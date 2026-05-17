@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -131,3 +131,112 @@ const runInputWithEnvironment: ProviderRunInput = {
 };
 
 void runInputWithEnvironment;
+
+test("representative adapter run launches in the target directory with prompt and optional model", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "devflow-codex-run-"));
+  const binDir = path.join(tempRoot, "bin");
+  const workingDirectory = path.join(tempRoot, "repo");
+  const outputPath = path.join(tempRoot, "codex-output.txt");
+  const executablePath = path.join(binDir, "codex");
+
+  await mkdir(binDir);
+  await mkdir(workingDirectory);
+  await writeFile(
+    executablePath,
+    [
+      "#!/bin/sh",
+      `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
+      `printf 'argc=%s\\n' \"$#\" >> "${outputPath}"`,
+      "for arg in \"$@\"; do",
+      `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
+      "done",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  await chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const result = await createCodexAdapter().run({
+    prompt: "Ship the contract",
+    workingDirectory,
+    model: "gpt-5.5",
+  });
+
+  assert.deepEqual(result, {
+    success: true,
+    exitCode: 0,
+    signal: null,
+  });
+
+  const output = await readFile(outputPath, "utf8");
+  assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
+  assert.match(output, /^argc=\d+$/m);
+  assert.match(output, /^arg=Ship the contract$/m);
+  assert.match(output, /^arg=gpt-5.5$/m);
+});
+
+test("representative adapter run resolves structured failure metadata for non-zero provider exits", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-nonzero-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const workingDirectory = path.join(tempRoot, "repo");
+  const executablePath = path.join(binDir, "codex");
+
+  await mkdir(binDir);
+  await mkdir(workingDirectory);
+  await writeFile(executablePath, "#!/bin/sh\nexit 7\n");
+  await chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const result = await createCodexAdapter().run({
+    prompt: "Ship the contract",
+    workingDirectory,
+  });
+
+  assert.deepEqual(result, {
+    success: false,
+    exitCode: 7,
+    signal: null,
+  });
+});
+
+test("representative adapter run rejects launch failures distinctly from normal provider exits", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-launch-failure-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const workingDirectory = path.join(tempRoot, "repo");
+
+  await mkdir(binDir);
+  await mkdir(workingDirectory);
+
+  process.env.PATH = binDir;
+
+  await assert.rejects(
+    () =>
+      createCodexAdapter().run({
+        prompt: "Ship the contract",
+        workingDirectory,
+      }),
+    /codex/i,
+  );
+});

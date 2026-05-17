@@ -1,3 +1,4 @@
+import { execa } from "execa";
 import which from "which";
 
 import {
@@ -11,9 +12,23 @@ import {
 const CODEX_COMMAND = "codex";
 const CODEX_PROVIDER = BUILT_IN_PROVIDERS[2];
 
+async function resolveCodexExecutable(): Promise<string> {
+  return which(CODEX_COMMAND);
+}
+
+function buildCodexArgs(input: ProviderRunInput): string[] {
+  const args = [input.prompt];
+
+  if (input.model) {
+    args.unshift("--model", input.model);
+  }
+
+  return args;
+}
+
 async function detectCodexExecutable(): Promise<ProviderDetectionResult> {
   try {
-    const executable = await which(CODEX_COMMAND);
+    const executable = await resolveCodexExecutable();
 
     return {
       isAvailable: true,
@@ -30,8 +45,19 @@ async function detectCodexExecutable(): Promise<ProviderDetectionResult> {
   }
 }
 
-async function runCodex(_input: ProviderRunInput): Promise<ProviderRunResult> {
-  throw new Error("Codex interactive run behavior is not implemented yet.");
+async function runCodex(input: ProviderRunInput): Promise<ProviderRunResult> {
+  const executable = await resolveCodexExecutable();
+  const result = await execa(executable, buildCodexArgs(input), {
+    cwd: input.workingDirectory,
+    stdio: "inherit",
+    reject: false,
+  });
+
+  return {
+    success: result.exitCode === 0,
+    exitCode: result.exitCode ?? null,
+    signal: result.signal ?? null,
+  };
 }
 
 export function createCodexAdapter(): ProviderAdapter {

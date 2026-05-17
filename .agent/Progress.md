@@ -36,18 +36,19 @@ Hard limit: 100 lines.
 - Added contract coverage in `tests/adapters/providerAdapter.contract.test.ts` for provider constants, adapter shape, and run input exclusions.
 - Added a representative built-in Codex adapter in `src/adapters/codexAdapter.ts` with private executable resolution against `PATH` and structured non-interactive detection outcomes.
 - Extended `tests/adapters/providerAdapter.contract.test.ts` to prove representative detection success and failure semantics through temporary local `PATH` state.
+- Implemented representative Codex interactive run behavior in `src/adapters/codexAdapter.ts` with private executable resolution, target `cwd` launch, prompt/model argv construction, and structured process exit metadata.
+- Extended `tests/adapters/providerAdapter.contract.test.ts` to prove run semantics for successful launch, non-zero exit resolution, distinct launch-failure rejection, and working-directory/model propagation via a temporary local `codex` executable.
 - Verified this slice with `npm run test` and `npm run typecheck`.
 
 ## Current State
 - Provider adapter contract exists under `src/adapters/providerAdapter.ts`.
-- Representative Codex detection exists under `src/adapters/codexAdapter.ts`.
+- Representative Codex detection and run behavior exist under `src/adapters/codexAdapter.ts`.
 - No prompt templates exist yet under `prompts/`.
 - Contract tests exist under `tests/adapters/providerAdapter.contract.test.ts`.
 - Build/dev scripts will not work until `src/cli.ts` is created.
-- `ISSUE-001` and `ISSUE-002` are complete.
+- `ISSUE-001`, `ISSUE-002`, and `ISSUE-003` are complete.
 
 ## Next Checkpoint
 - Start coding from the handoff order:
-  1. Implement representative interactive run semantics with subprocess outcomes.
-  2. Wire one built-in provider end to end through the shared adapter.
-  3. Add broader regression coverage around detection and run behavior.
+  1. Wire one built-in provider end to end through the shared adapter.
+  2. Add broader regression coverage around detection and run behavior.
