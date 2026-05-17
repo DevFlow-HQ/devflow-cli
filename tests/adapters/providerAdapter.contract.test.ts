@@ -7,10 +7,12 @@ import path from "node:path";
 import {
   BUILT_IN_PROVIDER_IDS,
   BUILT_IN_PROVIDERS,
+  type BuiltInProviderId,
   type ProviderAdapter,
   type ProviderRunInput,
 } from "../../src/adapters/providerAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
+import { createBuiltInProviderAdapter } from "../../src/adapters/builtInProviderAdapter.js";
 
 test("built-in providers are defined from a single runtime source of truth", () => {
   assert.deepEqual(BUILT_IN_PROVIDER_IDS, [
@@ -239,4 +241,63 @@ test("representative adapter run rejects launch failures distinctly from normal 
       }),
     /codex/i,
   );
+});
+
+test("built-in provider selection wires codex end to end through the shared adapter contract", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await mkdtemp(
+    path.join(os.tmpdir(), "devflow-built-in-codex-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const workingDirectory = path.join(tempRoot, "repo");
+  const outputPath = path.join(tempRoot, "codex-output.txt");
+  const executablePath = path.join(binDir, "codex");
+
+  await mkdir(binDir);
+  await mkdir(workingDirectory);
+  await writeFile(
+    executablePath,
+    [
+      "#!/bin/sh",
+      `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
+      "for arg in \"$@\"; do",
+      `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
+      "done",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  await chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const providerId: BuiltInProviderId = "codex";
+  const adapter = createBuiltInProviderAdapter(providerId);
+
+  assert.deepEqual(adapter.provider, BUILT_IN_PROVIDERS[2]);
+
+  const detection = await adapter.detect();
+  assert.deepEqual(detection, {
+    isAvailable: true,
+    executable: executablePath,
+  });
+
+  const result = await adapter.run({
+    prompt: "Ship through the contract",
+    workingDirectory,
+  });
+
+  assert.deepEqual(result, {
+    success: true,
+    exitCode: 0,
+    signal: null,
+  });
+
+  const output = await readFile(outputPath, "utf8");
+  assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
+  assert.match(output, /^arg=Ship through the contract$/m);
 });

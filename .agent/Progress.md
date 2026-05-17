@@ -38,17 +38,19 @@ Hard limit: 100 lines.
 - Extended `tests/adapters/providerAdapter.contract.test.ts` to prove representative detection success and failure semantics through temporary local `PATH` state.
 - Implemented representative Codex interactive run behavior in `src/adapters/codexAdapter.ts` with private executable resolution, target `cwd` launch, prompt/model argv construction, and structured process exit metadata.
 - Extended `tests/adapters/providerAdapter.contract.test.ts` to prove run semantics for successful launch, non-zero exit resolution, distinct launch-failure rejection, and working-directory/model propagation via a temporary local `codex` executable.
+- Wired built-in provider selection through `src/adapters/builtInProviderAdapter.ts`, so orchestration-facing code can select `codex` by built-in provider id and consume only the shared adapter contract.
+- Extended `tests/adapters/providerAdapter.contract.test.ts` to prove end-to-end built-in provider wiring by selecting `codex` generically, then detecting and launching it through the shared contract.
 - Verified this slice with `npm run test` and `npm run typecheck`.
 
 ## Current State
 - Provider adapter contract exists under `src/adapters/providerAdapter.ts`.
 - Representative Codex detection and run behavior exist under `src/adapters/codexAdapter.ts`.
+- Built-in provider selection for the wired Codex path exists under `src/adapters/builtInProviderAdapter.ts`.
 - No prompt templates exist yet under `prompts/`.
 - Contract tests exist under `tests/adapters/providerAdapter.contract.test.ts`.
 - Build/dev scripts will not work until `src/cli.ts` is created.
-- `ISSUE-001`, `ISSUE-002`, and `ISSUE-003` are complete.
+- `ISSUE-001` through `ISSUE-004` are complete.
 
 ## Next Checkpoint
 - Start coding from the handoff order:
-  1. Wire one built-in provider end to end through the shared adapter.
-  2. Add broader regression coverage around detection and run behavior.
+  1. Add broader regression coverage around provider constants, detection, and run behavior.
