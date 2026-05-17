@@ -8,6 +8,7 @@ import {
   BUILT_IN_PROVIDER_IDS,
   BUILT_IN_PROVIDERS,
   type BuiltInProviderId,
+  getBuiltInProviderIdentity,
   type ProviderAdapter,
   type ProviderRunInput,
 } from "../../src/adapters/providerAdapter.js";
@@ -31,6 +32,15 @@ test("built-in providers are defined from a single runtime source of truth", () 
     BUILT_IN_PROVIDERS.map((provider) => provider.displayName),
     ["Claude", "Gemini", "Codex", "OpenCode"],
   );
+});
+
+test("provider identity lookup stays aligned with the built-in provider constants", () => {
+  const lookedUpProviders = BUILT_IN_PROVIDER_IDS.map((providerId) =>
+    getBuiltInProviderIdentity(providerId),
+  );
+
+  assert.deepEqual(lookedUpProviders, BUILT_IN_PROVIDERS);
+  assert.equal(getBuiltInProviderIdentity("codex").displayName, "Codex");
 });
 
 test("provider adapters expose static metadata plus async detect and run methods", async () => {

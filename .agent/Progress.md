@@ -40,17 +40,18 @@ Hard limit: 100 lines.
 - Extended `tests/adapters/providerAdapter.contract.test.ts` to prove run semantics for successful launch, non-zero exit resolution, distinct launch-failure rejection, and working-directory/model propagation via a temporary local `codex` executable.
 - Wired built-in provider selection through `src/adapters/builtInProviderAdapter.ts`, so orchestration-facing code can select `codex` by built-in provider id and consume only the shared adapter contract.
 - Extended `tests/adapters/providerAdapter.contract.test.ts` to prove end-to-end built-in provider wiring by selecting `codex` generically, then detecting and launching it through the shared contract.
+- Added `getBuiltInProviderIdentity` in `src/adapters/providerAdapter.ts`, reused it from `src/adapters/codexAdapter.ts`, and extended `tests/adapters/providerAdapter.contract.test.ts` with regression coverage that binds provider identity lookup to the built-in provider constant list.
 - Verified this slice with `npm run test` and `npm run typecheck`.
 
 ## Current State
 - Provider adapter contract exists under `src/adapters/providerAdapter.ts`.
 - Representative Codex detection and run behavior exist under `src/adapters/codexAdapter.ts`.
 - Built-in provider selection for the wired Codex path exists under `src/adapters/builtInProviderAdapter.ts`.
+- Contract-level regression coverage now covers provider constants, identity lookup alignment, detection outcomes, run exit metadata, and launch-failure rejection semantics.
 - No prompt templates exist yet under `prompts/`.
 - Contract tests exist under `tests/adapters/providerAdapter.contract.test.ts`.
 - Build/dev scripts will not work until `src/cli.ts` is created.
-- `ISSUE-001` through `ISSUE-004` are complete.
+- `ISSUE-001` through `ISSUE-005` are complete.
 
 ## Next Checkpoint
-- Start coding from the handoff order:
-  1. Add broader regression coverage around provider constants, detection, and run behavior.
+- Provider adapter tracer-bullet and regression AFK issues are complete; pick the next non-provider task from the handoff order.

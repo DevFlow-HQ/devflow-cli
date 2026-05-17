@@ -2,7 +2,7 @@ import { execa } from "execa";
 import which from "which";
 
 import {
-  BUILT_IN_PROVIDERS,
+  getBuiltInProviderIdentity,
   type ProviderAdapter,
   type ProviderDetectionResult,
   type ProviderRunInput,
@@ -10,7 +10,7 @@ import {
 } from "./providerAdapter.js";
 
 const CODEX_COMMAND = "codex";
-const CODEX_PROVIDER = BUILT_IN_PROVIDERS[2];
+const CODEX_PROVIDER = getBuiltInProviderIdentity("codex");
 
 async function resolveCodexExecutable(): Promise<string> {
   return which(CODEX_COMMAND);

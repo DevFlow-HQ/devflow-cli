@@ -12,6 +12,20 @@ export const BUILT_IN_PROVIDER_IDS = BUILT_IN_PROVIDERS.map(
 export type ProviderIdentity = (typeof BUILT_IN_PROVIDERS)[number];
 export type BuiltInProviderId = ProviderIdentity["id"];
 
+export function getBuiltInProviderIdentity(
+  providerId: BuiltInProviderId,
+): ProviderIdentity {
+  const provider = BUILT_IN_PROVIDERS.find(
+    (candidate) => candidate.id === providerId,
+  );
+
+  if (!provider) {
+    throw new Error(`Unknown built-in provider '${providerId}'.`);
+  }
+
+  return provider;
+}
+
 export type ProviderDetectionResult =
   | {
       isAvailable: true;
