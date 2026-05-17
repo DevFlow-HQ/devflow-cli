@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli.ts",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+    "test": "tsx --test tests/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "files": [
     "dist",
