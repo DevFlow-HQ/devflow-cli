@@ -1,9 +1,9 @@
 import { createCommandProviderAdapter } from "./commandProviderAdapter.js";
 import type { ProviderAdapter } from "./providerAdapter.js";
 
-export function createCodexAdapter(): ProviderAdapter {
+export function createGeminiAdapter(): ProviderAdapter {
   return createCommandProviderAdapter({
-    providerId: "codex",
-    command: "codex",
+    providerId: "gemini",
+    command: "gemini",
   });
 }

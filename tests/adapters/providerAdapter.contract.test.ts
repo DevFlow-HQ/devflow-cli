@@ -12,8 +12,38 @@ import {
   type ProviderAdapter,
   type ProviderRunInput,
 } from "../../src/adapters/providerAdapter.js";
+import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
+import { createGeminiAdapter } from "../../src/adapters/geminiAdapter.js";
 import { createBuiltInProviderAdapter } from "../../src/adapters/builtInProviderAdapter.js";
+
+interface AdapterContractHarness {
+  providerId: BuiltInProviderId;
+  command: string;
+  displayName: string;
+  createAdapter: () => ProviderAdapter;
+}
+
+const providerHarnesses: AdapterContractHarness[] = [
+  {
+    providerId: "claude",
+    command: "claude",
+    displayName: "Claude",
+    createAdapter: createClaudeAdapter,
+  },
+  {
+    providerId: "gemini",
+    command: "gemini",
+    displayName: "Gemini",
+    createAdapter: createGeminiAdapter,
+  },
+  {
+    providerId: "codex",
+    command: "codex",
+    displayName: "Codex",
+    createAdapter: createCodexAdapter,
+  },
+];
 
 test("built-in providers are defined from a single runtime source of truth", () => {
   assert.deepEqual(BUILT_IN_PROVIDER_IDS, [
@@ -40,6 +70,8 @@ test("provider identity lookup stays aligned with the built-in provider constant
   );
 
   assert.deepEqual(lookedUpProviders, BUILT_IN_PROVIDERS);
+  assert.equal(getBuiltInProviderIdentity("claude").displayName, "Claude");
+  assert.equal(getBuiltInProviderIdentity("gemini").displayName, "Gemini");
   assert.equal(getBuiltInProviderIdentity("codex").displayName, "Codex");
 });
 
@@ -71,45 +103,52 @@ test("provider adapters expose static metadata plus async detect and run methods
   );
 });
 
-test("representative adapter detection resolves structured success and failure outcomes", async (t) => {
-  const originalPath = process.env.PATH;
-  t.after(() => {
-    process.env.PATH = originalPath;
+for (const harness of providerHarnesses) {
+  test(`${harness.displayName} adapter detection resolves structured success and failure outcomes`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
+
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), `devflow-${harness.command}-`),
+    );
+    const availableBinDir = path.join(tempRoot, "available-bin");
+    const missingBinDir = path.join(tempRoot, "missing-bin");
+
+    await mkdir(availableBinDir);
+    await mkdir(missingBinDir);
+
+    const executablePath = path.join(availableBinDir, harness.command);
+    await writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+    await chmod(executablePath, 0o755);
+
+    process.env.PATH = availableBinDir;
+
+    const availableResult = await harness.createAdapter().detect();
+
+    assert.deepEqual(availableResult, {
+      isAvailable: true,
+      executable: executablePath,
+    });
+
+    process.env.PATH = missingBinDir;
+
+    const missingResult = await harness.createAdapter().detect();
+
+    assert.equal(missingResult.isAvailable, false);
+
+    if (missingResult.isAvailable) {
+      assert.fail("expected missing executable detection to report unavailable");
+    }
+
+    assert.match(missingResult.reason, new RegExp(harness.command, "i"));
+    assert.doesNotMatch(
+      missingResult.reason,
+      new RegExp(harness.displayName),
+    );
   });
-
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "devflow-codex-"));
-  const availableBinDir = path.join(tempRoot, "available-bin");
-  const missingBinDir = path.join(tempRoot, "missing-bin");
-
-  await mkdir(availableBinDir);
-  await mkdir(missingBinDir);
-
-  const executablePath = path.join(availableBinDir, "codex");
-  await writeFile(executablePath, "#!/bin/sh\nexit 0\n");
-  await chmod(executablePath, 0o755);
-
-  process.env.PATH = availableBinDir;
-
-  const availableResult = await createCodexAdapter().detect();
-
-  assert.deepEqual(availableResult, {
-    isAvailable: true,
-    executable: executablePath,
-  });
-
-  process.env.PATH = missingBinDir;
-
-  const missingResult = await createCodexAdapter().detect();
-
-  assert.equal(missingResult.isAvailable, false);
-
-  if (missingResult.isAvailable) {
-    assert.fail("expected missing executable detection to report unavailable");
-  }
-
-  assert.match(missingResult.reason, /codex/i);
-  assert.doesNotMatch(missingResult.reason, /Codex/);
-});
+}
 
 const validRunInput: ProviderRunInput = {
   prompt: "Ship the contract",
@@ -144,170 +183,176 @@ const runInputWithEnvironment: ProviderRunInput = {
 
 void runInputWithEnvironment;
 
-test("representative adapter run launches in the target directory with prompt and optional model", async (t) => {
-  const originalPath = process.env.PATH;
-  t.after(() => {
-    process.env.PATH = originalPath;
+for (const harness of providerHarnesses) {
+  test(`${harness.displayName} adapter run launches in the target directory with prompt and optional model`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
+
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), `devflow-${harness.command}-run-`),
+    );
+    const binDir = path.join(tempRoot, "bin");
+    const workingDirectory = path.join(tempRoot, "repo");
+    const outputPath = path.join(tempRoot, `${harness.command}-output.txt`);
+    const executablePath = path.join(binDir, harness.command);
+
+    await mkdir(binDir);
+    await mkdir(workingDirectory);
+    await writeFile(
+      executablePath,
+      [
+        "#!/bin/sh",
+        `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
+        `printf 'argc=%s\\n' \"$#\" >> "${outputPath}"`,
+        "for arg in \"$@\"; do",
+        `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
+        "done",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    await chmod(executablePath, 0o755);
+
+    process.env.PATH = binDir;
+
+    const result = await harness.createAdapter().run({
+      prompt: "Ship the contract",
+      workingDirectory,
+      model: "gpt-5.5",
+    });
+
+    assert.deepEqual(result, {
+      success: true,
+      exitCode: 0,
+      signal: null,
+    });
+
+    const output = await readFile(outputPath, "utf8");
+    assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
+    assert.match(output, /^argc=\d+$/m);
+    assert.match(output, /^arg=Ship the contract$/m);
+    assert.match(output, /^arg=gpt-5.5$/m);
   });
 
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "devflow-codex-run-"));
-  const binDir = path.join(tempRoot, "bin");
-  const workingDirectory = path.join(tempRoot, "repo");
-  const outputPath = path.join(tempRoot, "codex-output.txt");
-  const executablePath = path.join(binDir, "codex");
+  test(`${harness.displayName} adapter run resolves structured failure metadata for non-zero provider exits`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
 
-  await mkdir(binDir);
-  await mkdir(workingDirectory);
-  await writeFile(
-    executablePath,
-    [
-      "#!/bin/sh",
-      `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
-      `printf 'argc=%s\\n' \"$#\" >> "${outputPath}"`,
-      "for arg in \"$@\"; do",
-      `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
-      "done",
-      "exit 0",
-      "",
-    ].join("\n"),
-  );
-  await chmod(executablePath, 0o755);
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), `devflow-${harness.command}-nonzero-`),
+    );
+    const binDir = path.join(tempRoot, "bin");
+    const workingDirectory = path.join(tempRoot, "repo");
+    const executablePath = path.join(binDir, harness.command);
 
-  process.env.PATH = binDir;
+    await mkdir(binDir);
+    await mkdir(workingDirectory);
+    await writeFile(executablePath, "#!/bin/sh\nexit 7\n");
+    await chmod(executablePath, 0o755);
 
-  const result = await createCodexAdapter().run({
-    prompt: "Ship the contract",
-    workingDirectory,
-    model: "gpt-5.5",
+    process.env.PATH = binDir;
+
+    const result = await harness.createAdapter().run({
+      prompt: "Ship the contract",
+      workingDirectory,
+    });
+
+    assert.deepEqual(result, {
+      success: false,
+      exitCode: 7,
+      signal: null,
+    });
   });
 
-  assert.deepEqual(result, {
-    success: true,
-    exitCode: 0,
-    signal: null,
+  test(`${harness.displayName} adapter run rejects launch failures distinctly from normal provider exits`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
+
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), `devflow-${harness.command}-launch-failure-`),
+    );
+    const binDir = path.join(tempRoot, "bin");
+    const workingDirectory = path.join(tempRoot, "repo");
+
+    await mkdir(binDir);
+    await mkdir(workingDirectory);
+
+    process.env.PATH = binDir;
+
+    await assert.rejects(
+      () =>
+        harness.createAdapter().run({
+          prompt: "Ship the contract",
+          workingDirectory,
+        }),
+      new RegExp(harness.command, "i"),
+    );
   });
 
-  const output = await readFile(outputPath, "utf8");
-  assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
-  assert.match(output, /^argc=\d+$/m);
-  assert.match(output, /^arg=Ship the contract$/m);
-  assert.match(output, /^arg=gpt-5.5$/m);
-});
+  test(`built-in provider selection wires ${harness.command} end to end through the shared adapter contract`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
 
-test("representative adapter run resolves structured failure metadata for non-zero provider exits", async (t) => {
-  const originalPath = process.env.PATH;
-  t.after(() => {
-    process.env.PATH = originalPath;
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), `devflow-built-in-${harness.command}-`),
+    );
+    const binDir = path.join(tempRoot, "bin");
+    const workingDirectory = path.join(tempRoot, "repo");
+    const outputPath = path.join(tempRoot, `${harness.command}-output.txt`);
+    const executablePath = path.join(binDir, harness.command);
+
+    await mkdir(binDir);
+    await mkdir(workingDirectory);
+    await writeFile(
+      executablePath,
+      [
+        "#!/bin/sh",
+        `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
+        "for arg in \"$@\"; do",
+        `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
+        "done",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    await chmod(executablePath, 0o755);
+
+    process.env.PATH = binDir;
+
+    const adapter = createBuiltInProviderAdapter(harness.providerId);
+
+    assert.deepEqual(
+      adapter.provider,
+      getBuiltInProviderIdentity(harness.providerId),
+    );
+
+    const detection = await adapter.detect();
+    assert.deepEqual(detection, {
+      isAvailable: true,
+      executable: executablePath,
+    });
+
+    const result = await adapter.run({
+      prompt: "Ship through the contract",
+      workingDirectory,
+    });
+
+    assert.deepEqual(result, {
+      success: true,
+      exitCode: 0,
+      signal: null,
+    });
+
+    const output = await readFile(outputPath, "utf8");
+    assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
+    assert.match(output, /^arg=Ship through the contract$/m);
   });
-
-  const tempRoot = await mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-nonzero-"),
-  );
-  const binDir = path.join(tempRoot, "bin");
-  const workingDirectory = path.join(tempRoot, "repo");
-  const executablePath = path.join(binDir, "codex");
-
-  await mkdir(binDir);
-  await mkdir(workingDirectory);
-  await writeFile(executablePath, "#!/bin/sh\nexit 7\n");
-  await chmod(executablePath, 0o755);
-
-  process.env.PATH = binDir;
-
-  const result = await createCodexAdapter().run({
-    prompt: "Ship the contract",
-    workingDirectory,
-  });
-
-  assert.deepEqual(result, {
-    success: false,
-    exitCode: 7,
-    signal: null,
-  });
-});
-
-test("representative adapter run rejects launch failures distinctly from normal provider exits", async (t) => {
-  const originalPath = process.env.PATH;
-  t.after(() => {
-    process.env.PATH = originalPath;
-  });
-
-  const tempRoot = await mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-launch-failure-"),
-  );
-  const binDir = path.join(tempRoot, "bin");
-  const workingDirectory = path.join(tempRoot, "repo");
-
-  await mkdir(binDir);
-  await mkdir(workingDirectory);
-
-  process.env.PATH = binDir;
-
-  await assert.rejects(
-    () =>
-      createCodexAdapter().run({
-        prompt: "Ship the contract",
-        workingDirectory,
-      }),
-    /codex/i,
-  );
-});
-
-test("built-in provider selection wires codex end to end through the shared adapter contract", async (t) => {
-  const originalPath = process.env.PATH;
-  t.after(() => {
-    process.env.PATH = originalPath;
-  });
-
-  const tempRoot = await mkdtemp(
-    path.join(os.tmpdir(), "devflow-built-in-codex-"),
-  );
-  const binDir = path.join(tempRoot, "bin");
-  const workingDirectory = path.join(tempRoot, "repo");
-  const outputPath = path.join(tempRoot, "codex-output.txt");
-  const executablePath = path.join(binDir, "codex");
-
-  await mkdir(binDir);
-  await mkdir(workingDirectory);
-  await writeFile(
-    executablePath,
-    [
-      "#!/bin/sh",
-      `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
-      "for arg in \"$@\"; do",
-      `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
-      "done",
-      "exit 0",
-      "",
-    ].join("\n"),
-  );
-  await chmod(executablePath, 0o755);
-
-  process.env.PATH = binDir;
-
-  const providerId: BuiltInProviderId = "codex";
-  const adapter = createBuiltInProviderAdapter(providerId);
-
-  assert.deepEqual(adapter.provider, BUILT_IN_PROVIDERS[2]);
-
-  const detection = await adapter.detect();
-  assert.deepEqual(detection, {
-    isAvailable: true,
-    executable: executablePath,
-  });
-
-  const result = await adapter.run({
-    prompt: "Ship through the contract",
-    workingDirectory,
-  });
-
-  assert.deepEqual(result, {
-    success: true,
-    exitCode: 0,
-    signal: null,
-  });
-
-  const output = await readFile(outputPath, "utf8");
-  assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
-  assert.match(output, /^arg=Ship through the contract$/m);
-});
+}

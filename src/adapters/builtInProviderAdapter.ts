@@ -1,4 +1,6 @@
+import { createClaudeAdapter } from "./claudeAdapter.js";
 import { createCodexAdapter } from "./codexAdapter.js";
+import { createGeminiAdapter } from "./geminiAdapter.js";
 import type {
   BuiltInProviderId,
   ProviderAdapter,
@@ -8,6 +10,10 @@ export function createBuiltInProviderAdapter(
   providerId: BuiltInProviderId,
 ): ProviderAdapter {
   switch (providerId) {
+    case "claude":
+      return createClaudeAdapter();
+    case "gemini":
+      return createGeminiAdapter();
     case "codex":
       return createCodexAdapter();
     default:
