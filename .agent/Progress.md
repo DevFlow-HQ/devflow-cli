@@ -43,6 +43,9 @@ Hard limit: 100 lines.
   - hardened `discoverBuiltInProviders` so adapter-construction and detection failures degrade per provider into unavailable entries instead of aborting the full discovery call
   - locked the exact unsupported-provider reason text as `This provider is not supported yet by DevFlow.` and used a separate user-safe unavailable fallback for operational failures
   - expanded `tests/adapters/providerDiscovery.test.ts` to cover unsupported providers, per-provider failure degradation, diagnostic preservation, and the absence of `debugReason` on available entries
+- Completed `issues/004-lock-discovery-and-adapter-behavior-with-regression-tests.md`:
+  - verified the discovery regression suite already locks canonical `providers` ordering, filtered `installedProviders` ordering, zero/single/multiple summary behavior, executable preservation, unsupported-provider messaging, and per-provider failure degradation in `tests/adapters/providerDiscovery.test.ts`
+  - verified `tests/adapters/providerAdapter.contract.test.ts` already covers OpenCode as a symmetric built-in command-backed provider through detect, run, and built-in selection wiring
 - Verified this slice with `npm run test` and `npm run typecheck`.
 
 ## Current State
@@ -60,8 +63,7 @@ Hard limit: 100 lines.
 - AFK issue `001` is complete and moved to `issues/done/`.
 - AFK issue `002` is complete and moved to `issues/done/`.
 - AFK issue `003` is complete and moved to `issues/done/`.
-- Open AFK issue is `004-lock-discovery-and-adapter-behavior-with-regression-tests.md`.
+- AFK issue `004` is complete and moved to `issues/done/`.
 
 ## Next Checkpoint
-- Continue from the handoff order after the adapter slice:
-  1. Lock the remaining discovery and adapter regression contract in AFK issue `004`.
+- AFK issue queue is empty.
