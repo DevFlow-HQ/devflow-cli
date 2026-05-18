@@ -34,6 +34,7 @@ export type ProviderDetectionResult =
   | {
       isAvailable: false;
       reason: string;
+      debugReason?: string;
     };
 
 export interface ProviderRunInput {

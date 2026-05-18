@@ -156,3 +156,75 @@ test("provider discovery defaults to the production built-in adapter factory", a
   });
   assert.equal(result.installedProviders[0]?.executable, executablePath);
 });
+
+test("provider discovery degrades unsupported and failed providers into user-safe unavailable results", async () => {
+  const result = await discoverBuiltInProviders({
+    createAdapter(providerId) {
+      if (providerId === "gemini") {
+        throw new Error("Built-in provider 'gemini' is not wired yet.");
+      }
+
+      return {
+        provider: getBuiltInProviderIdentity(providerId),
+        async detect() {
+          if (providerId === "claude") {
+            return {
+              isAvailable: true,
+              executable: "/usr/local/bin/claude",
+            };
+          }
+
+          if (providerId === "codex") {
+            throw new Error("spawn ENOENT while probing codex internals");
+          }
+
+          return {
+            isAvailable: false,
+            reason: "This provider is not supported yet by DevFlow.",
+            debugReason: "OpenCode adapter is intentionally not implemented in this test.",
+          };
+        },
+        async run() {
+          throw new Error("run should not be called during discovery");
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(result.providers, [
+    {
+      provider: getBuiltInProviderIdentity("claude"),
+      isAvailable: true,
+      executable: "/usr/local/bin/claude",
+    },
+    {
+      provider: getBuiltInProviderIdentity("gemini"),
+      isAvailable: false,
+      reason: "This provider is not supported yet by DevFlow.",
+      debugReason: "Built-in provider 'gemini' is not wired yet.",
+    },
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      isAvailable: false,
+      reason: "This provider is currently unavailable.",
+      debugReason: "spawn ENOENT while probing codex internals",
+    },
+    {
+      provider: getBuiltInProviderIdentity("opencode"),
+      isAvailable: false,
+      reason: "This provider is not supported yet by DevFlow.",
+      debugReason: "OpenCode adapter is intentionally not implemented in this test.",
+    },
+  ]);
+
+  assert.deepEqual(
+    result.installedProviders.map((provider) => provider.provider.id),
+    ["claude"],
+  );
+  assert.deepEqual(result.summary, {
+    availabilityStatus: "single",
+    installedProviderCount: 1,
+    recommendedProviderId: "claude",
+  });
+  assert.equal("debugReason" in result.installedProviders[0], false);
+});

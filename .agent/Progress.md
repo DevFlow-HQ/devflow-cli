@@ -38,6 +38,11 @@ Hard limit: 100 lines.
   - exposed a CLI-facing discovery contract with canonical `providers`, filtered `installedProviders`, and `summary` availability classification
   - allowed tests and specialized consumers to inject an alternate adapter factory while defaulting production discovery to `createBuiltInProviderAdapter`
   - added `tests/adapters/providerDiscovery.test.ts` covering canonical ordering, zero/single/multiple summary semantics, executable preservation, and default factory wiring
+- Completed `issues/003-harden-unavailable-provider-and-failure-semantics.md`:
+  - extended the discovery-facing unavailable contract in `src/adapters/providerAdapter.ts` and `src/adapters/providerDiscovery.ts` with optional `debugReason` support
+  - hardened `discoverBuiltInProviders` so adapter-construction and detection failures degrade per provider into unavailable entries instead of aborting the full discovery call
+  - locked the exact unsupported-provider reason text as `This provider is not supported yet by DevFlow.` and used a separate user-safe unavailable fallback for operational failures
+  - expanded `tests/adapters/providerDiscovery.test.ts` to cover unsupported providers, per-provider failure degradation, diagnostic preservation, and the absence of `debugReason` on available entries
 - Verified this slice with `npm run test` and `npm run typecheck`.
 
 ## Current State
@@ -46,16 +51,17 @@ Hard limit: 100 lines.
 - Built-in Claude, Gemini, Codex, and OpenCode adapters exist under `src/adapters/`.
 - Built-in provider selection exists under `src/adapters/builtInProviderAdapter.ts` for all declared built-in providers.
 - Built-in provider discovery exists under `src/adapters/providerDiscovery.ts` with injectable adapter-factory wiring and CLI-facing aggregation results.
+- Discovery now degrades unsupported-provider wiring gaps and per-provider probe failures into user-safe unavailable results with optional internal diagnostics.
 - Contract-level regression coverage covers provider constants, identity lookup alignment, detection outcomes, run exit metadata, launch-failure rejection, and built-in wiring for the implemented adapters.
-- Discovery regression coverage exists under `tests/adapters/providerDiscovery.test.ts` for canonical ordering, availability summaries, executable preservation, and default built-in factory wiring.
+- Discovery regression coverage exists under `tests/adapters/providerDiscovery.test.ts` for canonical ordering, availability summaries, executable preservation, default built-in factory wiring, unsupported-provider messaging, and per-provider failure degradation.
 - No prompt templates exist yet under `prompts/`.
 - Contract tests exist under `tests/adapters/providerAdapter.contract.test.ts`.
 - Build/dev scripts will not work until `src/cli.ts` is created.
 - AFK issue `001` is complete and moved to `issues/done/`.
 - AFK issue `002` is complete and moved to `issues/done/`.
-- Open AFK issues are `003-harden-unavailable-provider-and-failure-semantics.md` and `004-lock-discovery-and-adapter-behavior-with-regression-tests.md`.
+- AFK issue `003` is complete and moved to `issues/done/`.
+- Open AFK issue is `004-lock-discovery-and-adapter-behavior-with-regression-tests.md`.
 
 ## Next Checkpoint
 - Continue from the handoff order after the adapter slice:
-  1. Harden unavailable-provider and failure semantics in AFK issue `003`.
-  2. Lock the discovery contract with dedicated regression coverage in AFK issue `004`.
+  1. Lock the remaining discovery and adapter regression contract in AFK issue `004`.

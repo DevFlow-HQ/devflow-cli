@@ -17,6 +17,7 @@ export type DiscoveredProvider =
       provider: ProviderIdentity;
       isAvailable: false;
       reason: string;
+      debugReason?: string;
     };
 
 export type InstalledProvider = Extract<DiscoveredProvider, { isAvailable: true }>;
@@ -37,6 +38,11 @@ export interface DiscoverBuiltInProvidersOptions {
   createAdapter?: (providerId: BuiltInProviderId) => ProviderAdapter;
 }
 
+export const UNSUPPORTED_PROVIDER_REASON =
+  "This provider is not supported yet by DevFlow.";
+
+const UNAVAILABLE_PROVIDER_REASON = "This provider is currently unavailable.";
+
 function toDiscoveredProvider(
   provider: ProviderIdentity,
   detection: ProviderDetectionResult,
@@ -53,6 +59,26 @@ function toDiscoveredProvider(
     provider,
     isAvailable: false,
     reason: detection.reason,
+    ...(detection.debugReason === undefined
+      ? {}
+      : { debugReason: detection.debugReason }),
+  };
+}
+
+function toUnavailableProviderFromFailure(
+  provider: ProviderIdentity,
+  error: unknown,
+): DiscoveredProvider {
+  const debugReason = error instanceof Error ? error.message : String(error);
+  const reason = debugReason.includes("is not wired yet")
+    ? UNSUPPORTED_PROVIDER_REASON
+    : UNAVAILABLE_PROVIDER_REASON;
+
+  return {
+    provider,
+    isAvailable: false,
+    reason,
+    ...(debugReason.length === 0 ? {} : { debugReason }),
   };
 }
 
@@ -85,8 +111,12 @@ export async function discoverBuiltInProviders(
 
   const providers = await Promise.all(
     BUILT_IN_PROVIDERS.map(async (provider) => {
-      const detection = await createAdapter(provider.id).detect();
-      return toDiscoveredProvider(provider, detection);
+      try {
+        const detection = await createAdapter(provider.id).detect();
+        return toDiscoveredProvider(provider, detection);
+      } catch (error) {
+        return toUnavailableProviderFromFailure(provider, error);
+      }
     }),
   );
 
