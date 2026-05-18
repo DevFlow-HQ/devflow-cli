@@ -15,6 +15,7 @@ import {
 import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
 import { createGeminiAdapter } from "../../src/adapters/geminiAdapter.js";
+import { createOpenCodeAdapter } from "../../src/adapters/opencodeAdapter.js";
 import { createBuiltInProviderAdapter } from "../../src/adapters/builtInProviderAdapter.js";
 
 interface AdapterContractHarness {
@@ -42,6 +43,12 @@ const providerHarnesses: AdapterContractHarness[] = [
     command: "codex",
     displayName: "Codex",
     createAdapter: createCodexAdapter,
+  },
+  {
+    providerId: "opencode",
+    command: "opencode",
+    displayName: "OpenCode",
+    createAdapter: createOpenCodeAdapter,
   },
 ];
 

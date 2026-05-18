@@ -1,6 +1,7 @@
 import { createClaudeAdapter } from "./claudeAdapter.js";
 import { createCodexAdapter } from "./codexAdapter.js";
 import { createGeminiAdapter } from "./geminiAdapter.js";
+import { createOpenCodeAdapter } from "./opencodeAdapter.js";
 import type {
   BuiltInProviderId,
   ProviderAdapter,
@@ -16,6 +17,8 @@ export function createBuiltInProviderAdapter(
       return createGeminiAdapter();
     case "codex":
       return createCodexAdapter();
+    case "opencode":
+      return createOpenCodeAdapter();
     default:
       throw new Error(`Built-in provider '${providerId}' is not wired yet.`);
   }
