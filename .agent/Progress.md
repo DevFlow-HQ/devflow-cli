@@ -33,6 +33,11 @@ Hard limit: 100 lines.
   - added `src/adapters/opencodeAdapter.ts` with canonical `opencode` executable wiring via the shared command-backed adapter
   - wired `opencode` through `src/adapters/builtInProviderAdapter.ts` as a first-class built-in provider peer
   - extended `tests/adapters/providerAdapter.contract.test.ts` so OpenCode participates in the same contract coverage as Claude, Gemini, and Codex
+- Completed `issues/002-build-provider-discovery-aggregation-contract.md`:
+  - added `src/adapters/providerDiscovery.ts` to discover built-in providers from `BUILT_IN_PROVIDERS` through the built-in adapter seam with concurrent probing
+  - exposed a CLI-facing discovery contract with canonical `providers`, filtered `installedProviders`, and `summary` availability classification
+  - allowed tests and specialized consumers to inject an alternate adapter factory while defaulting production discovery to `createBuiltInProviderAdapter`
+  - added `tests/adapters/providerDiscovery.test.ts` covering canonical ordering, zero/single/multiple summary semantics, executable preservation, and default factory wiring
 - Verified this slice with `npm run test` and `npm run typecheck`.
 
 ## Current State
@@ -40,15 +45,17 @@ Hard limit: 100 lines.
 - Shared command-backed adapter behavior exists under `src/adapters/commandProviderAdapter.ts`.
 - Built-in Claude, Gemini, Codex, and OpenCode adapters exist under `src/adapters/`.
 - Built-in provider selection exists under `src/adapters/builtInProviderAdapter.ts` for all declared built-in providers.
+- Built-in provider discovery exists under `src/adapters/providerDiscovery.ts` with injectable adapter-factory wiring and CLI-facing aggregation results.
 - Contract-level regression coverage covers provider constants, identity lookup alignment, detection outcomes, run exit metadata, launch-failure rejection, and built-in wiring for the implemented adapters.
+- Discovery regression coverage exists under `tests/adapters/providerDiscovery.test.ts` for canonical ordering, availability summaries, executable preservation, and default built-in factory wiring.
 - No prompt templates exist yet under `prompts/`.
 - Contract tests exist under `tests/adapters/providerAdapter.contract.test.ts`.
 - Build/dev scripts will not work until `src/cli.ts` is created.
 - AFK issue `001` is complete and moved to `issues/done/`.
-- Open AFK issues are `002-build-provider-discovery-aggregation-contract.md`, `003-harden-unavailable-provider-and-failure-semantics.md`, and `004-lock-discovery-and-adapter-behavior-with-regression-tests.md`.
+- AFK issue `002` is complete and moved to `issues/done/`.
+- Open AFK issues are `003-harden-unavailable-provider-and-failure-semantics.md` and `004-lock-discovery-and-adapter-behavior-with-regression-tests.md`.
 
 ## Next Checkpoint
 - Continue from the handoff order after the adapter slice:
-  1. Add the provider discovery aggregation module from AFK issue `002` on top of the built-in adapter seam.
-  2. Harden unavailable-provider and failure semantics in AFK issue `003`.
-  3. Lock the discovery contract with dedicated regression coverage in AFK issue `004`.
+  1. Harden unavailable-provider and failure semantics in AFK issue `003`.
+  2. Lock the discovery contract with dedicated regression coverage in AFK issue `004`.
