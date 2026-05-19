@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli.ts",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx --test tests/*.test.ts tests/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "files": [

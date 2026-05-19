@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -183,4 +183,70 @@ test("cli falls back to the current directory outside git and fails with a clear
   );
   assert.match(result.stderr, new RegExp(`Project root: ${currentDirectory}`));
   assert.match(result.stderr, /Task: draft plan/);
+});
+
+test("cli reuses a valid repo-local default provider config when no override is supplied", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-config-root-"));
+  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
+  writeFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "codex" }, null, 2),
+  );
+
+  const receivedRequests: unknown[] = [];
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    runExecutionRequest: async (request) => {
+      receivedRequests.push(request);
+    },
+  });
+
+  assert.equal(result.commandError, undefined);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(receivedRequests, [
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+  ]);
+});
+
+test("cli rejects invalid repo-local provider config with repair guidance", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-invalid-config-"));
+  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
+  writeFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "not-real" }, null, 2),
+  );
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    /Invalid DevFlow config at .*\.devflow\/config\.json\./,
+  );
+  assert.match(result.stderr, /defaultProvider/);
+  assert.match(
+    result.stderr,
+    /Delete or repair the config file before running DevFlow again\./,
+  );
+});
+
+test("cli does not create repo-local state during a read-only bootstrap invocation", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-lazy-state-"));
+
+  const result = await invokeCliWithOptions(["draft", "plan"], {
+    cwd: projectRoot,
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
 });

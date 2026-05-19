@@ -3,6 +3,11 @@ import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 
 import {
+  formatInvalidRepoConfigError,
+  InvalidRepoConfigError,
+  resolveRepoConfig,
+} from "./repoConfig.js";
+import {
   formatOrchestratorError,
   OrchestratorNotImplementedError,
   runExecutionRequest,
@@ -45,13 +50,14 @@ export function resolveRawTask(taskParts: string[]): string {
 function createExecutionRequest(
   rawTask: string,
   projectRoot: string,
-  options: RunCliOptions,
+  providerId: string | undefined,
+  model: string | undefined,
 ): ResolvedExecutionRequest {
   return {
     projectRoot,
     rawTask,
-    ...(options.providerId ? { providerId: options.providerId } : {}),
-    ...(options.model ? { model: options.model } : {}),
+    ...(providerId ? { providerId } : {}),
+    ...(model ? { model } : {}),
   };
 }
 
@@ -70,9 +76,15 @@ export function createCli(options: RunCliOptions = {}): Command {
       const projectRoot = options.resolveProjectRoot
         ? await options.resolveProjectRoot(cwd)
         : await resolveProjectRoot({ cwd });
+      const repoConfig = await resolveRepoConfig({ projectRoot });
       const executionRequestRunner =
         options.runExecutionRequest ?? runExecutionRequest;
-      const request = createExecutionRequest(rawTask, projectRoot, options);
+      const request = createExecutionRequest(
+        rawTask,
+        projectRoot,
+        options.providerId ?? repoConfig?.defaultProvider,
+        options.model,
+      );
 
       await executionRequestRunner(request);
     });
@@ -114,6 +126,10 @@ export async function runCli(
 
     if (error instanceof OrchestratorNotImplementedError) {
       program.error(formatOrchestratorError(error));
+    }
+
+    if (error instanceof InvalidRepoConfigError) {
+      program.error(formatInvalidRepoConfigError(error));
     }
 
     throw error;
