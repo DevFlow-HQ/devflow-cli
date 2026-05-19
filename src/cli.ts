@@ -2,6 +2,14 @@ import { pathToFileURL } from "node:url";
 
 import { Command, CommanderError } from "commander";
 
+import {
+  formatOrchestratorError,
+  OrchestratorNotImplementedError,
+  runExecutionRequest,
+  type ResolvedExecutionRequest,
+} from "./orchestrator.js";
+import { resolveProjectRoot } from "./projectRoot.js";
+
 const DEFAULT_VERSION = "0.1.0";
 const REQUIRED_TASK_ERROR = "A task is required.";
 
@@ -13,7 +21,14 @@ export interface RunCliOptions {
   stdout?: CliWriter;
   stderr?: CliWriter;
   version?: string;
+  cwd?: string;
+  providerId?: string;
+  model?: string;
   onResolvedTask?: (rawTask: string) => void | Promise<void>;
+  resolveProjectRoot?: (cwd: string) => Promise<string>;
+  runExecutionRequest?: (
+    request: ResolvedExecutionRequest,
+  ) => void | Promise<void>;
   configureProgram?: (program: Command) => void;
 }
 
@@ -27,6 +42,19 @@ export function resolveRawTask(taskParts: string[]): string {
   return rawTask;
 }
 
+function createExecutionRequest(
+  rawTask: string,
+  projectRoot: string,
+  options: RunCliOptions,
+): ResolvedExecutionRequest {
+  return {
+    projectRoot,
+    rawTask,
+    ...(options.providerId ? { providerId: options.providerId } : {}),
+    ...(options.model ? { model: options.model } : {}),
+  };
+}
+
 export function createCli(options: RunCliOptions = {}): Command {
   const program = new Command();
 
@@ -36,12 +64,17 @@ export function createCli(options: RunCliOptions = {}): Command {
     .argument("[taskParts...]")
     .action(async (taskParts: string[]) => {
       const rawTask = resolveRawTask(taskParts);
+      await options.onResolvedTask?.(rawTask);
 
-      if (!options.onResolvedTask) {
-        return;
-      }
+      const cwd = options.cwd ?? process.cwd();
+      const projectRoot = options.resolveProjectRoot
+        ? await options.resolveProjectRoot(cwd)
+        : await resolveProjectRoot({ cwd });
+      const executionRequestRunner =
+        options.runExecutionRequest ?? runExecutionRequest;
+      const request = createExecutionRequest(rawTask, projectRoot, options);
 
-      await options.onResolvedTask(rawTask);
+      await executionRequestRunner(request);
     });
 
   program.configureOutput({
@@ -77,6 +110,10 @@ export async function runCli(
 
     if (error instanceof Error && error.message === REQUIRED_TASK_ERROR) {
       program.error(REQUIRED_TASK_ERROR);
+    }
+
+    if (error instanceof OrchestratorNotImplementedError) {
+      program.error(formatOrchestratorError(error));
     }
 
     throw error;
