@@ -225,12 +225,10 @@ test("cli falls back to the current directory outside git and fails with a clear
 
   assert.equal(result.commandError?.code, "commander.error");
   assert.equal(result.stdout, "");
-  assert.match(
+  assert.equal(
     result.stderr,
-    /Execution orchestration is not implemented yet\./,
+    `Execution orchestration is not implemented yet.\nProject root: ${currentDirectory}\nTask: draft plan\n`,
   );
-  assert.match(result.stderr, new RegExp(`Project root: ${currentDirectory}`));
-  assert.match(result.stderr, /Task: draft plan/);
 });
 
 test("cli reuses a valid repo-local default provider config when no override is supplied", async () => {
@@ -374,6 +372,46 @@ test("cli passes through --model unchanged with an explicit provider override wi
       rawTask: "resume work",
       providerId: "claude",
       model: "claude-sonnet-4.5",
+    },
+  ]);
+  assert.equal(
+    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    '{\n  "defaultProvider": "codex"\n}',
+  );
+});
+
+test("cli hands the orchestrator the exact resolved request when explicit provider and model overrides are supplied", async () => {
+  const projectRoot = mkdtempSync(
+    join(tmpdir(), "devflow-cli-exact-resolved-request-"),
+  );
+  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
+  writeFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "codex" }, null, 2),
+  );
+
+  const receivedRequests: unknown[] = [];
+
+  const result = await invokeCliWithOptions(
+    ["--provider", "claude", "--model", "gpt-5.5/fast beta", "resume", "work"],
+    {
+      cwd: projectRoot,
+      discoverProviders: async () => createDiscoveryResult(["claude", "codex"]),
+      runExecutionRequest: async (request) => {
+        receivedRequests.push(request);
+      },
+    },
+  );
+
+  assert.equal(result.commandError, undefined);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(receivedRequests, [
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "claude",
+      model: "gpt-5.5/fast beta",
     },
   ]);
   assert.equal(
