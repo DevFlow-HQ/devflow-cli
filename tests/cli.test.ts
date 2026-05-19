@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { Command, CommanderError } from "commander";
+import { execa } from "execa";
+import fs from "fs-extra";
 
 import { BUILT_IN_PROVIDERS } from "../src/adapters/providerAdapter.js";
 import { runCli } from "../src/cli.js";
@@ -188,10 +187,10 @@ test("cli preserves commander-owned version output", async () => {
 });
 
 test("cli resolves the git repository root before handing off the execution request", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-git-root-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-git-root-"));
   const nestedDirectory = join(projectRoot, "packages", "feature");
-  mkdirSync(nestedDirectory, { recursive: true });
-  execFileSync("git", ["init"], { cwd: projectRoot });
+  fs.ensureDirSync(nestedDirectory);
+  await execa("git", ["init"], { cwd: projectRoot });
 
   const receivedRequests: unknown[] = [];
 
@@ -216,7 +215,7 @@ test("cli resolves the git repository root before handing off the execution requ
 });
 
 test("cli falls back to the current directory outside git and fails with a clear orchestrator stub message", async () => {
-  const currentDirectory = mkdtempSync(join(tmpdir(), "devflow-cli-no-git-"));
+  const currentDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-git-"));
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: currentDirectory,
@@ -232,12 +231,10 @@ test("cli falls back to the current directory outside git and fails with a clear
 });
 
 test("cli reuses a valid repo-local default provider config when no override is supplied", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-config-root-"));
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
-    join(projectRoot, ".devflow", "config.json"),
-    JSON.stringify({ defaultProvider: "codex" }, null, 2),
-  );
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-config-root-"));
+  fs.outputJsonSync(join(projectRoot, ".devflow", "config.json"), {
+    defaultProvider: "codex",
+  });
 
   const receivedRequests: unknown[] = [];
 
@@ -261,9 +258,8 @@ test("cli reuses a valid repo-local default provider config when no override is 
 });
 
 test("cli gives --provider precedence over saved config for the current invocation only", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-provider-override-"));
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-provider-override-"));
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
   );
@@ -298,15 +294,14 @@ test("cli gives --provider precedence over saved config for the current invocati
     },
   ]);
   assert.equal(
-    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    await fs.readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
     '{\n  "defaultProvider": "codex"\n}',
   );
 });
 
 test("cli passes through --model unchanged alongside a saved provider without persisting model state", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-model-saved-provider-"));
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-model-saved-provider-"));
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
   );
@@ -335,17 +330,16 @@ test("cli passes through --model unchanged alongside a saved provider without pe
     },
   ]);
   assert.equal(
-    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    await fs.readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
     '{\n  "defaultProvider": "codex"\n}',
   );
 });
 
 test("cli passes through --model unchanged with an explicit provider override without mutating saved config", async () => {
-  const projectRoot = mkdtempSync(
+  const projectRoot = fs.mkdtempSync(
     join(tmpdir(), "devflow-cli-model-explicit-provider-"),
   );
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
   );
@@ -375,17 +369,16 @@ test("cli passes through --model unchanged with an explicit provider override wi
     },
   ]);
   assert.equal(
-    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    await fs.readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
     '{\n  "defaultProvider": "codex"\n}',
   );
 });
 
 test("cli hands the orchestrator the exact resolved request when explicit provider and model overrides are supplied", async () => {
-  const projectRoot = mkdtempSync(
+  const projectRoot = fs.mkdtempSync(
     join(tmpdir(), "devflow-cli-exact-resolved-request-"),
   );
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
   );
@@ -415,15 +408,14 @@ test("cli hands the orchestrator the exact resolved request when explicit provid
     },
   ]);
   assert.equal(
-    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    await fs.readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
     '{\n  "defaultProvider": "codex"\n}',
   );
 });
 
 test("cli rejects unknown --provider values before bootstrap fallback", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-unknown-provider-"));
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-unknown-provider-"));
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
   );
@@ -450,11 +442,10 @@ test("cli rejects unknown --provider values before bootstrap fallback", async ()
 });
 
 test("cli rejects unavailable --provider overrides without mutating saved config", async () => {
-  const projectRoot = mkdtempSync(
+  const projectRoot = fs.mkdtempSync(
     join(tmpdir(), "devflow-cli-unavailable-provider-override-"),
   );
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
   );
@@ -474,17 +465,16 @@ test("cli rejects unavailable --provider overrides without mutating saved config
     /Requested provider Claude \(claude\) is currently unavailable: Not installed\./,
   );
   assert.equal(
-    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    await fs.readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
     '{\n  "defaultProvider": "codex"\n}',
   );
 });
 
 test("cli fails fast when a saved default provider is no longer available", async () => {
-  const projectRoot = mkdtempSync(
+  const projectRoot = fs.mkdtempSync(
     join(tmpdir(), "devflow-cli-unavailable-saved-provider-"),
   );
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "claude" }, null, 2),
   );
@@ -510,9 +500,8 @@ test("cli fails fast when a saved default provider is no longer available", asyn
 });
 
 test("cli rejects invalid repo-local provider config with repair guidance", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-invalid-config-"));
-  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
-  writeFileSync(
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-invalid-config-"));
+  fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "not-real" }, null, 2),
   );
@@ -535,7 +524,7 @@ test("cli rejects invalid repo-local provider config with repair guidance", asyn
 });
 
 test("cli does not create repo-local state when bootstrap already has an explicit provider", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-lazy-state-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-lazy-state-"));
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: projectRoot,
@@ -545,11 +534,11 @@ test("cli does not create repo-local state when bootstrap already has an explici
 
   assert.equal(result.commandError, undefined);
   assert.equal(result.stdout, "");
-  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
+  assert.equal(fs.pathExistsSync(join(projectRoot, ".devflow")), false);
 });
 
 test("cli fails first-run setup with supported-provider guidance when no supported providers are installed", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-no-providers-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-providers-"));
   let discoveryCallCount = 0;
 
   const result = await invokeCliWithOptions(["bootstrap", "repo"], {
@@ -571,11 +560,11 @@ test("cli fails first-run setup with supported-provider guidance when no support
   assert.match(result.stderr, /Gemini \(gemini\)/);
   assert.match(result.stderr, /Codex \(codex\)/);
   assert.match(result.stderr, /OpenCode \(opencode\)/);
-  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
+  assert.equal(fs.pathExistsSync(join(projectRoot, ".devflow")), false);
 });
 
 test("cli auto-selects and persists the only installed provider during first-run setup", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-auto-provider-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-auto-provider-"));
   const receivedRequests: unknown[] = [];
   let promptCallCount = 0;
 
@@ -603,13 +592,13 @@ test("cli auto-selects and persists the only installed provider during first-run
     },
   ]);
   assert.equal(
-    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    await fs.readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
     '{\n  "defaultProvider": "codex"\n}\n',
   );
 });
 
 test("cli prompts once with canonical provider choices and disabled unavailable entries during first-run setup", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-prompt-provider-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-prompt-provider-"));
   const receivedRequests: unknown[] = [];
   const promptCalls: unknown[] = [];
 
@@ -659,7 +648,7 @@ test("cli prompts once with canonical provider choices and disabled unavailable 
 });
 
 test("cli aborts first-run setup without writing config when provider selection is cancelled", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-cancel-provider-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-cancel-provider-"));
   const receivedRequests: unknown[] = [];
 
   const result = await invokeCliWithOptions(["continue", "flow"], {
@@ -678,5 +667,5 @@ test("cli aborts first-run setup without writing config when provider selection 
     /Provider setup was cancelled before a default was saved\./,
   );
   assert.deepEqual(receivedRequests, []);
-  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
+  assert.equal(fs.pathExistsSync(join(projectRoot, ".devflow")), false);
 });

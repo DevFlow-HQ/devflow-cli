@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import fs from "fs-extra";
 
 import {
   BUILT_IN_PROVIDER_IDS,
@@ -117,18 +117,18 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await mkdtemp(
+    const tempRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), `devflow-${harness.command}-`),
     );
     const availableBinDir = path.join(tempRoot, "available-bin");
     const missingBinDir = path.join(tempRoot, "missing-bin");
 
-    await mkdir(availableBinDir);
-    await mkdir(missingBinDir);
+    await fs.ensureDir(availableBinDir);
+    await fs.ensureDir(missingBinDir);
 
     const executablePath = path.join(availableBinDir, harness.command);
-    await writeFile(executablePath, "#!/bin/sh\nexit 0\n");
-    await chmod(executablePath, 0o755);
+    await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+    await fs.chmod(executablePath, 0o755);
 
     process.env.PATH = availableBinDir;
 
@@ -197,7 +197,7 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await mkdtemp(
+    const tempRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), `devflow-${harness.command}-run-`),
     );
     const binDir = path.join(tempRoot, "bin");
@@ -205,9 +205,9 @@ for (const harness of providerHarnesses) {
     const outputPath = path.join(tempRoot, `${harness.command}-output.txt`);
     const executablePath = path.join(binDir, harness.command);
 
-    await mkdir(binDir);
-    await mkdir(workingDirectory);
-    await writeFile(
+    await fs.ensureDir(binDir);
+    await fs.ensureDir(workingDirectory);
+    await fs.writeFile(
       executablePath,
       [
         "#!/bin/sh",
@@ -220,7 +220,7 @@ for (const harness of providerHarnesses) {
         "",
       ].join("\n"),
     );
-    await chmod(executablePath, 0o755);
+    await fs.chmod(executablePath, 0o755);
 
     process.env.PATH = binDir;
 
@@ -236,7 +236,7 @@ for (const harness of providerHarnesses) {
       signal: null,
     });
 
-    const output = await readFile(outputPath, "utf8");
+    const output = await fs.readFile(outputPath, "utf8");
     assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
     assert.match(output, /^argc=\d+$/m);
     assert.match(output, /^arg=Ship the contract$/m);
@@ -249,17 +249,17 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await mkdtemp(
+    const tempRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), `devflow-${harness.command}-nonzero-`),
     );
     const binDir = path.join(tempRoot, "bin");
     const workingDirectory = path.join(tempRoot, "repo");
     const executablePath = path.join(binDir, harness.command);
 
-    await mkdir(binDir);
-    await mkdir(workingDirectory);
-    await writeFile(executablePath, "#!/bin/sh\nexit 7\n");
-    await chmod(executablePath, 0o755);
+    await fs.ensureDir(binDir);
+    await fs.ensureDir(workingDirectory);
+    await fs.writeFile(executablePath, "#!/bin/sh\nexit 7\n");
+    await fs.chmod(executablePath, 0o755);
 
     process.env.PATH = binDir;
 
@@ -281,14 +281,14 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await mkdtemp(
+    const tempRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), `devflow-${harness.command}-launch-failure-`),
     );
     const binDir = path.join(tempRoot, "bin");
     const workingDirectory = path.join(tempRoot, "repo");
 
-    await mkdir(binDir);
-    await mkdir(workingDirectory);
+    await fs.ensureDir(binDir);
+    await fs.ensureDir(workingDirectory);
 
     process.env.PATH = binDir;
 
@@ -308,7 +308,7 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await mkdtemp(
+    const tempRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), `devflow-built-in-${harness.command}-`),
     );
     const binDir = path.join(tempRoot, "bin");
@@ -316,9 +316,9 @@ for (const harness of providerHarnesses) {
     const outputPath = path.join(tempRoot, `${harness.command}-output.txt`);
     const executablePath = path.join(binDir, harness.command);
 
-    await mkdir(binDir);
-    await mkdir(workingDirectory);
-    await writeFile(
+    await fs.ensureDir(binDir);
+    await fs.ensureDir(workingDirectory);
+    await fs.writeFile(
       executablePath,
       [
         "#!/bin/sh",
@@ -330,7 +330,7 @@ for (const harness of providerHarnesses) {
         "",
       ].join("\n"),
     );
-    await chmod(executablePath, 0o755);
+    await fs.chmod(executablePath, 0o755);
 
     process.env.PATH = binDir;
 
@@ -358,7 +358,7 @@ for (const harness of providerHarnesses) {
       signal: null,
     });
 
-    const output = await readFile(outputPath, "utf8");
+    const output = await fs.readFile(outputPath, "utf8");
     assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
     assert.match(output, /^arg=Ship through the contract$/m);
   });

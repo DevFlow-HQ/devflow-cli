@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import fs from "fs-extra";
 
 import {
   getBuiltInProviderIdentity,
@@ -133,13 +133,13 @@ test("provider discovery defaults to the production built-in adapter factory", a
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "devflow-discovery-"));
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "devflow-discovery-"));
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "codex");
 
-  await mkdir(binDir);
-  await writeFile(executablePath, "#!/bin/sh\nexit 0\n");
-  await chmod(executablePath, 0o755);
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
 
   process.env.PATH = binDir;
 

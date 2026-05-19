@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import fs from "fs-extra";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -61,23 +61,16 @@ export async function resolveRepoConfig(
   options: ResolveRepoConfigOptions,
 ): Promise<RepoConfig | undefined> {
   const configPath = getConfigPath(options.projectRoot);
+  const configExists = await fs.pathExists(configPath);
 
-  let rawConfig: string;
-
-  try {
-    rawConfig = await readFile(configPath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-
-    throw error;
+  if (!configExists) {
+    return undefined;
   }
 
   let parsedConfig: unknown;
 
   try {
-    parsedConfig = JSON.parse(rawConfig);
+    parsedConfig = await fs.readJson(configPath);
   } catch (error) {
     const details =
       error instanceof Error ? error.message : "Config file is not valid JSON.";
@@ -102,8 +95,8 @@ export async function persistRepoConfig(
   const configPath = getConfigPath(options.projectRoot);
   const stateDirectory = join(options.projectRoot, DEVFLOW_STATE_DIRECTORY);
 
-  await mkdir(stateDirectory, { recursive: true });
-  await writeFile(configPath, JSON.stringify(options.config, null, 2) + "\n");
+  await fs.ensureDir(stateDirectory);
+  await fs.writeJson(configPath, options.config, { spaces: 2 });
 }
 
 export function formatInvalidRepoConfigError(

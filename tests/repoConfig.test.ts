@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import fs from "fs-extra";
 
 import {
   InvalidRepoConfigError,
@@ -12,29 +11,29 @@ import {
 } from "../src/repoConfig.js";
 
 test("repo config is absent until explicitly persisted", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-repo-config-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-repo-config-"));
 
-  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
+  assert.equal(await fs.pathExists(join(projectRoot, ".devflow")), false);
   assert.equal(await resolveRepoConfig({ projectRoot }), undefined);
-  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
+  assert.equal(await fs.pathExists(join(projectRoot, ".devflow")), false);
 });
 
 test("persisting repo config creates state lazily and supports later reads", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-repo-config-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-repo-config-"));
 
   await persistRepoConfig({
     projectRoot,
     config: { defaultProvider: "claude" },
   });
 
-  assert.equal(existsSync(join(projectRoot, ".devflow")), true);
+  assert.equal(await fs.pathExists(join(projectRoot, ".devflow")), true);
   assert.deepEqual(await resolveRepoConfig({ projectRoot }), {
     defaultProvider: "claude",
   });
 });
 
 test("repo config validation rejects hand-edited unknown providers", async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-repo-config-"));
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-repo-config-"));
 
   await persistRepoConfig({
     projectRoot,
@@ -42,10 +41,7 @@ test("repo config validation rejects hand-edited unknown providers", async () =>
   });
 
   const configPath = join(projectRoot, ".devflow", "config.json");
-  await writeFile(
-    configPath,
-    JSON.stringify({ defaultProvider: "nope" }, null, 2),
-  );
+  await fs.outputJson(configPath, { defaultProvider: "nope" }, { spaces: 2 });
 
   await assert.rejects(
     resolveRepoConfig({ projectRoot }),
