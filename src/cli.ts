@@ -85,11 +85,12 @@ export function createCli(options: RunCliOptions = {}): Command {
     .name("devflow")
     .version(options.version ?? DEFAULT_VERSION)
     .option("--provider <providerId>")
+    .option("--model <model>")
     .argument("[taskParts...]")
     .action(async (taskParts: string[]) => {
       const rawTask = resolveRawTask(taskParts);
       await options.onResolvedTask?.(rawTask);
-      const commandOptions = program.opts<{ provider?: string }>();
+      const commandOptions = program.opts<{ provider?: string; model?: string }>();
 
       const cwd = options.cwd ?? process.cwd();
       const projectRoot = options.resolveProjectRoot
@@ -113,7 +114,7 @@ export function createCli(options: RunCliOptions = {}): Command {
         rawTask,
         projectRoot,
         resolvedProviderId,
-        options.model,
+        commandOptions.model ?? options.model,
       );
 
       await executionRequestRunner(request);
