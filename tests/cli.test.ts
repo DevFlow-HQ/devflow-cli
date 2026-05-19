@@ -262,6 +262,138 @@ test("cli reuses a valid repo-local default provider config when no override is 
   ]);
 });
 
+test("cli gives --provider precedence over saved config for the current invocation only", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-provider-override-"));
+  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
+  writeFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "codex" }, null, 2),
+  );
+
+  const receivedRequests: unknown[] = [];
+  let promptCallCount = 0;
+
+  const result = await invokeCliWithOptions(
+    ["--provider", "claude", "resume", "work"],
+    {
+      cwd: projectRoot,
+      discoverProviders: async () => createDiscoveryResult(["claude", "codex"]),
+      promptForProviderSelection: async () => {
+        promptCallCount += 1;
+        return "codex";
+      },
+      runExecutionRequest: async (request) => {
+        receivedRequests.push(request);
+      },
+    },
+  );
+
+  assert.equal(result.commandError, undefined);
+  assert.equal(promptCallCount, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(receivedRequests, [
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "claude",
+    },
+  ]);
+  assert.equal(
+    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    '{\n  "defaultProvider": "codex"\n}',
+  );
+});
+
+test("cli rejects unknown --provider values before bootstrap fallback", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-unknown-provider-"));
+  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
+  writeFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "codex" }, null, 2),
+  );
+
+  let discoveryCallCount = 0;
+
+  const result = await invokeCliWithOptions(
+    ["--provider", "not-real", "resume", "work"],
+    {
+      cwd: projectRoot,
+      discoverProviders: async () => {
+        discoveryCallCount += 1;
+        return createDiscoveryResult(["claude", "codex"]);
+      },
+    },
+  );
+
+  assert.equal(discoveryCallCount, 0);
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /Unsupported provider: not-real\./);
+  assert.match(result.stderr, /Supported providers:/);
+  assert.match(result.stderr, /Claude \(claude\)/);
+});
+
+test("cli rejects unavailable --provider overrides without mutating saved config", async () => {
+  const projectRoot = mkdtempSync(
+    join(tmpdir(), "devflow-cli-unavailable-provider-override-"),
+  );
+  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
+  writeFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "codex" }, null, 2),
+  );
+
+  const result = await invokeCliWithOptions(
+    ["--provider", "claude", "resume", "work"],
+    {
+      cwd: projectRoot,
+      discoverProviders: async () => createDiscoveryResult(["codex"]),
+    },
+  );
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    /Requested provider Claude \(claude\) is currently unavailable: Not installed\./,
+  );
+  assert.equal(
+    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    '{\n  "defaultProvider": "codex"\n}',
+  );
+});
+
+test("cli fails fast when a saved default provider is no longer available", async () => {
+  const projectRoot = mkdtempSync(
+    join(tmpdir(), "devflow-cli-unavailable-saved-provider-"),
+  );
+  mkdirSync(join(projectRoot, ".devflow"), { recursive: true });
+  writeFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "claude" }, null, 2),
+  );
+
+  let promptCallCount = 0;
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    discoverProviders: async () => createDiscoveryResult(["codex"]),
+    promptForProviderSelection: async () => {
+      promptCallCount += 1;
+      return "codex";
+    },
+  });
+
+  assert.equal(promptCallCount, 0);
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    /Saved default provider Claude \(claude\) is currently unavailable: Not installed\./,
+  );
+});
+
 test("cli rejects invalid repo-local provider config with repair guidance", async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-invalid-config-"));
   mkdirSync(join(projectRoot, ".devflow"), { recursive: true });

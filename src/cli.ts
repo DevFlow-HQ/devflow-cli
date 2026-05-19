@@ -5,8 +5,10 @@ import { Command, CommanderError } from "commander";
 import {
   NoSupportedProvidersInstalledError,
   ProviderSetupCancelledError,
+  ProviderUnavailableError,
   resolveBootstrapProvider,
   type PromptForProviderSelectionOptions,
+  UnsupportedProviderError,
 } from "./bootstrapProvider.js";
 import type { BuiltInProviderId } from "./adapters/providerAdapter.js";
 import type { ProviderDiscoveryResult } from "./adapters/providerDiscovery.js";
@@ -82,10 +84,12 @@ export function createCli(options: RunCliOptions = {}): Command {
   program
     .name("devflow")
     .version(options.version ?? DEFAULT_VERSION)
+    .option("--provider <providerId>")
     .argument("[taskParts...]")
     .action(async (taskParts: string[]) => {
       const rawTask = resolveRawTask(taskParts);
       await options.onResolvedTask?.(rawTask);
+      const commandOptions = program.opts<{ provider?: string }>();
 
       const cwd = options.cwd ?? process.cwd();
       const projectRoot = options.resolveProjectRoot
@@ -96,10 +100,11 @@ export function createCli(options: RunCliOptions = {}): Command {
         options.runExecutionRequest ?? runExecutionRequest;
       const resolvedProviderId =
         options.providerId ??
-        repoConfig?.defaultProvider ??
         (await resolveBootstrapProvider({
           projectRoot,
           stdout: options.stdout,
+          explicitProviderId: commandOptions.provider,
+          savedProviderId: repoConfig?.defaultProvider,
           discoverProviders: options.discoverProviders,
           persistRepoConfig: options.persistRepoConfig ?? persistRepoConfig,
           promptForProviderSelection: options.promptForProviderSelection,
@@ -159,7 +164,9 @@ export async function runCli(
 
     if (
       error instanceof NoSupportedProvidersInstalledError ||
-      error instanceof ProviderSetupCancelledError
+      error instanceof ProviderSetupCancelledError ||
+      error instanceof UnsupportedProviderError ||
+      error instanceof ProviderUnavailableError
     ) {
       program.error(error.message);
     }

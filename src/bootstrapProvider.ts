@@ -8,6 +8,7 @@ import {
 import {
   BUILT_IN_PROVIDERS,
   getBuiltInProviderIdentity,
+  isBuiltInProviderId,
   type BuiltInProviderId,
 } from "./adapters/providerAdapter.js";
 import {
@@ -36,6 +37,8 @@ export interface PromptForProviderSelectionOptions {
 export interface ResolveBootstrapProviderOptions {
   projectRoot: string;
   stdout?: BootstrapWriter;
+  explicitProviderId?: string;
+  savedProviderId?: BuiltInProviderId;
   discoverProviders?: () => Promise<ProviderDiscoveryResult>;
   persistRepoConfig?: (options: PersistRepoConfigOptions) => Promise<void>;
   promptForProviderSelection?: (
@@ -59,6 +62,31 @@ export class ProviderSetupCancelledError extends Error {
   }
 }
 
+export class UnsupportedProviderError extends Error {
+  constructor(providerId: string) {
+    super(
+      `Unsupported provider: ${providerId}. Supported providers: ${BUILT_IN_PROVIDERS.map((provider) => formatProviderLabel(provider.id)).join(", ")}.`,
+    );
+    this.name = "UnsupportedProviderError";
+  }
+}
+
+export class ProviderUnavailableError extends Error {
+  constructor(
+    source: "requested" | "saved",
+    providerId: BuiltInProviderId,
+    reason: string,
+  ) {
+    const sourceLabel =
+      source === "requested" ? "Requested provider" : "Saved default provider";
+
+    super(
+      `${sourceLabel} ${formatProviderLabel(providerId)} is currently unavailable: ${reason}.`,
+    );
+    this.name = "ProviderUnavailableError";
+  }
+}
+
 function formatProviderLabel(providerId: BuiltInProviderId): string {
   const provider = getBuiltInProviderIdentity(providerId);
   return `${provider.displayName} (${provider.id})`;
@@ -75,6 +103,26 @@ function createProviderSelectionChoices(
       ? {}
       : { unavailableReason: provider.reason }),
   }));
+}
+
+function resolveAvailableDiscoveredProvider(
+  discovery: ProviderDiscoveryResult,
+  providerId: BuiltInProviderId,
+  source: "requested" | "saved",
+): BuiltInProviderId {
+  const discoveredProvider = discovery.providers.find(
+    (provider) => provider.provider.id === providerId,
+  );
+
+  if (!discoveredProvider || !discoveredProvider.isAvailable) {
+    throw new ProviderUnavailableError(
+      source,
+      providerId,
+      discoveredProvider?.reason ?? "Not installed",
+    );
+  }
+
+  return providerId;
 }
 
 async function saveDefaultProvider(
@@ -128,6 +176,29 @@ export async function resolveBootstrapProvider(
   const persistConfig = options.persistRepoConfig ?? persistRepoConfig;
   const promptForProviderSelection =
     options.promptForProviderSelection ?? defaultPromptForProviderSelection;
+
+  if (options.explicitProviderId) {
+    if (!isBuiltInProviderId(options.explicitProviderId)) {
+      throw new UnsupportedProviderError(options.explicitProviderId);
+    }
+
+    const discovery = await discoverProviders();
+    return resolveAvailableDiscoveredProvider(
+      discovery,
+      options.explicitProviderId,
+      "requested",
+    );
+  }
+
+  if (options.savedProviderId) {
+    const discovery = await discoverProviders();
+    return resolveAvailableDiscoveredProvider(
+      discovery,
+      options.savedProviderId,
+      "saved",
+    );
+  }
+
   const discovery = await discoverProviders();
 
   if (discovery.summary.availabilityStatus === "none") {

@@ -12,6 +12,12 @@ export const BUILT_IN_PROVIDER_IDS = BUILT_IN_PROVIDERS.map(
 export type ProviderIdentity = (typeof BUILT_IN_PROVIDERS)[number];
 export type BuiltInProviderId = ProviderIdentity["id"];
 
+export function isBuiltInProviderId(
+  providerId: string,
+): providerId is BuiltInProviderId {
+  return BUILT_IN_PROVIDER_IDS.includes(providerId as BuiltInProviderId);
+}
+
 export function getBuiltInProviderIdentity(
   providerId: BuiltInProviderId,
 ): ProviderIdentity {
