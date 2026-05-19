@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { Command, CommanderError } from "commander";
 
+import { BUILT_IN_PROVIDERS } from "../src/adapters/providerAdapter.js";
 import { runCli } from "../src/cli.js";
+import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.js";
 
 function createWritableBuffer() {
   let output = "";
@@ -33,6 +36,7 @@ async function invokeCli(argv: string[]) {
     await runCli(argv, {
       stdout,
       stderr,
+      providerId: "claude",
       onResolvedTask(rawTask) {
         resolvedTasks.push(rawTask);
       },
@@ -88,6 +92,47 @@ async function invokeCliWithOptions(
     commandError,
     stdout: stdout.read(),
     stderr: stderr.read(),
+  };
+}
+
+function createDiscoveryResult(
+  availableProviderIds: (typeof BUILT_IN_PROVIDERS)[number]["id"][],
+): ProviderDiscoveryResult {
+  const providers = BUILT_IN_PROVIDERS.map((provider) =>
+    availableProviderIds.includes(provider.id)
+      ? {
+          provider,
+          isAvailable: true as const,
+          executable: provider.id,
+        }
+      : {
+          provider,
+          isAvailable: false as const,
+          reason: "Not installed",
+        },
+  );
+
+  const installedProviders = providers.filter(
+    (provider): provider is Extract<(typeof providers)[number], { isAvailable: true }> =>
+      provider.isAvailable,
+  );
+
+  return {
+    providers,
+    installedProviders,
+    summary:
+      installedProviders.length === 0
+        ? { availabilityStatus: "none", installedProviderCount: 0 }
+        : installedProviders.length === 1
+          ? {
+              availabilityStatus: "single",
+              installedProviderCount: 1,
+              recommendedProviderId: installedProviders[0].provider.id,
+            }
+          : {
+              availabilityStatus: "multiple",
+              installedProviderCount: installedProviders.length,
+            },
   };
 }
 
@@ -152,6 +197,7 @@ test("cli resolves the git repository root before handing off the execution requ
 
   const result = await invokeCliWithOptions(["ship", "bootstrap"], {
     cwd: nestedDirectory,
+    providerId: "claude",
     runExecutionRequest: async (request) => {
       receivedRequests.push(request);
     },
@@ -164,6 +210,7 @@ test("cli resolves the git repository root before handing off the execution requ
     {
       projectRoot,
       rawTask: "ship bootstrap",
+      providerId: "claude",
     },
   ]);
 });
@@ -173,6 +220,7 @@ test("cli falls back to the current directory outside git and fails with a clear
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: currentDirectory,
+    providerId: "claude",
   });
 
   assert.equal(result.commandError?.code, "commander.error");
@@ -239,14 +287,149 @@ test("cli rejects invalid repo-local provider config with repair guidance", asyn
   );
 });
 
-test("cli does not create repo-local state during a read-only bootstrap invocation", async () => {
+test("cli does not create repo-local state when bootstrap already has an explicit provider", async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-lazy-state-"));
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: projectRoot,
+    providerId: "claude",
+    runExecutionRequest: async () => {},
+  });
+
+  assert.equal(result.commandError, undefined);
+  assert.equal(result.stdout, "");
+  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
+});
+
+test("cli fails first-run setup with supported-provider guidance when no supported providers are installed", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-no-providers-"));
+  let discoveryCallCount = 0;
+
+  const result = await invokeCliWithOptions(["bootstrap", "repo"], {
+    cwd: projectRoot,
+    discoverProviders: async () => {
+      discoveryCallCount += 1;
+      return createDiscoveryResult([]);
+    },
+  });
+
+  assert.equal(discoveryCallCount, 1);
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    /No supported providers are currently installed\./,
+  );
+  assert.match(result.stderr, /Claude \(claude\)/);
+  assert.match(result.stderr, /Gemini \(gemini\)/);
+  assert.match(result.stderr, /Codex \(codex\)/);
+  assert.match(result.stderr, /OpenCode \(opencode\)/);
+  assert.equal(existsSync(join(projectRoot, ".devflow")), false);
+});
+
+test("cli auto-selects and persists the only installed provider during first-run setup", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-auto-provider-"));
+  const receivedRequests: unknown[] = [];
+  let promptCallCount = 0;
+
+  const result = await invokeCliWithOptions(["continue", "flow"], {
+    cwd: projectRoot,
+    discoverProviders: async () => createDiscoveryResult(["codex"]),
+    promptForProviderSelection: async () => {
+      promptCallCount += 1;
+      return "claude";
+    },
+    runExecutionRequest: async (request) => {
+      receivedRequests.push(request);
+    },
+  });
+
+  assert.equal(result.commandError, undefined);
+  assert.equal(promptCallCount, 0);
+  assert.match(result.stdout, /Saved default provider: Codex \(codex\)\./);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(receivedRequests, [
+    {
+      projectRoot,
+      rawTask: "continue flow",
+      providerId: "codex",
+    },
+  ]);
+  assert.equal(
+    await readFile(join(projectRoot, ".devflow", "config.json"), "utf8"),
+    '{\n  "defaultProvider": "codex"\n}\n',
+  );
+});
+
+test("cli prompts once with canonical provider choices and disabled unavailable entries during first-run setup", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-prompt-provider-"));
+  const receivedRequests: unknown[] = [];
+  const promptCalls: unknown[] = [];
+
+  const result = await invokeCliWithOptions(["continue", "flow"], {
+    cwd: projectRoot,
+    discoverProviders: async () => createDiscoveryResult(["claude", "codex"]),
+    promptForProviderSelection: async (options) => {
+      promptCalls.push(options);
+      return "codex";
+    },
+    runExecutionRequest: async (request) => {
+      receivedRequests.push(request);
+    },
+  });
+
+  assert.equal(result.commandError, undefined);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /Saved default provider: Codex \(codex\)\./);
+  assert.deepEqual(promptCalls, [
+    {
+      message: "Select a default provider",
+      choices: [
+        { value: "claude", label: "Claude (claude)", disabled: false },
+        {
+          value: "gemini",
+          label: "Gemini (gemini)",
+          disabled: true,
+          unavailableReason: "Not installed",
+        },
+        { value: "codex", label: "Codex (codex)", disabled: false },
+        {
+          value: "opencode",
+          label: "OpenCode (opencode)",
+          disabled: true,
+          unavailableReason: "Not installed",
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(receivedRequests, [
+    {
+      projectRoot,
+      rawTask: "continue flow",
+      providerId: "codex",
+    },
+  ]);
+});
+
+test("cli aborts first-run setup without writing config when provider selection is cancelled", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "devflow-cli-cancel-provider-"));
+  const receivedRequests: unknown[] = [];
+
+  const result = await invokeCliWithOptions(["continue", "flow"], {
+    cwd: projectRoot,
+    discoverProviders: async () => createDiscoveryResult(["claude", "codex"]),
+    promptForProviderSelection: async () => undefined,
+    runExecutionRequest: async (request) => {
+      receivedRequests.push(request);
+    },
   });
 
   assert.equal(result.commandError?.code, "commander.error");
   assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    /Provider setup was cancelled before a default was saved\./,
+  );
+  assert.deepEqual(receivedRequests, []);
   assert.equal(existsSync(join(projectRoot, ".devflow")), false);
 });

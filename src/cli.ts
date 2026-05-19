@@ -3,9 +3,19 @@ import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 
 import {
+  NoSupportedProvidersInstalledError,
+  ProviderSetupCancelledError,
+  resolveBootstrapProvider,
+  type PromptForProviderSelectionOptions,
+} from "./bootstrapProvider.js";
+import type { BuiltInProviderId } from "./adapters/providerAdapter.js";
+import type { ProviderDiscoveryResult } from "./adapters/providerDiscovery.js";
+import {
   formatInvalidRepoConfigError,
   InvalidRepoConfigError,
+  persistRepoConfig,
   resolveRepoConfig,
+  type PersistRepoConfigOptions,
 } from "./repoConfig.js";
 import {
   formatOrchestratorError,
@@ -31,6 +41,11 @@ export interface RunCliOptions {
   model?: string;
   onResolvedTask?: (rawTask: string) => void | Promise<void>;
   resolveProjectRoot?: (cwd: string) => Promise<string>;
+  discoverProviders?: () => Promise<ProviderDiscoveryResult>;
+  persistRepoConfig?: (options: PersistRepoConfigOptions) => Promise<void>;
+  promptForProviderSelection?: (
+    options: PromptForProviderSelectionOptions,
+  ) => Promise<BuiltInProviderId | undefined>;
   runExecutionRequest?: (
     request: ResolvedExecutionRequest,
   ) => void | Promise<void>;
@@ -79,10 +94,20 @@ export function createCli(options: RunCliOptions = {}): Command {
       const repoConfig = await resolveRepoConfig({ projectRoot });
       const executionRequestRunner =
         options.runExecutionRequest ?? runExecutionRequest;
+      const resolvedProviderId =
+        options.providerId ??
+        repoConfig?.defaultProvider ??
+        (await resolveBootstrapProvider({
+          projectRoot,
+          stdout: options.stdout,
+          discoverProviders: options.discoverProviders,
+          persistRepoConfig: options.persistRepoConfig ?? persistRepoConfig,
+          promptForProviderSelection: options.promptForProviderSelection,
+        }));
       const request = createExecutionRequest(
         rawTask,
         projectRoot,
-        options.providerId ?? repoConfig?.defaultProvider,
+        resolvedProviderId,
         options.model,
       );
 
@@ -130,6 +155,13 @@ export async function runCli(
 
     if (error instanceof InvalidRepoConfigError) {
       program.error(formatInvalidRepoConfigError(error));
+    }
+
+    if (
+      error instanceof NoSupportedProvidersInstalledError ||
+      error instanceof ProviderSetupCancelledError
+    ) {
+      program.error(error.message);
     }
 
     throw error;
