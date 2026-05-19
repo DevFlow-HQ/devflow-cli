@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-05-18_
+_Last updated: 2026-05-19_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md`.
 Hard limit: 100 lines.
@@ -28,21 +28,24 @@ Hard limit: 100 lines.
   - discovery aggregates providers in canonical order, preserves available executable metadata, and supports injected adapter factories for tests
   - unsupported or failing providers degrade into user-safe unavailable entries, with optional internal `debugReason` diagnostics
   - regression coverage locks adapter and discovery behavior so future CLI work can depend on a stable contract
+- Completed done issues `001` through `007` for the CLI bootstrap slice:
+  - `src/cli.ts` now provides the real `commander` entrypoint with free-form task parsing, help/version passthrough, and clear missing-task failures
+  - `src/projectRoot.ts` resolves the Git repo root when present and falls back to the current working directory outside Git before handing off to the orchestrator
+  - `src/repoConfig.ts` validates repo-local `.devflow/config.json` with a strict schema, preserves valid saved defaults, and rejects malformed or hand-edited config with repair guidance
+  - `src/bootstrapProvider.ts` implements first-run provider setup: zero-provider guidance, single-provider auto-persist, multi-provider prompt flow, and cancellation without side effects
+  - `--provider` override semantics are strict: explicit override wins for the invocation only, unknown ids fail immediately, unavailable overrides fail with targeted messaging, and stale saved defaults hard-fail instead of re-prompting
+  - `--model` is accepted as an opaque string, passed unchanged into the resolved orchestrator request, and never persisted to config
+  - `src/orchestrator.ts` now receives a pinned bootstrap handoff object from the CLI, with the current structured not-implemented failure shape locked by regression tests
 - Added regression coverage in `tests/adapters/providerAdapter.contract.test.ts` and `tests/adapters/providerDiscovery.test.ts` for provider identity, detection results, interactive run semantics, OpenCode parity, discovery ordering, availability summaries, unsupported-provider messaging, and failure degradation.
-- Verified this slice with `npm run test` and `npm run typecheck`.
+- Added regression coverage in `tests/cli.test.ts` and `tests/repoConfig.test.ts` for task parsing, project-root resolution, provider precedence, first-run persistence/prompt/cancellation behavior, strict config and override failures, exact orchestrator request shape, and repo-local config persistence/validation.
+- Verified the current slice with `npm run test`, `npm run typecheck`, and `npm run build`.
 
 ## Current State
-- The repo currently contains only the adapter/discovery slice under `src/adapters/` plus its tests.
-- Built-in provider discovery is stable enough for CLI integration and returns canonical provider lists, installed-provider subsets, and availability summaries.
-- Contract and regression tests exist only for adapters/discovery; no CLI, orchestrator, state, agents, or prompt files exist yet.
-- `src/cli.ts` is still missing, so `npm run build` and `npm run dev` remain blocked even though package/build config is in place.
+- The repo now has a working CLI/bootstrap boundary across `src/cli.ts`, `src/projectRoot.ts`, `src/repoConfig.ts`, `src/bootstrapProvider.ts`, `src/orchestrator.ts`, and `src/adapters/`.
+- Built-in provider discovery, repo-root resolution, repo-local default-provider state, explicit provider/model override handling, and first-run provider selection are implemented and regression-tested.
+- The orchestrator boundary exists but is still a stubbed handoff target; downstream state helpers, agents, and prompt files for the actual pipeline are not implemented yet.
 
 ## Next Checkpoint
-- Implement the CLI bootstrap layer:
-  - create `src/cli.ts` with `commander` entry wiring, raw task argument parsing, provider discovery integration, and a first-run/default-provider flow
-- Implement the config and state foundation:
-  - add repo-root `.devflow/config.json` management plus `src/state/reader.ts` and `src/state/writer.ts` helpers for config, context, and run-folder creation
-- Implement the orchestration skeleton:
-  - add `src/orchestrator.ts` and stage contracts so DevFlow can sequence intent → bootstrap → grill → PRD → issues → execute → validate even if most agents are still thin
-- Implement the first agent slice:
-  - add `src/agents/intent.ts` and `prompts/intent.md` so the orchestrator can run one real provider-backed stage end to end
+- Implement the filesystem state helpers under `src/state/` for config reuse, context/bootstrap artifacts, and timestamped run directories.
+- Expand `src/orchestrator.ts` from a stub into the stage sequencer for intent → bootstrap → grill → PRD → issues → execute → validate.
+- Add the first real agent slice, starting with `src/agents/intent.ts` and `prompts/intent.md`, so one provider-backed stage can run end to end.
