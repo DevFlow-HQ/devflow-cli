@@ -51,6 +51,24 @@ test("devflow config validation rejects malformed persisted provider ids", async
   );
 });
 
+test("devflow config validation rejects malformed persisted json", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-config-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await fs.outputFile(
+    join(projectRoot, ".devflow", "config.json"),
+    '{"defaultProvider":"claude"',
+  );
+
+  await assert.rejects(
+    state.config.load(),
+    (error: unknown) =>
+      error instanceof InvalidDevFlowConfigError &&
+      error.configPath.endsWith("/.devflow/config.json") &&
+      error.message.includes("config.json"),
+  );
+});
+
 test("project context is absent until written and then readable from its canonical state location", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const state = createDevFlowState({ projectRoot });
@@ -158,6 +176,57 @@ test("run artifact writes reject duplicates with a domain-specific error", async
       error.runId === run.id &&
       error.artifactName === "intent" &&
       error.message.includes("intent"),
+  );
+});
+
+test("run handles reject duplicate PRD, validation, and normalized issue artifact writes while retaining the first artifact", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.writePrd("# First PRD\n");
+  await run.writeValidation('{"status":"first"}');
+  await run.writeIssue("Release Prep", "# First issue\n");
+
+  await assert.rejects(
+    run.writePrd("# Second PRD\n"),
+    (error: unknown) =>
+      error instanceof DuplicateDevFlowRunArtifactError &&
+      error.runId === run.id &&
+      error.artifactName === "prd" &&
+      error.artifactPath.endsWith("/prd.md"),
+  );
+  await assert.rejects(
+    run.writeValidation('{"status":"second"}'),
+    (error: unknown) =>
+      error instanceof DuplicateDevFlowRunArtifactError &&
+      error.runId === run.id &&
+      error.artifactName === "validation" &&
+      error.artifactPath.endsWith("/validation.json"),
+  );
+  await assert.rejects(
+    run.writeIssue("release_prep", "# Second issue\n"),
+    (error: unknown) =>
+      error instanceof DuplicateDevFlowRunArtifactError &&
+      error.runId === run.id &&
+      error.artifactName === "issue" &&
+      error.artifactPath.endsWith("/issues/release-prep.md"),
+  );
+
+  assert.equal(
+    await fs.readFile(join(run.paths.runDirectory, "prd.md"), "utf8"),
+    "# First PRD\n",
+  );
+  assert.equal(
+    await fs.readFile(join(run.paths.runDirectory, "validation.json"), "utf8"),
+    '{"status":"first"}',
+  );
+  assert.equal(
+    await fs.readFile(
+      join(run.paths.runDirectory, "issues", "release-prep.md"),
+      "utf8",
+    ),
+    "# First issue\n",
   );
 });
 

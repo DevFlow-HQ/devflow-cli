@@ -264,9 +264,8 @@ test("cli falls back to the current directory outside git and fails with a clear
 
 test("cli reuses a valid repo-local default provider config when no override is supplied", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-config-root-"));
-  fs.outputJsonSync(join(projectRoot, ".devflow", "config.json"), {
-    defaultProvider: "codex",
-  });
+  const devFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.config.save({ defaultProvider: "codex" });
 
   const receivedRequests: unknown[] = [];
 
