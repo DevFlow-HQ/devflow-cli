@@ -12,9 +12,9 @@ import {
   type BuiltInProviderId,
 } from "./adapters/providerAdapter.js";
 import {
-  persistRepoConfig,
-  type PersistRepoConfigOptions,
-} from "./repoConfig.js";
+  createDevFlowState,
+  type DevFlowState,
+} from "./devflowState.js";
 
 const PROVIDER_SELECTION_MESSAGE = "Select a default provider";
 
@@ -36,11 +36,11 @@ export interface PromptForProviderSelectionOptions {
 
 export interface ResolveBootstrapProviderOptions {
   projectRoot: string;
+  devFlowState?: DevFlowState;
   stdout?: BootstrapWriter;
   explicitProviderId?: string;
   savedProviderId?: BuiltInProviderId;
   discoverProviders?: () => Promise<ProviderDiscoveryResult>;
-  persistRepoConfig?: (options: PersistRepoConfigOptions) => Promise<void>;
   promptForProviderSelection?: (
     options: PromptForProviderSelectionOptions,
   ) => Promise<BuiltInProviderId | undefined>;
@@ -126,15 +126,11 @@ function resolveAvailableDiscoveredProvider(
 }
 
 async function saveDefaultProvider(
-  projectRoot: string,
+  devFlowState: DevFlowState,
   providerId: BuiltInProviderId,
-  persistConfig: (options: PersistRepoConfigOptions) => Promise<void>,
   stdout?: BootstrapWriter,
 ): Promise<void> {
-  await persistConfig({
-    projectRoot,
-    config: { defaultProvider: providerId },
-  });
+  await devFlowState.config.save({ defaultProvider: providerId });
 
   stdout?.write(`Saved default provider: ${formatProviderLabel(providerId)}.\n`);
 }
@@ -173,9 +169,10 @@ export async function resolveBootstrapProvider(
 ): Promise<BuiltInProviderId> {
   const discoverProviders =
     options.discoverProviders ?? discoverBuiltInProviders;
-  const persistConfig = options.persistRepoConfig ?? persistRepoConfig;
   const promptForProviderSelection =
     options.promptForProviderSelection ?? defaultPromptForProviderSelection;
+  const devFlowState =
+    options.devFlowState ?? createDevFlowState({ projectRoot: options.projectRoot });
 
   if (options.explicitProviderId) {
     if (!isBuiltInProviderId(options.explicitProviderId)) {
@@ -210,9 +207,8 @@ export async function resolveBootstrapProvider(
     discovery.summary.recommendedProviderId
   ) {
     await saveDefaultProvider(
-      options.projectRoot,
+      devFlowState,
       discovery.summary.recommendedProviderId,
-      persistConfig,
       options.stdout,
     );
     return discovery.summary.recommendedProviderId;
@@ -228,9 +224,8 @@ export async function resolveBootstrapProvider(
   }
 
   await saveDefaultProvider(
-    options.projectRoot,
+    devFlowState,
     selectedProviderId,
-    persistConfig,
     options.stdout,
   );
 

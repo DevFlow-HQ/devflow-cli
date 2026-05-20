@@ -11,7 +11,7 @@ import {
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";
 
-const repoConfigSchema = z
+const devFlowConfigSchema = z
   .object({
     defaultProvider: z.enum(
       BUILT_IN_PROVIDER_IDS as [
@@ -22,24 +22,27 @@ const repoConfigSchema = z
   })
   .strict();
 
-export interface RepoConfig {
+export interface DevFlowConfig {
   defaultProvider: BuiltInProviderId;
 }
 
-export interface ResolveRepoConfigOptions {
+export interface CreateDevFlowStateOptions {
   projectRoot: string;
 }
 
-export interface PersistRepoConfigOptions extends ResolveRepoConfigOptions {
-  config: RepoConfig;
+export interface DevFlowState {
+  config: {
+    load(): Promise<DevFlowConfig | undefined>;
+    save(config: DevFlowConfig): Promise<void>;
+  };
 }
 
-export class InvalidRepoConfigError extends Error {
+export class InvalidDevFlowConfigError extends Error {
   readonly configPath: string;
 
   constructor(configPath: string, details: string) {
     super(`Invalid DevFlow config at ${configPath}. ${details}`);
-    this.name = "InvalidRepoConfigError";
+    this.name = "InvalidDevFlowConfigError";
     this.configPath = configPath;
   }
 }
@@ -57,10 +60,8 @@ function formatValidationDetails(error: z.ZodError): string {
     .join("; ");
 }
 
-export async function resolveRepoConfig(
-  options: ResolveRepoConfigOptions,
-): Promise<RepoConfig | undefined> {
-  const configPath = getConfigPath(options.projectRoot);
+async function loadConfig(projectRoot: string): Promise<DevFlowConfig | undefined> {
+  const configPath = getConfigPath(projectRoot);
   const configExists = await fs.pathExists(configPath);
 
   if (!configExists) {
@@ -74,13 +75,13 @@ export async function resolveRepoConfig(
   } catch (error) {
     const details =
       error instanceof Error ? error.message : "Config file is not valid JSON.";
-    throw new InvalidRepoConfigError(configPath, details);
+    throw new InvalidDevFlowConfigError(configPath, details);
   }
 
-  const result = repoConfigSchema.safeParse(parsedConfig);
+  const result = devFlowConfigSchema.safeParse(parsedConfig);
 
   if (!result.success) {
-    throw new InvalidRepoConfigError(
+    throw new InvalidDevFlowConfigError(
       configPath,
       formatValidationDetails(result.error),
     );
@@ -89,18 +90,27 @@ export async function resolveRepoConfig(
   return result.data;
 }
 
-export async function persistRepoConfig(
-  options: PersistRepoConfigOptions,
-): Promise<void> {
-  const configPath = getConfigPath(options.projectRoot);
-  const stateDirectory = join(options.projectRoot, DEVFLOW_STATE_DIRECTORY);
+async function saveConfig(projectRoot: string, config: DevFlowConfig): Promise<void> {
+  const configPath = getConfigPath(projectRoot);
+  const stateDirectory = join(projectRoot, DEVFLOW_STATE_DIRECTORY);
 
   await fs.ensureDir(stateDirectory);
-  await fs.writeJson(configPath, options.config, { spaces: 2 });
+  await fs.writeJson(configPath, config, { spaces: 2 });
 }
 
-export function formatInvalidRepoConfigError(
-  error: InvalidRepoConfigError,
+export function createDevFlowState(
+  options: CreateDevFlowStateOptions,
+): DevFlowState {
+  return {
+    config: {
+      load: () => loadConfig(options.projectRoot),
+      save: (config) => saveConfig(options.projectRoot, config),
+    },
+  };
+}
+
+export function formatInvalidDevFlowConfigError(
+  error: InvalidDevFlowConfigError,
 ): string {
   return `${error.message} Delete or repair the config file before running DevFlow again.`;
 }

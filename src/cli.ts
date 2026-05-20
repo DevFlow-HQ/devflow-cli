@@ -13,12 +13,11 @@ import {
 import type { BuiltInProviderId } from "./adapters/providerAdapter.js";
 import type { ProviderDiscoveryResult } from "./adapters/providerDiscovery.js";
 import {
-  formatInvalidRepoConfigError,
-  InvalidRepoConfigError,
-  persistRepoConfig,
-  resolveRepoConfig,
-  type PersistRepoConfigOptions,
-} from "./repoConfig.js";
+  createDevFlowState,
+  formatInvalidDevFlowConfigError,
+  InvalidDevFlowConfigError,
+  type DevFlowState,
+} from "./devflowState.js";
 import {
   formatOrchestratorError,
   OrchestratorNotImplementedError,
@@ -41,10 +40,10 @@ export interface RunCliOptions {
   cwd?: string;
   providerId?: string;
   model?: string;
+  devFlowState?: DevFlowState;
   onResolvedTask?: (rawTask: string) => void | Promise<void>;
   resolveProjectRoot?: (cwd: string) => Promise<string>;
   discoverProviders?: () => Promise<ProviderDiscoveryResult>;
-  persistRepoConfig?: (options: PersistRepoConfigOptions) => Promise<void>;
   promptForProviderSelection?: (
     options: PromptForProviderSelectionOptions,
   ) => Promise<BuiltInProviderId | undefined>;
@@ -96,18 +95,20 @@ export function createCli(options: RunCliOptions = {}): Command {
       const projectRoot = options.resolveProjectRoot
         ? await options.resolveProjectRoot(cwd)
         : await resolveProjectRoot({ cwd });
-      const repoConfig = await resolveRepoConfig({ projectRoot });
+      const devFlowState =
+        options.devFlowState ?? createDevFlowState({ projectRoot });
+      const config = await devFlowState.config.load();
       const executionRequestRunner =
         options.runExecutionRequest ?? runExecutionRequest;
       const resolvedProviderId =
         options.providerId ??
         (await resolveBootstrapProvider({
           projectRoot,
+          devFlowState,
           stdout: options.stdout,
           explicitProviderId: commandOptions.provider,
-          savedProviderId: repoConfig?.defaultProvider,
+          savedProviderId: config?.defaultProvider,
           discoverProviders: options.discoverProviders,
-          persistRepoConfig: options.persistRepoConfig ?? persistRepoConfig,
           promptForProviderSelection: options.promptForProviderSelection,
         }));
       const request = createExecutionRequest(
@@ -159,8 +160,8 @@ export async function runCli(
       program.error(formatOrchestratorError(error));
     }
 
-    if (error instanceof InvalidRepoConfigError) {
-      program.error(formatInvalidRepoConfigError(error));
+    if (error instanceof InvalidDevFlowConfigError) {
+      program.error(formatInvalidDevFlowConfigError(error));
     }
 
     if (
