@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 import fs from "fs-extra";
 
 import {
   createDevFlowState,
   InvalidDevFlowConfigError,
+  InvalidDevFlowRunIdError,
 } from "../src/devflowState.js";
 
 test("devflow config is absent until explicitly saved through the state facade", async () => {
@@ -74,4 +76,45 @@ test("project context writes overwrite the existing shared artifact in place", a
     await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
     "refreshed snapshot",
   );
+});
+
+test("createRun returns isolated run handles with opaque ids and persisted creation metadata", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+
+  const firstRun = await state.createRun();
+  const secondRun = await state.createRun();
+
+  assert.match(firstRun.id, /^[a-z0-9]{12}$/);
+  assert.match(secondRun.id, /^[a-z0-9]{12}$/);
+  assert.notEqual(firstRun.id, secondRun.id);
+
+  assert.equal(
+    firstRun.paths.runDirectory,
+    join(projectRoot, ".devflow", "runs", firstRun.id),
+  );
+  assert.equal(await fs.pathExists(firstRun.paths.runDirectory), true);
+  assert.equal(await fs.pathExists(secondRun.paths.runDirectory), true);
+
+  const metadataPath = join(firstRun.paths.runDirectory, "run.json");
+  assert.deepEqual(await fs.readJson(metadataPath), {
+    id: firstRun.id,
+    createdAt: firstRun.createdAt,
+  });
+});
+
+test("createRun surfaces invalid generated run ids as domain errors", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const randomUuidMock = mock.method(crypto, "randomUUID", () => "INVALID-ID");
+
+  await assert.rejects(
+    state.createRun(),
+    (error: unknown) =>
+      error instanceof InvalidDevFlowRunIdError &&
+      error.runId === "INVALIDID" &&
+      error.message.includes("INVALIDID"),
+  );
+
+  randomUuidMock.mock.restore();
 });

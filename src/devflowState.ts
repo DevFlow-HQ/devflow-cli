@@ -1,4 +1,5 @@
 import fs from "fs-extra";
+import crypto from "node:crypto";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -11,6 +12,10 @@ import {
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";
 const DEVFLOW_PROJECT_CONTEXT_FILENAME = "project-context.md";
+const DEVFLOW_RUNS_DIRECTORY = "runs";
+const DEVFLOW_RUN_METADATA_FILENAME = "run.json";
+const DEVFLOW_RUN_ID_LENGTH = 12;
+const devFlowRunIdPattern = /^[a-z0-9]{12}$/;
 
 const devFlowConfigSchema = z
   .object({
@@ -31,6 +36,14 @@ export interface CreateDevFlowStateOptions {
   projectRoot: string;
 }
 
+export interface DevFlowRunHandle {
+  id: string;
+  createdAt: string;
+  paths: {
+    runDirectory: string;
+  };
+}
+
 export interface DevFlowState {
   config: {
     load(): Promise<DevFlowConfig | undefined>;
@@ -38,6 +51,7 @@ export interface DevFlowState {
   };
   readProjectContext(): Promise<string | undefined>;
   writeProjectContext(content: string): Promise<void>;
+  createRun(): Promise<DevFlowRunHandle>;
 }
 
 export class InvalidDevFlowConfigError extends Error {
@@ -50,6 +64,18 @@ export class InvalidDevFlowConfigError extends Error {
   }
 }
 
+export class InvalidDevFlowRunIdError extends Error {
+  readonly runId: string;
+
+  constructor(runId: string) {
+    super(
+      `Invalid DevFlow run id "${runId}". Run ids must be lowercase alphanumeric strings with exactly ${DEVFLOW_RUN_ID_LENGTH} characters.`,
+    );
+    this.name = "InvalidDevFlowRunIdError";
+    this.runId = runId;
+  }
+}
+
 function getConfigPath(projectRoot: string): string {
   return join(projectRoot, DEVFLOW_STATE_DIRECTORY, DEVFLOW_CONFIG_FILENAME);
 }
@@ -59,6 +85,21 @@ function getProjectContextPath(projectRoot: string): string {
     projectRoot,
     DEVFLOW_STATE_DIRECTORY,
     DEVFLOW_PROJECT_CONTEXT_FILENAME,
+  );
+}
+
+function getRunsDirectoryPath(projectRoot: string): string {
+  return join(projectRoot, DEVFLOW_STATE_DIRECTORY, DEVFLOW_RUNS_DIRECTORY);
+}
+
+function getRunDirectoryPath(projectRoot: string, runId: string): string {
+  return join(getRunsDirectoryPath(projectRoot), runId);
+}
+
+function getRunMetadataPath(projectRoot: string, runId: string): string {
+  return join(
+    getRunDirectoryPath(projectRoot, runId),
+    DEVFLOW_RUN_METADATA_FILENAME,
   );
 }
 
@@ -133,6 +174,43 @@ async function writeProjectContext(
   await fs.writeFile(projectContextPath, content, "utf8");
 }
 
+function createOpaqueRunId(): string {
+  return crypto.randomUUID().replaceAll("-", "").slice(0, DEVFLOW_RUN_ID_LENGTH);
+}
+
+function assertValidRunId(runId: string): void {
+  if (!devFlowRunIdPattern.test(runId)) {
+    throw new InvalidDevFlowRunIdError(runId);
+  }
+}
+
+async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
+  const runId = createOpaqueRunId();
+  assertValidRunId(runId);
+
+  const createdAt = new Date().toISOString();
+  const runDirectory = getRunDirectoryPath(projectRoot, runId);
+  const runMetadataPath = getRunMetadataPath(projectRoot, runId);
+
+  await fs.ensureDir(runDirectory);
+  await fs.writeJson(
+    runMetadataPath,
+    {
+      id: runId,
+      createdAt,
+    },
+    { spaces: 2 },
+  );
+
+  return {
+    id: runId,
+    createdAt,
+    paths: {
+      runDirectory,
+    },
+  };
+}
+
 export function createDevFlowState(
   options: CreateDevFlowStateOptions,
 ): DevFlowState {
@@ -144,6 +222,7 @@ export function createDevFlowState(
     readProjectContext: () => readProjectContext(options.projectRoot),
     writeProjectContext: (content) =>
       writeProjectContext(options.projectRoot, content),
+    createRun: () => createRun(options.projectRoot),
   };
 }
 
