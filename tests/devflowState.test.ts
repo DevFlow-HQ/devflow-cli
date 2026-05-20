@@ -7,6 +7,7 @@ import fs from "fs-extra";
 
 import {
   createDevFlowState,
+  DuplicateDevFlowRunArtifactError,
   InvalidDevFlowConfigError,
   InvalidDevFlowRunIdError,
 } from "../src/devflowState.js";
@@ -117,4 +118,44 @@ test("createRun surfaces invalid generated run ids as domain errors", async () =
   );
 
   randomUuidMock.mock.restore();
+});
+
+test("run handles write canonical immutable artifacts without exposing filenames to callers", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.writeIntent('{"goal":"ship it"}');
+  await run.writePrd("# PRD\n");
+  await run.writeValidation('{"status":"pending"}');
+
+  assert.equal(
+    await fs.readFile(join(run.paths.runDirectory, "intent.json"), "utf8"),
+    '{"goal":"ship it"}',
+  );
+  assert.equal(
+    await fs.readFile(join(run.paths.runDirectory, "prd.md"), "utf8"),
+    "# PRD\n",
+  );
+  assert.equal(
+    await fs.readFile(join(run.paths.runDirectory, "validation.json"), "utf8"),
+    '{"status":"pending"}',
+  );
+});
+
+test("run artifact writes reject duplicates with a domain-specific error", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.writeIntent('{"goal":"ship it"}');
+
+  await assert.rejects(
+    run.writeIntent('{"goal":"rewrite it"}'),
+    (error: unknown) =>
+      error instanceof DuplicateDevFlowRunArtifactError &&
+      error.runId === run.id &&
+      error.artifactName === "intent" &&
+      error.message.includes("intent"),
+  );
 });

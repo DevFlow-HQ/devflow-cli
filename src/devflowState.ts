@@ -14,8 +14,16 @@ const DEVFLOW_CONFIG_FILENAME = "config.json";
 const DEVFLOW_PROJECT_CONTEXT_FILENAME = "project-context.md";
 const DEVFLOW_RUNS_DIRECTORY = "runs";
 const DEVFLOW_RUN_METADATA_FILENAME = "run.json";
+const DEVFLOW_RUN_INTENT_FILENAME = "intent.json";
+const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
+const DEVFLOW_RUN_VALIDATION_FILENAME = "validation.json";
 const DEVFLOW_RUN_ID_LENGTH = 12;
 const devFlowRunIdPattern = /^[a-z0-9]{12}$/;
+const devFlowRunArtifactFilenames = {
+  intent: DEVFLOW_RUN_INTENT_FILENAME,
+  prd: DEVFLOW_RUN_PRD_FILENAME,
+  validation: DEVFLOW_RUN_VALIDATION_FILENAME,
+} as const;
 
 const devFlowConfigSchema = z
   .object({
@@ -39,6 +47,9 @@ export interface CreateDevFlowStateOptions {
 export interface DevFlowRunHandle {
   id: string;
   createdAt: string;
+  writeIntent(content: string): Promise<void>;
+  writePrd(content: string): Promise<void>;
+  writeValidation(content: string): Promise<void>;
   paths: {
     runDirectory: string;
   };
@@ -76,6 +87,26 @@ export class InvalidDevFlowRunIdError extends Error {
   }
 }
 
+export class DuplicateDevFlowRunArtifactError extends Error {
+  readonly runId: string;
+  readonly artifactName: keyof typeof devFlowRunArtifactFilenames;
+  readonly artifactPath: string;
+
+  constructor(options: {
+    runId: string;
+    artifactName: keyof typeof devFlowRunArtifactFilenames;
+    artifactPath: string;
+  }) {
+    super(
+      `DevFlow run artifact "${options.artifactName}" already exists for run "${options.runId}" at ${options.artifactPath}. Run artifacts are immutable once written.`,
+    );
+    this.name = "DuplicateDevFlowRunArtifactError";
+    this.runId = options.runId;
+    this.artifactName = options.artifactName;
+    this.artifactPath = options.artifactPath;
+  }
+}
+
 function getConfigPath(projectRoot: string): string {
   return join(projectRoot, DEVFLOW_STATE_DIRECTORY, DEVFLOW_CONFIG_FILENAME);
 }
@@ -100,6 +131,17 @@ function getRunMetadataPath(projectRoot: string, runId: string): string {
   return join(
     getRunDirectoryPath(projectRoot, runId),
     DEVFLOW_RUN_METADATA_FILENAME,
+  );
+}
+
+function getRunArtifactPath(
+  projectRoot: string,
+  runId: string,
+  artifactName: keyof typeof devFlowRunArtifactFilenames,
+): string {
+  return join(
+    getRunDirectoryPath(projectRoot, runId),
+    devFlowRunArtifactFilenames[artifactName],
   );
 }
 
@@ -202,9 +244,38 @@ async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
     { spaces: 2 },
   );
 
+  async function writeArtifact(
+    artifactName: keyof typeof devFlowRunArtifactFilenames,
+    content: string,
+  ): Promise<void> {
+    const artifactPath = getRunArtifactPath(projectRoot, runId, artifactName);
+
+    try {
+      await fs.writeFile(artifactPath, content, { encoding: "utf8", flag: "wx" });
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "EEXIST"
+      ) {
+        throw new DuplicateDevFlowRunArtifactError({
+          runId,
+          artifactName,
+          artifactPath,
+        });
+      }
+
+      throw error;
+    }
+  }
+
   return {
     id: runId,
     createdAt,
+    writeIntent: (content) => writeArtifact("intent", content),
+    writePrd: (content) => writeArtifact("prd", content),
+    writeValidation: (content) => writeArtifact("validation", content),
     paths: {
       runDirectory,
     },
