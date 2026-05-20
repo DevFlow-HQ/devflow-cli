@@ -22,6 +22,7 @@ import {
   formatOrchestratorError,
   OrchestratorNotImplementedError,
   runExecutionRequest,
+  type RunExecutionRequestOptions,
   type ResolvedExecutionRequest,
 } from "./orchestrator.js";
 import { resolveProjectRoot } from "./projectRoot.js";
@@ -49,6 +50,7 @@ export interface RunCliOptions {
   ) => Promise<BuiltInProviderId | undefined>;
   runExecutionRequest?: (
     request: ResolvedExecutionRequest,
+    options: RunExecutionRequestOptions,
   ) => void | Promise<void>;
   configureProgram?: (program: Command) => void;
 }
@@ -118,7 +120,7 @@ export function createCli(options: RunCliOptions = {}): Command {
         commandOptions.model ?? options.model,
       );
 
-      await executionRequestRunner(request);
+      await executionRequestRunner(request, { devFlowState });
     });
 
   program.configureOutput({

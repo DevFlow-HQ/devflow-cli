@@ -10,6 +10,7 @@ import fs from "fs-extra";
 import { BUILT_IN_PROVIDERS } from "../src/adapters/providerAdapter.js";
 import { runCli } from "../src/cli.js";
 import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.js";
+import { createDevFlowState } from "../src/devflowState.js";
 
 function createWritableBuffer() {
   let output = "";
@@ -210,6 +211,37 @@ test("cli resolves the git repository root before handing off the execution requ
       projectRoot,
       rawTask: "ship bootstrap",
       providerId: "claude",
+    },
+  ]);
+});
+
+test("cli passes the resolved state facade through to the orchestrator runner", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-state-pass-through-"));
+  const devFlowState = createDevFlowState({ projectRoot });
+  const receivedCalls: unknown[] = [];
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    devFlowState,
+    providerId: "claude",
+    runExecutionRequest: async (request, options) => {
+      receivedCalls.push({ request, options });
+    },
+  });
+
+  assert.equal(result.commandError, undefined);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(receivedCalls, [
+    {
+      request: {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "claude",
+      },
+      options: {
+        devFlowState,
+      },
     },
   ]);
 });
