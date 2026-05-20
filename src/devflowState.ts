@@ -10,6 +10,7 @@ import {
 
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";
+const DEVFLOW_PROJECT_CONTEXT_FILENAME = "project-context.md";
 
 const devFlowConfigSchema = z
   .object({
@@ -35,6 +36,8 @@ export interface DevFlowState {
     load(): Promise<DevFlowConfig | undefined>;
     save(config: DevFlowConfig): Promise<void>;
   };
+  readProjectContext(): Promise<string | undefined>;
+  writeProjectContext(content: string): Promise<void>;
 }
 
 export class InvalidDevFlowConfigError extends Error {
@@ -49,6 +52,14 @@ export class InvalidDevFlowConfigError extends Error {
 
 function getConfigPath(projectRoot: string): string {
   return join(projectRoot, DEVFLOW_STATE_DIRECTORY, DEVFLOW_CONFIG_FILENAME);
+}
+
+function getProjectContextPath(projectRoot: string): string {
+  return join(
+    projectRoot,
+    DEVFLOW_STATE_DIRECTORY,
+    DEVFLOW_PROJECT_CONTEXT_FILENAME,
+  );
 }
 
 function formatValidationDetails(error: z.ZodError): string {
@@ -98,6 +109,30 @@ async function saveConfig(projectRoot: string, config: DevFlowConfig): Promise<v
   await fs.writeJson(configPath, config, { spaces: 2 });
 }
 
+async function readProjectContext(
+  projectRoot: string,
+): Promise<string | undefined> {
+  const projectContextPath = getProjectContextPath(projectRoot);
+  const projectContextExists = await fs.pathExists(projectContextPath);
+
+  if (!projectContextExists) {
+    return undefined;
+  }
+
+  return fs.readFile(projectContextPath, "utf8");
+}
+
+async function writeProjectContext(
+  projectRoot: string,
+  content: string,
+): Promise<void> {
+  const projectContextPath = getProjectContextPath(projectRoot);
+  const stateDirectory = join(projectRoot, DEVFLOW_STATE_DIRECTORY);
+
+  await fs.ensureDir(stateDirectory);
+  await fs.writeFile(projectContextPath, content, "utf8");
+}
+
 export function createDevFlowState(
   options: CreateDevFlowStateOptions,
 ): DevFlowState {
@@ -106,6 +141,9 @@ export function createDevFlowState(
       load: () => loadConfig(options.projectRoot),
       save: (config) => saveConfig(options.projectRoot, config),
     },
+    readProjectContext: () => readProjectContext(options.projectRoot),
+    writeProjectContext: (content) =>
+      writeProjectContext(options.projectRoot, content),
   };
 }
 

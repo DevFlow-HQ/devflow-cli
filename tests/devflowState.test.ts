@@ -46,3 +46,32 @@ test("devflow config validation rejects malformed persisted provider ids", async
       error.message.includes("defaultProvider"),
   );
 });
+
+test("project context is absent until written and then readable from its canonical state location", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  assert.equal(await state.readProjectContext(), undefined);
+
+  await state.writeProjectContext("# Project context\n");
+
+  assert.equal(
+    await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
+    "# Project context\n",
+  );
+  assert.equal(await state.readProjectContext(), "# Project context\n");
+});
+
+test("project context writes overwrite the existing shared artifact in place", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await state.writeProjectContext("first snapshot");
+  await state.writeProjectContext("refreshed snapshot");
+
+  assert.equal(await state.readProjectContext(), "refreshed snapshot");
+  assert.equal(
+    await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
+    "refreshed snapshot",
+  );
+});
