@@ -1,6 +1,6 @@
 import fs from "fs-extra";
 import crypto from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { z } from "zod";
 
@@ -17,8 +17,10 @@ const DEVFLOW_RUN_METADATA_FILENAME = "run.json";
 const DEVFLOW_RUN_INTENT_FILENAME = "intent.json";
 const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
 const DEVFLOW_RUN_VALIDATION_FILENAME = "validation.json";
+const DEVFLOW_RUN_ISSUES_DIRECTORY = "issues";
 const DEVFLOW_RUN_ID_LENGTH = 12;
 const devFlowRunIdPattern = /^[a-z0-9]{12}$/;
+const devFlowIssueSlugAllowedPattern = /^[A-Za-z0-9 _-]+$/;
 const devFlowRunArtifactFilenames = {
   intent: DEVFLOW_RUN_INTENT_FILENAME,
   prd: DEVFLOW_RUN_PRD_FILENAME,
@@ -48,6 +50,7 @@ export interface DevFlowRunHandle {
   id: string;
   createdAt: string;
   writeIntent(content: string): Promise<void>;
+  writeIssue(slug: string, content: string): Promise<void>;
   writePrd(content: string): Promise<void>;
   writeValidation(content: string): Promise<void>;
   paths: {
@@ -87,14 +90,26 @@ export class InvalidDevFlowRunIdError extends Error {
   }
 }
 
+export class InvalidDevFlowIssueSlugError extends Error {
+  readonly slug: string;
+
+  constructor(slug: string) {
+    super(
+      `Invalid DevFlow issue slug "${slug}". Issue slugs must contain letters, numbers, spaces, underscores, or hyphens and normalize to at least one lowercase alphanumeric segment.`,
+    );
+    this.name = "InvalidDevFlowIssueSlugError";
+    this.slug = slug;
+  }
+}
+
 export class DuplicateDevFlowRunArtifactError extends Error {
   readonly runId: string;
-  readonly artifactName: keyof typeof devFlowRunArtifactFilenames;
+  readonly artifactName: string;
   readonly artifactPath: string;
 
   constructor(options: {
     runId: string;
-    artifactName: keyof typeof devFlowRunArtifactFilenames;
+    artifactName: string;
     artifactPath: string;
   }) {
     super(
@@ -142,6 +157,18 @@ function getRunArtifactPath(
   return join(
     getRunDirectoryPath(projectRoot, runId),
     devFlowRunArtifactFilenames[artifactName],
+  );
+}
+
+function getRunIssueArtifactPath(
+  projectRoot: string,
+  runId: string,
+  normalizedSlug: string,
+): string {
+  return join(
+    getRunDirectoryPath(projectRoot, runId),
+    DEVFLOW_RUN_ISSUES_DIRECTORY,
+    `${normalizedSlug}.md`,
   );
 }
 
@@ -226,6 +253,28 @@ function assertValidRunId(runId: string): void {
   }
 }
 
+function normalizeIssueSlug(slug: string): string {
+  const trimmedSlug = slug.trim();
+
+  if (
+    trimmedSlug.length === 0 ||
+    !devFlowIssueSlugAllowedPattern.test(trimmedSlug)
+  ) {
+    throw new InvalidDevFlowIssueSlugError(slug);
+  }
+
+  const normalizedSlug = trimmedSlug
+    .toLowerCase()
+    .replace(/[ _-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (normalizedSlug.length === 0) {
+    throw new InvalidDevFlowIssueSlugError(slug);
+  }
+
+  return normalizedSlug;
+}
+
 async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
   const runId = createOpaqueRunId();
   assertValidRunId(runId);
@@ -245,12 +294,12 @@ async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
   );
 
   async function writeArtifact(
-    artifactName: keyof typeof devFlowRunArtifactFilenames,
+    artifactName: string,
+    artifactPath: string,
     content: string,
   ): Promise<void> {
-    const artifactPath = getRunArtifactPath(projectRoot, runId, artifactName);
-
     try {
+      await fs.ensureDir(dirname(artifactPath));
       await fs.writeFile(artifactPath, content, { encoding: "utf8", flag: "wx" });
     } catch (error) {
       if (
@@ -273,9 +322,29 @@ async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
   return {
     id: runId,
     createdAt,
-    writeIntent: (content) => writeArtifact("intent", content),
-    writePrd: (content) => writeArtifact("prd", content),
-    writeValidation: (content) => writeArtifact("validation", content),
+    writeIntent: (content) =>
+      writeArtifact(
+        "intent",
+        getRunArtifactPath(projectRoot, runId, "intent"),
+        content,
+      ),
+    writeIssue: async (slug, content) => {
+      const normalizedSlug = normalizeIssueSlug(slug);
+
+      await writeArtifact(
+        "issue",
+        getRunIssueArtifactPath(projectRoot, runId, normalizedSlug),
+        content,
+      );
+    },
+    writePrd: (content) =>
+      writeArtifact("prd", getRunArtifactPath(projectRoot, runId, "prd"), content),
+    writeValidation: (content) =>
+      writeArtifact(
+        "validation",
+        getRunArtifactPath(projectRoot, runId, "validation"),
+        content,
+      ),
     paths: {
       runDirectory,
     },

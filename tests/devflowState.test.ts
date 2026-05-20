@@ -9,6 +9,7 @@ import {
   createDevFlowState,
   DuplicateDevFlowRunArtifactError,
   InvalidDevFlowConfigError,
+  InvalidDevFlowIssueSlugError,
   InvalidDevFlowRunIdError,
 } from "../src/devflowState.js";
 
@@ -157,5 +158,57 @@ test("run artifact writes reject duplicates with a domain-specific error", async
       error.runId === run.id &&
       error.artifactName === "intent" &&
       error.message.includes("intent"),
+  );
+});
+
+test("run handles write issue artifacts through canonical normalized filenames", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.writeIssue("  Release_Prep Plan  ", "# Issue\n");
+
+  assert.equal(
+    await fs.readFile(
+      join(run.paths.runDirectory, "issues", "release-prep-plan.md"),
+      "utf8",
+    ),
+    "# Issue\n",
+  );
+});
+
+test("run issue artifact writes reject invalid slugs before creating issue files", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await assert.rejects(
+    run.writeIssue("../escape", "# nope\n"),
+    (error: unknown) =>
+      error instanceof InvalidDevFlowIssueSlugError &&
+      error.slug === "../escape" &&
+      error.message.includes("../escape"),
+  );
+
+  assert.equal(
+    await fs.pathExists(join(run.paths.runDirectory, "issues")),
+    false,
+  );
+});
+
+test("run issue artifact writes reject duplicates after slug normalization", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.writeIssue("Release Prep", "# first\n");
+
+  await assert.rejects(
+    run.writeIssue("release_prep", "# second\n"),
+    (error: unknown) =>
+      error instanceof DuplicateDevFlowRunArtifactError &&
+      error.runId === run.id &&
+      error.artifactName === "issue" &&
+      error.artifactPath.endsWith("/issues/release-prep.md"),
   );
 });
