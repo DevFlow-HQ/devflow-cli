@@ -61,6 +61,9 @@ export interface PtyManagedSessionDependencies {
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
 const DEFAULT_MARKER_BUFFER_LIMIT = 8192;
+const BRACKETED_PASTE_START = "\u001b[200~";
+const BRACKETED_PASTE_END = "\u001b[201~";
+const SUBMIT = "\r";
 
 export const nodePtySpawner: PtySpawner = {
   spawn(executable, args, options) {
@@ -93,6 +96,15 @@ export const nodePtySpawner: PtySpawner = {
   },
 };
 
+export function submitPtyPrompt(
+  processHandle: Pick<PtyProcess, "write">,
+  prompt: string,
+): void {
+  processHandle.write(
+    `${BRACKETED_PASTE_START}${prompt}${BRACKETED_PASTE_END}${SUBMIT}`,
+  );
+}
+
 export async function runPtyManagedSession(
   command: PtyManagedSessionCommand,
   input: ManagedProviderSessionInput,
@@ -112,9 +124,42 @@ export async function runPtyManagedSession(
   return new Promise((resolve, reject) => {
     let rollingOutput = "";
     let markerDetected = false;
+    let waitingForRepair = false;
     let settled = false;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
+
+    function cleanup(): void {
+      if (command.cleanupCommand) {
+        processHandle.write(command.cleanupCommand);
+      } else {
+        processHandle.kill();
+      }
+    }
+
+    function cleanupAfterValidationFailure(): void {
+      try {
+        cleanup();
+      } catch {
+        // Preserve the validation failure as the actionable error.
+      }
+    }
+
+    function createResult(repairUsed: boolean): ManagedProviderSessionResult {
+      return {
+        repairUsed,
+        exitCode,
+        signal,
+      };
+    }
+
+    function cleanupAfterValidOutput(): void {
+      try {
+        cleanup();
+      } catch (error) {
+        throw new ProviderSessionCleanupError(command.provider, error);
+      }
+    }
 
     function settle(
       callback: () => Promise<ManagedProviderSessionResult>,
@@ -127,10 +172,68 @@ export async function runPtyManagedSession(
       void callback().then(resolve, reject);
     }
 
+    function handleInitialCompletion(): void {
+      if (markerDetected) {
+        return;
+      }
+
+      markerDetected = true;
+
+      void (async () => {
+        try {
+          await input.validate();
+        } catch (error: unknown) {
+          if (!(error instanceof Error) || !input.repair) {
+            cleanupAfterValidationFailure();
+            settled = true;
+            reject(error);
+            return;
+          }
+
+          waitingForRepair = true;
+          rollingOutput = "";
+          submitPtyPrompt(processHandle, input.repair.renderPrompt(error));
+          return;
+        }
+
+        try {
+          cleanupAfterValidOutput();
+        } catch (error) {
+          settled = true;
+          reject(error);
+          return;
+        }
+
+        settled = true;
+        resolve(createResult(false));
+      })();
+    }
+
+    function handleRepairCompletion(): void {
+      const repair = input.repair;
+
+      if (!repair) {
+        return;
+      }
+
+      waitingForRepair = false;
+      settle(async () => {
+        try {
+          await input.validate();
+        } catch (error) {
+          cleanupAfterValidationFailure();
+          throw repair.mapFailure(error as Error);
+        }
+
+        cleanupAfterValidOutput();
+        return createResult(true);
+      });
+    }
+
     processHandle.onData((chunk) => {
       outputSink.write(chunk);
 
-      if (markerDetected || settled) {
+      if (settled) {
         return;
       }
 
@@ -138,30 +241,19 @@ export async function runPtyManagedSession(
         -markerBufferLimit,
       );
 
-      if (!rollingOutput.includes(input.initialCompletionMarker)) {
+      if (waitingForRepair) {
+        if (
+          input.repair &&
+          rollingOutput.includes(input.repair.completionMarker)
+        ) {
+          handleRepairCompletion();
+        }
         return;
       }
 
-      markerDetected = true;
-      settle(async () => {
-        await input.validate();
-
-        try {
-          if (command.cleanupCommand) {
-            processHandle.write(command.cleanupCommand);
-          } else {
-            processHandle.kill();
-          }
-        } catch (error) {
-          throw new ProviderSessionCleanupError(command.provider, error);
-        }
-
-        return {
-          repairUsed: false,
-          exitCode,
-          signal,
-        };
-      });
+      if (rollingOutput.includes(input.initialCompletionMarker)) {
+        handleInitialCompletion();
+      }
     });
 
     processHandle.onExit((event) => {

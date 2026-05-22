@@ -9,11 +9,18 @@ import {
 } from "../../src/adapters/managedSessionAdapter.js";
 import {
   runPtyManagedSession,
+  submitPtyPrompt,
   type PtyProcess,
   type PtySpawnOptions,
   type PtySpawner,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+
+function waitForAsyncHandlers(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
@@ -67,6 +74,21 @@ class FakePtySpawner implements PtySpawner {
     return this.process;
   }
 }
+
+test("submitPtyPrompt writes multiline prompts with bracketed paste and submit", () => {
+  const writes: string[] = [];
+
+  submitPtyPrompt(
+    {
+      write(data) {
+        writes.push(data);
+      },
+    },
+    "Line one\nLine two",
+  );
+
+  assert.deepEqual(writes, ["\u001b[200~Line one\nLine two\u001b[201~\r"]);
+});
 
 function createInput(
   overrides: Partial<ManagedProviderSessionInput> = {},
@@ -233,4 +255,152 @@ test("PTY managed-session runner surfaces cleanup failures after valid output", 
     assert.equal(error.cause, cleanupFailure);
     return true;
   });
+});
+
+test("PTY managed-session runner repairs invalid artifacts inside the same session", async () => {
+  const spawner = new FakePtySpawner();
+  const validationStates: boolean[] = [];
+  const validationFailure = new Error("artifact is invalid");
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "INITIAL_DONE",
+      async validate() {
+        validationStates.push(spawner.process.isAlive);
+
+        if (validationStates.length === 1) {
+          throw validationFailure;
+        }
+      },
+      repair: {
+        completionMarker: "REPAIR_DONE",
+        renderPrompt(error) {
+          assert.equal(error, validationFailure);
+          return "Repair the artifact.\nKeep the provider session open.";
+        },
+        mapFailure(error) {
+          return new Error(`repair failed: ${error.message}`);
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("INITIAL_DONE\n");
+  await waitForAsyncHandlers();
+  assert.equal(spawner.process.killed, false);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Repair the artifact.\nKeep the provider session open.\u001b[201~\r",
+  ]);
+
+  spawner.process.emitData("REPAIR_DONE\n");
+  await waitForAsyncHandlers();
+
+  const result = await runPromise;
+
+  assert.deepEqual(validationStates, [true, true]);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Repair the artifact.\nKeep the provider session open.\u001b[201~\r",
+    "/exit\n",
+  ]);
+  assert.deepEqual(result, {
+    repairUsed: true,
+    exitCode: 0,
+    signal: null,
+  });
+});
+
+test("PTY managed-session runner maps repair validation failures", async () => {
+  const spawner = new FakePtySpawner();
+  const initialFailure = new Error("initial artifact is invalid");
+  const repairFailure = new Error("repaired artifact is still invalid");
+  const mappedFailure = new Error("mapped repair failure");
+  let validationCount = 0;
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "INITIAL_DONE",
+      async validate() {
+        validationCount += 1;
+
+        if (validationCount === 1) {
+          throw initialFailure;
+        }
+
+        throw repairFailure;
+      },
+      repair: {
+        completionMarker: "REPAIR_DONE",
+        renderPrompt(error) {
+          assert.equal(error, initialFailure);
+          return "Repair the artifact.";
+        },
+        mapFailure(error) {
+          assert.equal(error, repairFailure);
+          return mappedFailure;
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("INITIAL_DONE\n");
+  await waitForAsyncHandlers();
+  spawner.process.emitData("REPAIR_DONE\n");
+
+  await assert.rejects(runPromise, mappedFailure);
+  assert.equal(validationCount, 2);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Repair the artifact.\u001b[201~\r",
+    "/exit\n",
+  ]);
+});
+
+test("PTY managed-session runner propagates initial validation failures when repair is absent", async () => {
+  const spawner = new FakePtySpawner();
+  const validationFailure = new Error("artifact is invalid");
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      async validate() {
+        throw validationFailure;
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+
+  await assert.rejects(runPromise, validationFailure);
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
 });
