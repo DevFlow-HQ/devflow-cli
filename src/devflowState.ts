@@ -55,6 +55,7 @@ export interface DevFlowRunHandle {
   writeValidation(content: string): Promise<void>;
   paths: {
     runDirectory: string;
+    intentArtifact: string;
   };
 }
 
@@ -347,6 +348,7 @@ async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
       ),
     paths: {
       runDirectory,
+      intentArtifact: getRunArtifactPath(projectRoot, runId, "intent"),
     },
   };
 }

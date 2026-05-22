@@ -246,7 +246,7 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
   ]);
 });
 
-test("cli falls back to the current directory outside git and fails with a clear orchestrator stub message", async () => {
+test("cli falls back to the current directory outside git and fails with a clear managed-session message", async () => {
   const currentDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-git-"));
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
@@ -258,7 +258,7 @@ test("cli falls back to the current directory outside git and fails with a clear
   assert.equal(result.stdout, "");
   assert.equal(
     result.stderr,
-    `Execution orchestration is not implemented yet.\nProject root: ${currentDirectory}\nTask: draft plan\n`,
+    'Managed provider sessions are not implemented yet for provider "claude".\n',
   );
 });
 

@@ -19,8 +19,7 @@ import {
   type DevFlowState,
 } from "./devflowState.js";
 import {
-  formatOrchestratorError,
-  OrchestratorNotImplementedError,
+  ManagedProviderSessionNotImplementedError,
   runExecutionRequest,
   type RunExecutionRequestOptions,
   type ResolvedExecutionRequest,
@@ -158,8 +157,8 @@ export async function runCli(
       program.error(REQUIRED_TASK_ERROR);
     }
 
-    if (error instanceof OrchestratorNotImplementedError) {
-      program.error(formatOrchestratorError(error));
+    if (error instanceof ManagedProviderSessionNotImplementedError) {
+      program.error(error.message);
     }
 
     if (error instanceof InvalidDevFlowConfigError) {
