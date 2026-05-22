@@ -11,7 +11,9 @@ import {
 } from "../src/devflowState.js";
 import {
   ManagedProviderSessionNotImplementedError,
+  MissingProviderIdError,
   runExecutionRequest,
+  type PipelineStage,
   type ProviderSessionRunner,
 } from "../src/orchestrator.js";
 
@@ -102,4 +104,95 @@ test("orchestrator renders intent prompt and accepts a provider-written intent a
     needsClarification: false,
   });
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
+});
+
+test("orchestrator runs the MVP pipeline order with intent active and later stages as no-ops", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
+  const sessionRunner: ProviderSessionRunner = {
+    async run(options) {
+      runnerCalls.push(options);
+
+      await fs.outputJson(
+        options.artifactPath,
+        {
+          classification: "bug",
+          summary: "Fix the failing provider handoff.",
+          rawTask: "fix provider handoff",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "fix provider handoff",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      sessionRunner,
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+    "validate",
+  ]);
+  assert.equal(runnerCalls.length, 1);
+  assert.equal(runnerCalls[0].artifactPath.endsWith("/intent.json"), true);
+
+  const runIds = await listRunDirectories(projectRoot);
+  assert.equal(runIds.length, 1);
+  const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+  assert.deepEqual(await fs.readJson(join(runDirectory, "intent.json")), {
+    classification: "bug",
+    summary: "Fix the failing provider handoff.",
+    rawTask: "fix provider handoff",
+    needsClarification: false,
+  });
+  assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
+  assert.equal(await fs.pathExists(join(runDirectory, "issues")), false);
+  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+});
+
+test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  let runnerCallCount = 0;
+  const sessionRunner: ProviderSessionRunner = {
+    async run() {
+      runnerCallCount += 1;
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+      },
+      { devFlowState, sessionRunner },
+    ),
+    (error: unknown) =>
+      error instanceof MissingProviderIdError &&
+      error.message.includes("Provider-backed orchestration requires a provider id"),
+  );
+
+  assert.equal(runnerCallCount, 0);
+  assert.deepEqual(await listRunDirectories(projectRoot), []);
 });

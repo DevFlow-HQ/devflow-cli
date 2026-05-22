@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import {
   createDevFlowState,
+  type DevFlowRunHandle,
   type DevFlowState,
 } from "./devflowState.js";
 
@@ -30,9 +31,22 @@ export interface ProviderSessionRunner {
   run(options: ProviderSessionRunOptions): Promise<void>;
 }
 
+export const PIPELINE_STAGES = [
+  "intent",
+  "bootstrap",
+  "grill",
+  "prd",
+  "issues",
+  "execute",
+  "validate",
+] as const;
+
+export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
 export interface RunExecutionRequestOptions {
   devFlowState?: DevFlowState;
   sessionRunner?: ProviderSessionRunner;
+  onStageStart?: (stage: PipelineStage) => void | Promise<void>;
 }
 
 const INTENT_PROMPT_PATH = join(
@@ -72,6 +86,13 @@ export class InvalidIntentArtifactError extends Error {
     super(`Invalid intent artifact at ${artifactPath}. ${details}`);
     this.name = "InvalidIntentArtifactError";
     this.artifactPath = artifactPath;
+  }
+}
+
+export class MissingProviderIdError extends Error {
+  constructor() {
+    super("Provider-backed orchestration requires a provider id.");
+    this.name = "MissingProviderIdError";
   }
 }
 
@@ -118,30 +139,68 @@ async function readIntentArtifact(artifactPath: string): Promise<IntentArtifact>
   return result.data;
 }
 
+async function startStage(
+  stage: PipelineStage,
+  options: RunExecutionRequestOptions,
+): Promise<void> {
+  await options.onStageStart?.(stage);
+}
+
+async function runIntentStage(options: {
+  request: ResolvedExecutionRequest;
+  providerId: string;
+  run: DevFlowRunHandle;
+  sessionRunner: ProviderSessionRunner;
+}): Promise<void> {
+  const completionMarker = createCompletionMarker();
+  const prompt = await renderIntentPrompt({
+    rawTask: options.request.rawTask,
+    artifactPath: options.run.paths.intentArtifact,
+    completionMarker,
+  });
+
+  await options.sessionRunner.run({
+    providerId: options.providerId,
+    projectRoot: options.request.projectRoot,
+    prompt,
+    artifactPath: options.run.paths.intentArtifact,
+    completionMarker,
+    ...(options.request.model ? { model: options.request.model } : {}),
+  });
+
+  await readIntentArtifact(options.run.paths.intentArtifact);
+}
+
+async function runNoopStage(): Promise<void> {
+  // Placeholder for the MVP pipeline stage order. Later slices will replace
+  // these no-op stages with provider-backed or state-writing work.
+}
+
 export async function runExecutionRequest(
   request: ResolvedExecutionRequest,
   options: RunExecutionRequestOptions = {},
 ): Promise<void> {
+  const providerId = request.providerId;
+
+  if (!providerId) {
+    throw new MissingProviderIdError();
+  }
+
   const devFlowState =
     options.devFlowState ?? createDevFlowState({ projectRoot: request.projectRoot });
   const sessionRunner = options.sessionRunner ?? defaultProviderSessionRunner;
   const run = await devFlowState.createRun();
-  const providerId = request.providerId ?? "";
-  const completionMarker = createCompletionMarker();
-  const prompt = await renderIntentPrompt({
-    rawTask: request.rawTask,
-    artifactPath: run.paths.intentArtifact,
-    completionMarker,
-  });
 
-  await sessionRunner.run({
+  await startStage("intent", options);
+  await runIntentStage({
+    request,
     providerId,
-    projectRoot: request.projectRoot,
-    prompt,
-    artifactPath: run.paths.intentArtifact,
-    completionMarker,
-    ...(request.model ? { model: request.model } : {}),
+    run,
+    sessionRunner,
   });
 
-  await readIntentArtifact(run.paths.intentArtifact);
+  for (const stage of PIPELINE_STAGES.slice(1)) {
+    await startStage(stage, options);
+    await runNoopStage();
+  }
 }
