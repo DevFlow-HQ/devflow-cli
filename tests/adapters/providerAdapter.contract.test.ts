@@ -5,12 +5,17 @@ import path from "node:path";
 import fs from "fs-extra";
 
 import {
-  BUILT_IN_PROVIDER_IDS,
-  BUILT_IN_PROVIDERS,
   type BuiltInProviderId,
   getBuiltInProviderIdentity,
+  BUILT_IN_PROVIDER_IDS,
+  BUILT_IN_PROVIDERS,
+} from "../../src/adapters/providers.js";
+import {
+  IncompleteProviderSessionError,
+  ManagedProviderSessionNotImplementedError,
+  ProviderSessionCleanupError,
   type ProviderAdapter,
-  type ProviderRunInput,
+  type ManagedProviderSessionInput,
 } from "../../src/adapters/providerAdapter.js";
 import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
@@ -82,7 +87,7 @@ test("provider identity lookup stays aligned with the built-in provider constant
   assert.equal(getBuiltInProviderIdentity("codex").displayName, "Codex");
 });
 
-test("provider adapters expose static metadata plus async detect and run methods", async () => {
+test("provider adapters expose static metadata plus async detect and runSession methods", async () => {
   const adapter: ProviderAdapter = {
     provider: BUILT_IN_PROVIDERS[2],
     async detect() {
@@ -91,9 +96,10 @@ test("provider adapters expose static metadata plus async detect and run methods
         executable: "codex",
       };
     },
-    async run(input) {
+    async runSession(input) {
+      await input.validate();
       return {
-        success: input.prompt.length > 0,
+        repairUsed: false,
         exitCode: 0,
         signal: null,
       };
@@ -102,12 +108,61 @@ test("provider adapters expose static metadata plus async detect and run methods
 
   await assert.doesNotReject(() => adapter.detect());
   await assert.doesNotReject(() =>
-    adapter.run({
-      prompt: "Ship the contract",
+    adapter.runSession({
       workingDirectory: "/tmp/devflow",
+      initialPrompt: "Ship the contract",
+      initialCompletionMarker: "DEVFLOW_DONE",
+      async validate() {},
       model: "gpt-5.5",
     }),
   );
+  assert.equal("run" in adapter, false);
+});
+
+test("managed-session input exposes validation and repair lifecycle configuration", () => {
+  const input: ManagedProviderSessionInput = {
+    workingDirectory: "/tmp/devflow",
+    initialPrompt: "Ship the contract",
+    initialCompletionMarker: "DEVFLOW_DONE",
+    model: "gpt-5.5",
+    async validate() {},
+    repair: {
+      completionMarker: "DEVFLOW_REPAIR_DONE",
+      renderPrompt(error) {
+        return `repair: ${error.message}`;
+      },
+      mapFailure(error) {
+        return new Error(`mapped: ${error.message}`);
+      },
+    },
+  };
+
+  assert.equal(input.model, "gpt-5.5");
+  assert.equal(
+    input.repair?.renderPrompt(new Error("invalid")),
+    "repair: invalid",
+  );
+});
+
+test("managed-session contract exposes typed lifecycle failures with provider identity", () => {
+  const provider = getBuiltInProviderIdentity("codex");
+  const incomplete = new IncompleteProviderSessionError({
+    provider,
+    completionMarker: "DEVFLOW_DONE",
+    exitCode: 1,
+    signal: null,
+  });
+  const cleanupCause = new Error("pty close failed");
+  const cleanup = new ProviderSessionCleanupError(provider, cleanupCause);
+
+  assert.equal(incomplete.name, "IncompleteProviderSessionError");
+  assert.equal(incomplete.provider, provider);
+  assert.equal(incomplete.completionMarker, "DEVFLOW_DONE");
+  assert.equal(incomplete.exitCode, 1);
+  assert.equal(incomplete.signal, null);
+  assert.equal(cleanup.name, "ProviderSessionCleanupError");
+  assert.equal(cleanup.provider, provider);
+  assert.equal(cleanup.cause, cleanupCause);
 });
 
 for (const harness of providerHarnesses) {
@@ -157,33 +212,41 @@ for (const harness of providerHarnesses) {
   });
 }
 
-const validRunInput: ProviderRunInput = {
-  prompt: "Ship the contract",
+const validRunInput: ManagedProviderSessionInput = {
   workingDirectory: "/tmp/devflow",
+  initialPrompt: "Ship the contract",
+  initialCompletionMarker: "DEVFLOW_DONE",
+  async validate() {},
 };
 
 assert.equal(validRunInput.model, undefined);
 
-const validRunInputWithModel: ProviderRunInput = {
-  prompt: "Ship the contract",
+const validRunInputWithModel: ManagedProviderSessionInput = {
   workingDirectory: "/tmp/devflow",
+  initialPrompt: "Ship the contract",
+  initialCompletionMarker: "DEVFLOW_DONE",
+  async validate() {},
   model: "gpt-5.5",
 };
 
 assert.equal(validRunInputWithModel.model, "gpt-5.5");
 
-const runInputWithArgs: ProviderRunInput = {
-  prompt: "Ship the contract",
+const runInputWithArgs: ManagedProviderSessionInput = {
   workingDirectory: "/tmp/devflow",
+  initialPrompt: "Ship the contract",
+  initialCompletionMarker: "DEVFLOW_DONE",
+  async validate() {},
   // @ts-expect-error Provider run input must not accept arbitrary CLI args.
   extraArgs: ["--dangerous"],
 };
 
 void runInputWithArgs;
 
-const runInputWithEnvironment: ProviderRunInput = {
-  prompt: "Ship the contract",
+const runInputWithEnvironment: ManagedProviderSessionInput = {
   workingDirectory: "/tmp/devflow",
+  initialPrompt: "Ship the contract",
+  initialCompletionMarker: "DEVFLOW_DONE",
+  async validate() {},
   // @ts-expect-error Provider run input must not accept custom environment injection.
   env: { DEBUG: "1" },
 };
@@ -191,7 +254,30 @@ const runInputWithEnvironment: ProviderRunInput = {
 void runInputWithEnvironment;
 
 for (const harness of providerHarnesses) {
-  test(`${harness.displayName} adapter run launches in the target directory with prompt and optional model`, async (t) => {
+  test(`${harness.displayName} adapter runSession intentionally reports missing managed-session transport`, async () => {
+    const adapter = harness.createAdapter();
+
+    await assert.rejects(
+      () =>
+        adapter.runSession({
+          workingDirectory: "/tmp/devflow",
+          initialPrompt: "Ship the contract",
+          initialCompletionMarker: "DEVFLOW_DONE",
+          async validate() {},
+          model: "gpt-5.5",
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof ManagedProviderSessionNotImplementedError);
+        assert.deepEqual(
+          error.provider,
+          getBuiltInProviderIdentity(harness.providerId),
+        );
+        return true;
+      },
+    );
+  });
+
+  test(`built-in provider selection wires ${harness.command} detection through the shared adapter contract`, async (t) => {
     const originalPath = process.env.PATH;
     t.after(() => {
       process.env.PATH = originalPath;
@@ -201,135 +287,10 @@ for (const harness of providerHarnesses) {
       path.join(os.tmpdir(), `devflow-${harness.command}-run-`),
     );
     const binDir = path.join(tempRoot, "bin");
-    const workingDirectory = path.join(tempRoot, "repo");
-    const outputPath = path.join(tempRoot, `${harness.command}-output.txt`);
     const executablePath = path.join(binDir, harness.command);
 
     await fs.ensureDir(binDir);
-    await fs.ensureDir(workingDirectory);
-    await fs.writeFile(
-      executablePath,
-      [
-        "#!/bin/sh",
-        `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
-        `printf 'argc=%s\\n' \"$#\" >> "${outputPath}"`,
-        "for arg in \"$@\"; do",
-        `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
-        "done",
-        "exit 0",
-        "",
-      ].join("\n"),
-    );
-    await fs.chmod(executablePath, 0o755);
-
-    process.env.PATH = binDir;
-
-    const result = await harness.createAdapter().run({
-      prompt: "Ship the contract",
-      workingDirectory,
-      model: "gpt-5.5",
-    });
-
-    assert.deepEqual(result, {
-      success: true,
-      exitCode: 0,
-      signal: null,
-    });
-
-    const output = await fs.readFile(outputPath, "utf8");
-    assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
-    assert.match(output, /^argc=\d+$/m);
-    assert.match(output, /^arg=Ship the contract$/m);
-    assert.match(output, /^arg=gpt-5.5$/m);
-  });
-
-  test(`${harness.displayName} adapter run resolves structured failure metadata for non-zero provider exits`, async (t) => {
-    const originalPath = process.env.PATH;
-    t.after(() => {
-      process.env.PATH = originalPath;
-    });
-
-    const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-${harness.command}-nonzero-`),
-    );
-    const binDir = path.join(tempRoot, "bin");
-    const workingDirectory = path.join(tempRoot, "repo");
-    const executablePath = path.join(binDir, harness.command);
-
-    await fs.ensureDir(binDir);
-    await fs.ensureDir(workingDirectory);
-    await fs.writeFile(executablePath, "#!/bin/sh\nexit 7\n");
-    await fs.chmod(executablePath, 0o755);
-
-    process.env.PATH = binDir;
-
-    const result = await harness.createAdapter().run({
-      prompt: "Ship the contract",
-      workingDirectory,
-    });
-
-    assert.deepEqual(result, {
-      success: false,
-      exitCode: 7,
-      signal: null,
-    });
-  });
-
-  test(`${harness.displayName} adapter run rejects launch failures distinctly from normal provider exits`, async (t) => {
-    const originalPath = process.env.PATH;
-    t.after(() => {
-      process.env.PATH = originalPath;
-    });
-
-    const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-${harness.command}-launch-failure-`),
-    );
-    const binDir = path.join(tempRoot, "bin");
-    const workingDirectory = path.join(tempRoot, "repo");
-
-    await fs.ensureDir(binDir);
-    await fs.ensureDir(workingDirectory);
-
-    process.env.PATH = binDir;
-
-    await assert.rejects(
-      () =>
-        harness.createAdapter().run({
-          prompt: "Ship the contract",
-          workingDirectory,
-        }),
-      new RegExp(harness.command, "i"),
-    );
-  });
-
-  test(`built-in provider selection wires ${harness.command} end to end through the shared adapter contract`, async (t) => {
-    const originalPath = process.env.PATH;
-    t.after(() => {
-      process.env.PATH = originalPath;
-    });
-
-    const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-built-in-${harness.command}-`),
-    );
-    const binDir = path.join(tempRoot, "bin");
-    const workingDirectory = path.join(tempRoot, "repo");
-    const outputPath = path.join(tempRoot, `${harness.command}-output.txt`);
-    const executablePath = path.join(binDir, harness.command);
-
-    await fs.ensureDir(binDir);
-    await fs.ensureDir(workingDirectory);
-    await fs.writeFile(
-      executablePath,
-      [
-        "#!/bin/sh",
-        `printf 'cwd=%s\\n' \"$PWD\" > "${outputPath}"`,
-        "for arg in \"$@\"; do",
-        `  printf 'arg=%s\\n' \"$arg\" >> "${outputPath}"`,
-        "done",
-        "exit 0",
-        "",
-      ].join("\n"),
-    );
+    await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
     await fs.chmod(executablePath, 0o755);
 
     process.env.PATH = binDir;
@@ -347,19 +308,6 @@ for (const harness of providerHarnesses) {
       executable: executablePath,
     });
 
-    const result = await adapter.run({
-      prompt: "Ship through the contract",
-      workingDirectory,
-    });
-
-    assert.deepEqual(result, {
-      success: true,
-      exitCode: 0,
-      signal: null,
-    });
-
-    const output = await fs.readFile(outputPath, "utf8");
-    assert.match(output, new RegExp(`^cwd=${workingDirectory}$`, "m"));
-    assert.match(output, /^arg=Ship through the contract$/m);
+    assert.equal("run" in adapter, false);
   });
 }

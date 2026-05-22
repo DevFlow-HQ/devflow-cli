@@ -2,9 +2,11 @@ import { createBuiltInProviderAdapter } from "./builtInProviderAdapter.js";
 import {
   BUILT_IN_PROVIDERS,
   type BuiltInProviderId,
+  type ProviderIdentity,
+} from "./providers.js";
+import {
   type ProviderAdapter,
   type ProviderDetectionResult,
-  type ProviderIdentity,
 } from "./providerAdapter.js";
 
 export type DiscoveredProvider =

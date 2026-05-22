@@ -10,7 +10,7 @@ import {
   type PromptForProviderSelectionOptions,
   UnsupportedProviderError,
 } from "./bootstrapProvider.js";
-import type { BuiltInProviderId } from "./adapters/providerAdapter.js";
+import type { BuiltInProviderId } from "./adapters/providers.js";
 import type { ProviderDiscoveryResult } from "./adapters/providerDiscovery.js";
 import {
   createDevFlowState,

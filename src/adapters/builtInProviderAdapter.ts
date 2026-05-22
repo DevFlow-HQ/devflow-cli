@@ -2,10 +2,8 @@ import { createClaudeAdapter } from "./claudeAdapter.js";
 import { createCodexAdapter } from "./codexAdapter.js";
 import { createGeminiAdapter } from "./geminiAdapter.js";
 import { createOpenCodeAdapter } from "./opencodeAdapter.js";
-import type {
-  BuiltInProviderId,
-  ProviderAdapter,
-} from "./providerAdapter.js";
+import type { ProviderAdapter } from "./providerAdapter.js";
+import type { BuiltInProviderId } from "./providers.js";
 
 export function createBuiltInProviderAdapter(
   providerId: BuiltInProviderId,

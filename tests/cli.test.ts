@@ -7,7 +7,7 @@ import { Command, CommanderError } from "commander";
 import { execa } from "execa";
 import fs from "fs-extra";
 
-import { BUILT_IN_PROVIDERS } from "../src/adapters/providerAdapter.js";
+import { BUILT_IN_PROVIDERS } from "../src/adapters/providers.js";
 import { runCli } from "../src/cli.js";
 import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.js";
 import { createDevFlowState } from "../src/devflowState.js";

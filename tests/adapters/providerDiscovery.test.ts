@@ -6,6 +6,8 @@ import fs from "fs-extra";
 
 import {
   getBuiltInProviderIdentity,
+} from "../../src/adapters/providers.js";
+import {
   type ProviderAdapter,
 } from "../../src/adapters/providerAdapter.js";
 import { discoverBuiltInProviders } from "../../src/adapters/providerDiscovery.js";
@@ -34,8 +36,8 @@ test("provider discovery preserves canonical order while summarizing a single in
 
           return detection;
         },
-        async run() {
-          throw new Error("run should not be called during discovery");
+        async runSession() {
+          throw new Error("runSession should not be called during discovery");
         },
       };
     },
@@ -79,8 +81,8 @@ test("provider discovery summarizes zero and multiple installed-provider cases w
             reason: `${providerId} missing`,
           };
         },
-        async run() {
-          throw new Error("run should not be called during discovery");
+        async runSession() {
+          throw new Error("runSession should not be called during discovery");
         },
       };
     },
@@ -109,8 +111,8 @@ test("provider discovery summarizes zero and multiple installed-provider cases w
             reason: `${providerId} missing`,
           };
         },
-        async run() {
-          throw new Error("run should not be called during discovery");
+        async runSession() {
+          throw new Error("runSession should not be called during discovery");
         },
       };
     },
@@ -184,8 +186,8 @@ test("provider discovery degrades unsupported and failed providers into user-saf
             debugReason: "OpenCode adapter is intentionally not implemented in this test.",
           };
         },
-        async run() {
-          throw new Error("run should not be called during discovery");
+        async runSession() {
+          throw new Error("runSession should not be called during discovery");
         },
       };
     },

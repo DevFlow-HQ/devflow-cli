@@ -7,7 +7,7 @@ import { z } from "zod";
 import {
   BUILT_IN_PROVIDER_IDS,
   type BuiltInProviderId,
-} from "./adapters/providerAdapter.js";
+} from "./adapters/providers.js";
 
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";

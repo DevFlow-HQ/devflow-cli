@@ -1,28 +1,19 @@
-import { execa } from "execa";
 import which from "which";
 
 import {
-  getBuiltInProviderIdentity,
-  type BuiltInProviderId,
+  ManagedProviderSessionNotImplementedError,
+  type ManagedProviderSessionInput,
   type ProviderAdapter,
   type ProviderDetectionResult,
-  type ProviderRunInput,
-  type ProviderRunResult,
-} from "./providerAdapter";
+} from "./providerAdapter.js";
+import {
+  getBuiltInProviderIdentity,
+  type BuiltInProviderId,
+} from "./providers.js";
 
 interface CommandProviderConfig {
   providerId: BuiltInProviderId;
   command: string;
-}
-
-function buildCommandArgs(input: ProviderRunInput): string[] {
-  const args = [input.prompt];
-
-  if (input.model) {
-    args.unshift("--model", input.model);
-  }
-
-  return args;
 }
 
 export function createCommandProviderAdapter(
@@ -53,26 +44,15 @@ export function createCommandProviderAdapter(
     }
   }
 
-  async function runCommand(
-    input: ProviderRunInput,
-  ): Promise<ProviderRunResult> {
-    const executable = await resolveExecutable();
-    const result = await execa(executable, buildCommandArgs(input), {
-      cwd: input.workingDirectory,
-      stdio: "inherit",
-      reject: false,
-    });
-
-    return {
-      success: result.exitCode === 0,
-      exitCode: result.exitCode ?? null,
-      signal: result.signal ?? null,
-    };
+  async function runSession(
+    _input: ManagedProviderSessionInput,
+  ): Promise<never> {
+    throw new ManagedProviderSessionNotImplementedError(provider);
   }
 
   return {
     provider,
     detect: detectExecutable,
-    run: runCommand,
+    runSession,
   };
 }

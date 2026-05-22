@@ -10,7 +10,7 @@ import {
   getBuiltInProviderIdentity,
   isBuiltInProviderId,
   type BuiltInProviderId,
-} from "./adapters/providerAdapter.js";
+} from "./adapters/providers.js";
 import {
   createDevFlowState,
   type DevFlowState,
