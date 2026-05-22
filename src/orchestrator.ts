@@ -118,8 +118,26 @@ async function renderIntentPrompt(options: {
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
 }
 
-function createCompletionMarker(): string {
-  return `DEVFLOW_INTENT_COMPLETE_${crypto.randomBytes(16).toString("hex")}`;
+function renderIntentRepairPrompt(options: {
+  artifactPath: string;
+  completionMarker: string;
+  validationError: Error;
+}): string {
+  return [
+    "Repair only the intent artifact.",
+    "",
+    `Artifact path: ${options.artifactPath}`,
+    "",
+    "Validation failure:",
+    options.validationError.message,
+    "",
+    "Replace the artifact with valid JSON matching the required intent schema.",
+    `When the artifact is repaired, print exactly: ${options.completionMarker}`,
+  ].join("\n");
+}
+
+function createCompletionMarker(prefix = "DEVFLOW_INTENT_COMPLETE"): string {
+  return `${prefix}_${crypto.randomBytes(16).toString("hex")}`;
 }
 
 async function readIntentArtifact(artifactPath: string): Promise<IntentArtifact> {
@@ -155,6 +173,9 @@ async function runIntentStage(options: {
   adapter: ProviderAdapter;
 }): Promise<void> {
   const completionMarker = createCompletionMarker();
+  const repairCompletionMarker = createCompletionMarker(
+    "DEVFLOW_INTENT_REPAIR_COMPLETE",
+  );
   const prompt = await renderIntentPrompt({
     rawTask: options.request.rawTask,
     artifactPath: options.run.paths.intentArtifact,
@@ -168,6 +189,23 @@ async function runIntentStage(options: {
     ...(options.request.model ? { model: options.request.model } : {}),
     async validate() {
       await readIntentArtifact(options.run.paths.intentArtifact);
+    },
+    repair: {
+      completionMarker: repairCompletionMarker,
+      renderPrompt(validationError) {
+        return renderIntentRepairPrompt({
+          artifactPath: options.run.paths.intentArtifact,
+          completionMarker: repairCompletionMarker,
+          validationError,
+        });
+      },
+      mapFailure(validationError) {
+        return new StageArtifactValidationError({
+          stage: "intent",
+          artifactPath: options.run.paths.intentArtifact,
+          details: validationError.message,
+        });
+      },
     },
   });
 }

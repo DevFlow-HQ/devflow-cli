@@ -144,6 +144,39 @@ test("managed-session input exposes validation and repair lifecycle configuratio
   );
 });
 
+test("fake managed-session lifecycle propagates original validation errors when repair is absent", async () => {
+  const validationError = new Error("intent artifact missing");
+  const input: ManagedProviderSessionInput = {
+    workingDirectory: "/tmp/devflow",
+    initialPrompt: "Ship the contract",
+    initialCompletionMarker: "DEVFLOW_DONE",
+    async validate() {
+      throw validationError;
+    },
+  };
+
+  async function runFakeManagedSession(
+    sessionInput: ManagedProviderSessionInput,
+  ) {
+    try {
+      await sessionInput.validate();
+    } catch (error) {
+      if (!sessionInput.repair) {
+        throw error;
+      }
+
+      sessionInput.repair.renderPrompt(error as Error);
+    }
+
+    return { repairUsed: false, exitCode: 0, signal: null };
+  }
+
+  await assert.rejects(
+    runFakeManagedSession(input),
+    (error: unknown) => error === validationError,
+  );
+});
+
 test("managed-session contract exposes typed lifecycle failures with provider identity", () => {
   const provider = getBuiltInProviderIdentity("codex");
   const incomplete = new IncompleteProviderSessionError({

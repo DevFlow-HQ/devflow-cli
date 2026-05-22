@@ -19,6 +19,7 @@ import {
   ManagedProviderSessionNotImplementedError,
   MissingProviderIdError,
   runExecutionRequest,
+  StageArtifactValidationError,
   type PipelineStage,
 } from "../src/orchestrator.js";
 
@@ -234,6 +235,150 @@ test("orchestrator treats successful runSession completion as sufficient intent 
     ),
     false,
   );
+});
+
+test("orchestrator supplies intent validation and one in-session repair attempt to the managed provider session", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  let repairedCompletion: { repairUsed: boolean } | undefined;
+  const repairPrompts: string[] = [];
+  const validationFailures: Error[] = [];
+  const adapter: ProviderAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      try {
+        await input.validate();
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        validationFailures.push(error);
+        assert.ok(input.repair);
+        assert.match(
+          input.repair.completionMarker,
+          /^DEVFLOW_INTENT_REPAIR_COMPLETE_[a-f0-9]{32}$/,
+        );
+        const repairPrompt = input.repair.renderPrompt(error);
+        repairPrompts.push(repairPrompt);
+        assert.match(repairPrompt, /Repair only the intent artifact/);
+        assert.match(repairPrompt, /no such file or directory|ENOENT/);
+        assert.match(repairPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/);
+
+        await fs.outputJson(
+          join(
+            projectRoot,
+            ".devflow",
+            "runs",
+            (await listRunDirectories(projectRoot))[0],
+            "intent.json",
+          ),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+
+        repairedCompletion = { repairUsed: true };
+        return { repairUsed: true, exitCode: 0, signal: null };
+      }
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createProviderAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(validationFailures.length, 1);
+  assert.equal(repairPrompts.length, 1);
+  assert.deepEqual(repairedCompletion, { repairUsed: true });
+});
+
+test("orchestrator maps failed intent repair validation to the stage artifact validation error", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  let repairPromptCount = 0;
+  const adapter: ProviderAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      try {
+        await input.validate();
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        assert.ok(input.repair);
+        input.repair.renderPrompt(error);
+        repairPromptCount += 1;
+
+        await fs.outputJson(
+          join(
+            projectRoot,
+            ".devflow",
+            "runs",
+            (await listRunDirectories(projectRoot))[0],
+            "intent.json",
+          ),
+          {
+            classification: "feature",
+            summary: "",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+
+        try {
+          await input.validate();
+        } catch (repairError) {
+          assert.ok(repairError instanceof Error);
+          throw input.repair.mapFailure(repairError);
+        }
+      }
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createProviderAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof StageArtifactValidationError &&
+      error.stage === "intent" &&
+      error.artifactPath.endsWith("/intent.json") &&
+      error.message.includes("Must be a non-empty string"),
+  );
+
+  assert.equal(repairPromptCount, 1);
 });
 
 test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {
