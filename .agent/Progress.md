@@ -45,38 +45,34 @@ Hard limit: 100 lines.
   - rename shared/core adapter modules to managed-session vocabulary while keeping individual provider modules unless they become confusing
   - keep provider discovery focused on availability detection
   - defer real PTY transport to the next checkpoint
+- Completed the managed-session contract and wiring migration:
+  - neutral provider identity metadata now lives outside the managed-session execution contract
+  - adapters expose discovery plus `runSession(...)`, validation callbacks, optional in-session repair prompts, typed lifecycle failures, and structured success metadata
+  - provider discovery stays focused on availability detection and canonical built-in ordering
+  - the orchestrator resolves managed-session adapters through an injectable factory, validates built-in provider ids before run creation, and delegates intent artifact validation plus one targeted repair to the managed session
+  - the CLI handles the adapter-layer `ManagedProviderSessionNotImplementedError` as the expected MVP limitation
 
 ## Current State
 - The repo now has a working CLI/bootstrap/state/orchestration boundary across `src/cli.ts`, `src/projectRoot.ts`, `src/bootstrapProvider.ts`, `src/devflowState.ts`, `src/orchestrator.ts`, provider session code, and `src/adapters/`.
-- Built-in provider discovery, repo-root resolution, repo-local default-provider state, explicit provider/model override handling, first-run provider selection, shared context storage, run creation, immutable run artifact writes, MVP stage ordering, provider-session-backed intent execution, strict intent validation, and one-shot intent repair are implemented and regression-tested.
+- Built-in provider discovery, repo-root resolution, repo-local default-provider state, explicit provider/model override handling, first-run provider selection, shared context storage, run creation, immutable run artifact writes, MVP stage ordering, managed-session-backed intent wiring, strict intent validation, and in-session intent repair are implemented and regression-tested.
 - The MVP pipeline currently has only intent active; bootstrap, grill, PRD, issues, execute, and validate are observable no-op placeholders that do not write fake artifacts.
-- The managed-session migration is specified in `.agent/prd.md` but not implemented yet; built-in provider adapters still use the current one-shot contract until that checkpoint is completed.
+- The managed-session contract and wiring migration is complete. Built-in managed sessions intentionally throw `ManagedProviderSessionNotImplementedError` until the PTY transport checkpoint lands, so documentation should not imply that real provider PTY execution is implemented in this migration.
 - There are no remaining AFK tasks in the `.devflow` filesystem state-boundary workstream from `.agent/task_progress.md`.
 
 ## Next Checkpoint
-1. Migrate provider adapters to managed session control:
-  - Replace `providerAdapter.ts` with a managed-session contract and remove the old one-shot `run(...)` API.
-  - Extract provider ids/display names/helpers into `providers.ts`.
-  - Rename shared/core adapter files to managed-session vocabulary; keep individual provider files unless confusing.
-  - Move `ManagedProviderSessionNotImplementedError` into the managed-session adapter layer.
-  - Add managed-session input/result types with required validation, optional in-session repair rendering, required repair failure mapping, and typed session failure errors.
-  - Wire orchestrator through an injectable managed-session adapter factory and validate built-in provider ids before run creation.
-  - Built-in `runSession(...)` should intentionally throw not implemented until PTY transport lands.
-  - Update tests to use fake managed-session adapters for lifecycle behavior and keep discovery tests focused on detection.
-
-2. PTY-based managed sessions:
+1. PTY-based managed sessions:
   - add `node-pty` and `strip-ansi` to the stack
   - bridge user input/output through a PTY so providers still see an interactive terminal
   - scan stripped PTY output for nonce completion markers
   - inject provider-specific `/exit` when known
   - terminate the child process as fallback after successful marker detection and artifact validation
 
-3. Add orchestrator-level whole-stage retry:
+2. Add orchestrator-level whole-stage retry:
   - Treat artifact repair and whole-stage retry as separate policies.
   - After PTY session failures are typed, add orchestrator-level retry around provider-backed stages when `runSession(...)` throws or a stage fails.
   - Keep the in-session artifact repair path for marker-plus-invalid-artifact failures that need provider context.
 
-4. Project context freshness before expanding bootstrap:
+3. Project context freshness before expanding bootstrap:
   - Add `.devflow/project-context.meta.json`.
   - Store `generatedAt`, `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`.
   - Use Git diff/status with context-relevant path rules to decide whether `.devflow/project-context.md` is fresh.
