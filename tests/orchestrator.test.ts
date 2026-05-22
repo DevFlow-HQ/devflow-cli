@@ -9,13 +9,17 @@ import {
   createDevFlowState,
   type DevFlowState,
 } from "../src/devflowState.js";
+import type {
+  ManagedProviderSessionInput,
+  ProviderAdapter,
+} from "../src/adapters/providerAdapter.js";
+import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
+import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
   ManagedProviderSessionNotImplementedError,
   MissingProviderIdError,
   runExecutionRequest,
-  StageArtifactValidationError,
   type PipelineStage,
-  type ProviderSessionRunner,
 } from "../src/orchestrator.js";
 
 async function listRunDirectories(
@@ -45,41 +49,24 @@ test("orchestrator default provider session runner fails with a managed-session-
     ),
     (error: unknown) =>
       error instanceof ManagedProviderSessionNotImplementedError &&
-      error.providerId === "codex" &&
+      error.provider.id === "codex" &&
       error.message.includes("Managed provider sessions are not implemented yet"),
   );
 });
 
-test("orchestrator renders intent prompt and accepts a provider-written intent artifact", async () => {
+test("orchestrator resolves the selected built-in provider through an adapter factory", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
-  await devFlowState.writeProjectContext("# Project context\n");
-  const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
-  const sessionRunner: ProviderSessionRunner = {
-    async run(options) {
-      runnerCalls.push(options);
-      assert.equal(options.providerId, "codex");
-      assert.equal(options.projectRoot, projectRoot);
-      assert.equal(options.model, "gpt-5.5/fast beta");
-      assert.match(options.artifactPath, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json$/);
-      assert.match(options.completionMarker, /^DEVFLOW_INTENT_COMPLETE_[a-f0-9]{32}$/);
-      assert.match(options.prompt, /Classify only the raw task/);
-      assert.match(options.prompt, /Raw task:\nresume work/);
-      assert.doesNotMatch(options.prompt, /Project context/);
-      assert.equal(options.prompt.includes(options.artifactPath), true);
-      assert.equal(options.prompt.includes(options.completionMarker), true);
-      assert.match(options.prompt, /"classification": "feature" \| "bug" \| "refactor" \| "unclear"/);
-
-      await fs.outputJson(
-        options.artifactPath,
-        {
-          classification: "feature",
-          summary: "Resume the current workstream.",
-          rawTask: "resume work",
-          needsClarification: false,
-        },
-        { spaces: 2 },
-      );
+  const resolvedProviderIds: string[] = [];
+  const runSessionInputs: ManagedProviderSessionInput[] = [];
+  const adapter: ProviderAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionInputs.push(input);
+      return { repairUsed: false, exitCode: 0, signal: null };
     },
   };
 
@@ -90,54 +77,80 @@ test("orchestrator renders intent prompt and accepts a provider-written intent a
       providerId: "codex",
       model: "gpt-5.5/fast beta",
     },
-    { devFlowState, sessionRunner },
+    {
+      devFlowState,
+      createProviderAdapter(providerId) {
+        resolvedProviderIds.push(providerId);
+        return adapter;
+      },
+    },
   );
 
-  assert.equal(runnerCalls.length, 1);
+  assert.deepEqual(resolvedProviderIds, ["codex"]);
+  assert.equal(runSessionInputs.length, 1);
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
-
-  const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
-  assert.deepEqual(await fs.readJson(join(runDirectory, "intent.json")), {
-    classification: "feature",
-    summary: "Resume the current workstream.",
-    rawTask: "resume work",
-    needsClarification: false,
-  });
-  assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
 });
 
-test("orchestrator runs the MVP pipeline order with intent active and later stages as no-ops", async () => {
+test("orchestrator passes intent stage input to the managed provider session", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.writeProjectContext("# Project context\n");
   const stages: PipelineStage[] = [];
-  const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
-  const sessionRunner: ProviderSessionRunner = {
-    async run(options) {
-      runnerCalls.push(options);
+  const runSessionInputs: ManagedProviderSessionInput[] = [];
+  const adapter: ProviderAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionInputs.push(input);
+      assert.equal(input.workingDirectory, projectRoot);
+      assert.equal(input.model, "gpt-5.5/fast beta");
+      assert.match(input.initialCompletionMarker, /^DEVFLOW_INTENT_COMPLETE_[a-f0-9]{32}$/);
+      assert.match(input.initialPrompt, /Classify only the raw task/);
+      assert.match(input.initialPrompt, /Raw task:\nresume work/);
+      assert.doesNotMatch(input.initialPrompt, /Project context/);
+      assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+      assert.match(input.initialPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/);
+      assert.equal("stage" in input, false);
+      assert.equal("artifactPath" in input, false);
+      assert.equal("context" in input, false);
 
       await fs.outputJson(
-        options.artifactPath,
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
         {
-          classification: "bug",
-          summary: "Fix the failing provider handoff.",
-          rawTask: "fix provider handoff",
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
           needsClarification: false,
         },
         { spaces: 2 },
       );
+      await input.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
     },
   };
 
   await runExecutionRequest(
     {
       projectRoot,
-      rawTask: "fix provider handoff",
+      rawTask: "resume work",
       providerId: "codex",
+      model: "gpt-5.5/fast beta",
     },
     {
       devFlowState,
-      sessionRunner,
+      createProviderAdapter() {
+        return adapter;
+      },
       onStageStart(stage) {
         stages.push(stage);
       },
@@ -153,17 +166,16 @@ test("orchestrator runs the MVP pipeline order with intent active and later stag
     "execute",
     "validate",
   ]);
-  assert.equal(runnerCalls.length, 1);
-  assert.equal(runnerCalls[0].artifactPath.endsWith("/intent.json"), true);
+  assert.equal(runSessionInputs.length, 1);
 
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
   const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
 
   assert.deepEqual(await fs.readJson(join(runDirectory, "intent.json")), {
-    classification: "bug",
-    summary: "Fix the failing provider handoff.",
-    rawTask: "fix provider handoff",
+    classification: "feature",
+    summary: "Resume the current workstream.",
+    rawTask: "resume work",
     needsClarification: false,
   });
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
@@ -171,27 +183,19 @@ test("orchestrator runs the MVP pipeline order with intent active and later stag
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
-test("orchestrator repairs a missing provider-written intent artifact once and continues", async () => {
+test("orchestrator treats successful runSession completion as sufficient intent stage success", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
-  const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
-  const sessionRunner: ProviderSessionRunner = {
-    async run(options) {
-      runnerCalls.push(options);
-
-      if (runnerCalls.length === 2) {
-        await fs.outputJson(
-          options.artifactPath,
-          {
-            classification: "unclear",
-            summary: "Clarify the requested work.",
-            rawTask: "do the thing",
-            needsClarification: true,
-          },
-          { spaces: 2 },
-        );
-      }
+  let runSessionCallCount = 0;
+  const adapter: ProviderAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
+      runSessionCallCount += 1;
+      return { repairUsed: false, exitCode: 0, signal: null };
     },
   };
 
@@ -203,13 +207,16 @@ test("orchestrator repairs a missing provider-written intent artifact once and c
     },
     {
       devFlowState,
-      sessionRunner,
+      createProviderAdapter() {
+        return adapter;
+      },
       onStageStart(stage) {
         stages.push(stage);
       },
     },
   );
 
+  assert.equal(runSessionCallCount, 1);
   assert.deepEqual(stages, [
     "intent",
     "bootstrap",
@@ -219,145 +226,28 @@ test("orchestrator repairs a missing provider-written intent artifact once and c
     "execute",
     "validate",
   ]);
-  assert.equal(runnerCalls.length, 2);
-  assert.match(runnerCalls[1].prompt, /repair/i);
-  assert.match(runnerCalls[1].prompt, /replace the invalid provider-owned artifact/i);
-
   const runIds = await listRunDirectories(projectRoot);
-  const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
-  assert.deepEqual(await fs.readJson(join(runDirectory, "intent.json")), {
-    classification: "unclear",
-    summary: "Clarify the requested work.",
-    rawTask: "do the thing",
-    needsClarification: true,
-  });
-});
-
-for (const invalidArtifact of [
-  {
-    name: "invalid JSON",
-    write: (artifactPath: string) => fs.outputFile(artifactPath, "{not-json", "utf8"),
-  },
-  {
-    name: "schema-invalid object",
-    write: (artifactPath: string) =>
-      fs.outputJson(
-        artifactPath,
-        {
-          classification: "documentation",
-          summary: "",
-          rawTask: "document the provider boundary",
-          needsClarification: "no",
-          extra: true,
-        },
-        { spaces: 2 },
-      ),
-  },
-]) {
-  test(`orchestrator repairs a provider-written ${invalidArtifact.name} intent artifact once`, async () => {
-    const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
-    const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
-    const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
-    const sessionRunner: ProviderSessionRunner = {
-      async run(options) {
-        runnerCalls.push(options);
-
-        if (runnerCalls.length === 1) {
-          await invalidArtifact.write(options.artifactPath);
-          return;
-        }
-
-        await fs.outputJson(
-          options.artifactPath,
-          {
-            classification: "feature",
-            summary: "Document the provider boundary.",
-            rawTask: "document the provider boundary",
-            needsClarification: false,
-          },
-          { spaces: 2 },
-        );
-      },
-    };
-
-    await runExecutionRequest(
-      {
-        projectRoot,
-        rawTask: "document the provider boundary",
-        providerId: "codex",
-      },
-      { devFlowState, sessionRunner },
-    );
-
-    assert.equal(runnerCalls.length, 2);
-    assert.match(runnerCalls[1].prompt, /missing, invalid JSON, or does not match/i);
-
-    const runIds = await listRunDirectories(projectRoot);
-    const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
-    assert.deepEqual(await fs.readJson(join(runDirectory, "intent.json")), {
-      classification: "feature",
-      summary: "Document the provider boundary.",
-      rawTask: "document the provider boundary",
-      needsClarification: false,
-    });
-  });
-}
-
-test("orchestrator fails with a structured stage artifact validation error after one failed repair", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
-  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
-  const stages: PipelineStage[] = [];
-  const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
-  const sessionRunner: ProviderSessionRunner = {
-    async run(options) {
-      runnerCalls.push(options);
-
-      await fs.outputJson(
-        options.artifactPath,
-        {
-          classification: "bug",
-          summary: "This artifact is still missing the required raw task.",
-          needsClarification: false,
-        },
-        { spaces: 2 },
-      );
-    },
-  };
-
-  await assert.rejects(
-    runExecutionRequest(
-      {
-        projectRoot,
-        rawTask: "fix intent parsing",
-        providerId: "codex",
-      },
-      {
-        devFlowState,
-        sessionRunner,
-        onStageStart(stage) {
-          stages.push(stage);
-        },
-      },
+  assert.equal(runIds.length, 1);
+  assert.equal(
+    await fs.pathExists(
+      join(projectRoot, ".devflow", "runs", runIds[0], "intent.json"),
     ),
-    (error: unknown) =>
-      error instanceof StageArtifactValidationError &&
-      error.stage === "intent" &&
-      error.artifactPath.endsWith("/intent.json") &&
-      error.message.includes("Invalid artifact for stage \"intent\"") &&
-      error.message.includes("rawTask"),
+    false,
   );
-
-  assert.equal(runnerCalls.length, 2);
-  assert.deepEqual(stages, ["intent"]);
 });
 
 test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let runnerCallCount = 0;
-  const sessionRunner: ProviderSessionRunner = {
-    async run() {
+  const adapter: ProviderAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
       runnerCallCount += 1;
+      return { repairUsed: false, exitCode: 0, signal: null };
     },
   };
 
@@ -367,7 +257,12 @@ test("orchestrator rejects provider-backed execution before creating a run when 
         projectRoot,
         rawTask: "resume work",
       },
-      { devFlowState, sessionRunner },
+      {
+        devFlowState,
+        createProviderAdapter() {
+          return adapter;
+        },
+      },
     ),
     (error: unknown) =>
       error instanceof MissingProviderIdError &&
@@ -375,5 +270,42 @@ test("orchestrator rejects provider-backed execution before creating a run when 
   );
 
   assert.equal(runnerCallCount, 0);
+  assert.deepEqual(await listRunDirectories(projectRoot), []);
+});
+
+test("orchestrator rejects unsupported provider ids before creating a run", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  let adapterFactoryCallCount = 0;
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "not-real",
+      },
+      {
+        devFlowState,
+        createProviderAdapter() {
+          adapterFactoryCallCount += 1;
+          return {
+            provider: getBuiltInProviderIdentity("codex"),
+            async detect() {
+              return { isAvailable: true, executable: "codex" };
+            },
+            async runSession() {
+              return { repairUsed: false, exitCode: 0, signal: null };
+            },
+          };
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof UnsupportedProviderError &&
+      error.message.includes("Unsupported provider: not-real"),
+  );
+
+  assert.equal(adapterFactoryCallCount, 0);
   assert.deepEqual(await listRunDirectories(projectRoot), []);
 });

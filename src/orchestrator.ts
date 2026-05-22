@@ -10,25 +10,24 @@ import {
   type DevFlowRunHandle,
   type DevFlowState,
 } from "./devflowState.js";
+import { createBuiltInProviderAdapter } from "./adapters/builtInProviderAdapter.js";
+import {
+  ManagedProviderSessionNotImplementedError,
+  type ProviderAdapter,
+} from "./adapters/providerAdapter.js";
+import {
+  isBuiltInProviderId,
+  type BuiltInProviderId,
+} from "./adapters/providers.js";
+import { UnsupportedProviderError } from "./bootstrapProvider.js";
+
+export { ManagedProviderSessionNotImplementedError };
 
 export interface ResolvedExecutionRequest {
   projectRoot: string;
   rawTask: string;
   providerId?: string;
   model?: string;
-}
-
-export interface ProviderSessionRunOptions {
-  providerId: string;
-  projectRoot: string;
-  prompt: string;
-  artifactPath: string;
-  completionMarker: string;
-  model?: string;
-}
-
-export interface ProviderSessionRunner {
-  run(options: ProviderSessionRunOptions): Promise<void>;
 }
 
 export const PIPELINE_STAGES = [
@@ -45,7 +44,7 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
 export interface RunExecutionRequestOptions {
   devFlowState?: DevFlowState;
-  sessionRunner?: ProviderSessionRunner;
+  createProviderAdapter?: (providerId: BuiltInProviderId) => ProviderAdapter;
   onStageStart?: (stage: PipelineStage) => void | Promise<void>;
 }
 
@@ -70,18 +69,6 @@ const intentArtifactSchema = z
   .strict();
 
 export type IntentArtifact = z.infer<typeof intentArtifactSchema>;
-
-export class ManagedProviderSessionNotImplementedError extends Error {
-  readonly providerId: string;
-
-  constructor(providerId: string) {
-    super(
-      `Managed provider sessions are not implemented yet for provider "${providerId}".`,
-    );
-    this.name = "ManagedProviderSessionNotImplementedError";
-    this.providerId = providerId;
-  }
-}
 
 export class InvalidIntentArtifactError extends Error {
   readonly artifactPath: string;
@@ -118,12 +105,6 @@ export class MissingProviderIdError extends Error {
   }
 }
 
-export const defaultProviderSessionRunner: ProviderSessionRunner = {
-  async run(options) {
-    throw new ManagedProviderSessionNotImplementedError(options.providerId);
-  },
-};
-
 async function renderIntentPrompt(options: {
   rawTask: string;
   artifactPath: string;
@@ -135,36 +116,6 @@ async function renderIntentPrompt(options: {
     .replaceAll("{{RAW_TASK}}", options.rawTask)
     .replaceAll("{{ARTIFACT_PATH}}", options.artifactPath)
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
-}
-
-function renderIntentRepairPrompt(options: {
-  rawTask: string;
-  artifactPath: string;
-  completionMarker: string;
-  validationError: InvalidIntentArtifactError;
-}): string {
-  return `Repair the intent artifact for this DevFlow run.
-
-The provider-owned intent artifact is missing, invalid JSON, or does not match the required schema:
-${options.validationError.message}
-
-You may replace the invalid provider-owned artifact during repair. Write a strict JSON object to this absolute artifact path:
-${options.artifactPath}
-
-Schema requirements:
-- The artifact must be valid JSON.
-- The root value must be an object with no extra keys.
-- Required keys:
-  - "classification": "feature" | "bug" | "refactor" | "unclear"
-  - "summary": non-empty string
-  - "rawTask": non-empty string copied from the raw task
-  - "needsClarification": boolean
-
-Raw task:
-${options.rawTask}
-
-After writing the artifact, reply with this completion marker and no other text:
-${options.completionMarker}`;
 }
 
 function createCompletionMarker(): string {
@@ -200,9 +151,8 @@ async function startStage(
 
 async function runIntentStage(options: {
   request: ResolvedExecutionRequest;
-  providerId: string;
   run: DevFlowRunHandle;
-  sessionRunner: ProviderSessionRunner;
+  adapter: ProviderAdapter;
 }): Promise<void> {
   const completionMarker = createCompletionMarker();
   const prompt = await renderIntentPrompt({
@@ -211,51 +161,15 @@ async function runIntentStage(options: {
     completionMarker,
   });
 
-  await options.sessionRunner.run({
-    providerId: options.providerId,
-    projectRoot: options.request.projectRoot,
-    prompt,
-    artifactPath: options.run.paths.intentArtifact,
-    completionMarker,
+  await options.adapter.runSession({
+    workingDirectory: options.request.projectRoot,
+    initialPrompt: prompt,
+    initialCompletionMarker: completionMarker,
     ...(options.request.model ? { model: options.request.model } : {}),
-  });
-
-  try {
-    await readIntentArtifact(options.run.paths.intentArtifact);
-  } catch (error) {
-    if (!(error instanceof InvalidIntentArtifactError)) {
-      throw error;
-    }
-
-    const repairCompletionMarker = createCompletionMarker();
-    await options.sessionRunner.run({
-      providerId: options.providerId,
-      projectRoot: options.request.projectRoot,
-      prompt: renderIntentRepairPrompt({
-        rawTask: options.request.rawTask,
-        artifactPath: options.run.paths.intentArtifact,
-        completionMarker: repairCompletionMarker,
-        validationError: error,
-      }),
-      artifactPath: options.run.paths.intentArtifact,
-      completionMarker: repairCompletionMarker,
-      ...(options.request.model ? { model: options.request.model } : {}),
-    });
-
-    try {
+    async validate() {
       await readIntentArtifact(options.run.paths.intentArtifact);
-    } catch (repairError) {
-      if (repairError instanceof InvalidIntentArtifactError) {
-        throw new StageArtifactValidationError({
-          stage: "intent",
-          artifactPath: options.run.paths.intentArtifact,
-          details: repairError.message,
-        });
-      }
-
-      throw repairError;
-    }
-  }
+    },
+  });
 }
 
 async function runNoopStage(): Promise<void> {
@@ -273,17 +187,22 @@ export async function runExecutionRequest(
     throw new MissingProviderIdError();
   }
 
+  if (!isBuiltInProviderId(providerId)) {
+    throw new UnsupportedProviderError(providerId);
+  }
+
   const devFlowState =
     options.devFlowState ?? createDevFlowState({ projectRoot: request.projectRoot });
-  const sessionRunner = options.sessionRunner ?? defaultProviderSessionRunner;
+  const createProviderAdapter =
+    options.createProviderAdapter ?? createBuiltInProviderAdapter;
+  const adapter = createProviderAdapter(providerId);
   const run = await devFlowState.createRun();
 
   await startStage("intent", options);
   await runIntentStage({
     request,
-    providerId,
     run,
-    sessionRunner,
+    adapter,
   });
 
   for (const stage of PIPELINE_STAGES.slice(1)) {
