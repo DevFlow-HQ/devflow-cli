@@ -21,8 +21,6 @@ import {
 } from "./adapters/providers.js";
 import { UnsupportedProviderError } from "./bootstrapProvider.js";
 
-export { ManagedProviderSessionNotImplementedError };
-
 export interface ResolvedExecutionRequest {
   projectRoot: string;
   rawTask: string;

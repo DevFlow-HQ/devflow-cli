@@ -13,10 +13,10 @@ import type {
   ManagedProviderSessionInput,
   ProviderAdapter,
 } from "../src/adapters/providerAdapter.js";
+import { ManagedProviderSessionNotImplementedError } from "../src/adapters/providerAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
-  ManagedProviderSessionNotImplementedError,
   MissingProviderIdError,
   runExecutionRequest,
   StageArtifactValidationError,

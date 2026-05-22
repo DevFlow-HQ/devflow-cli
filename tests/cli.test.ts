@@ -7,7 +7,11 @@ import { Command, CommanderError } from "commander";
 import { execa } from "execa";
 import fs from "fs-extra";
 
-import { BUILT_IN_PROVIDERS } from "../src/adapters/providers.js";
+import { ManagedProviderSessionNotImplementedError } from "../src/adapters/providerAdapter.js";
+import {
+  BUILT_IN_PROVIDERS,
+  getBuiltInProviderIdentity,
+} from "../src/adapters/providers.js";
 import { runCli } from "../src/cli.js";
 import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.js";
 import { createDevFlowState } from "../src/devflowState.js";
@@ -259,6 +263,27 @@ test("cli falls back to the current directory outside git and fails with a clear
   assert.equal(
     result.stderr,
     'Managed provider sessions are not implemented yet for provider "claude".\n',
+  );
+});
+
+test("cli maps adapter-layer managed-session not-implemented errors to the expected-limitation message", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-adapter-error-"));
+
+  const result = await invokeCliWithOptions(["draft", "plan"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new ManagedProviderSessionNotImplementedError(
+        getBuiltInProviderIdentity("codex"),
+      );
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    'Managed provider sessions are not implemented yet for provider "codex".\n',
   );
 });
 
