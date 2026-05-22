@@ -12,7 +12,7 @@ import {
 } from "./bootstrapProvider.js";
 import type { BuiltInProviderId } from "./adapters/providers.js";
 import type { ProviderDiscoveryResult } from "./adapters/providerDiscovery.js";
-import { ManagedProviderSessionNotImplementedError } from "./adapters/providerAdapter.js";
+import { ManagedProviderSessionNotImplementedError } from "./adapters/managedSessionAdapter.js";
 import {
   createDevFlowState,
   formatInvalidDevFlowConfigError,

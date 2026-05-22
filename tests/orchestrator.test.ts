@@ -11,9 +11,9 @@ import {
 } from "../src/devflowState.js";
 import type {
   ManagedProviderSessionInput,
-  ProviderAdapter,
-} from "../src/adapters/providerAdapter.js";
-import { ManagedProviderSessionNotImplementedError } from "../src/adapters/providerAdapter.js";
+  ManagedSessionAdapter,
+} from "../src/adapters/managedSessionAdapter.js";
+import { ManagedProviderSessionNotImplementedError } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
@@ -55,12 +55,12 @@ test("orchestrator default provider session runner fails with a managed-session-
   );
 });
 
-test("orchestrator resolves the selected built-in provider through an adapter factory", async () => {
+test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const resolvedProviderIds: string[] = [];
   const runSessionInputs: ManagedProviderSessionInput[] = [];
-  const adapter: ProviderAdapter = {
+  const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
     async detect() {
       return { isAvailable: true, executable: "codex" };
@@ -80,7 +80,7 @@ test("orchestrator resolves the selected built-in provider through an adapter fa
     },
     {
       devFlowState,
-      createProviderAdapter(providerId) {
+      createManagedSessionAdapter(providerId) {
         resolvedProviderIds.push(providerId);
         return adapter;
       },
@@ -99,7 +99,7 @@ test("orchestrator passes intent stage input to the managed provider session", a
   await devFlowState.writeProjectContext("# Project context\n");
   const stages: PipelineStage[] = [];
   const runSessionInputs: ManagedProviderSessionInput[] = [];
-  const adapter: ProviderAdapter = {
+  const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
     async detect() {
       return { isAvailable: true, executable: "codex" };
@@ -149,7 +149,7 @@ test("orchestrator passes intent stage input to the managed provider session", a
     },
     {
       devFlowState,
-      createProviderAdapter() {
+      createManagedSessionAdapter() {
         return adapter;
       },
       onStageStart(stage) {
@@ -189,7 +189,7 @@ test("orchestrator treats successful runSession completion as sufficient intent 
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
   let runSessionCallCount = 0;
-  const adapter: ProviderAdapter = {
+  const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
     async detect() {
       return { isAvailable: true, executable: "codex" };
@@ -208,7 +208,7 @@ test("orchestrator treats successful runSession completion as sufficient intent 
     },
     {
       devFlowState,
-      createProviderAdapter() {
+      createManagedSessionAdapter() {
         return adapter;
       },
       onStageStart(stage) {
@@ -243,7 +243,7 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
   let repairedCompletion: { repairUsed: boolean } | undefined;
   const repairPrompts: string[] = [];
   const validationFailures: Error[] = [];
-  const adapter: ProviderAdapter = {
+  const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
     async detect() {
       return { isAvailable: true, executable: "codex" };
@@ -299,7 +299,7 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
     },
     {
       devFlowState,
-      createProviderAdapter() {
+      createManagedSessionAdapter() {
         return adapter;
       },
     },
@@ -314,7 +314,7 @@ test("orchestrator maps failed intent repair validation to the stage artifact va
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let repairPromptCount = 0;
-  const adapter: ProviderAdapter = {
+  const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
     async detect() {
       return { isAvailable: true, executable: "codex" };
@@ -366,7 +366,7 @@ test("orchestrator maps failed intent repair validation to the stage artifact va
       },
       {
         devFlowState,
-        createProviderAdapter() {
+        createManagedSessionAdapter() {
           return adapter;
         },
       },
@@ -385,7 +385,7 @@ test("orchestrator rejects provider-backed execution before creating a run when 
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let runnerCallCount = 0;
-  const adapter: ProviderAdapter = {
+  const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
     async detect() {
       return { isAvailable: true, executable: "codex" };
@@ -404,7 +404,7 @@ test("orchestrator rejects provider-backed execution before creating a run when 
       },
       {
         devFlowState,
-        createProviderAdapter() {
+        createManagedSessionAdapter() {
           return adapter;
         },
       },
@@ -432,7 +432,7 @@ test("orchestrator rejects unsupported provider ids before creating a run", asyn
       },
       {
         devFlowState,
-        createProviderAdapter() {
+        createManagedSessionAdapter() {
           adapterFactoryCallCount += 1;
           return {
             provider: getBuiltInProviderIdentity("codex"),

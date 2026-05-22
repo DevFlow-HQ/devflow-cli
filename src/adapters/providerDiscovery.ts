@@ -1,13 +1,13 @@
-import { createBuiltInProviderAdapter } from "./builtInProviderAdapter.js";
+import { createBuiltInManagedSessionAdapter } from "./builtInManagedSessionAdapter.js";
 import {
   BUILT_IN_PROVIDERS,
   type BuiltInProviderId,
   type ProviderIdentity,
 } from "./providers.js";
 import {
-  type ProviderAdapter,
+  type ManagedSessionAdapter,
   type ProviderDetectionResult,
-} from "./providerAdapter.js";
+} from "./managedSessionAdapter.js";
 
 export type DiscoveredProvider =
   | {
@@ -37,7 +37,7 @@ export interface ProviderDiscoveryResult {
 }
 
 export type ProviderDiscoveryAdapter = Pick<
-  ProviderAdapter,
+  ManagedSessionAdapter,
   "provider" | "detect"
 >;
 
@@ -114,7 +114,8 @@ function buildSummary(installedProviders: InstalledProvider[]): ProviderDiscover
 export async function discoverBuiltInProviders(
   options: DiscoverBuiltInProvidersOptions = {},
 ): Promise<ProviderDiscoveryResult> {
-  const createAdapter = options.createAdapter ?? createBuiltInProviderAdapter;
+  const createAdapter =
+    options.createAdapter ?? createBuiltInManagedSessionAdapter;
 
   const providers = await Promise.all(
     BUILT_IN_PROVIDERS.map(async (provider) => {

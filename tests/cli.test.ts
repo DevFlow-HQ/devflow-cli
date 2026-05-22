@@ -7,7 +7,7 @@ import { Command, CommanderError } from "commander";
 import { execa } from "execa";
 import fs from "fs-extra";
 
-import { ManagedProviderSessionNotImplementedError } from "../src/adapters/providerAdapter.js";
+import { ManagedProviderSessionNotImplementedError } from "../src/adapters/managedSessionAdapter.js";
 import {
   BUILT_IN_PROVIDERS,
   getBuiltInProviderIdentity,

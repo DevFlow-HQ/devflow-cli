@@ -8,8 +8,8 @@ import {
   getBuiltInProviderIdentity,
 } from "../../src/adapters/providers.js";
 import {
-  type ProviderAdapter,
-} from "../../src/adapters/providerAdapter.js";
+  type ManagedSessionAdapter,
+} from "../../src/adapters/managedSessionAdapter.js";
 import {
   discoverBuiltInProviders,
   type ProviderDiscoveryAdapter,
@@ -23,8 +23,8 @@ function createDiscoveryAdapter(
 
 test("provider discovery preserves canonical order while summarizing a single installed provider", async () => {
   const detections = new Map<
-    ProviderAdapter["provider"]["id"],
-    Awaited<ReturnType<ProviderAdapter["detect"]>>
+    ManagedSessionAdapter["provider"]["id"],
+    Awaited<ReturnType<ManagedSessionAdapter["detect"]>>
   >([
     ["claude", { isAvailable: false, reason: "claude missing" }],
     ["gemini", { isAvailable: true, executable: "/usr/local/bin/gemini" }],

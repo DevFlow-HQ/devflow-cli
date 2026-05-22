@@ -14,20 +14,20 @@ import {
   IncompleteProviderSessionError,
   ManagedProviderSessionNotImplementedError,
   ProviderSessionCleanupError,
-  type ProviderAdapter,
+  type ManagedSessionAdapter,
   type ManagedProviderSessionInput,
-} from "../../src/adapters/providerAdapter.js";
+} from "../../src/adapters/managedSessionAdapter.js";
 import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
 import { createGeminiAdapter } from "../../src/adapters/geminiAdapter.js";
 import { createOpenCodeAdapter } from "../../src/adapters/opencodeAdapter.js";
-import { createBuiltInProviderAdapter } from "../../src/adapters/builtInProviderAdapter.js";
+import { createBuiltInManagedSessionAdapter } from "../../src/adapters/builtInManagedSessionAdapter.js";
 
 interface AdapterContractHarness {
   providerId: BuiltInProviderId;
   command: string;
   displayName: string;
-  createAdapter: () => ProviderAdapter;
+  createAdapter: () => ManagedSessionAdapter;
 }
 
 const providerHarnesses: AdapterContractHarness[] = [
@@ -87,8 +87,8 @@ test("provider identity lookup stays aligned with the built-in provider constant
   assert.equal(getBuiltInProviderIdentity("codex").displayName, "Codex");
 });
 
-test("provider adapters expose static metadata plus async detect and runSession methods", async () => {
-  const adapter: ProviderAdapter = {
+test("managed-session adapters expose static metadata plus async detect and runSession methods", async () => {
+  const adapter: ManagedSessionAdapter = {
     provider: BUILT_IN_PROVIDERS[2],
     async detect() {
       return {
@@ -310,7 +310,7 @@ for (const harness of providerHarnesses) {
     );
   });
 
-  test(`built-in provider selection wires ${harness.command} detection through the shared adapter contract`, async (t) => {
+  test(`built-in managed-session selection wires ${harness.command} detection through the shared managed-session contract`, async (t) => {
     const originalPath = process.env.PATH;
     t.after(() => {
       process.env.PATH = originalPath;
@@ -328,7 +328,7 @@ for (const harness of providerHarnesses) {
 
     process.env.PATH = binDir;
 
-    const adapter = createBuiltInProviderAdapter(harness.providerId);
+    const adapter = createBuiltInManagedSessionAdapter(harness.providerId);
 
     assert.deepEqual(
       adapter.provider,

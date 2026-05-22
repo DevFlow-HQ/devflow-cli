@@ -1,8 +1,8 @@
-import { createCommandProviderAdapter } from "./commandProviderAdapter.js";
-import type { ProviderAdapter } from "./providerAdapter.js";
+import { createCommandManagedSessionAdapter } from "./commandManagedSessionAdapter.js";
+import type { ManagedSessionAdapter } from "./managedSessionAdapter.js";
 
-export function createCodexAdapter(): ProviderAdapter {
-  return createCommandProviderAdapter({
+export function createCodexAdapter(): ManagedSessionAdapter {
+  return createCommandManagedSessionAdapter({
     providerId: "codex",
     command: "codex",
   });

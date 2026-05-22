@@ -2,12 +2,12 @@ import { createClaudeAdapter } from "./claudeAdapter.js";
 import { createCodexAdapter } from "./codexAdapter.js";
 import { createGeminiAdapter } from "./geminiAdapter.js";
 import { createOpenCodeAdapter } from "./opencodeAdapter.js";
-import type { ProviderAdapter } from "./providerAdapter.js";
+import type { ManagedSessionAdapter } from "./managedSessionAdapter.js";
 import type { BuiltInProviderId } from "./providers.js";
 
-export function createBuiltInProviderAdapter(
+export function createBuiltInManagedSessionAdapter(
   providerId: BuiltInProviderId,
-): ProviderAdapter {
+): ManagedSessionAdapter {
   switch (providerId) {
     case "claude":
       return createClaudeAdapter();

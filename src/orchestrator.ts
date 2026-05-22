@@ -10,11 +10,11 @@ import {
   type DevFlowRunHandle,
   type DevFlowState,
 } from "./devflowState.js";
-import { createBuiltInProviderAdapter } from "./adapters/builtInProviderAdapter.js";
+import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSessionAdapter.js";
 import {
   ManagedProviderSessionNotImplementedError,
-  type ProviderAdapter,
-} from "./adapters/providerAdapter.js";
+  type ManagedSessionAdapter,
+} from "./adapters/managedSessionAdapter.js";
 import {
   isBuiltInProviderId,
   type BuiltInProviderId,
@@ -42,7 +42,9 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
 export interface RunExecutionRequestOptions {
   devFlowState?: DevFlowState;
-  createProviderAdapter?: (providerId: BuiltInProviderId) => ProviderAdapter;
+  createManagedSessionAdapter?: (
+    providerId: BuiltInProviderId,
+  ) => ManagedSessionAdapter;
   onStageStart?: (stage: PipelineStage) => void | Promise<void>;
 }
 
@@ -168,7 +170,7 @@ async function startStage(
 async function runIntentStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
-  adapter: ProviderAdapter;
+  adapter: ManagedSessionAdapter;
 }): Promise<void> {
   const completionMarker = createCompletionMarker();
   const repairCompletionMarker = createCompletionMarker(
@@ -229,9 +231,9 @@ export async function runExecutionRequest(
 
   const devFlowState =
     options.devFlowState ?? createDevFlowState({ projectRoot: request.projectRoot });
-  const createProviderAdapter =
-    options.createProviderAdapter ?? createBuiltInProviderAdapter;
-  const adapter = createProviderAdapter(providerId);
+  const createManagedSessionAdapter =
+    options.createManagedSessionAdapter ?? createBuiltInManagedSessionAdapter;
+  const adapter = createManagedSessionAdapter(providerId);
   const run = await devFlowState.createRun();
 
   await startStage("intent", options);

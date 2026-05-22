@@ -81,7 +81,7 @@ export class ProviderSessionCleanupError extends Error {
   }
 }
 
-export interface ProviderAdapter {
+export interface ManagedSessionAdapter {
   readonly provider: ProviderIdentity;
   detect(): Promise<ProviderDetectionResult>;
   runSession(

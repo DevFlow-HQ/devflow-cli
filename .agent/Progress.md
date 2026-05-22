@@ -8,10 +8,10 @@ Hard limit: 100 lines.
 - Architecture, MVP scope, library choices, state layout, and implementation order are locked in `HANDOFF_2.md`.
 - Node/TypeScript CLI scaffold exists with strict ESM TypeScript, `devflow` bin mapping, `tsup` build config, repo `.gitignore`, package lock, and installed runtime/dev dependencies.
 - Completed the adapter and discovery foundation across `src/adapters/`:
-  - `providerAdapter.ts` defines the built-in provider registry and shared detect/run contract for Claude, Gemini, Codex, and OpenCode
-  - `commandProviderAdapter.ts` implements reusable command-backed detection and interactive run behavior
+  - `managedSessionAdapter.ts` defines the shared managed-session detect/runSession contract for Claude, Gemini, Codex, and OpenCode
+  - `commandManagedSessionAdapter.ts` implements reusable command-backed detection and the intentional managed-session not-implemented boundary
   - built-in adapters wire each provider through that shared contract
-  - `builtInProviderAdapter.ts` and `providerDiscovery.ts` expose built-in selection plus concurrent installed-provider discovery with stable CLI-facing results
+  - `builtInManagedSessionAdapter.ts` and `providerDiscovery.ts` expose built-in managed-session selection plus concurrent installed-provider discovery with stable CLI-facing results
 - Completed done issues `001` through `004` under `.agent/issues/done/`:
   - OpenCode now has first-class built-in adapter parity using the canonical `opencode` executable
   - discovery aggregates providers in canonical order, preserves available executable metadata, and supports injected adapter factories for tests
@@ -24,7 +24,7 @@ Hard limit: 100 lines.
   - `src/bootstrapProvider.ts` implements first-run provider setup, cancellation without side effects, and strict `--provider` override semantics
   - `--model` is accepted as an opaque invocation-only string and passed unchanged into the resolved orchestrator request
   - `src/orchestrator.ts` receives a pinned bootstrap handoff object from the CLI, with the structured not-implemented failure shape locked by regression tests
-- Added regression coverage in `tests/adapters/providerAdapter.contract.test.ts`, `tests/adapters/providerDiscovery.test.ts`, `tests/cli.test.ts`, and `tests/repoConfig.test.ts` for provider behavior, discovery ordering, task parsing, project-root resolution, provider precedence, first-run persistence, strict config/override failures, and orchestrator request shape.
+- Added regression coverage in `tests/adapters/managedSessionAdapter.contract.test.ts`, `tests/adapters/providerDiscovery.test.ts`, `tests/cli.test.ts`, and `tests/repoConfig.test.ts` for provider behavior, discovery ordering, task parsing, project-root resolution, provider precedence, first-run persistence, strict config/override failures, and orchestrator request shape.
 - Completed the `.devflow` filesystem state-boundary stream from `.agent/task_progress.md` issues `001` through `010`:
   - `src/devflowState.ts` owns repo-local config persistence behind `createDevFlowState({ projectRoot })`, with typed `config.load()`/`config.save()` APIs and malformed persisted config surfaced as `InvalidDevFlowConfigError`
   - the state facade owns shared project context through canonical `readProjectContext()` and `writeProjectContext(content)` operations
@@ -47,6 +47,7 @@ Hard limit: 100 lines.
   - defer real PTY transport to the next checkpoint
 - Completed the managed-session contract and wiring migration:
   - neutral provider identity metadata now lives outside the managed-session execution contract
+  - shared/core adapter module names and factory seams now use managed-session vocabulary
   - adapters expose discovery plus `runSession(...)`, validation callbacks, optional in-session repair prompts, typed lifecycle failures, and structured success metadata
   - provider discovery stays focused on availability detection and canonical built-in ordering
   - the orchestrator resolves managed-session adapters through an injectable factory, validates built-in provider ids before run creation, and delegates intent artifact validation plus one targeted repair to the managed session

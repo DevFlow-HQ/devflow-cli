@@ -3,22 +3,22 @@ import which from "which";
 import {
   ManagedProviderSessionNotImplementedError,
   type ManagedProviderSessionInput,
-  type ProviderAdapter,
+  type ManagedSessionAdapter,
   type ProviderDetectionResult,
-} from "./providerAdapter.js";
+} from "./managedSessionAdapter.js";
 import {
   getBuiltInProviderIdentity,
   type BuiltInProviderId,
 } from "./providers.js";
 
-interface CommandProviderConfig {
+interface CommandManagedSessionConfig {
   providerId: BuiltInProviderId;
   command: string;
 }
 
-export function createCommandProviderAdapter(
-  config: CommandProviderConfig,
-): ProviderAdapter {
+export function createCommandManagedSessionAdapter(
+  config: CommandManagedSessionConfig,
+): ManagedSessionAdapter {
   const provider = getBuiltInProviderIdentity(config.providerId);
 
   async function resolveExecutable(): Promise<string> {
