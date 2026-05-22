@@ -1,25 +1,42 @@
 import which from "which";
 
 import {
-  ManagedProviderSessionNotImplementedError,
   type ManagedProviderSessionInput,
+  type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
   type ProviderDetectionResult,
 } from "./managedSessionAdapter.js";
+import {
+  runPtyManagedSession,
+  type PtyManagedSessionCommand,
+} from "./ptyManagedSessionRunner.js";
 import {
   getBuiltInProviderIdentity,
   type BuiltInProviderId,
 } from "./providers.js";
 
+export type ManagedSessionPtyRunner = (
+  command: PtyManagedSessionCommand,
+  input: ManagedProviderSessionInput,
+) => Promise<ManagedProviderSessionResult>;
+
 interface CommandManagedSessionConfig {
   providerId: BuiltInProviderId;
   command: string;
+  buildArgs(input: ManagedProviderSessionInput): string[];
+  cleanupCommand: string;
+}
+
+export interface CommandManagedSessionAdapterOptions {
+  runPtyManagedSession?: ManagedSessionPtyRunner;
 }
 
 export function createCommandManagedSessionAdapter(
   config: CommandManagedSessionConfig,
+  options: CommandManagedSessionAdapterOptions = {},
 ): ManagedSessionAdapter {
   const provider = getBuiltInProviderIdentity(config.providerId);
+  const ptyRunner = options.runPtyManagedSession ?? runPtyManagedSession;
 
   async function resolveExecutable(): Promise<string> {
     return which(config.command);
@@ -45,9 +62,19 @@ export function createCommandManagedSessionAdapter(
   }
 
   async function runSession(
-    _input: ManagedProviderSessionInput,
-  ): Promise<never> {
-    throw new ManagedProviderSessionNotImplementedError(provider);
+    input: ManagedProviderSessionInput,
+  ): Promise<ManagedProviderSessionResult> {
+    const executable = await resolveExecutable();
+
+    return ptyRunner(
+      {
+        provider,
+        executable,
+        args: config.buildArgs(input),
+        cleanupCommand: config.cleanupCommand,
+      },
+      input,
+    );
   }
 
   return {

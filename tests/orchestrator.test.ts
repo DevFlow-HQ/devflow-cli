@@ -13,7 +13,6 @@ import type {
   ManagedProviderSessionInput,
   ManagedSessionAdapter,
 } from "../src/adapters/managedSessionAdapter.js";
-import { ManagedProviderSessionNotImplementedError } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
@@ -34,26 +33,6 @@ async function listRunDirectories(
 
   return (await fs.readdir(runsDirectory)).sort();
 }
-
-test("orchestrator default provider session runner fails with a managed-session-not-implemented error", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
-  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
-
-  await assert.rejects(
-    runExecutionRequest(
-      {
-        projectRoot,
-        rawTask: "resume work",
-        providerId: "codex",
-      },
-      { devFlowState },
-    ),
-    (error: unknown) =>
-      error instanceof ManagedProviderSessionNotImplementedError &&
-      error.provider.id === "codex" &&
-      error.message.includes("Managed provider sessions are not implemented yet"),
-  );
-});
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));

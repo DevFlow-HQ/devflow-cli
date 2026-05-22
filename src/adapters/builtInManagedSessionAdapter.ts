@@ -1,4 +1,5 @@
 import { createClaudeAdapter } from "./claudeAdapter.js";
+import type { CommandManagedSessionAdapterOptions } from "./commandManagedSessionAdapter.js";
 import { createCodexAdapter } from "./codexAdapter.js";
 import { createGeminiAdapter } from "./geminiAdapter.js";
 import { createOpenCodeAdapter } from "./opencodeAdapter.js";
@@ -7,16 +8,17 @@ import type { BuiltInProviderId } from "./providers.js";
 
 export function createBuiltInManagedSessionAdapter(
   providerId: BuiltInProviderId,
+  options?: CommandManagedSessionAdapterOptions,
 ): ManagedSessionAdapter {
   switch (providerId) {
     case "claude":
-      return createClaudeAdapter();
+      return createClaudeAdapter(options);
     case "gemini":
-      return createGeminiAdapter();
+      return createGeminiAdapter(options);
     case "codex":
-      return createCodexAdapter();
+      return createCodexAdapter(options);
     case "opencode":
-      return createOpenCodeAdapter();
+      return createOpenCodeAdapter(options);
     default:
       throw new Error(`Built-in provider '${providerId}' is not wired yet.`);
   }

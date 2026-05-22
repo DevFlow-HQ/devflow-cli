@@ -12,10 +12,10 @@ import {
 } from "../../src/adapters/providers.js";
 import {
   IncompleteProviderSessionError,
-  ManagedProviderSessionNotImplementedError,
   ProviderSessionCleanupError,
   type ManagedSessionAdapter,
   type ManagedProviderSessionInput,
+  type ManagedProviderSessionResult,
 } from "../../src/adapters/managedSessionAdapter.js";
 import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
@@ -27,7 +27,42 @@ interface AdapterContractHarness {
   providerId: BuiltInProviderId;
   command: string;
   displayName: string;
-  createAdapter: () => ManagedSessionAdapter;
+  expectedArgsWithoutModel: string[];
+  expectedArgsWithModel: string[];
+  cleanupCommand: string;
+  createAdapter: (options?: {
+    runPtyManagedSession: CapturingPtyRunner["runPtyManagedSession"];
+  }) => ManagedSessionAdapter;
+}
+
+class CapturingPtyRunner {
+  readonly calls: Array<{
+    command: {
+      provider: ReturnType<typeof getBuiltInProviderIdentity>;
+      executable: string;
+      args: string[];
+      cleanupCommand?: string;
+    };
+    input: ManagedProviderSessionInput;
+  }> = [];
+
+  async runPtyManagedSession(
+    command: {
+      provider: ReturnType<typeof getBuiltInProviderIdentity>;
+      executable: string;
+      args: string[];
+      cleanupCommand?: string;
+    },
+    input: ManagedProviderSessionInput,
+  ): Promise<ManagedProviderSessionResult> {
+    this.calls.push({ command, input });
+    await input.validate();
+    return {
+      repairUsed: false,
+      exitCode: 0,
+      signal: null,
+    };
+  }
 }
 
 const providerHarnesses: AdapterContractHarness[] = [
@@ -35,24 +70,41 @@ const providerHarnesses: AdapterContractHarness[] = [
     providerId: "claude",
     command: "claude",
     displayName: "Claude",
+    expectedArgsWithoutModel: ["Ship the contract"],
+    expectedArgsWithModel: ["--model", "gpt-5.5", "Ship the contract"],
+    cleanupCommand: "/exit\n",
     createAdapter: createClaudeAdapter,
   },
   {
     providerId: "gemini",
     command: "gemini",
     displayName: "Gemini",
+    expectedArgsWithoutModel: ["--prompt-interactive", "Ship the contract"],
+    expectedArgsWithModel: [
+      "--model",
+      "gpt-5.5",
+      "--prompt-interactive",
+      "Ship the contract",
+    ],
+    cleanupCommand: "/quit\n",
     createAdapter: createGeminiAdapter,
   },
   {
     providerId: "codex",
     command: "codex",
     displayName: "Codex",
+    expectedArgsWithoutModel: ["Ship the contract"],
+    expectedArgsWithModel: ["--model", "gpt-5.5", "Ship the contract"],
+    cleanupCommand: "/quit\n",
     createAdapter: createCodexAdapter,
   },
   {
     providerId: "opencode",
     command: "opencode",
     displayName: "OpenCode",
+    expectedArgsWithoutModel: ["--prompt", "Ship the contract"],
+    expectedArgsWithModel: ["--model", "gpt-5.5", "--prompt", "Ship the contract"],
+    cleanupCommand: "/exit\n",
     createAdapter: createOpenCodeAdapter,
   },
 ];
@@ -287,30 +339,83 @@ const runInputWithEnvironment: ManagedProviderSessionInput = {
 void runInputWithEnvironment;
 
 for (const harness of providerHarnesses) {
-  test(`${harness.displayName} adapter runSession intentionally reports missing managed-session transport`, async () => {
-    const adapter = harness.createAdapter();
+  test(`${harness.displayName} adapter runSession delegates provider startup config to the shared PTY runner`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
 
-    await assert.rejects(
-      () =>
-        adapter.runSession({
-          workingDirectory: "/tmp/devflow",
-          initialPrompt: "Ship the contract",
-          initialCompletionMarker: "DEVFLOW_DONE",
-          async validate() {},
-          model: "gpt-5.5",
-        }),
-      (error: unknown) => {
-        assert.ok(error instanceof ManagedProviderSessionNotImplementedError);
-        assert.deepEqual(
-          error.provider,
-          getBuiltInProviderIdentity(harness.providerId),
-        );
-        return true;
-      },
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), `devflow-${harness.command}-pty-`),
     );
+    const binDir = path.join(tempRoot, "bin");
+    const executablePath = path.join(binDir, harness.command);
+
+    await fs.ensureDir(binDir);
+    await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+    await fs.chmod(executablePath, 0o755);
+
+    process.env.PATH = binDir;
+
+    const runner = new CapturingPtyRunner();
+    const adapter = harness.createAdapter({
+      runPtyManagedSession: runner.runPtyManagedSession.bind(runner),
+    });
+
+    const result = await adapter.runSession(validRunInput);
+
+    assert.deepEqual(result, {
+      repairUsed: false,
+      exitCode: 0,
+      signal: null,
+    });
+    assert.deepEqual(runner.calls, [
+      {
+        command: {
+          provider: getBuiltInProviderIdentity(harness.providerId),
+          executable: executablePath,
+          args: harness.expectedArgsWithoutModel,
+          cleanupCommand: harness.cleanupCommand,
+        },
+        input: validRunInput,
+      },
+    ]);
   });
 
-  test(`built-in managed-session selection wires ${harness.command} detection through the shared managed-session contract`, async (t) => {
+  test(`${harness.displayName} adapter passes opaque model overrides through provider-native flags`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
+
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), `devflow-${harness.command}-model-`),
+    );
+    const binDir = path.join(tempRoot, "bin");
+    const executablePath = path.join(binDir, harness.command);
+
+    await fs.ensureDir(binDir);
+    await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+    await fs.chmod(executablePath, 0o755);
+
+    process.env.PATH = binDir;
+
+    const runner = new CapturingPtyRunner();
+    const adapter = harness.createAdapter({
+      runPtyManagedSession: runner.runPtyManagedSession.bind(runner),
+    });
+
+    await adapter.runSession(validRunInputWithModel);
+
+    assert.deepEqual(runner.calls[0]?.command, {
+      provider: getBuiltInProviderIdentity(harness.providerId),
+      executable: executablePath,
+      args: harness.expectedArgsWithModel,
+      cleanupCommand: harness.cleanupCommand,
+    });
+  });
+
+  test(`built-in managed-session selection wires ${harness.command} execution through the shared managed-session contract`, async (t) => {
     const originalPath = process.env.PATH;
     t.after(() => {
       process.env.PATH = originalPath;
@@ -328,7 +433,10 @@ for (const harness of providerHarnesses) {
 
     process.env.PATH = binDir;
 
-    const adapter = createBuiltInManagedSessionAdapter(harness.providerId);
+    const runner = new CapturingPtyRunner();
+    const adapter = createBuiltInManagedSessionAdapter(harness.providerId, {
+      runPtyManagedSession: runner.runPtyManagedSession.bind(runner),
+    });
 
     assert.deepEqual(
       adapter.provider,
@@ -341,6 +449,19 @@ for (const harness of providerHarnesses) {
       executable: executablePath,
     });
 
+    await adapter.runSession(validRunInput);
+
+    assert.deepEqual(runner.calls, [
+      {
+        command: {
+          provider: getBuiltInProviderIdentity(harness.providerId),
+          executable: executablePath,
+          args: harness.expectedArgsWithoutModel,
+          cleanupCommand: harness.cleanupCommand,
+        },
+        input: validRunInput,
+      },
+    ]);
     assert.equal("run" in adapter, false);
   });
 }

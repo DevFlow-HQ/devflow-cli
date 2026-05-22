@@ -250,20 +250,28 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
   ]);
 });
 
-test("cli falls back to the current directory outside git and fails with a clear managed-session message", async () => {
+test("cli falls back to the current directory outside git before running the request", async () => {
   const currentDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-git-"));
+  const receivedRequests: unknown[] = [];
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: currentDirectory,
     providerId: "claude",
+    runExecutionRequest: async (request) => {
+      receivedRequests.push(request);
+    },
   });
 
-  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.commandError, undefined);
   assert.equal(result.stdout, "");
-  assert.equal(
-    result.stderr,
-    'Managed provider sessions are not implemented yet for provider "claude".\n',
-  );
+  assert.equal(result.stderr, "");
+  assert.deepEqual(receivedRequests, [
+    {
+      projectRoot: currentDirectory,
+      rawTask: "draft plan",
+      providerId: "claude",
+    },
+  ]);
 });
 
 test("cli maps adapter-layer managed-session not-implemented errors to the expected-limitation message", async () => {
