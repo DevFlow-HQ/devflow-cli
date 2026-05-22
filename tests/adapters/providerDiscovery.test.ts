@@ -10,7 +10,16 @@ import {
 import {
   type ProviderAdapter,
 } from "../../src/adapters/providerAdapter.js";
-import { discoverBuiltInProviders } from "../../src/adapters/providerDiscovery.js";
+import {
+  discoverBuiltInProviders,
+  type ProviderDiscoveryAdapter,
+} from "../../src/adapters/providerDiscovery.js";
+
+function createDiscoveryAdapter(
+  options: ProviderDiscoveryAdapter,
+): ProviderDiscoveryAdapter {
+  return options;
+}
 
 test("provider discovery preserves canonical order while summarizing a single installed provider", async () => {
   const detections = new Map<
@@ -25,7 +34,7 @@ test("provider discovery preserves canonical order while summarizing a single in
 
   const result = await discoverBuiltInProviders({
     createAdapter(providerId) {
-      return {
+      return createDiscoveryAdapter({
         provider: getBuiltInProviderIdentity(providerId),
         async detect() {
           const detection = detections.get(providerId);
@@ -36,10 +45,7 @@ test("provider discovery preserves canonical order while summarizing a single in
 
           return detection;
         },
-        async runSession() {
-          throw new Error("runSession should not be called during discovery");
-        },
-      };
+      });
     },
   });
 
@@ -73,7 +79,7 @@ test("provider discovery preserves canonical order while summarizing a single in
 test("provider discovery summarizes zero and multiple installed-provider cases without a recommendation", async () => {
   const unavailableResult = await discoverBuiltInProviders({
     createAdapter(providerId) {
-      return {
+      return createDiscoveryAdapter({
         provider: getBuiltInProviderIdentity(providerId),
         async detect() {
           return {
@@ -81,10 +87,7 @@ test("provider discovery summarizes zero and multiple installed-provider cases w
             reason: `${providerId} missing`,
           };
         },
-        async runSession() {
-          throw new Error("runSession should not be called during discovery");
-        },
-      };
+      });
     },
   });
 
@@ -96,7 +99,7 @@ test("provider discovery summarizes zero and multiple installed-provider cases w
 
   const multipleResult = await discoverBuiltInProviders({
     createAdapter(providerId) {
-      return {
+      return createDiscoveryAdapter({
         provider: getBuiltInProviderIdentity(providerId),
         async detect() {
           if (providerId === "claude" || providerId === "opencode") {
@@ -111,10 +114,7 @@ test("provider discovery summarizes zero and multiple installed-provider cases w
             reason: `${providerId} missing`,
           };
         },
-        async runSession() {
-          throw new Error("runSession should not be called during discovery");
-        },
-      };
+      });
     },
   });
 
@@ -166,7 +166,7 @@ test("provider discovery degrades unsupported and failed providers into user-saf
         throw new Error("Built-in provider 'gemini' is not wired yet.");
       }
 
-      return {
+      return createDiscoveryAdapter({
         provider: getBuiltInProviderIdentity(providerId),
         async detect() {
           if (providerId === "claude") {
@@ -186,10 +186,7 @@ test("provider discovery degrades unsupported and failed providers into user-saf
             debugReason: "OpenCode adapter is intentionally not implemented in this test.",
           };
         },
-        async runSession() {
-          throw new Error("runSession should not be called during discovery");
-        },
-      };
+      });
     },
   });
 

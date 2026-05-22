@@ -36,8 +36,13 @@ export interface ProviderDiscoveryResult {
   summary: ProviderDiscoverySummary;
 }
 
+export type ProviderDiscoveryAdapter = Pick<
+  ProviderAdapter,
+  "provider" | "detect"
+>;
+
 export interface DiscoverBuiltInProvidersOptions {
-  createAdapter?: (providerId: BuiltInProviderId) => ProviderAdapter;
+  createAdapter?: (providerId: BuiltInProviderId) => ProviderDiscoveryAdapter;
 }
 
 export const UNSUPPORTED_PROVIDER_REASON =
@@ -114,8 +119,9 @@ export async function discoverBuiltInProviders(
   const providers = await Promise.all(
     BUILT_IN_PROVIDERS.map(async (provider) => {
       try {
-        const detection = await createAdapter(provider.id).detect();
-        return toDiscoveredProvider(provider, detection);
+        const adapter = createAdapter(provider.id);
+        const detection = await adapter.detect();
+        return toDiscoveredProvider(adapter.provider, detection);
       } catch (error) {
         return toUnavailableProviderFromFailure(provider, error);
       }
