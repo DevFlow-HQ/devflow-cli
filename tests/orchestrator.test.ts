@@ -13,6 +13,7 @@ import {
   ManagedProviderSessionNotImplementedError,
   MissingProviderIdError,
   runExecutionRequest,
+  StageArtifactValidationError,
   type PipelineStage,
   type ProviderSessionRunner,
 } from "../src/orchestrator.js";
@@ -168,6 +169,186 @@ test("orchestrator runs the MVP pipeline order with intent active and later stag
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
   assert.equal(await fs.pathExists(join(runDirectory, "issues")), false);
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+});
+
+test("orchestrator repairs a missing provider-written intent artifact once and continues", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
+  const sessionRunner: ProviderSessionRunner = {
+    async run(options) {
+      runnerCalls.push(options);
+
+      if (runnerCalls.length === 2) {
+        await fs.outputJson(
+          options.artifactPath,
+          {
+            classification: "unclear",
+            summary: "Clarify the requested work.",
+            rawTask: "do the thing",
+            needsClarification: true,
+          },
+          { spaces: 2 },
+        );
+      }
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "do the thing",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      sessionRunner,
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+    "validate",
+  ]);
+  assert.equal(runnerCalls.length, 2);
+  assert.match(runnerCalls[1].prompt, /repair/i);
+  assert.match(runnerCalls[1].prompt, /replace the invalid provider-owned artifact/i);
+
+  const runIds = await listRunDirectories(projectRoot);
+  const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+  assert.deepEqual(await fs.readJson(join(runDirectory, "intent.json")), {
+    classification: "unclear",
+    summary: "Clarify the requested work.",
+    rawTask: "do the thing",
+    needsClarification: true,
+  });
+});
+
+for (const invalidArtifact of [
+  {
+    name: "invalid JSON",
+    write: (artifactPath: string) => fs.outputFile(artifactPath, "{not-json", "utf8"),
+  },
+  {
+    name: "schema-invalid object",
+    write: (artifactPath: string) =>
+      fs.outputJson(
+        artifactPath,
+        {
+          classification: "documentation",
+          summary: "",
+          rawTask: "document the provider boundary",
+          needsClarification: "no",
+          extra: true,
+        },
+        { spaces: 2 },
+      ),
+  },
+]) {
+  test(`orchestrator repairs a provider-written ${invalidArtifact.name} intent artifact once`, async () => {
+    const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+    const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+    const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
+    const sessionRunner: ProviderSessionRunner = {
+      async run(options) {
+        runnerCalls.push(options);
+
+        if (runnerCalls.length === 1) {
+          await invalidArtifact.write(options.artifactPath);
+          return;
+        }
+
+        await fs.outputJson(
+          options.artifactPath,
+          {
+            classification: "feature",
+            summary: "Document the provider boundary.",
+            rawTask: "document the provider boundary",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+      },
+    };
+
+    await runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "document the provider boundary",
+        providerId: "codex",
+      },
+      { devFlowState, sessionRunner },
+    );
+
+    assert.equal(runnerCalls.length, 2);
+    assert.match(runnerCalls[1].prompt, /missing, invalid JSON, or does not match/i);
+
+    const runIds = await listRunDirectories(projectRoot);
+    const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+    assert.deepEqual(await fs.readJson(join(runDirectory, "intent.json")), {
+      classification: "feature",
+      summary: "Document the provider boundary.",
+      rawTask: "document the provider boundary",
+      needsClarification: false,
+    });
+  });
+}
+
+test("orchestrator fails with a structured stage artifact validation error after one failed repair", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  const runnerCalls: Parameters<ProviderSessionRunner["run"]>[0][] = [];
+  const sessionRunner: ProviderSessionRunner = {
+    async run(options) {
+      runnerCalls.push(options);
+
+      await fs.outputJson(
+        options.artifactPath,
+        {
+          classification: "bug",
+          summary: "This artifact is still missing the required raw task.",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "fix intent parsing",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        sessionRunner,
+        onStageStart(stage) {
+          stages.push(stage);
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof StageArtifactValidationError &&
+      error.stage === "intent" &&
+      error.artifactPath.endsWith("/intent.json") &&
+      error.message.includes("Invalid artifact for stage \"intent\"") &&
+      error.message.includes("rawTask"),
+  );
+
+  assert.equal(runnerCalls.length, 2);
+  assert.deepEqual(stages, ["intent"]);
 });
 
 test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {
