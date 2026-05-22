@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-05-20_
+_Last updated: 2026-05-22_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md`.
 Hard limit: 100 lines.
@@ -54,5 +54,43 @@ Hard limit: 100 lines.
 - The orchestrator boundary now snapshots the resolved request into `.devflow/runs/<id>/intent.json` through the state facade, but it still raises the structured not-implemented error after that snapshot; downstream real agents and prompt files for the actual pipeline are not implemented yet.
 
 ## Next Checkpoint
-- Expand `src/orchestrator.ts` from a stub into the stage sequencer for intent → bootstrap → grill → PRD → issues → execute → validate.
-- Add the first real agent slice, starting with `src/agents/intent.ts` and `prompts/intent.md`, so one provider-backed stage can run end to end.
+- Keep the current implementation slice focused on contract-first intent orchestration:
+  - expand `src/orchestrator.ts` from a stub into the sequential stage skeleton for intent → bootstrap → grill → PRD → issues → execute → validate
+  - require a resolved provider id before running provider-backed stages
+  - add `src/providerSessions.ts` with an injectable session-runner contract and a default managed-session-not-implemented runner
+  - add `src/agents/intent.ts` and `prompts/intent.md`
+  - make intent classify only the raw task, without project context
+  - have the provider write `intent.json` to an absolute path and emit a nonce completion marker
+  - validate `intent.json` with schema fields: `classification`, `summary`, `rawTask`, and `needsClarification`
+  - allow one targeted repair attempt for missing/invalid intent artifacts
+  - keep later stages as no-op placeholders for now, without writing fake PRD/issues/validation artifacts
+- Intent tests should use a fake injected session runner that writes the artifact; real PTY-backed provider execution is a follow-up.
+
+## Follow-Up
+1. Project context freshness before expanding bootstrap:
+  - Add `.devflow/project-context.meta.json`.
+  - Store `generatedAt`, `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`.
+  - Use Git diff/status with context-relevant path rules to decide whether `.devflow/project-context.md` is fresh.
+  - Include uncommitted changes via a dirty fingerprint so repeated runs do not refresh for the same dirty tree.
+  - In non-Git repos, fall back to missing metadata/context and max age checks.
+  - Use a 3-day max age.
+
+2. Migrate provider adapters to managed session control:
+  Current provider adapters support one-shot interactive runs. DevFlow’s real pipeline needs session-oriented control so each stage can:
+  - start a provider session
+  - inject a stage prompt
+  - remain interactive for permissions/questions
+  - wait for a nonce completion marker
+  - validate provider-written artifacts
+  - run one targeted repair attempt when a provider-written artifact is invalid
+  - inject a provider-specific exit command, such as `/exit`, when known
+  - close cleanly before the next session
+
+  MVP can add `runSession(...)` alongside the existing `run(...)` API, but the adapter layer should later migrate fully to session control.
+
+3. PTY-based managed sessions:
+  - add `node-pty` and `strip-ansi` to the stack
+  - bridge user input/output through a PTY so providers still see an interactive terminal
+  - scan stripped PTY output for nonce completion markers
+  - inject provider-specific `/exit` when known
+  - terminate the child process as fallback after successful marker detection and artifact validation
