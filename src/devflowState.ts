@@ -161,6 +161,7 @@ export type ProjectContextFreshness =
       refreshReason: ProjectContextRefreshReason;
       context?: string;
       metadata?: ProjectContextMetadata;
+      changedPaths?: GitChangedPath[];
     };
 
 export interface CreateDevFlowStateOptions {
@@ -332,6 +333,83 @@ function getRunIssueArtifactPath(
 
 function normalizeGitPath(path: string): string {
   return path.replaceAll("\\", "/");
+}
+
+function isIgnoredProjectContextPath(path: string): boolean {
+  const normalizedPath = normalizeGitPath(path).replace(/^\/+/, "");
+  const pathSegments = normalizedPath.split("/");
+  const [firstSegment] = pathSegments;
+
+  if (
+    firstSegment === undefined ||
+    [
+      ".devflow",
+      ".agent",
+      ".agents",
+      ".codex",
+      ".git",
+      "node_modules",
+      "dist",
+      "coverage",
+      ".cache",
+      "cache",
+      "tmp",
+      "temp",
+    ].includes(firstSegment)
+  ) {
+    return true;
+  }
+
+  return (
+    normalizedPath.endsWith(".generated.ts") ||
+    normalizedPath.endsWith(".generated.js") ||
+    normalizedPath.endsWith(".gen.ts") ||
+    normalizedPath.endsWith(".gen.js") ||
+    normalizedPath.endsWith(".tsbuildinfo") ||
+    normalizedPath.includes("/generated/") ||
+    normalizedPath.includes("/__generated__/") ||
+    normalizedPath.includes("/.cache/") ||
+    normalizedPath.includes("/cache/")
+  );
+}
+
+function isRelevantChangedPath(changedPath: GitChangedPath): boolean {
+  return (
+    !isIgnoredProjectContextPath(changedPath.path) &&
+    (changedPath.previousPath === undefined ||
+      !isIgnoredProjectContextPath(changedPath.previousPath))
+  );
+}
+
+function filterRelevantChangedPaths(
+  changedPaths: GitChangedPath[],
+): GitChangedPath[] {
+  return changedPaths.filter(isRelevantChangedPath);
+}
+
+function filterRelevantDirtyState(dirtyState: GitDirtyState): GitDirtyState {
+  const staged = filterRelevantChangedPaths(dirtyState.staged);
+  const unstaged = filterRelevantChangedPaths(dirtyState.unstaged);
+  const untracked = dirtyState.untracked.filter((file) =>
+    isRelevantChangedPath(file),
+  );
+
+  return {
+    staged,
+    stagedDiff: staged.length === 0 ? Buffer.alloc(0) : dirtyState.stagedDiff,
+    unstaged,
+    unstagedDiff:
+      unstaged.length === 0 ? Buffer.alloc(0) : dirtyState.unstagedDiff,
+    untracked,
+  };
+}
+
+function getDirtyChangedPaths(dirtyState: GitDirtyState): GitChangedPath[] {
+  return [
+    ...dirtyState.staged,
+    ...dirtyState.unstaged,
+    ...dirtyState.untracked.map(({ path, status }) => ({ path, status })),
+  ];
 }
 
 function mapGitChangedPathStatus(statusCode: string): GitChangedPathStatus {
@@ -818,9 +896,24 @@ async function checkProjectContextFreshness(
         };
       }
 
-      const dirtyFingerprint = computeGitDirtyFingerprint(
+      const relevantCommittedChanges = filterRelevantChangedPaths(
+        committedChanges.changedPaths,
+      );
+
+      if (relevantCommittedChanges.length > 0) {
+        return {
+          status: "stale",
+          refreshReason: "relevant-changes",
+          context,
+          metadata,
+          changedPaths: relevantCommittedChanges,
+        };
+      }
+
+      const dirtyState = filterRelevantDirtyState(
         await gitProbe.getDirtyState(projectRoot),
       );
+      const dirtyFingerprint = computeGitDirtyFingerprint(dirtyState);
 
       if (dirtyFingerprint !== metadata.dirtyFingerprint) {
         return {
@@ -828,6 +921,7 @@ async function checkProjectContextFreshness(
           refreshReason: "relevant-changes",
           context,
           metadata,
+          changedPaths: getDirtyChangedPaths(dirtyState),
         };
       }
     }

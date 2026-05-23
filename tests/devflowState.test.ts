@@ -430,7 +430,7 @@ test("project context freshness uses the injected git probe for unavailable base
   });
 });
 
-test("project context freshness evaluates git repository state through the injected probe", async () => {
+test("project context freshness treats stored git head as a baseline when no relevant changes exist", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const calls: string[] = [];
   const state = createDevFlowState({
@@ -449,21 +449,7 @@ test("project context freshness evaluates git repository state through the injec
         calls.push(`getCommittedChangesSince:${baseline}`);
         return {
           status: "available",
-          changedPaths: [
-            { path: "added.ts", status: "added" },
-            { path: "modified.ts", status: "modified" },
-            { path: "deleted.ts", status: "deleted" },
-            {
-              path: "renamed-new.ts",
-              previousPath: "renamed-old.ts",
-              status: "renamed",
-            },
-            {
-              path: "copied-new.ts",
-              previousPath: "copied-old.ts",
-              status: "copied",
-            },
-          ],
+          changedPaths: [],
         };
       },
       getDirtyState: async () => {
@@ -494,6 +480,52 @@ test("project context freshness evaluates git repository state through the injec
     "getCommittedChangesSince:0123456789abcdef0123456789abcdef01234567",
     "getDirtyState",
   ]);
+});
+
+test("project context freshness reports relevant committed changes since the stored baseline", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const metadata = {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual" as const,
+  };
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getCommittedChangesSince: async () => ({
+        status: "available",
+        changedPaths: [
+          { path: "src/added.ts", status: "added" },
+          { path: ".devflow/project-context.md", status: "modified" },
+          {
+            path: "src/renamed-new.ts",
+            previousPath: "src/renamed-old.ts",
+            status: "renamed",
+          },
+        ],
+      }),
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", metadata);
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "relevant-changes",
+    context: "context snapshot",
+    metadata,
+    changedPaths: [
+      { path: "src/added.ts", status: "added" },
+      {
+        path: "src/renamed-new.ts",
+        previousPath: "src/renamed-old.ts",
+        status: "renamed",
+      },
+    ],
+  });
 });
 
 test("project context freshness treats repeated dirty git fingerprints as fresh", async () => {
@@ -580,6 +612,10 @@ test("project context freshness treats changed dirty tracked content as stale", 
       contextVersion: 1,
       refreshReason: "manual",
     },
+    changedPaths: [
+      { path: "staged.ts", status: "modified" },
+      { path: "unstaged.ts", status: "modified" },
+    ],
   });
 });
 
@@ -639,6 +675,55 @@ test("project context freshness includes untracked path and content in dirty fin
       contextVersion: 1,
       refreshReason: "manual",
     },
+    changedPaths: [{ path: "notes/new-file.md", status: "untracked" }],
+  });
+});
+
+test("project context freshness ignores generated and agent-state path changes", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const metadata = {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual" as const,
+  };
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getCommittedChangesSince: async () => ({
+        status: "available",
+        changedPaths: [
+          { path: ".agent/task_progress.md", status: "modified" },
+          { path: ".codex/session.json", status: "modified" },
+          { path: "dist/index.js", status: "modified" },
+          { path: "src/client.generated.ts", status: "modified" },
+          { path: "node_modules/pkg/index.js", status: "modified" },
+        ],
+      }),
+      getDirtyState: async () => ({
+        staged: [{ path: ".devflow/project-context.md", status: "modified" }],
+        stagedDiff: Buffer.from("ignored staged diff"),
+        unstaged: [{ path: "coverage/report.json", status: "modified" }],
+        unstagedDiff: Buffer.from("ignored unstaged diff"),
+        untracked: [
+          {
+            path: ".agents/issues/005.md",
+            status: "untracked",
+            content: Buffer.from("ignored issue workflow state"),
+          },
+        ],
+      }),
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", metadata);
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "fresh",
+    context: "context snapshot",
+    metadata,
   });
 });
 
