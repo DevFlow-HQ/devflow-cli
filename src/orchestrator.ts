@@ -105,6 +105,31 @@ export class StageArtifactValidationError extends Error {
   }
 }
 
+export class ProviderStageRetryExhaustedError extends Error {
+  readonly stage: PipelineStage;
+  readonly attempts: number;
+  readonly cause: unknown;
+
+  constructor(options: {
+    stage: PipelineStage;
+    attempts: number;
+    cause: unknown;
+  }) {
+    const causeMessage =
+      options.cause instanceof Error
+        ? options.cause.message
+        : "Unknown provider-backed stage failure";
+
+    super(
+      `Provider-backed stage "${options.stage}" exhausted ${options.attempts} attempts. ${causeMessage}`,
+    );
+    this.name = "ProviderStageRetryExhaustedError";
+    this.stage = options.stage;
+    this.attempts = options.attempts;
+    this.cause = options.cause;
+  }
+}
+
 export class MissingProviderIdError extends Error {
   constructor() {
     super("Provider-backed orchestration requires a provider id.");
@@ -182,7 +207,8 @@ function isRetryableProviderStageFailure(error: unknown): boolean {
   );
 }
 
-async function runProviderBackedStageWithRetry<T>(options: {
+export async function runProviderBackedStageWithRetry<T>(options: {
+  stage: PipelineStage;
   totalAttempts: number;
   runAttempt(): Promise<T>;
   cleanupBeforeRetry(): Promise<void>;
@@ -191,11 +217,20 @@ async function runProviderBackedStageWithRetry<T>(options: {
     try {
       return await options.runAttempt();
     } catch (error) {
-      if (
-        attempt >= options.totalAttempts ||
-        !isRetryableProviderStageFailure(error)
-      ) {
+      if (!isRetryableProviderStageFailure(error)) {
         throw error;
+      }
+
+      if (attempt >= options.totalAttempts) {
+        if (options.totalAttempts === 1) {
+          throw error;
+        }
+
+        throw new ProviderStageRetryExhaustedError({
+          stage: options.stage,
+          attempts: options.totalAttempts,
+          cause: error,
+        });
       }
 
       await options.cleanupBeforeRetry();
@@ -276,6 +311,7 @@ export async function runExecutionRequest(
 
   await startStage("intent", options);
   const intent = await runProviderBackedStageWithRetry({
+    stage: "intent",
     totalAttempts: INTENT_STAGE_TOTAL_ATTEMPTS,
     async runAttempt() {
       return runIntentStage({

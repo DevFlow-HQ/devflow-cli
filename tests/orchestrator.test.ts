@@ -22,7 +22,9 @@ import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
   MissingProviderIdError,
+  ProviderStageRetryExhaustedError,
   runExecutionRequest,
+  runProviderBackedStageWithRetry,
   StageArtifactValidationError,
   type PipelineStage,
 } from "../src/orchestrator.js";
@@ -462,6 +464,93 @@ test("orchestrator retries intent after failed in-session repair and accepts a v
   });
 });
 
+test("orchestrator raises a typed retry-exhausted error and preserves the final failed intent artifact", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const artifactPaths: string[] = [];
+  const artifactExistedAtAttemptStart: boolean[] = [];
+  const finalFailureMessages: string[] = [];
+  let runSessionCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionCallCount += 1;
+      const runIds = await listRunDirectories(projectRoot);
+      const artifactPath = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        runIds[0],
+        "intent.json",
+      );
+
+      artifactPaths.push(artifactPath);
+      artifactExistedAtAttemptStart.push(await fs.pathExists(artifactPath));
+
+      await fs.outputJson(
+        artifactPath,
+        {
+          classification: "feature",
+          summary:
+            runSessionCallCount === 1
+              ? "first failed attempt"
+              : "final failed attempt",
+          rawTask: "resume work",
+          needsClarification: "no",
+        },
+        { spaces: 2 },
+      );
+
+      try {
+        await input.validate();
+      } catch (validationError) {
+        assert.ok(validationError instanceof Error);
+        const failure = input.repair?.mapFailure(validationError);
+        assert.ok(failure instanceof StageArtifactValidationError);
+        finalFailureMessages.push(failure.message);
+        throw failure;
+      }
+
+      throw new Error("Invalid intent artifact unexpectedly passed validation.");
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ProviderStageRetryExhaustedError &&
+      error.stage === "intent" &&
+      error.attempts === 2 &&
+      error.cause instanceof StageArtifactValidationError &&
+      error.cause.message === finalFailureMessages[1],
+  );
+
+  assert.equal(runSessionCallCount, 2);
+  assert.equal(artifactPaths[0], artifactPaths[1]);
+  assert.deepEqual(artifactExistedAtAttemptStart, [false, false]);
+  assert.deepEqual(await fs.readJson(artifactPaths[1]), {
+    classification: "feature",
+    summary: "final failed attempt",
+    rawTask: "resume work",
+    needsClarification: "no",
+  });
+});
+
 test("orchestrator passes intent stage input to the managed provider session", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
@@ -679,7 +768,7 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
   assert.deepEqual(repairedCompletion, { repairUsed: true });
 });
 
-test("orchestrator maps failed intent repair validation to the stage artifact validation error after retry", async () => {
+test("orchestrator preserves the final failed repair validation error as the retry-exhausted cause", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let repairPromptCount = 0;
@@ -741,13 +830,40 @@ test("orchestrator maps failed intent repair validation to the stage artifact va
       },
     ),
     (error: unknown) =>
-      error instanceof StageArtifactValidationError &&
+      error instanceof ProviderStageRetryExhaustedError &&
       error.stage === "intent" &&
-      error.artifactPath.endsWith("/intent.json") &&
-      error.message.includes("Must be a non-empty string"),
+      error.attempts === 2 &&
+      error.cause instanceof StageArtifactValidationError &&
+      error.cause.artifactPath.endsWith("/intent.json") &&
+      error.cause.message.includes("Must be a non-empty string"),
   );
 
   assert.equal(repairPromptCount, 2);
+});
+
+test("provider-backed stage retry helper surfaces the original failure for a single configured attempt", async () => {
+  const originalFailure = new StageArtifactValidationError({
+    stage: "intent",
+    artifactPath: "/tmp/intent.json",
+    details: "invalid json",
+  });
+  let cleanupCallCount = 0;
+
+  await assert.rejects(
+    runProviderBackedStageWithRetry({
+      stage: "intent",
+      totalAttempts: 1,
+      async runAttempt() {
+        throw originalFailure;
+      },
+      async cleanupBeforeRetry() {
+        cleanupCallCount += 1;
+      },
+    }),
+    (error: unknown) => error === originalFailure,
+  );
+
+  assert.equal(cleanupCallCount, 0);
 });
 
 test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {
