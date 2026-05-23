@@ -67,6 +67,39 @@ export class IncompleteProviderSessionError extends Error {
   }
 }
 
+export class ProviderSessionLaunchError extends Error {
+  readonly provider: ProviderIdentity;
+  readonly cause: unknown;
+
+  constructor(provider: ProviderIdentity, cause: unknown) {
+    const causeMessage =
+      cause instanceof Error ? cause.message : "Unknown launch failure";
+
+    super(`Provider session for "${provider.id}" could not be launched: ${causeMessage}.`);
+    this.name = "ProviderSessionLaunchError";
+    this.provider = provider;
+    this.cause = cause;
+  }
+}
+
+export class InterruptedProviderSessionError extends Error {
+  readonly provider: ProviderIdentity;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+
+  constructor(options: {
+    provider: ProviderIdentity;
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+  }) {
+    super(`Provider session for "${options.provider.id}" was interrupted.`);
+    this.name = "InterruptedProviderSessionError";
+    this.provider = options.provider;
+    this.exitCode = options.exitCode;
+    this.signal = options.signal;
+  }
+}
+
 export class ProviderSessionCleanupError extends Error {
   readonly provider: ProviderIdentity;
   readonly cause: unknown;

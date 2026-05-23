@@ -12,7 +12,11 @@ import {
 } from "./bootstrapProvider.js";
 import type { BuiltInProviderId } from "./adapters/providers.js";
 import type { ProviderDiscoveryResult } from "./adapters/providerDiscovery.js";
-import { ManagedProviderSessionNotImplementedError } from "./adapters/managedSessionAdapter.js";
+import {
+  InterruptedProviderSessionError,
+  ManagedProviderSessionNotImplementedError,
+  ProviderSessionLaunchError,
+} from "./adapters/managedSessionAdapter.js";
 import {
   createDevFlowState,
   formatInvalidDevFlowConfigError,
@@ -76,6 +80,25 @@ function createExecutionRequest(
     ...(providerId ? { providerId } : {}),
     ...(model ? { model } : {}),
   };
+}
+
+function formatProviderLabel(provider: { displayName: string; id: string }): string {
+  return `${provider.displayName} (${provider.id})`;
+}
+
+function formatProviderSessionLaunchError(
+  error: ProviderSessionLaunchError,
+): string {
+  const causeMessage =
+    error.cause instanceof Error ? error.cause.message : "Unknown launch failure";
+
+  return `Unable to launch ${formatProviderLabel(error.provider)}: ${causeMessage}.`;
+}
+
+function formatInterruptedProviderSessionError(
+  error: InterruptedProviderSessionError,
+): string {
+  return `Provider session for ${formatProviderLabel(error.provider)} was interrupted.`;
 }
 
 export function createCli(options: RunCliOptions = {}): Command {
@@ -159,6 +182,14 @@ export async function runCli(
 
     if (error instanceof ManagedProviderSessionNotImplementedError) {
       program.error(error.message);
+    }
+
+    if (error instanceof ProviderSessionLaunchError) {
+      program.error(formatProviderSessionLaunchError(error));
+    }
+
+    if (error instanceof InterruptedProviderSessionError) {
+      program.error(formatInterruptedProviderSessionError(error));
     }
 
     if (error instanceof InvalidDevFlowConfigError) {

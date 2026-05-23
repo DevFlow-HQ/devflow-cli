@@ -3,6 +3,8 @@ import pty from "node-pty";
 
 import {
   IncompleteProviderSessionError,
+  InterruptedProviderSessionError,
+  ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
@@ -44,6 +46,10 @@ export interface TerminalDimensions {
   rows?: number;
 }
 
+export interface UserInterruptState {
+  wasRequested(): boolean;
+}
+
 export interface PtyManagedSessionCommand {
   provider: ProviderIdentity;
   executable: string;
@@ -56,6 +62,7 @@ export interface PtyManagedSessionDependencies {
   ptySpawner?: PtySpawner;
   outputSink?: OutputSink;
   terminal?: TerminalDimensions;
+  userInterrupt?: UserInterruptState;
 }
 
 const DEFAULT_COLUMNS = 80;
@@ -115,11 +122,17 @@ export async function runPtyManagedSession(
   const terminal = dependencies.terminal ?? process.stdout;
   const markerBufferLimit =
     command.markerBufferLimit ?? DEFAULT_MARKER_BUFFER_LIMIT;
-  const processHandle = ptySpawner.spawn(command.executable, command.args, {
-    cwd: input.workingDirectory,
-    cols: terminal.columns ?? DEFAULT_COLUMNS,
-    rows: terminal.rows ?? DEFAULT_ROWS,
-  });
+  let processHandle: PtyProcess;
+
+  try {
+    processHandle = ptySpawner.spawn(command.executable, command.args, {
+      cwd: input.workingDirectory,
+      cols: terminal.columns ?? DEFAULT_COLUMNS,
+      rows: terminal.rows ?? DEFAULT_ROWS,
+    });
+  } catch (error) {
+    throw new ProviderSessionLaunchError(command.provider, error);
+  }
 
   return new Promise((resolve, reject) => {
     let rollingOutput = "";
@@ -265,6 +278,14 @@ export async function runPtyManagedSession(
       }
 
       settle(async () => {
+        if (dependencies.userInterrupt?.wasRequested()) {
+          throw new InterruptedProviderSessionError({
+            provider: command.provider,
+            exitCode: event.exitCode,
+            signal: event.signal,
+          });
+        }
+
         throw new IncompleteProviderSessionError({
           provider: command.provider,
           completionMarker: input.initialCompletionMarker,

@@ -4,6 +4,7 @@ import {
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
+  ProviderSessionLaunchError,
   type ProviderDetectionResult,
 } from "./managedSessionAdapter.js";
 import {
@@ -64,7 +65,13 @@ export function createCommandManagedSessionAdapter(
   async function runSession(
     input: ManagedProviderSessionInput,
   ): Promise<ManagedProviderSessionResult> {
-    const executable = await resolveExecutable();
+    let executable: string;
+
+    try {
+      executable = await resolveExecutable();
+    } catch (error) {
+      throw new ProviderSessionLaunchError(provider, error);
+    }
 
     return ptyRunner(
       {

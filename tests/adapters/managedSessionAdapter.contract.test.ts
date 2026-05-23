@@ -12,6 +12,8 @@ import {
 } from "../../src/adapters/providers.js";
 import {
   IncompleteProviderSessionError,
+  InterruptedProviderSessionError,
+  ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   type ManagedSessionAdapter,
   type ManagedProviderSessionInput,
@@ -231,20 +233,34 @@ test("fake managed-session lifecycle propagates original validation errors when 
 
 test("managed-session contract exposes typed lifecycle failures with provider identity", () => {
   const provider = getBuiltInProviderIdentity("codex");
+  const launchCause = new Error("spawn ENOENT");
+  const launch = new ProviderSessionLaunchError(provider, launchCause);
   const incomplete = new IncompleteProviderSessionError({
     provider,
     completionMarker: "DEVFLOW_DONE",
     exitCode: 1,
     signal: null,
   });
+  const interrupted = new InterruptedProviderSessionError({
+    provider,
+    exitCode: 130,
+    signal: "SIGINT",
+  });
   const cleanupCause = new Error("pty close failed");
   const cleanup = new ProviderSessionCleanupError(provider, cleanupCause);
 
+  assert.equal(launch.name, "ProviderSessionLaunchError");
+  assert.equal(launch.provider, provider);
+  assert.equal(launch.cause, launchCause);
   assert.equal(incomplete.name, "IncompleteProviderSessionError");
   assert.equal(incomplete.provider, provider);
   assert.equal(incomplete.completionMarker, "DEVFLOW_DONE");
   assert.equal(incomplete.exitCode, 1);
   assert.equal(incomplete.signal, null);
+  assert.equal(interrupted.name, "InterruptedProviderSessionError");
+  assert.equal(interrupted.provider, provider);
+  assert.equal(interrupted.exitCode, 130);
+  assert.equal(interrupted.signal, "SIGINT");
   assert.equal(cleanup.name, "ProviderSessionCleanupError");
   assert.equal(cleanup.provider, provider);
   assert.equal(cleanup.cause, cleanupCause);
@@ -413,6 +429,33 @@ for (const harness of providerHarnesses) {
       args: harness.expectedArgsWithModel,
       cleanupCommand: harness.cleanupCommand,
     });
+  });
+
+  test(`${harness.displayName} adapter maps launch-time executable resolution failures`, async (t) => {
+    const originalPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = originalPath;
+    });
+
+    const missingBinDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `devflow-${harness.command}-missing-run-`),
+    );
+
+    process.env.PATH = missingBinDir;
+
+    const runner = new CapturingPtyRunner();
+    const adapter = harness.createAdapter({
+      runPtyManagedSession: runner.runPtyManagedSession.bind(runner),
+    });
+
+    await assert.rejects(adapter.runSession(validRunInput), (error: unknown) => {
+      assert.ok(error instanceof ProviderSessionLaunchError);
+      assert.equal(error.provider, getBuiltInProviderIdentity(harness.providerId));
+      assert.ok(error.cause instanceof Error);
+      assert.match(error.cause.message, new RegExp(harness.command, "i"));
+      return true;
+    });
+    assert.deepEqual(runner.calls, []);
   });
 
   test(`built-in managed-session selection wires ${harness.command} execution through the shared managed-session contract`, async (t) => {

@@ -7,7 +7,11 @@ import { Command, CommanderError } from "commander";
 import { execa } from "execa";
 import fs from "fs-extra";
 
-import { ManagedProviderSessionNotImplementedError } from "../src/adapters/managedSessionAdapter.js";
+import {
+  InterruptedProviderSessionError,
+  ManagedProviderSessionNotImplementedError,
+  ProviderSessionLaunchError,
+} from "../src/adapters/managedSessionAdapter.js";
 import {
   BUILT_IN_PROVIDERS,
   getBuiltInProviderIdentity,
@@ -293,6 +297,50 @@ test("cli maps adapter-layer managed-session not-implemented errors to the expec
     result.stderr,
     'Managed provider sessions are not implemented yet for provider "codex".\n',
   );
+});
+
+test("cli maps provider launch failures to concise user-facing errors", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-launch-error-"));
+
+  const result = await invokeCliWithOptions(["draft", "plan"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new ProviderSessionLaunchError(
+        getBuiltInProviderIdentity("codex"),
+        new Error("spawn codex ENOENT"),
+      );
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Unable to launch Codex (codex): spawn codex ENOENT.\n",
+  );
+});
+
+test("cli maps interrupted provider sessions to concise user-facing errors", async () => {
+  const projectRoot = fs.mkdtempSync(
+    join(tmpdir(), "devflow-cli-interrupted-error-"),
+  );
+
+  const result = await invokeCliWithOptions(["draft", "plan"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new InterruptedProviderSessionError({
+        provider: getBuiltInProviderIdentity("codex"),
+        exitCode: 130,
+        signal: "SIGINT",
+      });
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "Provider session for Codex (codex) was interrupted.\n");
 });
 
 test("cli reuses a valid repo-local default provider config when no override is supplied", async () => {

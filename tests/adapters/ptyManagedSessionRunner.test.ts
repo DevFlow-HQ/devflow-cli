@@ -4,6 +4,8 @@ import test from "node:test";
 
 import {
   IncompleteProviderSessionError,
+  InterruptedProviderSessionError,
+  ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   type ManagedProviderSessionInput,
 } from "../../src/adapters/managedSessionAdapter.js";
@@ -59,6 +61,7 @@ class FakePtyProcess implements PtyProcess {
 
 class FakePtySpawner implements PtySpawner {
   readonly process = new FakePtyProcess();
+  spawnFailure?: unknown;
   calls: Array<{
     executable: string;
     args: string[];
@@ -70,6 +73,10 @@ class FakePtySpawner implements PtySpawner {
     args: string[],
     options: PtySpawnOptions,
   ): PtyProcess {
+    if (this.spawnFailure) {
+      throw this.spawnFailure;
+    }
+
     this.calls.push({ executable, args, options });
     return this.process;
   }
@@ -221,6 +228,71 @@ test("PTY managed-session runner reports incomplete sessions before marker detec
     assert.equal(error.provider.id, "codex");
     assert.equal(error.completionMarker, "DEVFLOW_DONE");
     assert.equal(error.exitCode, 1);
+    return true;
+  });
+});
+
+test("PTY managed-session runner maps PTY spawn failures to typed launch errors", async () => {
+  const spawner = new FakePtySpawner();
+  const spawnFailure = new Error("spawn codex ENOENT");
+  spawner.spawnFailure = spawnFailure;
+
+  await assert.rejects(
+    runPtyManagedSession(
+      {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: "codex",
+        args: [],
+        cleanupCommand: "/exit\n",
+      },
+      createInput(),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        terminal: {},
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof ProviderSessionLaunchError);
+      assert.equal(error.provider.id, "codex");
+      assert.equal(error.cause, spawnFailure);
+      return true;
+    },
+  );
+});
+
+test("PTY managed-session runner reports interrupted sessions when user interruption was requested", async () => {
+  const spawner = new FakePtySpawner();
+  let interrupted = false;
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInterrupt: {
+        wasRequested() {
+          return interrupted;
+        },
+      },
+    },
+  );
+
+  interrupted = true;
+  spawner.process.emitExit(130, "SIGINT");
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof InterruptedProviderSessionError);
+    assert.equal(error.provider.id, "codex");
+    assert.equal(error.exitCode, 130);
+    assert.equal(error.signal, "SIGINT");
     return true;
   });
 });
