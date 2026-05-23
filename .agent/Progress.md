@@ -62,24 +62,32 @@ Hard limit: 100 lines.
   - the active intent stage can now complete through a built-in provider adapter with fake PTY execution in tests
 - Added PTY/session regression coverage in `tests/adapters/ptyManagedSessionRunner.test.ts`, `tests/adapters/managedSessionAdapter.contract.test.ts`, `tests/cli.test.ts`, and `tests/orchestrator.test.ts` for launch failures, cleanup failures, incomplete markers, interrupts, resize forwarding, in-session repair, provider args/model wiring, and built-in intent execution.
 - Verified the PTY/session slice with `npm run test` (96 passing tests), `npm run typecheck`, and `npm run build`.
+- Completed the orchestrator-level whole-stage retry checkpoint for the active intent stage:
+  - provider-backed intent gets 2 total attempts inside one run, reusing the canonical `intent.json` path after cleaning failed retryable output
+  - fresh provider sessions, initial markers, and repair markers are rendered per attempt while `onStageStart("intent")` remains stage-level
+  - failed repaired intent artifacts are retryable at the stage boundary; in-session repair remains a separate same-session policy
+  - `ProviderStageRetryExhaustedError` preserves `stage`, `attempts`, and final `cause`, leaving the final failed intent artifact for inspection
+  - `isRetryableProviderBackedStageFailure()` centralizes retry policy; interrupted sessions, cleanup failures, and setup/config failures fail fast outside retry
+- Added orchestrator retry regression coverage for same-run retry success, failed-repair retry, retry exhaustion, final artifact retention, non-retryable lifecycle failures, and setup-boundary failures.
 
 ## Current State
 - The repo now has a working CLI/bootstrap/state/orchestration boundary across `src/cli.ts`, `src/projectRoot.ts`, `src/bootstrapProvider.ts`, `src/devflowState.ts`, `src/orchestrator.ts`, provider session code, and `src/adapters/`.
-- Built-in provider discovery, repo-root resolution, repo-local default-provider state, explicit provider/model override handling, first-run provider selection, shared context storage, run creation, immutable run artifact writes, MVP stage ordering, PTY-backed managed sessions, strict intent validation, and in-session intent repair are implemented and regression-tested.
+- Built-in provider discovery, repo-root resolution, repo-local default-provider state, explicit provider/model override handling, first-run provider selection, shared context storage, run creation, immutable run artifact writes, MVP stage ordering, PTY-backed managed sessions, strict intent validation, in-session intent repair, and intent whole-stage retry are implemented and regression-tested.
 - The MVP pipeline currently has only intent active; bootstrap, grill, PRD, issues, execute, and validate are observable no-op placeholders that do not write fake artifacts.
-- The managed-session contract, PTY transport, CLI error mapping, and active intent-stage adapter path are complete enough for local provider-backed intent runs.
+- The managed-session contract, PTY transport, CLI error mapping, active intent-stage adapter path, retry exhaustion typing, and retry/non-retry boundary are complete enough for local provider-backed intent runs.
 - There are no remaining AFK tasks in the `.devflow` filesystem state-boundary workstream from `.agent/task_progress.md`.
+- There are no remaining AFK tasks in the managed-session/retry workstream from `.agent/task_progress.md`.
 
 ## Next Checkpoint
-1. Add orchestrator-level whole-stage retry:
-  - Treat artifact repair and whole-stage retry as separate policies.
-  - After PTY session failures are typed, add orchestrator-level retry around provider-backed stages when `runSession(...)` throws or a stage fails.
-  - Keep the in-session artifact repair path for marker-plus-invalid-artifact failures that need provider context.
-
-2. Project context freshness before expanding bootstrap:
+1. Project context freshness before expanding bootstrap:
   - Add `.devflow/project-context.meta.json`.
-  - Store `generatedAt`, `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`.
-  - Use Git diff/status with context-relevant path rules to decide whether `.devflow/project-context.md` is fresh.
-  - Include uncommitted changes via a dirty fingerprint so repeated runs do not refresh for the same dirty tree.
-  - In non-Git repos, fall back to missing metadata/context and max age checks.
-  - Use a 3-day max age.
+  - Store `generatedAt`, baseline `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`.
+  - Use baseline Git diff plus status/diff dirty fingerprinting to decide freshness; ignore `.devflow/`, `.agent/`, `.codex/`, `node_modules/`, `dist/`, and `.git/`.
+  - Treat repeated runs on the same dirty tree as fresh, with clean trees storing `dirtyFingerprint: null`.
+  - Enforce non-empty project context with a 150-line hard cap.
+  - In non-Git repos, use missing metadata/context, invalid metadata, version mismatch, and a 3-day max-age check.
+  - Expose structured freshness results with changed path metadata for future incremental refresh.
+2. Follow-up bootstrap slice:
+  - Use the freshness API to reuse fresh context or run a provider-backed incremental refresh.
+  - Initial generation may inspect repo entrypoints/config/docs; refresh must focus on changed/deleted/renamed/untracked files and the current context, not re-explore the whole codebase.
+  - If refresh output is semantically unchanged, keep `project-context.md` and still update metadata to advance the baseline.
