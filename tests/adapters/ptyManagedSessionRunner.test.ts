@@ -27,6 +27,7 @@ function waitForAsyncHandlers(): Promise<void> {
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
+  readonly resizes: Array<{ columns: number; rows: number }> = [];
   readonly emitter = new EventEmitter();
   killed = false;
   isAlive = true;
@@ -48,6 +49,10 @@ class FakePtyProcess implements PtyProcess {
   kill(): void {
     this.killed = true;
     this.isAlive = false;
+  }
+
+  resize(columns: number, rows: number): void {
+    this.resizes.push({ columns, rows });
   }
 
   emitData(data: string): void {
@@ -80,6 +85,32 @@ class FakePtySpawner implements PtySpawner {
 
     this.calls.push({ executable, args, options });
     return this.process;
+  }
+}
+
+class FakeTerminal extends EventEmitter {
+  removedResizeListeners = 0;
+
+  constructor(
+    public columns: number | undefined,
+    public rows: number | undefined,
+  ) {
+    super();
+  }
+
+  override on(event: "resize", listener: () => void): this {
+    return super.on(event, listener);
+  }
+
+  override off(event: "resize", listener: () => void): this {
+    this.removedResizeListeners += 1;
+    return super.off(event, listener);
+  }
+
+  emitResize(columns: number | undefined, rows: number | undefined): void {
+    this.columns = columns;
+    this.rows = rows;
+    this.emit("resize");
   }
 }
 
@@ -279,9 +310,85 @@ test("PTY managed-session runner does not bridge stdin when stdin is not a TTY",
   assert.equal(userInput.listenerCount("data"), 0);
 });
 
+test("PTY managed-session runner forwards terminal resizes while active without requiring TTY stdin", async () => {
+  const spawner = new FakePtySpawner();
+  const terminal = new FakeTerminal(100, 30);
+  const userInput = new FakeUserInput(false);
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal,
+      userInput,
+    },
+  );
+
+  terminal.emitResize(120, 45);
+  terminal.emitResize(undefined, 50);
+  terminal.emitResize(140, undefined);
+  assert.deepEqual(spawner.process.resizes, [
+    { columns: 120, rows: 45 },
+    { columns: 80, rows: 50 },
+    { columns: 140, rows: 24 },
+  ]);
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+  await runPromise;
+
+  assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(terminal.listenerCount("resize"), 0);
+  assert.equal(terminal.removedResizeListeners, 1);
+});
+
+test("PTY managed-session runner ignores terminal resizes when the PTY does not support resizing", async () => {
+  const spawner = new FakePtySpawner();
+  const terminal = new FakeTerminal(100, 30);
+  const processWithoutResize: PtyProcess = {
+    onData: spawner.process.onData.bind(spawner.process),
+    onExit: spawner.process.onExit.bind(spawner.process),
+    write: spawner.process.write.bind(spawner.process),
+    kill: spawner.process.kill.bind(spawner.process),
+  };
+  spawner.spawn = (executable, args, options) => {
+    spawner.calls.push({ executable, args, options });
+    return processWithoutResize;
+  };
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal,
+    },
+  );
+
+  terminal.emitResize(120, 45);
+  spawner.process.emitData("DEVFLOW_DONE\n");
+  await runPromise;
+
+  assert.equal(terminal.listenerCount("resize"), 0);
+  assert.equal(terminal.removedResizeListeners, 1);
+});
+
 test("PTY managed-session runner restores bridged stdin after validation failure", async () => {
   const spawner = new FakePtySpawner();
   const userInput = new FakeUserInput(true);
+  const terminal = new FakeTerminal(100, 30);
   const validationFailure = new Error("artifact is invalid");
 
   const runPromise = runPtyManagedSession(
@@ -299,17 +406,21 @@ test("PTY managed-session runner restores bridged stdin after validation failure
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      terminal: {},
+      terminal,
       userInput,
     },
   );
 
+  terminal.emitResize(120, 40);
   spawner.process.emitData("DEVFLOW_DONE\n");
 
   await assert.rejects(runPromise, validationFailure);
+  assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.deepEqual(userInput.rawModeChanges, [true, false]);
   assert.equal(userInput.pauseCount, 1);
   assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(terminal.listenerCount("resize"), 0);
+  assert.equal(terminal.removedResizeListeners, 1);
 });
 
 test("PTY managed-session runner detects markers inside the bounded rolling buffer", async () => {
@@ -354,6 +465,7 @@ test("PTY managed-session runner detects markers inside the bounded rolling buff
 
 test("PTY managed-session runner reports incomplete sessions before marker detection", async () => {
   const spawner = new FakePtySpawner();
+  const terminal = new FakeTerminal(100, 30);
 
   const runPromise = runPtyManagedSession(
     {
@@ -366,10 +478,11 @@ test("PTY managed-session runner reports incomplete sessions before marker detec
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      terminal: {},
+      terminal,
     },
   );
 
+  terminal.emitResize(120, 40);
   spawner.process.emitData("still working\n");
   spawner.process.emitExit(1);
 
@@ -380,6 +493,9 @@ test("PTY managed-session runner reports incomplete sessions before marker detec
     assert.equal(error.exitCode, 1);
     return true;
   });
+  assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
+  assert.equal(terminal.listenerCount("resize"), 0);
+  assert.equal(terminal.removedResizeListeners, 1);
 });
 
 test("PTY managed-session runner maps PTY spawn failures to typed launch errors", async () => {
@@ -450,6 +566,7 @@ test("PTY managed-session runner reports interrupted sessions when user interrup
 test("PTY managed-session runner forwards the first Ctrl-C and reports provider exit as interrupted", async () => {
   const spawner = new FakePtySpawner();
   const userInput = new FakeUserInput(true);
+  const terminal = new FakeTerminal(100, 30);
 
   const runPromise = runPtyManagedSession(
     {
@@ -462,11 +579,12 @@ test("PTY managed-session runner forwards the first Ctrl-C and reports provider 
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      terminal: {},
+      terminal,
       userInput,
     },
   );
 
+  terminal.emitResize(120, 40);
   userInput.emitData("\u0003");
   assert.deepEqual(spawner.process.writes, ["\u0003"]);
   assert.equal(spawner.process.killed, false);
@@ -480,8 +598,11 @@ test("PTY managed-session runner forwards the first Ctrl-C and reports provider 
     assert.equal(error.signal, "SIGINT");
     return true;
   });
+  assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.deepEqual(userInput.rawModeChanges, [true, false]);
   assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(terminal.listenerCount("resize"), 0);
+  assert.equal(terminal.removedResizeListeners, 1);
 });
 
 test("PTY managed-session runner kills the provider and reports interruption on a second Ctrl-C", async () => {

@@ -27,6 +27,7 @@ export interface PtyProcess {
   ): void;
   write(data: string): void;
   kill(): void;
+  resize?(columns: number, rows: number): void;
 }
 
 export interface PtySpawner {
@@ -44,6 +45,9 @@ export interface OutputSink {
 export interface TerminalDimensions {
   columns?: number;
   rows?: number;
+  on?(event: "resize", listener: () => void): void;
+  off?(event: "resize", listener: () => void): void;
+  removeListener?(event: "resize", listener: () => void): void;
 }
 
 export interface UserInterruptState {
@@ -114,6 +118,9 @@ export const nodePtySpawner: PtySpawner = {
       kill() {
         process.kill();
       },
+      resize(columns, rows) {
+        process.resize(columns, rows);
+      },
     };
   },
 };
@@ -160,6 +167,7 @@ export async function runPtyManagedSession(
     let interruptCount = 0;
     let interruptRequested = false;
     let cleanupUserInputBridge = (): void => {};
+    let cleanupTerminalResize = (): void => {};
 
     function cleanup(): void {
       if (command.cleanupCommand) {
@@ -190,13 +198,23 @@ export async function runPtyManagedSession(
       cleanupUserInputBridge = (): void => {};
     }
 
-    function resolveSession(result: ManagedProviderSessionResult): void {
+    function cleanupResizeListener(): void {
+      cleanupTerminalResize();
+      cleanupTerminalResize = (): void => {};
+    }
+
+    function cleanupSessionListeners(): void {
       cleanupInteractiveInput();
+      cleanupResizeListener();
+    }
+
+    function resolveSession(result: ManagedProviderSessionResult): void {
+      cleanupSessionListeners();
       resolve(result);
     }
 
     function rejectSession(error: unknown): void {
-      cleanupInteractiveInput();
+      cleanupSessionListeners();
       reject(error);
     }
 
@@ -297,6 +315,29 @@ export async function runPtyManagedSession(
       };
     }
 
+    function setupTerminalResizeForwarding(): void {
+      if (!terminal.on) {
+        return;
+      }
+
+      const onResize = (): void => {
+        processHandle.resize?.(
+          terminal.columns ?? DEFAULT_COLUMNS,
+          terminal.rows ?? DEFAULT_ROWS,
+        );
+      };
+
+      terminal.on("resize", onResize);
+
+      cleanupTerminalResize = () => {
+        if (terminal.off) {
+          terminal.off("resize", onResize);
+        } else {
+          terminal.removeListener?.("resize", onResize);
+        }
+      };
+    }
+
     function handleInitialCompletion(): void {
       if (markerDetected) {
         return;
@@ -356,6 +397,7 @@ export async function runPtyManagedSession(
     }
 
     setupUserInputBridge();
+    setupTerminalResizeForwarding();
 
     processHandle.onData((chunk) => {
       outputSink.write(chunk);
