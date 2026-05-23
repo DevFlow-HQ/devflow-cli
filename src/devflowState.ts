@@ -1,5 +1,6 @@
 import fs from "fs-extra";
 import crypto from "node:crypto";
+import { createReadStream } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { execa } from "execa";
@@ -130,11 +131,18 @@ export type GitBaselineChanges =
       status: "baseline-unavailable";
     };
 
-export interface GitUntrackedFile {
-  path: string;
-  status: "untracked";
-  content: Buffer;
-}
+export type GitUntrackedFile =
+  | {
+      path: string;
+      status: "untracked";
+      content: Buffer;
+    }
+  | {
+      path: string;
+      status: "untracked";
+      contentPath: string;
+      byteLength: number;
+    };
 
 export interface GitDirtyState {
   staged: GitChangedPath[];
@@ -479,6 +487,37 @@ async function runGitBuffer(
   return Buffer.from(result.stdout);
 }
 
+async function mapWithConcurrency<Input, Output>(
+  inputs: Input[],
+  concurrency: number,
+  mapper: (input: Input) => Promise<Output>,
+): Promise<Output[]> {
+  const results = new Array<Output>(inputs.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      if (currentIndex >= inputs.length) {
+        return;
+      }
+
+      results[currentIndex] = await mapper(inputs[currentIndex]);
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, inputs.length) },
+      async () => worker(),
+    ),
+  );
+
+  return results;
+}
+
 export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
   return {
     async isRepository(projectRoot) {
@@ -542,15 +581,25 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
         "--exclude-standard",
         "-z",
       ]);
-      const untracked = await Promise.all(
-        untrackedOutput
-          .split("\0")
-          .filter((path) => path.length > 0)
-          .map(async (path) => ({
-            path: normalizeGitPath(path),
+      const untrackedPaths = untrackedOutput
+        .split("\0")
+        .filter((path) => path.length > 0)
+        .map(normalizeGitPath)
+        .filter((path) => isRelevantChangedPath({ path, status: "untracked" }));
+      const untracked = await mapWithConcurrency(
+        untrackedPaths,
+        8,
+        async (path) => {
+          const contentPath = join(projectRoot, path);
+          const stats = await fs.stat(contentPath);
+
+          return {
+            path,
             status: "untracked" as const,
-            content: await fs.readFile(join(projectRoot, path)),
-          })),
+            contentPath,
+            byteLength: stats.size,
+          };
+        },
       );
 
       return { staged, stagedDiff, unstaged, unstagedDiff, untracked };
@@ -568,6 +617,28 @@ function updateHashWithLengthPrefixedBuffer(
   hash.update("\0");
 }
 
+async function updateHashWithLengthPrefixedFile(
+  hash: crypto.Hash,
+  label: string,
+  contentPath: string,
+  byteLength: number,
+): Promise<void> {
+  hash.update(`${label}\0${byteLength}\0`);
+
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(contentPath);
+
+    stream.on("data", (chunk) => {
+      hash.update(chunk);
+    });
+    stream.on("error", reject);
+    stream.on("end", () => {
+      hash.update("\0");
+      resolve();
+    });
+  });
+}
+
 function sortedChangedPaths(changedPaths: GitChangedPath[]): GitChangedPath[] {
   return [...changedPaths].sort((left, right) => {
     const leftKey = `${left.status}\0${left.previousPath ?? ""}\0${left.path}`;
@@ -577,9 +648,9 @@ function sortedChangedPaths(changedPaths: GitChangedPath[]): GitChangedPath[] {
   });
 }
 
-function computeGitDirtyFingerprint(
+async function computeGitDirtyFingerprint(
   dirtyState: GitDirtyState,
-): string | null {
+): Promise<string | null> {
   if (
     dirtyState.staged.length === 0 &&
     dirtyState.stagedDiff.length === 0 &&
@@ -613,10 +684,20 @@ function computeGitDirtyFingerprint(
   for (const untrackedFile of [...dirtyState.untracked].sort((left, right) =>
     left.path.localeCompare(right.path),
   )) {
-    updateHashWithLengthPrefixedBuffer(
+    if ("content" in untrackedFile) {
+      updateHashWithLengthPrefixedBuffer(
+        hash,
+        `untracked\0${untrackedFile.path}`,
+        untrackedFile.content,
+      );
+      continue;
+    }
+
+    await updateHashWithLengthPrefixedFile(
       hash,
       `untracked\0${untrackedFile.path}`,
-      untrackedFile.content,
+      untrackedFile.contentPath,
+      untrackedFile.byteLength,
     );
   }
 
@@ -843,7 +924,7 @@ async function createProjectContextRefreshMetadata(
   return {
     ...baseMetadata,
     gitHead: await gitProbe.getCurrentHead(projectRoot),
-    dirtyFingerprint: computeGitDirtyFingerprint(dirtyState),
+    dirtyFingerprint: await computeGitDirtyFingerprint(dirtyState),
   };
 }
 
@@ -948,7 +1029,7 @@ async function checkProjectContextFreshness(
       const dirtyState = filterRelevantDirtyState(
         await gitProbe.getDirtyState(projectRoot),
       );
-      const dirtyFingerprint = computeGitDirtyFingerprint(dirtyState);
+      const dirtyFingerprint = await computeGitDirtyFingerprint(dirtyState);
 
       if (dirtyFingerprint !== metadata.dirtyFingerprint) {
         return {

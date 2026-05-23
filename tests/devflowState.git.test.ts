@@ -123,6 +123,44 @@ test("default git probe includes untracked file content in dirty fingerprints", 
   });
 });
 
+test("default git probe fingerprints large untracked files without full-file reads", async (t) => {
+  const { projectRoot } = await createGitProject();
+  const largeUntrackedPath = join(projectRoot, "notes", "large.bin");
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
+  });
+
+  await fs.outputFile(largeUntrackedPath, Buffer.alloc(1024 * 1024, "a"));
+
+  const originalReadFile = fs.readFile.bind(fs);
+  t.mock.method(fs, "readFile", async (...args: unknown[]) => {
+    const [path] = args;
+
+    if (path === largeUntrackedPath) {
+      throw new Error("large untracked files must be streamed");
+    }
+
+    return Reflect.apply(originalReadFile, fs, args);
+  });
+
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "manual",
+  });
+  const metadata = await state.projectContext.readMetadata();
+
+  await fs.outputFile(largeUntrackedPath, Buffer.alloc(1024 * 1024, "b"));
+
+  assert.match(metadata?.dirtyFingerprint ?? "", /^dirty-[0-9a-f]{16}$/);
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "relevant-changes",
+    context: "context snapshot",
+    metadata,
+    changedPaths: [{ path: "notes/large.bin", status: "untracked" }],
+  });
+});
+
 test("default git probe ignores untracked files excluded by git ignore rules", async () => {
   const { projectRoot } = await createGitProject();
   const state = createDevFlowState({
@@ -139,6 +177,38 @@ test("default git probe ignores untracked files excluded by git ignore rules", a
   const metadata = await state.projectContext.readMetadata();
 
   await fs.outputFile(join(projectRoot, "ignored.log"), "ignored content\n");
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "fresh",
+    context: "context snapshot",
+    metadata,
+  });
+});
+
+test("default git probe filters agent-owned untracked files before reading content", async (t) => {
+  const { projectRoot } = await createGitProject();
+  const agentUntrackedPath = join(projectRoot, ".agent", "large-state.bin");
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
+  });
+
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "manual",
+  });
+  const metadata = await state.projectContext.readMetadata();
+  await fs.outputFile(agentUntrackedPath, Buffer.alloc(1024 * 1024, "a"));
+
+  const originalReadFile = fs.readFile.bind(fs);
+  t.mock.method(fs, "readFile", async (...args: unknown[]) => {
+    const [path] = args;
+
+    if (path === agentUntrackedPath) {
+      throw new Error("agent-owned untracked files must be filtered first");
+    }
+
+    return Reflect.apply(originalReadFile, fs, args);
+  });
 
   assert.deepEqual(await state.projectContext.checkFreshness(), {
     status: "fresh",
