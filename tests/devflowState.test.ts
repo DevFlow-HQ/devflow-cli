@@ -200,6 +200,29 @@ test("project context metadata validation rejects malformed writes before updati
   });
 });
 
+test("project context freshness treats missing context as stale", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "missing-context",
+  });
+});
+
+test("project context freshness treats missing metadata as stale with readable context", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await state.projectContext.write("context snapshot");
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "missing-metadata",
+    context: "context snapshot",
+  });
+});
+
 test("project context freshness treats malformed metadata as repairable stale cache state", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const state = createDevFlowState({ projectRoot });
@@ -218,6 +241,90 @@ test("project context freshness treats malformed metadata as repairable stale ca
     status: "stale",
     refreshReason: "metadata-invalid",
     context: "context snapshot",
+  });
+});
+
+test("project context freshness treats context version changes as stale repairable state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await fs.outputFile(
+    join(projectRoot, ".devflow", "project-context.md"),
+    "context snapshot",
+  );
+  await fs.outputJson(
+    join(projectRoot, ".devflow", "project-context.meta.json"),
+    {
+      generatedAt: "2026-05-23T10:00:00.000Z",
+      gitHead: null,
+      dirtyFingerprint: null,
+      contextVersion: 0,
+      refreshReason: "manual",
+    },
+    { spaces: 2 },
+  );
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "context-version-changed",
+    context: "context snapshot",
+  });
+});
+
+test("project context freshness treats non-git metadata older than three days as stale", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+  });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-20T09:59:59.999Z",
+    gitHead: null,
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "max-age-exceeded",
+    context: "context snapshot",
+    metadata: {
+      generatedAt: "2026-05-20T09:59:59.999Z",
+      gitHead: null,
+      dirtyFingerprint: null,
+      contextVersion: 1,
+      refreshReason: "manual",
+    },
+  });
+});
+
+test("project context freshness returns fresh non-git metadata within max age", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+  });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-20T10:00:00.000Z",
+    gitHead: null,
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "fresh",
+    context: "context snapshot",
+    metadata: {
+      generatedAt: "2026-05-20T10:00:00.000Z",
+      gitHead: null,
+      dirtyFingerprint: null,
+      contextVersion: 1,
+      refreshReason: "manual",
+    },
   });
 });
 

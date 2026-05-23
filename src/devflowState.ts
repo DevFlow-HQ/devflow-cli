@@ -33,6 +33,7 @@ const isoDateTimePattern =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const gitHeadPattern = /^[0-9a-f]{40}$/;
 const dirtyFingerprintPattern = /^dirty-[0-9a-f]{16}$/;
+const projectContextMaxAgeMilliseconds = 3 * 24 * 60 * 60 * 1000;
 const projectContextRefreshReasons = [
   "missing-context",
   "missing-metadata",
@@ -78,6 +79,10 @@ const projectContextMetadataSchema = z
   })
   .strict();
 
+const projectContextFreshnessMetadataSchema = projectContextMetadataSchema.extend({
+  contextVersion: z.number().int(),
+});
+
 export interface DevFlowConfig {
   defaultProvider: BuiltInProviderId;
 }
@@ -91,6 +96,10 @@ export interface ProjectContextMetadata {
   dirtyFingerprint: string | null;
   contextVersion: number;
   refreshReason: ProjectContextRefreshReason;
+}
+
+export interface DevFlowClock {
+  now(): Date;
 }
 
 export type ProjectContextFreshness =
@@ -108,6 +117,7 @@ export type ProjectContextFreshness =
 
 export interface CreateDevFlowStateOptions {
   projectRoot: string;
+  clock?: DevFlowClock;
 }
 
 export interface DevFlowRunHandle {
@@ -386,6 +396,40 @@ async function readProjectContextMetadata(
   return validateProjectContextMetadata(metadataPath, parsedMetadata);
 }
 
+async function readProjectContextMetadataForFreshness(
+  projectRoot: string,
+): Promise<ProjectContextMetadata | undefined> {
+  const metadataPath = getProjectContextMetadataPath(projectRoot);
+  const metadataExists = await fs.pathExists(metadataPath);
+
+  if (!metadataExists) {
+    return undefined;
+  }
+
+  let parsedMetadata: unknown;
+
+  try {
+    parsedMetadata = await fs.readJson(metadataPath);
+  } catch (error) {
+    const details =
+      error instanceof Error ? error.message : "Metadata file is not valid JSON.";
+    throw new InvalidProjectContextMetadataError(metadataPath, details);
+  }
+
+  const result = projectContextFreshnessMetadataSchema.safeParse(parsedMetadata);
+
+  if (!result.success) {
+    throw new InvalidProjectContextMetadataError(
+      metadataPath,
+      formatValidationDetails(result.error),
+    );
+  }
+
+  return result.data.contextVersion === DEVFLOW_PROJECT_CONTEXT_VERSION
+    ? validateProjectContextMetadata(metadataPath, result.data)
+    : result.data;
+}
+
 async function writeProjectContext(
   projectRoot: string,
   content: string,
@@ -412,6 +456,7 @@ async function writeProjectContext(
 
 async function checkProjectContextFreshness(
   projectRoot: string,
+  clock: DevFlowClock,
 ): Promise<ProjectContextFreshness> {
   const context = await readProjectContext(projectRoot);
 
@@ -423,13 +468,35 @@ async function checkProjectContextFreshness(
   }
 
   try {
-    const metadata = await readProjectContextMetadata(projectRoot);
+    const metadata = await readProjectContextMetadataForFreshness(projectRoot);
 
     if (metadata === undefined) {
       return {
         status: "stale",
         refreshReason: "missing-metadata",
         context,
+      };
+    }
+
+    if (metadata.contextVersion !== DEVFLOW_PROJECT_CONTEXT_VERSION) {
+      return {
+        status: "stale",
+        refreshReason: "context-version-changed",
+        context,
+      };
+    }
+
+    const generatedAt = new Date(metadata.generatedAt).getTime();
+
+    if (
+      clock.now().getTime() - generatedAt >
+      projectContextMaxAgeMilliseconds
+    ) {
+      return {
+        status: "stale",
+        refreshReason: "max-age-exceeded",
+        context,
+        metadata,
       };
     }
 
@@ -483,11 +550,14 @@ function normalizeIssueSlug(slug: string): string {
   return normalizedSlug;
 }
 
-async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
+async function createRun(
+  projectRoot: string,
+  clock: DevFlowClock,
+): Promise<DevFlowRunHandle> {
   const runId = createOpaqueRunId();
   assertValidRunId(runId);
 
-  const createdAt = new Date().toISOString();
+  const createdAt = clock.now().toISOString();
   const runDirectory = getRunDirectoryPath(projectRoot, runId);
   const runMetadataPath = getRunMetadataPath(projectRoot, runId);
 
@@ -563,6 +633,8 @@ async function createRun(projectRoot: string): Promise<DevFlowRunHandle> {
 export function createDevFlowState(
   options: CreateDevFlowStateOptions,
 ): DevFlowState {
+  const clock = options.clock ?? { now: () => new Date() };
+
   return {
     config: {
       load: () => loadConfig(options.projectRoot),
@@ -573,12 +645,13 @@ export function createDevFlowState(
       write: (content, metadata) =>
         writeProjectContext(options.projectRoot, content, metadata),
       readMetadata: () => readProjectContextMetadata(options.projectRoot),
-      checkFreshness: () => checkProjectContextFreshness(options.projectRoot),
+      checkFreshness: () =>
+        checkProjectContextFreshness(options.projectRoot, clock),
     },
     readProjectContext: () => readProjectContext(options.projectRoot),
     writeProjectContext: (content, metadata) =>
       writeProjectContext(options.projectRoot, content, metadata),
-    createRun: () => createRun(options.projectRoot),
+    createRun: () => createRun(options.projectRoot, clock),
   };
 }
 
