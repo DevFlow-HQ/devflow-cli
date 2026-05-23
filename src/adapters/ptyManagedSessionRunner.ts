@@ -50,6 +50,20 @@ export interface UserInterruptState {
   wasRequested(): boolean;
 }
 
+export interface UserInput {
+  isTTY?: boolean;
+  isRaw?: boolean;
+  setRawMode?(enabled: boolean): void;
+  on(event: "data", listener: (chunk: Buffer | string) => void): void;
+  off?(event: "data", listener: (chunk: Buffer | string) => void): void;
+  removeListener?(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): void;
+  resume?(): void;
+  pause?(): void;
+}
+
 export interface PtyManagedSessionCommand {
   provider: ProviderIdentity;
   executable: string;
@@ -62,6 +76,7 @@ export interface PtyManagedSessionDependencies {
   ptySpawner?: PtySpawner;
   outputSink?: OutputSink;
   terminal?: TerminalDimensions;
+  userInput?: UserInput;
   userInterrupt?: UserInterruptState;
 }
 
@@ -120,6 +135,7 @@ export async function runPtyManagedSession(
   const ptySpawner = dependencies.ptySpawner ?? nodePtySpawner;
   const outputSink = dependencies.outputSink ?? process.stdout;
   const terminal = dependencies.terminal ?? process.stdout;
+  const userInput = dependencies.userInput ?? process.stdin;
   const markerBufferLimit =
     command.markerBufferLimit ?? DEFAULT_MARKER_BUFFER_LIMIT;
   let processHandle: PtyProcess;
@@ -141,6 +157,9 @@ export async function runPtyManagedSession(
     let settled = false;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
+    let interruptCount = 0;
+    let interruptRequested = false;
+    let cleanupUserInputBridge = (): void => {};
 
     function cleanup(): void {
       if (command.cleanupCommand) {
@@ -166,6 +185,21 @@ export async function runPtyManagedSession(
       };
     }
 
+    function cleanupInteractiveInput(): void {
+      cleanupUserInputBridge();
+      cleanupUserInputBridge = (): void => {};
+    }
+
+    function resolveSession(result: ManagedProviderSessionResult): void {
+      cleanupInteractiveInput();
+      resolve(result);
+    }
+
+    function rejectSession(error: unknown): void {
+      cleanupInteractiveInput();
+      reject(error);
+    }
+
     function cleanupAfterValidOutput(): void {
       try {
         cleanup();
@@ -182,7 +216,85 @@ export async function runPtyManagedSession(
       }
 
       settled = true;
-      void callback().then(resolve, reject);
+      void callback().then(resolveSession, rejectSession);
+    }
+
+    function createInterruptedError(
+      interruptedExitCode: number | null,
+      interruptedSignal: NodeJS.Signals | null,
+    ): InterruptedProviderSessionError {
+      return new InterruptedProviderSessionError({
+        provider: command.provider,
+        exitCode: interruptedExitCode,
+        signal: interruptedSignal,
+      });
+    }
+
+    function forwardInputChunk(chunk: string): void {
+      let pending = "";
+
+      for (const character of chunk) {
+        if (character !== "\u0003") {
+          pending += character;
+          continue;
+        }
+
+        if (pending) {
+          processHandle.write(pending);
+          pending = "";
+        }
+
+        interruptRequested = true;
+        interruptCount += 1;
+
+        if (interruptCount === 1) {
+          processHandle.write("\u0003");
+          continue;
+        }
+
+        try {
+          processHandle.kill();
+        } finally {
+          settle(async () => {
+            throw createInterruptedError(null, "SIGINT");
+          });
+        }
+      }
+
+      if (pending) {
+        processHandle.write(pending);
+      }
+    }
+
+    function setupUserInputBridge(): void {
+      if (!userInput.isTTY) {
+        return;
+      }
+
+      const wasRaw = userInput.isRaw === true;
+      const onData = (chunk: Buffer | string): void => {
+        forwardInputChunk(
+          typeof chunk === "string" ? chunk : chunk.toString("utf8"),
+        );
+      };
+
+      userInput.setRawMode?.(true);
+      userInput.resume?.();
+      userInput.on("data", onData);
+
+      cleanupUserInputBridge = () => {
+        if (userInput.off) {
+          userInput.off("data", onData);
+        } else {
+          userInput.removeListener?.("data", onData);
+        }
+
+        if (!wasRaw) {
+          userInput.setRawMode?.(false);
+        }
+
+        userInput.pause?.();
+      };
     }
 
     function handleInitialCompletion(): void {
@@ -199,7 +311,7 @@ export async function runPtyManagedSession(
           if (!(error instanceof Error) || !input.repair) {
             cleanupAfterValidationFailure();
             settled = true;
-            reject(error);
+            rejectSession(error);
             return;
           }
 
@@ -213,12 +325,12 @@ export async function runPtyManagedSession(
           cleanupAfterValidOutput();
         } catch (error) {
           settled = true;
-          reject(error);
+          rejectSession(error);
           return;
         }
 
         settled = true;
-        resolve(createResult(false));
+        resolveSession(createResult(false));
       })();
     }
 
@@ -242,6 +354,8 @@ export async function runPtyManagedSession(
         return createResult(true);
       });
     }
+
+    setupUserInputBridge();
 
     processHandle.onData((chunk) => {
       outputSink.write(chunk);
@@ -278,12 +392,8 @@ export async function runPtyManagedSession(
       }
 
       settle(async () => {
-        if (dependencies.userInterrupt?.wasRequested()) {
-          throw new InterruptedProviderSessionError({
-            provider: command.provider,
-            exitCode: event.exitCode,
-            signal: event.signal,
-          });
+        if (interruptRequested || dependencies.userInterrupt?.wasRequested()) {
+          throw createInterruptedError(event.exitCode, event.signal);
         }
 
         throw new IncompleteProviderSessionError({

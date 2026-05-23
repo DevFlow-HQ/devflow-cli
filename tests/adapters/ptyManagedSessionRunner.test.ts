@@ -15,6 +15,7 @@ import {
   type PtyProcess,
   type PtySpawnOptions,
   type PtySpawner,
+  type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 
@@ -79,6 +80,51 @@ class FakePtySpawner implements PtySpawner {
 
     this.calls.push({ executable, args, options });
     return this.process;
+  }
+}
+
+class FakeUserInput extends EventEmitter implements UserInput {
+  readonly rawModeChanges: boolean[] = [];
+  readonly removedDataListeners: Array<(chunk: Buffer | string) => void> = [];
+  resumeCount = 0;
+  pauseCount = 0;
+
+  constructor(
+    readonly isTTY: boolean,
+    readonly isRaw = false,
+  ) {
+    super();
+  }
+
+  setRawMode(enabled: boolean): void {
+    this.rawModeChanges.push(enabled);
+  }
+
+  override on(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): this {
+    return super.on(event, listener);
+  }
+
+  override off(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): this {
+    this.removedDataListeners.push(listener);
+    return super.off(event, listener);
+  }
+
+  resume(): void {
+    this.resumeCount += 1;
+  }
+
+  pause(): void {
+    this.pauseCount += 1;
+  }
+
+  emitData(chunk: Buffer | string): void {
+    this.emit("data", chunk);
   }
 }
 
@@ -160,6 +206,110 @@ test("PTY managed-session runner mirrors raw output and validates after an ANSI-
     exitCode: 0,
     signal: null,
   });
+});
+
+test("PTY managed-session runner bridges TTY stdin to the provider and restores stdin on success", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+  let validated = false;
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      async validate() {
+        validated = true;
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData(Buffer.from("typed input"));
+  assert.deepEqual(spawner.process.writes, ["typed input"]);
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+  const result = await runPromise;
+
+  assert.equal(validated, true);
+  assert.equal(result.repairUsed, false);
+  assert.deepEqual(spawner.process.writes, ["typed input", "/exit\n"]);
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.resumeCount, 1);
+  assert.equal(userInput.pauseCount, 1);
+  assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(userInput.removedDataListeners.length, 1);
+});
+
+test("PTY managed-session runner does not bridge stdin when stdin is not a TTY", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(false);
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("ignored input");
+  spawner.process.emitData("DEVFLOW_DONE\n");
+  await runPromise;
+
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(userInput.rawModeChanges, []);
+  assert.equal(userInput.resumeCount, 0);
+  assert.equal(userInput.listenerCount("data"), 0);
+});
+
+test("PTY managed-session runner restores bridged stdin after validation failure", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+  const validationFailure = new Error("artifact is invalid");
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      async validate() {
+        throw validationFailure;
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+
+  await assert.rejects(runPromise, validationFailure);
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.pauseCount, 1);
+  assert.equal(userInput.listenerCount("data"), 0);
 });
 
 test("PTY managed-session runner detects markers inside the bounded rolling buffer", async () => {
@@ -295,6 +445,81 @@ test("PTY managed-session runner reports interrupted sessions when user interrup
     assert.equal(error.signal, "SIGINT");
     return true;
   });
+});
+
+test("PTY managed-session runner forwards the first Ctrl-C and reports provider exit as interrupted", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("\u0003");
+  assert.deepEqual(spawner.process.writes, ["\u0003"]);
+  assert.equal(spawner.process.killed, false);
+
+  spawner.process.emitExit(130, "SIGINT");
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof InterruptedProviderSessionError);
+    assert.equal(error.provider.id, "codex");
+    assert.equal(error.exitCode, 130);
+    assert.equal(error.signal, "SIGINT");
+    return true;
+  });
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.listenerCount("data"), 0);
+});
+
+test("PTY managed-session runner kills the provider and reports interruption on a second Ctrl-C", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("\u0003");
+  userInput.emitData(Buffer.from("\u0003"));
+
+  assert.deepEqual(spawner.process.writes, ["\u0003"]);
+  assert.equal(spawner.process.killed, true);
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof InterruptedProviderSessionError);
+    assert.equal(error.provider.id, "codex");
+    assert.equal(error.exitCode, null);
+    assert.equal(error.signal, "SIGINT");
+    return true;
+  });
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.pauseCount, 1);
+  assert.equal(userInput.listenerCount("data"), 0);
 });
 
 test("PTY managed-session runner surfaces cleanup failures after valid output", async () => {
