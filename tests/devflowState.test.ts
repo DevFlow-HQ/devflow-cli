@@ -28,11 +28,59 @@ function createFreshnessProbe(
     }),
     getDirtyState: async () => ({
       staged: [],
+      stagedDiff: Buffer.alloc(0),
       unstaged: [],
+      unstagedDiff: Buffer.alloc(0),
       untracked: [],
     }),
     ...overrides,
   };
+}
+
+function expectedDirtyFingerprint(input: {
+  staged?: Array<{ path: string; status: string; previousPath?: string }>;
+  stagedDiff?: Buffer;
+  unstaged?: Array<{ path: string; status: string; previousPath?: string }>;
+  unstagedDiff?: Buffer;
+  untracked?: Array<{ path: string; content: Buffer }>;
+}): string {
+  const hash = crypto.createHash("sha1");
+
+  for (const [scope, changedPaths] of [
+    ["staged-status", input.staged ?? []],
+    ["unstaged-status", input.unstaged ?? []],
+  ] as const) {
+    for (const changedPath of [...changedPaths].sort((left, right) =>
+      `${left.status}\0${left.previousPath ?? ""}\0${left.path}`.localeCompare(
+        `${right.status}\0${right.previousPath ?? ""}\0${right.path}`,
+      ),
+    )) {
+      hash.update(
+        `${scope}\0${changedPath.status}\0${changedPath.previousPath ?? ""}\0${changedPath.path}\0`,
+      );
+    }
+  }
+
+  for (const [label, content] of [
+    ["staged-diff", input.stagedDiff ?? Buffer.alloc(0)],
+    ["unstaged-diff", input.unstagedDiff ?? Buffer.alloc(0)],
+  ] as const) {
+    hash.update(`${label}\0${content.byteLength}\0`);
+    hash.update(content);
+    hash.update("\0");
+  }
+
+  for (const untrackedFile of [...(input.untracked ?? [])].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
+    hash.update(
+      `untracked\0${untrackedFile.path}\0${untrackedFile.content.byteLength}\0`,
+    );
+    hash.update(untrackedFile.content);
+    hash.update("\0");
+  }
+
+  return `dirty-${hash.digest("hex").slice(0, 16)}`;
 }
 
 test("devflow config is absent until explicitly saved through the state facade", async () => {
@@ -421,15 +469,11 @@ test("project context freshness evaluates git repository state through the injec
       getDirtyState: async () => {
         calls.push("getDirtyState");
         return {
-          staged: [{ path: "staged.ts", status: "modified" }],
-          unstaged: [{ path: "unstaged.ts", status: "deleted" }],
-          untracked: [
-            {
-              path: "untracked.ts",
-              status: "untracked",
-              content: Buffer.from("new file"),
-            },
-          ],
+          staged: [],
+          stagedDiff: Buffer.alloc(0),
+          unstaged: [],
+          unstagedDiff: Buffer.alloc(0),
+          untracked: [],
         };
       },
     }),
@@ -450,6 +494,152 @@ test("project context freshness evaluates git repository state through the injec
     "getCommittedChangesSince:0123456789abcdef0123456789abcdef01234567",
     "getDirtyState",
   ]);
+});
+
+test("project context freshness treats repeated dirty git fingerprints as fresh", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const dirtyState = {
+    staged: [{ path: "staged.ts", status: "modified" as const }],
+    stagedDiff: Buffer.from("staged diff"),
+    unstaged: [{ path: "unstaged.ts", status: "deleted" as const }],
+    unstagedDiff: Buffer.from("unstaged diff"),
+    untracked: [
+      {
+        path: "notes/new-file.md",
+        status: "untracked" as const,
+        content: Buffer.from("new file"),
+      },
+    ],
+  };
+  const metadata = {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: expectedDirtyFingerprint(dirtyState),
+    contextVersion: 1,
+    refreshReason: "manual" as const,
+  };
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getDirtyState: async () => dirtyState,
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", metadata);
+
+  assert.match(metadata.dirtyFingerprint, /^dirty-[0-9a-f]{16}$/);
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "fresh",
+    context: "context snapshot",
+    metadata,
+  });
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "fresh",
+    context: "context snapshot",
+    metadata,
+  });
+});
+
+test("project context freshness treats changed dirty tracked content as stale", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const baselineDirtyState = {
+    staged: [{ path: "staged.ts", status: "modified" as const }],
+    stagedDiff: Buffer.from("old staged diff"),
+    unstaged: [{ path: "unstaged.ts", status: "modified" as const }],
+    unstagedDiff: Buffer.from("old unstaged diff"),
+    untracked: [],
+  };
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getDirtyState: async () => ({
+        ...baselineDirtyState,
+        unstagedDiff: Buffer.from("new unstaged diff"),
+      }),
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: expectedDirtyFingerprint(baselineDirtyState),
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "relevant-changes",
+    context: "context snapshot",
+    metadata: {
+      generatedAt: "2026-05-23T10:00:00.000Z",
+      gitHead: "0123456789abcdef0123456789abcdef01234567",
+      dirtyFingerprint: expectedDirtyFingerprint(baselineDirtyState),
+      contextVersion: 1,
+      refreshReason: "manual",
+    },
+  });
+});
+
+test("project context freshness includes untracked path and content in dirty fingerprints", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const baselineDirtyState = {
+    staged: [],
+    stagedDiff: Buffer.alloc(0),
+    unstaged: [],
+    unstagedDiff: Buffer.alloc(0),
+    untracked: [
+      {
+        path: "notes/new-file.md",
+        status: "untracked" as const,
+        content: Buffer.from("old content"),
+      },
+    ],
+  };
+  const changedUntrackedState = {
+    ...baselineDirtyState,
+    untracked: [
+      {
+        path: "notes/new-file.md",
+        status: "untracked" as const,
+        content: Buffer.from("new content"),
+      },
+    ],
+  };
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getDirtyState: async () => changedUntrackedState,
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: expectedDirtyFingerprint(baselineDirtyState),
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  assert.notEqual(
+    expectedDirtyFingerprint(baselineDirtyState),
+    expectedDirtyFingerprint(changedUntrackedState),
+  );
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "relevant-changes",
+    context: "context snapshot",
+    metadata: {
+      generatedAt: "2026-05-23T10:00:00.000Z",
+      gitHead: "0123456789abcdef0123456789abcdef01234567",
+      dirtyFingerprint: expectedDirtyFingerprint(baselineDirtyState),
+      contextVersion: 1,
+      refreshReason: "manual",
+    },
+  });
 });
 
 test("createRun returns isolated run handles with opaque ids and persisted creation metadata", async () => {

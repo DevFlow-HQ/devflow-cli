@@ -134,7 +134,9 @@ export interface GitUntrackedFile {
 
 export interface GitDirtyState {
   staged: GitChangedPath[];
+  stagedDiff: Buffer;
   unstaged: GitChangedPath[];
+  unstagedDiff: Buffer;
   untracked: GitUntrackedFile[];
 }
 
@@ -402,6 +404,19 @@ async function runGit(
   return result.stdout;
 }
 
+async function runGitBuffer(
+  projectRoot: string,
+  args: string[],
+): Promise<Buffer> {
+  const result = await execa("git", args, {
+    cwd: projectRoot,
+    encoding: "buffer",
+    reject: true,
+  });
+
+  return Buffer.from(result.stdout);
+}
+
 export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
   return {
     async isRepository(projectRoot) {
@@ -447,9 +462,18 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
           "-z",
         ]),
       );
+      const stagedDiff = await runGitBuffer(projectRoot, [
+        "diff",
+        "--cached",
+        "--binary",
+      ]);
       const unstaged = parseGitNameStatus(
         await runGit(projectRoot, ["diff", "--name-status", "-z"]),
       );
+      const unstagedDiff = await runGitBuffer(projectRoot, [
+        "diff",
+        "--binary",
+      ]);
       const untrackedOutput = await runGit(projectRoot, [
         "ls-files",
         "--others",
@@ -467,9 +491,74 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
           })),
       );
 
-      return { staged, unstaged, untracked };
+      return { staged, stagedDiff, unstaged, unstagedDiff, untracked };
     },
   };
+}
+
+function updateHashWithLengthPrefixedBuffer(
+  hash: crypto.Hash,
+  label: string,
+  content: Buffer,
+): void {
+  hash.update(`${label}\0${content.byteLength}\0`);
+  hash.update(content);
+  hash.update("\0");
+}
+
+function sortedChangedPaths(changedPaths: GitChangedPath[]): GitChangedPath[] {
+  return [...changedPaths].sort((left, right) => {
+    const leftKey = `${left.status}\0${left.previousPath ?? ""}\0${left.path}`;
+    const rightKey = `${right.status}\0${right.previousPath ?? ""}\0${right.path}`;
+
+    return leftKey.localeCompare(rightKey);
+  });
+}
+
+function computeGitDirtyFingerprint(
+  dirtyState: GitDirtyState,
+): string | null {
+  if (
+    dirtyState.staged.length === 0 &&
+    dirtyState.stagedDiff.length === 0 &&
+    dirtyState.unstaged.length === 0 &&
+    dirtyState.unstagedDiff.length === 0 &&
+    dirtyState.untracked.length === 0
+  ) {
+    return null;
+  }
+
+  const hash = crypto.createHash("sha1");
+
+  for (const [scope, changedPaths] of [
+    ["staged-status", dirtyState.staged],
+    ["unstaged-status", dirtyState.unstaged],
+  ] as const) {
+    for (const changedPath of sortedChangedPaths(changedPaths)) {
+      hash.update(
+        `${scope}\0${changedPath.status}\0${changedPath.previousPath ?? ""}\0${changedPath.path}\0`,
+      );
+    }
+  }
+
+  updateHashWithLengthPrefixedBuffer(hash, "staged-diff", dirtyState.stagedDiff);
+  updateHashWithLengthPrefixedBuffer(
+    hash,
+    "unstaged-diff",
+    dirtyState.unstagedDiff,
+  );
+
+  for (const untrackedFile of [...dirtyState.untracked].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
+    updateHashWithLengthPrefixedBuffer(
+      hash,
+      `untracked\0${untrackedFile.path}`,
+      untrackedFile.content,
+    );
+  }
+
+  return `dirty-${hash.digest("hex").slice(0, 16)}`;
 }
 
 function formatValidationDetails(error: z.ZodError): string {
@@ -729,7 +818,18 @@ async function checkProjectContextFreshness(
         };
       }
 
-      await gitProbe.getDirtyState(projectRoot);
+      const dirtyFingerprint = computeGitDirtyFingerprint(
+        await gitProbe.getDirtyState(projectRoot),
+      );
+
+      if (dirtyFingerprint !== metadata.dirtyFingerprint) {
+        return {
+          status: "stale",
+          refreshReason: "relevant-changes",
+          context,
+          metadata,
+        };
+      }
     }
 
     return {
