@@ -351,6 +351,117 @@ test("orchestrator retries a retryable intent provider-session failure inside th
   });
 });
 
+test("orchestrator retries intent after failed in-session repair and accepts a valid retry repair", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const artifactPaths: string[] = [];
+  const artifactExistedAtAttemptStart: boolean[] = [];
+  const initialCompletionMarkers: string[] = [];
+  const repairCompletionMarkers: string[] = [];
+  const initialPrompts: string[] = [];
+  const repairPrompts: string[] = [];
+  let runSessionCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionCallCount += 1;
+      const runIds = await listRunDirectories(projectRoot);
+      const artifactPath = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        runIds[0],
+        "intent.json",
+      );
+
+      artifactPaths.push(artifactPath);
+      artifactExistedAtAttemptStart.push(await fs.pathExists(artifactPath));
+      initialCompletionMarkers.push(input.initialCompletionMarker);
+      initialPrompts.push(input.initialPrompt);
+      assert.ok(input.repair);
+      repairCompletionMarkers.push(input.repair.completionMarker);
+
+      await assert.rejects(input.validate());
+      const repairPrompt = input.repair.renderPrompt(
+        new Error(`attempt ${runSessionCallCount} invalid intent`),
+      );
+      repairPrompts.push(repairPrompt);
+
+      if (runSessionCallCount === 1) {
+        await fs.outputJson(
+          artifactPath,
+          {
+            classification: "feature",
+            summary: "",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+
+        try {
+          await input.validate();
+        } catch (repairError) {
+          assert.ok(repairError instanceof Error);
+          throw input.repair.mapFailure(repairError);
+        }
+      }
+
+      await fs.outputJson(
+        artifactPath,
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+
+      return { repairUsed: true, exitCode: 0, signal: null };
+    },
+  };
+
+  const result = await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.deepEqual(result.intent, {
+    repairUsed: true,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.equal(runSessionCallCount, 2);
+  assert.equal(artifactPaths[0], artifactPaths[1]);
+  assert.deepEqual(artifactExistedAtAttemptStart, [false, false]);
+  assert.notEqual(initialCompletionMarkers[0], initialCompletionMarkers[1]);
+  assert.notEqual(repairCompletionMarkers[0], repairCompletionMarkers[1]);
+  assert.match(initialPrompts[0], new RegExp(initialCompletionMarkers[0]));
+  assert.match(initialPrompts[1], new RegExp(initialCompletionMarkers[1]));
+  assert.match(repairPrompts[0], new RegExp(repairCompletionMarkers[0]));
+  assert.match(repairPrompts[1], new RegExp(repairCompletionMarkers[1]));
+  assert.deepEqual(await fs.readJson(artifactPaths[1]), {
+    classification: "feature",
+    summary: "Resume the current workstream.",
+    rawTask: "resume work",
+    needsClarification: false,
+  });
+});
+
 test("orchestrator passes intent stage input to the managed provider session", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
@@ -568,7 +679,7 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
   assert.deepEqual(repairedCompletion, { repairUsed: true });
 });
 
-test("orchestrator maps failed intent repair validation to the stage artifact validation error", async () => {
+test("orchestrator maps failed intent repair validation to the stage artifact validation error after retry", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let repairPromptCount = 0;
@@ -636,7 +747,7 @@ test("orchestrator maps failed intent repair validation to the stage artifact va
       error.message.includes("Must be a non-empty string"),
   );
 
-  assert.equal(repairPromptCount, 1);
+  assert.equal(repairPromptCount, 2);
 });
 
 test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {

@@ -177,7 +177,8 @@ async function startStage(
 function isRetryableProviderStageFailure(error: unknown): boolean {
   return (
     error instanceof IncompleteProviderSessionError ||
-    error instanceof ProviderSessionLaunchError
+    error instanceof ProviderSessionLaunchError ||
+    error instanceof StageArtifactValidationError
   );
 }
 
