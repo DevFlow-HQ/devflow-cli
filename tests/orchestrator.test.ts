@@ -17,12 +17,15 @@ import type {
 } from "../src/adapters/managedSessionAdapter.js";
 import {
   IncompleteProviderSessionError,
+  InterruptedProviderSessionError,
+  ProviderSessionCleanupError,
 } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
   MissingProviderIdError,
   ProviderStageRetryExhaustedError,
+  isRetryableProviderBackedStageFailure,
   runExecutionRequest,
   runProviderBackedStageWithRetry,
   StageArtifactValidationError,
@@ -866,6 +869,199 @@ test("provider-backed stage retry helper surfaces the original failure for a sin
   assert.equal(cleanupCallCount, 0);
 });
 
+test("provider-backed stage retry classification keeps lifecycle failures non-retryable", () => {
+  const provider = getBuiltInProviderIdentity("codex");
+
+  assert.equal(
+    isRetryableProviderBackedStageFailure(
+      new IncompleteProviderSessionError({
+        provider,
+        completionMarker: "DEVFLOW_INTENT_COMPLETE",
+        exitCode: 1,
+        signal: null,
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableProviderBackedStageFailure(
+      new StageArtifactValidationError({
+        stage: "intent",
+        artifactPath: "/tmp/intent.json",
+        details: "invalid",
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableProviderBackedStageFailure(
+      new InterruptedProviderSessionError({
+        provider,
+        exitCode: null,
+        signal: "SIGINT",
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    isRetryableProviderBackedStageFailure(
+      new ProviderSessionCleanupError(provider, new Error("cleanup failed")),
+    ),
+    false,
+  );
+  assert.equal(isRetryableProviderBackedStageFailure(new Error("setup failed")), false);
+});
+
+test("orchestrator surfaces interrupted provider sessions without retrying the intent stage", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  let runSessionCallCount = 0;
+  const provider = getBuiltInProviderIdentity("codex");
+  const interrupted = new InterruptedProviderSessionError({
+    provider,
+    exitCode: null,
+    signal: "SIGINT",
+  });
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
+      runSessionCallCount += 1;
+      throw interrupted;
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
+      },
+    ),
+    (error: unknown) => error === interrupted,
+  );
+
+  assert.equal(runSessionCallCount, 1);
+  assert.deepEqual(stages, ["intent"]);
+});
+
+test("orchestrator surfaces provider cleanup failures without retrying the intent stage", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  let runSessionCallCount = 0;
+  const provider = getBuiltInProviderIdentity("codex");
+  const cleanup = new ProviderSessionCleanupError(
+    provider,
+    new Error("cleanup command failed"),
+  );
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
+      runSessionCallCount += 1;
+      throw cleanup;
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
+      },
+    ),
+    (error: unknown) => error === cleanup,
+  );
+
+  assert.equal(runSessionCallCount, 1);
+  assert.deepEqual(stages, ["intent"]);
+});
+
+test("orchestrator stops after cleanup failure even when the intent artifact is valid", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  const provider = getBuiltInProviderIdentity("codex");
+  const cleanup = new ProviderSessionCleanupError(
+    provider,
+    new Error("cleanup command failed"),
+  );
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      throw cleanup;
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
+      },
+    ),
+    (error: unknown) => error === cleanup,
+  );
+
+  assert.deepEqual(stages, ["intent"]);
+});
+
 test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
@@ -938,4 +1134,89 @@ test("orchestrator rejects unsupported provider ids before creating a run", asyn
 
   assert.equal(adapterFactoryCallCount, 0);
   assert.deepEqual(await listRunDirectories(projectRoot), []);
+});
+
+test("orchestrator surfaces adapter factory failures before creating a run or starting a stage", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  const adapterFailure = new Error("adapter resolution failed");
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          throw adapterFailure;
+        },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
+      },
+    ),
+    (error: unknown) => error === adapterFailure,
+  );
+
+  assert.deepEqual(stages, []);
+  assert.deepEqual(await listRunDirectories(projectRoot), []);
+});
+
+test("orchestrator surfaces run creation failures before starting a stage or provider attempt", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const runCreationFailure = new Error("run creation failed");
+  const stages: PipelineStage[] = [];
+  let runSessionCallCount = 0;
+  const devFlowState: DevFlowState = {
+    config: {
+      async load() {
+        return undefined;
+      },
+      async save() {},
+    },
+    async readProjectContext() {
+      return undefined;
+    },
+    async writeProjectContext() {},
+    async createRun() {
+      throw runCreationFailure;
+    },
+  };
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
+      runSessionCallCount += 1;
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
+      },
+    ),
+    (error: unknown) => error === runCreationFailure,
+  );
+
+  assert.equal(runSessionCallCount, 0);
+  assert.deepEqual(stages, []);
 });

@@ -13,8 +13,10 @@ import {
 import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSessionAdapter.js";
 import {
   IncompleteProviderSessionError,
+  InterruptedProviderSessionError,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
+  ProviderSessionCleanupError,
   ProviderSessionLaunchError,
 } from "./adapters/managedSessionAdapter.js";
 import {
@@ -199,7 +201,14 @@ async function startStage(
   await options.onStageStart?.(stage);
 }
 
-function isRetryableProviderStageFailure(error: unknown): boolean {
+export function isRetryableProviderBackedStageFailure(error: unknown): boolean {
+  if (
+    error instanceof InterruptedProviderSessionError ||
+    error instanceof ProviderSessionCleanupError
+  ) {
+    return false;
+  }
+
   return (
     error instanceof IncompleteProviderSessionError ||
     error instanceof ProviderSessionLaunchError ||
@@ -217,7 +226,7 @@ export async function runProviderBackedStageWithRetry<T>(options: {
     try {
       return await options.runAttempt();
     } catch (error) {
-      if (!isRetryableProviderStageFailure(error)) {
+      if (!isRetryableProviderBackedStageFailure(error)) {
         throw error;
       }
 
