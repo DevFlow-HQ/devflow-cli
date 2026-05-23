@@ -146,3 +146,30 @@ test("default git probe ignores untracked files excluded by git ignore rules", a
     metadata,
   });
 });
+
+test("default git probe treats unignored project-shape paths as relevant", async () => {
+  const { projectRoot } = await createGitProject();
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
+  });
+
+  await fs.outputFile(join(projectRoot, ".gitignore"), "dist/ignored.js\n");
+  await git(projectRoot, ["add", ".gitignore"]);
+  await git(projectRoot, ["commit", "-m", "Ignore one dist file"]);
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "manual",
+  });
+  const metadata = await state.projectContext.readMetadata();
+
+  await fs.outputFile(join(projectRoot, "dist", "ignored.js"), "ignored by git\n");
+  await fs.outputFile(join(projectRoot, "dist", "index.js"), "unignored dist content\n");
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "relevant-changes",
+    context: "context snapshot",
+    metadata,
+    changedPaths: [{ path: "dist/index.js", status: "untracked" }],
+  });
+});

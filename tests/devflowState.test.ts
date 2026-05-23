@@ -827,7 +827,7 @@ test("project context freshness includes untracked path and content in dirty fin
   });
 });
 
-test("project context freshness ignores generated and agent-state path changes", async () => {
+test("project context freshness ignores DevFlow and agent-owned path changes", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const metadata = {
     generatedAt: "2026-05-23T10:00:00.000Z",
@@ -845,15 +845,14 @@ test("project context freshness ignores generated and agent-state path changes",
         changedPaths: [
           { path: ".agent/task_progress.md", status: "modified" },
           { path: ".codex/session.json", status: "modified" },
-          { path: "dist/index.js", status: "modified" },
-          { path: "src/client.generated.ts", status: "modified" },
-          { path: "node_modules/pkg/index.js", status: "modified" },
+          { path: ".agents/issues/005.md", status: "modified" },
+          { path: ".devflow/project-context.md", status: "modified" },
         ],
       }),
       getDirtyState: async () => ({
         staged: [{ path: ".devflow/project-context.md", status: "modified" }],
         stagedDiff: Buffer.from("ignored staged diff"),
-        unstaged: [{ path: "coverage/report.json", status: "modified" }],
+        unstaged: [{ path: ".agent/task_progress.md", status: "modified" }],
         unstagedDiff: Buffer.from("ignored unstaged diff"),
         untracked: [
           {
@@ -872,6 +871,52 @@ test("project context freshness ignores generated and agent-state path changes",
     status: "fresh",
     context: "context snapshot",
     metadata,
+  });
+});
+
+test("project context freshness treats project-owned build and dependency paths as relevant", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const metadata = {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual" as const,
+  };
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getCommittedChangesSince: async () => ({
+        status: "available",
+        changedPaths: [
+          { path: "dist/index.js", status: "modified" },
+          { path: "coverage/report.json", status: "modified" },
+          { path: "node_modules/pkg/index.js", status: "modified" },
+        ],
+      }),
+      getDirtyState: async () => ({
+        staged: [],
+        stagedDiff: Buffer.alloc(0),
+        unstaged: [],
+        unstagedDiff: Buffer.alloc(0),
+        untracked: [],
+      }),
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", metadata);
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "relevant-changes",
+    context: "context snapshot",
+    metadata,
+    changedPaths: [
+      { path: "dist/index.js", status: "modified" },
+      { path: "coverage/report.json", status: "modified" },
+      { path: "node_modules/pkg/index.js", status: "modified" },
+    ],
   });
 });
 

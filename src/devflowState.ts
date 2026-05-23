@@ -349,35 +349,12 @@ function isIgnoredProjectContextPath(path: string): boolean {
 
   if (
     firstSegment === undefined ||
-    [
-      ".devflow",
-      ".agent",
-      ".agents",
-      ".codex",
-      ".git",
-      "node_modules",
-      "dist",
-      "coverage",
-      ".cache",
-      "cache",
-      "tmp",
-      "temp",
-    ].includes(firstSegment)
+    [".devflow", ".agent", ".agents", ".codex", ".git"].includes(firstSegment)
   ) {
     return true;
   }
 
-  return (
-    normalizedPath.endsWith(".generated.ts") ||
-    normalizedPath.endsWith(".generated.js") ||
-    normalizedPath.endsWith(".gen.ts") ||
-    normalizedPath.endsWith(".gen.js") ||
-    normalizedPath.endsWith(".tsbuildinfo") ||
-    normalizedPath.includes("/generated/") ||
-    normalizedPath.includes("/__generated__/") ||
-    normalizedPath.includes("/.cache/") ||
-    normalizedPath.includes("/cache/")
-  );
+  return false;
 }
 
 function isRelevantChangedPath(changedPath: GitChangedPath): boolean {
