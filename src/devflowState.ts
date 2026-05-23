@@ -2,6 +2,7 @@ import fs from "fs-extra";
 import crypto from "node:crypto";
 import { dirname, join } from "node:path";
 
+import { execa } from "execa";
 import { z } from "zod";
 
 import {
@@ -102,6 +103,51 @@ export interface DevFlowClock {
   now(): Date;
 }
 
+export type GitChangedPathStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "untracked";
+
+export interface GitChangedPath {
+  path: string;
+  status: GitChangedPathStatus;
+  previousPath?: string;
+}
+
+export type GitBaselineChanges =
+  | {
+      status: "available";
+      changedPaths: GitChangedPath[];
+    }
+  | {
+      status: "baseline-unavailable";
+    };
+
+export interface GitUntrackedFile {
+  path: string;
+  status: "untracked";
+  content: Buffer;
+}
+
+export interface GitDirtyState {
+  staged: GitChangedPath[];
+  unstaged: GitChangedPath[];
+  untracked: GitUntrackedFile[];
+}
+
+export interface GitProjectContextProbe {
+  isRepository(projectRoot: string): Promise<boolean>;
+  getCurrentHead(projectRoot: string): Promise<string | null>;
+  getCommittedChangesSince(
+    projectRoot: string,
+    baseline: string,
+  ): Promise<GitBaselineChanges>;
+  getDirtyState(projectRoot: string): Promise<GitDirtyState>;
+}
+
 export type ProjectContextFreshness =
   | {
       status: "fresh";
@@ -118,6 +164,7 @@ export type ProjectContextFreshness =
 export interface CreateDevFlowStateOptions {
   projectRoot: string;
   clock?: DevFlowClock;
+  gitProbe?: GitProjectContextProbe;
 }
 
 export interface DevFlowRunHandle {
@@ -279,6 +326,150 @@ function getRunIssueArtifactPath(
     DEVFLOW_RUN_ISSUES_DIRECTORY,
     `${normalizedSlug}.md`,
   );
+}
+
+function normalizeGitPath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+function mapGitChangedPathStatus(statusCode: string): GitChangedPathStatus {
+  switch (statusCode) {
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "R":
+      return "renamed";
+    case "C":
+      return "copied";
+    default:
+      return "modified";
+  }
+}
+
+function parseGitNameStatus(output: string): GitChangedPath[] {
+  if (output.trim().length === 0) {
+    return [];
+  }
+
+  const entries = output.split("\0").filter((entry) => entry.length > 0);
+  const changedPaths: GitChangedPath[] = [];
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const rawStatusCode = entries[index] ?? "M";
+    const status = mapGitChangedPathStatus(rawStatusCode.slice(0, 1));
+    const firstPath = entries[index + 1];
+
+    if (firstPath === undefined) {
+      break;
+    }
+
+    if (status === "renamed" || status === "copied") {
+      const nextPath = entries[index + 2];
+
+      if (nextPath === undefined) {
+        break;
+      }
+
+      changedPaths.push({
+        path: normalizeGitPath(nextPath),
+        previousPath: normalizeGitPath(firstPath),
+        status,
+      });
+      index += 2;
+      continue;
+    }
+
+    changedPaths.push({
+      path: normalizeGitPath(firstPath),
+      status,
+    });
+    index += 1;
+  }
+
+  return changedPaths;
+}
+
+async function runGit(
+  projectRoot: string,
+  args: string[],
+): Promise<string> {
+  const result = await execa("git", args, {
+    cwd: projectRoot,
+    reject: true,
+  });
+
+  return result.stdout;
+}
+
+export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
+  return {
+    async isRepository(projectRoot) {
+      try {
+        await runGit(projectRoot, ["rev-parse", "--is-inside-work-tree"]);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async getCurrentHead(projectRoot) {
+      try {
+        return await runGit(projectRoot, ["rev-parse", "HEAD"]);
+      } catch {
+        return null;
+      }
+    },
+    async getCommittedChangesSince(projectRoot, baseline) {
+      try {
+        const output = await runGit(projectRoot, [
+          "diff",
+          "--name-status",
+          "-z",
+          `${baseline}..HEAD`,
+        ]);
+
+        return {
+          status: "available",
+          changedPaths: parseGitNameStatus(output),
+        };
+      } catch {
+        return {
+          status: "baseline-unavailable",
+        };
+      }
+    },
+    async getDirtyState(projectRoot) {
+      const staged = parseGitNameStatus(
+        await runGit(projectRoot, [
+          "diff",
+          "--cached",
+          "--name-status",
+          "-z",
+        ]),
+      );
+      const unstaged = parseGitNameStatus(
+        await runGit(projectRoot, ["diff", "--name-status", "-z"]),
+      );
+      const untrackedOutput = await runGit(projectRoot, [
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+      ]);
+      const untracked = await Promise.all(
+        untrackedOutput
+          .split("\0")
+          .filter((path) => path.length > 0)
+          .map(async (path) => ({
+            path: normalizeGitPath(path),
+            status: "untracked" as const,
+            content: await fs.readFile(join(projectRoot, path)),
+          })),
+      );
+
+      return { staged, unstaged, untracked };
+    },
+  };
 }
 
 function formatValidationDetails(error: z.ZodError): string {
@@ -457,6 +648,7 @@ async function writeProjectContext(
 async function checkProjectContextFreshness(
   projectRoot: string,
   clock: DevFlowClock,
+  gitProbe: GitProjectContextProbe,
 ): Promise<ProjectContextFreshness> {
   const context = await readProjectContext(projectRoot);
 
@@ -498,6 +690,46 @@ async function checkProjectContextFreshness(
         context,
         metadata,
       };
+    }
+
+    if (metadata.gitHead !== null) {
+      const isRepository = await gitProbe.isRepository(projectRoot);
+
+      if (!isRepository) {
+        return {
+          status: "stale",
+          refreshReason: "baseline-unavailable",
+          context,
+          metadata,
+        };
+      }
+
+      const currentHead = await gitProbe.getCurrentHead(projectRoot);
+
+      if (currentHead === null) {
+        return {
+          status: "stale",
+          refreshReason: "baseline-unavailable",
+          context,
+          metadata,
+        };
+      }
+
+      const committedChanges = await gitProbe.getCommittedChangesSince(
+        projectRoot,
+        metadata.gitHead,
+      );
+
+      if (committedChanges.status === "baseline-unavailable") {
+        return {
+          status: "stale",
+          refreshReason: "baseline-unavailable",
+          context,
+          metadata,
+        };
+      }
+
+      await gitProbe.getDirtyState(projectRoot);
     }
 
     return {
@@ -634,6 +866,7 @@ export function createDevFlowState(
   options: CreateDevFlowStateOptions,
 ): DevFlowState {
   const clock = options.clock ?? { now: () => new Date() };
+  const gitProbe = options.gitProbe ?? createDefaultGitProjectContextProbe();
 
   return {
     config: {
@@ -646,7 +879,7 @@ export function createDevFlowState(
         writeProjectContext(options.projectRoot, content, metadata),
       readMetadata: () => readProjectContextMetadata(options.projectRoot),
       checkFreshness: () =>
-        checkProjectContextFreshness(options.projectRoot, clock),
+        checkProjectContextFreshness(options.projectRoot, clock, gitProbe),
     },
     readProjectContext: () => readProjectContext(options.projectRoot),
     writeProjectContext: (content, metadata) =>

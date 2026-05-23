@@ -8,12 +8,32 @@ import fs from "fs-extra";
 import {
   createDevFlowState,
   DuplicateDevFlowRunArtifactError,
+  type GitProjectContextProbe,
   InvalidDevFlowConfigError,
   InvalidDevFlowIssueSlugError,
   InvalidProjectContextError,
   InvalidProjectContextMetadataError,
   InvalidDevFlowRunIdError,
 } from "../src/devflowState.js";
+
+function createFreshnessProbe(
+  overrides: Partial<GitProjectContextProbe> = {},
+): GitProjectContextProbe {
+  return {
+    isRepository: async () => true,
+    getCurrentHead: async () => "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    getCommittedChangesSince: async () => ({
+      status: "available",
+      changedPaths: [],
+    }),
+    getDirtyState: async () => ({
+      staged: [],
+      unstaged: [],
+      untracked: [],
+    }),
+    ...overrides,
+  };
+}
 
 test("devflow config is absent until explicitly saved through the state facade", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-config-"));
@@ -326,6 +346,110 @@ test("project context freshness returns fresh non-git metadata within max age", 
       refreshReason: "manual",
     },
   });
+});
+
+test("project context freshness uses the injected git probe for unavailable baselines", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getCommittedChangesSince: async () => ({
+        status: "baseline-unavailable",
+      }),
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "baseline-unavailable",
+    context: "context snapshot",
+    metadata: {
+      generatedAt: "2026-05-23T10:00:00.000Z",
+      gitHead: "0123456789abcdef0123456789abcdef01234567",
+      dirtyFingerprint: null,
+      contextVersion: 1,
+      refreshReason: "manual",
+    },
+  });
+});
+
+test("project context freshness evaluates git repository state through the injected probe", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const calls: string[] = [];
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      isRepository: async () => {
+        calls.push("isRepository");
+        return true;
+      },
+      getCurrentHead: async () => {
+        calls.push("getCurrentHead");
+        return "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+      },
+      getCommittedChangesSince: async (_root, baseline) => {
+        calls.push(`getCommittedChangesSince:${baseline}`);
+        return {
+          status: "available",
+          changedPaths: [
+            { path: "added.ts", status: "added" },
+            { path: "modified.ts", status: "modified" },
+            { path: "deleted.ts", status: "deleted" },
+            {
+              path: "renamed-new.ts",
+              previousPath: "renamed-old.ts",
+              status: "renamed",
+            },
+            {
+              path: "copied-new.ts",
+              previousPath: "copied-old.ts",
+              status: "copied",
+            },
+          ],
+        };
+      },
+      getDirtyState: async () => {
+        calls.push("getDirtyState");
+        return {
+          staged: [{ path: "staged.ts", status: "modified" }],
+          unstaged: [{ path: "unstaged.ts", status: "deleted" }],
+          untracked: [
+            {
+              path: "untracked.ts",
+              status: "untracked",
+              content: Buffer.from("new file"),
+            },
+          ],
+        };
+      },
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  assert.equal((await state.projectContext.checkFreshness()).status, "fresh");
+  assert.deepEqual(calls, [
+    "isRepository",
+    "getCurrentHead",
+    "getCommittedChangesSince:0123456789abcdef0123456789abcdef01234567",
+    "getDirtyState",
+  ]);
 });
 
 test("createRun returns isolated run handles with opaque ids and persisted creation metadata", async () => {
