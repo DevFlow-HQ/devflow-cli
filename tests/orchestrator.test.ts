@@ -1182,6 +1182,21 @@ test("orchestrator surfaces run creation failures before starting a stage or pro
       return undefined;
     },
     async writeProjectContext() {},
+    projectContext: {
+      async read() {
+        return undefined;
+      },
+      async write() {},
+      async readMetadata() {
+        return undefined;
+      },
+      async checkFreshness() {
+        return {
+          status: "stale",
+          refreshReason: "missing-context",
+        };
+      },
+    },
     async createRun() {
       throw runCreationFailure;
     },

@@ -12,6 +12,7 @@ import {
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";
 const DEVFLOW_PROJECT_CONTEXT_FILENAME = "project-context.md";
+const DEVFLOW_PROJECT_CONTEXT_METADATA_FILENAME = "project-context.meta.json";
 const DEVFLOW_RUNS_DIRECTORY = "runs";
 const DEVFLOW_RUN_METADATA_FILENAME = "run.json";
 const DEVFLOW_RUN_INTENT_FILENAME = "intent.json";
@@ -26,6 +27,22 @@ const devFlowRunArtifactFilenames = {
   prd: DEVFLOW_RUN_PRD_FILENAME,
   validation: DEVFLOW_RUN_VALIDATION_FILENAME,
 } as const;
+const DEVFLOW_PROJECT_CONTEXT_VERSION = 1;
+const projectContextLineCap = 150;
+const isoDateTimePattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const gitHeadPattern = /^[0-9a-f]{40}$/;
+const dirtyFingerprintPattern = /^dirty-[0-9a-f]{16}$/;
+const projectContextRefreshReasons = [
+  "missing-context",
+  "missing-metadata",
+  "metadata-invalid",
+  "context-version-changed",
+  "max-age-exceeded",
+  "baseline-unavailable",
+  "relevant-changes",
+  "manual",
+] as const;
 
 const devFlowConfigSchema = z
   .object({
@@ -38,9 +55,56 @@ const devFlowConfigSchema = z
   })
   .strict();
 
+const projectContextMetadataSchema = z
+  .object({
+    generatedAt: z.string().refine(
+      (value) => {
+        if (!isoDateTimePattern.test(value)) {
+          return false;
+        }
+
+        const parsedDate = new Date(value);
+        return (
+          !Number.isNaN(parsedDate.getTime()) &&
+          parsedDate.toISOString() === value
+        );
+      },
+      { message: "Must be a valid ISO-8601 UTC timestamp." },
+    ),
+    gitHead: z.string().regex(gitHeadPattern).nullable(),
+    dirtyFingerprint: z.string().regex(dirtyFingerprintPattern).nullable(),
+    contextVersion: z.literal(DEVFLOW_PROJECT_CONTEXT_VERSION),
+    refreshReason: z.enum(projectContextRefreshReasons),
+  })
+  .strict();
+
 export interface DevFlowConfig {
   defaultProvider: BuiltInProviderId;
 }
+
+export type ProjectContextRefreshReason =
+  (typeof projectContextRefreshReasons)[number];
+
+export interface ProjectContextMetadata {
+  generatedAt: string;
+  gitHead: string | null;
+  dirtyFingerprint: string | null;
+  contextVersion: number;
+  refreshReason: ProjectContextRefreshReason;
+}
+
+export type ProjectContextFreshness =
+  | {
+      status: "fresh";
+      context: string;
+      metadata: ProjectContextMetadata;
+    }
+  | {
+      status: "stale";
+      refreshReason: ProjectContextRefreshReason;
+      context?: string;
+      metadata?: ProjectContextMetadata;
+    };
 
 export interface CreateDevFlowStateOptions {
   projectRoot: string;
@@ -64,8 +128,17 @@ export interface DevFlowState {
     load(): Promise<DevFlowConfig | undefined>;
     save(config: DevFlowConfig): Promise<void>;
   };
+  projectContext: {
+    read(): Promise<string | undefined>;
+    write(content: string, metadata?: ProjectContextMetadata): Promise<void>;
+    readMetadata(): Promise<ProjectContextMetadata | undefined>;
+    checkFreshness(): Promise<ProjectContextFreshness>;
+  };
   readProjectContext(): Promise<string | undefined>;
-  writeProjectContext(content: string): Promise<void>;
+  writeProjectContext(
+    content: string,
+    metadata?: ProjectContextMetadata,
+  ): Promise<void>;
   createRun(): Promise<DevFlowRunHandle>;
 }
 
@@ -76,6 +149,23 @@ export class InvalidDevFlowConfigError extends Error {
     super(`Invalid DevFlow config at ${configPath}. ${details}`);
     this.name = "InvalidDevFlowConfigError";
     this.configPath = configPath;
+  }
+}
+
+export class InvalidProjectContextError extends Error {
+  constructor(details: string) {
+    super(`Invalid project context. ${details}`);
+    this.name = "InvalidProjectContextError";
+  }
+}
+
+export class InvalidProjectContextMetadataError extends Error {
+  readonly metadataPath: string;
+
+  constructor(metadataPath: string, details: string) {
+    super(`Invalid project context metadata at ${metadataPath}. ${details}`);
+    this.name = "InvalidProjectContextMetadataError";
+    this.metadataPath = metadataPath;
   }
 }
 
@@ -132,6 +222,14 @@ function getProjectContextPath(projectRoot: string): string {
     projectRoot,
     DEVFLOW_STATE_DIRECTORY,
     DEVFLOW_PROJECT_CONTEXT_FILENAME,
+  );
+}
+
+function getProjectContextMetadataPath(projectRoot: string): string {
+  return join(
+    projectRoot,
+    DEVFLOW_STATE_DIRECTORY,
+    DEVFLOW_PROJECT_CONTEXT_METADATA_FILENAME,
   );
 }
 
@@ -233,15 +331,124 @@ async function readProjectContext(
   return fs.readFile(projectContextPath, "utf8");
 }
 
+function validateProjectContext(content: string): void {
+  if (content.trim().length === 0) {
+    throw new InvalidProjectContextError(
+      "Project context content must be non-empty.",
+    );
+  }
+
+  const lineCount = content.split(/\r\n|\r|\n/).length;
+
+  if (lineCount > projectContextLineCap) {
+    throw new InvalidProjectContextError(
+      `Project context content must be no more than ${projectContextLineCap} lines.`,
+    );
+  }
+}
+
+function validateProjectContextMetadata(
+  metadataPath: string,
+  metadata: unknown,
+): ProjectContextMetadata {
+  const result = projectContextMetadataSchema.safeParse(metadata);
+
+  if (!result.success) {
+    throw new InvalidProjectContextMetadataError(
+      metadataPath,
+      formatValidationDetails(result.error),
+    );
+  }
+
+  return result.data;
+}
+
+async function readProjectContextMetadata(
+  projectRoot: string,
+): Promise<ProjectContextMetadata | undefined> {
+  const metadataPath = getProjectContextMetadataPath(projectRoot);
+  const metadataExists = await fs.pathExists(metadataPath);
+
+  if (!metadataExists) {
+    return undefined;
+  }
+
+  let parsedMetadata: unknown;
+
+  try {
+    parsedMetadata = await fs.readJson(metadataPath);
+  } catch (error) {
+    const details =
+      error instanceof Error ? error.message : "Metadata file is not valid JSON.";
+    throw new InvalidProjectContextMetadataError(metadataPath, details);
+  }
+
+  return validateProjectContextMetadata(metadataPath, parsedMetadata);
+}
+
 async function writeProjectContext(
   projectRoot: string,
   content: string,
+  metadata?: ProjectContextMetadata,
 ): Promise<void> {
   const projectContextPath = getProjectContextPath(projectRoot);
+  const projectContextMetadataPath = getProjectContextMetadataPath(projectRoot);
   const stateDirectory = join(projectRoot, DEVFLOW_STATE_DIRECTORY);
+  const validatedMetadata =
+    metadata === undefined
+      ? undefined
+      : validateProjectContextMetadata(projectContextMetadataPath, metadata);
 
+  validateProjectContext(content);
   await fs.ensureDir(stateDirectory);
   await fs.writeFile(projectContextPath, content, "utf8");
+
+  if (validatedMetadata !== undefined) {
+    await fs.writeJson(projectContextMetadataPath, validatedMetadata, {
+      spaces: 2,
+    });
+  }
+}
+
+async function checkProjectContextFreshness(
+  projectRoot: string,
+): Promise<ProjectContextFreshness> {
+  const context = await readProjectContext(projectRoot);
+
+  if (context === undefined) {
+    return {
+      status: "stale",
+      refreshReason: "missing-context",
+    };
+  }
+
+  try {
+    const metadata = await readProjectContextMetadata(projectRoot);
+
+    if (metadata === undefined) {
+      return {
+        status: "stale",
+        refreshReason: "missing-metadata",
+        context,
+      };
+    }
+
+    return {
+      status: "fresh",
+      context,
+      metadata,
+    };
+  } catch (error) {
+    if (error instanceof InvalidProjectContextMetadataError) {
+      return {
+        status: "stale",
+        refreshReason: "metadata-invalid",
+        context,
+      };
+    }
+
+    throw error;
+  }
 }
 
 function createOpaqueRunId(): string {
@@ -361,9 +568,16 @@ export function createDevFlowState(
       load: () => loadConfig(options.projectRoot),
       save: (config) => saveConfig(options.projectRoot, config),
     },
+    projectContext: {
+      read: () => readProjectContext(options.projectRoot),
+      write: (content, metadata) =>
+        writeProjectContext(options.projectRoot, content, metadata),
+      readMetadata: () => readProjectContextMetadata(options.projectRoot),
+      checkFreshness: () => checkProjectContextFreshness(options.projectRoot),
+    },
     readProjectContext: () => readProjectContext(options.projectRoot),
-    writeProjectContext: (content) =>
-      writeProjectContext(options.projectRoot, content),
+    writeProjectContext: (content, metadata) =>
+      writeProjectContext(options.projectRoot, content, metadata),
     createRun: () => createRun(options.projectRoot),
   };
 }

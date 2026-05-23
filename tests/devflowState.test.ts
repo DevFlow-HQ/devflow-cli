@@ -10,6 +10,8 @@ import {
   DuplicateDevFlowRunArtifactError,
   InvalidDevFlowConfigError,
   InvalidDevFlowIssueSlugError,
+  InvalidProjectContextError,
+  InvalidProjectContextMetadataError,
   InvalidDevFlowRunIdError,
 } from "../src/devflowState.js";
 
@@ -96,6 +98,127 @@ test("project context writes overwrite the existing shared artifact in place", a
     await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
     "refreshed snapshot",
   );
+});
+
+test("project context writes reject empty content before updating state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await state.writeProjectContext("existing context");
+
+  await assert.rejects(
+    state.writeProjectContext(" \n\t "),
+    (error: unknown) =>
+      error instanceof InvalidProjectContextError &&
+      error.message.includes("non-empty"),
+  );
+
+  assert.equal(await state.readProjectContext(), "existing context");
+});
+
+test("project context writes reject content over the line cap before updating state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await state.writeProjectContext("existing context");
+
+  await assert.rejects(
+    state.writeProjectContext(
+      Array.from({ length: 151 }, (_, index) => `line ${index + 1}`).join("\n"),
+    ),
+    (error: unknown) =>
+      error instanceof InvalidProjectContextError &&
+      error.message.includes("150 lines"),
+  );
+
+  assert.equal(await state.readProjectContext(), "existing context");
+});
+
+test("project context metadata is written beside the shared context and strictly read back", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: "dirty-0123456789abcdef",
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(
+    await fs.readJson(join(projectRoot, ".devflow", "project-context.meta.json")),
+    {
+      generatedAt: "2026-05-23T10:00:00.000Z",
+      gitHead: "0123456789abcdef0123456789abcdef01234567",
+      dirtyFingerprint: "dirty-0123456789abcdef",
+      contextVersion: 1,
+      refreshReason: "manual",
+    },
+  );
+  assert.deepEqual(await state.projectContext.readMetadata(), {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "0123456789abcdef0123456789abcdef01234567",
+    dirtyFingerprint: "dirty-0123456789abcdef",
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+});
+
+test("project context metadata validation rejects malformed writes before updating state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: null,
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+
+  await assert.rejects(
+    state.projectContext.write("replacement", {
+      generatedAt: "not-a-date",
+      gitHead: null,
+      dirtyFingerprint: null,
+      contextVersion: 1,
+      refreshReason: "manual",
+    }),
+    (error: unknown) =>
+      error instanceof InvalidProjectContextMetadataError &&
+      error.message.includes("generatedAt"),
+  );
+
+  assert.equal(await state.readProjectContext(), "context snapshot");
+  assert.deepEqual(await state.projectContext.readMetadata(), {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: null,
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+});
+
+test("project context freshness treats malformed metadata as repairable stale cache state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await fs.outputFile(
+    join(projectRoot, ".devflow", "project-context.md"),
+    "context snapshot",
+  );
+  await fs.outputJson(
+    join(projectRoot, ".devflow", "project-context.meta.json"),
+    { generatedAt: "not-a-date" },
+    { spaces: 2 },
+  );
+
+  assert.deepEqual(await state.projectContext.checkFreshness(), {
+    status: "stale",
+    refreshReason: "metadata-invalid",
+    context: "context snapshot",
+  });
 });
 
 test("createRun returns isolated run handles with opaque ids and persisted creation metadata", async () => {
