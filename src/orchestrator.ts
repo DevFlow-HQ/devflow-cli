@@ -12,8 +12,10 @@ import {
 } from "./devflowState.js";
 import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSessionAdapter.js";
 import {
+  IncompleteProviderSessionError,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
+  ProviderSessionLaunchError,
 } from "./adapters/managedSessionAdapter.js";
 import {
   isBuiltInProviderId,
@@ -58,6 +60,7 @@ const INTENT_PROMPT_PATH = join(
   "prompts",
   "intent.md",
 );
+const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 
 const intentArtifactSchema = z
   .object({
@@ -171,6 +174,36 @@ async function startStage(
   await options.onStageStart?.(stage);
 }
 
+function isRetryableProviderStageFailure(error: unknown): boolean {
+  return (
+    error instanceof IncompleteProviderSessionError ||
+    error instanceof ProviderSessionLaunchError
+  );
+}
+
+async function runProviderBackedStageWithRetry<T>(options: {
+  totalAttempts: number;
+  runAttempt(): Promise<T>;
+  cleanupBeforeRetry(): Promise<void>;
+}): Promise<T> {
+  for (let attempt = 1; attempt <= options.totalAttempts; attempt += 1) {
+    try {
+      return await options.runAttempt();
+    } catch (error) {
+      if (
+        attempt >= options.totalAttempts ||
+        !isRetryableProviderStageFailure(error)
+      ) {
+        throw error;
+      }
+
+      await options.cleanupBeforeRetry();
+    }
+  }
+
+  throw new Error("Provider-backed stage retry loop ended without a result.");
+}
+
 async function runIntentStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
@@ -241,10 +274,18 @@ export async function runExecutionRequest(
   const run = await devFlowState.createRun();
 
   await startStage("intent", options);
-  const intent = await runIntentStage({
-    request,
-    run,
-    adapter,
+  const intent = await runProviderBackedStageWithRetry({
+    totalAttempts: INTENT_STAGE_TOTAL_ATTEMPTS,
+    async runAttempt() {
+      return runIntentStage({
+        request,
+        run,
+        adapter,
+      });
+    },
+    async cleanupBeforeRetry() {
+      await fs.remove(run.paths.intentArtifact);
+    },
   });
 
   for (const stage of PIPELINE_STAGES.slice(1)) {

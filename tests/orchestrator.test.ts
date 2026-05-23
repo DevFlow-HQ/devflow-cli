@@ -15,6 +15,9 @@ import type {
   ManagedProviderSessionResult,
   ManagedSessionAdapter,
 } from "../src/adapters/managedSessionAdapter.js";
+import {
+  IncompleteProviderSessionError,
+} from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
@@ -244,6 +247,108 @@ test("orchestrator reports intent repair metadata from a built-in provider adapt
     signal: null,
   });
   assert.deepEqual(repairResults, [result.intent]);
+});
+
+test("orchestrator retries a retryable intent provider-session failure inside the same run", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const stages: PipelineStage[] = [];
+  const artifactPaths: string[] = [];
+  const initialCompletionMarkers: string[] = [];
+  const initialPrompts: string[] = [];
+  const artifactExistedAtAttemptStart: boolean[] = [];
+  let runSessionCallCount = 0;
+  const provider = getBuiltInProviderIdentity("codex");
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionCallCount += 1;
+      const runIds = await listRunDirectories(projectRoot);
+      const artifactPath = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        runIds[0],
+        "intent.json",
+      );
+
+      artifactPaths.push(artifactPath);
+      initialCompletionMarkers.push(input.initialCompletionMarker);
+      initialPrompts.push(input.initialPrompt);
+      artifactExistedAtAttemptStart.push(await fs.pathExists(artifactPath));
+
+      if (runSessionCallCount === 1) {
+        await fs.outputJson(
+          artifactPath,
+          {
+            classification: "feature",
+            summary: "stale failed attempt",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        throw new IncompleteProviderSessionError({
+          provider,
+          completionMarker: input.initialCompletionMarker,
+          exitCode: 1,
+          signal: null,
+        });
+      }
+
+      await fs.outputJson(
+        artifactPath,
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+
+  assert.equal(runSessionCallCount, 2);
+  assert.equal((await listRunDirectories(projectRoot)).length, 1);
+  assert.equal(artifactPaths[0], artifactPaths[1]);
+  assert.deepEqual(artifactExistedAtAttemptStart, [false, false]);
+  assert.notEqual(initialCompletionMarkers[0], initialCompletionMarkers[1]);
+  assert.match(initialPrompts[0], new RegExp(initialCompletionMarkers[0]));
+  assert.match(initialPrompts[1], new RegExp(initialCompletionMarkers[1]));
+  assert.deepEqual(
+    stages.filter((stage) => stage === "intent"),
+    ["intent"],
+  );
+  assert.deepEqual(await fs.readJson(artifactPaths[1]), {
+    classification: "feature",
+    summary: "Resume the current workstream.",
+    rawTask: "resume work",
+    needsClarification: false,
+  });
 });
 
 test("orchestrator passes intent stage input to the managed provider session", async () => {
