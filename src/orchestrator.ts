@@ -12,7 +12,7 @@ import {
 } from "./devflowState.js";
 import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSessionAdapter.js";
 import {
-  ManagedProviderSessionNotImplementedError,
+  type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
 } from "./adapters/managedSessionAdapter.js";
 import {
@@ -46,6 +46,10 @@ export interface RunExecutionRequestOptions {
     providerId: BuiltInProviderId,
   ) => ManagedSessionAdapter;
   onStageStart?: (stage: PipelineStage) => void | Promise<void>;
+}
+
+export interface RunExecutionRequestResult {
+  intent: ManagedProviderSessionResult;
 }
 
 const INTENT_PROMPT_PATH = join(
@@ -171,7 +175,7 @@ async function runIntentStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
-}): Promise<void> {
+}): Promise<ManagedProviderSessionResult> {
   const completionMarker = createCompletionMarker();
   const repairCompletionMarker = createCompletionMarker(
     "DEVFLOW_INTENT_REPAIR_COMPLETE",
@@ -182,7 +186,7 @@ async function runIntentStage(options: {
     completionMarker,
   });
 
-  await options.adapter.runSession({
+  return options.adapter.runSession({
     workingDirectory: options.request.projectRoot,
     initialPrompt: prompt,
     initialCompletionMarker: completionMarker,
@@ -218,7 +222,7 @@ async function runNoopStage(): Promise<void> {
 export async function runExecutionRequest(
   request: ResolvedExecutionRequest,
   options: RunExecutionRequestOptions = {},
-): Promise<void> {
+): Promise<RunExecutionRequestResult> {
   const providerId = request.providerId;
 
   if (!providerId) {
@@ -237,7 +241,7 @@ export async function runExecutionRequest(
   const run = await devFlowState.createRun();
 
   await startStage("intent", options);
-  await runIntentStage({
+  const intent = await runIntentStage({
     request,
     run,
     adapter,
@@ -247,4 +251,6 @@ export async function runExecutionRequest(
     await startStage(stage, options);
     await runNoopStage();
   }
+
+  return { intent };
 }

@@ -9,8 +9,10 @@ import {
   createDevFlowState,
   type DevFlowState,
 } from "../src/devflowState.js";
+import { createBuiltInManagedSessionAdapter } from "../src/adapters/builtInManagedSessionAdapter.js";
 import type {
   ManagedProviderSessionInput,
+  ManagedProviderSessionResult,
   ManagedSessionAdapter,
 } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
@@ -32,6 +34,29 @@ async function listRunDirectories(
   }
 
   return (await fs.readdir(runsDirectory)).sort();
+}
+
+async function createExecutableOnPath(
+  t: test.TestContext,
+  command: string,
+): Promise<string> {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    join(tmpdir(), `devflow-orchestrator-${command}-`),
+  );
+  const binDir = join(tempRoot, "bin");
+  const executablePath = join(binDir, command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+  process.env.PATH = binDir;
+
+  return executablePath;
 }
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
@@ -70,6 +95,155 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
   assert.equal(runSessionInputs.length, 1);
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
+});
+
+test("orchestrator can complete the active intent stage through a built-in provider adapter with fake PTY execution", async (t) => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const executablePath = await createExecutableOnPath(t, "codex");
+  const ptyCalls: Array<{
+    executable: string;
+    args: string[];
+    input: ManagedProviderSessionInput;
+  }> = [];
+
+  const result = await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+      model: "gpt-5.5/fast beta",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter(providerId) {
+        return createBuiltInManagedSessionAdapter(providerId, {
+          async runPtyManagedSession(command, input) {
+            ptyCalls.push({
+              executable: command.executable,
+              args: command.args,
+              input,
+            });
+
+            assert.equal(input.workingDirectory, projectRoot);
+            assert.equal(input.model, "gpt-5.5/fast beta");
+            assert.equal(command.provider.id, "codex");
+            assert.ok(
+              command.args.some((arg) =>
+                arg.includes(input.initialCompletionMarker),
+              ),
+            );
+
+            await fs.outputJson(
+              join(
+                projectRoot,
+                ".devflow",
+                "runs",
+                (await listRunDirectories(projectRoot))[0],
+                "intent.json",
+              ),
+              {
+                classification: "feature",
+                summary: "Resume the current workstream.",
+                rawTask: "resume work",
+                needsClarification: false,
+              },
+              { spaces: 2 },
+            );
+            await input.validate();
+
+            return { repairUsed: false, exitCode: 0, signal: null };
+          },
+        });
+      },
+    },
+  );
+
+  assert.deepEqual(result.intent, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.equal(ptyCalls.length, 1);
+  assert.equal(ptyCalls[0]?.executable, executablePath);
+  assert.equal(ptyCalls[0]?.args[0], "--model");
+  assert.equal(ptyCalls[0]?.args[1], "gpt-5.5/fast beta");
+
+  const runIds = await listRunDirectories(projectRoot);
+  assert.deepEqual(
+    await fs.readJson(
+      join(projectRoot, ".devflow", "runs", runIds[0], "intent.json"),
+    ),
+    {
+      classification: "feature",
+      summary: "Resume the current workstream.",
+      rawTask: "resume work",
+      needsClarification: false,
+    },
+  );
+});
+
+test("orchestrator reports intent repair metadata from a built-in provider adapter", async (t) => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await createExecutableOnPath(t, "codex");
+  const repairResults: ManagedProviderSessionResult[] = [];
+
+  const result = await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter(providerId) {
+        return createBuiltInManagedSessionAdapter(providerId, {
+          async runPtyManagedSession(_command, input) {
+            await assert.rejects(input.validate());
+            assert.ok(input.repair);
+            const repairPrompt = input.repair.renderPrompt(
+              new Error("intent artifact missing"),
+            );
+            assert.match(repairPrompt, /Repair only the intent artifact/);
+
+            await fs.outputJson(
+              join(
+                projectRoot,
+                ".devflow",
+                "runs",
+                (await listRunDirectories(projectRoot))[0],
+                "intent.json",
+              ),
+              {
+                classification: "feature",
+                summary: "Resume the current workstream.",
+                rawTask: "resume work",
+                needsClarification: false,
+              },
+              { spaces: 2 },
+            );
+            await input.validate();
+
+            const sessionResult = {
+              repairUsed: true,
+              exitCode: 0,
+              signal: null,
+            };
+            repairResults.push(sessionResult);
+            return sessionResult;
+          },
+        });
+      },
+    },
+  );
+
+  assert.deepEqual(result.intent, {
+    repairUsed: true,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.deepEqual(repairResults, [result.intent]);
 });
 
 test("orchestrator passes intent stage input to the managed provider session", async () => {
