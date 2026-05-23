@@ -268,6 +268,154 @@ test("project context metadata validation rejects malformed writes before updati
   });
 });
 
+test("project context refresh writes create metadata from the current git state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const dirtyState = {
+    staged: [{ path: "src/changed.ts", status: "modified" as const }],
+    stagedDiff: Buffer.from("staged diff"),
+    unstaged: [],
+    unstagedDiff: Buffer.alloc(0),
+    untracked: [],
+  };
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getCurrentHead: async () => "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      getDirtyState: async () => dirtyState,
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.readMetadata(), {
+    generatedAt: "2026-05-24T10:00:00.000Z",
+    gitHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    dirtyFingerprint: expectedDirtyFingerprint(dirtyState),
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+});
+
+test("project context refresh writes update metadata when replacing existing metadata", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T11:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getCurrentHead: async () => "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    generatedAt: "2026-05-23T10:00:00.000Z",
+    gitHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    dirtyFingerprint: "dirty-0123456789abcdef",
+    contextVersion: 1,
+    refreshReason: "relevant-changes",
+  });
+
+  await state.projectContext.write("updated context snapshot", {
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.readMetadata(), {
+    generatedAt: "2026-05-24T11:00:00.000Z",
+    gitHead: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+});
+
+test("project context refresh writes advance metadata when context content is unchanged", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  let currentHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  let currentTime = "2026-05-24T10:00:00.000Z";
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date(currentTime) },
+    gitProbe: createFreshnessProbe({
+      getCurrentHead: async () => currentHead,
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "manual",
+  });
+
+  currentHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  currentTime = "2026-05-24T11:00:00.000Z";
+
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "relevant-changes",
+  });
+
+  assert.equal(await state.projectContext.read(), "context snapshot");
+  assert.deepEqual(await state.projectContext.readMetadata(), {
+    generatedAt: "2026-05-24T11:00:00.000Z",
+    gitHead: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "relevant-changes",
+  });
+});
+
+test("project context refresh writes store clean git metadata with a null dirty fingerprint", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T12:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      getCurrentHead: async () => "cccccccccccccccccccccccccccccccccccccccc",
+      getDirtyState: async () => ({
+        staged: [],
+        stagedDiff: Buffer.alloc(0),
+        unstaged: [],
+        unstagedDiff: Buffer.alloc(0),
+        untracked: [],
+      }),
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.readMetadata(), {
+    generatedAt: "2026-05-24T12:00:00.000Z",
+    gitHead: "cccccccccccccccccccccccccccccccccccccccc",
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+});
+
+test("project context refresh writes store non-git metadata without git state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T13:00:00.000Z") },
+    gitProbe: createFreshnessProbe({
+      isRepository: async () => false,
+    }),
+  });
+
+  await state.projectContext.write("context snapshot", {
+    refreshReason: "manual",
+  });
+
+  assert.deepEqual(await state.projectContext.readMetadata(), {
+    generatedAt: "2026-05-24T13:00:00.000Z",
+    gitHead: null,
+    dirtyFingerprint: null,
+    contextVersion: 1,
+    refreshReason: "manual",
+  });
+});
+
 test("project context freshness treats missing context as stale", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const state = createDevFlowState({ projectRoot });

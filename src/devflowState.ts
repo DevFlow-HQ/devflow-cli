@@ -99,6 +99,10 @@ export interface ProjectContextMetadata {
   refreshReason: ProjectContextRefreshReason;
 }
 
+export interface ProjectContextWriteOptions {
+  refreshReason: ProjectContextRefreshReason;
+}
+
 export interface DevFlowClock {
   now(): Date;
 }
@@ -190,14 +194,17 @@ export interface DevFlowState {
   };
   projectContext: {
     read(): Promise<string | undefined>;
-    write(content: string, metadata?: ProjectContextMetadata): Promise<void>;
+    write(
+      content: string,
+      metadataOrOptions?: ProjectContextMetadata | ProjectContextWriteOptions,
+    ): Promise<void>;
     readMetadata(): Promise<ProjectContextMetadata | undefined>;
     checkFreshness(): Promise<ProjectContextFreshness>;
   };
   readProjectContext(): Promise<string | undefined>;
   writeProjectContext(
     content: string,
-    metadata?: ProjectContextMetadata,
+    metadataOrOptions?: ProjectContextMetadata | ProjectContextWriteOptions,
   ): Promise<void>;
   createRun(): Promise<DevFlowRunHandle>;
 }
@@ -639,6 +646,12 @@ function computeGitDirtyFingerprint(
   return `dirty-${hash.digest("hex").slice(0, 16)}`;
 }
 
+function isProjectContextMetadata(
+  metadataOrOptions: ProjectContextMetadata | ProjectContextWriteOptions,
+): metadataOrOptions is ProjectContextMetadata {
+  return "generatedAt" in metadataOrOptions;
+}
+
 function formatValidationDetails(error: z.ZodError): string {
   return error.issues
     .map((issue) => {
@@ -791,11 +804,24 @@ async function readProjectContextMetadataForFreshness(
 async function writeProjectContext(
   projectRoot: string,
   content: string,
-  metadata?: ProjectContextMetadata,
+  metadataOrOptions: ProjectContextMetadata | ProjectContextWriteOptions | undefined,
+  clock: DevFlowClock,
+  gitProbe: GitProjectContextProbe,
 ): Promise<void> {
   const projectContextPath = getProjectContextPath(projectRoot);
   const projectContextMetadataPath = getProjectContextMetadataPath(projectRoot);
   const stateDirectory = join(projectRoot, DEVFLOW_STATE_DIRECTORY);
+  const metadata =
+    metadataOrOptions === undefined
+      ? undefined
+      : isProjectContextMetadata(metadataOrOptions)
+        ? metadataOrOptions
+        : await createProjectContextRefreshMetadata(
+            projectRoot,
+            metadataOrOptions.refreshReason,
+            clock,
+            gitProbe,
+          );
   const validatedMetadata =
     metadata === undefined
       ? undefined
@@ -810,6 +836,38 @@ async function writeProjectContext(
       spaces: 2,
     });
   }
+}
+
+async function createProjectContextRefreshMetadata(
+  projectRoot: string,
+  refreshReason: ProjectContextRefreshReason,
+  clock: DevFlowClock,
+  gitProbe: GitProjectContextProbe,
+): Promise<ProjectContextMetadata> {
+  const generatedAt = clock.now().toISOString();
+  const baseMetadata = {
+    generatedAt,
+    contextVersion: DEVFLOW_PROJECT_CONTEXT_VERSION,
+    refreshReason,
+  };
+
+  if (!(await gitProbe.isRepository(projectRoot))) {
+    return {
+      ...baseMetadata,
+      gitHead: null,
+      dirtyFingerprint: null,
+    };
+  }
+
+  const dirtyState = filterRelevantDirtyState(
+    await gitProbe.getDirtyState(projectRoot),
+  );
+
+  return {
+    ...baseMetadata,
+    gitHead: await gitProbe.getCurrentHead(projectRoot),
+    dirtyFingerprint: computeGitDirtyFingerprint(dirtyState),
+  };
 }
 
 async function checkProjectContextFreshness(
@@ -1069,15 +1127,27 @@ export function createDevFlowState(
     },
     projectContext: {
       read: () => readProjectContext(options.projectRoot),
-      write: (content, metadata) =>
-        writeProjectContext(options.projectRoot, content, metadata),
+      write: (content, metadataOrOptions) =>
+        writeProjectContext(
+          options.projectRoot,
+          content,
+          metadataOrOptions,
+          clock,
+          gitProbe,
+        ),
       readMetadata: () => readProjectContextMetadata(options.projectRoot),
       checkFreshness: () =>
         checkProjectContextFreshness(options.projectRoot, clock, gitProbe),
     },
     readProjectContext: () => readProjectContext(options.projectRoot),
-    writeProjectContext: (content, metadata) =>
-      writeProjectContext(options.projectRoot, content, metadata),
+    writeProjectContext: (content, metadataOrOptions) =>
+      writeProjectContext(
+        options.projectRoot,
+        content,
+        metadataOrOptions,
+        clock,
+        gitProbe,
+      ),
     createRun: () => createRun(options.projectRoot, clock),
   };
 }
