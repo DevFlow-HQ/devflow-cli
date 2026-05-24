@@ -557,7 +557,7 @@ test("orchestrator raises a typed retry-exhausted error and preserves the final 
 test("orchestrator passes intent stage input to the managed provider session", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
-  await devFlowState.writeProjectContext("# Project context\n");
+  await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
   const runSessionInputs: ManagedProviderSessionInput[] = [];
   const adapter: ManagedSessionAdapter = {
@@ -1178,10 +1178,6 @@ test("orchestrator surfaces run creation failures before starting a stage or pro
       },
       async save() {},
     },
-    async readProjectContext() {
-      return undefined;
-    },
-    async writeProjectContext() {},
     projectContext: {
       async read() {
         return undefined;

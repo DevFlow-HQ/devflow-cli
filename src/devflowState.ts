@@ -209,11 +209,6 @@ export interface DevFlowState {
     readMetadata(): Promise<ProjectContextMetadata | undefined>;
     checkFreshness(): Promise<ProjectContextFreshness>;
   };
-  readProjectContext(): Promise<string | undefined>;
-  writeProjectContext(
-    content: string,
-    metadataOrOptions?: ProjectContextMetadata | ProjectContextWriteOptions,
-  ): Promise<void>;
   createRun(): Promise<DevFlowRunHandle>;
 }
 
@@ -1197,15 +1192,6 @@ export function createDevFlowState(
       checkFreshness: () =>
         checkProjectContextFreshness(options.projectRoot, clock, gitProbe),
     },
-    readProjectContext: () => readProjectContext(options.projectRoot),
-    writeProjectContext: (content, metadataOrOptions) =>
-      writeProjectContext(
-        options.projectRoot,
-        content,
-        metadataOrOptions,
-        clock,
-        gitProbe,
-      ),
     createRun: () => createRun(options.projectRoot, clock),
   };
 }

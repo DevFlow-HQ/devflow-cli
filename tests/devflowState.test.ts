@@ -143,25 +143,25 @@ test("project context is absent until written and then readable from its canonic
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const state = createDevFlowState({ projectRoot });
 
-  assert.equal(await state.readProjectContext(), undefined);
+  assert.equal(await state.projectContext.read(), undefined);
 
-  await state.writeProjectContext("# Project context\n");
+  await state.projectContext.write("# Project context\n");
 
   assert.equal(
     await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
     "# Project context\n",
   );
-  assert.equal(await state.readProjectContext(), "# Project context\n");
+  assert.equal(await state.projectContext.read(), "# Project context\n");
 });
 
 test("project context writes overwrite the existing shared artifact in place", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const state = createDevFlowState({ projectRoot });
 
-  await state.writeProjectContext("first snapshot");
-  await state.writeProjectContext("refreshed snapshot");
+  await state.projectContext.write("first snapshot");
+  await state.projectContext.write("refreshed snapshot");
 
-  assert.equal(await state.readProjectContext(), "refreshed snapshot");
+  assert.equal(await state.projectContext.read(), "refreshed snapshot");
   assert.equal(
     await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
     "refreshed snapshot",
@@ -172,26 +172,26 @@ test("project context writes reject empty content before updating state", async 
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const state = createDevFlowState({ projectRoot });
 
-  await state.writeProjectContext("existing context");
+  await state.projectContext.write("existing context");
 
   await assert.rejects(
-    state.writeProjectContext(" \n\t "),
+    state.projectContext.write(" \n\t "),
     (error: unknown) =>
       error instanceof InvalidProjectContextError &&
       error.message.includes("non-empty"),
   );
 
-  assert.equal(await state.readProjectContext(), "existing context");
+  assert.equal(await state.projectContext.read(), "existing context");
 });
 
 test("project context writes reject content over the line cap before updating state", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
   const state = createDevFlowState({ projectRoot });
 
-  await state.writeProjectContext("existing context");
+  await state.projectContext.write("existing context");
 
   await assert.rejects(
-    state.writeProjectContext(
+    state.projectContext.write(
       Array.from({ length: 151 }, (_, index) => `line ${index + 1}`).join("\n"),
     ),
     (error: unknown) =>
@@ -199,7 +199,7 @@ test("project context writes reject content over the line cap before updating st
       error.message.includes("150 lines"),
   );
 
-  assert.equal(await state.readProjectContext(), "existing context");
+  assert.equal(await state.projectContext.read(), "existing context");
 });
 
 test("project context metadata is written beside the shared context and strictly read back", async () => {
@@ -258,7 +258,7 @@ test("project context metadata validation rejects malformed writes before updati
       error.message.includes("generatedAt"),
   );
 
-  assert.equal(await state.readProjectContext(), "context snapshot");
+  assert.equal(await state.projectContext.read(), "context snapshot");
   assert.deepEqual(await state.projectContext.readMetadata(), {
     generatedAt: "2026-05-23T10:00:00.000Z",
     gitHead: null,
