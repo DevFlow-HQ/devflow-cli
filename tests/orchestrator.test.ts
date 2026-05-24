@@ -1306,10 +1306,370 @@ test("orchestrator rejects invalid generated project-context candidates during b
       expectedMessage,
     );
 
-    assert.equal(runSessionCallCount, 2);
+    assert.equal(runSessionCallCount, 3);
     assert.equal(await devFlowState.projectContext.read(), undefined);
     assert.equal(await devFlowState.projectContext.readMetadata(), undefined);
   }
+});
+
+test("orchestrator supplies bootstrap validation and one in-session repair attempt to the managed provider session", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const repairedContext = [
+    "# Project Context",
+    "",
+    "## Purpose",
+    "DevFlow coordinates provider-backed development workflows.",
+    "",
+    "## Architecture",
+    "The bootstrap stage repairs invalid project-context candidates in-session.",
+    "",
+    "## Key Paths",
+    "- src/orchestrator.ts",
+    "",
+    "## Commands",
+    "- npm run test",
+    "",
+    "## Conventions",
+    "Tests exercise public orchestration behavior.",
+    "",
+  ].join("\n");
+  const repairPrompts: string[] = [];
+  let runSessionCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionCallCount += 1;
+      const runIds = await listRunDirectories(projectRoot);
+      const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+      if (runSessionCallCount === 1) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      const candidatePath = join(runDirectory, "project-context.candidate.md");
+      await fs.outputFile(candidatePath, " \n\t");
+      const validationError = await input.validate().then(
+        () => undefined,
+        (error: Error) => error,
+      );
+      assert.ok(validationError);
+      assert.ok(input.repair);
+      const repairPrompt = input.repair.renderPrompt(validationError);
+      repairPrompts.push(repairPrompt);
+      assert.match(repairPrompt, /Repair only the project-context candidate artifact/);
+      assert.match(repairPrompt, /project-context\.candidate\.md/);
+      assert.doesNotMatch(repairPrompt, /resume work/);
+      assert.doesNotMatch(repairPrompt, /classification/);
+
+      await fs.outputFile(candidatePath, repairedContext);
+      await input.validate();
+
+      return { repairUsed: true, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(runSessionCallCount, 2);
+  assert.equal(repairPrompts.length, 1);
+  assert.equal(await devFlowState.projectContext.read(), repairedContext);
+});
+
+test("orchestrator retries bootstrap after repair failure and removes the failed candidate before retry", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const validContext = [
+    "# Project Context",
+    "",
+    "## Purpose",
+    "DevFlow coordinates provider-backed development workflows.",
+    "",
+    "## Architecture",
+    "Bootstrap retries the whole stage after repair failure.",
+    "",
+    "## Key Paths",
+    "- src/orchestrator.ts",
+    "",
+    "## Commands",
+    "- npm run test",
+    "",
+    "## Conventions",
+    "Tests exercise public orchestration behavior.",
+    "",
+  ].join("\n");
+  const candidateExistedAtBootstrapAttemptStart: boolean[] = [];
+  let runSessionCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionCallCount += 1;
+      const runIds = await listRunDirectories(projectRoot);
+      const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+      const candidatePath = join(runDirectory, "project-context.candidate.md");
+
+      if (runSessionCallCount === 1) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      candidateExistedAtBootstrapAttemptStart.push(
+        await fs.pathExists(candidatePath),
+      );
+
+      if (candidateExistedAtBootstrapAttemptStart.length === 1) {
+        await fs.outputFile(candidatePath, " \n\t");
+        const validationError = await input.validate().then(
+          () => undefined,
+          (error: Error) => error,
+        );
+        assert.ok(validationError);
+        assert.ok(input.repair);
+        throw input.repair.mapFailure(validationError);
+      }
+
+      await fs.outputFile(candidatePath, validContext);
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.deepEqual(candidateExistedAtBootstrapAttemptStart, [false, false]);
+  assert.equal(runSessionCallCount, 3);
+  assert.equal(await devFlowState.projectContext.read(), validContext);
+});
+
+test("orchestrator preserves the final failed bootstrap candidate after retry exhaustion", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  let runSessionCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionCallCount += 1;
+      const runIds = await listRunDirectories(projectRoot);
+      const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+      if (runSessionCallCount === 1) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      const candidatePath = join(runDirectory, "project-context.candidate.md");
+      const failedCandidate = [
+        `failed bootstrap candidate ${runSessionCallCount}`,
+        ...Array.from(
+          { length: 151 },
+          (_value, index) => `overflow line ${index + 1}`,
+        ),
+      ].join("\n");
+      await fs.outputFile(candidatePath, failedCandidate);
+      const validationError = await input.validate().then(
+        () => undefined,
+        (error: Error) => error,
+      );
+      assert.ok(validationError);
+      assert.ok(input.repair);
+      throw input.repair.mapFailure(validationError);
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: Error) =>
+      error instanceof ProviderStageRetryExhaustedError &&
+      error.stage === "bootstrap" &&
+      error.attempts === 2,
+  );
+
+  const runIds = await listRunDirectories(projectRoot);
+  assert.equal(runSessionCallCount, 3);
+  assert.equal(
+    await fs.readFile(
+      join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        runIds[0],
+        "project-context.candidate.md",
+      ),
+      "utf8",
+    ),
+    [
+      "failed bootstrap candidate 3",
+      ...Array.from(
+        { length: 151 },
+        (_value, index) => `overflow line ${index + 1}`,
+      ),
+    ].join("\n"),
+  );
+  assert.equal(await devFlowState.projectContext.read(), undefined);
+});
+
+test("orchestrator treats bootstrap candidate cleanup failure after persistence as non-fatal", async (t) => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const validContext = [
+    "# Project Context",
+    "",
+    "## Purpose",
+    "DevFlow coordinates provider-backed development workflows.",
+    "",
+    "## Architecture",
+    "Successful bootstrap persistence is not undone by candidate cleanup failure.",
+    "",
+    "## Key Paths",
+    "- src/orchestrator.ts",
+    "",
+    "## Commands",
+    "- npm run test",
+    "",
+    "## Conventions",
+    "Tests exercise public orchestration behavior.",
+    "",
+  ].join("\n");
+  let runSessionCallCount = 0;
+  const originalRemove = fs.remove;
+  t.after(() => {
+    fs.remove = originalRemove;
+  });
+
+  fs.remove = async (path: string) => {
+    if (path.endsWith("project-context.candidate.md")) {
+      throw new Error("simulated candidate cleanup failure");
+    }
+
+    return originalRemove(path);
+  };
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionCallCount += 1;
+      const runIds = await listRunDirectories(projectRoot);
+      const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+      if (runSessionCallCount === 1) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      await fs.outputFile(
+        join(runDirectory, "project-context.candidate.md"),
+        validContext,
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(runSessionCallCount, 2);
+  assert.equal(await devFlowState.projectContext.read(), validContext);
 });
 
 test("orchestrator validates parsed intent before starting bootstrap", async () => {

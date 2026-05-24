@@ -73,6 +73,7 @@ const BOOTSTRAP_PROJECT_CONTEXT_PROMPT_PATH = join(
   "bootstrap-project-context.md",
 );
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
+const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
 
 const intentArtifactSchema = z
   .object({
@@ -203,6 +204,24 @@ function renderIntentRepairPrompt(options: {
     "",
     "Replace the artifact with valid JSON matching the required intent schema.",
     `When the artifact is repaired, print exactly: ${options.completionMarker}`,
+  ].join("\n");
+}
+
+function renderBootstrapProjectContextRepairPrompt(options: {
+  candidatePath: string;
+  completionMarker: string;
+  validationError: Error;
+}): string {
+  return [
+    "Repair only the project-context candidate artifact.",
+    "",
+    `Candidate path: ${options.candidatePath}`,
+    "",
+    "Validation failure:",
+    options.validationError.message,
+    "",
+    "Replace the candidate artifact with valid bounded project context Markdown.",
+    `When the candidate is repaired, print exactly: ${options.completionMarker}`,
   ].join("\n");
 }
 
@@ -376,6 +395,38 @@ async function parseStageIntentArtifact(
   }
 }
 
+async function readValidProjectContextCandidate(
+  candidatePath: string,
+): Promise<string> {
+  let candidate: string;
+
+  try {
+    candidate = await fs.readFile(candidatePath, "utf8");
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "bootstrap",
+      artifactPath: candidatePath,
+      details,
+    });
+  }
+
+  try {
+    validateProjectContextContent(candidate);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "bootstrap",
+      artifactPath: candidatePath,
+      details,
+    });
+  }
+
+  return candidate;
+}
+
 async function runBootstrapStage(options: {
   devFlowState: DevFlowState;
   request: ResolvedExecutionRequest;
@@ -402,6 +453,9 @@ async function runBootstrapStage(options: {
     const completionMarker = createCompletionMarker(
       "DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE",
     );
+    const repairCompletionMarker = createCompletionMarker(
+      "DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_REPAIR_COMPLETE",
+    );
     const prompt = await renderBootstrapProjectContextPrompt({
       candidatePath: options.run.paths.projectContextCandidate,
       completionMarker,
@@ -416,25 +470,42 @@ async function runBootstrapStage(options: {
       initialCompletionMarker: completionMarker,
       ...(options.request.model ? { model: options.request.model } : {}),
       async validate() {
-        const candidate = await fs.readFile(
+        await readValidProjectContextCandidate(
           options.run.paths.projectContextCandidate,
-          "utf8",
         );
-
-        validateProjectContextContent(candidate);
+      },
+      repair: {
+        completionMarker: repairCompletionMarker,
+        renderPrompt(validationError) {
+          return renderBootstrapProjectContextRepairPrompt({
+            candidatePath: options.run.paths.projectContextCandidate,
+            completionMarker: repairCompletionMarker,
+            validationError,
+          });
+        },
+        mapFailure(validationError) {
+          return new StageArtifactValidationError({
+            stage: "bootstrap",
+            artifactPath: options.run.paths.projectContextCandidate,
+            details: validationError.message,
+          });
+        },
       },
     });
 
-    const candidate = await fs.readFile(
+    const candidate = await readValidProjectContextCandidate(
       options.run.paths.projectContextCandidate,
-      "utf8",
     );
 
-    validateProjectContextContent(candidate);
     await options.devFlowState.projectContext.write(candidate, {
       refreshReason: freshness.refreshReason,
     });
-    await fs.remove(options.run.paths.projectContextCandidate);
+    try {
+      await fs.remove(options.run.paths.projectContextCandidate);
+    } catch {
+      // A persisted project context is the durable success condition; leaving
+      // the run-scoped candidate behind should not fail bootstrap.
+    }
   }
 }
 
@@ -485,7 +556,16 @@ export async function runExecutionRequest(
   });
 
   await startStage("bootstrap", options);
-  await runBootstrapStage({ devFlowState, request, run, adapter });
+  await runProviderBackedStageWithRetry({
+    stage: "bootstrap",
+    totalAttempts: BOOTSTRAP_STAGE_TOTAL_ATTEMPTS,
+    async runAttempt() {
+      await runBootstrapStage({ devFlowState, request, run, adapter });
+    },
+    async cleanupBeforeRetry() {
+      await fs.remove(run.paths.projectContextCandidate);
+    },
+  });
 
   for (const stage of PIPELINE_STAGES.slice(2)) {
     await startStage(stage, options);
