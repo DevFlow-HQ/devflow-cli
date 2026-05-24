@@ -58,6 +58,8 @@ export interface RunExecutionRequestOptions {
 
 export interface RunExecutionRequestResult {
   intent: ManagedProviderSessionResult;
+  parsedIntent: IntentArtifact;
+  bootstrapProvenance: BootstrapProvenance;
 }
 
 const INTENT_PROMPT_PATH = join(
@@ -89,6 +91,12 @@ const intentArtifactSchema = z
   .strict();
 
 export type IntentArtifact = z.infer<typeof intentArtifactSchema>;
+
+export type BootstrapProvenance =
+  | "reused"
+  | "generated"
+  | "refreshed"
+  | "metadata-updated";
 
 export class InvalidIntentArtifactError extends Error {
   readonly artifactPath: string;
@@ -432,11 +440,11 @@ async function runBootstrapStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
-}): Promise<void> {
+}): Promise<BootstrapProvenance> {
   const freshness = await options.devFlowState.projectContext.checkFreshness();
 
   if (freshness.status === "fresh") {
-    return;
+    return "reused";
   }
 
   if (
@@ -447,6 +455,7 @@ async function runBootstrapStage(options: {
     await options.devFlowState.projectContext.write(freshness.context, {
       refreshReason: freshness.refreshReason,
     });
+    return "metadata-updated";
   }
 
   if (requiresProviderBackedProjectContextRefresh(freshness)) {
@@ -506,7 +515,13 @@ async function runBootstrapStage(options: {
       // A persisted project context is the durable success condition; leaving
       // the run-scoped candidate behind should not fail bootstrap.
     }
+
+    return freshness.refreshReason === "missing-context"
+      ? "generated"
+      : "refreshed";
   }
+
+  return "reused";
 }
 
 async function runNoopStage(): Promise<void> {
@@ -554,13 +569,14 @@ export async function runExecutionRequest(
       await fs.remove(run.paths.intentArtifact);
     },
   });
+  const parsedIntent = await parseStageIntentArtifact(run.paths.intentArtifact);
 
   await startStage("bootstrap", options);
-  await runProviderBackedStageWithRetry({
+  const bootstrapProvenance = await runProviderBackedStageWithRetry({
     stage: "bootstrap",
     totalAttempts: BOOTSTRAP_STAGE_TOTAL_ATTEMPTS,
     async runAttempt() {
-      await runBootstrapStage({ devFlowState, request, run, adapter });
+      return runBootstrapStage({ devFlowState, request, run, adapter });
     },
     async cleanupBeforeRetry() {
       await fs.remove(run.paths.projectContextCandidate);
@@ -572,5 +588,5 @@ export async function runExecutionRequest(
     await runNoopStage();
   }
 
-  return { intent };
+  return { intent, parsedIntent, bootstrapProvenance };
 }

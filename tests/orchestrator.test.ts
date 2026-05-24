@@ -125,7 +125,9 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
 test("orchestrator can complete the active intent stage through a built-in provider adapter with fake PTY execution", async (t) => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
-  await devFlowState.projectContext.write("# Project context\n");
+  await devFlowState.projectContext.write("# Project context\n", {
+    refreshReason: "manual",
+  });
   const executablePath = await createExecutableOnPath(t, "codex");
   const ptyCalls: Array<{
     executable: string;
@@ -190,6 +192,13 @@ test("orchestrator can complete the active intent stage through a built-in provi
     exitCode: 0,
     signal: null,
   });
+  assert.deepEqual(result.parsedIntent, {
+    classification: "feature",
+    summary: "Resume the current workstream.",
+    rawTask: "resume work",
+    needsClarification: false,
+  });
+  assert.equal(result.bootstrapProvenance, "reused");
   assert.equal(ptyCalls.length, 1);
   assert.equal(ptyCalls[0]?.executable, executablePath);
   assert.equal(ptyCalls[0]?.args[0], "--model");
@@ -717,7 +726,7 @@ test("orchestrator reuses fresh project context during bootstrap without provide
     },
   };
 
-  await runExecutionRequest(
+  const result = await runExecutionRequest(
     {
       projectRoot,
       rawTask: "resume work",
@@ -735,6 +744,7 @@ test("orchestrator reuses fresh project context during bootstrap without provide
   );
 
   assert.equal(runSessionInputs.length, 1);
+  assert.equal(result.bootstrapProvenance, "reused");
   assert.equal(checkFreshnessCallCount, 1);
   assert.deepEqual(stages, [
     "intent",
@@ -804,7 +814,7 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
     },
   };
 
-  await runExecutionRequest(
+  const result = await runExecutionRequest(
     {
       projectRoot,
       rawTask: "resume work",
@@ -822,6 +832,7 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
   );
 
   assert.equal(runSessionCallCount, 1);
+  assert.equal(result.bootstrapProvenance, "metadata-updated");
   assert.deepEqual(projectContextWrites, [
     {
       content: existingContext,
@@ -903,7 +914,7 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
     },
   };
 
-  await runExecutionRequest(
+  const result = await runExecutionRequest(
     {
       projectRoot,
       rawTask: "resume work",
@@ -918,6 +929,7 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
   );
 
   assert.equal(runSessionCallCount, 1);
+  assert.equal(result.bootstrapProvenance, "metadata-updated");
   assert.deepEqual(projectContextWrites, [
     {
       content: existingContext,
@@ -1028,7 +1040,7 @@ test("orchestrator generates missing project context through the managed provide
     },
   };
 
-  await runExecutionRequest(
+  const result = await runExecutionRequest(
     {
       projectRoot,
       rawTask: "resume work",
@@ -1043,6 +1055,7 @@ test("orchestrator generates missing project context through the managed provide
   );
 
   assert.equal(runSessionInputs.length, 2);
+  assert.equal(result.bootstrapProvenance, "generated");
   assert.deepEqual(projectContextWrites, [
     {
       content: generatedContext,
@@ -1209,7 +1222,7 @@ test("orchestrator refreshes semantically stale project context through the mana
       },
     };
 
-    await runExecutionRequest(
+    const result = await runExecutionRequest(
       {
         projectRoot,
         rawTask: "SECRET RAW TASK",
@@ -1224,6 +1237,7 @@ test("orchestrator refreshes semantically stale project context through the mana
     );
 
     assert.equal(runSessionCallCount, 2);
+    assert.equal(result.bootstrapProvenance, "refreshed");
     assert.equal(prompts.length, 1);
     assert.deepEqual(projectContextWrites, [
       {
