@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
+  ProviderSessionTranscriptCaptureError,
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   type ManagedProviderSessionInput,
@@ -237,6 +238,170 @@ test("PTY managed-session runner mirrors raw output and validates after an ANSI-
     exitCode: 0,
     signal: null,
   });
+});
+
+test("PTY managed-session runner captures normalized provider output without protocol markers", async () => {
+  const spawner = new FakePtySpawner();
+  const transcript: string[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "DEVFLOW_GRILL_DONE",
+      transcript: {
+        onProviderOutput(chunk) {
+          transcript.push(chunk);
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("\u001b[32mQuestion one?\u001b[0m\r\n");
+  spawner.process.emitData("Decision text DEVFLOW_GRILL_DONE\n");
+  spawner.process.emitData("post-completion orchestration\n");
+
+  await runPromise;
+
+  assert.deepEqual(transcript, ["Question one?\n", "Decision text "]);
+});
+
+test("PTY managed-session runner captures submitted user messages only after submit", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+  const submittedMessages: string[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      transcript: {
+        onSubmittedUserMessage(message) {
+          submittedMessages.push(message);
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("hel");
+  userInput.emitData(Buffer.from("lo"));
+  assert.deepEqual(submittedMessages, []);
+
+  userInput.emitData("\r");
+  userInput.emitData("second\n");
+  spawner.process.emitData("DEVFLOW_DONE\n");
+
+  await runPromise;
+
+  assert.deepEqual(submittedMessages, ["hello", "second"]);
+  assert.deepEqual(spawner.process.writes, ["hel", "lo", "\r", "second", "\n", "/exit\n"]);
+});
+
+test("PTY managed-session runner excludes repair markers from provider transcript content", async () => {
+  const spawner = new FakePtySpawner();
+  const transcript: string[] = [];
+  let validationCount = 0;
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "INITIAL_DONE",
+      async validate() {
+        validationCount += 1;
+
+        if (validationCount === 1) {
+          throw new Error("invalid");
+        }
+      },
+      repair: {
+        completionMarker: "REPAIR_DONE",
+        renderPrompt() {
+          return "Repair it.";
+        },
+        mapFailure(error) {
+          return error;
+        },
+      },
+      transcript: {
+        onProviderOutput(chunk) {
+          transcript.push(chunk);
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("draft INITIAL_DONE\n");
+  await waitForAsyncHandlers();
+  spawner.process.emitData("fixed REPAIR_DONE\n");
+
+  await runPromise;
+
+  assert.deepEqual(transcript, ["draft ", "\nfixed "]);
+});
+
+test("PTY managed-session runner maps pre-completion transcript callback failures to retryable capture errors", async () => {
+  const spawner = new FakePtySpawner();
+  const captureFailure = new Error("transcript write failed");
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      transcript: {
+        onProviderOutput() {
+          throw captureFailure;
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("Question one?\n");
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof ProviderSessionTranscriptCaptureError);
+    assert.equal(error.provider.id, "codex");
+    assert.equal(error.cause, captureFailure);
+    return true;
+  });
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
 });
 
 test("PTY managed-session runner bridges TTY stdin to the provider and restores stdin on success", async () => {

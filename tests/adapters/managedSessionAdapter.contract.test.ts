@@ -15,6 +15,7 @@ import {
   InterruptedProviderSessionError,
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
+  ProviderSessionTranscriptCaptureError,
   type ManagedSessionAdapter,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
@@ -189,6 +190,14 @@ test("managed-session input exposes validation and repair lifecycle configuratio
         return new Error(`mapped: ${error.message}`);
       },
     },
+    transcript: {
+      onProviderOutput(chunk) {
+        assert.equal(chunk, "provider text");
+      },
+      onSubmittedUserMessage(message) {
+        assert.equal(message, "user text");
+      },
+    },
   };
 
   assert.equal(input.model, "gpt-5.5");
@@ -196,6 +205,8 @@ test("managed-session input exposes validation and repair lifecycle configuratio
     input.repair?.renderPrompt(new Error("invalid")),
     "repair: invalid",
   );
+  input.transcript?.onProviderOutput?.("provider text");
+  input.transcript?.onSubmittedUserMessage?.("user text");
 });
 
 test("fake managed-session lifecycle propagates original validation errors when repair is absent", async () => {
@@ -248,6 +259,11 @@ test("managed-session contract exposes typed lifecycle failures with provider id
   });
   const cleanupCause = new Error("pty close failed");
   const cleanup = new ProviderSessionCleanupError(provider, cleanupCause);
+  const transcriptCause = new Error("append failed");
+  const transcript = new ProviderSessionTranscriptCaptureError(
+    provider,
+    transcriptCause,
+  );
 
   assert.equal(launch.name, "ProviderSessionLaunchError");
   assert.equal(launch.provider, provider);
@@ -264,6 +280,9 @@ test("managed-session contract exposes typed lifecycle failures with provider id
   assert.equal(cleanup.name, "ProviderSessionCleanupError");
   assert.equal(cleanup.provider, provider);
   assert.equal(cleanup.cause, cleanupCause);
+  assert.equal(transcript.name, "ProviderSessionTranscriptCaptureError");
+  assert.equal(transcript.provider, provider);
+  assert.equal(transcript.cause, transcriptCause);
 });
 
 for (const harness of providerHarnesses) {

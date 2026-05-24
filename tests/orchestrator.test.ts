@@ -20,6 +20,7 @@ import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   ProviderSessionCleanupError,
+  ProviderSessionTranscriptCaptureError,
 } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
@@ -2023,6 +2024,15 @@ test("provider-backed stage retry classification keeps lifecycle failures non-re
         artifactPath: "/tmp/intent.json",
         details: "invalid",
       }),
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableProviderBackedStageFailure(
+      new ProviderSessionTranscriptCaptureError(
+        provider,
+        new Error("transcript write failed"),
+      ),
     ),
     true,
   );

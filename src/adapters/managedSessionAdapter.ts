@@ -24,12 +24,18 @@ export interface ManagedProviderSessionInput {
   model?: string;
   validate(): Promise<void>;
   repair?: ManagedProviderSessionRepairConfig;
+  transcript?: ManagedProviderSessionTranscriptCallbacks;
 }
 
 export interface ManagedProviderSessionResult {
   repairUsed: boolean;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
+}
+
+export interface ManagedProviderSessionTranscriptCallbacks {
+  onProviderOutput?(chunk: string): void | Promise<void>;
+  onSubmittedUserMessage?(message: string): void | Promise<void>;
 }
 
 export class ManagedProviderSessionNotImplementedError extends Error {
@@ -109,6 +115,23 @@ export class ProviderSessionCleanupError extends Error {
       `Provider session for "${provider.id}" produced valid output but cleanup failed.`,
     );
     this.name = "ProviderSessionCleanupError";
+    this.provider = provider;
+    this.cause = cause;
+  }
+}
+
+export class ProviderSessionTranscriptCaptureError extends Error {
+  readonly provider: ProviderIdentity;
+  readonly cause: unknown;
+
+  constructor(provider: ProviderIdentity, cause: unknown) {
+    const causeMessage =
+      cause instanceof Error ? cause.message : "Unknown transcript capture failure";
+
+    super(
+      `Provider session for "${provider.id}" could not capture transcript content: ${causeMessage}.`,
+    );
+    this.name = "ProviderSessionTranscriptCaptureError";
     this.provider = provider;
     this.cause = cause;
   }

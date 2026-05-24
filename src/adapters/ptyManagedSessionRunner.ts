@@ -6,6 +6,7 @@ import {
   InterruptedProviderSessionError,
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
+  ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";
@@ -90,6 +91,8 @@ const DEFAULT_MARKER_BUFFER_LIMIT = 8192;
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
 const SUBMIT = "\r";
+const CONTROL_CHARACTERS_EXCEPT_TRANSCRIPT_WHITESPACE =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
 
 export const nodePtySpawner: PtySpawner = {
   spawn(executable, args, options) {
@@ -166,6 +169,9 @@ export async function runPtyManagedSession(
     let signal: NodeJS.Signals | null = null;
     let interruptCount = 0;
     let interruptRequested = false;
+    let submittedUserMessageBuffer = "";
+    let providerTranscriptStopped = false;
+    let providerTranscriptRemainder = "";
     let cleanupUserInputBridge = (): void => {};
     let cleanupTerminalResize = (): void => {};
 
@@ -182,6 +188,87 @@ export async function runPtyManagedSession(
         cleanup();
       } catch {
         // Preserve the validation failure as the actionable error.
+      }
+    }
+
+    function rejectTranscriptCaptureFailure(error: unknown): void {
+      if (settled) {
+        return;
+      }
+
+      cleanupAfterValidationFailure();
+      settled = true;
+      rejectSession(
+        new ProviderSessionTranscriptCaptureError(command.provider, error),
+      );
+    }
+
+    function captureProviderTranscriptChunk(chunk: string): void {
+      const onProviderOutput = input.transcript?.onProviderOutput;
+
+      if (!onProviderOutput || providerTranscriptStopped || settled) {
+        return;
+      }
+
+      const normalizedChunk = normalizeTranscriptChunk(
+        providerTranscriptRemainder + chunk,
+      );
+      providerTranscriptRemainder = "";
+      const activeCompletionMarker = waitingForRepair
+        ? input.repair?.completionMarker
+        : input.initialCompletionMarker;
+      const markerIndex =
+        activeCompletionMarker === undefined
+          ? -1
+          : normalizedChunk.indexOf(activeCompletionMarker);
+      const transcriptChunk =
+        markerIndex === -1
+          ? normalizedChunk
+          : normalizedChunk.slice(0, markerIndex);
+
+      if (markerIndex !== -1) {
+        providerTranscriptStopped = true;
+        const detectedCompletionMarker = activeCompletionMarker;
+
+        if (detectedCompletionMarker === undefined) {
+          return;
+        }
+
+        providerTranscriptRemainder = normalizedChunk.slice(
+          markerIndex + detectedCompletionMarker.length,
+        );
+      }
+
+      if (!transcriptChunk) {
+        return;
+      }
+
+      try {
+        void Promise.resolve(onProviderOutput(transcriptChunk)).catch(
+          rejectTranscriptCaptureFailure,
+        );
+      } catch (error) {
+        rejectTranscriptCaptureFailure(error);
+      }
+    }
+
+    function resumeProviderTranscriptCapture(): void {
+      providerTranscriptStopped = false;
+    }
+
+    function captureSubmittedUserMessage(message: string): void {
+      const onSubmittedUserMessage = input.transcript?.onSubmittedUserMessage;
+
+      if (!onSubmittedUserMessage || settled || providerTranscriptStopped) {
+        return;
+      }
+
+      try {
+        void Promise.resolve(onSubmittedUserMessage(message)).catch(
+          rejectTranscriptCaptureFailure,
+        );
+      } catch (error) {
+        rejectTranscriptCaptureFailure(error);
       }
     }
 
@@ -252,8 +339,21 @@ export async function runPtyManagedSession(
       let pending = "";
 
       for (const character of chunk) {
+        if (character === "\r" || character === "\n") {
+          if (pending) {
+            processHandle.write(pending);
+            pending = "";
+          }
+
+          processHandle.write(character);
+          captureSubmittedUserMessage(submittedUserMessageBuffer);
+          submittedUserMessageBuffer = "";
+          continue;
+        }
+
         if (character !== "\u0003") {
           pending += character;
+          submittedUserMessageBuffer += character;
           continue;
         }
 
@@ -357,6 +457,7 @@ export async function runPtyManagedSession(
           }
 
           waitingForRepair = true;
+          resumeProviderTranscriptCapture();
           rollingOutput = "";
           submitPtyPrompt(processHandle, input.repair.renderPrompt(error));
           return;
@@ -406,6 +507,8 @@ export async function runPtyManagedSession(
         return;
       }
 
+      captureProviderTranscriptChunk(chunk);
+
       rollingOutput = (rollingOutput + stripAnsi(chunk)).slice(
         -markerBufferLimit,
       );
@@ -447,4 +550,11 @@ export async function runPtyManagedSession(
       });
     });
   });
+}
+
+function normalizeTranscriptChunk(chunk: string): string {
+  return stripAnsi(chunk)
+    .replaceAll("\r\n", "\n")
+    .replaceAll("\r", "\n")
+    .replace(CONTROL_CHARACTERS_EXCEPT_TRANSCRIPT_WHITESPACE, "");
 }
