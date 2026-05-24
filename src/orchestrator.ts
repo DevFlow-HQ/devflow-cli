@@ -9,6 +9,7 @@ import {
   createDevFlowState,
   type DevFlowRunHandle,
   type DevFlowState,
+  validateProjectContextContent,
 } from "./devflowState.js";
 import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSessionAdapter.js";
 import {
@@ -61,6 +62,12 @@ const INTENT_PROMPT_PATH = join(
   "..",
   "prompts",
   "intent.md",
+);
+const BOOTSTRAP_PROJECT_CONTEXT_PROMPT_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "prompts",
+  "bootstrap-project-context.md",
 );
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 
@@ -149,6 +156,20 @@ async function renderIntentPrompt(options: {
   return promptTemplate
     .replaceAll("{{RAW_TASK}}", options.rawTask)
     .replaceAll("{{ARTIFACT_PATH}}", options.artifactPath)
+    .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
+}
+
+async function renderBootstrapProjectContextPrompt(options: {
+  candidatePath: string;
+  completionMarker: string;
+}): Promise<string> {
+  const promptTemplate = await fs.readFile(
+    BOOTSTRAP_PROJECT_CONTEXT_PROMPT_PATH,
+    "utf8",
+  );
+
+  return promptTemplate
+    .replaceAll("{{CANDIDATE_PATH}}", options.candidatePath)
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
 }
 
@@ -310,6 +331,9 @@ async function parseStageIntentArtifact(
 
 async function runBootstrapStage(options: {
   devFlowState: DevFlowState;
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
 }): Promise<void> {
   const freshness = await options.devFlowState.projectContext.checkFreshness();
 
@@ -325,6 +349,42 @@ async function runBootstrapStage(options: {
     await options.devFlowState.projectContext.write(freshness.context, {
       refreshReason: freshness.refreshReason,
     });
+  }
+
+  if (freshness.refreshReason === "missing-context") {
+    const completionMarker = createCompletionMarker(
+      "DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE",
+    );
+    const prompt = await renderBootstrapProjectContextPrompt({
+      candidatePath: options.run.paths.projectContextCandidate,
+      completionMarker,
+    });
+
+    await options.adapter.runSession({
+      workingDirectory: options.request.projectRoot,
+      initialPrompt: prompt,
+      initialCompletionMarker: completionMarker,
+      ...(options.request.model ? { model: options.request.model } : {}),
+      async validate() {
+        const candidate = await fs.readFile(
+          options.run.paths.projectContextCandidate,
+          "utf8",
+        );
+
+        validateProjectContextContent(candidate);
+      },
+    });
+
+    const candidate = await fs.readFile(
+      options.run.paths.projectContextCandidate,
+      "utf8",
+    );
+
+    validateProjectContextContent(candidate);
+    await options.devFlowState.projectContext.write(candidate, {
+      refreshReason: "missing-context",
+    });
+    await fs.remove(options.run.paths.projectContextCandidate);
   }
 }
 
@@ -375,7 +435,7 @@ export async function runExecutionRequest(
   });
 
   await startStage("bootstrap", options);
-  await runBootstrapStage({ devFlowState });
+  await runBootstrapStage({ devFlowState, request, run, adapter });
 
   for (const stage of PIPELINE_STAGES.slice(2)) {
     await startStage(stage, options);

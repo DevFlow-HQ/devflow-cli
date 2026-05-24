@@ -768,7 +768,7 @@ async function readProjectContext(
   return fs.readFile(projectContextPath, "utf8");
 }
 
-function validateProjectContext(content: string): void {
+export function validateProjectContextContent(content: string): void {
   if (content.trim().length === 0) {
     throw new InvalidProjectContextError(
       "Project context content must be non-empty.",
@@ -883,7 +883,7 @@ async function writeProjectContext(
       ? undefined
       : validateProjectContextMetadata(projectContextMetadataPath, metadata);
 
-  validateProjectContext(content);
+  validateProjectContextContent(content);
   await fs.ensureDir(stateDirectory);
   await fs.writeFile(projectContextPath, content, "utf8");
 

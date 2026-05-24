@@ -70,6 +70,7 @@ async function createExecutableOnPath(
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
   const resolvedProviderIds: string[] = [];
   const runSessionInputs: ManagedProviderSessionInput[] = [];
   const adapter: ManagedSessionAdapter = {
@@ -124,6 +125,7 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
 test("orchestrator can complete the active intent stage through a built-in provider adapter with fake PTY execution", async (t) => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
   const executablePath = await createExecutableOnPath(t, "codex");
   const ptyCalls: Array<{
     executable: string;
@@ -210,6 +212,7 @@ test("orchestrator can complete the active intent stage through a built-in provi
 test("orchestrator reports intent repair metadata from a built-in provider adapter", async (t) => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
   await createExecutableOnPath(t, "codex");
   const repairResults: ManagedProviderSessionResult[] = [];
 
@@ -273,6 +276,7 @@ test("orchestrator reports intent repair metadata from a built-in provider adapt
 test("orchestrator retries a retryable intent provider-session failure inside the same run", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
   const artifactPaths: string[] = [];
   const initialCompletionMarkers: string[] = [];
@@ -375,6 +379,7 @@ test("orchestrator retries a retryable intent provider-session failure inside th
 test("orchestrator retries intent after failed in-session repair and accepts a valid retry repair", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
   const artifactPaths: string[] = [];
   const artifactExistedAtAttemptStart: boolean[] = [];
   const initialCompletionMarkers: string[] = [];
@@ -926,6 +931,218 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
   );
 });
 
+test("orchestrator generates missing project context through the managed provider during bootstrap", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const projectContextWrites: Array<{
+    content: string;
+    refreshReason: string | undefined;
+  }> = [];
+  const devFlowState: DevFlowState = {
+    ...baseDevFlowState,
+    projectContext: {
+      ...baseDevFlowState.projectContext,
+      async write(content, metadataOrOptions) {
+        projectContextWrites.push({
+          content,
+          refreshReason:
+            metadataOrOptions && "refreshReason" in metadataOrOptions
+              ? metadataOrOptions.refreshReason
+              : undefined,
+        });
+        return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+      },
+    },
+  };
+  const runSessionInputs: ManagedProviderSessionInput[] = [];
+  const generatedContext = [
+    "# Project Context",
+    "",
+    "## Purpose",
+    "DevFlow coordinates provider-backed development workflows.",
+    "",
+    "## Architecture",
+    "The orchestrator creates runs and delegates durable state to DevFlowState.",
+    "",
+    "## Key Paths",
+    "- src/orchestrator.ts",
+    "- src/devflowState.ts",
+    "",
+    "## Commands",
+    "- npm run test",
+    "- npm run typecheck",
+    "",
+    "## Conventions",
+    "Tests exercise public orchestration behavior.",
+    "",
+  ].join("\n");
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionInputs.push(input);
+      const runIds = await listRunDirectories(projectRoot);
+      const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+      if (runSessionInputs.length === 1) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.equal(input.workingDirectory, projectRoot);
+      assert.match(
+        input.initialCompletionMarker,
+        /^DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE_[a-f0-9]{32}$/,
+      );
+      assert.match(input.initialPrompt, /bounded repository orientation/i);
+      assert.match(input.initialPrompt, /ecosystem-neutral inspection/i);
+      assert.match(input.initialPrompt, /purpose/i);
+      assert.match(input.initialPrompt, /architecture/i);
+      assert.match(input.initialPrompt, /key paths/i);
+      assert.match(input.initialPrompt, /commands/i);
+      assert.match(input.initialPrompt, /conventions/i);
+      assert.match(
+        input.initialPrompt,
+        /project-context\.candidate\.md/,
+      );
+      assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+
+      const candidatePath = join(runDirectory, "project-context.candidate.md");
+      await fs.outputFile(candidatePath, generatedContext);
+      await input.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(runSessionInputs.length, 2);
+  assert.deepEqual(projectContextWrites, [
+    {
+      content: generatedContext,
+      refreshReason: "missing-context",
+    },
+  ]);
+  assert.equal(await baseDevFlowState.projectContext.read(), generatedContext);
+  assert.equal(
+    (await baseDevFlowState.projectContext.readMetadata())?.refreshReason,
+    "missing-context",
+  );
+
+  const runIds = await listRunDirectories(projectRoot);
+  assert.equal(
+    await fs.pathExists(
+      join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        runIds[0],
+        "project-context.candidate.md",
+      ),
+    ),
+    false,
+  );
+});
+
+test("orchestrator rejects invalid generated project-context candidates during bootstrap", async () => {
+  for (const [name, invalidCandidate, expectedMessage] of [
+    ["empty", " \n\t", /Project context content must be non-empty/],
+    [
+      "too-long",
+      Array.from({ length: 151 }, (_value, index) => `line ${index + 1}`).join(
+        "\n",
+      ),
+      /Project context content must be no more than 150 lines/,
+    ],
+  ] as const) {
+    const projectRoot = fs.mkdtempSync(
+      join(tmpdir(), `devflow-orchestrator-${name}-`),
+    );
+    const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+    let runSessionCallCount = 0;
+    const adapter: ManagedSessionAdapter = {
+      provider: getBuiltInProviderIdentity("codex"),
+      async detect() {
+        return { isAvailable: true, executable: "codex" };
+      },
+      async runSession(input) {
+        runSessionCallCount += 1;
+        const runIds = await listRunDirectories(projectRoot);
+        const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+        if (runSessionCallCount === 1) {
+          await fs.outputJson(
+            join(runDirectory, "intent.json"),
+            {
+              classification: "feature",
+              summary: "Resume the current workstream.",
+              rawTask: "resume work",
+              needsClarification: false,
+            },
+            { spaces: 2 },
+          );
+          await input.validate();
+          return { repairUsed: false, exitCode: 0, signal: null };
+        }
+
+        await fs.outputFile(
+          join(runDirectory, "project-context.candidate.md"),
+          invalidCandidate,
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      },
+    };
+
+    await assert.rejects(
+      runExecutionRequest(
+        {
+          projectRoot,
+          rawTask: "resume work",
+          providerId: "codex",
+        },
+        {
+          devFlowState,
+          createManagedSessionAdapter() {
+            return adapter;
+          },
+        },
+      ),
+      expectedMessage,
+    );
+
+    assert.equal(runSessionCallCount, 2);
+    assert.equal(await devFlowState.projectContext.read(), undefined);
+    assert.equal(await devFlowState.projectContext.readMetadata(), undefined);
+  }
+});
+
 test("orchestrator validates parsed intent before starting bootstrap", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
@@ -981,6 +1198,7 @@ test("orchestrator validates parsed intent before starting bootstrap", async () 
 test("orchestrator supplies intent validation and one in-session repair attempt to the managed provider session", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
   let repairedCompletion: { repairUsed: boolean } | undefined;
   const repairPrompts: string[] = [];
   const validationFailures: Error[] = [];
