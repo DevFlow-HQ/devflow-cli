@@ -935,6 +935,14 @@ test("createRun returns isolated run handles with opaque ids and persisted creat
     firstRun.paths.runDirectory,
     join(projectRoot, ".devflow", "runs", firstRun.id),
   );
+  assert.equal(
+    firstRun.paths.projectContextCandidate,
+    join(firstRun.paths.runDirectory, "project-context.candidate.md"),
+  );
+  assert.equal(
+    firstRun.paths.projectContextCandidate,
+    join(projectRoot, ".devflow", "runs", firstRun.id, "project-context.candidate.md"),
+  );
   assert.equal(await fs.pathExists(firstRun.paths.runDirectory), true);
   assert.equal(await fs.pathExists(secondRun.paths.runDirectory), true);
 

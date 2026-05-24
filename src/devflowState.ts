@@ -18,6 +18,8 @@ const DEVFLOW_PROJECT_CONTEXT_METADATA_FILENAME = "project-context.meta.json";
 const DEVFLOW_RUNS_DIRECTORY = "runs";
 const DEVFLOW_RUN_METADATA_FILENAME = "run.json";
 const DEVFLOW_RUN_INTENT_FILENAME = "intent.json";
+const DEVFLOW_RUN_PROJECT_CONTEXT_CANDIDATE_FILENAME =
+  "project-context.candidate.md";
 const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
 const DEVFLOW_RUN_VALIDATION_FILENAME = "validation.json";
 const DEVFLOW_RUN_ISSUES_DIRECTORY = "issues";
@@ -192,6 +194,7 @@ export interface DevFlowRunHandle {
   paths: {
     runDirectory: string;
     intentArtifact: string;
+    projectContextCandidate: string;
   };
 }
 
@@ -1163,6 +1166,10 @@ async function createRun(
     paths: {
       runDirectory,
       intentArtifact: getRunArtifactPath(projectRoot, runId, "intent"),
+      projectContextCandidate: join(
+        runDirectory,
+        DEVFLOW_RUN_PROJECT_CONTEXT_CANDIDATE_FILENAME,
+      ),
     },
   };
 }
