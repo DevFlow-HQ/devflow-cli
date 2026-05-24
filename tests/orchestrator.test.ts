@@ -736,6 +736,8 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     [
       "# Grill Transcript",
       "",
+      "## Attempt 1",
+      "",
       "## Provider",
       "",
       "What tradeoff matters?",
@@ -770,6 +772,275 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
   assert.match(grillCheckpoint.completedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(await fs.pathExists(join(runDirectory, "issues")), false);
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+});
+
+test("orchestrator retries a partial grill attempt from the same transcript", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  const grillPrompts: string[] = [];
+  let grillCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillCallCount += 1;
+      grillPrompts.push(input.initialPrompt);
+
+      if (grillCallCount === 1) {
+        await input.transcript?.onProviderOutput?.("Which state should survive?\n");
+        await input.transcript?.onSubmittedUserMessage?.("Keep answered decisions.\n");
+        throw new IncompleteProviderSessionError({
+          provider,
+          completionMarker: input.initialCompletionMarker,
+          exitCode: 1,
+          signal: null,
+        });
+      }
+
+      assert.match(input.initialPrompt, /Partial grill transcript path:/);
+      assert.match(input.initialPrompt, /grill-transcript\.md/);
+      assert.match(
+        input.initialPrompt,
+        /Do not repeat resolved questions unless necessary/,
+      );
+      await input.transcript?.onProviderOutput?.("Any retry constraint?\n");
+      await input.transcript?.onSubmittedUserMessage?.("Use the same transcript.\n");
+      await input.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(grillCallCount, 2);
+  assert.doesNotMatch(grillPrompts[0], /Partial grill transcript path:/);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const transcript = await fs.readFile(
+    join(runDirectory, "grill-transcript.md"),
+    "utf8",
+  );
+
+  assert.match(transcript, /## Attempt 1/);
+  assert.match(transcript, /Which state should survive\?/);
+  assert.match(transcript, /Keep answered decisions\./);
+  assert.match(
+    transcript,
+    /Attempt failed before completion:\nProvider session for "codex" ended before completion marker/,
+  );
+  assert.match(transcript, /## Attempt 2/);
+  assert.match(transcript, /Any retry constraint\?/);
+  assert.match(transcript, /Use the same transcript\./);
+  assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
+  assert.ok(
+    transcript.indexOf("Which state should survive?") <
+      transcript.indexOf("Any retry constraint?"),
+  );
+});
+
+test("orchestrator exhausts grill retries after two pre-completion attempts", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  let grillCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillCallCount += 1;
+      await input.transcript?.onProviderOutput?.(`Attempt ${grillCallCount} question\n`);
+      throw new IncompleteProviderSessionError({
+        provider,
+        completionMarker: input.initialCompletionMarker,
+        exitCode: 1,
+        signal: null,
+      });
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ProviderStageRetryExhaustedError &&
+      error.stage === "grill" &&
+      error.attempts === 2 &&
+      error.cause instanceof IncompleteProviderSessionError,
+  );
+
+  assert.equal(grillCallCount, 2);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const transcript = await fs.readFile(
+    join(runDirectory, "grill-transcript.md"),
+    "utf8",
+  );
+
+  assert.match(transcript, /## Attempt 1/);
+  assert.match(transcript, /Attempt 1 question/);
+  assert.match(transcript, /## Attempt 2/);
+  assert.match(transcript, /Attempt 2 question/);
+  assert.doesNotMatch(transcript, new RegExp(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE));
+});
+
+test("orchestrator does not retry interactive grill after transcript completion", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  let grillCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillCallCount += 1;
+      await input.transcript?.onProviderOutput?.("Ready for PRD synthesis.\n");
+      await input.validate();
+      throw new ProviderSessionTranscriptCaptureError(
+        provider,
+        new Error("late transcript callback failed"),
+      );
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ProviderSessionTranscriptCaptureError &&
+      error.message.includes("late transcript callback failed"),
+  );
+
+  assert.equal(grillCallCount, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.match(
+    await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
+    new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
+  );
+  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
 });
 
 test("orchestrator surfaces pre-completion grill transcript persistence failures as retryable grill-stage failures", async () => {
@@ -832,10 +1103,13 @@ test("orchestrator surfaces pre-completion grill transcript persistence failures
       },
     ),
     (error: unknown) =>
-      error instanceof StageArtifactValidationError &&
+      error instanceof ProviderStageRetryExhaustedError &&
       error.stage === "grill" &&
-      error.message.includes("disk full") &&
-      isRetryableProviderBackedStageFailure(error),
+      error.attempts === 2 &&
+      error.cause instanceof StageArtifactValidationError &&
+      error.cause.stage === "grill" &&
+      error.cause.message.includes("disk full") &&
+      isRetryableProviderBackedStageFailure(error.cause),
   );
 });
 

@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import {
   createDevFlowState,
+  DEVFLOW_GRILL_TRANSCRIPT_COMPLETE,
   type GitChangedPath,
   type DevFlowRunHandle,
   type DevFlowState,
@@ -83,6 +84,7 @@ const GRILL_PROMPT_PATH = join(
 );
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
+const GRILL_STAGE_TOTAL_ATTEMPTS = 2;
 
 const intentArtifactSchema = z
   .object({
@@ -209,6 +211,7 @@ async function renderGrillPrompt(options: {
   intentArtifact: IntentArtifact;
   intentArtifactPath: string;
   projectContextPath: string;
+  partialTranscriptPath?: string;
   completionMarker: string;
 }): Promise<string> {
   const promptTemplate = await fs.readFile(GRILL_PROMPT_PATH, "utf8");
@@ -224,6 +227,10 @@ async function renderGrillPrompt(options: {
     .replaceAll(
       "{{CLARIFICATION_CONTEXT}}",
       formatClarificationContext(options.intentArtifact),
+    )
+    .replaceAll(
+      "{{PARTIAL_TRANSCRIPT_CONTEXT}}",
+      formatPartialGrillTranscriptContext(options.partialTranscriptPath),
     )
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
 }
@@ -289,6 +296,20 @@ function formatClarificationContext(intentArtifact: IntentArtifact): string {
   return intentArtifact.needsClarification
     ? "The intent classifier flagged this task as needing clarification. Use that as advisory context for the interview, but do not skip grilling."
     : "The intent classifier did not flag mandatory clarification. Still run the grill interview and validate the plan before continuing.";
+}
+
+function formatPartialGrillTranscriptContext(
+  partialTranscriptPath: string | undefined,
+): string {
+  if (partialTranscriptPath === undefined) {
+    return "No partial grill transcript exists yet.";
+  }
+
+  return [
+    `Partial grill transcript path: ${partialTranscriptPath}`,
+    "Continue from the answered decisions in that transcript.",
+    "Do not repeat resolved questions unless necessary.",
+  ].join("\n");
 }
 
 function requiresProviderBackedProjectContextRefresh(
@@ -599,6 +620,7 @@ async function runGrillStage(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
   parsedIntent: IntentArtifact;
+  attempt: number;
 }): Promise<void> {
   const completionMarker = createCompletionMarker("DEVFLOW_GRILL_COMPLETE");
   const prompt = await renderGrillPrompt({
@@ -606,11 +628,20 @@ async function runGrillStage(options: {
     intentArtifact: options.parsedIntent,
     intentArtifactPath: options.run.paths.intentArtifact,
     projectContextPath: options.run.paths.projectContextArtifact,
+    partialTranscriptPath:
+      options.attempt === 1 ? undefined : options.run.paths.grillTranscript,
     completionMarker,
   });
 
   try {
-    await options.run.initializeGrillTranscript();
+    if (
+      options.attempt === 1 ||
+      !(await fs.pathExists(options.run.paths.grillTranscript))
+    ) {
+      await options.run.initializeGrillTranscript();
+    }
+
+    await options.run.appendGrillAttemptHeading(options.attempt);
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
 
@@ -639,6 +670,67 @@ async function runGrillStage(options: {
         options.run.appendGrillUserMessage(message),
     },
   });
+}
+
+async function isGrillTranscriptComplete(transcriptPath: string): Promise<boolean> {
+  if (!(await fs.pathExists(transcriptPath))) {
+    return false;
+  }
+
+  const transcript = await fs.readFile(transcriptPath, "utf8");
+  return transcript.includes(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE);
+}
+
+async function appendGrillFailureNoteBestEffort(
+  run: DevFlowRunHandle,
+  error: unknown,
+): Promise<void> {
+  if (!(await fs.pathExists(run.paths.grillTranscript))) {
+    return;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+
+  try {
+    await run.appendGrillAttemptFailure(message);
+  } catch {
+    // Losing the failure note must not mask the provider-stage failure that
+    // drives retry/exhaustion behavior.
+  }
+}
+
+async function runGrillStageWithRetry(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  parsedIntent: IntentArtifact;
+}): Promise<void> {
+  for (let attempt = 1; attempt <= GRILL_STAGE_TOTAL_ATTEMPTS; attempt += 1) {
+    try {
+      await runGrillStage({ ...options, attempt });
+      return;
+    } catch (error) {
+      if (!isRetryableProviderBackedStageFailure(error)) {
+        throw error;
+      }
+
+      if (await isGrillTranscriptComplete(options.run.paths.grillTranscript)) {
+        throw error;
+      }
+
+      await appendGrillFailureNoteBestEffort(options.run, error);
+
+      if (attempt >= GRILL_STAGE_TOTAL_ATTEMPTS) {
+        throw new ProviderStageRetryExhaustedError({
+          stage: "grill",
+          attempts: GRILL_STAGE_TOTAL_ATTEMPTS,
+          cause: error,
+        });
+      }
+    }
+  }
+
+  throw new Error("Grill stage retry loop ended without a result.");
 }
 
 export async function runExecutionRequest(
@@ -696,16 +788,7 @@ export async function runExecutionRequest(
   });
 
   await startStage("grill", options);
-  await runProviderBackedStageWithRetry({
-    stage: "grill",
-    totalAttempts: 1,
-    async runAttempt() {
-      await runGrillStage({ request, run, adapter, parsedIntent });
-    },
-    async cleanupBeforeRetry() {
-      await fs.remove(run.paths.grillTranscript);
-    },
-  });
+  await runGrillStageWithRetry({ request, run, adapter, parsedIntent });
 
   for (const stage of PIPELINE_STAGES.slice(3)) {
     await startStage(stage, options);

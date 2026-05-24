@@ -230,8 +230,10 @@ export interface DevFlowRunHandle {
   createdAt: string;
   writeIntent(content: string): Promise<void>;
   initializeGrillTranscript(): Promise<void>;
+  appendGrillAttemptHeading(attempt: number): Promise<void>;
   appendGrillProviderMessage(content: string): Promise<void>;
   appendGrillUserMessage(content: string): Promise<void>;
+  appendGrillAttemptFailure(message: string): Promise<void>;
   completeGrillTranscript(): Promise<void>;
   writeGrillCheckpoint(checkpoint: DevFlowGrillCheckpoint): Promise<void>;
   writeIssue(slug: string, content: string): Promise<void>;
@@ -1206,6 +1208,21 @@ function formatTranscriptBlock(role: "Provider" | "User", content: string): stri
   ].join("\n");
 }
 
+function formatGrillAttemptHeading(attempt: number): string {
+  return [`## Attempt ${attempt}`, "", ""].join("\n");
+}
+
+function formatGrillAttemptFailure(message: string): string {
+  const normalizedMessage = normalizeTranscriptContent(message);
+
+  return [
+    "Attempt failed before completion:",
+    normalizedMessage.length === 0 ? "Unknown provider failure." : normalizedMessage,
+    "",
+    "",
+  ].join("\n");
+}
+
 async function assertGrillTranscriptMutable(
   runId: string,
   transcriptPath: string,
@@ -1305,6 +1322,14 @@ async function createRun(
         grillTranscriptPath,
         "# Grill Transcript\n\n",
       ),
+    appendGrillAttemptHeading: async (attempt) => {
+      await assertGrillTranscriptMutable(runId, grillTranscriptPath);
+      await fs.appendFile(
+        grillTranscriptPath,
+        formatGrillAttemptHeading(attempt),
+        "utf8",
+      );
+    },
     appendGrillProviderMessage: async (content) => {
       await assertGrillTranscriptMutable(runId, grillTranscriptPath);
       await fs.appendFile(
@@ -1318,6 +1343,14 @@ async function createRun(
       await fs.appendFile(
         grillTranscriptPath,
         formatTranscriptBlock("User", content),
+        "utf8",
+      );
+    },
+    appendGrillAttemptFailure: async (message) => {
+      await assertGrillTranscriptMutable(runId, grillTranscriptPath);
+      await fs.appendFile(
+        grillTranscriptPath,
+        formatGrillAttemptFailure(message),
         "utf8",
       );
     },

@@ -17,6 +17,9 @@ Project context path:
 Clarification context:
 {{CLARIFICATION_CONTEXT}}
 
+Partial transcript context:
+{{PARTIAL_TRANSCRIPT_CONTEXT}}
+
 Behavior:
 - Ask one question at a time.
 - Include 2-3 recommended answers for each question when useful.
