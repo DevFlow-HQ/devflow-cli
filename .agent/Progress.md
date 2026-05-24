@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-05-23_
+_Last updated: 2026-05-24_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md`.
 Hard limit: 100 lines.
@@ -7,87 +7,76 @@ Hard limit: 100 lines.
 ## Done
 - Architecture, MVP scope, library choices, state layout, and implementation order are locked in `HANDOFF_2.md`.
 - Node/TypeScript CLI scaffold exists with strict ESM TypeScript, `devflow` bin mapping, `tsup` build config, repo `.gitignore`, package lock, and installed runtime/dev dependencies.
-- Completed the adapter and discovery foundation across `src/adapters/`:
-  - `managedSessionAdapter.ts` defines the shared managed-session detect/runSession contract for Claude, Gemini, Codex, and OpenCode
-  - `commandManagedSessionAdapter.ts` implements reusable command-backed detection and the intentional managed-session not-implemented boundary
-  - built-in adapters wire each provider through that shared contract
-  - `builtInManagedSessionAdapter.ts` and `providerDiscovery.ts` expose built-in managed-session selection plus concurrent installed-provider discovery with stable CLI-facing results
-- Completed done issues `001` through `004` under `.agent/issues/done/`:
-  - OpenCode now has first-class built-in adapter parity using the canonical `opencode` executable
-  - discovery aggregates providers in canonical order, preserves available executable metadata, and supports injected adapter factories for tests
-  - unsupported or failing providers degrade into user-safe unavailable entries, with optional internal `debugReason` diagnostics
-  - regression coverage locks adapter and discovery behavior so future CLI work can depend on a stable contract
-- Completed done issues `001` through `007` for the CLI bootstrap slice:
-  - `src/cli.ts` provides the real `commander` entrypoint with free-form task parsing, help/version passthrough, and clear missing-task failures
+- Completed the adapter and discovery foundation:
+  - built-in Claude, Gemini, Codex, and OpenCode provider identity metadata lives in `src/adapters/providers.ts`
+  - managed-session adapters expose discovery plus `runSession(...)`, validation callbacks, optional in-session repair prompts, typed lifecycle failures, and structured success metadata
+  - provider discovery stays focused on availability detection, canonical built-in ordering, unavailable-provider degradation, and injected adapter factories for tests
+- Completed the CLI/bootstrap slice:
+  - `src/cli.ts` provides the `commander` entrypoint with free-form task parsing, help/version passthrough, clear missing-task failures, and concise provider/session error mapping
   - `src/projectRoot.ts` resolves the Git repo root when present and falls back to the current working directory outside Git
-  - `src/repoConfig.ts` validates repo-local `.devflow/config.json` with a strict schema, preserves valid saved defaults, and rejects malformed config with repair guidance
-  - `src/bootstrapProvider.ts` implements first-run provider setup, cancellation without side effects, and strict `--provider` override semantics
-  - `--model` is accepted as an opaque invocation-only string and passed unchanged into the resolved orchestrator request
-  - `src/orchestrator.ts` receives a pinned bootstrap handoff object from the CLI, with the structured not-implemented failure shape locked by regression tests
-- Added regression coverage in `tests/adapters/managedSessionAdapter.contract.test.ts`, `tests/adapters/providerDiscovery.test.ts`, `tests/cli.test.ts`, and `tests/repoConfig.test.ts` for provider behavior, discovery ordering, task parsing, project-root resolution, provider precedence, first-run persistence, strict config/override failures, and orchestrator request shape.
-- Completed the `.devflow` filesystem state-boundary stream from `.agent/task_progress.md` issues `001` through `010`:
-  - `src/devflowState.ts` owns repo-local config persistence behind `createDevFlowState({ projectRoot })`, with typed `config.load()`/`config.save()` APIs and malformed persisted config surfaced as `InvalidDevFlowConfigError`
-  - the state facade owns shared project context through canonical `readProjectContext()` and `writeProjectContext(content)` operations
-  - `createRun()` creates isolated `.devflow/runs/<opaque-id>/` records with validated 12-character run ids, typed run handles, persisted `run.json` metadata, and canonical run-directory paths
-  - run handles write immutable canonical artifacts for `intent.json`, `prd.md`, `validation.json`, and normalized issue markdown files under `issues/`
-  - duplicate artifact writes raise `DuplicateDevFlowRunArtifactError`; invalid issue slugs raise `InvalidDevFlowIssueSlugError`
-  - the active CLI-to-orchestrator path threads the typed state facade into the orchestrator
-  - `runExecutionRequest()` now creates a run, renders the markdown intent prompt with raw task, absolute artifact path, schema requirements, and nonce completion marker, invokes an injected `ProviderSessionRunner`, and validates the provider-written intent artifact
-  - orchestration emits the MVP stage order: `intent`, `bootstrap`, `grill`, `prd`, `issues`, `execute`, `validate`
-  - orchestration rejects missing provider ids before creating a run, invokes the intent provider runner against the canonical intent artifact path, and leaves PRD, issue, validation, and downstream artifacts absent for no-op stages
-  - missing, invalid JSON, and schema-invalid intent artifacts each trigger exactly one explicit repair prompt that may replace the invalid provider-owned artifact
-  - failed intent repair raises `StageArtifactValidationError`
-- Added regression coverage in `tests/devflowState.test.ts` and `tests/orchestrator.test.ts` for config validation, shared project context semantics, run creation, artifact immutability, issue slug normalization, duplicate-write failures, bootstrap/orchestrator compatibility, provider-session-backed intent, MVP stage ordering, missing-provider rejection, no-op downstream stages, one-shot artifact repair, and structured validation failures.
-- Verified the state-boundary slice with `npm run test` (65 passing tests), `npm run typecheck`, and `npm run build`.
-- Wrote `.agent/prd.md` for the managed-session adapter contract migration:
-  - replace one-shot provider adapter semantics with managed-session adapter semantics
-  - extract neutral provider metadata into `providers.ts`
-  - rename shared/core adapter modules to managed-session vocabulary while keeping individual provider modules unless they become confusing
-  - keep provider discovery focused on availability detection
-  - defer real PTY transport to the next checkpoint
-- Completed the managed-session contract and wiring migration:
-  - neutral provider identity metadata now lives outside the managed-session execution contract
-  - shared/core adapter module names and factory seams now use managed-session vocabulary
-  - adapters expose discovery plus `runSession(...)`, validation callbacks, optional in-session repair prompts, typed lifecycle failures, and structured success metadata
-  - provider discovery stays focused on availability detection and canonical built-in ordering
-  - the orchestrator resolves managed-session adapters through an injectable factory, validates built-in provider ids before run creation, and delegates intent artifact validation plus one targeted repair to the managed session
-  - the CLI handles adapter-layer lifecycle failures as concise user-facing errors
-- Completed the PTY-based managed-session checkpoint:
-  - added `node-pty` and `strip-ansi`, plus `src/adapters/ptyManagedSessionRunner.ts` for command-backed interactive sessions
-  - built-in Claude, Gemini, Codex, and OpenCode adapters now resolve executables, pass opaque model overrides through provider-native flags, launch via the shared PTY runner, and issue provider cleanup commands
-  - PTY output is mirrored to stdout, stripped for bounded completion-marker scanning, and validated before cleanup
-  - TTY stdin is bridged in raw mode, first Ctrl-C is forwarded to the provider, second Ctrl-C kills the child, and interrupted sessions are reported with typed errors
-  - terminal resize events are forwarded when supported
-  - invalid intent artifacts can be repaired inside the same PTY session with a repair marker; failed repair maps to `StageArtifactValidationError`
-  - the active intent stage can now complete through a built-in provider adapter with fake PTY execution in tests
-- Added PTY/session regression coverage in `tests/adapters/ptyManagedSessionRunner.test.ts`, `tests/adapters/managedSessionAdapter.contract.test.ts`, `tests/cli.test.ts`, and `tests/orchestrator.test.ts` for launch failures, cleanup failures, incomplete markers, interrupts, resize forwarding, in-session repair, provider args/model wiring, and built-in intent execution.
-- Verified the PTY/session slice with `npm run test` (96 passing tests), `npm run typecheck`, and `npm run build`.
-- Completed the orchestrator-level whole-stage retry checkpoint for the active intent stage:
-  - provider-backed intent gets 2 total attempts inside one run, reusing the canonical `intent.json` path after cleaning failed retryable output
-  - fresh provider sessions, initial markers, and repair markers are rendered per attempt while `onStageStart("intent")` remains stage-level
-  - failed repaired intent artifacts are retryable at the stage boundary; in-session repair remains a separate same-session policy
-  - `ProviderStageRetryExhaustedError` preserves `stage`, `attempts`, and final `cause`, leaving the final failed intent artifact for inspection
-  - `isRetryableProviderBackedStageFailure()` centralizes retry policy; interrupted sessions, cleanup failures, and setup/config failures fail fast outside retry
-- Added orchestrator retry regression coverage for same-run retry success, failed-repair retry, retry exhaustion, final artifact retention, non-retryable lifecycle failures, and setup-boundary failures.
+  - repo-local default-provider config is validated strictly, saved through the state facade, and repaired with clear malformed-config guidance
+  - first-run provider setup, cancellation without side effects, strict `--provider` overrides, and opaque invocation-only `--model` forwarding are implemented and tested
+- Completed the `.devflow` filesystem state boundary:
+  - `src/devflowState.ts` owns config persistence, shared project context, run creation, canonical run paths, immutable `intent.json`/`prd.md`/`validation.json` artifacts, and normalized issue markdown writes
+  - duplicate artifact writes, invalid issue slugs, invalid run ids, malformed config, invalid project context, and invalid metadata surface as typed domain errors
+  - the active CLI-to-orchestrator path threads the typed state facade into `src/orchestrator.ts`
+- Completed project-context freshness tracking:
+  - `.devflow/project-context.md` writes reject empty content and content over 150 lines
+  - `.devflow/project-context.meta.json` stores `generatedAt`, baseline `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`
+  - freshness checks return structured fresh/stale results for missing context, missing metadata, invalid metadata, version changes, max age, unavailable Git baselines, and relevant changes
+  - Git freshness uses committed changes since the stored baseline plus staged, unstaged, and untracked dirty-tree fingerprints
+  - repeated runs on the same dirty tree stay fresh; clean trees store `dirtyFingerprint: null`
+  - hardcoded freshness ignores are limited to DevFlow/agent/Git internal paths; Git-ignored untracked files are ignored by Git itself
+  - untracked fingerprinting is streamed through file paths/byte lengths instead of eagerly buffering all content
+  - non-Git repos use metadata/context presence, metadata validity, context version, and a three-day max-age fallback
+  - the public state contract now exposes project context only through the grouped `projectContext` capability
+- Completed the active intent stage:
+  - `runExecutionRequest()` creates a run, renders `prompts/intent.md` with the raw task, canonical artifact path, schema requirements, and nonce completion marker, then invokes the selected managed-session adapter
+  - intent artifact validation is strict JSON/schema validation over the provider-owned `intent.json`
+  - invalid intent artifacts can be repaired once inside the same PTY session with a targeted repair prompt
+  - intent gets 2 total whole-stage attempts inside one run; retryable failures clean failed output before retry and retry exhaustion preserves the final failed artifact for inspection
+  - setup/config failures, interruptions, and cleanup failures stay outside retry
+- Completed the PTY-based managed-session transport:
+  - `node-pty` and `strip-ansi` are wired through `src/adapters/ptyManagedSessionRunner.ts`
+  - built-in adapters resolve executables at launch, pass model overrides through provider-native flags, mirror stripped/bounded output for marker scanning, and send cleanup after successful validation
+  - TTY stdin raw-mode bridging, first/second Ctrl-C behavior, terminal resize forwarding, launch failures, incomplete sessions, interruptions, cleanup failures, and in-session repair are typed and covered by regression tests
+- Regression coverage now spans adapter contracts, provider discovery, CLI parsing/bootstrap/error handling, repo config, state boundary, project-context Git freshness, PTY sessions, orchestrator intent execution, in-session repair, and whole-stage retry.
 
 ## Current State
-- The repo now has a working CLI/bootstrap/state/orchestration boundary across `src/cli.ts`, `src/projectRoot.ts`, `src/bootstrapProvider.ts`, `src/devflowState.ts`, `src/orchestrator.ts`, provider session code, and `src/adapters/`.
-- Built-in provider discovery, repo-root resolution, repo-local default-provider state, explicit provider/model override handling, first-run provider selection, shared context storage, run creation, immutable run artifact writes, MVP stage ordering, PTY-backed managed sessions, strict intent validation, in-session intent repair, and intent whole-stage retry are implemented and regression-tested.
-- The MVP pipeline currently has only intent active; bootstrap, grill, PRD, issues, execute, and validate are observable no-op placeholders that do not write fake artifacts.
-- The managed-session contract, PTY transport, CLI error mapping, active intent-stage adapter path, retry exhaustion typing, and retry/non-retry boundary are complete enough for local provider-backed intent runs.
-- There are no remaining AFK tasks in the `.devflow` filesystem state-boundary workstream from `.agent/task_progress.md`.
-- There are no remaining AFK tasks in the managed-session/retry workstream from `.agent/task_progress.md`.
+- The repo has a working CLI/bootstrap/state/orchestration boundary across `src/cli.ts`, `src/projectRoot.ts`, `src/bootstrapProvider.ts`, `src/devflowState.ts`, `src/orchestrator.ts`, provider session code, and `src/adapters/`.
+- Built-in provider discovery, repo-root resolution, default-provider state, provider/model override handling, first-run provider selection, shared context storage/freshness, run creation, immutable run artifact writes, PTY-backed managed sessions, strict intent validation, in-session intent repair, and intent whole-stage retry are implemented and regression-tested.
+- The MVP pipeline currently has only `intent` active; `bootstrap`, `grill`, `prd`, `issues`, `execute`, and `validate` are observable no-op placeholders that do not write fake artifacts.
+- There are no remaining AFK tasks in the project-context freshness workstream or the managed-session/retry workstream from `.agent/task_progress.md`.
+- Latest verification: `npm run test` on 2026-05-24 passed with 136 tests.
 
-## Next Checkpoint
-1. Project context freshness before expanding bootstrap:
-  - Add `.devflow/project-context.meta.json`.
-  - Store `generatedAt`, baseline `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`.
-  - Use baseline Git diff plus status/diff dirty fingerprinting to decide freshness; ignore `.devflow/`, `.agent/`, `.codex/`, `node_modules/`, `dist/`, and `.git/`.
-  - Treat repeated runs on the same dirty tree as fresh, with clean trees storing `dirtyFingerprint: null`.
-  - Enforce non-empty project context with a 150-line hard cap.
-  - In non-Git repos, use missing metadata/context, invalid metadata, version mismatch, and a 3-day max-age check.
-  - Expose structured freshness results with changed path metadata for future incremental refresh.
-2. Follow-up bootstrap slice:
-  - Use the freshness API to reuse fresh context or run a provider-backed incremental refresh.
-  - Initial generation may inspect repo entrypoints/config/docs; refresh must focus on changed/deleted/renamed/untracked files and the current context, not re-explore the whole codebase.
-  - If refresh output is semantically unchanged, keep `project-context.md` and still update metadata to advance the baseline.
+## Remaining MVP Tasks
+1. Activate bootstrap/project-context generation:
+  - consume `projectContext.checkFreshness()`
+  - reuse fresh context
+  - generate initial context when missing
+  - refresh stale context incrementally from changed path metadata and existing context
+  - write context plus metadata even when provider output is semantically unchanged
+2. Activate the grill stage:
+  - decide from intent/context whether clarification is needed
+  - run a provider-backed user-facing grill session when needed
+  - persist the resolved decisions as a run artifact or explicit downstream input
+3. Activate PRD generation:
+  - add a PRD prompt template
+  - write canonical `prd.md`
+  - validate non-empty, task-aligned output before downstream stages
+4. Activate issue decomposition:
+  - add an issues prompt template and artifact contract
+  - produce normalized issue markdown files under the run `issues/` directory
+  - validate issue slugs, ordering, file-scope hints, and actionable acceptance criteria
+5. Activate execution:
+  - run each MVP issue sequentially through provider-backed sessions
+  - pass bounded context, PRD, issue content, and prior issue outputs
+  - record execution summaries without inventing success when provider work fails
+6. Activate validation:
+  - run configured or inferred lint/tests/build checks
+  - retry failed validation once through the provider
+  - write `validation.json` and escalate clearly after the second failure
+7. Finish MVP CLI UX:
+  - expose concise stage progress
+  - map new stage/artifact validation failures to user-facing errors
+  - produce a final run summary with artifact paths and next manual steps
