@@ -24,7 +24,16 @@ export interface ManagedProviderSessionInput {
   model?: string;
   validate(): Promise<void>;
   repair?: ManagedProviderSessionRepairConfig;
+  continuations?: ManagedProviderSessionContinuation[];
   transcript?: ManagedProviderSessionTranscriptCallbacks;
+}
+
+export interface ManagedProviderSessionContinuation {
+  prompt: string;
+  completionMarker: string;
+  onStart?(): void | Promise<void>;
+  validate(): Promise<void>;
+  repair?: ManagedProviderSessionRepairConfig;
 }
 
 export interface ManagedProviderSessionResult {

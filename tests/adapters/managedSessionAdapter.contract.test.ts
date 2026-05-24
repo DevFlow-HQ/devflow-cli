@@ -198,12 +198,25 @@ test("managed-session input exposes validation and repair lifecycle configuratio
         assert.equal(message, "user text");
       },
     },
+    continuations: [
+      {
+        prompt: "Continue with the next phase",
+        completionMarker: "DEVFLOW_NEXT_DONE",
+        onStart() {},
+        async validate() {},
+      },
+    ],
   };
 
   assert.equal(input.model, "gpt-5.5");
   assert.equal(
     input.repair?.renderPrompt(new Error("invalid")),
     "repair: invalid",
+  );
+  assert.equal(input.continuations?.[0]?.prompt, "Continue with the next phase");
+  assert.equal(
+    input.continuations?.[0]?.completionMarker,
+    "DEVFLOW_NEXT_DONE",
   );
   input.transcript?.onProviderOutput?.("provider text");
   input.transcript?.onSubmittedUserMessage?.("user text");

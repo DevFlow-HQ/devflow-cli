@@ -162,11 +162,13 @@ export async function runPtyManagedSession(
 
   return new Promise((resolve, reject) => {
     let rollingOutput = "";
-    let markerDetected = false;
+    let phaseMarkerDetected = false;
     let waitingForRepair = false;
     let settled = false;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
+    let activeContinuationIndex: number | null = null;
+    let repairUsed = false;
     let interruptCount = 0;
     let interruptRequested = false;
     let submittedUserMessageBuffer = "";
@@ -214,9 +216,7 @@ export async function runPtyManagedSession(
         providerTranscriptRemainder + chunk,
       );
       providerTranscriptRemainder = "";
-      const activeCompletionMarker = waitingForRepair
-        ? input.repair?.completionMarker
-        : input.initialCompletionMarker;
+      const activeCompletionMarker = getActiveCompletionMarker();
       const markerIndex =
         activeCompletionMarker === undefined
           ? -1
@@ -256,6 +256,39 @@ export async function runPtyManagedSession(
       providerTranscriptStopped = false;
     }
 
+    function getActiveContinuation():
+      | NonNullable<ManagedProviderSessionInput["continuations"]>[number]
+      | undefined {
+      if (activeContinuationIndex === null) {
+        return undefined;
+      }
+
+      return input.continuations?.[activeContinuationIndex];
+    }
+
+    function getActiveRepair() {
+      return getActiveContinuation()?.repair ?? input.repair;
+    }
+
+    function getActiveCompletionMarker(): string | undefined {
+      if (waitingForRepair) {
+        return getActiveRepair()?.completionMarker;
+      }
+
+      return getActiveContinuation()?.completionMarker ?? input.initialCompletionMarker;
+    }
+
+    async function validateActivePhase(): Promise<void> {
+      const continuation = getActiveContinuation();
+
+      if (continuation) {
+        await continuation.validate();
+        return;
+      }
+
+      await input.validate();
+    }
+
     function captureSubmittedUserMessage(message: string): void {
       const onSubmittedUserMessage = input.transcript?.onSubmittedUserMessage;
 
@@ -272,7 +305,7 @@ export async function runPtyManagedSession(
       }
     }
 
-    function createResult(repairUsed: boolean): ManagedProviderSessionResult {
+    function createResult(): ManagedProviderSessionResult {
       return {
         repairUsed,
         exitCode,
@@ -438,18 +471,54 @@ export async function runPtyManagedSession(
       };
     }
 
-    function handleInitialCompletion(): void {
-      if (markerDetected) {
+    function startNextContinuationOrComplete(): void {
+      const nextContinuationIndex =
+        activeContinuationIndex === null ? 0 : activeContinuationIndex + 1;
+      const nextContinuation = input.continuations?.[nextContinuationIndex];
+
+      if (nextContinuation) {
+        activeContinuationIndex = nextContinuationIndex;
+        phaseMarkerDetected = false;
+        waitingForRepair = false;
+        rollingOutput = "";
+        void Promise.resolve(nextContinuation.onStart?.())
+          .then(() => {
+            submitPtyPrompt(processHandle, nextContinuation.prompt);
+          })
+          .catch((error) => {
+            settled = true;
+            cleanupAfterValidationFailure();
+            rejectSession(error);
+          });
         return;
       }
 
-      markerDetected = true;
+      try {
+        cleanupAfterValidOutput();
+      } catch (error) {
+        settled = true;
+        rejectSession(error);
+        return;
+      }
+
+      settled = true;
+      resolveSession(createResult());
+    }
+
+    function handlePhaseCompletion(): void {
+      if (phaseMarkerDetected) {
+        return;
+      }
+
+      phaseMarkerDetected = true;
 
       void (async () => {
         try {
-          await input.validate();
+          await validateActivePhase();
         } catch (error: unknown) {
-          if (!(error instanceof Error) || !input.repair) {
+          const repair = getActiveRepair();
+
+          if (!(error instanceof Error) || !repair) {
             cleanupAfterValidationFailure();
             settled = true;
             rejectSession(error);
@@ -459,42 +528,35 @@ export async function runPtyManagedSession(
           waitingForRepair = true;
           resumeProviderTranscriptCapture();
           rollingOutput = "";
-          submitPtyPrompt(processHandle, input.repair.renderPrompt(error));
+          submitPtyPrompt(processHandle, repair.renderPrompt(error));
           return;
         }
 
-        try {
-          cleanupAfterValidOutput();
-        } catch (error) {
-          settled = true;
-          rejectSession(error);
-          return;
-        }
-
-        settled = true;
-        resolveSession(createResult(false));
+        startNextContinuationOrComplete();
       })();
     }
 
     function handleRepairCompletion(): void {
-      const repair = input.repair;
+      const repair = getActiveRepair();
 
       if (!repair) {
         return;
       }
 
       waitingForRepair = false;
-      settle(async () => {
+      void (async () => {
         try {
-          await input.validate();
+          await validateActivePhase();
         } catch (error) {
           cleanupAfterValidationFailure();
-          throw repair.mapFailure(error as Error);
+          settled = true;
+          rejectSession(repair.mapFailure(error as Error));
+          return;
         }
 
-        cleanupAfterValidOutput();
-        return createResult(true);
-      });
+        repairUsed = true;
+        startNextContinuationOrComplete();
+      })();
     }
 
     setupUserInputBridge();
@@ -515,16 +577,21 @@ export async function runPtyManagedSession(
 
       if (waitingForRepair) {
         if (
-          input.repair &&
-          rollingOutput.includes(input.repair.completionMarker)
+          getActiveRepair() &&
+          rollingOutput.includes(getActiveRepair()?.completionMarker ?? "")
         ) {
           handleRepairCompletion();
         }
         return;
       }
 
-      if (rollingOutput.includes(input.initialCompletionMarker)) {
-        handleInitialCompletion();
+      const activeCompletionMarker = getActiveCompletionMarker();
+
+      if (
+        activeCompletionMarker !== undefined &&
+        rollingOutput.includes(activeCompletionMarker)
+      ) {
+        handlePhaseCompletion();
       }
     });
 
@@ -532,7 +599,7 @@ export async function runPtyManagedSession(
       exitCode = event.exitCode;
       signal = event.signal;
 
-      if (markerDetected || settled) {
+      if (phaseMarkerDetected || settled) {
         return;
       }
 
@@ -543,7 +610,8 @@ export async function runPtyManagedSession(
 
         throw new IncompleteProviderSessionError({
           provider: command.provider,
-          completionMarker: input.initialCompletionMarker,
+          completionMarker:
+            getActiveCompletionMarker() ?? input.initialCompletionMarker,
           exitCode: event.exitCode,
           signal: event.signal,
         });

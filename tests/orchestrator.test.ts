@@ -50,11 +50,58 @@ function isGrillSessionInput(input: ManagedProviderSessionInput): boolean {
   return input.initialCompletionMarker.startsWith("DEVFLOW_GRILL_COMPLETE_");
 }
 
+function isPrdSessionInput(input: ManagedProviderSessionInput): boolean {
+  return input.initialCompletionMarker.startsWith("DEVFLOW_PRD_COMPLETE_");
+}
+
+function extractPrdArtifactPath(prompt: string): string {
+  const match = prompt.match(/Canonical PRD artifact path:\n([^\n]+)/);
+
+  assert.ok(match?.[1], "expected PRD prompt to include artifact path");
+  return match[1];
+}
+
+async function completeSessionContinuations(
+  input: ManagedProviderSessionInput,
+): Promise<void> {
+  for (const continuation of input.continuations ?? []) {
+    assert.match(continuation.completionMarker, /^DEVFLOW_PRD_COMPLETE_[a-f0-9]{32}$/);
+    assert.match(continuation.prompt, /Synthesize the canonical PRD/);
+    assert.match(continuation.prompt, /Do not interview the user/);
+    assert.match(continuation.prompt, /just-completed live grill discussion/);
+    assert.match(continuation.prompt, /Persisted grill transcript path:/);
+    assert.match(continuation.prompt, /grill-transcript\.md/);
+    assert.match(continuation.prompt, /Canonical PRD artifact path:/);
+    assert.match(continuation.prompt, /prd\.md/);
+    assert.equal(continuation.prompt.includes(continuation.completionMarker), true);
+
+    await continuation.onStart?.();
+    await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# PRD\n");
+    await continuation.validate();
+  }
+}
+
 async function completeGrillSession(
   input: ManagedProviderSessionInput,
 ): Promise<ManagedProviderSessionResult> {
   assert.match(input.initialCompletionMarker, /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/);
   assert.match(input.initialPrompt, /Run the interactive grill stage/);
+  await input.validate();
+  await completeSessionContinuations(input);
+
+  return { repairUsed: false, exitCode: 0, signal: null };
+}
+
+async function completePrdSession(
+  input: ManagedProviderSessionInput,
+): Promise<ManagedProviderSessionResult> {
+  assert.match(input.initialCompletionMarker, /^DEVFLOW_PRD_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(input.initialPrompt, /Synthesize the canonical PRD/);
+  assert.match(input.initialPrompt, /No live provider discussion is available/);
+  assert.match(input.initialPrompt, /Persisted grill transcript path:/);
+  assert.doesNotMatch(input.initialPrompt, /Ask one question at a time/);
+
+  await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD\n");
   await input.validate();
 
   return { repairUsed: false, exitCode: 0, signal: null };
@@ -376,6 +423,7 @@ test("orchestrator retries a retryable intent provider-session failure inside th
         { spaces: 2 },
       );
       await input.validate();
+      await completeSessionContinuations(input);
 
       return { repairUsed: false, exitCode: 0, signal: null };
     },
@@ -686,6 +734,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
       }
 
       await input.validate();
+      await completeSessionContinuations(input);
 
       return { repairUsed: false, exitCode: 0, signal: null };
     },
@@ -730,7 +779,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     rawTask: "resume work",
     needsClarification: false,
   });
-  assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
+  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD\n");
   assert.equal(
     await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
     [
@@ -794,6 +843,10 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
         (await listRunDirectories(projectRoot))[0],
       );
 
+      if (isPrdSessionInput(input)) {
+        return completePrdSession(input);
+      }
+
       if (!isGrillSessionInput(input)) {
         await fs.outputJson(
           join(runDirectory, "intent.json"),
@@ -832,6 +885,7 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
       await input.transcript?.onProviderOutput?.("Any retry constraint?\n");
       await input.transcript?.onSubmittedUserMessage?.("Use the same transcript.\n");
       await input.validate();
+      await completeSessionContinuations(input);
 
       return { repairUsed: false, exitCode: 0, signal: null };
     },
@@ -1063,6 +1117,10 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
         (await listRunDirectories(projectRoot))[0],
       );
 
+      if (isPrdSessionInput(input)) {
+        return completePrdSession(input);
+      }
+
       if (!isGrillSessionInput(input)) {
         await fs.outputJson(
           join(runDirectory, "intent.json"),
@@ -1162,6 +1220,10 @@ test("orchestrator replaces a corrupt checkpoint from a completed grill transcri
         "runs",
         (await listRunDirectories(projectRoot))[0],
       );
+
+      if (isPrdSessionInput(input)) {
+        return completePrdSession(input);
+      }
 
       if (!isGrillSessionInput(input)) {
         await fs.outputJson(
@@ -2296,6 +2358,10 @@ test("orchestrator treats bootstrap candidate cleanup failure after persistence 
         );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
       }
 
       await fs.outputFile(

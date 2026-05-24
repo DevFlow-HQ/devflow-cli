@@ -81,6 +81,12 @@ const GRILL_PROMPT_PATH = join(
   "prompts",
   "grill.md",
 );
+const PRD_PROMPT_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "prompts",
+  "prd.md",
+);
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
 const GRILL_STAGE_TOTAL_ATTEMPTS = 2;
@@ -231,6 +237,32 @@ async function renderGrillPrompt(options: {
       "{{PARTIAL_TRANSCRIPT_CONTEXT}}",
       formatPartialGrillTranscriptContext(options.partialTranscriptPath),
     )
+    .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
+}
+
+async function renderPrdPrompt(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  completionMarker: string;
+  liveDiscussionAvailable: boolean;
+}): Promise<string> {
+  const promptTemplate = await fs.readFile(PRD_PROMPT_PATH, "utf8");
+
+  return promptTemplate
+    .replaceAll("{{RAW_TASK}}", options.request.rawTask)
+    .replaceAll("{{INTENT_ARTIFACT_PATH}}", options.run.paths.intentArtifact)
+    .replaceAll(
+      "{{PROJECT_CONTEXT_PATH}}",
+      options.run.paths.projectContextArtifact,
+    )
+    .replaceAll(
+      "{{LIVE_DISCUSSION_CONTEXT}}",
+      options.liveDiscussionAvailable
+        ? "A just-completed live grill discussion is available in this provider session. Use it as immediate context, but verify decisions against the persisted transcript path below."
+        : "No live provider discussion is available. Use the persisted grill transcript path below as the durable source material.",
+    )
+    .replaceAll("{{GRILL_TRANSCRIPT_PATH}}", options.run.paths.grillTranscript)
+    .replaceAll("{{PRD_ARTIFACT_PATH}}", options.run.paths.prdArtifact)
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
 }
 
@@ -493,6 +525,30 @@ async function readValidProjectContextCandidate(
   return candidate;
 }
 
+async function validatePrdArtifact(artifactPath: string): Promise<void> {
+  let content: string;
+
+  try {
+    content = await fs.readFile(artifactPath, "utf8");
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "prd",
+      artifactPath,
+      details,
+    });
+  }
+
+  if (content.trim().length === 0) {
+    throw new StageArtifactValidationError({
+      stage: "prd",
+      artifactPath,
+      details: "PRD artifact must contain non-whitespace content.",
+    });
+  }
+}
+
 async function runBootstrapStage(options: {
   devFlowState: DevFlowState;
   request: ResolvedExecutionRequest;
@@ -587,6 +643,10 @@ async function runNoopStage(): Promise<void> {
   // these no-op stages with provider-backed or state-writing work.
 }
 
+function createPrdCompletionMarker(): string {
+  return createCompletionMarker("DEVFLOW_PRD_COMPLETE");
+}
+
 async function writeCompletedGrillArtifacts(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
@@ -632,8 +692,10 @@ async function runGrillStage(options: {
   adapter: ManagedSessionAdapter;
   parsedIntent: IntentArtifact;
   attempt: number;
+  onPrdStageStart: () => void | Promise<void>;
 }): Promise<void> {
   const completionMarker = createCompletionMarker("DEVFLOW_GRILL_COMPLETE");
+  const prdCompletionMarker = createPrdCompletionMarker();
   const prompt = await renderGrillPrompt({
     rawTask: options.request.rawTask,
     intentArtifact: options.parsedIntent,
@@ -642,6 +704,12 @@ async function runGrillStage(options: {
     partialTranscriptPath:
       options.attempt === 1 ? undefined : options.run.paths.grillTranscript,
     completionMarker,
+  });
+  const prdPrompt = await renderPrdPrompt({
+    request: options.request,
+    run: options.run,
+    completionMarker: prdCompletionMarker,
+    liveDiscussionAvailable: true,
   });
 
   try {
@@ -674,6 +742,16 @@ async function runGrillStage(options: {
         run: options.run,
       });
     },
+    continuations: [
+      {
+        prompt: prdPrompt,
+        completionMarker: prdCompletionMarker,
+        onStart: options.onPrdStageStart,
+        async validate() {
+          await validatePrdArtifact(options.run.paths.prdArtifact);
+        },
+      },
+    ],
     transcript: {
       onProviderOutput: (chunk) =>
         options.run.appendGrillProviderMessage(chunk),
@@ -681,6 +759,33 @@ async function runGrillStage(options: {
         options.run.appendGrillUserMessage(message),
     },
   });
+}
+
+async function runPrdStage(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  liveDiscussionAvailable: boolean;
+}): Promise<void> {
+  const completionMarker = createPrdCompletionMarker();
+  const prompt = await renderPrdPrompt({
+    request: options.request,
+    run: options.run,
+    completionMarker,
+    liveDiscussionAvailable: options.liveDiscussionAvailable,
+  });
+
+  await options.adapter.runSession({
+    workingDirectory: options.request.projectRoot,
+    initialPrompt: prompt,
+    initialCompletionMarker: completionMarker,
+    ...(options.request.model ? { model: options.request.model } : {}),
+    async validate() {
+      await validatePrdArtifact(options.run.paths.prdArtifact);
+    },
+  });
+
+  await validatePrdArtifact(options.run.paths.prdArtifact);
 }
 
 async function appendGrillFailureNoteBestEffort(
@@ -732,13 +837,22 @@ async function runGrillStageWithRetry(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
   parsedIntent: IntentArtifact;
+  onPrdStageStart: () => void | Promise<void>;
 }): Promise<void> {
   for (let attempt = 1; attempt <= GRILL_STAGE_TOTAL_ATTEMPTS; attempt += 1) {
     try {
       await runGrillStage({ ...options, attempt });
+      await validatePrdArtifact(options.run.paths.prdArtifact);
       return;
     } catch (error) {
       if (!isRetryableProviderBackedStageFailure(error)) {
+        throw error;
+      }
+
+      if (
+        error instanceof StageArtifactValidationError &&
+        error.stage === "prd"
+      ) {
         throw error;
       }
 
@@ -748,6 +862,13 @@ async function runGrillStageWithRetry(options: {
           run: options.run,
         })
       ) {
+        await options.onPrdStageStart();
+        await runPrdStage({
+          request: options.request,
+          run: options.run,
+          adapter: options.adapter,
+          liveDiscussionAvailable: false,
+        });
         return;
       }
 
@@ -825,9 +946,15 @@ export async function runExecutionRequest(
   });
 
   await startStage("grill", options);
-  await runGrillStageWithRetry({ request, run, adapter, parsedIntent });
+  await runGrillStageWithRetry({
+    request,
+    run,
+    adapter,
+    parsedIntent,
+    onPrdStageStart: () => startStage("prd", options),
+  });
 
-  for (const stage of PIPELINE_STAGES.slice(3)) {
+  for (const stage of PIPELINE_STAGES.slice(4)) {
     await startStage(stage, options);
     await runNoopStage();
   }

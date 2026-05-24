@@ -240,6 +240,61 @@ test("PTY managed-session runner mirrors raw output and validates after an ANSI-
   });
 });
 
+test("PTY managed-session runner submits generic continuations inside the same live session", async () => {
+  const spawner = new FakePtySpawner();
+  const validationOrder: string[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "GRILL_DONE",
+      async validate() {
+        validationOrder.push("grill");
+      },
+      continuations: [
+        {
+          prompt: "Synthesize the PRD.",
+          completionMarker: "PRD_DONE",
+          onStart() {
+            validationOrder.push("prd-start");
+          },
+          async validate() {
+            validationOrder.push("prd");
+          },
+        },
+      ],
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("GRILL_DONE\n");
+  await waitForAsyncHandlers();
+
+  assert.deepEqual(validationOrder, ["grill", "prd-start"]);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Synthesize the PRD.\u001b[201~\r",
+  ]);
+
+  spawner.process.emitData("PRD_DONE\n");
+  const result = await runPromise;
+
+  assert.deepEqual(validationOrder, ["grill", "prd-start", "prd"]);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Synthesize the PRD.\u001b[201~\r",
+    "/exit\n",
+  ]);
+  assert.equal(result.repairUsed, false);
+});
+
 test("PTY managed-session runner captures normalized provider output without protocol markers", async () => {
   const spawner = new FakePtySpawner();
   const transcript: string[] = [];
