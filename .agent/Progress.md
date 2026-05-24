@@ -36,47 +36,49 @@ Hard limit: 100 lines.
   - invalid intent artifacts can be repaired once inside the same PTY session with a targeted repair prompt
   - intent gets 2 total whole-stage attempts inside one run; retryable failures clean failed output before retry and retry exhaustion preserves the final failed artifact for inspection
   - setup/config failures, interruptions, and cleanup failures stay outside retry
+- Completed bootstrap/project-context activation:
+  - run handles expose `.devflow/runs/<run-id>/project-context.candidate.md` for provider-written context candidates
+  - bootstrap reuses fresh project context, repairs missing/invalid metadata without provider work, and generates missing context through the managed provider
+  - stale context refresh handles version, age, unavailable baseline, and relevant-change freshness results with prior context plus changed-path hints
+  - bootstrap candidate validation uses the exported project-context content validator, supports one in-session repair attempt, and has an independent 2-attempt whole-stage retry budget
+  - successful candidates persist through `projectContext.write(...)`, refresh metadata even for unchanged text, and best-effort cleanup failures are non-fatal
+  - orchestrator results now expose parsed canonical intent, the intent managed-session result, and bootstrap provenance: `reused`, `generated`, `refreshed`, or `metadata-updated`
 - Completed the PTY-based managed-session transport:
   - `node-pty` and `strip-ansi` are wired through `src/adapters/ptyManagedSessionRunner.ts`
   - built-in adapters resolve executables at launch, pass model overrides through provider-native flags, mirror stripped/bounded output for marker scanning, and send cleanup after successful validation
   - TTY stdin raw-mode bridging, first/second Ctrl-C behavior, terminal resize forwarding, launch failures, incomplete sessions, interruptions, cleanup failures, and in-session repair are typed and covered by regression tests
-- Regression coverage now spans adapter contracts, provider discovery, CLI parsing/bootstrap/error handling, repo config, state boundary, project-context Git freshness, PTY sessions, orchestrator intent execution, in-session repair, and whole-stage retry.
+- Regression coverage now spans adapter contracts, provider discovery, CLI parsing/bootstrap/error handling, repo config, state boundary, project-context Git freshness, PTY sessions, orchestrator intent/bootstrap execution, in-session repair, and whole-stage retry.
 
 ## Current State
 - The repo has a working CLI/bootstrap/state/orchestration boundary across `src/cli.ts`, `src/projectRoot.ts`, `src/bootstrapProvider.ts`, `src/devflowState.ts`, `src/orchestrator.ts`, provider session code, and `src/adapters/`.
-- Built-in provider discovery, repo-root resolution, default-provider state, provider/model override handling, first-run provider selection, shared context storage/freshness, run creation, immutable run artifact writes, PTY-backed managed sessions, strict intent validation, in-session intent repair, and intent whole-stage retry are implemented and regression-tested.
-- The MVP pipeline currently has only `intent` active; `bootstrap`, `grill`, `prd`, `issues`, `execute`, and `validate` are observable no-op placeholders that do not write fake artifacts.
-- There are no remaining AFK tasks in the project-context freshness workstream or the managed-session/retry workstream from `.agent/task_progress.md`.
-- Latest verification: `npm run test` on 2026-05-24 passed with 136 tests.
+- Built-in provider discovery, repo-root resolution, default-provider state, provider/model override handling, first-run provider selection, shared context storage/freshness, run creation, immutable run artifact writes, PTY-backed managed sessions, strict intent validation, active bootstrap/project-context generation, in-session repair, and whole-stage retry are implemented and regression-tested.
+- The MVP pipeline currently has `intent` and `bootstrap` active; `grill`, `prd`, `issues`, `execute`, and `validate` are observable no-op placeholders that do not write fake artifacts.
+- There are no remaining AFK tasks in the project-context freshness, managed-session/retry, or bootstrap project-context workstreams from `.agent/task_progress.md`.
+- Latest verification: `npm run test` on 2026-05-24 passed with 146 tests.
 
 ## Remaining MVP Tasks
-1. Activate bootstrap/project-context generation:
-  - consume `projectContext.checkFreshness()`
-  - reuse fresh context
-  - generate initial context when missing
-  - refresh stale context incrementally from changed path metadata and existing context
-  - write context plus metadata even when provider output is semantically unchanged
-2. Activate the grill stage:
-  - decide from intent/context whether clarification is needed
-  - run a provider-backed user-facing grill session when needed
-  - persist the resolved decisions as a run artifact or explicit downstream input
-3. Activate PRD generation:
-  - add a PRD prompt template
-  - write canonical `prd.md`
-  - validate non-empty, task-aligned output before downstream stages
-4. Activate issue decomposition:
+1. Activate the grill stage:
+  - always run a provider-backed user-facing grill session after intent/bootstrap
+  - persist an append-only `grill-transcript.md` with provider output and submitted user messages, across retry attempts
+  - write a durable grill completion boundary plus immutable `grill-checkpoint.json` before PRD synthesis
+  - synthesize canonical `prd.md` from the completed grill transcript in the coupled PRD phase and validate it as non-empty
+  - keep downstream stages consuming only `prd.md`
+2. Add resume support for completed grill sessions:
+  - expose a CLI resume path that uses `grill-transcript.md`/`grill-checkpoint.json` to regenerate missing or invalid `prd.md`
+  - never repeat the interactive grill when the transcript completion boundary proves grill completion
+3. Activate issue decomposition:
   - add an issues prompt template and artifact contract
   - produce normalized issue markdown files under the run `issues/` directory
   - validate issue slugs, ordering, file-scope hints, and actionable acceptance criteria
-5. Activate execution:
+4. Activate execution:
   - run each MVP issue sequentially through provider-backed sessions
   - pass bounded context, PRD, issue content, and prior issue outputs
   - record execution summaries without inventing success when provider work fails
-6. Activate validation:
+5. Activate validation:
   - run configured or inferred lint/tests/build checks
   - retry failed validation once through the provider
   - write `validation.json` and escalate clearly after the second failure
-7. Finish MVP CLI UX:
+6. Finish MVP CLI UX:
   - expose concise stage progress
   - map new stage/artifact validation failures to user-facing errors
   - produce a final run summary with artifact paths and next manual steps
