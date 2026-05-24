@@ -79,6 +79,22 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
     },
     async runSession(input) {
       runSessionInputs.push(input);
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
       return { repairUsed: false, exitCode: 0, signal: null };
     },
   };
@@ -645,7 +661,89 @@ test("orchestrator passes intent stage input to the managed provider session", a
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
-test("orchestrator treats successful runSession completion as sufficient intent stage success", async () => {
+test("orchestrator reuses fresh project context during bootstrap without provider work", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await baseDevFlowState.projectContext.write("# Project context\n", {
+    refreshReason: "manual",
+  });
+  const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
+  const metadataBefore = await fs.readFile(metadataPath, "utf8");
+  const stages: PipelineStage[] = [];
+  let checkFreshnessCallCount = 0;
+  const devFlowState: DevFlowState = {
+    ...baseDevFlowState,
+    projectContext: {
+      ...baseDevFlowState.projectContext,
+      async checkFreshness() {
+        checkFreshnessCallCount += 1;
+        return baseDevFlowState.projectContext.checkFreshness();
+      },
+    },
+  };
+  const runSessionInputs: ManagedProviderSessionInput[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionInputs.push(input);
+
+      assert.equal(stages.at(-1), "intent");
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+
+  assert.equal(runSessionInputs.length, 1);
+  assert.equal(checkFreshnessCallCount, 1);
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+    "validate",
+  ]);
+  assert.equal(await fs.readFile(metadataPath, "utf8"), metadataBefore);
+});
+
+test("orchestrator validates parsed intent before starting bootstrap", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
@@ -661,33 +759,32 @@ test("orchestrator treats successful runSession completion as sufficient intent 
     },
   };
 
-  await runExecutionRequest(
-    {
-      projectRoot,
-      rawTask: "do the thing",
-      providerId: "codex",
-    },
-    {
-      devFlowState,
-      createManagedSessionAdapter() {
-        return adapter;
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "do the thing",
+        providerId: "codex",
       },
-      onStageStart(stage) {
-        stages.push(stage);
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
       },
-    },
+    ),
+    (error: unknown) =>
+      error instanceof ProviderStageRetryExhaustedError &&
+      error.stage === "intent" &&
+      error.cause instanceof StageArtifactValidationError &&
+      error.cause.artifactPath.endsWith("/intent.json"),
   );
 
-  assert.equal(runSessionCallCount, 1);
-  assert.deepEqual(stages, [
-    "intent",
-    "bootstrap",
-    "grill",
-    "prd",
-    "issues",
-    "execute",
-    "validate",
-  ]);
+  assert.equal(runSessionCallCount, 2);
+  assert.deepEqual(stages, ["intent"]);
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
   assert.equal(

@@ -292,6 +292,32 @@ async function runIntentStage(options: {
   });
 }
 
+async function parseStageIntentArtifact(
+  artifactPath: string,
+): Promise<IntentArtifact> {
+  try {
+    return await readIntentArtifact(artifactPath);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "intent",
+      artifactPath,
+      details,
+    });
+  }
+}
+
+async function runBootstrapStage(options: {
+  devFlowState: DevFlowState;
+}): Promise<void> {
+  const freshness = await options.devFlowState.projectContext.checkFreshness();
+
+  if (freshness.status === "fresh") {
+    return;
+  }
+}
+
 async function runNoopStage(): Promise<void> {
   // Placeholder for the MVP pipeline stage order. Later slices will replace
   // these no-op stages with provider-backed or state-writing work.
@@ -323,18 +349,25 @@ export async function runExecutionRequest(
     stage: "intent",
     totalAttempts: INTENT_STAGE_TOTAL_ATTEMPTS,
     async runAttempt() {
-      return runIntentStage({
+      const result = await runIntentStage({
         request,
         run,
         adapter,
       });
+
+      await parseStageIntentArtifact(run.paths.intentArtifact);
+
+      return result;
     },
     async cleanupBeforeRetry() {
       await fs.remove(run.paths.intentArtifact);
     },
   });
 
-  for (const stage of PIPELINE_STAGES.slice(1)) {
+  await startStage("bootstrap", options);
+  await runBootstrapStage({ devFlowState });
+
+  for (const stage of PIPELINE_STAGES.slice(2)) {
     await startStage(stage, options);
     await runNoopStage();
   }
