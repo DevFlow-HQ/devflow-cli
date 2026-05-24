@@ -743,6 +743,189 @@ test("orchestrator reuses fresh project context during bootstrap without provide
   assert.equal(await fs.readFile(metadataPath, "utf8"), metadataBefore);
 });
 
+test("orchestrator repairs missing project-context metadata during bootstrap without provider work", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const existingContext = "# Project context\n\nKeep this exact text.\n";
+  await baseDevFlowState.projectContext.write(existingContext);
+  const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
+  const stages: PipelineStage[] = [];
+  const projectContextWrites: Array<{
+    content: string;
+    refreshReason: string | undefined;
+  }> = [];
+  const devFlowState: DevFlowState = {
+    ...baseDevFlowState,
+    projectContext: {
+      ...baseDevFlowState.projectContext,
+      async write(content, metadataOrOptions) {
+        projectContextWrites.push({
+          content,
+          refreshReason:
+            metadataOrOptions && "refreshReason" in metadataOrOptions
+              ? metadataOrOptions.refreshReason
+              : undefined,
+        });
+        return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+      },
+    },
+  };
+  let runSessionCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
+      runSessionCallCount += 1;
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+
+  assert.equal(runSessionCallCount, 1);
+  assert.deepEqual(projectContextWrites, [
+    {
+      content: existingContext,
+      refreshReason: "missing-metadata",
+    },
+  ]);
+  assert.equal(await baseDevFlowState.projectContext.read(), existingContext);
+  assert.equal(
+    (await fs.readJson(metadataPath)).refreshReason,
+    "missing-metadata",
+  );
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+    "validate",
+  ]);
+});
+
+test("orchestrator repairs invalid project-context metadata during bootstrap without provider work", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  const existingContext = "# Project context\n\nPreserve invalid metadata content.\n";
+  const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
+  await fs.outputFile(
+    join(projectRoot, ".devflow", "project-context.md"),
+    existingContext,
+  );
+  await fs.outputJson(metadataPath, { generatedAt: "not-a-date" }, { spaces: 2 });
+  const projectContextWrites: Array<{
+    content: string;
+    refreshReason: string | undefined;
+  }> = [];
+  const devFlowState: DevFlowState = {
+    ...baseDevFlowState,
+    projectContext: {
+      ...baseDevFlowState.projectContext,
+      async write(content, metadataOrOptions) {
+        projectContextWrites.push({
+          content,
+          refreshReason:
+            metadataOrOptions && "refreshReason" in metadataOrOptions
+              ? metadataOrOptions.refreshReason
+              : undefined,
+        });
+        return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+      },
+    },
+  };
+  let runSessionCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
+      runSessionCallCount += 1;
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(runSessionCallCount, 1);
+  assert.deepEqual(projectContextWrites, [
+    {
+      content: existingContext,
+      refreshReason: "metadata-invalid",
+    },
+  ]);
+  assert.equal(await baseDevFlowState.projectContext.read(), existingContext);
+  assert.equal(
+    (await fs.readJson(metadataPath)).refreshReason,
+    "metadata-invalid",
+  );
+});
+
 test("orchestrator validates parsed intent before starting bootstrap", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });

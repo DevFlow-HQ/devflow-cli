@@ -316,6 +316,16 @@ async function runBootstrapStage(options: {
   if (freshness.status === "fresh") {
     return;
   }
+
+  if (
+    (freshness.refreshReason === "missing-metadata" ||
+      freshness.refreshReason === "metadata-invalid") &&
+    freshness.context !== undefined
+  ) {
+    await options.devFlowState.projectContext.write(freshness.context, {
+      refreshReason: freshness.refreshReason,
+    });
+  }
 }
 
 async function runNoopStage(): Promise<void> {
