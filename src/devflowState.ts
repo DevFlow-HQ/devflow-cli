@@ -20,6 +20,8 @@ const DEVFLOW_RUN_METADATA_FILENAME = "run.json";
 const DEVFLOW_RUN_INTENT_FILENAME = "intent.json";
 const DEVFLOW_RUN_PROJECT_CONTEXT_CANDIDATE_FILENAME =
   "project-context.candidate.md";
+const DEVFLOW_RUN_GRILL_TRANSCRIPT_FILENAME = "grill-transcript.md";
+const DEVFLOW_RUN_GRILL_CHECKPOINT_FILENAME = "grill-checkpoint.json";
 const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
 const DEVFLOW_RUN_VALIDATION_FILENAME = "validation.json";
 const DEVFLOW_RUN_ISSUES_DIRECTORY = "issues";
@@ -48,6 +50,9 @@ const projectContextRefreshReasons = [
   "relevant-changes",
   "manual",
 ] as const;
+
+export const DEVFLOW_GRILL_TRANSCRIPT_COMPLETE =
+  "DEVFLOW_GRILL_TRANSCRIPT_COMPLETE";
 
 const devFlowConfigSchema = z
   .object({
@@ -86,6 +91,42 @@ const projectContextMetadataSchema = z
 const projectContextFreshnessMetadataSchema = projectContextMetadataSchema.extend({
   contextVersion: z.number().int(),
 });
+
+const grillCheckpointSchema = z
+  .object({
+    stage: z.literal("grill"),
+    status: z.literal("complete"),
+    completedAt: z.string().refine(
+      (value) => {
+        if (!isoDateTimePattern.test(value)) {
+          return false;
+        }
+
+        const parsedDate = new Date(value);
+        return (
+          !Number.isNaN(parsedDate.getTime()) &&
+          parsedDate.toISOString() === value
+        );
+      },
+      { message: "Must be a valid ISO-8601 UTC timestamp." },
+    ),
+    rawTask: z.string().refine((value) => value.trim().length > 0, {
+      message: "Must be a non-empty string.",
+    }),
+    intentArtifactPath: z.string().refine((value) => value.trim().length > 0, {
+      message: "Must be a non-empty string.",
+    }),
+    projectContextPath: z.string().refine((value) => value.trim().length > 0, {
+      message: "Must be a non-empty string.",
+    }),
+    grillTranscriptPath: z.string().refine((value) => value.trim().length > 0, {
+      message: "Must be a non-empty string.",
+    }),
+    prdArtifactPath: z.string().refine((value) => value.trim().length > 0, {
+      message: "Must be a non-empty string.",
+    }),
+  })
+  .strict();
 
 export interface DevFlowConfig {
   defaultProvider: BuiltInProviderId;
@@ -188,15 +229,26 @@ export interface DevFlowRunHandle {
   id: string;
   createdAt: string;
   writeIntent(content: string): Promise<void>;
+  initializeGrillTranscript(): Promise<void>;
+  appendGrillProviderMessage(content: string): Promise<void>;
+  appendGrillUserMessage(content: string): Promise<void>;
+  completeGrillTranscript(): Promise<void>;
+  writeGrillCheckpoint(checkpoint: DevFlowGrillCheckpoint): Promise<void>;
   writeIssue(slug: string, content: string): Promise<void>;
   writePrd(content: string): Promise<void>;
   writeValidation(content: string): Promise<void>;
   paths: {
     runDirectory: string;
     intentArtifact: string;
+    projectContextArtifact: string;
     projectContextCandidate: string;
+    grillTranscript: string;
+    grillCheckpoint: string;
+    prdArtifact: string;
   };
 }
+
+export type DevFlowGrillCheckpoint = z.infer<typeof grillCheckpointSchema>;
 
 export interface DevFlowState {
   config: {
@@ -286,6 +338,36 @@ export class DuplicateDevFlowRunArtifactError extends Error {
   }
 }
 
+export class CompletedDevFlowRunArtifactError extends Error {
+  readonly runId: string;
+  readonly artifactName: string;
+  readonly artifactPath: string;
+
+  constructor(options: {
+    runId: string;
+    artifactName: string;
+    artifactPath: string;
+  }) {
+    super(
+      `DevFlow run artifact "${options.artifactName}" is complete for run "${options.runId}" at ${options.artifactPath}. Completed artifacts are immutable.`,
+    );
+    this.name = "CompletedDevFlowRunArtifactError";
+    this.runId = options.runId;
+    this.artifactName = options.artifactName;
+    this.artifactPath = options.artifactPath;
+  }
+}
+
+export class InvalidGrillCheckpointError extends Error {
+  readonly checkpointPath: string;
+
+  constructor(checkpointPath: string, details: string) {
+    super(`Invalid grill checkpoint at ${checkpointPath}. ${details}`);
+    this.name = "InvalidGrillCheckpointError";
+    this.checkpointPath = checkpointPath;
+  }
+}
+
 function getConfigPath(projectRoot: string): string {
   return join(projectRoot, DEVFLOW_STATE_DIRECTORY, DEVFLOW_CONFIG_FILENAME);
 }
@@ -329,6 +411,20 @@ function getRunArtifactPath(
   return join(
     getRunDirectoryPath(projectRoot, runId),
     devFlowRunArtifactFilenames[artifactName],
+  );
+}
+
+function getRunGrillTranscriptPath(projectRoot: string, runId: string): string {
+  return join(
+    getRunDirectoryPath(projectRoot, runId),
+    DEVFLOW_RUN_GRILL_TRANSCRIPT_FILENAME,
+  );
+}
+
+function getRunGrillCheckpointPath(projectRoot: string, runId: string): string {
+  return join(
+    getRunDirectoryPath(projectRoot, runId),
+    DEVFLOW_RUN_GRILL_CHECKPOINT_FILENAME,
   );
 }
 
@@ -1090,6 +1186,61 @@ function normalizeIssueSlug(slug: string): string {
   return normalizedSlug;
 }
 
+function normalizeTranscriptContent(content: string): string {
+  return content
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim();
+}
+
+function formatTranscriptBlock(role: "Provider" | "User", content: string): string {
+  const normalizedContent = normalizeTranscriptContent(content);
+
+  return [
+    `## ${role}`,
+    "",
+    normalizedContent.length === 0 ? "(empty)" : normalizedContent,
+    "",
+    "",
+  ].join("\n");
+}
+
+async function assertGrillTranscriptMutable(
+  runId: string,
+  transcriptPath: string,
+): Promise<void> {
+  if (!(await fs.pathExists(transcriptPath))) {
+    return;
+  }
+
+  const transcript = await fs.readFile(transcriptPath, "utf8");
+
+  if (transcript.includes(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE)) {
+    throw new CompletedDevFlowRunArtifactError({
+      runId,
+      artifactName: "grill-transcript",
+      artifactPath: transcriptPath,
+    });
+  }
+}
+
+function validateGrillCheckpoint(
+  checkpointPath: string,
+  checkpoint: unknown,
+): DevFlowGrillCheckpoint {
+  const result = grillCheckpointSchema.safeParse(checkpoint);
+
+  if (!result.success) {
+    throw new InvalidGrillCheckpointError(
+      checkpointPath,
+      formatValidationDetails(result.error),
+    );
+  }
+
+  return result.data;
+}
+
 async function createRun(
   projectRoot: string,
   clock: DevFlowClock,
@@ -1100,6 +1251,8 @@ async function createRun(
   const createdAt = clock.now().toISOString();
   const runDirectory = getRunDirectoryPath(projectRoot, runId);
   const runMetadataPath = getRunMetadataPath(projectRoot, runId);
+  const grillTranscriptPath = getRunGrillTranscriptPath(projectRoot, runId);
+  const grillCheckpointPath = getRunGrillCheckpointPath(projectRoot, runId);
 
   await fs.ensureDir(runDirectory);
   await fs.writeJson(
@@ -1146,6 +1299,64 @@ async function createRun(
         getRunArtifactPath(projectRoot, runId, "intent"),
         content,
       ),
+    initializeGrillTranscript: () =>
+      writeArtifact(
+        "grill-transcript",
+        grillTranscriptPath,
+        "# Grill Transcript\n\n",
+      ),
+    appendGrillProviderMessage: async (content) => {
+      await assertGrillTranscriptMutable(runId, grillTranscriptPath);
+      await fs.appendFile(
+        grillTranscriptPath,
+        formatTranscriptBlock("Provider", content),
+        "utf8",
+      );
+    },
+    appendGrillUserMessage: async (content) => {
+      await assertGrillTranscriptMutable(runId, grillTranscriptPath);
+      await fs.appendFile(
+        grillTranscriptPath,
+        formatTranscriptBlock("User", content),
+        "utf8",
+      );
+    },
+    completeGrillTranscript: async () => {
+      await assertGrillTranscriptMutable(runId, grillTranscriptPath);
+      await fs.appendFile(
+        grillTranscriptPath,
+        `${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n`,
+        "utf8",
+      );
+    },
+    writeGrillCheckpoint: async (checkpoint) => {
+      const validatedCheckpoint = validateGrillCheckpoint(
+        grillCheckpointPath,
+        checkpoint,
+      );
+
+      if (validatedCheckpoint.grillTranscriptPath !== grillTranscriptPath) {
+        throw new InvalidGrillCheckpointError(
+          grillCheckpointPath,
+          "grillTranscriptPath must match the canonical run transcript path.",
+        );
+      }
+
+      const transcript = await fs.readFile(grillTranscriptPath, "utf8");
+
+      if (!transcript.includes(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE)) {
+        throw new InvalidGrillCheckpointError(
+          grillCheckpointPath,
+          "grill transcript must be complete before writing a checkpoint.",
+        );
+      }
+
+      await writeArtifact(
+        "grill-checkpoint",
+        grillCheckpointPath,
+        `${JSON.stringify(validatedCheckpoint, null, 2)}\n`,
+      );
+    },
     writeIssue: async (slug, content) => {
       const normalizedSlug = normalizeIssueSlug(slug);
 
@@ -1166,10 +1377,14 @@ async function createRun(
     paths: {
       runDirectory,
       intentArtifact: getRunArtifactPath(projectRoot, runId, "intent"),
+      projectContextArtifact: getProjectContextPath(projectRoot),
       projectContextCandidate: join(
         runDirectory,
         DEVFLOW_RUN_PROJECT_CONTEXT_CANDIDATE_FILENAME,
       ),
+      grillTranscript: grillTranscriptPath,
+      grillCheckpoint: grillCheckpointPath,
+      prdArtifact: getRunArtifactPath(projectRoot, runId, "prd"),
     },
   };
 }

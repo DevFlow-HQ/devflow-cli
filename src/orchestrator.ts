@@ -529,6 +529,34 @@ async function runNoopStage(): Promise<void> {
   // these no-op stages with provider-backed or state-writing work.
 }
 
+async function runGrillArtifactStage(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+}): Promise<void> {
+  try {
+    await options.run.initializeGrillTranscript();
+    await options.run.completeGrillTranscript();
+    await options.run.writeGrillCheckpoint({
+      stage: "grill",
+      status: "complete",
+      completedAt: new Date().toISOString(),
+      rawTask: options.request.rawTask,
+      intentArtifactPath: options.run.paths.intentArtifact,
+      projectContextPath: options.run.paths.projectContextArtifact,
+      grillTranscriptPath: options.run.paths.grillTranscript,
+      prdArtifactPath: options.run.paths.prdArtifact,
+    });
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "grill",
+      artifactPath: options.run.paths.grillTranscript,
+      details,
+    });
+  }
+}
+
 export async function runExecutionRequest(
   request: ResolvedExecutionRequest,
   options: RunExecutionRequestOptions = {},
@@ -583,7 +611,19 @@ export async function runExecutionRequest(
     },
   });
 
-  for (const stage of PIPELINE_STAGES.slice(2)) {
+  await startStage("grill", options);
+  await runProviderBackedStageWithRetry({
+    stage: "grill",
+    totalAttempts: 1,
+    async runAttempt() {
+      await runGrillArtifactStage({ request, run });
+    },
+    async cleanupBeforeRetry() {
+      await fs.remove(run.paths.grillTranscript);
+    },
+  });
+
+  for (const stage of PIPELINE_STAGES.slice(3)) {
     await startStage(stage, options);
     await runNoopStage();
   }

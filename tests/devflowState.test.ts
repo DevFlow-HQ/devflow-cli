@@ -6,9 +6,12 @@ import test, { mock } from "node:test";
 import fs from "fs-extra";
 
 import {
+  CompletedDevFlowRunArtifactError,
   createDevFlowState,
+  DEVFLOW_GRILL_TRANSCRIPT_COMPLETE,
   DuplicateDevFlowRunArtifactError,
   type GitProjectContextProbe,
+  InvalidGrillCheckpointError,
   InvalidDevFlowConfigError,
   InvalidDevFlowIssueSlugError,
   InvalidProjectContextError,
@@ -943,6 +946,19 @@ test("createRun returns isolated run handles with opaque ids and persisted creat
     firstRun.paths.projectContextCandidate,
     join(projectRoot, ".devflow", "runs", firstRun.id, "project-context.candidate.md"),
   );
+  assert.equal(
+    firstRun.paths.projectContextArtifact,
+    join(projectRoot, ".devflow", "project-context.md"),
+  );
+  assert.equal(
+    firstRun.paths.grillTranscript,
+    join(firstRun.paths.runDirectory, "grill-transcript.md"),
+  );
+  assert.equal(
+    firstRun.paths.grillCheckpoint,
+    join(firstRun.paths.runDirectory, "grill-checkpoint.json"),
+  );
+  assert.equal(firstRun.paths.prdArtifact, join(firstRun.paths.runDirectory, "prd.md"));
   assert.equal(await fs.pathExists(firstRun.paths.runDirectory), true);
   assert.equal(await fs.pathExists(secondRun.paths.runDirectory), true);
 
@@ -990,6 +1006,103 @@ test("run handles write canonical immutable artifacts without exposing filenames
     await fs.readFile(join(run.paths.runDirectory, "validation.json"), "utf8"),
     '{"status":"pending"}',
   );
+});
+
+test("run handles record readable grill transcript message blocks and immutable completion", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.initializeGrillTranscript();
+  await run.appendGrillProviderMessage("\u001b[31mWhat outcome matters?\r\n");
+  await run.appendGrillUserMessage("Ship the artifact contract.\n");
+  await run.completeGrillTranscript();
+
+  assert.equal(
+    await fs.readFile(run.paths.grillTranscript, "utf8"),
+    [
+      "# Grill Transcript",
+      "",
+      "## Provider",
+      "",
+      "What outcome matters?",
+      "",
+      "## User",
+      "",
+      "Ship the artifact contract.",
+      "",
+      DEVFLOW_GRILL_TRANSCRIPT_COMPLETE,
+      "",
+    ].join("\n"),
+  );
+
+  await assert.rejects(
+    run.appendGrillProviderMessage("too late"),
+    (error: unknown) =>
+      error instanceof CompletedDevFlowRunArtifactError &&
+      error.runId === run.id &&
+      error.artifactName === "grill-transcript",
+  );
+});
+
+test("run handles validate and write grill checkpoint only after transcript completion", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
+  });
+  const run = await state.createRun();
+  const checkpoint = {
+    stage: "grill" as const,
+    status: "complete" as const,
+    completedAt: "2026-05-24T10:00:00.000Z",
+    rawTask: "resume work",
+    intentArtifactPath: run.paths.intentArtifact,
+    projectContextPath: run.paths.projectContextArtifact,
+    grillTranscriptPath: run.paths.grillTranscript,
+    prdArtifactPath: run.paths.prdArtifact,
+  };
+
+  await run.initializeGrillTranscript();
+  await assert.rejects(
+    run.writeGrillCheckpoint(checkpoint),
+    (error: unknown) =>
+      error instanceof InvalidGrillCheckpointError &&
+      error.message.includes("transcript must be complete"),
+  );
+
+  await run.completeGrillTranscript();
+  await run.writeGrillCheckpoint(checkpoint);
+
+  assert.deepEqual(await fs.readJson(run.paths.grillCheckpoint), checkpoint);
+});
+
+test("run handles reject malformed grill checkpoints before writing state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.initializeGrillTranscript();
+  await run.completeGrillTranscript();
+
+  await assert.rejects(
+    run.writeGrillCheckpoint({
+      stage: "grill",
+      status: "complete",
+      completedAt: "not-a-date",
+      rawTask: "",
+      intentArtifactPath: run.paths.intentArtifact,
+      projectContextPath: run.paths.projectContextArtifact,
+      grillTranscriptPath: run.paths.grillTranscript,
+      prdArtifactPath: run.paths.prdArtifact,
+    }),
+    (error: unknown) =>
+      error instanceof InvalidGrillCheckpointError &&
+      error.message.includes("completedAt") &&
+      error.message.includes("rawTask"),
+  );
+
+  assert.equal(await fs.pathExists(run.paths.grillCheckpoint), false);
 });
 
 test("run artifact writes reject duplicates with a domain-specific error", async () => {

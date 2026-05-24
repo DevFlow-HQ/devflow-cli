@@ -7,6 +7,7 @@ import fs from "fs-extra";
 
 import {
   createDevFlowState,
+  DEVFLOW_GRILL_TRANSCRIPT_COMPLETE,
   type DevFlowState,
 } from "../src/devflowState.js";
 import { createBuiltInManagedSessionAdapter } from "../src/adapters/builtInManagedSessionAdapter.js";
@@ -671,8 +672,99 @@ test("orchestrator passes intent stage input to the managed provider session", a
     needsClarification: false,
   });
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
+  assert.equal(
+    await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
+    `# Grill Transcript\n\n${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n`,
+  );
+  const grillCheckpoint = await fs.readJson(
+    join(runDirectory, "grill-checkpoint.json"),
+  );
+  assert.deepEqual(
+    {
+      ...grillCheckpoint,
+      completedAt: "<iso>",
+    },
+    {
+      stage: "grill",
+      status: "complete",
+      completedAt: "<iso>",
+      rawTask: "resume work",
+      intentArtifactPath: join(runDirectory, "intent.json"),
+      projectContextPath: join(projectRoot, ".devflow", "project-context.md"),
+      grillTranscriptPath: join(runDirectory, "grill-transcript.md"),
+      prdArtifactPath: join(runDirectory, "prd.md"),
+    },
+  );
+  assert.match(grillCheckpoint.completedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(await fs.pathExists(join(runDirectory, "issues")), false);
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+});
+
+test("orchestrator surfaces pre-completion grill transcript persistence failures as retryable grill-stage failures", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await baseDevFlowState.projectContext.write("# Project context\n");
+  const devFlowState: DevFlowState = {
+    ...baseDevFlowState,
+    async createRun() {
+      const run = await baseDevFlowState.createRun();
+
+      return {
+        ...run,
+        async initializeGrillTranscript() {
+          throw new Error("disk full");
+        },
+      };
+    },
+  };
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof StageArtifactValidationError &&
+      error.stage === "grill" &&
+      error.message.includes("disk full") &&
+      isRetryableProviderBackedStageFailure(error),
+  );
 });
 
 test("orchestrator reuses fresh project context during bootstrap without provider work", async () => {
