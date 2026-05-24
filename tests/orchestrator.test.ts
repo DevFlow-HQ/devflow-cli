@@ -1043,6 +1043,178 @@ test("orchestrator does not retry interactive grill after transcript completion"
   assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
 });
 
+test("orchestrator recreates a missing checkpoint from a completed grill transcript without repeating grill", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  const stages: PipelineStage[] = [];
+  let grillCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillCallCount += 1;
+      await input.transcript?.onProviderOutput?.("Ready for PRD synthesis.\n");
+      await input.validate();
+      await fs.remove(join(runDirectory, "grill-checkpoint.json"));
+      throw new ProviderSessionTranscriptCaptureError(
+        provider,
+        new Error("checkpoint vanished after completion"),
+      );
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+
+  assert.equal(grillCallCount, 1);
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+    "validate",
+  ]);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.match(
+    await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
+    new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
+  );
+  assert.deepEqual(
+    {
+      ...(await fs.readJson(join(runDirectory, "grill-checkpoint.json"))),
+      completedAt: "<iso>",
+    },
+    {
+      stage: "grill",
+      status: "complete",
+      completedAt: "<iso>",
+      rawTask: "resume work",
+      intentArtifactPath: join(runDirectory, "intent.json"),
+      projectContextPath: join(projectRoot, ".devflow", "project-context.md"),
+      grillTranscriptPath: join(runDirectory, "grill-transcript.md"),
+      prdArtifactPath: join(runDirectory, "prd.md"),
+    },
+  );
+});
+
+test("orchestrator replaces a corrupt checkpoint from a completed grill transcript without repeating grill", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  let grillCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillCallCount += 1;
+      await input.validate();
+      await fs.writeFile(join(runDirectory, "grill-checkpoint.json"), "{broken", "utf8");
+      throw new ProviderSessionTranscriptCaptureError(
+        provider,
+        new Error("checkpoint corrupt after completion"),
+      );
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(grillCallCount, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.equal(
+    (await fs.readJson(join(runDirectory, "grill-checkpoint.json"))).status,
+    "complete",
+  );
+});
+
 test("orchestrator surfaces pre-completion grill transcript persistence failures as retryable grill-stage failures", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });

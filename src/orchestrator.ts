@@ -7,7 +7,6 @@ import { z } from "zod";
 
 import {
   createDevFlowState,
-  DEVFLOW_GRILL_TRANSCRIPT_COMPLETE,
   type GitChangedPath,
   type DevFlowRunHandle,
   type DevFlowState,
@@ -594,16 +593,12 @@ async function writeCompletedGrillArtifacts(options: {
 }): Promise<void> {
   try {
     await options.run.completeGrillTranscript();
-    await options.run.writeGrillCheckpoint({
-      stage: "grill",
-      status: "complete",
-      completedAt: new Date().toISOString(),
-      rawTask: options.request.rawTask,
-      intentArtifactPath: options.run.paths.intentArtifact,
-      projectContextPath: options.run.paths.projectContextArtifact,
-      grillTranscriptPath: options.run.paths.grillTranscript,
-      prdArtifactPath: options.run.paths.prdArtifact,
-    });
+    await options.run.writeGrillCheckpoint(
+      createGrillCheckpoint({
+        request: options.request,
+        run: options.run,
+      }),
+    );
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
 
@@ -613,6 +608,22 @@ async function writeCompletedGrillArtifacts(options: {
       details,
     });
   }
+}
+
+function createGrillCheckpoint(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+}) {
+  return {
+    stage: "grill" as const,
+    status: "complete" as const,
+    completedAt: new Date().toISOString(),
+    rawTask: options.request.rawTask,
+    intentArtifactPath: options.run.paths.intentArtifact,
+    projectContextPath: options.run.paths.projectContextArtifact,
+    grillTranscriptPath: options.run.paths.grillTranscript,
+    prdArtifactPath: options.run.paths.prdArtifact,
+  };
 }
 
 async function runGrillStage(options: {
@@ -672,15 +683,6 @@ async function runGrillStage(options: {
   });
 }
 
-async function isGrillTranscriptComplete(transcriptPath: string): Promise<boolean> {
-  if (!(await fs.pathExists(transcriptPath))) {
-    return false;
-  }
-
-  const transcript = await fs.readFile(transcriptPath, "utf8");
-  return transcript.includes(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE);
-}
-
 async function appendGrillFailureNoteBestEffort(
   run: DevFlowRunHandle,
   error: unknown,
@@ -699,6 +701,32 @@ async function appendGrillFailureNoteBestEffort(
   }
 }
 
+async function recoverCompletedGrillCheckpointIfNeeded(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+}): Promise<boolean> {
+  if ((await options.run.getGrillTranscriptStatus()) !== "complete") {
+    return false;
+  }
+
+  try {
+    if ((await options.run.readGrillCheckpoint()) !== undefined) {
+      return false;
+    }
+  } catch {
+    // A completed transcript is authoritative; invalid checkpoint metadata can
+    // be replaced from run-scoped paths and the original raw task.
+  }
+
+  await options.run.recoverGrillCheckpoint(
+    createGrillCheckpoint({
+      request: options.request,
+      run: options.run,
+    }),
+  );
+  return true;
+}
+
 async function runGrillStageWithRetry(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
@@ -714,7 +742,16 @@ async function runGrillStageWithRetry(options: {
         throw error;
       }
 
-      if (await isGrillTranscriptComplete(options.run.paths.grillTranscript)) {
+      if (
+        await recoverCompletedGrillCheckpointIfNeeded({
+          request: options.request,
+          run: options.run,
+        })
+      ) {
+        return;
+      }
+
+      if ((await options.run.getGrillTranscriptStatus()) === "complete") {
         throw error;
       }
 

@@ -235,7 +235,10 @@ export interface DevFlowRunHandle {
   appendGrillUserMessage(content: string): Promise<void>;
   appendGrillAttemptFailure(message: string): Promise<void>;
   completeGrillTranscript(): Promise<void>;
+  getGrillTranscriptStatus(): Promise<DevFlowGrillTranscriptStatus>;
+  readGrillCheckpoint(): Promise<DevFlowGrillCheckpoint | undefined>;
   writeGrillCheckpoint(checkpoint: DevFlowGrillCheckpoint): Promise<void>;
+  recoverGrillCheckpoint(checkpoint: DevFlowGrillCheckpoint): Promise<void>;
   writeIssue(slug: string, content: string): Promise<void>;
   writePrd(content: string): Promise<void>;
   writeValidation(content: string): Promise<void>;
@@ -251,6 +254,7 @@ export interface DevFlowRunHandle {
 }
 
 export type DevFlowGrillCheckpoint = z.infer<typeof grillCheckpointSchema>;
+export type DevFlowGrillTranscriptStatus = "missing" | "partial" | "complete";
 
 export interface DevFlowState {
   config: {
@@ -1242,6 +1246,20 @@ async function assertGrillTranscriptMutable(
   }
 }
 
+async function getGrillTranscriptStatus(
+  transcriptPath: string,
+): Promise<DevFlowGrillTranscriptStatus> {
+  if (!(await fs.pathExists(transcriptPath))) {
+    return "missing";
+  }
+
+  const transcript = await fs.readFile(transcriptPath, "utf8");
+
+  return transcript.includes(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE)
+    ? "complete"
+    : "partial";
+}
+
 function validateGrillCheckpoint(
   checkpointPath: string,
   checkpoint: unknown,
@@ -1256,6 +1274,26 @@ function validateGrillCheckpoint(
   }
 
   return result.data;
+}
+
+async function readGrillCheckpoint(
+  checkpointPath: string,
+): Promise<DevFlowGrillCheckpoint | undefined> {
+  if (!(await fs.pathExists(checkpointPath))) {
+    return undefined;
+  }
+
+  let checkpoint: unknown;
+
+  try {
+    checkpoint = await fs.readJson(checkpointPath);
+  } catch (error) {
+    const details =
+      error instanceof Error ? error.message : "Checkpoint file is not valid JSON.";
+    throw new InvalidGrillCheckpointError(checkpointPath, details);
+  }
+
+  return validateGrillCheckpoint(checkpointPath, checkpoint);
 }
 
 async function createRun(
@@ -1362,6 +1400,8 @@ async function createRun(
         "utf8",
       );
     },
+    getGrillTranscriptStatus: () => getGrillTranscriptStatus(grillTranscriptPath),
+    readGrillCheckpoint: () => readGrillCheckpoint(grillCheckpointPath),
     writeGrillCheckpoint: async (checkpoint) => {
       const validatedCheckpoint = validateGrillCheckpoint(
         grillCheckpointPath,
@@ -1389,6 +1429,30 @@ async function createRun(
         grillCheckpointPath,
         `${JSON.stringify(validatedCheckpoint, null, 2)}\n`,
       );
+    },
+    recoverGrillCheckpoint: async (checkpoint) => {
+      const validatedCheckpoint = validateGrillCheckpoint(
+        grillCheckpointPath,
+        checkpoint,
+      );
+
+      if (validatedCheckpoint.grillTranscriptPath !== grillTranscriptPath) {
+        throw new InvalidGrillCheckpointError(
+          grillCheckpointPath,
+          "grillTranscriptPath must match the canonical run transcript path.",
+        );
+      }
+
+      const transcriptStatus = await getGrillTranscriptStatus(grillTranscriptPath);
+
+      if (transcriptStatus !== "complete") {
+        throw new InvalidGrillCheckpointError(
+          grillCheckpointPath,
+          "grill transcript must be complete before recovering a checkpoint.",
+        );
+      }
+
+      await fs.writeJson(grillCheckpointPath, validatedCheckpoint, { spaces: 2 });
     },
     writeIssue: async (slug, content) => {
       const normalizedSlug = normalizeIssueSlug(slug);

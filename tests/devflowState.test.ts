@@ -1077,6 +1077,88 @@ test("run handles validate and write grill checkpoint only after transcript comp
   assert.deepEqual(await fs.readJson(run.paths.grillCheckpoint), checkpoint);
 });
 
+test("run handles distinguish missing partial and completed grill transcripts", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  assert.equal(await run.getGrillTranscriptStatus(), "missing");
+
+  await run.initializeGrillTranscript();
+  await run.appendGrillProviderMessage("What changed?\n");
+
+  assert.equal(await run.getGrillTranscriptStatus(), "partial");
+
+  await run.completeGrillTranscript();
+
+  assert.equal(await run.getGrillTranscriptStatus(), "complete");
+});
+
+test("run handles recover missing or corrupt grill checkpoints from completed transcripts", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+  const checkpoint = {
+    stage: "grill" as const,
+    status: "complete" as const,
+    completedAt: "2026-05-24T10:00:00.000Z",
+    rawTask: "resume work",
+    intentArtifactPath: run.paths.intentArtifact,
+    projectContextPath: run.paths.projectContextArtifact,
+    grillTranscriptPath: run.paths.grillTranscript,
+    prdArtifactPath: run.paths.prdArtifact,
+  };
+
+  assert.equal(await run.readGrillCheckpoint(), undefined);
+
+  await run.initializeGrillTranscript();
+  await run.completeGrillTranscript();
+  await run.recoverGrillCheckpoint(checkpoint);
+
+  assert.deepEqual(await run.readGrillCheckpoint(), checkpoint);
+
+  await fs.writeFile(run.paths.grillCheckpoint, "{broken", "utf8");
+  await assert.rejects(
+    run.readGrillCheckpoint(),
+    (error: unknown) => error instanceof InvalidGrillCheckpointError,
+  );
+
+  await run.recoverGrillCheckpoint({
+    ...checkpoint,
+    completedAt: "2026-05-24T10:05:00.000Z",
+  });
+
+  assert.deepEqual(await run.readGrillCheckpoint(), {
+    ...checkpoint,
+    completedAt: "2026-05-24T10:05:00.000Z",
+  });
+});
+
+test("run handles reject checkpoint recovery from partial grill transcripts", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.initializeGrillTranscript();
+  await run.appendGrillProviderMessage("Still deciding.\n");
+
+  await assert.rejects(
+    run.recoverGrillCheckpoint({
+      stage: "grill",
+      status: "complete",
+      completedAt: "2026-05-24T10:00:00.000Z",
+      rawTask: "resume work",
+      intentArtifactPath: run.paths.intentArtifact,
+      projectContextPath: run.paths.projectContextArtifact,
+      grillTranscriptPath: run.paths.grillTranscript,
+      prdArtifactPath: run.paths.prdArtifact,
+    }),
+    (error: unknown) =>
+      error instanceof InvalidGrillCheckpointError &&
+      error.message.includes("transcript must be complete"),
+  );
+});
+
 test("run handles reject malformed grill checkpoints before writing state", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
   const state = createDevFlowState({ projectRoot });
