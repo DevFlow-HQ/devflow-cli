@@ -46,6 +46,20 @@ async function listRunDirectories(
   return (await fs.readdir(runsDirectory)).sort();
 }
 
+function isGrillSessionInput(input: ManagedProviderSessionInput): boolean {
+  return input.initialCompletionMarker.startsWith("DEVFLOW_GRILL_COMPLETE_");
+}
+
+async function completeGrillSession(
+  input: ManagedProviderSessionInput,
+): Promise<ManagedProviderSessionResult> {
+  assert.match(input.initialCompletionMarker, /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(input.initialPrompt, /Run the interactive grill stage/);
+  await input.validate();
+
+  return { repairUsed: false, exitCode: 0, signal: null };
+}
+
 async function createExecutableOnPath(
   t: test.TestContext,
   command: string,
@@ -82,6 +96,10 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
     },
     async runSession(input) {
       runSessionInputs.push(input);
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       await fs.outputJson(
         join(
           projectRoot,
@@ -119,7 +137,7 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
   );
 
   assert.deepEqual(resolvedProviderIds, ["codex"]);
-  assert.equal(runSessionInputs.length, 1);
+  assert.equal(runSessionInputs.length, 2);
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
 });
@@ -164,6 +182,10 @@ test("orchestrator can complete the active intent stage through a built-in provi
               ),
             );
 
+            if (isGrillSessionInput(input)) {
+              return completeGrillSession(input);
+            }
+
             await fs.outputJson(
               join(
                 projectRoot,
@@ -201,7 +223,7 @@ test("orchestrator can complete the active intent stage through a built-in provi
     needsClarification: false,
   });
   assert.equal(result.bootstrapProvenance, "reused");
-  assert.equal(ptyCalls.length, 1);
+  assert.equal(ptyCalls.length, 2);
   assert.equal(ptyCalls[0]?.executable, executablePath);
   assert.equal(ptyCalls[0]?.args[0], "--model");
   assert.equal(ptyCalls[0]?.args[1], "gpt-5.5/fast beta");
@@ -238,6 +260,10 @@ test("orchestrator reports intent repair metadata from a built-in provider adapt
       createManagedSessionAdapter(providerId) {
         return createBuiltInManagedSessionAdapter(providerId, {
           async runPtyManagedSession(_command, input) {
+            if (isGrillSessionInput(input)) {
+              return completeGrillSession(input);
+            }
+
             await assert.rejects(input.validate());
             assert.ok(input.repair);
             const repairPrompt = input.repair.renderPrompt(
@@ -301,6 +327,10 @@ test("orchestrator retries a retryable intent provider-session failure inside th
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const artifactPath = join(
@@ -404,6 +434,10 @@ test("orchestrator retries intent after failed in-session repair and accepts a v
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const artifactPath = join(
@@ -512,6 +546,10 @@ test("orchestrator raises a typed retry-exhausted error and preserves the final 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const artifactPath = join(
@@ -586,7 +624,7 @@ test("orchestrator raises a typed retry-exhausted error and preserves the final 
   });
 });
 
-test("orchestrator passes intent stage input to the managed provider session", async () => {
+test("orchestrator passes intent and grill stage inputs to managed provider sessions", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
@@ -601,32 +639,52 @@ test("orchestrator passes intent stage input to the managed provider session", a
       runSessionInputs.push(input);
       assert.equal(input.workingDirectory, projectRoot);
       assert.equal(input.model, "gpt-5.5/fast beta");
-      assert.match(input.initialCompletionMarker, /^DEVFLOW_INTENT_COMPLETE_[a-f0-9]{32}$/);
-      assert.match(input.initialPrompt, /Classify only the raw task/);
-      assert.match(input.initialPrompt, /Raw task:\nresume work/);
-      assert.doesNotMatch(input.initialPrompt, /Project context/);
-      assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
-      assert.match(input.initialPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/);
       assert.equal("stage" in input, false);
       assert.equal("artifactPath" in input, false);
       assert.equal("context" in input, false);
 
-      await fs.outputJson(
-        join(
-          projectRoot,
-          ".devflow",
-          "runs",
-          (await listRunDirectories(projectRoot))[0],
-          "intent.json",
-        ),
-        {
-          classification: "feature",
-          summary: "Resume the current workstream.",
-          rawTask: "resume work",
-          needsClarification: false,
-        },
-        { spaces: 2 },
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
       );
+
+      if (input.initialCompletionMarker.startsWith("DEVFLOW_INTENT_COMPLETE_")) {
+        assert.match(input.initialCompletionMarker, /^DEVFLOW_INTENT_COMPLETE_[a-f0-9]{32}$/);
+        assert.match(input.initialPrompt, /Classify only the raw task/);
+        assert.match(input.initialPrompt, /Raw task:\nresume work/);
+        assert.doesNotMatch(input.initialPrompt, /Project context/);
+        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+        assert.match(input.initialPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/);
+
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+      } else {
+        assert.match(input.initialCompletionMarker, /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/);
+        assert.match(input.initialPrompt, /Run the interactive grill stage/);
+        assert.match(input.initialPrompt, /Raw task:\nresume work/);
+        assert.match(input.initialPrompt, /Intent artifact:/);
+        assert.match(input.initialPrompt, /"needsClarification": false/);
+        assert.match(input.initialPrompt, /Project context path:/);
+        assert.match(input.initialPrompt, /Ask one question at a time/);
+        assert.match(input.initialPrompt, /recommended answers/);
+        assert.match(input.initialPrompt, /Inspect the repository/);
+        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+        assert.ok(input.transcript);
+
+        await input.transcript.onProviderOutput?.("What tradeoff matters?\n");
+        await input.transcript.onSubmittedUserMessage?.("Prefer simple contracts.\n");
+      }
+
       await input.validate();
 
       return { repairUsed: false, exitCode: 0, signal: null };
@@ -660,7 +718,7 @@ test("orchestrator passes intent stage input to the managed provider session", a
     "execute",
     "validate",
   ]);
-  assert.equal(runSessionInputs.length, 1);
+  assert.equal(runSessionInputs.length, 2);
 
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
@@ -675,7 +733,20 @@ test("orchestrator passes intent stage input to the managed provider session", a
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), false);
   assert.equal(
     await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
-    `# Grill Transcript\n\n${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n`,
+    [
+      "# Grill Transcript",
+      "",
+      "## Provider",
+      "",
+      "What tradeoff matters?",
+      "",
+      "## User",
+      "",
+      "Prefer simple contracts.",
+      "",
+      DEVFLOW_GRILL_TRANSCRIPT_COMPLETE,
+      "",
+    ].join("\n"),
   );
   const grillCheckpoint = await fs.readJson(
     join(runDirectory, "grill-checkpoint.json"),
@@ -797,6 +868,11 @@ test("orchestrator reuses fresh project context during bootstrap without provide
     async runSession(input) {
       runSessionInputs.push(input);
 
+      if (isGrillSessionInput(input)) {
+        assert.equal(stages.at(-1), "grill");
+        return completeGrillSession(input);
+      }
+
       assert.equal(stages.at(-1), "intent");
       await fs.outputJson(
         join(
@@ -836,7 +912,7 @@ test("orchestrator reuses fresh project context during bootstrap without provide
     },
   );
 
-  assert.equal(runSessionInputs.length, 1);
+  assert.equal(runSessionInputs.length, 2);
   assert.equal(result.bootstrapProvenance, "reused");
   assert.equal(checkFreshnessCallCount, 1);
   assert.deepEqual(stages, [
@@ -884,8 +960,12 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
     async detect() {
       return { isAvailable: true, executable: "codex" };
     },
-    async runSession() {
+    async runSession(input) {
       runSessionCallCount += 1;
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       await fs.outputJson(
         join(
           projectRoot,
@@ -924,7 +1004,7 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
     },
   );
 
-  assert.equal(runSessionCallCount, 1);
+  assert.equal(runSessionCallCount, 2);
   assert.equal(result.bootstrapProvenance, "metadata-updated");
   assert.deepEqual(projectContextWrites, [
     {
@@ -984,8 +1064,12 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
     async detect() {
       return { isAvailable: true, executable: "codex" };
     },
-    async runSession() {
+    async runSession(input) {
       runSessionCallCount += 1;
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       await fs.outputJson(
         join(
           projectRoot,
@@ -1021,7 +1105,7 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
     },
   );
 
-  assert.equal(runSessionCallCount, 1);
+  assert.equal(runSessionCallCount, 2);
   assert.equal(result.bootstrapProvenance, "metadata-updated");
   assert.deepEqual(projectContextWrites, [
     {
@@ -1107,6 +1191,10 @@ test("orchestrator generates missing project context through the managed provide
         return { repairUsed: false, exitCode: 0, signal: null };
       }
 
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       assert.equal(input.workingDirectory, projectRoot);
       assert.match(
         input.initialCompletionMarker,
@@ -1147,7 +1235,7 @@ test("orchestrator generates missing project context through the managed provide
     },
   );
 
-  assert.equal(runSessionInputs.length, 2);
+  assert.equal(runSessionInputs.length, 3);
   assert.equal(result.bootstrapProvenance, "generated");
   assert.deepEqual(projectContextWrites, [
     {
@@ -1261,6 +1349,10 @@ test("orchestrator refreshes semantically stale project context through the mana
         return { isAvailable: true, executable: "codex" };
       },
       async runSession(input) {
+        if (isGrillSessionInput(input)) {
+          return completeGrillSession(input);
+        }
+
         runSessionCallCount += 1;
         const runIds = await listRunDirectories(projectRoot);
         const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -1449,6 +1541,10 @@ test("orchestrator supplies bootstrap validation and one in-session repair attem
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -1539,6 +1635,10 @@ test("orchestrator retries bootstrap after repair failure and removes the failed
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -1775,7 +1875,7 @@ test("orchestrator treats bootstrap candidate cleanup failure after persistence 
     },
   );
 
-  assert.equal(runSessionCallCount, 2);
+  assert.equal(runSessionCallCount, 3);
   assert.equal(await devFlowState.projectContext.read(), validContext);
 });
 
@@ -1844,6 +1944,10 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
       try {
         await input.validate();
       } catch (error) {

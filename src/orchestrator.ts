@@ -75,6 +75,12 @@ const BOOTSTRAP_PROJECT_CONTEXT_PROMPT_PATH = join(
   "prompts",
   "bootstrap-project-context.md",
 );
+const GRILL_PROMPT_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "prompts",
+  "grill.md",
+);
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
 
@@ -198,6 +204,30 @@ async function renderBootstrapProjectContextPrompt(options: {
     );
 }
 
+async function renderGrillPrompt(options: {
+  rawTask: string;
+  intentArtifact: IntentArtifact;
+  intentArtifactPath: string;
+  projectContextPath: string;
+  completionMarker: string;
+}): Promise<string> {
+  const promptTemplate = await fs.readFile(GRILL_PROMPT_PATH, "utf8");
+
+  return promptTemplate
+    .replaceAll("{{RAW_TASK}}", options.rawTask)
+    .replaceAll(
+      "{{INTENT_ARTIFACT}}",
+      JSON.stringify(options.intentArtifact, null, 2),
+    )
+    .replaceAll("{{INTENT_ARTIFACT_PATH}}", options.intentArtifactPath)
+    .replaceAll("{{PROJECT_CONTEXT_PATH}}", options.projectContextPath)
+    .replaceAll(
+      "{{CLARIFICATION_CONTEXT}}",
+      formatClarificationContext(options.intentArtifact),
+    )
+    .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
+}
+
 function renderIntentRepairPrompt(options: {
   artifactPath: string;
   completionMarker: string;
@@ -253,6 +283,12 @@ function formatChangedPathsForPrompt(changedPaths: GitChangedPath[] | undefined)
       return `- ${changedPath.path} (${changedPath.status}${previousPath})`;
     })
     .join("\n");
+}
+
+function formatClarificationContext(intentArtifact: IntentArtifact): string {
+  return intentArtifact.needsClarification
+    ? "The intent classifier flagged this task as needing clarification. Use that as advisory context for the interview, but do not skip grilling."
+    : "The intent classifier did not flag mandatory clarification. Still run the grill interview and validate the plan before continuing.";
 }
 
 function requiresProviderBackedProjectContextRefresh(
@@ -531,12 +567,11 @@ async function runNoopStage(): Promise<void> {
   // these no-op stages with provider-backed or state-writing work.
 }
 
-async function runGrillArtifactStage(options: {
+async function writeCompletedGrillArtifacts(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
 }): Promise<void> {
   try {
-    await options.run.initializeGrillTranscript();
     await options.run.completeGrillTranscript();
     await options.run.writeGrillCheckpoint({
       stage: "grill",
@@ -557,6 +592,53 @@ async function runGrillArtifactStage(options: {
       details,
     });
   }
+}
+
+async function runGrillStage(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  parsedIntent: IntentArtifact;
+}): Promise<void> {
+  const completionMarker = createCompletionMarker("DEVFLOW_GRILL_COMPLETE");
+  const prompt = await renderGrillPrompt({
+    rawTask: options.request.rawTask,
+    intentArtifact: options.parsedIntent,
+    intentArtifactPath: options.run.paths.intentArtifact,
+    projectContextPath: options.run.paths.projectContextArtifact,
+    completionMarker,
+  });
+
+  try {
+    await options.run.initializeGrillTranscript();
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "grill",
+      artifactPath: options.run.paths.grillTranscript,
+      details,
+    });
+  }
+
+  await options.adapter.runSession({
+    workingDirectory: options.request.projectRoot,
+    initialPrompt: prompt,
+    initialCompletionMarker: completionMarker,
+    ...(options.request.model ? { model: options.request.model } : {}),
+    async validate() {
+      await writeCompletedGrillArtifacts({
+        request: options.request,
+        run: options.run,
+      });
+    },
+    transcript: {
+      onProviderOutput: (chunk) =>
+        options.run.appendGrillProviderMessage(chunk),
+      onSubmittedUserMessage: (message) =>
+        options.run.appendGrillUserMessage(message),
+    },
+  });
 }
 
 export async function runExecutionRequest(
@@ -618,7 +700,7 @@ export async function runExecutionRequest(
     stage: "grill",
     totalAttempts: 1,
     async runAttempt() {
-      await runGrillArtifactStage({ request, run });
+      await runGrillStage({ request, run, adapter, parsedIntent });
     },
     async cleanupBeforeRetry() {
       await fs.remove(run.paths.grillTranscript);
