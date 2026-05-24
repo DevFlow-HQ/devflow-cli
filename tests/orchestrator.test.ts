@@ -1277,6 +1277,281 @@ test("orchestrator replaces a corrupt checkpoint from a completed grill transcri
   );
 });
 
+test("orchestrator repairs a missing PRD artifact inside the completed grill session", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const repairPrompts: string[] = [];
+  const repairMarkers: string[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      await input.validate();
+
+      for (const continuation of input.continuations ?? []) {
+        await continuation.onStart?.();
+        await assert.rejects(continuation.validate());
+        assert.ok(continuation.repair);
+        assert.notEqual(
+          continuation.repair.completionMarker,
+          continuation.completionMarker,
+        );
+        assert.match(
+          continuation.repair.completionMarker,
+          /^DEVFLOW_PRD_REPAIR_COMPLETE_[a-f0-9]{32}$/,
+        );
+        const repairPrompt = continuation.repair.renderPrompt(
+          new Error("prd artifact missing"),
+        );
+        repairPrompts.push(repairPrompt);
+        repairMarkers.push(continuation.repair.completionMarker);
+        assert.match(repairPrompt, /Repair only the canonical PRD artifact/);
+        assert.match(repairPrompt, /prd artifact missing/);
+        assert.match(repairPrompt, new RegExp(continuation.repair.completionMarker));
+
+        await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# Repaired PRD\n");
+        await continuation.validate();
+      }
+
+      return { repairUsed: true, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(repairPrompts.length, 1);
+  assert.equal(repairMarkers.length, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# Repaired PRD\n",
+  );
+});
+
+test("orchestrator repairs an empty PRD artifact with the same non-empty validation", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const repairFailures: string[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      await input.validate();
+
+      for (const continuation of input.continuations ?? []) {
+        await continuation.onStart?.();
+        const prdPath = extractPrdArtifactPath(continuation.prompt);
+        await fs.outputFile(prdPath, "   \n");
+
+        await assert.rejects(
+          continuation.validate(),
+          (error: unknown) => {
+            assert.ok(error instanceof StageArtifactValidationError);
+            repairFailures.push(error.message);
+            return error.message.includes("non-whitespace content");
+          },
+        );
+        assert.ok(continuation.repair);
+
+        await fs.outputFile(prdPath, "# Repaired PRD\n");
+        await continuation.validate();
+      }
+
+      return { repairUsed: true, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.deepEqual(repairFailures, [
+    'Invalid artifact for stage "prd" at ' +
+      join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+        "prd.md",
+      ) +
+      ". PRD artifact must contain non-whitespace content.",
+  ]);
+});
+
+test("orchestrator retries only PRD synthesis from transcript after completed-grill PRD repair fails", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  let grillCallCount = 0;
+  let prdOnlyCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (isPrdSessionInput(input)) {
+        prdOnlyCallCount += 1;
+        assert.match(input.initialPrompt, /No live provider discussion is available/);
+        assert.match(input.initialPrompt, /Persisted grill transcript path:/);
+        assert.doesNotMatch(input.initialPrompt, /Ask one question at a time/);
+        assert.ok(input.repair);
+
+        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD retry\n");
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillCallCount += 1;
+      await input.transcript?.onProviderOutput?.("Ready for PRD synthesis.\n");
+      await input.validate();
+
+      for (const continuation of input.continuations ?? []) {
+        await continuation.onStart?.();
+        await assert.rejects(continuation.validate());
+        assert.ok(continuation.repair);
+        await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "\n");
+
+        try {
+          await continuation.validate();
+        } catch (repairError) {
+          assert.ok(repairError instanceof Error);
+          throw continuation.repair.mapFailure(repairError);
+        }
+      }
+
+      throw new Error("Invalid PRD unexpectedly passed validation.");
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(grillCallCount, 1);
+  assert.equal(prdOnlyCallCount, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.match(
+    await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
+    new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
+  );
+  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD retry\n");
+});
+
 test("orchestrator surfaces pre-completion grill transcript persistence failures as retryable grill-stage failures", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });

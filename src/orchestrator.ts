@@ -90,6 +90,7 @@ const PRD_PROMPT_PATH = join(
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
 const GRILL_STAGE_TOTAL_ATTEMPTS = 2;
+const PRD_STAGE_TOTAL_ATTEMPTS = 2;
 
 const intentArtifactSchema = z
   .object({
@@ -299,6 +300,25 @@ function renderBootstrapProjectContextRepairPrompt(options: {
     "",
     "Replace the candidate artifact with valid bounded project context Markdown.",
     `When the candidate is repaired, print exactly: ${options.completionMarker}`,
+  ].join("\n");
+}
+
+function renderPrdRepairPrompt(options: {
+  prdArtifactPath: string;
+  completionMarker: string;
+  validationError: Error;
+}): string {
+  return [
+    "Repair only the canonical PRD artifact.",
+    "",
+    `Canonical PRD artifact path: ${options.prdArtifactPath}`,
+    "",
+    "Validation failure:",
+    options.validationError.message,
+    "",
+    "Replace the PRD artifact with non-empty Markdown synthesized from the existing task, intent, project context, and grill transcript.",
+    "Do not interview the user, write issues, or create alternate PRD files.",
+    `When the PRD artifact is repaired, print exactly: ${options.completionMarker}`,
   ].join("\n");
 }
 
@@ -647,6 +667,33 @@ function createPrdCompletionMarker(): string {
   return createCompletionMarker("DEVFLOW_PRD_COMPLETE");
 }
 
+function createPrdRepairCompletionMarker(): string {
+  return createCompletionMarker("DEVFLOW_PRD_REPAIR_COMPLETE");
+}
+
+function createPrdRepairConfig(options: {
+  run: DevFlowRunHandle;
+  completionMarker: string;
+}) {
+  return {
+    completionMarker: options.completionMarker,
+    renderPrompt(validationError: Error) {
+      return renderPrdRepairPrompt({
+        prdArtifactPath: options.run.paths.prdArtifact,
+        completionMarker: options.completionMarker,
+        validationError,
+      });
+    },
+    mapFailure(validationError: Error) {
+      return new StageArtifactValidationError({
+        stage: "prd",
+        artifactPath: options.run.paths.prdArtifact,
+        details: validationError.message,
+      });
+    },
+  };
+}
+
 async function writeCompletedGrillArtifacts(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
@@ -696,6 +743,7 @@ async function runGrillStage(options: {
 }): Promise<void> {
   const completionMarker = createCompletionMarker("DEVFLOW_GRILL_COMPLETE");
   const prdCompletionMarker = createPrdCompletionMarker();
+  const prdRepairCompletionMarker = createPrdRepairCompletionMarker();
   const prompt = await renderGrillPrompt({
     rawTask: options.request.rawTask,
     intentArtifact: options.parsedIntent,
@@ -750,6 +798,10 @@ async function runGrillStage(options: {
         async validate() {
           await validatePrdArtifact(options.run.paths.prdArtifact);
         },
+        repair: createPrdRepairConfig({
+          run: options.run,
+          completionMarker: prdRepairCompletionMarker,
+        }),
       },
     ],
     transcript: {
@@ -768,6 +820,7 @@ async function runPrdStage(options: {
   liveDiscussionAvailable: boolean;
 }): Promise<void> {
   const completionMarker = createPrdCompletionMarker();
+  const repairCompletionMarker = createPrdRepairCompletionMarker();
   const prompt = await renderPrdPrompt({
     request: options.request,
     run: options.run,
@@ -783,9 +836,31 @@ async function runPrdStage(options: {
     async validate() {
       await validatePrdArtifact(options.run.paths.prdArtifact);
     },
+    repair: createPrdRepairConfig({
+      run: options.run,
+      completionMarker: repairCompletionMarker,
+    }),
   });
 
   await validatePrdArtifact(options.run.paths.prdArtifact);
+}
+
+async function runPrdStageWithRetry(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  liveDiscussionAvailable: boolean;
+}): Promise<void> {
+  await runProviderBackedStageWithRetry({
+    stage: "prd",
+    totalAttempts: PRD_STAGE_TOTAL_ATTEMPTS,
+    async runAttempt() {
+      await runPrdStage(options);
+    },
+    async cleanupBeforeRetry() {
+      await fs.remove(options.run.paths.prdArtifact);
+    },
+  });
 }
 
 async function appendGrillFailureNoteBestEffort(
@@ -853,7 +928,23 @@ async function runGrillStageWithRetry(options: {
         error instanceof StageArtifactValidationError &&
         error.stage === "prd"
       ) {
-        throw error;
+        await recoverCompletedGrillCheckpointIfNeeded({
+          request: options.request,
+          run: options.run,
+        });
+
+        if ((await options.run.getGrillTranscriptStatus()) !== "complete") {
+          throw error;
+        }
+
+        await options.onPrdStageStart();
+        await runPrdStageWithRetry({
+          request: options.request,
+          run: options.run,
+          adapter: options.adapter,
+          liveDiscussionAvailable: false,
+        });
+        return;
       }
 
       if (
@@ -863,7 +954,7 @@ async function runGrillStageWithRetry(options: {
         })
       ) {
         await options.onPrdStageStart();
-        await runPrdStage({
+        await runPrdStageWithRetry({
           request: options.request,
           run: options.run,
           adapter: options.adapter,
