@@ -7,8 +7,11 @@ import { z } from "zod";
 
 import {
   createDevFlowState,
+  type GitChangedPath,
   type DevFlowRunHandle,
   type DevFlowState,
+  type ProjectContextFreshness,
+  type ProjectContextRefreshReason,
   validateProjectContextContent,
 } from "./devflowState.js";
 import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSessionAdapter.js";
@@ -162,6 +165,9 @@ async function renderIntentPrompt(options: {
 async function renderBootstrapProjectContextPrompt(options: {
   candidatePath: string;
   completionMarker: string;
+  refreshReason: ProjectContextRefreshReason;
+  priorContext?: string;
+  changedPaths?: GitChangedPath[];
 }): Promise<string> {
   const promptTemplate = await fs.readFile(
     BOOTSTRAP_PROJECT_CONTEXT_PROMPT_PATH,
@@ -170,7 +176,16 @@ async function renderBootstrapProjectContextPrompt(options: {
 
   return promptTemplate
     .replaceAll("{{CANDIDATE_PATH}}", options.candidatePath)
-    .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
+    .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker)
+    .replaceAll("{{REFRESH_REASON}}", options.refreshReason)
+    .replaceAll(
+      "{{PRIOR_PROJECT_CONTEXT}}",
+      options.priorContext ?? "No prior project context is available.",
+    )
+    .replaceAll(
+      "{{CHANGED_PATHS}}",
+      formatChangedPathsForPrompt(options.changedPaths),
+    );
 }
 
 function renderIntentRepairPrompt(options: {
@@ -193,6 +208,38 @@ function renderIntentRepairPrompt(options: {
 
 function createCompletionMarker(prefix = "DEVFLOW_INTENT_COMPLETE"): string {
   return `${prefix}_${crypto.randomBytes(16).toString("hex")}`;
+}
+
+function formatChangedPathsForPrompt(changedPaths: GitChangedPath[] | undefined): string {
+  if (changedPaths === undefined || changedPaths.length === 0) {
+    return "No changed path metadata was provided by freshness.";
+  }
+
+  return changedPaths
+    .map((changedPath) => {
+      const previousPath =
+        changedPath.previousPath === undefined
+          ? ""
+          : ` from ${changedPath.previousPath}`;
+
+      return `- ${changedPath.path} (${changedPath.status}${previousPath})`;
+    })
+    .join("\n");
+}
+
+function requiresProviderBackedProjectContextRefresh(
+  freshness: ProjectContextFreshness,
+): freshness is Extract<ProjectContextFreshness, { status: "stale" }> {
+  return (
+    freshness.status === "stale" &&
+    [
+      "missing-context",
+      "context-version-changed",
+      "max-age-exceeded",
+      "baseline-unavailable",
+      "relevant-changes",
+    ].includes(freshness.refreshReason)
+  );
 }
 
 async function readIntentArtifact(artifactPath: string): Promise<IntentArtifact> {
@@ -351,13 +398,16 @@ async function runBootstrapStage(options: {
     });
   }
 
-  if (freshness.refreshReason === "missing-context") {
+  if (requiresProviderBackedProjectContextRefresh(freshness)) {
     const completionMarker = createCompletionMarker(
       "DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE",
     );
     const prompt = await renderBootstrapProjectContextPrompt({
       candidatePath: options.run.paths.projectContextCandidate,
       completionMarker,
+      refreshReason: freshness.refreshReason,
+      priorContext: freshness.context,
+      changedPaths: freshness.changedPaths,
     });
 
     await options.adapter.runSession({
@@ -382,7 +432,7 @@ async function runBootstrapStage(options: {
 
     validateProjectContextContent(candidate);
     await options.devFlowState.projectContext.write(candidate, {
-      refreshReason: "missing-context",
+      refreshReason: freshness.refreshReason,
     });
     await fs.remove(options.run.paths.projectContextCandidate);
   }

@@ -1070,6 +1070,175 @@ test("orchestrator generates missing project context through the managed provide
   );
 });
 
+test("orchestrator refreshes semantically stale project context through the managed provider during bootstrap", async () => {
+  for (const refreshReason of [
+    "context-version-changed",
+    "max-age-exceeded",
+    "baseline-unavailable",
+    "relevant-changes",
+  ] as const) {
+    const projectRoot = fs.mkdtempSync(
+      join(tmpdir(), `devflow-orchestrator-${refreshReason}-`),
+    );
+    const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+    const priorContext = "# Project Context\n\nExisting orientation.\n";
+    await baseDevFlowState.projectContext.write(priorContext, {
+      refreshReason: "manual",
+    });
+    const refreshedContext = [
+      "# Project Context",
+      "",
+      "## Purpose",
+      "DevFlow coordinates provider-backed development workflows.",
+      "",
+      "## Architecture",
+      "The orchestrator refreshes stale shared project context.",
+      "",
+      "## Key Paths",
+      "- src/orchestrator.ts",
+      "- src/devflowState.ts",
+      "",
+      "## Commands",
+      "- npm run test",
+      "- npm run typecheck",
+      "",
+      "## Conventions",
+      "Tests exercise public orchestration behavior.",
+      "",
+    ].join("\n");
+    const candidateContext =
+      refreshReason === "max-age-exceeded" ? priorContext : refreshedContext;
+    const projectContextWrites: Array<{
+      content: string;
+      refreshReason: string | undefined;
+    }> = [];
+    const devFlowState: DevFlowState = {
+      ...baseDevFlowState,
+      projectContext: {
+        ...baseDevFlowState.projectContext,
+        async checkFreshness() {
+          return {
+            status: "stale",
+            refreshReason,
+            context: priorContext,
+            changedPaths:
+              refreshReason === "relevant-changes"
+                ? [
+                    { path: "src/orchestrator.ts", status: "modified" },
+                    {
+                      path: "docs/context.md",
+                      previousPath: "docs/old-context.md",
+                      status: "renamed",
+                    },
+                    { path: "src/obsolete.ts", status: "deleted" },
+                  ]
+                : undefined,
+          };
+        },
+        async write(content, metadataOrOptions) {
+          projectContextWrites.push({
+            content,
+            refreshReason:
+              metadataOrOptions && "refreshReason" in metadataOrOptions
+                ? metadataOrOptions.refreshReason
+                : undefined,
+          });
+          return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+        },
+      },
+    };
+    const prompts: string[] = [];
+    let runSessionCallCount = 0;
+    const adapter: ManagedSessionAdapter = {
+      provider: getBuiltInProviderIdentity("codex"),
+      async detect() {
+        return { isAvailable: true, executable: "codex" };
+      },
+      async runSession(input) {
+        runSessionCallCount += 1;
+        const runIds = await listRunDirectories(projectRoot);
+        const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+        if (runSessionCallCount === 1) {
+          await fs.outputJson(
+            join(runDirectory, "intent.json"),
+            {
+              classification: "feature",
+              summary: "Refresh context from raw task details.",
+              rawTask: "SECRET RAW TASK",
+              needsClarification: true,
+            },
+            { spaces: 2 },
+          );
+          await input.validate();
+          return { repairUsed: false, exitCode: 0, signal: null };
+        }
+
+        prompts.push(input.initialPrompt);
+        assert.equal(input.workingDirectory, projectRoot);
+        assert.match(
+          input.initialCompletionMarker,
+          /^DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE_[a-f0-9]{32}$/,
+        );
+        assert.match(input.initialPrompt, /Refresh reason:/);
+        assert.match(input.initialPrompt, new RegExp(refreshReason));
+        assert.match(input.initialPrompt, /Existing project context:/);
+        assert.match(input.initialPrompt, /Existing orientation/);
+        assert.match(input.initialPrompt, /focused inspection/i);
+        assert.match(input.initialPrompt, /changed, renamed, new, deleted-related, nearby, or referenced files/i);
+        assert.doesNotMatch(input.initialPrompt, /whole-repo rescan/i);
+        assert.doesNotMatch(input.initialPrompt, /SECRET RAW TASK/);
+        assert.doesNotMatch(input.initialPrompt, /Refresh context from raw task details/);
+        assert.doesNotMatch(input.initialPrompt, /needsClarification/);
+        assert.doesNotMatch(input.initialPrompt, /classification/);
+
+        if (refreshReason === "relevant-changes") {
+          assert.match(input.initialPrompt, /src\/orchestrator\.ts \(modified\)/);
+          assert.match(
+            input.initialPrompt,
+            /docs\/context\.md \(renamed from docs\/old-context\.md\)/,
+          );
+          assert.match(input.initialPrompt, /src\/obsolete\.ts \(deleted\)/);
+        }
+
+        const candidatePath = join(runDirectory, "project-context.candidate.md");
+        await fs.outputFile(candidatePath, candidateContext);
+        await input.validate();
+
+        return { repairUsed: false, exitCode: 0, signal: null };
+      },
+    };
+
+    await runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "SECRET RAW TASK",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    );
+
+    assert.equal(runSessionCallCount, 2);
+    assert.equal(prompts.length, 1);
+    assert.deepEqual(projectContextWrites, [
+      {
+        content: candidateContext,
+        refreshReason,
+      },
+    ]);
+    assert.equal(await baseDevFlowState.projectContext.read(), candidateContext);
+    assert.equal(
+      (await baseDevFlowState.projectContext.readMetadata())?.refreshReason,
+      refreshReason,
+    );
+  }
+});
+
 test("orchestrator rejects invalid generated project-context candidates during bootstrap", async () => {
   for (const [name, invalidCandidate, expectedMessage] of [
     ["empty", " \n\t", /Project context content must be non-empty/],
