@@ -11,8 +11,62 @@ export type ProviderDetectionResult =
       debugReason?: string;
     };
 
+export type ManagedProviderSessionControlTransport = "pty" | "api";
+export type ManagedProviderSessionEventSource = "pty" | "provider";
+
+export interface ManagedProviderSessionCapabilities {
+  controlTransport: ManagedProviderSessionControlTransport;
+  eventSource: ManagedProviderSessionEventSource;
+  supportsProviderSessionId: boolean;
+  supportsResume: boolean;
+}
+
+export interface ManagedProviderSessionPhase {
+  id: string;
+  kind?: string;
+  attempt?: number;
+}
+
+interface ManagedProviderSessionEventBase {
+  provider: ProviderIdentity;
+  source: ManagedProviderSessionEventSource;
+  structured: boolean;
+  phaseId?: string;
+  providerSessionId?: string;
+}
+
+export type ManagedProviderSessionEvent =
+  | (ManagedProviderSessionEventBase & {
+      type: "session-start";
+    })
+  | (ManagedProviderSessionEventBase & {
+      type: "submitted-user-message";
+      message: string;
+    })
+  | (ManagedProviderSessionEventBase & {
+      type: "assistant-message";
+      content: string;
+    })
+  | (ManagedProviderSessionEventBase & {
+      type: "turn-completed";
+    })
+  | (ManagedProviderSessionEventBase & {
+      type: "session-completed";
+      exitCode: number | null;
+      signal: NodeJS.Signals | null;
+    })
+  | (ManagedProviderSessionEventBase & {
+      type: "session-failed";
+      error: string;
+    });
+
+export type ManagedProviderSessionEventCallback = (
+  event: ManagedProviderSessionEvent,
+) => void | Promise<void>;
+
 export interface ManagedProviderSessionRepairConfig {
   completionMarker: string;
+  phase?: ManagedProviderSessionPhase;
   renderPrompt(validationError: Error): string;
   mapFailure(validationError: Error): Error;
 }
@@ -22,15 +76,18 @@ export interface ManagedProviderSessionInput {
   initialPrompt: string;
   initialCompletionMarker: string;
   model?: string;
+  phase?: ManagedProviderSessionPhase;
   validate(): Promise<void>;
   repair?: ManagedProviderSessionRepairConfig;
   continuations?: ManagedProviderSessionContinuation[];
   transcript?: ManagedProviderSessionTranscriptCallbacks;
+  onProviderEvent?: ManagedProviderSessionEventCallback;
 }
 
 export interface ManagedProviderSessionContinuation {
   prompt: string;
   completionMarker: string;
+  phase?: ManagedProviderSessionPhase;
   onStart?(): void | Promise<void>;
   validate(): Promise<void>;
   repair?: ManagedProviderSessionRepairConfig;
@@ -146,8 +203,26 @@ export class ProviderSessionTranscriptCaptureError extends Error {
   }
 }
 
+export class ProviderSessionEventCaptureError extends Error {
+  readonly provider: ProviderIdentity;
+  readonly cause: unknown;
+
+  constructor(provider: ProviderIdentity, cause: unknown) {
+    const causeMessage =
+      cause instanceof Error ? cause.message : "Unknown event capture failure";
+
+    super(
+      `Provider session for "${provider.id}" could not capture provider events: ${causeMessage}.`,
+    );
+    this.name = "ProviderSessionEventCaptureError";
+    this.provider = provider;
+    this.cause = cause;
+  }
+}
+
 export interface ManagedSessionAdapter {
   readonly provider: ProviderIdentity;
+  readonly capabilities?: ManagedProviderSessionCapabilities;
   detect(): Promise<ProviderDetectionResult>;
   runSession(
     input: ManagedProviderSessionInput,

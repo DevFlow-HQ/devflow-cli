@@ -16,9 +16,13 @@ import {
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   ProviderSessionTranscriptCaptureError,
+  ProviderSessionEventCaptureError,
   type ManagedSessionAdapter,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
+  type ManagedProviderSessionEvent,
+  type ManagedProviderSessionPhase,
+  type ManagedProviderSessionCapabilities,
 } from "../../src/adapters/managedSessionAdapter.js";
 import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
@@ -222,6 +226,108 @@ test("managed-session input exposes validation and repair lifecycle configuratio
   input.transcript?.onSubmittedUserMessage?.("user text");
 });
 
+test("managed-session contract exposes normalized provider events, phases, callbacks, and capabilities", async () => {
+  const provider = getBuiltInProviderIdentity("codex");
+  const phase: ManagedProviderSessionPhase = {
+    id: "prd:initial",
+    kind: "prd",
+    attempt: 1,
+  };
+  const capabilities: ManagedProviderSessionCapabilities = {
+    controlTransport: "pty",
+    eventSource: "pty",
+    supportsProviderSessionId: false,
+    supportsResume: false,
+  };
+  const events: ManagedProviderSessionEvent[] = [
+    {
+      type: "session-start",
+      source: "pty",
+      structured: false,
+      phaseId: phase.id,
+      providerSessionId: "session-123",
+      provider,
+    },
+    {
+      type: "submitted-user-message",
+      source: "pty",
+      structured: false,
+      phaseId: phase.id,
+      provider,
+      message: "Please continue",
+    },
+    {
+      type: "assistant-message",
+      source: "pty",
+      structured: false,
+      phaseId: phase.id,
+      provider,
+      content: "Working...",
+    },
+    {
+      type: "turn-completed",
+      source: "provider",
+      structured: true,
+      phaseId: phase.id,
+      provider,
+    },
+    {
+      type: "session-completed",
+      source: "provider",
+      structured: true,
+      provider,
+      exitCode: 0,
+      signal: null,
+    },
+    {
+      type: "session-failed",
+      source: "pty",
+      structured: false,
+      phaseId: phase.id,
+      provider,
+      error: "completion marker missing",
+    },
+  ];
+  const capturedEvents: ManagedProviderSessionEvent[] = [];
+  const input: ManagedProviderSessionInput = {
+    workingDirectory: "/tmp/devflow",
+    initialPrompt: "Ship the contract",
+    initialCompletionMarker: "DEVFLOW_DONE",
+    phase,
+    async validate() {},
+    onProviderEvent(event) {
+      capturedEvents.push(event);
+    },
+  };
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities,
+    async detect() {
+      return {
+        isAvailable: true,
+        executable: "codex",
+      };
+    },
+    async runSession(sessionInput) {
+      for (const event of events) {
+        await sessionInput.onProviderEvent?.(event);
+      }
+
+      return {
+        repairUsed: false,
+        exitCode: 0,
+        signal: null,
+      };
+    },
+  };
+
+  assert.equal(input.phase?.kind, "prd");
+  assert.equal(input.phase?.attempt, 1);
+  await adapter.runSession(input);
+  assert.deepEqual(capturedEvents, events);
+  assert.deepEqual(adapter.capabilities, capabilities);
+});
+
 test("fake managed-session lifecycle propagates original validation errors when repair is absent", async () => {
   const validationError = new Error("intent artifact missing");
   const input: ManagedProviderSessionInput = {
@@ -277,6 +383,11 @@ test("managed-session contract exposes typed lifecycle failures with provider id
     provider,
     transcriptCause,
   );
+  const eventCause = new Error("callback failed");
+  const eventCapture = new ProviderSessionEventCaptureError(
+    provider,
+    eventCause,
+  );
 
   assert.equal(launch.name, "ProviderSessionLaunchError");
   assert.equal(launch.provider, provider);
@@ -296,6 +407,9 @@ test("managed-session contract exposes typed lifecycle failures with provider id
   assert.equal(transcript.name, "ProviderSessionTranscriptCaptureError");
   assert.equal(transcript.provider, provider);
   assert.equal(transcript.cause, transcriptCause);
+  assert.equal(eventCapture.name, "ProviderSessionEventCaptureError");
+  assert.equal(eventCapture.provider, provider);
+  assert.equal(eventCapture.cause, eventCause);
 });
 
 for (const harness of providerHarnesses) {
