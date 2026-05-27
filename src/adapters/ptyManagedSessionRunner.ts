@@ -7,6 +7,7 @@ import {
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   ProviderSessionTranscriptCaptureError,
+  type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";
@@ -93,6 +94,14 @@ const BRACKETED_PASTE_END = "\u001b[201~";
 const SUBMIT = "\r";
 const CONTROL_CHARACTERS_EXCEPT_TRANSCRIPT_WHITESPACE =
   /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+
+type DistributiveOmit<T, K extends keyof any> = T extends unknown
+  ? Omit<T, K>
+  : never;
+type PtyProviderEventInput = DistributiveOmit<
+  ManagedProviderSessionEvent,
+  "provider" | "source" | "structured" | "phaseId"
+>;
 
 export const nodePtySpawner: PtySpawner = {
   spawn(executable, args, options) {
@@ -252,6 +261,19 @@ export async function runPtyManagedSession(
       }
     }
 
+    function captureAssistantMessageEvent(chunk: string): void {
+      const normalizedChunk = normalizeTranscriptChunk(chunk);
+
+      if (!normalizedChunk) {
+        return;
+      }
+
+      emitProviderEvent({
+        type: "assistant-message",
+        content: normalizedChunk,
+      });
+    }
+
     function resumeProviderTranscriptCapture(): void {
       providerTranscriptStopped = false;
     }
@@ -278,6 +300,28 @@ export async function runPtyManagedSession(
       return getActiveContinuation()?.completionMarker ?? input.initialCompletionMarker;
     }
 
+    function getActivePhaseId(): string | undefined {
+      return getActiveContinuation()?.phase?.id ?? input.phase?.id;
+    }
+
+    function emitProviderEvent(
+      event: PtyProviderEventInput,
+    ): void {
+      const onProviderEvent = input.onProviderEvent;
+
+      if (!onProviderEvent) {
+        return;
+      }
+
+      void onProviderEvent({
+        ...event,
+        provider: command.provider,
+        source: "pty",
+        structured: false,
+        phaseId: getActivePhaseId(),
+      } as ManagedProviderSessionEvent);
+    }
+
     async function validateActivePhase(): Promise<void> {
       const continuation = getActiveContinuation();
 
@@ -290,6 +334,11 @@ export async function runPtyManagedSession(
     }
 
     function captureSubmittedUserMessage(message: string): void {
+      emitProviderEvent({
+        type: "submitted-user-message",
+        message,
+      });
+
       const onSubmittedUserMessage = input.transcript?.onSubmittedUserMessage;
 
       if (!onSubmittedUserMessage || settled || providerTranscriptStopped) {
@@ -561,6 +610,7 @@ export async function runPtyManagedSession(
 
     setupUserInputBridge();
     setupTerminalResizeForwarding();
+    emitProviderEvent({ type: "session-start" });
 
     processHandle.onData((chunk) => {
       outputSink.write(chunk);
@@ -570,6 +620,7 @@ export async function runPtyManagedSession(
       }
 
       captureProviderTranscriptChunk(chunk);
+      captureAssistantMessageEvent(chunk);
 
       rollingOutput = (rollingOutput + stripAnsi(chunk)).slice(
         -markerBufferLimit,

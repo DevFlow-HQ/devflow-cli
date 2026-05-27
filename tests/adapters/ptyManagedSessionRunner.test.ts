@@ -8,6 +8,7 @@ import {
   ProviderSessionTranscriptCaptureError,
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
+  type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
 } from "../../src/adapters/managedSessionAdapter.js";
 import {
@@ -240,6 +241,44 @@ test("PTY managed-session runner mirrors raw output and validates after an ANSI-
   });
 });
 
+test("PTY managed-session runner emits a fallback session-start event after successful spawn", async () => {
+  const spawner = new FakePtySpawner();
+  const events: ManagedProviderSessionEvent[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      phase: {
+        id: "initial-phase",
+      },
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+  await runPromise;
+
+  assert.deepEqual(events[0], {
+    type: "session-start",
+    provider: getBuiltInProviderIdentity("codex"),
+    source: "pty",
+    structured: false,
+    phaseId: "initial-phase",
+  });
+});
+
 test("PTY managed-session runner submits generic continuations inside the same live session", async () => {
   const spawner = new FakePtySpawner();
   const validationOrder: string[] = [];
@@ -330,10 +369,63 @@ test("PTY managed-session runner captures normalized provider output without pro
   assert.deepEqual(transcript, ["Question one?\n", "Decision text "]);
 });
 
+test("PTY managed-session runner emits normalized assistant-message events while preserving output mirroring and transcripts", async () => {
+  const spawner = new FakePtySpawner();
+  const output: string[] = [];
+  const transcript: string[] = [];
+  const events: ManagedProviderSessionEvent[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "DEVFLOW_DONE",
+      transcript: {
+        onProviderOutput(chunk) {
+          transcript.push(chunk);
+        },
+      },
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write: (chunk) => output.push(chunk) },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("\u001b[32mQuestion one?\u001b[0m\r\n");
+  spawner.process.emitData("Decision text DEVFLOW_DONE\n");
+
+  await runPromise;
+
+  assert.deepEqual(output, [
+    "\u001b[32mQuestion one?\u001b[0m\r\n",
+    "Decision text DEVFLOW_DONE\n",
+  ]);
+  assert.deepEqual(transcript, ["Question one?\n", "Decision text "]);
+
+  const assistantContent = events
+    .filter((event) => event.type === "assistant-message")
+    .map((event) => event.content)
+    .join("");
+
+  assert.match(assistantContent, /Question one\?\n/);
+  assert.match(assistantContent, /Decision text DEVFLOW_DONE\n/);
+  assert.doesNotMatch(assistantContent, /\u001b\[/);
+});
+
 test("PTY managed-session runner captures submitted user messages only after submit", async () => {
   const spawner = new FakePtySpawner();
   const userInput = new FakeUserInput(true);
   const submittedMessages: string[] = [];
+  const events: ManagedProviderSessionEvent[] = [];
 
   const runPromise = runPtyManagedSession(
     {
@@ -348,6 +440,9 @@ test("PTY managed-session runner captures submitted user messages only after sub
           submittedMessages.push(message);
         },
       },
+      onProviderEvent(event) {
+        events.push(event);
+      },
     }),
     {
       ptySpawner: spawner,
@@ -360,15 +455,34 @@ test("PTY managed-session runner captures submitted user messages only after sub
   userInput.emitData("hel");
   userInput.emitData(Buffer.from("lo"));
   assert.deepEqual(submittedMessages, []);
+  assert.deepEqual(
+    events.filter((event) => event.type === "submitted-user-message"),
+    [],
+  );
 
   userInput.emitData("\r");
   userInput.emitData("second\n");
+  userInput.emitData("\u0003");
   spawner.process.emitData("DEVFLOW_DONE\n");
 
   await runPromise;
 
   assert.deepEqual(submittedMessages, ["hello", "second"]);
-  assert.deepEqual(spawner.process.writes, ["hel", "lo", "\r", "second", "\n", "/exit\n"]);
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "submitted-user-message")
+      .map((event) => event.message),
+    ["hello", "second"],
+  );
+  assert.deepEqual(spawner.process.writes, [
+    "hel",
+    "lo",
+    "\r",
+    "second",
+    "\n",
+    "\u0003",
+    "/exit\n",
+  ]);
 });
 
 test("PTY managed-session runner excludes repair markers from provider transcript content", async () => {
