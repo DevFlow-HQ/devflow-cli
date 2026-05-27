@@ -6,6 +6,7 @@ import {
   InterruptedProviderSessionError,
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
+  ProviderSessionEventCaptureError,
   ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
@@ -191,15 +192,22 @@ export async function runPtyManagedSession(
     let submittedUserMessageBuffer = "";
     let providerTranscriptStopped = false;
     let providerTranscriptRemainder = "";
+    let cleanupPerformed = false;
     let cleanupUserInputBridge = (): void => {};
     let cleanupTerminalResize = (): void => {};
 
     function cleanup(): void {
+      if (cleanupPerformed) {
+        return;
+      }
+
       if (command.cleanupCommand) {
         processHandle.write(command.cleanupCommand);
       } else {
         processHandle.kill();
       }
+
+      cleanupPerformed = true;
     }
 
     function cleanupAfterValidationFailure(): void {
@@ -220,6 +228,19 @@ export async function runPtyManagedSession(
       emitProviderFailureEvent(error);
       rejectSession(
         new ProviderSessionTranscriptCaptureError(command.provider, error),
+      );
+    }
+
+    function rejectEventCaptureFailure(error: unknown): void {
+      if (settled) {
+        return;
+      }
+
+      cleanupAfterValidationFailure();
+      settled = true;
+      emitProviderFailureEvent(error);
+      rejectSession(
+        new ProviderSessionEventCaptureError(command.provider, error),
       );
     }
 
@@ -277,7 +298,7 @@ export async function runPtyManagedSession(
         return;
       }
 
-      emitProviderEvent({
+      void emitProviderEvent({
         type: "assistant-message",
         content: normalizedChunk,
       });
@@ -321,27 +342,35 @@ export async function runPtyManagedSession(
       return getActiveContinuation()?.phase?.id ?? input.phase?.id;
     }
 
-    function emitProviderEvent(event: PtyProviderEventInput): void {
-      emitProviderEventWithPhase(event, getActivePhaseId());
+    async function emitProviderEvent(
+      event: PtyProviderEventInput,
+    ): Promise<void> {
+      await emitProviderEventWithPhase(event, getActivePhaseId());
     }
 
-    function emitProviderEventWithPhase(
+    async function emitProviderEventWithPhase(
       event: PtyProviderEventInput,
       phaseId: string | undefined,
-    ): void {
+    ): Promise<void> {
       const onProviderEvent = input.onProviderEvent;
 
       if (!onProviderEvent) {
         return;
       }
 
-      void onProviderEvent({
-        ...event,
-        provider: command.provider,
-        source: "pty",
-        structured: false,
-        phaseId,
-      } as ManagedProviderSessionEvent);
+      try {
+        await Promise.resolve(
+          onProviderEvent({
+            ...event,
+            provider: command.provider,
+            source: "pty",
+            structured: false,
+            phaseId,
+          } as ManagedProviderSessionEvent),
+        );
+      } catch (error) {
+        rejectEventCaptureFailure(error);
+      }
     }
 
     function emitProviderFailureEvent(error: unknown): void {
@@ -364,7 +393,7 @@ export async function runPtyManagedSession(
     }
 
     function captureSubmittedUserMessage(message: string): void {
-      emitProviderEvent({
+      void emitProviderEvent({
         type: "submitted-user-message",
         message,
       });
@@ -585,13 +614,19 @@ export async function runPtyManagedSession(
         return;
       }
 
-      settled = true;
-      emitProviderEvent({
-        type: "session-completed",
-        exitCode,
-        signal,
-      });
-      resolveSession(createResult());
+      void (async () => {
+        await emitProviderEvent({
+          type: "session-completed",
+          exitCode,
+          signal,
+        });
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        resolveSession(createResult());
+      })();
     }
 
     function handlePhaseCompletion(): void {
@@ -622,7 +657,11 @@ export async function runPtyManagedSession(
           return;
         }
 
-        emitProviderEvent({ type: "turn-completed" });
+        await emitProviderEvent({ type: "turn-completed" });
+        if (settled) {
+          return;
+        }
+
         startNextContinuationOrComplete();
       })();
     }
@@ -647,12 +686,16 @@ export async function runPtyManagedSession(
           return;
         }
 
-        emitProviderEventWithPhase(
+        await emitProviderEventWithPhase(
           {
             type: "turn-completed",
           },
           repairPhaseId,
         );
+        if (settled) {
+          return;
+        }
+
         waitingForRepair = false;
         repairUsed = true;
         startNextContinuationOrComplete();
@@ -661,7 +704,7 @@ export async function runPtyManagedSession(
 
     setupUserInputBridge();
     setupTerminalResizeForwarding();
-    emitProviderEvent({ type: "session-start" });
+    void emitProviderEvent({ type: "session-start" });
 
     processHandle.onData((chunk) => {
       outputSink.write(chunk);
@@ -672,6 +715,10 @@ export async function runPtyManagedSession(
 
       captureProviderTranscriptChunk(chunk);
       captureAssistantMessageEvent(chunk);
+
+      if (settled) {
+        return;
+      }
 
       rollingOutput = (rollingOutput + stripAnsi(chunk)).slice(
         -markerBufferLimit,

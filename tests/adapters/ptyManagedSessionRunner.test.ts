@@ -6,6 +6,7 @@ import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   ProviderSessionTranscriptCaptureError,
+  ProviderSessionEventCaptureError,
   ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   type ManagedProviderSessionEvent,
@@ -771,6 +772,77 @@ test("PTY managed-session runner maps pre-completion transcript callback failure
     return true;
   });
   assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+});
+
+test("PTY managed-session runner maps normal provider event callback failures to retryable capture errors", async () => {
+  const spawner = new FakePtySpawner();
+  const captureFailure = new Error("event callback failed");
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      onProviderEvent(event) {
+        if (event.type === "assistant-message") {
+          throw captureFailure;
+        }
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("Question one?\n");
+  spawner.process.emitData("DEVFLOW_DONE\n");
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof ProviderSessionEventCaptureError);
+    assert.equal(error.provider.id, "codex");
+    assert.equal(error.cause, captureFailure);
+    return true;
+  });
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+});
+
+test("PTY managed-session runner preserves provider failures when failure-context event callbacks fail", async () => {
+  const spawner = new FakePtySpawner();
+  const launchFailure = new Error("spawn failed");
+  spawner.spawnFailure = launchFailure;
+
+  await assert.rejects(
+    runPtyManagedSession(
+      {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: "codex",
+        args: [],
+      },
+      createInput({
+        onProviderEvent(event) {
+          if (event.type === "session-failed") {
+            throw new Error("failure event callback failed");
+          }
+        },
+      }),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        terminal: {},
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof ProviderSessionLaunchError);
+      assert.equal(error.provider.id, "codex");
+      assert.equal(error.cause, launchFailure);
+      return true;
+    },
+  );
 });
 
 test("PTY managed-session runner bridges TTY stdin to the provider and restores stdin on success", async () => {

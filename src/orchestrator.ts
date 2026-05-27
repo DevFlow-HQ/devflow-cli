@@ -21,6 +21,7 @@ import {
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
   ProviderSessionCleanupError,
+  ProviderSessionEventCaptureError,
   ProviderSessionLaunchError,
   ProviderSessionTranscriptCaptureError,
 } from "./adapters/managedSessionAdapter.js";
@@ -416,6 +417,7 @@ export function isRetryableProviderBackedStageFailure(error: unknown): boolean {
   return (
     error instanceof IncompleteProviderSessionError ||
     error instanceof ProviderSessionLaunchError ||
+    error instanceof ProviderSessionEventCaptureError ||
     error instanceof ProviderSessionTranscriptCaptureError ||
     error instanceof StageArtifactValidationError
   );

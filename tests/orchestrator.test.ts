@@ -20,6 +20,7 @@ import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   ProviderSessionCleanupError,
+  ProviderSessionEventCaptureError,
   ProviderSessionTranscriptCaptureError,
 } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
@@ -2923,6 +2924,15 @@ test("provider-backed stage retry classification keeps lifecycle failures non-re
       new ProviderSessionTranscriptCaptureError(
         provider,
         new Error("transcript write failed"),
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableProviderBackedStageFailure(
+      new ProviderSessionEventCaptureError(
+        provider,
+        new Error("event callback failed"),
       ),
     ),
     true,
