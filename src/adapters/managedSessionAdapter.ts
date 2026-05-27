@@ -12,7 +12,12 @@ export type ProviderDetectionResult =
     };
 
 export type ManagedProviderSessionControlTransport = "pty" | "api";
-export type ManagedProviderSessionEventSource = "pty" | "provider";
+export type ManagedProviderSessionEventSource =
+  | "pty"
+  | "hooks"
+  | "jsonl"
+  | "api"
+  | "logs";
 
 export interface ManagedProviderSessionCapabilities {
   controlTransport: ManagedProviderSessionControlTransport;

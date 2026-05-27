@@ -266,14 +266,14 @@ test("managed-session contract exposes normalized provider events, phases, callb
     },
     {
       type: "turn-completed",
-      source: "provider",
+      source: "hooks",
       structured: true,
       phaseId: phase.id,
       provider,
     },
     {
       type: "session-completed",
-      source: "provider",
+      source: "jsonl",
       structured: true,
       provider,
       exitCode: 0,
