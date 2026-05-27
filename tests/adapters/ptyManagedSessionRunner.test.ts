@@ -279,6 +279,73 @@ test("PTY managed-session runner emits a fallback session-start event after succ
   });
 });
 
+test("PTY managed-session runner emits turn and session completion events after validation and cleanup", async () => {
+  const spawner = new FakePtySpawner();
+  const ordering: string[] = [];
+  const events: ManagedProviderSessionEvent[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      phase: {
+        id: "initial-phase",
+      },
+      async validate() {
+        ordering.push("validate");
+      },
+      onProviderEvent(event) {
+        events.push(event);
+
+        if (event.type === "turn-completed") {
+          ordering.push("turn-completed");
+        }
+
+        if (event.type === "session-completed") {
+          ordering.push("session-completed");
+        }
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+  await runPromise;
+
+  assert.deepEqual(ordering, [
+    "validate",
+    "turn-completed",
+    "session-completed",
+  ]);
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(
+    events
+      .filter(
+        (event) =>
+          event.type === "session-start" ||
+          event.type === "turn-completed" ||
+          event.type === "session-completed",
+      )
+      .map((event) => ({
+        type: event.type,
+        phaseId: event.phaseId,
+      })),
+    [
+      { type: "session-start", phaseId: "initial-phase" },
+      { type: "turn-completed", phaseId: "initial-phase" },
+      { type: "session-completed", phaseId: "initial-phase" },
+    ],
+  );
+});
+
 test("PTY managed-session runner submits generic continuations inside the same live session", async () => {
   const spawner = new FakePtySpawner();
   const validationOrder: string[] = [];
@@ -332,6 +399,78 @@ test("PTY managed-session runner submits generic continuations inside the same l
     "/exit\n",
   ]);
   assert.equal(result.repairUsed, false);
+});
+
+test("PTY managed-session runner emits turn completion before submitting continuation prompts", async () => {
+  const spawner = new FakePtySpawner();
+  const ordering: string[] = [];
+  const events: ManagedProviderSessionEvent[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      phase: {
+        id: "grill-phase",
+      },
+      initialCompletionMarker: "GRILL_DONE",
+      async validate() {
+        ordering.push("grill-validate");
+      },
+      onProviderEvent(event) {
+        events.push(event);
+
+        if (event.type === "turn-completed") {
+          ordering.push(`turn:${event.phaseId}`);
+        }
+      },
+      continuations: [
+        {
+          phase: {
+            id: "prd-phase",
+          },
+          prompt: "Synthesize the PRD.",
+          completionMarker: "PRD_DONE",
+          async validate() {
+            ordering.push("prd-validate");
+          },
+        },
+      ],
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("GRILL_DONE\n");
+  await waitForAsyncHandlers();
+
+  assert.deepEqual(ordering, ["grill-validate", "turn:grill-phase"]);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Synthesize the PRD.\u001b[201~\r",
+  ]);
+
+  spawner.process.emitData("PRD_DONE\n");
+  await runPromise;
+
+  assert.deepEqual(ordering, [
+    "grill-validate",
+    "turn:grill-phase",
+    "prd-validate",
+    "turn:prd-phase",
+  ]);
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn-completed")
+      .map((event) => event.phaseId),
+    ["grill-phase", "prd-phase"],
+  );
 });
 
 test("PTY managed-session runner captures normalized provider output without protocol markers", async () => {
@@ -535,6 +674,67 @@ test("PTY managed-session runner excludes repair markers from provider transcrip
   await runPromise;
 
   assert.deepEqual(transcript, ["draft ", "\nfixed "]);
+});
+
+test("PTY managed-session runner emits repair turn completion with repair phase metadata", async () => {
+  const spawner = new FakePtySpawner();
+  const events: ManagedProviderSessionEvent[] = [];
+  let validationCount = 0;
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      phase: {
+        id: "initial-phase",
+      },
+      initialCompletionMarker: "INITIAL_DONE",
+      async validate() {
+        validationCount += 1;
+
+        if (validationCount === 1) {
+          throw new Error("invalid");
+        }
+      },
+      repair: {
+        phase: {
+          id: "repair-phase",
+        },
+        completionMarker: "REPAIR_DONE",
+        renderPrompt() {
+          return "Repair it.";
+        },
+        mapFailure(error) {
+          return error;
+        },
+      },
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("INITIAL_DONE\n");
+  await waitForAsyncHandlers();
+  spawner.process.emitData("REPAIR_DONE\n");
+
+  await runPromise;
+
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn-completed")
+      .map((event) => event.phaseId),
+    ["repair-phase"],
+  );
 });
 
 test("PTY managed-session runner maps pre-completion transcript callback failures to retryable capture errors", async () => {
@@ -800,6 +1000,7 @@ test("PTY managed-session runner detects markers inside the bounded rolling buff
 test("PTY managed-session runner reports incomplete sessions before marker detection", async () => {
   const spawner = new FakePtySpawner();
   const terminal = new FakeTerminal(100, 30);
+  const events: ManagedProviderSessionEvent[] = [];
 
   const runPromise = runPtyManagedSession(
     {
@@ -808,7 +1009,14 @@ test("PTY managed-session runner reports incomplete sessions before marker detec
       args: [],
       cleanupCommand: "/exit\n",
     },
-    createInput(),
+    createInput({
+      phase: {
+        id: "initial-phase",
+      },
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
@@ -830,6 +1038,21 @@ test("PTY managed-session runner reports incomplete sessions before marker detec
   assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.equal(terminal.listenerCount("resize"), 0);
   assert.equal(terminal.removedResizeListeners, 1);
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "session-failed")
+      .map((event) => ({
+        phaseId: event.phaseId,
+        error: event.error,
+      })),
+    [
+      {
+        phaseId: "initial-phase",
+        error:
+          'Provider session for "codex" ended before completion marker "DEVFLOW_DONE" was observed.',
+      },
+    ],
+  );
 });
 
 test("PTY managed-session runner maps PTY spawn failures to typed launch errors", async () => {
@@ -980,6 +1203,8 @@ test("PTY managed-session runner kills the provider and reports interruption on 
 test("PTY managed-session runner surfaces cleanup failures after valid output", async () => {
   const spawner = new FakePtySpawner();
   const cleanupFailure = new Error("write failed");
+  const callbackFailure = new Error("event sink failed");
+  const events: ManagedProviderSessionEvent[] = [];
   spawner.process.write = () => {
     throw cleanupFailure;
   };
@@ -991,7 +1216,15 @@ test("PTY managed-session runner surfaces cleanup failures after valid output", 
       args: [],
       cleanupCommand: "/exit\n",
     },
-    createInput(),
+    createInput({
+      onProviderEvent(event) {
+        events.push(event);
+
+        if (event.type === "session-failed") {
+          throw callbackFailure;
+        }
+      },
+    }),
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
@@ -1007,6 +1240,12 @@ test("PTY managed-session runner surfaces cleanup failures after valid output", 
     assert.equal(error.cause, cleanupFailure);
     return true;
   });
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "session-failed")
+      .map((event) => event.error),
+    ['Provider session for "codex" produced valid output but cleanup failed.'],
+  );
 });
 
 test("PTY managed-session runner repairs invalid artifacts inside the same session", async () => {

@@ -102,6 +102,10 @@ type PtyProviderEventInput = DistributiveOmit<
   ManagedProviderSessionEvent,
   "provider" | "source" | "structured" | "phaseId"
 >;
+type PtyProviderEventInputWithPhase = DistributiveOmit<
+  ManagedProviderSessionEvent,
+  "provider" | "source" | "structured"
+>;
 
 export const nodePtySpawner: PtySpawner = {
   spawn(executable, args, options) {
@@ -166,6 +170,10 @@ export async function runPtyManagedSession(
       rows: terminal.rows ?? DEFAULT_ROWS,
     });
   } catch (error) {
+    emitBestEffortProviderEvent(command.provider, input, {
+      type: "session-failed",
+      error: describeProviderFailure(error),
+    });
     throw new ProviderSessionLaunchError(command.provider, error);
   }
 
@@ -209,6 +217,7 @@ export async function runPtyManagedSession(
 
       cleanupAfterValidationFailure();
       settled = true;
+      emitProviderFailureEvent(error);
       rejectSession(
         new ProviderSessionTranscriptCaptureError(command.provider, error),
       );
@@ -301,11 +310,24 @@ export async function runPtyManagedSession(
     }
 
     function getActivePhaseId(): string | undefined {
+      if (waitingForRepair) {
+        return (
+          getActiveRepair()?.phase?.id ??
+          getActiveContinuation()?.phase?.id ??
+          input.phase?.id
+        );
+      }
+
       return getActiveContinuation()?.phase?.id ?? input.phase?.id;
     }
 
-    function emitProviderEvent(
+    function emitProviderEvent(event: PtyProviderEventInput): void {
+      emitProviderEventWithPhase(event, getActivePhaseId());
+    }
+
+    function emitProviderEventWithPhase(
       event: PtyProviderEventInput,
+      phaseId: string | undefined,
     ): void {
       const onProviderEvent = input.onProviderEvent;
 
@@ -318,8 +340,16 @@ export async function runPtyManagedSession(
         provider: command.provider,
         source: "pty",
         structured: false,
-        phaseId: getActivePhaseId(),
+        phaseId,
       } as ManagedProviderSessionEvent);
+    }
+
+    function emitProviderFailureEvent(error: unknown): void {
+      emitBestEffortProviderEvent(command.provider, input, {
+        type: "session-failed",
+        error: describeProviderFailure(error),
+        phaseId: getActivePhaseId(),
+      });
     }
 
     async function validateActivePhase(): Promise<void> {
@@ -403,7 +433,10 @@ export async function runPtyManagedSession(
       }
 
       settled = true;
-      void callback().then(resolveSession, rejectSession);
+      void callback().then(resolveSession, (error) => {
+        emitProviderFailureEvent(error);
+        rejectSession(error);
+      });
     }
 
     function createInterruptedError(
@@ -537,6 +570,7 @@ export async function runPtyManagedSession(
           .catch((error) => {
             settled = true;
             cleanupAfterValidationFailure();
+            emitProviderFailureEvent(error);
             rejectSession(error);
           });
         return;
@@ -546,11 +580,17 @@ export async function runPtyManagedSession(
         cleanupAfterValidOutput();
       } catch (error) {
         settled = true;
+        emitProviderFailureEvent(error);
         rejectSession(error);
         return;
       }
 
       settled = true;
+      emitProviderEvent({
+        type: "session-completed",
+        exitCode,
+        signal,
+      });
       resolveSession(createResult());
     }
 
@@ -570,6 +610,7 @@ export async function runPtyManagedSession(
           if (!(error instanceof Error) || !repair) {
             cleanupAfterValidationFailure();
             settled = true;
+            emitProviderFailureEvent(error);
             rejectSession(error);
             return;
           }
@@ -581,28 +622,38 @@ export async function runPtyManagedSession(
           return;
         }
 
+        emitProviderEvent({ type: "turn-completed" });
         startNextContinuationOrComplete();
       })();
     }
 
     function handleRepairCompletion(): void {
       const repair = getActiveRepair();
+      const repairPhaseId = getActivePhaseId();
 
       if (!repair) {
         return;
       }
 
-      waitingForRepair = false;
       void (async () => {
         try {
           await validateActivePhase();
         } catch (error) {
           cleanupAfterValidationFailure();
           settled = true;
-          rejectSession(repair.mapFailure(error as Error));
+          const mappedError = repair.mapFailure(error as Error);
+          emitProviderFailureEvent(mappedError);
+          rejectSession(mappedError);
           return;
         }
 
+        emitProviderEventWithPhase(
+          {
+            type: "turn-completed",
+          },
+          repairPhaseId,
+        );
+        waitingForRepair = false;
         repairUsed = true;
         startNextContinuationOrComplete();
       })();
@@ -676,4 +727,27 @@ function normalizeTranscriptChunk(chunk: string): string {
     .replaceAll("\r\n", "\n")
     .replaceAll("\r", "\n")
     .replace(CONTROL_CHARACTERS_EXCEPT_TRANSCRIPT_WHITESPACE, "");
+}
+
+function emitBestEffortProviderEvent(
+  provider: ProviderIdentity,
+  input: ManagedProviderSessionInput,
+  event: PtyProviderEventInputWithPhase,
+): void {
+  try {
+    void Promise.resolve(
+      input.onProviderEvent?.({
+        ...event,
+        provider,
+        source: "pty",
+        structured: false,
+      } as ManagedProviderSessionEvent),
+    ).catch(() => {});
+  } catch {
+    // Failure-context events must not replace the primary provider/session error.
+  }
+}
+
+function describeProviderFailure(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
