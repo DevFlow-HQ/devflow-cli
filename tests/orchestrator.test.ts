@@ -66,6 +66,8 @@ async function completeSessionContinuations(
   input: ManagedProviderSessionInput,
 ): Promise<void> {
   for (const continuation of input.continuations ?? []) {
+    assert.ok(continuation.phase?.id, "expected continuation phase id");
+    assert.equal(continuation.phase.kind, "prd");
     assert.match(continuation.completionMarker, /^DEVFLOW_PRD_COMPLETE_[a-f0-9]{32}$/);
     assert.match(continuation.prompt, /Synthesize the canonical PRD/);
     assert.match(continuation.prompt, /Do not interview the user/);
@@ -700,6 +702,9 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
       );
 
       if (input.initialCompletionMarker.startsWith("DEVFLOW_INTENT_COMPLETE_")) {
+        assert.ok(input.phase?.id, "expected intent phase id");
+        assert.equal(input.phase.kind, "intent");
+        assert.equal(input.phase.attempt, 1);
         assert.match(input.initialCompletionMarker, /^DEVFLOW_INTENT_COMPLETE_[a-f0-9]{32}$/);
         assert.match(input.initialPrompt, /Classify only the raw task/);
         assert.match(input.initialPrompt, /Raw task:\nresume work/);
@@ -718,6 +723,9 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
           { spaces: 2 },
         );
       } else {
+        assert.ok(input.phase?.id, "expected grill phase id");
+        assert.equal(input.phase.kind, "grill");
+        assert.equal(input.phase.attempt, 1);
         assert.match(input.initialCompletionMarker, /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/);
         assert.match(input.initialPrompt, /Run the interactive grill stage/);
         assert.match(input.initialPrompt, /Raw task:\nresume work/);
@@ -2356,6 +2364,13 @@ test("orchestrator supplies bootstrap validation and one in-session repair attem
       );
       assert.ok(validationError);
       assert.ok(input.repair);
+      assert.ok(input.phase?.id, "expected bootstrap phase id");
+      assert.equal(input.phase.kind, "bootstrap");
+      assert.equal(input.phase.attempt, 1);
+      assert.ok(input.repair.phase?.id, "expected bootstrap repair phase id");
+      assert.equal(input.repair.phase.kind, "bootstrap-repair");
+      assert.equal(input.repair.phase.attempt, 1);
+      assert.notEqual(input.repair.phase.id, input.phase.id);
       const repairPrompt = input.repair.renderPrompt(validationError);
       repairPrompts.push(repairPrompt);
       assert.match(repairPrompt, /Repair only the project-context candidate artifact/);
@@ -2742,6 +2757,13 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
         assert.ok(error instanceof Error);
         validationFailures.push(error);
         assert.ok(input.repair);
+        assert.ok(input.phase?.id, "expected intent phase id");
+        assert.equal(input.phase.kind, "intent");
+        assert.equal(input.phase.attempt, 1);
+        assert.ok(input.repair.phase?.id, "expected intent repair phase id");
+        assert.equal(input.repair.phase.kind, "intent-repair");
+        assert.equal(input.repair.phase.attempt, 1);
+        assert.notEqual(input.repair.phase.id, input.phase.id);
         assert.match(
           input.repair.completionMarker,
           /^DEVFLOW_INTENT_REPAIR_COMPLETE_[a-f0-9]{32}$/,

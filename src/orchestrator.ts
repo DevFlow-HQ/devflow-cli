@@ -18,6 +18,7 @@ import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSes
 import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
+  type ManagedProviderSessionPhase,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
   ProviderSessionCleanupError,
@@ -426,12 +427,12 @@ export function isRetryableProviderBackedStageFailure(error: unknown): boolean {
 export async function runProviderBackedStageWithRetry<T>(options: {
   stage: PipelineStage;
   totalAttempts: number;
-  runAttempt(): Promise<T>;
+  runAttempt(attempt: number): Promise<T>;
   cleanupBeforeRetry(): Promise<void>;
 }): Promise<T> {
   for (let attempt = 1; attempt <= options.totalAttempts; attempt += 1) {
     try {
-      return await options.runAttempt();
+      return await options.runAttempt(attempt);
     } catch (error) {
       if (!isRetryableProviderBackedStageFailure(error)) {
         throw error;
@@ -460,6 +461,7 @@ async function runIntentStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  attempt: number;
 }): Promise<ManagedProviderSessionResult> {
   const completionMarker = createCompletionMarker();
   const repairCompletionMarker = createCompletionMarker(
@@ -475,11 +477,21 @@ async function runIntentStage(options: {
     workingDirectory: options.request.projectRoot,
     initialPrompt: prompt,
     initialCompletionMarker: completionMarker,
+    phase: createProviderSessionPhase({
+      run: options.run,
+      kind: "intent",
+      attempt: options.attempt,
+    }),
     ...(options.request.model ? { model: options.request.model } : {}),
     async validate() {
       await readIntentArtifact(options.run.paths.intentArtifact);
     },
     repair: {
+      phase: createProviderSessionPhase({
+        run: options.run,
+        kind: "intent-repair",
+        attempt: options.attempt,
+      }),
       completionMarker: repairCompletionMarker,
       renderPrompt(validationError) {
         return renderIntentRepairPrompt({
@@ -576,6 +588,7 @@ async function runBootstrapStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  attempt: number;
 }): Promise<BootstrapProvenance> {
   const freshness = await options.devFlowState.projectContext.checkFreshness();
 
@@ -613,6 +626,11 @@ async function runBootstrapStage(options: {
       workingDirectory: options.request.projectRoot,
       initialPrompt: prompt,
       initialCompletionMarker: completionMarker,
+      phase: createProviderSessionPhase({
+        run: options.run,
+        kind: "bootstrap",
+        attempt: options.attempt,
+      }),
       ...(options.request.model ? { model: options.request.model } : {}),
       async validate() {
         await readValidProjectContextCandidate(
@@ -620,6 +638,11 @@ async function runBootstrapStage(options: {
         );
       },
       repair: {
+        phase: createProviderSessionPhase({
+          run: options.run,
+          kind: "bootstrap-repair",
+          attempt: options.attempt,
+        }),
         completionMarker: repairCompletionMarker,
         renderPrompt(validationError) {
           return renderBootstrapProjectContextRepairPrompt({
@@ -673,11 +696,29 @@ function createPrdRepairCompletionMarker(): string {
   return createCompletionMarker("DEVFLOW_PRD_REPAIR_COMPLETE");
 }
 
+function createProviderSessionPhase(options: {
+  run: DevFlowRunHandle;
+  kind: string;
+  attempt: number;
+}): ManagedProviderSessionPhase {
+  return {
+    id: `${options.run.id}:${options.kind}:attempt-${options.attempt}`,
+    kind: options.kind,
+    attempt: options.attempt,
+  };
+}
+
 function createPrdRepairConfig(options: {
   run: DevFlowRunHandle;
   completionMarker: string;
+  attempt: number;
 }) {
   return {
+    phase: createProviderSessionPhase({
+      run: options.run,
+      kind: "prd-repair",
+      attempt: options.attempt,
+    }),
     completionMarker: options.completionMarker,
     renderPrompt(validationError: Error) {
       return renderPrdRepairPrompt({
@@ -785,6 +826,11 @@ async function runGrillStage(options: {
     workingDirectory: options.request.projectRoot,
     initialPrompt: prompt,
     initialCompletionMarker: completionMarker,
+    phase: createProviderSessionPhase({
+      run: options.run,
+      kind: "grill",
+      attempt: options.attempt,
+    }),
     ...(options.request.model ? { model: options.request.model } : {}),
     async validate() {
       await writeCompletedGrillArtifacts({
@@ -796,6 +842,11 @@ async function runGrillStage(options: {
       {
         prompt: prdPrompt,
         completionMarker: prdCompletionMarker,
+        phase: createProviderSessionPhase({
+          run: options.run,
+          kind: "prd",
+          attempt: options.attempt,
+        }),
         onStart: options.onPrdStageStart,
         async validate() {
           await validatePrdArtifact(options.run.paths.prdArtifact);
@@ -803,6 +854,7 @@ async function runGrillStage(options: {
         repair: createPrdRepairConfig({
           run: options.run,
           completionMarker: prdRepairCompletionMarker,
+          attempt: options.attempt,
         }),
       },
     ],
@@ -820,6 +872,7 @@ async function runPrdStage(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
   liveDiscussionAvailable: boolean;
+  attempt: number;
 }): Promise<void> {
   const completionMarker = createPrdCompletionMarker();
   const repairCompletionMarker = createPrdRepairCompletionMarker();
@@ -834,6 +887,11 @@ async function runPrdStage(options: {
     workingDirectory: options.request.projectRoot,
     initialPrompt: prompt,
     initialCompletionMarker: completionMarker,
+    phase: createProviderSessionPhase({
+      run: options.run,
+      kind: "prd",
+      attempt: options.attempt,
+    }),
     ...(options.request.model ? { model: options.request.model } : {}),
     async validate() {
       await validatePrdArtifact(options.run.paths.prdArtifact);
@@ -841,6 +899,7 @@ async function runPrdStage(options: {
     repair: createPrdRepairConfig({
       run: options.run,
       completionMarker: repairCompletionMarker,
+      attempt: options.attempt,
     }),
   });
 
@@ -856,8 +915,8 @@ async function runPrdStageWithRetry(options: {
   await runProviderBackedStageWithRetry({
     stage: "prd",
     totalAttempts: PRD_STAGE_TOTAL_ATTEMPTS,
-    async runAttempt() {
-      await runPrdStage(options);
+    async runAttempt(attempt) {
+      await runPrdStage({ ...options, attempt });
     },
     async cleanupBeforeRetry() {
       await fs.remove(options.run.paths.prdArtifact);
@@ -1009,11 +1068,12 @@ export async function runExecutionRequest(
   const intent = await runProviderBackedStageWithRetry({
     stage: "intent",
     totalAttempts: INTENT_STAGE_TOTAL_ATTEMPTS,
-    async runAttempt() {
+    async runAttempt(attempt) {
       const result = await runIntentStage({
         request,
         run,
         adapter,
+        attempt,
       });
 
       await parseStageIntentArtifact(run.paths.intentArtifact);
@@ -1030,8 +1090,8 @@ export async function runExecutionRequest(
   const bootstrapProvenance = await runProviderBackedStageWithRetry({
     stage: "bootstrap",
     totalAttempts: BOOTSTRAP_STAGE_TOTAL_ATTEMPTS,
-    async runAttempt() {
-      return runBootstrapStage({ devFlowState, request, run, adapter });
+    async runAttempt(attempt) {
+      return runBootstrapStage({ devFlowState, request, run, adapter, attempt });
     },
     async cleanupBeforeRetry() {
       await fs.remove(run.paths.projectContextCandidate);

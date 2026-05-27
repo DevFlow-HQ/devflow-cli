@@ -280,6 +280,45 @@ test("PTY managed-session runner emits a fallback session-start event after succ
   });
 });
 
+test("PTY managed-session runner emits fallback phase ids when callers omit phase metadata", async () => {
+  const spawner = new FakePtySpawner();
+  const events: ManagedProviderSessionEvent[] = [];
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+  await runPromise;
+
+  assert.deepEqual(
+    events
+      .filter(
+        (event) =>
+          event.type === "session-start" ||
+          event.type === "turn-completed" ||
+          event.type === "session-completed",
+      )
+      .map((event) => event.phaseId),
+    ["initial", "initial", "initial"],
+  );
+});
+
 test("PTY managed-session runner emits turn and session completion events after validation and cleanup", async () => {
   const spawner = new FakePtySpawner();
   const ordering: string[] = [];

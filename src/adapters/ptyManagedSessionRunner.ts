@@ -331,15 +331,27 @@ export async function runPtyManagedSession(
     }
 
     function getActivePhaseId(): string | undefined {
+      const activePhaseId =
+        getActiveContinuation()?.phase?.id ??
+        input.phase?.id ??
+        getFallbackActivePhaseId();
+
       if (waitingForRepair) {
         return (
           getActiveRepair()?.phase?.id ??
-          getActiveContinuation()?.phase?.id ??
-          input.phase?.id
+          `${activePhaseId}:repair`
         );
       }
 
-      return getActiveContinuation()?.phase?.id ?? input.phase?.id;
+      return activePhaseId;
+    }
+
+    function getFallbackActivePhaseId(): string {
+      if (activeContinuationIndex === null) {
+        return "initial";
+      }
+
+      return `continuation-${activeContinuationIndex + 1}`;
     }
 
     async function emitProviderEvent(
@@ -785,6 +797,7 @@ function emitBestEffortProviderEvent(
     void Promise.resolve(
       input.onProviderEvent?.({
         ...event,
+        phaseId: event.phaseId ?? input.phase?.id ?? "initial",
         provider,
         source: "pty",
         structured: false,
