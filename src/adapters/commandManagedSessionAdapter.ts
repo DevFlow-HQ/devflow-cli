@@ -1,6 +1,7 @@
 import which from "which";
 
 import {
+  type ManagedProviderSessionCapabilities,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
@@ -31,6 +32,13 @@ interface CommandManagedSessionConfig {
 export interface CommandManagedSessionAdapterOptions {
   runPtyManagedSession?: ManagedSessionPtyRunner;
 }
+
+const PTY_FALLBACK_CAPABILITIES: ManagedProviderSessionCapabilities = {
+  controlTransport: "pty",
+  eventSource: "pty",
+  supportsProviderSessionId: false,
+  supportsResume: false,
+};
 
 export function createCommandManagedSessionAdapter(
   config: CommandManagedSessionConfig,
@@ -86,6 +94,7 @@ export function createCommandManagedSessionAdapter(
 
   return {
     provider,
+    capabilities: PTY_FALLBACK_CAPABILITIES,
     detect: detectExecutable,
     runSession,
   };

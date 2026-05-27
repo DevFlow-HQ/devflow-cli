@@ -328,6 +328,30 @@ test("managed-session contract exposes normalized provider events, phases, callb
   assert.deepEqual(adapter.capabilities, capabilities);
 });
 
+test("built-in managed-session adapters expose effective PTY fallback capabilities", () => {
+  const expectedCapabilities: ManagedProviderSessionCapabilities = {
+    controlTransport: "pty",
+    eventSource: "pty",
+    supportsProviderSessionId: false,
+    supportsResume: false,
+  };
+
+  const adapters = BUILT_IN_PROVIDER_IDS.map((providerId) =>
+    createBuiltInManagedSessionAdapter(providerId),
+  );
+
+  assert.deepEqual(
+    adapters.map((adapter) => ({
+      providerId: adapter.provider.id,
+      capabilities: adapter.capabilities,
+    })),
+    BUILT_IN_PROVIDER_IDS.map((providerId) => ({
+      providerId,
+      capabilities: expectedCapabilities,
+    })),
+  );
+});
+
 test("fake managed-session lifecycle propagates original validation errors when repair is absent", async () => {
   const validationError = new Error("intent artifact missing");
   const input: ManagedProviderSessionInput = {
