@@ -48,6 +48,7 @@ export function createCodexAdapter(
     eventSource,
     supportsProviderSessionId: true,
     supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: true,
   };
 
   async function resolveExecutable(): Promise<string> {

@@ -24,6 +24,7 @@ export interface ManagedProviderSessionCapabilities {
   eventSource: ManagedProviderSessionEventSource;
   supportsProviderSessionId: boolean;
   supportsResume: boolean;
+  classifiesSubmittedUserMessageOrigin: boolean;
 }
 
 export interface ManagedProviderSessionPhase {
@@ -31,6 +32,8 @@ export interface ManagedProviderSessionPhase {
   kind?: string;
   attempt?: number;
 }
+
+export type SubmittedUserMessageOrigin = "managed" | "human" | "unknown";
 
 interface ManagedProviderSessionEventBase {
   provider: ProviderIdentity;
@@ -47,6 +50,7 @@ export type ManagedProviderSessionEvent =
   | (ManagedProviderSessionEventBase & {
       type: "submitted-user-message";
       message: string;
+      origin: SubmittedUserMessageOrigin;
     })
   | (ManagedProviderSessionEventBase & {
       type: "turn-completed";

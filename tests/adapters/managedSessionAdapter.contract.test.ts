@@ -23,6 +23,7 @@ import {
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionPhase,
   type ManagedProviderSessionCapabilities,
+  type SubmittedUserMessageOrigin,
 } from "../../src/adapters/managedSessionAdapter.js";
 import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
@@ -302,7 +303,13 @@ test("managed-session contract exposes normalized provider events, phases, callb
     eventSource: "pty",
     supportsProviderSessionId: false,
     supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: false,
   };
+  const submittedUserMessageOrigins: SubmittedUserMessageOrigin[] = [
+    "managed",
+    "human",
+    "unknown",
+  ];
   const events: ManagedProviderSessionEvent[] = [
     {
       type: "session-start",
@@ -319,6 +326,7 @@ test("managed-session contract exposes normalized provider events, phases, callb
       phaseId: phase.id,
       provider,
       message: "Please continue",
+      origin: "managed",
     },
     {
       type: "turn-completed",
@@ -372,6 +380,7 @@ test("managed-session contract exposes normalized provider events, phases, callb
 
   assert.equal(input.phase?.kind, "prd");
   assert.equal(input.phase?.attempt, 1);
+  assert.deepEqual(submittedUserMessageOrigins, ["managed", "human", "unknown"]);
   await adapter.runSession(input);
   assert.deepEqual(capturedEvents, events);
   assert.deepEqual(adapter.capabilities, capabilities);
@@ -383,12 +392,14 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
     eventSource: "pty",
     supportsProviderSessionId: false,
     supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: false,
   };
   const expectedCodexCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "hooks",
     supportsProviderSessionId: true,
     supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: true,
   };
 
   const adapters = BUILT_IN_PROVIDER_IDS.map((providerId) =>
@@ -422,6 +433,7 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
     eventSource: "jsonl",
     supportsProviderSessionId: true,
     supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: true,
   };
 
   assert.deepEqual(

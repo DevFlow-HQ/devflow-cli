@@ -38,6 +38,7 @@ const PTY_FALLBACK_CAPABILITIES: ManagedProviderSessionCapabilities = {
   eventSource: "pty",
   supportsProviderSessionId: false,
   supportsResume: false,
+  classifiesSubmittedUserMessageOrigin: false,
 };
 
 export function createCommandManagedSessionAdapter(

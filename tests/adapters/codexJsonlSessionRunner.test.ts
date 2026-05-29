@@ -287,6 +287,8 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
       source: event.source,
       structured: event.structured,
       message: event.type === "submitted-user-message" ? event.message : undefined,
+      origin:
+        event.type === "submitted-user-message" ? event.origin : undefined,
       assistantMessage:
         event.type === "turn-completed" ? event.assistantMessage : undefined,
     })),
@@ -298,6 +300,7 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
         source: "jsonl",
         structured: true,
         message: undefined,
+        origin: undefined,
         assistantMessage: undefined,
       },
       {
@@ -307,6 +310,7 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
         source: "jsonl",
         structured: true,
         message: "Start",
+        origin: "managed",
         assistantMessage: undefined,
       },
       {
@@ -316,6 +320,7 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
         source: "jsonl",
         structured: true,
         message: undefined,
+        origin: undefined,
         assistantMessage: "terminal text is irrelevant INITIAL_DONE",
       },
       {
@@ -325,6 +330,7 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
         source: "jsonl",
         structured: true,
         message: undefined,
+        origin: undefined,
         assistantMessage: undefined,
       },
     ],
@@ -483,14 +489,14 @@ test("Codex JSONL runner submits continuation prompts through PTY and emits mana
   assert.deepEqual(
     events.map((event) =>
       event.type === "submitted-user-message"
-        ? `${event.type}:${event.phaseId}:${event.message}`
+        ? `${event.type}:${event.phaseId}:${event.origin}:${event.message}`
         : `${event.type}:${event.phaseId}`,
     ),
     [
       "session-start:runabc123456:intent:attempt-1",
-      "submitted-user-message:runabc123456:intent:attempt-1:Start",
+      "submitted-user-message:runabc123456:intent:attempt-1:managed:Start",
       "turn-completed:runabc123456:intent:attempt-1",
-      "submitted-user-message:runabc123456:prd:attempt-1:Continue",
+      "submitted-user-message:runabc123456:prd:attempt-1:managed:Continue",
       "turn-completed:runabc123456:prd:attempt-1",
       "session-completed:undefined",
     ],
@@ -550,10 +556,10 @@ test("Codex JSONL runner submits repair prompts through PTY and reports repair u
   assert.deepEqual(
     events
       .filter((event) => event.type === "submitted-user-message")
-      .map((event) => `${event.phaseId}:${event.message}`),
+      .map((event) => `${event.phaseId}:${event.origin}:${event.message}`),
     [
-      "runabc123456:intent:attempt-1:Start",
-      "runabc123456:intent:attempt-1:repair-1:Repair",
+      "runabc123456:intent:attempt-1:managed:Start",
+      "runabc123456:intent:attempt-1:repair-1:managed:Repair",
     ],
   );
 });

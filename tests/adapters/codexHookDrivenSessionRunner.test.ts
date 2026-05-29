@@ -274,6 +274,8 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
       providerSessionId: event.providerSessionId,
       source: event.source,
       structured: event.structured,
+      origin:
+        event.type === "submitted-user-message" ? event.origin : undefined,
     })),
     [
       {
@@ -282,6 +284,7 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
         providerSessionId: "codex-session-1",
         source: "hooks",
         structured: true,
+        origin: undefined,
       },
       {
         type: "submitted-user-message",
@@ -289,6 +292,7 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
         providerSessionId: "codex-session-1",
         source: "hooks",
         structured: true,
+        origin: "managed",
       },
       {
         type: "turn-completed",
@@ -296,6 +300,7 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
         providerSessionId: "codex-session-1",
         source: "hooks",
         structured: true,
+        origin: undefined,
       },
       {
         type: "session-completed",
@@ -303,6 +308,7 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
         providerSessionId: undefined,
         source: "hooks",
         structured: true,
+        origin: undefined,
       },
     ],
   );
@@ -368,11 +374,15 @@ test("Codex hook-driven runner advances continuations and submits prompts throug
     "\u001b[200~Continue\u001b[201~\r",
   ]);
   assert.deepEqual(
-    events.map((event) => `${event.type}:${event.phaseId}`),
+    events.map((event) =>
+      event.type === "submitted-user-message"
+        ? `${event.type}:${event.phaseId}:${event.origin}`
+        : `${event.type}:${event.phaseId}`,
+    ),
     [
       "session-start:runabc123456:intent:attempt-1",
       "turn-completed:runabc123456:intent:attempt-1",
-      "submitted-user-message:runabc123456:prd:attempt-1",
+      "submitted-user-message:runabc123456:prd:attempt-1:managed",
       "turn-completed:runabc123456:prd:attempt-1",
       "session-completed:undefined",
     ],

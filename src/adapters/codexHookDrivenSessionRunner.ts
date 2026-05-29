@@ -106,6 +106,7 @@ export async function runCodexHookDrivenSession(
     let cleanupTerminalResize = (): void => {};
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
+    const pendingManagedPrompts = [input.initialPrompt];
 
     const manager = createPhaseManager({
       provider: command.provider,
@@ -118,6 +119,7 @@ export async function runCodexHookDrivenSession(
         }
 
         submitPtyPrompt(processHandle, prompt);
+        pendingManagedPrompts.push(prompt);
       },
       finalize() {
         phaseFinalized = true;
@@ -240,11 +242,13 @@ export async function runCodexHookDrivenSession(
     }
 
     async function handlePayload(payload: unknown): Promise<void> {
-      const event = normalizeCodexHookPayload(payload);
+      let event = normalizeCodexHookPayload(payload);
 
       if (!event) {
         return;
       }
+
+      event = classifySubmittedUserMessageOrigin(event);
 
       if (!sessionStarted) {
         if (event.type !== "session-start") {
@@ -262,6 +266,27 @@ export async function runCodexHookDrivenSession(
 
       await captureHookTranscript(event);
       await manager.handleEvent(event);
+    }
+
+    function classifySubmittedUserMessageOrigin(
+      event: Parameters<typeof manager.handleEvent>[0],
+    ): Parameters<typeof manager.handleEvent>[0] {
+      if (event.type !== "submitted-user-message") {
+        return event;
+      }
+
+      const pendingIndex = pendingManagedPrompts.indexOf(event.message);
+
+      if (pendingIndex === -1) {
+        return event;
+      }
+
+      pendingManagedPrompts.splice(pendingIndex, 1);
+
+      return {
+        ...event,
+        origin: "managed",
+      };
     }
 
     async function captureHookTranscript(

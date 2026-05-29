@@ -305,6 +305,7 @@ test("orchestrator leaves Codex event-source selection behind the managed-sessio
       eventSource: "jsonl",
       supportsProviderSessionId: true,
       supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
     },
     async detect() {
       return { isAvailable: true, executable: "codex" };

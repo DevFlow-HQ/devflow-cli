@@ -507,9 +507,21 @@ test("PTY managed-session runner emits turn completion before submitting continu
   ]);
   assert.deepEqual(
     events
-      .filter((event) => event.type === "turn-completed")
-      .map((event) => event.phaseId),
-    ["grill-phase", "prd-phase"],
+      .filter(
+        (event) =>
+          event.type === "turn-completed" ||
+          event.type === "submitted-user-message",
+      )
+      .map((event) =>
+        event.type === "submitted-user-message"
+          ? `${event.type}:${event.phaseId}:${event.origin}:${event.message}`
+          : `${event.type}:${event.phaseId}`,
+      ),
+    [
+      "turn-completed:grill-phase",
+      "submitted-user-message:prd-phase:managed:Synthesize the PRD.",
+      "turn-completed:prd-phase",
+    ],
   );
 });
 
@@ -658,8 +670,8 @@ test("PTY managed-session runner captures submitted user messages only after sub
   assert.deepEqual(
     events
       .filter((event) => event.type === "submitted-user-message")
-      .map((event) => event.message),
-    ["hello", "second"],
+      .map((event) => `${event.origin}:${event.message}`),
+    ["human:hello", "human:second"],
   );
   assert.deepEqual(spawner.process.writes, [
     "hel",
@@ -779,9 +791,20 @@ test("PTY managed-session runner emits repair turn completion with repair phase 
 
   assert.deepEqual(
     events
-      .filter((event) => event.type === "turn-completed")
-      .map((event) => event.phaseId),
-    ["repair-phase"],
+      .filter(
+        (event) =>
+          event.type === "turn-completed" ||
+          event.type === "submitted-user-message",
+      )
+      .map((event) =>
+        event.type === "submitted-user-message"
+          ? `${event.type}:${event.phaseId}:${event.origin}:${event.message}`
+          : `${event.type}:${event.phaseId}`,
+      ),
+    [
+      "submitted-user-message:repair-phase:managed:Repair it.",
+      "turn-completed:repair-phase",
+    ],
   );
 });
 

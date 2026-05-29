@@ -58,6 +58,7 @@ test("phase manager stamps forwarded hook events with the active initial phase",
   await manager.handleEvent({
     type: "submitted-user-message",
     message: "Start",
+    origin: "unknown",
     providerSessionId: "session-123",
   });
 
@@ -72,6 +73,7 @@ test("phase manager stamps forwarded hook events with the active initial phase",
     {
       type: "submitted-user-message",
       message: "Start",
+      origin: "unknown",
       provider: getBuiltInProviderIdentity("codex"),
       source: "hooks",
       structured: true,
@@ -179,6 +181,7 @@ test("phase manager advances to a continuation after successful validation", asy
   await manager.handleEvent({
     type: "submitted-user-message",
     message: "Write the PRD.",
+    origin: "human",
   });
   await manager.handleEvent({
     type: "turn-completed",
@@ -248,6 +251,7 @@ test("phase manager enters repair phase and submits the repair prompt after vali
   await manager.handleEvent({
     type: "submitted-user-message",
     message: "Repair it.",
+    origin: "human",
   });
   await manager.handleEvent({
     type: "turn-completed",

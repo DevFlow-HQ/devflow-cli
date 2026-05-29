@@ -378,6 +378,7 @@ export async function runPtyManagedSession(
       void emitProviderEvent({
         type: "submitted-user-message",
         message,
+        origin: "human",
       });
 
       const onSubmittedUserMessage = input.transcript?.onSubmittedUserMessage;
@@ -393,6 +394,14 @@ export async function runPtyManagedSession(
       } catch (error) {
         rejectTranscriptCaptureFailure(error);
       }
+    }
+
+    function emitManagedSubmittedUserMessage(message: string): void {
+      void emitProviderEvent({
+        type: "submitted-user-message",
+        message,
+        origin: "managed",
+      });
     }
 
     function createResult(): ManagedProviderSessionResult {
@@ -576,6 +585,7 @@ export async function runPtyManagedSession(
         void Promise.resolve(nextContinuation.onStart?.())
           .then(() => {
             submitPtyPrompt(processHandle, nextContinuation.prompt);
+            emitManagedSubmittedUserMessage(nextContinuation.prompt);
           })
           .catch((error) => {
             settled = true;
@@ -631,7 +641,9 @@ export async function runPtyManagedSession(
           waitingForRepair = true;
           resumeProviderTranscriptCapture();
           rollingOutput = "";
-          submitPtyPrompt(processHandle, repair.renderPrompt(error));
+          const repairPrompt = repair.renderPrompt(error);
+          submitPtyPrompt(processHandle, repairPrompt);
+          emitManagedSubmittedUserMessage(repairPrompt);
           return;
         }
 

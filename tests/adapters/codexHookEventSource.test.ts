@@ -28,6 +28,7 @@ test("codex hook normalizer maps UserPromptSubmit prompt to submitted-user-messa
   assert.deepEqual(event, {
     type: "submitted-user-message",
     message: "Write the PRD",
+    origin: "unknown",
     providerSessionId: "session-123",
   });
 });

@@ -143,6 +143,7 @@ export async function runCodexJsonlSession(
       await manager.handleEvent({
         type: "submitted-user-message",
         message: prompt,
+        origin: "managed",
       });
     }
 

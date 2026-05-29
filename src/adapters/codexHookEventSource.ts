@@ -67,6 +67,7 @@ export function normalizeCodexHookPayload(
         {
           type: "submitted-user-message",
           message: hookPayload.prompt,
+          origin: "unknown",
         },
         providerSessionId,
       );
