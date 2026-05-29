@@ -2,6 +2,7 @@ import { createClaudeAdapter } from "./claudeAdapter.js";
 import type { CommandManagedSessionAdapterOptions } from "./commandManagedSessionAdapter.js";
 import {
   createCodexAdapter,
+  type CodexManagedSessionEventSource,
   type CodexAdapterOptions,
 } from "./codexAdapter.js";
 import { createGeminiAdapter } from "./geminiAdapter.js";
@@ -10,7 +11,10 @@ import type { ManagedSessionAdapter } from "./managedSessionAdapter.js";
 import type { BuiltInProviderId } from "./providers.js";
 
 export type BuiltInManagedSessionAdapterOptions =
-  CommandManagedSessionAdapterOptions & CodexAdapterOptions;
+  CommandManagedSessionAdapterOptions &
+    Omit<CodexAdapterOptions, "eventSource"> & {
+      codexEventSource?: CodexManagedSessionEventSource;
+    };
 
 export function createBuiltInManagedSessionAdapter(
   providerId: BuiltInProviderId,
@@ -22,7 +26,10 @@ export function createBuiltInManagedSessionAdapter(
     case "gemini":
       return createGeminiAdapter(options);
     case "codex":
-      return createCodexAdapter(options);
+      return createCodexAdapter({
+        ...options,
+        eventSource: options?.codexEventSource,
+      });
     case "opencode":
       return createOpenCodeAdapter(options);
     default:

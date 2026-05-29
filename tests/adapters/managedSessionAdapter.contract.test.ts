@@ -30,6 +30,7 @@ import { createGeminiAdapter } from "../../src/adapters/geminiAdapter.js";
 import { createOpenCodeAdapter } from "../../src/adapters/opencodeAdapter.js";
 import { createBuiltInManagedSessionAdapter } from "../../src/adapters/builtInManagedSessionAdapter.js";
 import type { CodexHookDrivenSessionCommand } from "../../src/adapters/codexHookDrivenSessionRunner.js";
+import type { CodexJsonlSessionCommand } from "../../src/adapters/codexJsonlSessionRunner.js";
 
 interface AdapterContractHarness {
   providerId: BuiltInProviderId;
@@ -51,6 +52,8 @@ interface CodexAdapterContractHarness {
   expectedArgsWithModel: string[];
   createAdapter: (options?: {
     runCodexHookDrivenSession: CapturingCodexHookRunner["runCodexHookDrivenSession"];
+    runCodexJsonlSession?: CapturingCodexJsonlRunner["runCodexJsonlSession"];
+    eventSource?: "hooks" | "jsonl";
   }) => ManagedSessionAdapter;
 }
 
@@ -92,6 +95,26 @@ class CapturingCodexHookRunner {
 
   async runCodexHookDrivenSession(
     command: CodexHookDrivenSessionCommand,
+    input: ManagedProviderSessionInput,
+  ): Promise<ManagedProviderSessionResult> {
+    this.calls.push({ command, input });
+    await input.validate();
+    return {
+      repairUsed: false,
+      exitCode: 0,
+      signal: null,
+    };
+  }
+}
+
+class CapturingCodexJsonlRunner {
+  readonly calls: Array<{
+    command: CodexJsonlSessionCommand;
+    input: ManagedProviderSessionInput;
+  }> = [];
+
+  async runCodexJsonlSession(
+    command: CodexJsonlSessionCommand,
     input: ManagedProviderSessionInput,
   ): Promise<ManagedProviderSessionResult> {
     this.calls.push({ command, input });
@@ -354,7 +377,7 @@ test("managed-session contract exposes normalized provider events, phases, callb
   assert.deepEqual(adapter.capabilities, capabilities);
 });
 
-test("built-in managed-session adapters expose effective PTY fallback capabilities", () => {
+test("built-in managed-session adapters expose effective PTY fallback and default Codex hook capabilities", () => {
   const expectedPtyCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "pty",
@@ -384,6 +407,32 @@ test("built-in managed-session adapters expose effective PTY fallback capabiliti
           ? expectedCodexCapabilities
           : expectedPtyCapabilities,
     })),
+  );
+});
+
+test("Codex adapter exposes selected JSONL capabilities without changing automatic hook default", () => {
+  assert.equal(createCodexAdapter().capabilities?.eventSource, "hooks");
+  assert.equal(
+    createBuiltInManagedSessionAdapter("codex").capabilities?.eventSource,
+    "hooks",
+  );
+
+  const jsonlCapabilities: ManagedProviderSessionCapabilities = {
+    controlTransport: "pty",
+    eventSource: "jsonl",
+    supportsProviderSessionId: true,
+    supportsResume: false,
+  };
+
+  assert.deepEqual(
+    createCodexAdapter({ eventSource: "jsonl" }).capabilities,
+    jsonlCapabilities,
+  );
+  assert.deepEqual(
+    createBuiltInManagedSessionAdapter("codex", {
+      codexEventSource: "jsonl",
+    }).capabilities,
+    jsonlCapabilities,
   );
 });
 
@@ -757,6 +806,55 @@ test("Codex adapter runSession delegates provider startup config to the hook-dri
   ]);
 });
 
+test("Codex adapter runSession delegates exclusively to JSONL runner when selected", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-jsonl-adapter-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, codexHarness.command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const hookRunner = new CapturingCodexHookRunner();
+  const jsonlRunner = new CapturingCodexJsonlRunner();
+  const adapter = codexHarness.createAdapter({
+    eventSource: "jsonl",
+    runCodexHookDrivenSession:
+      hookRunner.runCodexHookDrivenSession.bind(hookRunner),
+    runCodexJsonlSession: jsonlRunner.runCodexJsonlSession.bind(jsonlRunner),
+  });
+
+  assert.equal(adapter.capabilities?.eventSource, "jsonl");
+
+  const result = await adapter.runSession(validRunInput);
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.deepEqual(hookRunner.calls, []);
+  assert.deepEqual(jsonlRunner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: executablePath,
+        args: codexHarness.expectedArgsWithoutModel,
+      },
+      input: validRunInput,
+    },
+  ]);
+});
+
 test("Codex adapter passes opaque model overrides through provider-native flags", async (t) => {
   const originalPath = process.env.PATH;
   t.after(() => {
@@ -863,4 +961,48 @@ test("built-in managed-session selection wires codex execution through the hook-
     },
   ]);
   assert.equal("run" in adapter, false);
+});
+
+test("built-in managed-session selection wires codex JSONL mode before launch", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-jsonl-run-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, codexHarness.command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const hookRunner = new CapturingCodexHookRunner();
+  const jsonlRunner = new CapturingCodexJsonlRunner();
+  const adapter = createBuiltInManagedSessionAdapter("codex", {
+    codexEventSource: "jsonl",
+    runCodexHookDrivenSession:
+      hookRunner.runCodexHookDrivenSession.bind(hookRunner),
+    runCodexJsonlSession: jsonlRunner.runCodexJsonlSession.bind(jsonlRunner),
+  });
+
+  assert.equal(adapter.capabilities?.eventSource, "jsonl");
+
+  await adapter.runSession(validRunInput);
+
+  assert.deepEqual(hookRunner.calls, []);
+  assert.deepEqual(jsonlRunner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: executablePath,
+        args: codexHarness.expectedArgsWithoutModel,
+      },
+      input: validRunInput,
+    },
+  ]);
 });
