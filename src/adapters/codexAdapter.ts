@@ -1,21 +1,89 @@
+import which from "which";
+
 import {
-  createCommandManagedSessionAdapter,
-  type CommandManagedSessionAdapterOptions,
-} from "./commandManagedSessionAdapter.js";
-import type { ManagedSessionAdapter } from "./managedSessionAdapter.js";
+  type ManagedProviderSessionCapabilities,
+  type ManagedProviderSessionInput,
+  type ManagedProviderSessionResult,
+  type ManagedSessionAdapter,
+  ProviderSessionLaunchError,
+  type ProviderDetectionResult,
+} from "./managedSessionAdapter.js";
+import {
+  runCodexHookDrivenSession,
+  type CodexHookDrivenSessionCommand,
+} from "./codexHookDrivenSessionRunner.js";
+import { getBuiltInProviderIdentity } from "./providers.js";
+
+export type CodexHookDrivenRunner = (
+  command: CodexHookDrivenSessionCommand,
+  input: ManagedProviderSessionInput,
+) => Promise<ManagedProviderSessionResult>;
+
+export interface CodexAdapterOptions {
+  runCodexHookDrivenSession?: CodexHookDrivenRunner;
+}
+
+const CODEX_CAPABILITIES: ManagedProviderSessionCapabilities = {
+  controlTransport: "pty",
+  eventSource: "hooks",
+  supportsProviderSessionId: true,
+  supportsResume: false,
+};
 
 export function createCodexAdapter(
-  options?: CommandManagedSessionAdapterOptions,
+  options: CodexAdapterOptions = {},
 ): ManagedSessionAdapter {
-  return createCommandManagedSessionAdapter(
-    {
-      providerId: "codex",
-      command: "codex",
-      cleanupCommand: "/quit\n",
-      buildArgs(input) {
-        return [...(input.model ? ["--model", input.model] : []), input.initialPrompt];
+  const provider = getBuiltInProviderIdentity("codex");
+  const hookRunner = options.runCodexHookDrivenSession ?? runCodexHookDrivenSession;
+
+  async function resolveExecutable(): Promise<string> {
+    return which("codex");
+  }
+
+  async function detectExecutable(): Promise<ProviderDetectionResult> {
+    try {
+      const executable = await resolveExecutable();
+
+      return {
+        isAvailable: true,
+        executable,
+      };
+    } catch (error) {
+      return {
+        isAvailable: false,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Unable to find executable 'codex' on PATH.",
+      };
+    }
+  }
+
+  async function runSession(
+    input: ManagedProviderSessionInput,
+  ): Promise<ManagedProviderSessionResult> {
+    let executable: string;
+
+    try {
+      executable = await resolveExecutable();
+    } catch (error) {
+      throw new ProviderSessionLaunchError(provider, error);
+    }
+
+    return hookRunner(
+      {
+        provider,
+        executable,
+        args: [...(input.model ? ["--model", input.model] : []), input.initialPrompt],
       },
-    },
-    options,
-  );
+      input,
+    );
+  }
+
+  return {
+    provider,
+    capabilities: CODEX_CAPABILITIES,
+    detect: detectExecutable,
+    runSession,
+  };
 }

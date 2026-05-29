@@ -192,14 +192,14 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
   assert.equal(runIds.length, 1);
 });
 
-test("orchestrator can complete the active intent stage through a built-in provider adapter with fake PTY execution", async (t) => {
+test("orchestrator can complete the active intent stage through a built-in Codex hook adapter", async (t) => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n", {
     refreshReason: "manual",
   });
   const executablePath = await createExecutableOnPath(t, "codex");
-  const ptyCalls: Array<{
+  const sessionCalls: Array<{
     executable: string;
     args: string[];
     input: ManagedProviderSessionInput;
@@ -216,8 +216,8 @@ test("orchestrator can complete the active intent stage through a built-in provi
       devFlowState,
       createManagedSessionAdapter(providerId) {
         return createBuiltInManagedSessionAdapter(providerId, {
-          async runPtyManagedSession(command, input) {
-            ptyCalls.push({
+          async runCodexHookDrivenSession(command, input) {
+            sessionCalls.push({
               executable: command.executable,
               args: command.args,
               input,
@@ -273,10 +273,10 @@ test("orchestrator can complete the active intent stage through a built-in provi
     needsClarification: false,
   });
   assert.equal(result.bootstrapProvenance, "reused");
-  assert.equal(ptyCalls.length, 2);
-  assert.equal(ptyCalls[0]?.executable, executablePath);
-  assert.equal(ptyCalls[0]?.args[0], "--model");
-  assert.equal(ptyCalls[0]?.args[1], "gpt-5.5/fast beta");
+  assert.equal(sessionCalls.length, 2);
+  assert.equal(sessionCalls[0]?.executable, executablePath);
+  assert.equal(sessionCalls[0]?.args[0], "--model");
+  assert.equal(sessionCalls[0]?.args[1], "gpt-5.5/fast beta");
 
   const runIds = await listRunDirectories(projectRoot);
   assert.deepEqual(
@@ -309,7 +309,7 @@ test("orchestrator reports intent repair metadata from a built-in provider adapt
       devFlowState,
       createManagedSessionAdapter(providerId) {
         return createBuiltInManagedSessionAdapter(providerId, {
-          async runPtyManagedSession(_command, input) {
+          async runCodexHookDrivenSession(_command, input) {
             if (isGrillSessionInput(input)) {
               return completeGrillSession(input);
             }

@@ -1,14 +1,20 @@
 import { createClaudeAdapter } from "./claudeAdapter.js";
 import type { CommandManagedSessionAdapterOptions } from "./commandManagedSessionAdapter.js";
-import { createCodexAdapter } from "./codexAdapter.js";
+import {
+  createCodexAdapter,
+  type CodexAdapterOptions,
+} from "./codexAdapter.js";
 import { createGeminiAdapter } from "./geminiAdapter.js";
 import { createOpenCodeAdapter } from "./opencodeAdapter.js";
 import type { ManagedSessionAdapter } from "./managedSessionAdapter.js";
 import type { BuiltInProviderId } from "./providers.js";
 
+export type BuiltInManagedSessionAdapterOptions =
+  CommandManagedSessionAdapterOptions & CodexAdapterOptions;
+
 export function createBuiltInManagedSessionAdapter(
   providerId: BuiltInProviderId,
-  options?: CommandManagedSessionAdapterOptions,
+  options?: BuiltInManagedSessionAdapterOptions,
 ): ManagedSessionAdapter {
   switch (providerId) {
     case "claude":

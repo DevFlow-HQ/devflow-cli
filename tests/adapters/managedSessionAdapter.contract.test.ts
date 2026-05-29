@@ -29,6 +29,7 @@ import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
 import { createGeminiAdapter } from "../../src/adapters/geminiAdapter.js";
 import { createOpenCodeAdapter } from "../../src/adapters/opencodeAdapter.js";
 import { createBuiltInManagedSessionAdapter } from "../../src/adapters/builtInManagedSessionAdapter.js";
+import type { CodexHookDrivenSessionCommand } from "../../src/adapters/codexHookDrivenSessionRunner.js";
 
 interface AdapterContractHarness {
   providerId: BuiltInProviderId;
@@ -39,6 +40,17 @@ interface AdapterContractHarness {
   cleanupCommand: string;
   createAdapter: (options?: {
     runPtyManagedSession: CapturingPtyRunner["runPtyManagedSession"];
+  }) => ManagedSessionAdapter;
+}
+
+interface CodexAdapterContractHarness {
+  providerId: "codex";
+  command: "codex";
+  displayName: "Codex";
+  expectedArgsWithoutModel: string[];
+  expectedArgsWithModel: string[];
+  createAdapter: (options?: {
+    runCodexHookDrivenSession: CapturingCodexHookRunner["runCodexHookDrivenSession"];
   }) => ManagedSessionAdapter;
 }
 
@@ -60,6 +72,26 @@ class CapturingPtyRunner {
       args: string[];
       cleanupCommand?: string;
     },
+    input: ManagedProviderSessionInput,
+  ): Promise<ManagedProviderSessionResult> {
+    this.calls.push({ command, input });
+    await input.validate();
+    return {
+      repairUsed: false,
+      exitCode: 0,
+      signal: null,
+    };
+  }
+}
+
+class CapturingCodexHookRunner {
+  readonly calls: Array<{
+    command: CodexHookDrivenSessionCommand;
+    input: ManagedProviderSessionInput;
+  }> = [];
+
+  async runCodexHookDrivenSession(
+    command: CodexHookDrivenSessionCommand,
     input: ManagedProviderSessionInput,
   ): Promise<ManagedProviderSessionResult> {
     this.calls.push({ command, input });
@@ -97,15 +129,6 @@ const providerHarnesses: AdapterContractHarness[] = [
     createAdapter: createGeminiAdapter,
   },
   {
-    providerId: "codex",
-    command: "codex",
-    displayName: "Codex",
-    expectedArgsWithoutModel: ["Ship the contract"],
-    expectedArgsWithModel: ["--model", "gpt-5.5", "Ship the contract"],
-    cleanupCommand: "/quit\n",
-    createAdapter: createCodexAdapter,
-  },
-  {
     providerId: "opencode",
     command: "opencode",
     displayName: "OpenCode",
@@ -115,6 +138,24 @@ const providerHarnesses: AdapterContractHarness[] = [
     createAdapter: createOpenCodeAdapter,
   },
 ];
+
+const codexHarness: CodexAdapterContractHarness = {
+  providerId: "codex",
+  command: "codex",
+  displayName: "Codex",
+  expectedArgsWithoutModel: ["Ship the contract"],
+  expectedArgsWithModel: ["--model", "gpt-5.5", "Ship the contract"],
+  createAdapter: createCodexAdapter,
+};
+
+const allProviderHarnesses = [
+  ...providerHarnesses,
+  codexHarness,
+].sort(
+  (left, right) =>
+    BUILT_IN_PROVIDER_IDS.indexOf(left.providerId) -
+    BUILT_IN_PROVIDER_IDS.indexOf(right.providerId),
+);
 
 test("built-in providers are defined from a single runtime source of truth", () => {
   assert.deepEqual(BUILT_IN_PROVIDER_IDS, [
@@ -314,10 +355,16 @@ test("managed-session contract exposes normalized provider events, phases, callb
 });
 
 test("built-in managed-session adapters expose effective PTY fallback capabilities", () => {
-  const expectedCapabilities: ManagedProviderSessionCapabilities = {
+  const expectedPtyCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "pty",
     supportsProviderSessionId: false,
+    supportsResume: false,
+  };
+  const expectedCodexCapabilities: ManagedProviderSessionCapabilities = {
+    controlTransport: "pty",
+    eventSource: "hooks",
+    supportsProviderSessionId: true,
     supportsResume: false,
   };
 
@@ -332,7 +379,10 @@ test("built-in managed-session adapters expose effective PTY fallback capabiliti
     })),
     BUILT_IN_PROVIDER_IDS.map((providerId) => ({
       providerId,
-      capabilities: expectedCapabilities,
+      capabilities:
+        providerId === "codex"
+          ? expectedCodexCapabilities
+          : expectedPtyCapabilities,
     })),
   );
 });
@@ -421,7 +471,7 @@ test("managed-session contract exposes typed lifecycle failures with provider id
   assert.equal(eventCapture.cause, eventCause);
 });
 
-for (const harness of providerHarnesses) {
+for (const harness of allProviderHarnesses) {
   test(`${harness.displayName} adapter detection resolves structured success and failure outcomes`, async (t) => {
     const originalPath = process.env.PATH;
     t.after(() => {
@@ -663,3 +713,154 @@ for (const harness of providerHarnesses) {
     assert.equal("run" in adapter, false);
   });
 }
+
+test("Codex adapter runSession delegates provider startup config to the hook-driven runner", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-hooks-adapter-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, codexHarness.command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const runner = new CapturingCodexHookRunner();
+  const adapter = codexHarness.createAdapter({
+    runCodexHookDrivenSession:
+      runner.runCodexHookDrivenSession.bind(runner),
+  });
+
+  const result = await adapter.runSession(validRunInput);
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: executablePath,
+        args: codexHarness.expectedArgsWithoutModel,
+      },
+      input: validRunInput,
+    },
+  ]);
+});
+
+test("Codex adapter passes opaque model overrides through provider-native flags", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-hooks-model-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, codexHarness.command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const runner = new CapturingCodexHookRunner();
+  const adapter = codexHarness.createAdapter({
+    runCodexHookDrivenSession:
+      runner.runCodexHookDrivenSession.bind(runner),
+  });
+
+  await adapter.runSession(validRunInputWithModel);
+
+  assert.deepEqual(runner.calls[0]?.command, {
+    provider: getBuiltInProviderIdentity("codex"),
+    executable: executablePath,
+    args: codexHarness.expectedArgsWithModel,
+  });
+});
+
+test("Codex adapter maps launch-time executable resolution failures before hook runner startup", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const missingBinDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-hooks-missing-run-"),
+  );
+
+  process.env.PATH = missingBinDir;
+
+  const runner = new CapturingCodexHookRunner();
+  const adapter = codexHarness.createAdapter({
+    runCodexHookDrivenSession:
+      runner.runCodexHookDrivenSession.bind(runner),
+  });
+
+  await assert.rejects(adapter.runSession(validRunInput), (error: unknown) => {
+    assert.ok(error instanceof ProviderSessionLaunchError);
+    assert.equal(error.provider, getBuiltInProviderIdentity("codex"));
+    assert.ok(error.cause instanceof Error);
+    assert.match(error.cause.message, /codex/i);
+    return true;
+  });
+  assert.deepEqual(runner.calls, []);
+});
+
+test("built-in managed-session selection wires codex execution through the hook-driven runner", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-hooks-run-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, codexHarness.command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const runner = new CapturingCodexHookRunner();
+  const adapter = createBuiltInManagedSessionAdapter("codex", {
+    runCodexHookDrivenSession:
+      runner.runCodexHookDrivenSession.bind(runner),
+  });
+
+  assert.deepEqual(adapter.provider, getBuiltInProviderIdentity("codex"));
+
+  const detection = await adapter.detect();
+  assert.deepEqual(detection, {
+    isAvailable: true,
+    executable: executablePath,
+  });
+
+  await adapter.runSession(validRunInput);
+
+  assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: executablePath,
+        args: codexHarness.expectedArgsWithoutModel,
+      },
+      input: validRunInput,
+    },
+  ]);
+  assert.equal("run" in adapter, false);
+});
