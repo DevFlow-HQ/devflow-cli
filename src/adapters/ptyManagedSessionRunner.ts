@@ -18,6 +18,7 @@ export interface PtySpawnOptions {
   cwd: string;
   cols: number;
   rows: number;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface PtyProcess {
@@ -109,6 +110,7 @@ export const nodePtySpawner: PtySpawner = {
       cwd: options.cwd,
       cols: options.cols,
       rows: options.rows,
+      env: options.env,
       name: "xterm-256color",
     });
 
