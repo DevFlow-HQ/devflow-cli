@@ -20,6 +20,7 @@ import {
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   ProviderSessionLaunchError,
+  ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";
@@ -206,6 +207,11 @@ export async function runCodexJsonlSession(
     }
 
     function rejectEventCaptureFailure(error: unknown): void {
+      if (error instanceof ProviderSessionTranscriptCaptureError) {
+        rejectSession(error);
+        return;
+      }
+
       rejectSession(
         error instanceof ProviderSessionEventCaptureError
           ? error

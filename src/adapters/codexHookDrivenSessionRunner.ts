@@ -12,6 +12,7 @@ import {
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   ProviderSessionLaunchError,
+  ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
@@ -129,6 +130,11 @@ export async function runCodexHookDrivenSession(
     });
 
     rejectEventCaptureFailure = (error: unknown): void => {
+      if (error instanceof ProviderSessionTranscriptCaptureError) {
+        rejectSession(error);
+        return;
+      }
+
       rejectSession(
         new ProviderSessionEventCaptureError(command.provider, error),
       );

@@ -31,6 +31,10 @@ import {
   type BuiltInProviderId,
 } from "./adapters/providers.js";
 import { UnsupportedProviderError } from "./bootstrapProvider.js";
+import {
+  createStructuredGrillTranscriptRecorder,
+  type StructuredGrillTranscriptRecorder,
+} from "./grillTranscriptRecorder.js";
 
 export interface ResolvedExecutionRequest {
   projectRoot: string;
@@ -740,9 +744,15 @@ function createPrdRepairConfig(options: {
 async function writeCompletedGrillArtifacts(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
+  recorder?: StructuredGrillTranscriptRecorder;
 }): Promise<void> {
   try {
-    await options.run.completeGrillTranscript();
+    if (options.recorder) {
+      await options.recorder.acceptCompletion();
+    } else {
+      await options.run.completeGrillTranscript();
+    }
+
     await options.run.writeGrillCheckpoint(
       createGrillCheckpoint({
         request: options.request,
@@ -750,6 +760,10 @@ async function writeCompletedGrillArtifacts(options: {
       }),
     );
   } catch (error) {
+    if (error instanceof ProviderSessionTranscriptCaptureError) {
+      throw error;
+    }
+
     const details = error instanceof Error ? error.message : String(error);
 
     throw new StageArtifactValidationError({
@@ -758,6 +772,16 @@ async function writeCompletedGrillArtifacts(options: {
       details,
     });
   }
+}
+
+function supportsStructuredGrillTranscriptCapture(
+  adapter: ManagedSessionAdapter,
+): boolean {
+  return (
+    adapter.capabilities?.eventSource !== undefined &&
+    adapter.capabilities.eventSource !== "pty" &&
+    adapter.capabilities.classifiesSubmittedUserMessageOrigin
+  );
 }
 
 function createGrillCheckpoint(options: {
@@ -822,6 +846,20 @@ async function runGrillStage(options: {
     });
   }
 
+  const recorder = supportsStructuredGrillTranscriptCapture(options.adapter)
+    ? createStructuredGrillTranscriptRecorder({
+        provider: options.adapter.provider,
+        artifact: {
+          appendProviderMessage: (content) =>
+            options.run.appendGrillProviderMessage(content),
+          appendUserMessage: (content) =>
+            options.run.appendGrillUserMessage(content),
+          complete: () => options.run.completeGrillTranscript(),
+        },
+        getActiveCompletionMarker: () => completionMarker,
+      })
+    : undefined;
+
   await options.adapter.runSession({
     workingDirectory: options.request.projectRoot,
     initialPrompt: prompt,
@@ -836,6 +874,7 @@ async function runGrillStage(options: {
       await writeCompletedGrillArtifacts({
         request: options.request,
         run: options.run,
+        recorder,
       });
     },
     continuations: [
@@ -858,12 +897,18 @@ async function runGrillStage(options: {
         }),
       },
     ],
-    transcript: {
-      onProviderOutput: (chunk) =>
-        options.run.appendGrillProviderMessage(chunk),
-      onSubmittedUserMessage: (message) =>
-        options.run.appendGrillUserMessage(message),
-    },
+    ...(recorder
+      ? {
+          onProviderEvent: (event) => recorder.recordEvent(event),
+        }
+      : {
+          transcript: {
+            onProviderOutput: (chunk: string) =>
+              options.run.appendGrillProviderMessage(chunk),
+            onSubmittedUserMessage: (message: string) =>
+              options.run.appendGrillUserMessage(message),
+          },
+        }),
   });
 }
 

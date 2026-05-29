@@ -13,6 +13,7 @@ import {
 import { createBuiltInManagedSessionAdapter } from "../src/adapters/builtInManagedSessionAdapter.js";
 import type {
   ManagedProviderSessionInput,
+  ManagedProviderSessionEvent,
   ManagedProviderSessionResult,
   ManagedSessionAdapter,
 } from "../src/adapters/managedSessionAdapter.js";
@@ -53,6 +54,24 @@ function isGrillSessionInput(input: ManagedProviderSessionInput): boolean {
 
 function isPrdSessionInput(input: ManagedProviderSessionInput): boolean {
   return input.initialCompletionMarker.startsWith("DEVFLOW_PRD_COMPLETE_");
+}
+
+type DistributiveOmit<T, K extends keyof any> = T extends unknown
+  ? Omit<T, K>
+  : never;
+
+function createStructuredProviderEvent(
+  event: DistributiveOmit<
+    ManagedProviderSessionEvent,
+    "provider" | "source" | "structured"
+  >,
+): ManagedProviderSessionEvent {
+  return {
+    ...event,
+    provider: getBuiltInProviderIdentity("codex"),
+    source: "hooks",
+    structured: true,
+  } as ManagedProviderSessionEvent;
 }
 
 function extractPrdArtifactPath(prompt: string): string {
@@ -902,6 +921,307 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
   assert.match(grillCheckpoint.completedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(await fs.pathExists(join(runDirectory, "issues")), false);
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+});
+
+test("structured-provider grill orchestration records normalized events instead of raw transcript callbacks", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.equal(input.transcript, undefined);
+      assert.ok(input.onProviderEvent);
+
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: [
+            "What tradeoff matters?",
+            input.initialCompletionMarker,
+            "Provider protocol text that must not be persisted.",
+          ].join("\n"),
+        }),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "submitted-user-message",
+          message: "Prefer simple contracts.",
+          origin: "human",
+        }),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "submitted-user-message",
+          message: "managed PRD continuation prompt",
+          origin: "managed",
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const transcript = await fs.readFile(
+    join(runDirectory, "grill-transcript.md"),
+    "utf8",
+  );
+
+  assert.match(transcript, /What tradeoff matters\?/);
+  assert.match(transcript, /Prefer simple contracts\./);
+  assert.doesNotMatch(transcript, /Provider protocol text/);
+  assert.doesNotMatch(transcript, /managed PRD continuation prompt/);
+  assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
+  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+});
+
+test("structured-provider grill orchestration keeps repair discussion before accepted completion", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: `Initial completion ${input.initialCompletionMarker} protocol`,
+        }),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "submitted-user-message",
+          message: "Repair the decision before accepting completion.",
+          origin: "human",
+        }),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: `Revised accepted completion ${input.initialCompletionMarker} protocol`,
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: true, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const transcript = await fs.readFile(
+    join(
+      projectRoot,
+      ".devflow",
+      "runs",
+      (await listRunDirectories(projectRoot))[0],
+      "grill-transcript.md",
+    ),
+    "utf8",
+  );
+
+  assert.match(transcript, /Initial completion/);
+  assert.match(transcript, /Repair the decision before accepting completion\./);
+  assert.match(transcript, /Revised accepted completion/);
+  assert.doesNotMatch(transcript, / protocol/);
+});
+
+test("structured-provider grill transcript persistence failures retry without writing a checkpoint", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await baseDevFlowState.projectContext.write("# Project context\n");
+  const devFlowState: DevFlowState = {
+    ...baseDevFlowState,
+    async createRun() {
+      const run = await baseDevFlowState.createRun();
+
+      return {
+        ...run,
+        async completeGrillTranscript() {
+          throw new Error("transcript write failed");
+        },
+      };
+    },
+  };
+  let grillCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillCallCount += 1;
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: `Ready ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ProviderStageRetryExhaustedError &&
+      error.stage === "grill" &&
+      error.cause instanceof ProviderSessionTranscriptCaptureError &&
+      error.cause.message.includes("transcript write failed"),
+  );
+
+  assert.equal(grillCallCount, 2);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), false);
 });
 
 test("orchestrator retries a partial grill attempt from the same transcript", async () => {
