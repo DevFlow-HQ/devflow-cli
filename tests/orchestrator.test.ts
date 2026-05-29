@@ -292,6 +292,77 @@ test("orchestrator can complete the active intent stage through a built-in Codex
   );
 });
 
+test("orchestrator leaves Codex event-source selection behind the managed-session adapter boundary", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const capabilitiesSeen: Array<string | undefined> = [];
+  const sessionPhaseKinds: Array<string | undefined> = [];
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "jsonl",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      capabilitiesSeen.push(adapter.capabilities?.eventSource);
+      sessionPhaseKinds.push(input.phase?.kind);
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  const result = await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter(providerId) {
+        assert.equal(providerId, "codex");
+        return adapter;
+      },
+    },
+  );
+
+  assert.deepEqual(capabilitiesSeen, ["jsonl", "jsonl"]);
+  assert.deepEqual(sessionPhaseKinds, ["intent", "grill"]);
+  assert.deepEqual(result.intent, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+});
+
 test("orchestrator reports intent repair metadata from a built-in provider adapter", async (t) => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
