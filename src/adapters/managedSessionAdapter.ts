@@ -49,20 +49,13 @@ export type ManagedProviderSessionEvent =
       message: string;
     })
   | (ManagedProviderSessionEventBase & {
-      type: "assistant-message";
-      content: string;
-    })
-  | (ManagedProviderSessionEventBase & {
       type: "turn-completed";
+      assistantMessage?: string;
     })
   | (ManagedProviderSessionEventBase & {
       type: "session-completed";
       exitCode: number | null;
       signal: NodeJS.Signals | null;
-    })
-  | (ManagedProviderSessionEventBase & {
-      type: "session-failed";
-      error: string;
     });
 
 export type ManagedProviderSessionEventCallback = (

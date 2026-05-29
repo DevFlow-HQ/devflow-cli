@@ -103,11 +103,6 @@ type PtyProviderEventInput = DistributiveOmit<
   ManagedProviderSessionEvent,
   "provider" | "source" | "structured" | "phaseId"
 >;
-type PtyProviderEventInputWithPhase = DistributiveOmit<
-  ManagedProviderSessionEvent,
-  "provider" | "source" | "structured"
->;
-
 export const nodePtySpawner: PtySpawner = {
   spawn(executable, args, options) {
     const process = pty.spawn(executable, args, {
@@ -171,10 +166,6 @@ export async function runPtyManagedSession(
       rows: terminal.rows ?? DEFAULT_ROWS,
     });
   } catch (error) {
-    emitBestEffortProviderEvent(command.provider, input, {
-      type: "session-failed",
-      error: describeProviderFailure(error),
-    });
     throw new ProviderSessionLaunchError(command.provider, error);
   }
 
@@ -225,7 +216,6 @@ export async function runPtyManagedSession(
 
       cleanupAfterValidationFailure();
       settled = true;
-      emitProviderFailureEvent(error);
       rejectSession(
         new ProviderSessionTranscriptCaptureError(command.provider, error),
       );
@@ -238,7 +228,6 @@ export async function runPtyManagedSession(
 
       cleanupAfterValidationFailure();
       settled = true;
-      emitProviderFailureEvent(error);
       rejectSession(
         new ProviderSessionEventCaptureError(command.provider, error),
       );
@@ -289,19 +278,6 @@ export async function runPtyManagedSession(
       } catch (error) {
         rejectTranscriptCaptureFailure(error);
       }
-    }
-
-    function captureAssistantMessageEvent(chunk: string): void {
-      const normalizedChunk = normalizeTranscriptChunk(chunk);
-
-      if (!normalizedChunk) {
-        return;
-      }
-
-      void emitProviderEvent({
-        type: "assistant-message",
-        content: normalizedChunk,
-      });
     }
 
     function resumeProviderTranscriptCapture(): void {
@@ -383,14 +359,6 @@ export async function runPtyManagedSession(
       } catch (error) {
         rejectEventCaptureFailure(error);
       }
-    }
-
-    function emitProviderFailureEvent(error: unknown): void {
-      emitBestEffortProviderEvent(command.provider, input, {
-        type: "session-failed",
-        error: describeProviderFailure(error),
-        phaseId: getActivePhaseId(),
-      });
     }
 
     async function validateActivePhase(): Promise<void> {
@@ -475,7 +443,6 @@ export async function runPtyManagedSession(
 
       settled = true;
       void callback().then(resolveSession, (error) => {
-        emitProviderFailureEvent(error);
         rejectSession(error);
       });
     }
@@ -611,7 +578,6 @@ export async function runPtyManagedSession(
           .catch((error) => {
             settled = true;
             cleanupAfterValidationFailure();
-            emitProviderFailureEvent(error);
             rejectSession(error);
           });
         return;
@@ -621,7 +587,6 @@ export async function runPtyManagedSession(
         cleanupAfterValidOutput();
       } catch (error) {
         settled = true;
-        emitProviderFailureEvent(error);
         rejectSession(error);
         return;
       }
@@ -657,7 +622,6 @@ export async function runPtyManagedSession(
           if (!(error instanceof Error) || !repair) {
             cleanupAfterValidationFailure();
             settled = true;
-            emitProviderFailureEvent(error);
             rejectSession(error);
             return;
           }
@@ -693,7 +657,6 @@ export async function runPtyManagedSession(
           cleanupAfterValidationFailure();
           settled = true;
           const mappedError = repair.mapFailure(error as Error);
-          emitProviderFailureEvent(mappedError);
           rejectSession(mappedError);
           return;
         }
@@ -726,7 +689,6 @@ export async function runPtyManagedSession(
       }
 
       captureProviderTranscriptChunk(chunk);
-      captureAssistantMessageEvent(chunk);
 
       if (settled) {
         return;
@@ -786,28 +748,4 @@ function normalizeTranscriptChunk(chunk: string): string {
     .replaceAll("\r\n", "\n")
     .replaceAll("\r", "\n")
     .replace(CONTROL_CHARACTERS_EXCEPT_TRANSCRIPT_WHITESPACE, "");
-}
-
-function emitBestEffortProviderEvent(
-  provider: ProviderIdentity,
-  input: ManagedProviderSessionInput,
-  event: PtyProviderEventInputWithPhase,
-): void {
-  try {
-    void Promise.resolve(
-      input.onProviderEvent?.({
-        ...event,
-        phaseId: event.phaseId ?? input.phase?.id ?? "initial",
-        provider,
-        source: "pty",
-        structured: false,
-      } as ManagedProviderSessionEvent),
-    ).catch(() => {});
-  } catch {
-    // Failure-context events must not replace the primary provider/session error.
-  }
-}
-
-function describeProviderFailure(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

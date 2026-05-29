@@ -257,19 +257,12 @@ test("managed-session contract exposes normalized provider events, phases, callb
       message: "Please continue",
     },
     {
-      type: "assistant-message",
-      source: "pty",
-      structured: false,
-      phaseId: phase.id,
-      provider,
-      content: "Working...",
-    },
-    {
       type: "turn-completed",
       source: "hooks",
       structured: true,
       phaseId: phase.id,
       provider,
+      assistantMessage: "Working...",
     },
     {
       type: "session-completed",
@@ -278,14 +271,6 @@ test("managed-session contract exposes normalized provider events, phases, callb
       provider,
       exitCode: 0,
       signal: null,
-    },
-    {
-      type: "session-failed",
-      source: "pty",
-      structured: false,
-      phaseId: phase.id,
-      provider,
-      error: "completion marker missing",
     },
   ];
   const capturedEvents: ManagedProviderSessionEvent[] = [];

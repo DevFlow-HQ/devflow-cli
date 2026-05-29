@@ -548,7 +548,7 @@ test("PTY managed-session runner captures normalized provider output without pro
   assert.deepEqual(transcript, ["Question one?\n", "Decision text "]);
 });
 
-test("PTY managed-session runner emits normalized assistant-message events while preserving output mirroring and transcripts", async () => {
+test("PTY managed-session runner mirrors output and transcripts without chunk-level assistant-message events", async () => {
   const spawner = new FakePtySpawner();
   const output: string[] = [];
   const transcript: string[] = [];
@@ -590,14 +590,22 @@ test("PTY managed-session runner emits normalized assistant-message events while
   ]);
   assert.deepEqual(transcript, ["Question one?\n", "Decision text "]);
 
-  const assistantContent = events
-    .filter((event) => event.type === "assistant-message")
-    .map((event) => event.content)
-    .join("");
-
-  assert.match(assistantContent, /Question one\?\n/);
-  assert.match(assistantContent, /Decision text DEVFLOW_DONE\n/);
-  assert.doesNotMatch(assistantContent, /\u001b\[/);
+  assert.equal(
+    events.some((event) => event.type === "turn-completed"),
+    true,
+  );
+  assert.deepEqual(
+    events.filter((event) => event.type === "turn-completed"),
+    [
+      {
+        type: "turn-completed",
+        provider: getBuiltInProviderIdentity("codex"),
+        source: "pty",
+        structured: false,
+        phaseId: "initial",
+      },
+    ],
+  );
 });
 
 test("PTY managed-session runner captures submitted user messages only after submit", async () => {
@@ -826,7 +834,7 @@ test("PTY managed-session runner maps normal provider event callback failures to
     },
     createInput({
       onProviderEvent(event) {
-        if (event.type === "assistant-message") {
+        if (event.type === "turn-completed") {
           throw captureFailure;
         }
       },
@@ -850,9 +858,10 @@ test("PTY managed-session runner maps normal provider event callback failures to
   assert.deepEqual(spawner.process.writes, ["/exit\n"]);
 });
 
-test("PTY managed-session runner preserves provider failures when failure-context event callbacks fail", async () => {
+test("PTY managed-session runner does not emit failure-context events on launch failures", async () => {
   const spawner = new FakePtySpawner();
   const launchFailure = new Error("spawn failed");
+  const events: ManagedProviderSessionEvent[] = [];
   spawner.spawnFailure = launchFailure;
 
   await assert.rejects(
@@ -864,9 +873,7 @@ test("PTY managed-session runner preserves provider failures when failure-contex
       },
       createInput({
         onProviderEvent(event) {
-          if (event.type === "session-failed") {
-            throw new Error("failure event callback failed");
-          }
+          events.push(event);
         },
       }),
       {
@@ -882,6 +889,7 @@ test("PTY managed-session runner preserves provider failures when failure-contex
       return true;
     },
   );
+  assert.deepEqual(events, []);
 });
 
 test("PTY managed-session runner bridges TTY stdin to the provider and restores stdin on success", async () => {
@@ -1150,19 +1158,8 @@ test("PTY managed-session runner reports incomplete sessions before marker detec
   assert.equal(terminal.listenerCount("resize"), 0);
   assert.equal(terminal.removedResizeListeners, 1);
   assert.deepEqual(
-    events
-      .filter((event) => event.type === "session-failed")
-      .map((event) => ({
-        phaseId: event.phaseId,
-        error: event.error,
-      })),
-    [
-      {
-        phaseId: "initial-phase",
-        error:
-          'Provider session for "codex" ended before completion marker "DEVFLOW_DONE" was observed.',
-      },
-    ],
+    events.map((event) => event.type),
+    ["session-start"],
   );
 });
 
@@ -1314,7 +1311,6 @@ test("PTY managed-session runner kills the provider and reports interruption on 
 test("PTY managed-session runner surfaces cleanup failures after valid output", async () => {
   const spawner = new FakePtySpawner();
   const cleanupFailure = new Error("write failed");
-  const callbackFailure = new Error("event sink failed");
   const events: ManagedProviderSessionEvent[] = [];
   spawner.process.write = () => {
     throw cleanupFailure;
@@ -1330,10 +1326,6 @@ test("PTY managed-session runner surfaces cleanup failures after valid output", 
     createInput({
       onProviderEvent(event) {
         events.push(event);
-
-        if (event.type === "session-failed") {
-          throw callbackFailure;
-        }
       },
     }),
     {
@@ -1352,10 +1344,8 @@ test("PTY managed-session runner surfaces cleanup failures after valid output", 
     return true;
   });
   assert.deepEqual(
-    events
-      .filter((event) => event.type === "session-failed")
-      .map((event) => event.error),
-    ['Provider session for "codex" produced valid output but cleanup failed.'],
+    events.map((event) => event.type),
+    ["session-start", "turn-completed"],
   );
 });
 
