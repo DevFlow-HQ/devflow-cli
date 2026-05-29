@@ -1,4 +1,7 @@
 import fs from "node:fs/promises";
+import { resolve } from "node:path";
+
+import chokidar from "chokidar";
 
 export interface JsonlTailReadSegmentResult {
   content: string;
@@ -33,23 +36,45 @@ export interface JsonlTailReadResult {
 
 export interface JsonlTailEventSource {
   readNewRecords(): Promise<JsonlTailReadResult>;
+  watch(
+    onRead: (result: JsonlTailReadResult) => void | Promise<void>,
+    onError: (error: unknown) => void,
+  ): void;
+  close(): Promise<void>;
 }
 
 export interface JsonlTailEventSourceOptions {
   filePath: string;
   readSegment?: JsonlTailReadSegment;
+  watchFile?: JsonlTailWatchFile;
 }
+
+export type JsonlTailWatchEvent = "add" | "change";
+
+export interface JsonlTailWatcher {
+  on(
+    event: JsonlTailWatchEvent,
+    listener: (filePath: string) => void,
+  ): JsonlTailWatcher;
+  close(): Promise<void> | void;
+}
+
+export type JsonlTailWatchFile = (filePath: string) => JsonlTailWatcher;
 
 export function createJsonlTailEventSource(
   options: JsonlTailEventSourceOptions,
 ): JsonlTailEventSource {
   const readSegment = options.readSegment ?? readFileSegment;
+  const watchFile = options.watchFile ?? watchJsonlFile;
+  const selectedFilePath = resolve(options.filePath);
   let offset = 0;
   let bufferedLine = "";
   let reading = false;
+  let watcher: JsonlTailWatcher | undefined;
+  let watchReadActive = false;
+  let watchReadPending = false;
 
-  return {
-    async readNewRecords() {
+  async function readNewRecords(): Promise<JsonlTailReadResult> {
       if (reading) {
         return {
           records: [],
@@ -98,8 +123,59 @@ export function createJsonlTailEventSource(
       } finally {
         reading = false;
       }
+  }
+
+  return {
+    readNewRecords,
+    watch(onRead, onError) {
+      if (watcher) {
+        return;
+      }
+
+      watcher = watchFile(options.filePath);
+      const onWakeup = (filePath: string): void => {
+        if (resolve(filePath) !== selectedFilePath) {
+          return;
+        }
+
+        watchReadPending = true;
+        if (watchReadActive) {
+          return;
+        }
+
+        watchReadActive = true;
+        void (async () => {
+          while (watchReadPending) {
+            watchReadPending = false;
+            await onRead(await readNewRecords());
+          }
+        })()
+          .catch(onError)
+          .finally(() => {
+            watchReadActive = false;
+          });
+      };
+
+      watcher.on("add", onWakeup);
+      watcher.on("change", onWakeup);
+    },
+
+    async close() {
+      const activeWatcher = watcher;
+      watcher = undefined;
+
+      if (activeWatcher) {
+        await activeWatcher.close();
+      }
     },
   };
+}
+
+function watchJsonlFile(filePath: string): JsonlTailWatcher {
+  return chokidar.watch(filePath, {
+    ignoreInitial: false,
+    awaitWriteFinish: false,
+  });
 }
 
 async function readFileSegment(

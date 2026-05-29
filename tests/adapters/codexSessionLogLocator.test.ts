@@ -10,12 +10,52 @@ import {
   createCodexSessionLogLocator,
   getScopedCodexProviderHome,
   locateCodexSessionLogForProvider,
+  type SessionLogWatchEvent,
+  type SessionLogWatcher,
 } from "../../src/adapters/codexSessionLogLocator.js";
 import {
   ProviderSessionEventCaptureError,
   type ManagedProviderSessionInput,
 } from "../../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+
+class FakeSessionLogWatcher implements SessionLogWatcher {
+  readonly listeners = new Map<
+    SessionLogWatchEvent,
+    Array<(filePath: string) => void>
+  >();
+  closeCount = 0;
+
+  on(
+    event: SessionLogWatchEvent,
+    listener: (filePath: string) => void,
+  ): SessionLogWatcher {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+    return this;
+  }
+
+  async close(): Promise<void> {
+    this.closeCount += 1;
+  }
+
+  emit(event: SessionLogWatchEvent, filePath: string): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(filePath);
+    }
+  }
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 250;
+
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("Timed out waiting for condition.");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
 
 function createInput(
   projectRoot: string,
@@ -48,7 +88,6 @@ test("Codex session log locator discovers new rollout logs only inside the scope
   const globalCodexHome = join(projectRoot, ".codex");
   const locator = createCodexSessionLogLocator({
     codexHome,
-    pollIntervalMs: 5,
   });
 
   const snapshot = await locator.snapshot();
@@ -81,7 +120,6 @@ test("Codex session log locator ignores rollout files that existed before spawn"
   );
   const locator = createCodexSessionLogLocator({
     codexHome,
-    pollIntervalMs: 5,
   });
 
   const snapshot = await locator.snapshot();
@@ -102,7 +140,6 @@ test("Codex session log locator waits for empty candidates to receive append dat
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
-    pollIntervalMs: 5,
   });
 
   const snapshot = await locator.snapshot();
@@ -127,7 +164,6 @@ test("Codex session log locator searches nested session trees without date assum
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
-    pollIntervalMs: 5,
   });
 
   const snapshot = await locator.snapshot();
@@ -146,7 +182,6 @@ test("Codex session log locator deterministically selects the most recent non-em
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
-    pollIntervalMs: 5,
   });
 
   const snapshot = await locator.snapshot();
@@ -178,7 +213,6 @@ test("Codex session log locator timeout includes scoped home and rollout pattern
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
-    pollIntervalMs: 5,
   });
 
   const snapshot = await locator.snapshot();
@@ -204,7 +238,6 @@ test("Codex session log locator provider wrapper classifies timeout as event cap
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
-    pollIntervalMs: 5,
   });
   const snapshot = await locator.snapshot();
 
@@ -221,4 +254,46 @@ test("Codex session log locator provider wrapper classifies timeout as event cap
       return true;
     },
   );
+});
+
+test("Codex session log locator uses a short-lived scoped watcher for new rollout discovery", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
+  const watcher = new FakeSessionLogWatcher();
+  const watchedRoots: string[] = [];
+  const existingLog = await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-existing.jsonl",
+  );
+  const locator = createCodexSessionLogLocator({
+    codexHome,
+    watchSessionsTree(sessionsRoot) {
+      watchedRoots.push(sessionsRoot);
+      return watcher;
+    },
+  });
+
+  const snapshot = await locator.snapshot();
+  const locatePromise = locator.locateActiveLog(snapshot, { timeoutMs: 500 });
+  await waitFor(() => watchedRoots.length === 1);
+
+  const emptyLog = await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-empty.jsonl",
+    "",
+  );
+  watcher.emit("add", emptyLog);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  await fs.appendFile(emptyLog, "{}\n", "utf8");
+  watcher.emit("change", emptyLog);
+
+  const located = await locatePromise;
+
+  assert.deepEqual(watchedRoots, [join(codexHome, "sessions")]);
+  assert.equal(located.filePath, emptyLog);
+  assert.equal(located.debug.ignoredPreexistingCount, 1);
+  assert.equal(located.debug.emptyCandidateCount, 1);
+  assert.deepEqual(Array.from(snapshot.filePaths), [existingLog]);
+  assert.equal(watcher.closeCount, 1);
 });

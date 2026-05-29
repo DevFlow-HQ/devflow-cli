@@ -10,7 +10,10 @@ import {
   locateCodexSessionLogForProvider,
   type SessionLogLocator,
 } from "./codexSessionLogLocator.js";
-import { createJsonlTailEventSource } from "./jsonlTailEventSource.js";
+import {
+  createJsonlTailEventSource,
+  type JsonlTailReadResult,
+} from "./jsonlTailEventSource.js";
 import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
@@ -50,7 +53,6 @@ export interface CodexJsonlSessionDependencies {
   firstEventTimeoutMs?: number;
   cleanupTimeoutMs?: number;
   earlyExitDrainTimeoutMs?: number;
-  pollIntervalMs?: number;
 }
 
 const DEFAULT_COLUMNS = 80;
@@ -59,7 +61,6 @@ const DEFAULT_LOCATOR_TIMEOUT_MS = 30_000;
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
 const DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS = 250;
-const DEFAULT_POLL_INTERVAL_MS = 50;
 
 export async function runCodexJsonlSession(
   command: CodexJsonlSessionCommand,
@@ -82,9 +83,6 @@ export async function runCodexJsonlSession(
     dependencies.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS;
   const earlyExitDrainTimeoutMs =
     dependencies.earlyExitDrainTimeoutMs ?? DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS;
-  const pollIntervalMs =
-    dependencies.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-
   await fs.ensureDir(codexHome);
 
   let snapshot;
@@ -117,7 +115,6 @@ export async function runCodexJsonlSession(
     let signal: NodeJS.Signals | null = null;
     let cleanupUserInputBridge = (): void => {};
     let cleanupTerminalResize = (): void => {};
-    let pollTimer: NodeJS.Timeout | undefined;
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
     let earlyExitDrainTimer: NodeJS.Timeout | undefined;
@@ -150,11 +147,6 @@ export async function runCodexJsonlSession(
     }
 
     function clearTimers(): void {
-      if (pollTimer) {
-        clearTimeout(pollTimer);
-        pollTimer = undefined;
-      }
-
       if (firstEventTimer) {
         clearTimeout(firstEventTimer);
         firstEventTimer = undefined;
@@ -190,6 +182,7 @@ export async function runCodexJsonlSession(
       clearTimers();
       cleanupInteractiveInput();
       cleanupResizeListener();
+      void activeEventSource?.close();
       resolve(result);
     }
 
@@ -202,6 +195,7 @@ export async function runCodexJsonlSession(
       clearTimers();
       cleanupInteractiveInput();
       cleanupResizeListener();
+      void activeEventSource?.close();
       try {
         processHandle.kill();
       } catch {
@@ -378,7 +372,12 @@ export async function runCodexJsonlSession(
       eventSource: ReturnType<typeof createJsonlTailEventSource>,
     ): Promise<void> {
       const result = await eventSource.readNewRecords();
+      await handleReadResult(result);
+    }
 
+    async function handleReadResult(
+      result: JsonlTailReadResult,
+    ): Promise<void> {
       for (const record of result.records) {
         const event = normalizeCodexJsonlRecordForProvider({
           provider: command.provider,
@@ -411,18 +410,23 @@ export async function runCodexJsonlSession(
       );
     }
 
-    function schedulePoll(
+    function startFileWatch(
       eventSource: ReturnType<typeof createJsonlTailEventSource>,
     ): void {
       if (settled || manager.isFinalized()) {
         return;
       }
 
-      pollTimer = setTimeout(() => {
-        void drainRecords(eventSource)
-          .then(() => schedulePoll(eventSource))
-          .catch(rejectEventCaptureFailure);
-      }, pollIntervalMs);
+      eventSource.watch(
+        async (result) => {
+          if (settled || manager.isFinalized()) {
+            return;
+          }
+
+          await handleReadResult(result);
+        },
+        rejectEventCaptureFailure,
+      );
     }
 
     function scheduleEarlyExitDrain(): void {
@@ -513,7 +517,7 @@ export async function runCodexJsonlSession(
         return;
       }
 
-      schedulePoll(eventSource);
+      startFileWatch(eventSource);
     })().catch(rejectEventCaptureFailure);
   });
 }

@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
+import chokidar from "chokidar";
+
 import {
   ProviderSessionEventCaptureError,
   type ManagedProviderSessionInput,
@@ -45,7 +47,7 @@ export interface SessionLogLocateOptions {
 
 export interface CodexSessionLogLocatorOptions {
   codexHome: string;
-  pollIntervalMs?: number;
+  watchSessionsTree?: SessionLogWatchSessionsTree;
 }
 
 export interface LocateCodexSessionLogForProviderOptions {
@@ -57,7 +59,20 @@ export interface LocateCodexSessionLogForProviderOptions {
 
 const CODEX_ROLLOUT_PATTERN = "sessions/**/rollout-*.jsonl";
 const DEFAULT_LOCATOR_TIMEOUT_MS = 30_000;
-const DEFAULT_POLL_INTERVAL_MS = 50;
+
+export type SessionLogWatchEvent = "add" | "change";
+
+export interface SessionLogWatcher {
+  on(
+    event: SessionLogWatchEvent,
+    listener: (filePath: string) => void,
+  ): SessionLogWatcher;
+  close(): Promise<void> | void;
+}
+
+export type SessionLogWatchSessionsTree = (
+  sessionsRoot: string,
+) => SessionLogWatcher;
 
 export class CodexSessionLogLocatorTimeoutError extends Error {
   readonly scopedProviderHome: string;
@@ -92,7 +107,8 @@ export function createCodexSessionLogLocator(
 ): SessionLogLocator {
   const scopedProviderHome = resolve(options.codexHome);
   const sessionsRoot = join(scopedProviderHome, "sessions");
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const watchSessionsTree =
+    options.watchSessionsTree ?? watchCodexSessionsTree;
 
   return {
     async snapshot() {
@@ -111,47 +127,46 @@ export function createCodexSessionLogLocator(
         locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
       const deadline = Date.now() + timeoutMs;
       const emptyCandidatesSeen = new Set<string>();
+      const watcher = watchSessionsTree(sessionsRoot);
+      let wakeup: (() => void) | undefined;
+      const notifyWakeup = (): void => {
+        wakeup?.();
+      };
 
-      do {
-        const files = await findRolloutFiles({
-          scopedProviderHome,
-          sessionsRoot,
-        });
-        const newFiles = files.filter(
-          (file) => !snapshot.filePaths.has(file.filePath),
-        );
-        const nonEmptyCandidates = newFiles.filter((file) => {
-          if (file.size > 0) {
-            return true;
+      watcher.on("add", notifyWakeup);
+      watcher.on("change", notifyWakeup);
+
+      try {
+        do {
+          const selected = await findSelectableCandidate({
+            scopedProviderHome,
+            sessionsRoot,
+            snapshot,
+            emptyCandidatesSeen,
+          });
+
+          if (selected) {
+            return selected;
           }
 
-          emptyCandidatesSeen.add(file.filePath);
-          return false;
-        });
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) {
+            break;
+          }
 
-        if (nonEmptyCandidates.length > 0) {
-          const candidates = sortCandidates(nonEmptyCandidates);
-
-          return {
-            filePath: candidates[0].filePath,
-            debug: {
-              scopedProviderHome,
-              searchedPattern: CODEX_ROLLOUT_PATTERN,
-              candidates,
-              ignoredPreexistingCount: snapshot.filePaths.size,
-              emptyCandidateCount: emptyCandidatesSeen.size,
-              multipleCandidates: candidates.length > 1,
+          await waitForWatcherWakeup({
+            timeoutMs: remainingMs,
+            register(resolveWakeup) {
+              wakeup = resolveWakeup;
             },
-          };
-        }
-
-        const remainingMs = deadline - Date.now();
-        if (remainingMs <= 0) {
-          break;
-        }
-
-        await sleep(Math.min(pollIntervalMs, remainingMs));
-      } while (true);
+            unregister() {
+              wakeup = undefined;
+            },
+          });
+        } while (true);
+      } finally {
+        await watcher.close();
+      }
 
       throw new CodexSessionLogLocatorTimeoutError({
         scopedProviderHome,
@@ -160,6 +175,62 @@ export function createCodexSessionLogLocator(
       });
     },
   };
+}
+
+async function findSelectableCandidate(options: {
+  scopedProviderHome: string;
+  sessionsRoot: string;
+  snapshot: SessionLogSnapshot;
+  emptyCandidatesSeen: Set<string>;
+}): Promise<SessionLogLocation | undefined> {
+  const files = await findRolloutFiles({
+    scopedProviderHome: options.scopedProviderHome,
+    sessionsRoot: options.sessionsRoot,
+  });
+  const newFiles = files.filter(
+    (file) => !options.snapshot.filePaths.has(file.filePath),
+  );
+  const nonEmptyCandidates = newFiles.filter((file) => {
+    if (file.size > 0) {
+      return true;
+    }
+
+    options.emptyCandidatesSeen.add(file.filePath);
+    return false;
+  });
+
+  if (nonEmptyCandidates.length === 0) {
+    return undefined;
+  }
+
+  const candidates = sortCandidates(nonEmptyCandidates);
+
+  return {
+    filePath: candidates[0].filePath,
+    debug: {
+      scopedProviderHome: options.scopedProviderHome,
+      searchedPattern: CODEX_ROLLOUT_PATTERN,
+      candidates,
+      ignoredPreexistingCount: options.snapshot.filePaths.size,
+      emptyCandidateCount: options.emptyCandidatesSeen.size,
+      multipleCandidates: candidates.length > 1,
+    },
+  };
+}
+
+async function waitForWatcherWakeup(options: {
+  timeoutMs: number;
+  register(resolveWakeup: () => void): void;
+  unregister(): void;
+}): Promise<void> {
+  await new Promise<void>((resolveWakeup) => {
+    const timer = setTimeout(resolveWakeup, options.timeoutMs);
+    options.register(() => {
+      clearTimeout(timer);
+      resolveWakeup();
+    });
+  });
+  options.unregister();
 }
 
 export async function locateCodexSessionLogForProvider(
@@ -262,9 +333,10 @@ function sortCandidates(
   });
 }
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolveSleep) => {
-    setTimeout(resolveSleep, milliseconds);
+function watchCodexSessionsTree(sessionsRoot: string): SessionLogWatcher {
+  return chokidar.watch(sessionsRoot, {
+    ignoreInitial: true,
+    awaitWriteFinish: false,
   });
 }
 

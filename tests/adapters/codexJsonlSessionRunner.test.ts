@@ -255,7 +255,6 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
       ptySpawner: spawner,
       outputSink: { write() {} },
       terminal: { columns: 100, rows: 30 },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -367,7 +366,6 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
       outputSink: { write: (chunk) => output.push(chunk) },
       terminal,
       userInput,
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -429,7 +427,6 @@ test("Codex JSONL runner forwards Ctrl-C and reports requested interruption on p
           return interrupted;
         },
       },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     }),
@@ -474,7 +471,6 @@ test("Codex JSONL runner submits continuation prompts through PTY and emits mana
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -541,7 +537,6 @@ test("Codex JSONL runner submits repair prompts through PTY and reports repair u
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -571,7 +566,6 @@ test("Codex JSONL runner fails with event capture when no rollout file appears",
     runCodexJsonlSession(createCommand(), createInput(projectRoot), {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 20,
       firstEventTimeoutMs: 1_000,
     }),
@@ -600,7 +594,6 @@ test("Codex JSONL runner fails when rollout has no usable structured event befor
     runCodexJsonlSession(createCommand(), createInput(projectRoot), {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 20,
     }),
@@ -628,7 +621,6 @@ test("Codex JSONL runner classifies malformed load-bearing records as event capt
     runCodexJsonlSession(createCommand(), createInput(projectRoot), {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     }),
@@ -666,7 +658,6 @@ test("Codex JSONL runner skips malformed unrelated completed lines and buffers i
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -697,7 +688,6 @@ test("Codex JSONL runner drains briefly after early PTY exit before incomplete-s
     runCodexJsonlSession(createCommand(), createInput(projectRoot), {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
       earlyExitDrainTimeoutMs: 20,
@@ -725,7 +715,6 @@ test("Codex JSONL runner reports cleanup timeout after phase finalization", asyn
     runCodexJsonlSession(createCommand(), createInput(projectRoot), {
       ptySpawner: spawner,
       outputSink: { write() {} },
-      pollIntervalMs: 5,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
       cleanupTimeoutMs: 20,

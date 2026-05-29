@@ -8,7 +8,47 @@ import fs from "fs-extra";
 import {
   createJsonlTailEventSource,
   type JsonlTailReadSegment,
+  type JsonlTailWatchEvent,
+  type JsonlTailWatcher,
 } from "../../src/adapters/jsonlTailEventSource.js";
+
+class FakeJsonlTailWatcher implements JsonlTailWatcher {
+  readonly listeners = new Map<
+    JsonlTailWatchEvent,
+    Array<(filePath: string) => void>
+  >();
+  closeCount = 0;
+
+  on(
+    event: JsonlTailWatchEvent,
+    listener: (filePath: string) => void,
+  ): JsonlTailWatcher {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+    return this;
+  }
+
+  async close(): Promise<void> {
+    this.closeCount += 1;
+  }
+
+  emit(event: JsonlTailWatchEvent, filePath: string): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(filePath);
+    }
+  }
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 250;
+
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("Timed out waiting for condition.");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
 
 test("JSONL tailer reads only newly appended records across repeated reads", async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
@@ -134,4 +174,48 @@ test("JSONL tailer isolates slow reads so overlapping polls stay responsive", as
     records: [{ id: 1 }],
     diagnostics: [],
   });
+});
+
+test("JSONL tailer consumes add and change wakeups for only the selected rollout file", async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const logPath = join(directory, "session.jsonl");
+  const otherPath = join(directory, "other.jsonl");
+  const watcher = new FakeJsonlTailWatcher();
+  const watchedPaths: string[] = [];
+  const results: Array<unknown[]> = [];
+  await fs.writeFile(logPath, "", "utf8");
+  const tailer = createJsonlTailEventSource({
+    filePath: logPath,
+    watchFile(filePath) {
+      watchedPaths.push(filePath);
+      return watcher;
+    },
+  });
+
+  tailer.watch(
+    (result) => {
+      results.push(result.records);
+    },
+    (error) => assert.fail(error as Error),
+  );
+
+  await fs.appendFile(otherPath, '{"id":"other"}\n', "utf8");
+  watcher.emit("add", otherPath);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(results, []);
+
+  await fs.appendFile(logPath, '{"id":1}\n', "utf8");
+  watcher.emit("add", logPath);
+  await waitFor(() => results.length === 1);
+
+  await fs.appendFile(logPath, '{"id":2}\n', "utf8");
+  watcher.emit("change", logPath);
+  await waitFor(() => results.length === 2);
+
+  assert.deepEqual(watchedPaths, [logPath]);
+  assert.deepEqual(results, [[{ id: 1 }], [{ id: 2 }]]);
+
+  await tailer.close();
+
+  assert.equal(watcher.closeCount, 1);
 });
