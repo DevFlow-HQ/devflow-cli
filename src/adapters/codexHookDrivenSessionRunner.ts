@@ -284,7 +284,10 @@ export async function runCodexHookDrivenSession(
       const pendingIndex = pendingManagedPrompts.indexOf(event.message);
 
       if (pendingIndex === -1) {
-        return event;
+        return {
+          ...event,
+          origin: "human",
+        };
       }
 
       pendingManagedPrompts.splice(pendingIndex, 1);

@@ -225,6 +225,11 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
       providerSessionId: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Manual clarification",
+      providerSessionId: "codex-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
       last_assistant_message: "done INITIAL_DONE",
       providerSessionId: "codex-session-1",
@@ -293,6 +298,14 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
         source: "hooks",
         structured: true,
         origin: "managed",
+      },
+      {
+        type: "submitted-user-message",
+        phaseId: "runabc123456:intent:attempt-1",
+        providerSessionId: "codex-session-1",
+        source: "hooks",
+        structured: true,
+        origin: "human",
       },
       {
         type: "turn-completed",
