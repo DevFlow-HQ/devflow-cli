@@ -12,6 +12,7 @@ import {
 } from "./codexSessionLogLocator.js";
 import { createJsonlTailEventSource } from "./jsonlTailEventSource.js";
 import {
+  IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
@@ -48,6 +49,7 @@ export interface CodexJsonlSessionDependencies {
   locatorTimeoutMs?: number;
   firstEventTimeoutMs?: number;
   cleanupTimeoutMs?: number;
+  earlyExitDrainTimeoutMs?: number;
   pollIntervalMs?: number;
 }
 
@@ -56,6 +58,7 @@ const DEFAULT_ROWS = 24;
 const DEFAULT_LOCATOR_TIMEOUT_MS = 30_000;
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
+const DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS = 250;
 const DEFAULT_POLL_INTERVAL_MS = 50;
 
 export async function runCodexJsonlSession(
@@ -77,6 +80,8 @@ export async function runCodexJsonlSession(
     dependencies.firstEventTimeoutMs ?? DEFAULT_FIRST_EVENT_TIMEOUT_MS;
   const cleanupTimeoutMs =
     dependencies.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS;
+  const earlyExitDrainTimeoutMs =
+    dependencies.earlyExitDrainTimeoutMs ?? DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS;
   const pollIntervalMs =
     dependencies.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
@@ -115,6 +120,10 @@ export async function runCodexJsonlSession(
     let pollTimer: NodeJS.Timeout | undefined;
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
+    let earlyExitDrainTimer: NodeJS.Timeout | undefined;
+    let activeEventSource:
+      | ReturnType<typeof createJsonlTailEventSource>
+      | undefined;
     const normalizer = createCodexJsonlNormalizer();
 
     const manager = createPhaseManager({
@@ -154,6 +163,11 @@ export async function runCodexJsonlSession(
       if (cleanupTimer) {
         clearTimeout(cleanupTimer);
         cleanupTimer = undefined;
+      }
+
+      if (earlyExitDrainTimer) {
+        clearTimeout(earlyExitDrainTimer);
+        earlyExitDrainTimer = undefined;
       }
     }
 
@@ -221,6 +235,47 @@ export async function runCodexJsonlSession(
         () => resolveSession(createResult()),
         rejectEventCaptureFailure,
       );
+    }
+
+    function getActiveCompletionMarker(): string {
+      const state = manager.getState();
+
+      if (state.type === "continuation") {
+        return (
+          input.continuations?.[state.index]?.completionMarker ??
+          input.initialCompletionMarker
+        );
+      }
+
+      if (state.type === "repair") {
+        const continuation =
+          state.base.type === "continuation"
+            ? input.continuations?.[state.base.index]
+            : undefined;
+        const repair = continuation?.repair ?? input.repair;
+
+        return repair?.completionMarker ?? input.initialCompletionMarker;
+      }
+
+      return input.initialCompletionMarker;
+    }
+
+    function rejectIncompleteSession(): void {
+      rejectSession(
+        new IncompleteProviderSessionError({
+          provider: command.provider,
+          completionMarker: getActiveCompletionMarker(),
+          exitCode,
+          signal,
+        }),
+      );
+    }
+
+    function markFirstEventObserved(): void {
+      if (firstEventTimer) {
+        clearTimeout(firstEventTimer);
+        firstEventTimer = undefined;
+      }
     }
 
     async function emitSessionCompleted(): Promise<void> {
@@ -333,8 +388,27 @@ export async function runCodexJsonlSession(
 
         if (event) {
           await manager.handleEvent(event);
+          markFirstEventObserved();
+        } else if (isNativeSessionMetaRecord(record)) {
+          markFirstEventObserved();
         }
       }
+    }
+
+    function isNativeSessionMetaRecord(
+      record: unknown,
+    ): record is { type: "session_meta"; payload: { id: string } } {
+      return (
+        typeof record === "object" &&
+        record !== null &&
+        "type" in record &&
+        record.type === "session_meta" &&
+        "payload" in record &&
+        typeof record.payload === "object" &&
+        record.payload !== null &&
+        "id" in record.payload &&
+        typeof record.payload.id === "string"
+      );
     }
 
     function schedulePoll(
@@ -349,6 +423,20 @@ export async function runCodexJsonlSession(
           .then(() => schedulePoll(eventSource))
           .catch(rejectEventCaptureFailure);
       }, pollIntervalMs);
+    }
+
+    function scheduleEarlyExitDrain(): void {
+      if (phaseFinalized || settled || earlyExitDrainTimer) {
+        return;
+      }
+
+      earlyExitDrainTimer = setTimeout(() => {
+        if (phaseFinalized || settled) {
+          return;
+        }
+
+        rejectIncompleteSession();
+      }, earlyExitDrainTimeoutMs);
     }
 
     setupUserInputBridge();
@@ -374,6 +462,25 @@ export async function runCodexJsonlSession(
         return;
       }
 
+      if (!phaseFinalized) {
+        if (activeEventSource) {
+          void drainRecords(activeEventSource)
+            .then(() => {
+              if (phaseFinalized) {
+                maybeResolve();
+                return;
+              }
+
+              scheduleEarlyExitDrain();
+            })
+            .catch(rejectEventCaptureFailure);
+          return;
+        }
+
+        scheduleEarlyExitDrain();
+        return;
+      }
+
       maybeResolve();
     });
 
@@ -395,15 +502,17 @@ export async function runCodexJsonlSession(
       const eventSource = createJsonlTailEventSource({
         filePath: location.filePath,
       });
-
-      if (firstEventTimer) {
-        clearTimeout(firstEventTimer);
-        firstEventTimer = undefined;
-      }
+      activeEventSource = eventSource;
 
       await emitAttachedSessionStart();
       await submitManagedPrompt(input.initialPrompt);
       await drainRecords(eventSource);
+
+      if (exitObserved && !phaseFinalized) {
+        scheduleEarlyExitDrain();
+        return;
+      }
+
       schedulePoll(eventSource);
     })().catch(rejectEventCaptureFailure);
   });

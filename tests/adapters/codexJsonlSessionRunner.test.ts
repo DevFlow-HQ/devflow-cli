@@ -7,9 +7,12 @@ import test from "node:test";
 import fs from "fs-extra";
 
 import {
+  IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
+  ProviderSessionCleanupError,
+  ProviderSessionEventCaptureError,
 } from "../../src/adapters/managedSessionAdapter.js";
 import {
   runCodexJsonlSession,
@@ -557,5 +560,176 @@ test("Codex JSONL runner submits repair prompts through PTY and reports repair u
       "runabc123456:intent:attempt-1:Start",
       "runabc123456:intent:attempt-1:repair-1:Repair",
     ],
+  );
+});
+
+test("Codex JSONL runner fails with event capture when no rollout file appears", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const spawner = new ScriptedCodexPtySpawner(async () => {});
+
+  await assert.rejects(
+    runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      pollIntervalMs: 5,
+      locatorTimeoutMs: 20,
+      firstEventTimeoutMs: 1_000,
+    }),
+    ProviderSessionEventCaptureError,
+  );
+});
+
+test("Codex JSONL runner fails when rollout has no usable structured event before timeout", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    await appendRolloutRecord(
+      String(options.env?.CODEX_HOME),
+      "sessions/2026/05/30/rollout-session.jsonl",
+      {
+        timestamp: "2026-05-30T00:00:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+        },
+      },
+    );
+  });
+
+  await assert.rejects(
+    runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      pollIntervalMs: 5,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 20,
+    }),
+    ProviderSessionEventCaptureError,
+  );
+});
+
+test("Codex JSONL runner classifies malformed load-bearing records as event capture failures", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    await appendRolloutRecord(
+      String(options.env?.CODEX_HOME),
+      "sessions/2026/05/30/rollout-session.jsonl",
+      {
+        timestamp: "2026-05-30T00:00:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+        },
+      },
+    );
+  });
+
+  await assert.rejects(
+    runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      pollIntervalMs: 5,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    }),
+    ProviderSessionEventCaptureError,
+  );
+});
+
+test("Codex JSONL runner skips malformed unrelated completed lines and buffers incomplete trailing lines", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const events: ManagedProviderSessionEvent[] = [];
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const codexHome = String(options.env?.CODEX_HOME);
+    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
+    const rolloutPath = join(codexHome, rollout);
+
+    await fs.ensureDir(dirname(rolloutPath));
+    await fs.appendFile(rolloutPath, "{unrelated}\n", "utf8");
+    await fs.appendFile(rolloutPath, '{"type":"event_msg"', "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await fs.appendFile(
+      rolloutPath,
+      ',"payload":{"type":"task_complete","last_agent_message":"INITIAL_DONE"}}\n',
+      "utf8",
+    );
+    spawner.process.emitExit(0);
+  });
+
+  await runCodexJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      pollIntervalMs: 5,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    [
+      "session-start",
+      "submitted-user-message",
+      "turn-completed",
+      "session-completed",
+    ],
+  );
+});
+
+test("Codex JSONL runner drains briefly after early PTY exit before incomplete-session failure", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const codexHome = String(options.env?.CODEX_HOME);
+    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
+
+    await appendSessionMeta(codexHome, rollout);
+    spawner.process.emitExit(1);
+  });
+
+  await assert.rejects(
+    runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      pollIntervalMs: 5,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      earlyExitDrainTimeoutMs: 20,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof IncompleteProviderSessionError);
+      assert.equal(error.completionMarker, "INITIAL_DONE");
+      assert.equal(error.exitCode, 1);
+      return true;
+    },
+  );
+});
+
+test("Codex JSONL runner reports cleanup timeout after phase finalization", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const codexHome = String(options.env?.CODEX_HOME);
+    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
+
+    await appendSessionMeta(codexHome, rollout);
+    await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
+  });
+
+  await assert.rejects(
+    runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      pollIntervalMs: 5,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      cleanupTimeoutMs: 20,
+    }),
+    ProviderSessionCleanupError,
   );
 });
