@@ -19,11 +19,13 @@ import {
   ProviderSessionEventCaptureError,
   type ManagedSessionAdapter,
   type ManagedProviderSessionInput,
+  type ManagedProviderSessionResumeInput,
   type ManagedProviderSessionResult,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionPhase,
   type ManagedProviderSessionCapabilities,
   type SubmittedUserMessageOrigin,
+  canResumeManagedProviderSession,
 } from "../../src/adapters/managedSessionAdapter.js";
 import { createClaudeAdapter } from "../../src/adapters/claudeAdapter.js";
 import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
@@ -243,6 +245,146 @@ test("managed-session adapters expose static metadata plus async detect and runS
   assert.equal("run" in adapter, false);
 });
 
+test("managed-session contract exposes a distinct resume entry point gated by truthful capabilities", async () => {
+  const provider = getBuiltInProviderIdentity("codex");
+  const resumeInputs: ManagedProviderSessionResumeInput[] = [];
+  const resumeInput: ManagedProviderSessionResumeInput = {
+    providerSessionId: "codex-session-123",
+    workingDirectory: "/tmp/devflow",
+    initialPrompt: "Continue the interrupted grill.",
+    initialCompletionMarker: "DEVFLOW_DONE",
+    phase: {
+      id: "grill:resume",
+      kind: "grill",
+      attempt: 2,
+    },
+    async validate() {},
+    repair: {
+      completionMarker: "DEVFLOW_REPAIR_DONE",
+      renderPrompt(error) {
+        return `repair: ${error.message}`;
+      },
+      mapFailure(error) {
+        return new Error(`mapped: ${error.message}`);
+      },
+    },
+    continuations: [
+      {
+        prompt: "Continue into PRD synthesis",
+        completionMarker: "DEVFLOW_PRD_DONE",
+        async validate() {},
+      },
+    ],
+    transcript: {
+      onSubmittedUserMessage() {},
+      onProviderOutput() {},
+    },
+    onProviderEvent() {},
+  };
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession() {
+      throw new Error("fresh runSession should stay distinct from resumeSession");
+    },
+    async resumeSession(input) {
+      resumeInputs.push(input);
+      await input.validate();
+      return {
+        repairUsed: false,
+        exitCode: 0,
+        signal: null,
+      };
+    },
+  };
+
+  assert.equal(canResumeManagedProviderSession(adapter), true);
+  if (!canResumeManagedProviderSession(adapter)) {
+    assert.fail("expected adapter to support resume");
+  }
+  await assert.doesNotReject(() => adapter.resumeSession(resumeInput));
+  assert.deepEqual(resumeInputs, [resumeInput]);
+});
+
+test("managed-session resume guard requires provider session ids, resume capability, and resume entry point", () => {
+  const provider = getBuiltInProviderIdentity("codex");
+  const baseAdapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      await input.validate();
+      return {
+        repairUsed: false,
+        exitCode: 0,
+        signal: null,
+      };
+    },
+  };
+
+  const resumeSession: NonNullable<ManagedSessionAdapter["resumeSession"]> =
+    async (input) => {
+      await input.validate();
+      return {
+        repairUsed: false,
+        exitCode: 0,
+        signal: null,
+      };
+    };
+
+  assert.equal(
+    canResumeManagedProviderSession({
+      ...baseAdapter,
+      capabilities: {
+        controlTransport: "pty",
+        eventSource: "hooks",
+        supportsProviderSessionId: true,
+        supportsResume: true,
+        classifiesSubmittedUserMessageOrigin: true,
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    canResumeManagedProviderSession({
+      ...baseAdapter,
+      resumeSession,
+      capabilities: {
+        controlTransport: "pty",
+        eventSource: "hooks",
+        supportsProviderSessionId: false,
+        supportsResume: true,
+        classifiesSubmittedUserMessageOrigin: true,
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    canResumeManagedProviderSession({
+      ...baseAdapter,
+      resumeSession,
+      capabilities: {
+        controlTransport: "pty",
+        eventSource: "hooks",
+        supportsProviderSessionId: true,
+        supportsResume: false,
+        classifiesSubmittedUserMessageOrigin: true,
+      },
+    }),
+    false,
+  );
+});
+
 test("managed-session input exposes validation and repair lifecycle configuration", () => {
   const input: ManagedProviderSessionInput = {
     workingDirectory: "/tmp/devflow",
@@ -398,7 +540,7 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
     controlTransport: "pty",
     eventSource: "hooks",
     supportsProviderSessionId: true,
-    supportsResume: true,
+    supportsResume: false,
     classifiesSubmittedUserMessageOrigin: true,
   };
 
@@ -410,6 +552,8 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
     adapters.map((adapter) => ({
       providerId: adapter.provider.id,
       capabilities: adapter.capabilities,
+      canResume: canResumeManagedProviderSession(adapter),
+      hasResumeSession: typeof adapter.resumeSession === "function",
     })),
     BUILT_IN_PROVIDER_IDS.map((providerId) => ({
       providerId,
@@ -417,6 +561,8 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
         providerId === "codex"
           ? expectedCodexCapabilities
           : expectedPtyCapabilities,
+      canResume: false,
+      hasResumeSession: false,
     })),
   );
 });
@@ -432,7 +578,7 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
     controlTransport: "pty",
     eventSource: "jsonl",
     supportsProviderSessionId: true,
-    supportsResume: true,
+    supportsResume: false,
     classifiesSubmittedUserMessageOrigin: true,
   };
 

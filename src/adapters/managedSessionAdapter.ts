@@ -86,6 +86,11 @@ export interface ManagedProviderSessionInput {
   onProviderEvent?: ManagedProviderSessionEventCallback;
 }
 
+export interface ManagedProviderSessionResumeInput
+  extends ManagedProviderSessionInput {
+  providerSessionId: string;
+}
+
 export interface ManagedProviderSessionContinuation {
   prompt: string;
   completionMarker: string;
@@ -229,4 +234,25 @@ export interface ManagedSessionAdapter {
   runSession(
     input: ManagedProviderSessionInput,
   ): Promise<ManagedProviderSessionResult>;
+  resumeSession?(
+    input: ManagedProviderSessionResumeInput,
+  ): Promise<ManagedProviderSessionResult>;
+}
+
+export function canResumeManagedProviderSession(
+  adapter: ManagedSessionAdapter,
+): adapter is ManagedSessionAdapter & {
+  readonly capabilities: ManagedProviderSessionCapabilities & {
+    supportsProviderSessionId: true;
+    supportsResume: true;
+  };
+  resumeSession(
+    input: ManagedProviderSessionResumeInput,
+  ): Promise<ManagedProviderSessionResult>;
+} {
+  return (
+    adapter.capabilities?.supportsProviderSessionId === true &&
+    adapter.capabilities.supportsResume === true &&
+    typeof adapter.resumeSession === "function"
+  );
 }

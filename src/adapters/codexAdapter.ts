@@ -47,7 +47,7 @@ export function createCodexAdapter(
     controlTransport: "pty",
     eventSource,
     supportsProviderSessionId: true,
-    supportsResume: true,
+    supportsResume: false,
     classifiesSubmittedUserMessageOrigin: true,
   };
 
