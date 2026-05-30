@@ -93,12 +93,12 @@ class CapturingPtyRunner {
 class CapturingCodexHookRunner {
   readonly calls: Array<{
     command: CodexHookDrivenSessionCommand;
-    input: ManagedProviderSessionInput;
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput;
   }> = [];
 
   async runCodexHookDrivenSession(
     command: CodexHookDrivenSessionCommand,
-    input: ManagedProviderSessionInput,
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput,
   ): Promise<ManagedProviderSessionResult> {
     this.calls.push({ command, input });
     await input.validate();
@@ -113,12 +113,12 @@ class CapturingCodexHookRunner {
 class CapturingCodexJsonlRunner {
   readonly calls: Array<{
     command: CodexJsonlSessionCommand;
-    input: ManagedProviderSessionInput;
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput;
   }> = [];
 
   async runCodexJsonlSession(
     command: CodexJsonlSessionCommand,
-    input: ManagedProviderSessionInput,
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput,
   ): Promise<ManagedProviderSessionResult> {
     this.calls.push({ command, input });
     await input.validate();
@@ -540,7 +540,7 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
     controlTransport: "pty",
     eventSource: "hooks",
     supportsProviderSessionId: true,
-    supportsResume: false,
+    supportsResume: true,
     classifiesSubmittedUserMessageOrigin: true,
   };
 
@@ -561,8 +561,8 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
         providerId === "codex"
           ? expectedCodexCapabilities
           : expectedPtyCapabilities,
-      canResume: false,
-      hasResumeSession: false,
+      canResume: providerId === "codex",
+      hasResumeSession: providerId === "codex",
     })),
   );
 });
@@ -578,7 +578,7 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
     controlTransport: "pty",
     eventSource: "jsonl",
     supportsProviderSessionId: true,
-    supportsResume: false,
+    supportsResume: true,
     classifiesSubmittedUserMessageOrigin: true,
   };
 
@@ -593,6 +593,19 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
     jsonlCapabilities,
   );
 });
+
+const validResumeInput: ManagedProviderSessionResumeInput = {
+  providerSessionId: "codex-session-123",
+  workingDirectory: "/tmp/devflow",
+  initialPrompt: "Continue the interrupted work",
+  initialCompletionMarker: "RESUME_DONE",
+  async validate() {},
+};
+
+const validResumeInputWithModel: ManagedProviderSessionResumeInput = {
+  ...validResumeInput,
+  model: "gpt-5.5",
+};
 
 test("fake managed-session lifecycle propagates original validation errors when repair is absent", async () => {
   const validationError = new Error("intent artifact missing");
@@ -1044,6 +1057,102 @@ test("Codex adapter passes opaque model overrides through provider-native flags"
     executable: executablePath,
     args: codexHarness.expectedArgsWithModel,
   });
+});
+
+test("Codex adapter resumeSession delegates hook resume with provider session id and prompt", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-hooks-resume-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, codexHarness.command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const runner = new CapturingCodexHookRunner();
+  const adapter = codexHarness.createAdapter({
+    runCodexHookDrivenSession:
+      runner.runCodexHookDrivenSession.bind(runner),
+  });
+
+  assert.equal(canResumeManagedProviderSession(adapter), true);
+  if (!canResumeManagedProviderSession(adapter)) {
+    assert.fail("expected Codex adapter to support resume");
+  }
+
+  await adapter.resumeSession(validResumeInputWithModel);
+
+  assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: executablePath,
+        args: [
+          "resume",
+          "--model",
+          "gpt-5.5",
+          "codex-session-123",
+          "Continue the interrupted work",
+        ],
+      },
+      input: validResumeInputWithModel,
+    },
+  ]);
+});
+
+test("Codex adapter resumeSession delegates JSONL resume without putting prompt in launch args", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-codex-jsonl-resume-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, codexHarness.command);
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const hookRunner = new CapturingCodexHookRunner();
+  const jsonlRunner = new CapturingCodexJsonlRunner();
+  const adapter = codexHarness.createAdapter({
+    eventSource: "jsonl",
+    runCodexHookDrivenSession:
+      hookRunner.runCodexHookDrivenSession.bind(hookRunner),
+    runCodexJsonlSession: jsonlRunner.runCodexJsonlSession.bind(jsonlRunner),
+  });
+
+  assert.equal(canResumeManagedProviderSession(adapter), true);
+  if (!canResumeManagedProviderSession(adapter)) {
+    assert.fail("expected Codex adapter to support resume");
+  }
+
+  await adapter.resumeSession(validResumeInputWithModel);
+
+  assert.deepEqual(hookRunner.calls, []);
+  assert.deepEqual(jsonlRunner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("codex"),
+        executable: executablePath,
+        args: ["resume", "--model", "gpt-5.5", "codex-session-123"],
+      },
+      input: validResumeInputWithModel,
+    },
+  ]);
 });
 
 test("Codex adapter maps launch-time executable resolution failures before hook runner startup", async (t) => {

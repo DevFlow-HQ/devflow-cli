@@ -3,6 +3,7 @@ import which from "which";
 import {
   type ManagedProviderSessionCapabilities,
   type ManagedProviderSessionInput,
+  type ManagedProviderSessionResumeInput,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
   ProviderSessionLaunchError,
@@ -47,7 +48,7 @@ export function createCodexAdapter(
     controlTransport: "pty",
     eventSource,
     supportsProviderSessionId: true,
-    supportsResume: false,
+    supportsResume: true,
     classifiesSubmittedUserMessageOrigin: true,
   };
 
@@ -85,25 +86,58 @@ export function createCodexAdapter(
       throw new ProviderSessionLaunchError(provider, error);
     }
 
-    const args =
-      eventSource === "jsonl"
-        ? [...(input.model ? ["--model", input.model] : [])]
-        : [...(input.model ? ["--model", input.model] : []), input.initialPrompt];
+    return runSelectedRunner({
+      executable,
+      input,
+      args:
+        eventSource === "jsonl"
+          ? modelArgs(input)
+          : [...modelArgs(input), input.initialPrompt],
+    });
+  }
 
+  async function resumeSession(
+    input: ManagedProviderSessionResumeInput,
+  ): Promise<ManagedProviderSessionResult> {
+    let executable: string;
+
+    try {
+      executable = await resolveExecutable();
+    } catch (error) {
+      throw new ProviderSessionLaunchError(provider, error);
+    }
+
+    const resumePrefix = ["resume", ...modelArgs(input), input.providerSessionId];
+
+    return runSelectedRunner({
+      executable,
+      input,
+      args:
+        eventSource === "jsonl"
+          ? resumePrefix
+          : [...resumePrefix, input.initialPrompt],
+    });
+  }
+
+  function modelArgs(
+    input: Pick<ManagedProviderSessionInput, "model">,
+  ): string[] {
+    return input.model ? ["--model", input.model] : [];
+  }
+
+  async function runSelectedRunner(options: {
+    executable: string;
+    args: string[];
+    input: ManagedProviderSessionInput;
+  }): Promise<ManagedProviderSessionResult> {
     const command = {
       provider,
-      executable,
-      args,
+      executable: options.executable,
+      args: options.args,
     };
-
     const runner = eventSource === "jsonl" ? jsonlRunner : hookRunner;
 
-    return runner(
-      {
-        ...command,
-      },
-      input,
-    );
+    return runner(command, options.input);
   }
 
   return {
@@ -111,5 +145,6 @@ export function createCodexAdapter(
     capabilities,
     detect: detectExecutable,
     runSession,
+    resumeSession,
   };
 }
