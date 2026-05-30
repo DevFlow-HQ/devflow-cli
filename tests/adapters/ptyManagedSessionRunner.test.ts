@@ -620,7 +620,7 @@ test("PTY managed-session runner mirrors output and transcripts without chunk-le
   );
 });
 
-test("PTY managed-session runner captures submitted user messages only after submit", async () => {
+test("PTY managed-session runner captures raw terminal submissions without classifying their origin", async () => {
   const spawner = new FakePtySpawner();
   const userInput = new FakeUserInput(true);
   const submittedMessages: string[] = [];
@@ -671,7 +671,7 @@ test("PTY managed-session runner captures submitted user messages only after sub
     events
       .filter((event) => event.type === "submitted-user-message")
       .map((event) => `${event.origin}:${event.message}`),
-    ["human:hello", "human:second"],
+    ["unknown:hello", "unknown:second"],
   );
   assert.deepEqual(spawner.process.writes, [
     "hel",

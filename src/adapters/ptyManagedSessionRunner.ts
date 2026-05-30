@@ -378,7 +378,7 @@ export async function runPtyManagedSession(
       void emitProviderEvent({
         type: "submitted-user-message",
         message,
-        origin: "human",
+        origin: "unknown",
       });
 
       const onSubmittedUserMessage = input.transcript?.onSubmittedUserMessage;
