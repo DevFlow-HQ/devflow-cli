@@ -17,6 +17,7 @@ import {
   InvalidProjectContextError,
   InvalidProjectContextMetadataError,
   InvalidDevFlowRunIdError,
+  InvalidProviderSessionStateError,
 } from "../src/devflowState.js";
 
 function createFreshnessProbe(
@@ -1008,6 +1009,84 @@ test("run handles write canonical immutable artifacts without exposing filenames
   );
 });
 
+test("run handles write and read provider session state before grill checkpoint creation", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.writeProviderSessionState({
+    provider: { id: "codex", displayName: "Codex" },
+    providerSessionId: "codex-session-123",
+    phase: { id: "grill-initial", kind: "grill", attempt: 1 },
+    status: "active",
+    startedAt: "2026-05-24T10:00:00.000Z",
+    updatedAt: "2026-05-24T10:01:00.000Z",
+  });
+
+  assert.equal(await fs.pathExists(run.paths.grillCheckpoint), false);
+  assert.deepEqual(await run.readProviderSessionState(), {
+    provider: { id: "codex", displayName: "Codex" },
+    providerSessionId: "codex-session-123",
+    phase: { id: "grill-initial", kind: "grill", attempt: 1 },
+    status: "active",
+    startedAt: "2026-05-24T10:00:00.000Z",
+    updatedAt: "2026-05-24T10:01:00.000Z",
+  });
+  assert.deepEqual(await fs.readJson(run.paths.providerSessionState), {
+    provider: { id: "codex", displayName: "Codex" },
+    providerSessionId: "codex-session-123",
+    phase: { id: "grill-initial", kind: "grill", attempt: 1 },
+    status: "active",
+    startedAt: "2026-05-24T10:00:00.000Z",
+    updatedAt: "2026-05-24T10:01:00.000Z",
+  });
+});
+
+test("run handles reject malformed provider session state before writing state", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await assert.rejects(
+    run.writeProviderSessionState({
+      provider: { id: "unknown", displayName: "" },
+      providerSessionId: "",
+      phase: { id: "", kind: "", attempt: 0 },
+      status: "stalled",
+      startedAt: "not-a-date",
+      updatedAt: "2026-05-24T10:01:00.000Z",
+    } as never),
+    (error: unknown) =>
+      error instanceof InvalidProviderSessionStateError &&
+      error.message.includes("provider.id") &&
+      error.message.includes("provider.displayName") &&
+      error.message.includes("providerSessionId") &&
+      error.message.includes("phase.id") &&
+      error.message.includes("phase.kind") &&
+      error.message.includes("phase.attempt") &&
+      error.message.includes("status") &&
+      error.message.includes("startedAt"),
+  );
+
+  assert.equal(await fs.pathExists(run.paths.providerSessionState), false);
+});
+
+test("run handles reject malformed persisted provider session json with a typed error", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await fs.outputFile(run.paths.providerSessionState, "{broken", "utf8");
+
+  await assert.rejects(
+    run.readProviderSessionState(),
+    (error: unknown) =>
+      error instanceof InvalidProviderSessionStateError &&
+      error.statePath === run.paths.providerSessionState &&
+      error.message.includes("provider-session.json"),
+  );
+});
+
 test("run handles record readable grill transcript message blocks and immutable completion", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
   const state = createDevFlowState({ projectRoot });
@@ -1077,6 +1156,36 @@ test("run handles validate and write grill checkpoint only after transcript comp
   assert.deepEqual(await fs.readJson(run.paths.grillCheckpoint), checkpoint);
 });
 
+test("completed grill checkpoints can include associated provider session metadata", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
+  });
+  const run = await state.createRun();
+  const checkpoint = {
+    stage: "grill" as const,
+    status: "complete" as const,
+    completedAt: "2026-05-24T10:00:00.000Z",
+    rawTask: "resume work",
+    intentArtifactPath: run.paths.intentArtifact,
+    projectContextPath: run.paths.projectContextArtifact,
+    grillTranscriptPath: run.paths.grillTranscript,
+    prdArtifactPath: run.paths.prdArtifact,
+    providerSession: {
+      provider: { id: "codex" as const, displayName: "Codex" as const },
+      providerSessionId: "codex-session-123",
+      phase: { id: "grill-initial", kind: "grill", attempt: 1 },
+    },
+  };
+
+  await run.initializeGrillTranscript();
+  await run.completeGrillTranscript();
+  await run.writeGrillCheckpoint(checkpoint);
+
+  assert.deepEqual(await run.readGrillCheckpoint(), checkpoint);
+});
+
 test("run handles distinguish missing partial and completed grill transcripts", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
   const state = createDevFlowState({ projectRoot });
@@ -1132,6 +1241,33 @@ test("run handles recover missing or corrupt grill checkpoints from completed tr
     ...checkpoint,
     completedAt: "2026-05-24T10:05:00.000Z",
   });
+});
+
+test("malformed provider session state does not prevent reading completed grill checkpoints", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+  const checkpoint = {
+    stage: "grill" as const,
+    status: "complete" as const,
+    completedAt: "2026-05-24T10:00:00.000Z",
+    rawTask: "resume work",
+    intentArtifactPath: run.paths.intentArtifact,
+    projectContextPath: run.paths.projectContextArtifact,
+    grillTranscriptPath: run.paths.grillTranscript,
+    prdArtifactPath: run.paths.prdArtifact,
+  };
+
+  await run.initializeGrillTranscript();
+  await run.completeGrillTranscript();
+  await run.writeGrillCheckpoint(checkpoint);
+  await fs.outputFile(run.paths.providerSessionState, "{broken", "utf8");
+
+  assert.deepEqual(await run.readGrillCheckpoint(), checkpoint);
+  await assert.rejects(
+    run.readProviderSessionState(),
+    (error: unknown) => error instanceof InvalidProviderSessionStateError,
+  );
 });
 
 test("run handles reject checkpoint recovery from partial grill transcripts", async () => {

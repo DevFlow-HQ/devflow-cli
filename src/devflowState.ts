@@ -8,8 +8,12 @@ import { z } from "zod";
 
 import {
   BUILT_IN_PROVIDER_IDS,
+  BUILT_IN_PROVIDERS,
+  getBuiltInProviderIdentity,
   type BuiltInProviderId,
+  type ProviderIdentity,
 } from "./adapters/providers.js";
+import type { ManagedProviderSessionPhase } from "./adapters/managedSessionAdapter.js";
 
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";
@@ -22,6 +26,7 @@ const DEVFLOW_RUN_PROJECT_CONTEXT_CANDIDATE_FILENAME =
   "project-context.candidate.md";
 const DEVFLOW_RUN_GRILL_TRANSCRIPT_FILENAME = "grill-transcript.md";
 const DEVFLOW_RUN_GRILL_CHECKPOINT_FILENAME = "grill-checkpoint.json";
+const DEVFLOW_RUN_PROVIDER_SESSION_FILENAME = "provider-session.json";
 const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
 const DEVFLOW_RUN_VALIDATION_FILENAME = "validation.json";
 const DEVFLOW_RUN_ISSUES_DIRECTORY = "issues";
@@ -50,6 +55,23 @@ const projectContextRefreshReasons = [
   "relevant-changes",
   "manual",
 ] as const;
+const providerSessionStatuses = [
+  "active",
+  "interrupted",
+  "completed",
+  "failed",
+] as const;
+
+function isValidIsoUtcTimestamp(value: string): boolean {
+  if (!isoDateTimePattern.test(value)) {
+    return false;
+  }
+
+  const parsedDate = new Date(value);
+  return (
+    !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString() === value
+  );
+}
 
 export const DEVFLOW_GRILL_TRANSCRIPT_COMPLETE =
   "DEVFLOW_GRILL_TRANSCRIPT_COMPLETE";
@@ -92,24 +114,68 @@ const projectContextFreshnessMetadataSchema = projectContextMetadataSchema.exten
   contextVersion: z.number().int(),
 });
 
+const providerIdentitySchema = z
+  .object({
+    id: z.enum(
+      BUILT_IN_PROVIDER_IDS as [BuiltInProviderId, ...BuiltInProviderId[]],
+    ),
+    displayName: z.string().refine((value) => value.trim().length > 0, {
+      message: "Must be a non-empty string.",
+    }),
+  })
+  .strict()
+  .superRefine((provider, context) => {
+    const expectedProvider = BUILT_IN_PROVIDERS.find(
+      (candidate) => candidate.id === provider.id,
+    );
+
+    if (
+      expectedProvider !== undefined &&
+      expectedProvider.displayName !== provider.displayName
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["displayName"],
+        message: `Must match built-in provider display name "${expectedProvider.displayName}".`,
+      });
+    }
+  });
+
+const providerSessionPhaseSchema = z
+  .object({
+    id: z.string().refine((value) => value.trim().length > 0, {
+      message: "Must be a non-empty string.",
+    }),
+    kind: z
+      .string()
+      .refine((value) => value.trim().length > 0, {
+        message: "Must be a non-empty string.",
+      })
+      .optional(),
+    attempt: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const providerSessionReferenceSchema = z
+  .object({
+    provider: providerIdentitySchema,
+    providerSessionId: z
+      .string()
+      .refine((value) => value.trim().length > 0, {
+        message: "Must be a non-empty string.",
+      })
+      .optional(),
+    phase: providerSessionPhaseSchema.optional(),
+  })
+  .strict();
+
 const grillCheckpointSchema = z
   .object({
     stage: z.literal("grill"),
     status: z.literal("complete"),
-    completedAt: z.string().refine(
-      (value) => {
-        if (!isoDateTimePattern.test(value)) {
-          return false;
-        }
-
-        const parsedDate = new Date(value);
-        return (
-          !Number.isNaN(parsedDate.getTime()) &&
-          parsedDate.toISOString() === value
-        );
-      },
-      { message: "Must be a valid ISO-8601 UTC timestamp." },
-    ),
+    completedAt: z.string().refine(isValidIsoUtcTimestamp, {
+      message: "Must be a valid ISO-8601 UTC timestamp.",
+    }),
     rawTask: z.string().refine((value) => value.trim().length > 0, {
       message: "Must be a non-empty string.",
     }),
@@ -124,6 +190,27 @@ const grillCheckpointSchema = z
     }),
     prdArtifactPath: z.string().refine((value) => value.trim().length > 0, {
       message: "Must be a non-empty string.",
+    }),
+    providerSession: providerSessionReferenceSchema.optional(),
+  })
+  .strict();
+
+const providerSessionStateSchema = z
+  .object({
+    provider: providerIdentitySchema,
+    providerSessionId: z
+      .string()
+      .refine((value) => value.trim().length > 0, {
+        message: "Must be a non-empty string.",
+      })
+      .optional(),
+    phase: providerSessionPhaseSchema,
+    status: z.enum(providerSessionStatuses),
+    startedAt: z.string().refine(isValidIsoUtcTimestamp, {
+      message: "Must be a valid ISO-8601 UTC timestamp.",
+    }),
+    updatedAt: z.string().refine(isValidIsoUtcTimestamp, {
+      message: "Must be a valid ISO-8601 UTC timestamp.",
     }),
   })
   .strict();
@@ -239,6 +326,8 @@ export interface DevFlowRunHandle {
   readGrillCheckpoint(): Promise<DevFlowGrillCheckpoint | undefined>;
   writeGrillCheckpoint(checkpoint: DevFlowGrillCheckpoint): Promise<void>;
   recoverGrillCheckpoint(checkpoint: DevFlowGrillCheckpoint): Promise<void>;
+  readProviderSessionState(): Promise<DevFlowProviderSessionState | undefined>;
+  writeProviderSessionState(state: DevFlowProviderSessionState): Promise<void>;
   writeIssue(slug: string, content: string): Promise<void>;
   writePrd(content: string): Promise<void>;
   writeValidation(content: string): Promise<void>;
@@ -249,12 +338,24 @@ export interface DevFlowRunHandle {
     projectContextCandidate: string;
     grillTranscript: string;
     grillCheckpoint: string;
+    providerSessionState: string;
     prdArtifact: string;
   };
 }
 
 export type DevFlowGrillCheckpoint = z.infer<typeof grillCheckpointSchema>;
 export type DevFlowGrillTranscriptStatus = "missing" | "partial" | "complete";
+export type DevFlowProviderSessionStatus =
+  (typeof providerSessionStatuses)[number];
+
+export interface DevFlowProviderSessionState {
+  provider: ProviderIdentity;
+  providerSessionId?: string;
+  phase: ManagedProviderSessionPhase;
+  status: DevFlowProviderSessionStatus;
+  startedAt: string;
+  updatedAt: string;
+}
 
 export interface DevFlowState {
   config: {
@@ -374,6 +475,16 @@ export class InvalidGrillCheckpointError extends Error {
   }
 }
 
+export class InvalidProviderSessionStateError extends Error {
+  readonly statePath: string;
+
+  constructor(statePath: string, details: string) {
+    super(`Invalid provider session state at ${statePath}. ${details}`);
+    this.name = "InvalidProviderSessionStateError";
+    this.statePath = statePath;
+  }
+}
+
 function getConfigPath(projectRoot: string): string {
   return join(projectRoot, DEVFLOW_STATE_DIRECTORY, DEVFLOW_CONFIG_FILENAME);
 }
@@ -431,6 +542,16 @@ function getRunGrillCheckpointPath(projectRoot: string, runId: string): string {
   return join(
     getRunDirectoryPath(projectRoot, runId),
     DEVFLOW_RUN_GRILL_CHECKPOINT_FILENAME,
+  );
+}
+
+function getRunProviderSessionStatePath(
+  projectRoot: string,
+  runId: string,
+): string {
+  return join(
+    getRunDirectoryPath(projectRoot, runId),
+    DEVFLOW_RUN_PROVIDER_SESSION_FILENAME,
   );
 }
 
@@ -1276,6 +1397,25 @@ function validateGrillCheckpoint(
   return result.data;
 }
 
+function validateProviderSessionState(
+  statePath: string,
+  state: unknown,
+): DevFlowProviderSessionState {
+  const result = providerSessionStateSchema.safeParse(state);
+
+  if (!result.success) {
+    throw new InvalidProviderSessionStateError(
+      statePath,
+      formatValidationDetails(result.error),
+    );
+  }
+
+  return {
+    ...result.data,
+    provider: getBuiltInProviderIdentity(result.data.provider.id),
+  };
+}
+
 async function readGrillCheckpoint(
   checkpointPath: string,
 ): Promise<DevFlowGrillCheckpoint | undefined> {
@@ -1296,6 +1436,36 @@ async function readGrillCheckpoint(
   return validateGrillCheckpoint(checkpointPath, checkpoint);
 }
 
+async function readProviderSessionState(
+  statePath: string,
+): Promise<DevFlowProviderSessionState | undefined> {
+  if (!(await fs.pathExists(statePath))) {
+    return undefined;
+  }
+
+  let state: unknown;
+
+  try {
+    state = await fs.readJson(statePath);
+  } catch (error) {
+    const details =
+      error instanceof Error ? error.message : "State file is not valid JSON.";
+    throw new InvalidProviderSessionStateError(statePath, details);
+  }
+
+  return validateProviderSessionState(statePath, state);
+}
+
+async function writeProviderSessionState(
+  statePath: string,
+  state: DevFlowProviderSessionState,
+): Promise<void> {
+  const validatedState = validateProviderSessionState(statePath, state);
+
+  await fs.ensureDir(dirname(statePath));
+  await fs.writeJson(statePath, validatedState, { spaces: 2 });
+}
+
 async function createRun(
   projectRoot: string,
   clock: DevFlowClock,
@@ -1308,6 +1478,10 @@ async function createRun(
   const runMetadataPath = getRunMetadataPath(projectRoot, runId);
   const grillTranscriptPath = getRunGrillTranscriptPath(projectRoot, runId);
   const grillCheckpointPath = getRunGrillCheckpointPath(projectRoot, runId);
+  const providerSessionStatePath = getRunProviderSessionStatePath(
+    projectRoot,
+    runId,
+  );
 
   await fs.ensureDir(runDirectory);
   await fs.writeJson(
@@ -1402,6 +1576,10 @@ async function createRun(
     },
     getGrillTranscriptStatus: () => getGrillTranscriptStatus(grillTranscriptPath),
     readGrillCheckpoint: () => readGrillCheckpoint(grillCheckpointPath),
+    readProviderSessionState: () =>
+      readProviderSessionState(providerSessionStatePath),
+    writeProviderSessionState: (state) =>
+      writeProviderSessionState(providerSessionStatePath, state),
     writeGrillCheckpoint: async (checkpoint) => {
       const validatedCheckpoint = validateGrillCheckpoint(
         grillCheckpointPath,
@@ -1481,6 +1659,7 @@ async function createRun(
       ),
       grillTranscript: grillTranscriptPath,
       grillCheckpoint: grillCheckpointPath,
+      providerSessionState: providerSessionStatePath,
       prdArtifact: getRunArtifactPath(projectRoot, runId, "prd"),
     },
   };
