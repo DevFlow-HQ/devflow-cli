@@ -215,6 +215,22 @@ async function appendTaskComplete(
   });
 }
 
+async function appendNativeUserMessage(
+  codexHome: string,
+  relativePath: string,
+  message: string,
+): Promise<void> {
+  await appendRolloutRecord(codexHome, relativePath, {
+    timestamp: "2026-05-30T00:00:00.500Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: message }],
+    },
+  });
+}
+
 test("Codex JSONL runner completes a single phase from rollout task completion without PTY capture", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
   const events: ManagedProviderSessionEvent[] = [];
@@ -340,6 +356,58 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
     exitCode: 0,
     signal: null,
   });
+});
+
+test("Codex JSONL runner classifies native user messages and suppresses managed prompt echoes", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const events: ManagedProviderSessionEvent[] = [];
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const codexHome = String(options.env?.CODEX_HOME);
+    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
+
+    await appendSessionMeta(codexHome, rollout);
+    await appendNativeUserMessage(codexHome, rollout, "Start");
+    await appendNativeUserMessage(codexHome, rollout, "human reply");
+    await appendRolloutRecord(codexHome, rollout, {
+      timestamp: "2026-05-30T00:00:01.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "JSONL final INITIAL_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runCodexJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "submitted-user-message")
+      .map((event) => `${event.origin}:${event.message}`),
+    ["managed:Start", "human:human reply"],
+  );
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn-completed")
+      .map((event) => event.assistantMessage),
+    ["JSONL final INITIAL_DONE"],
+  );
 });
 
 test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {

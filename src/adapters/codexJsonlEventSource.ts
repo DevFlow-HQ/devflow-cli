@@ -73,6 +73,13 @@ export function createCodexJsonlNormalizer(): CodexJsonlNormalizer {
             type: "turn-completed",
             assistantMessage: codexRecord.assistantMessage,
           };
+
+        case "submitted-user-message":
+          return {
+            type: "submitted-user-message",
+            message: codexRecord.message,
+            origin: "unknown",
+          };
       }
     },
   };
@@ -96,6 +103,10 @@ type ParsedCodexJsonlRecord =
   | {
       type: "turn-completed";
       assistantMessage: string;
+    }
+  | {
+      type: "submitted-user-message";
+      message: string;
     };
 
 function parseCodexJsonlRecord(
@@ -111,6 +122,10 @@ function parseCodexJsonlRecord(
 
   if (record.type === "event_msg") {
     return parseEventMessageRecord(record);
+  }
+
+  if (record.type === "response_item") {
+    return parseResponseItemRecord(record);
   }
 
   return undefined;
@@ -164,6 +179,91 @@ function parseEventMessageRecord(
     type: "turn-completed",
     assistantMessage: record.payload.last_agent_message,
   };
+}
+
+function parseResponseItemRecord(
+  record: Record<string, unknown>,
+): ParsedCodexJsonlRecord | undefined {
+  if (!isRecord(record.payload)) {
+    throw new CodexJsonlRecordMalformedError(
+      record,
+      "expected object payload for response_item",
+    );
+  }
+
+  if (record.payload.type !== "message") {
+    return undefined;
+  }
+
+  if (record.payload.role === "assistant") {
+    if (record.payload.phase !== "final_answer") {
+      return undefined;
+    }
+
+    return {
+      type: "turn-completed",
+      assistantMessage: parseMessageTextContent(
+        record,
+        record.payload.content,
+        "output_text",
+        "response_item assistant final_answer",
+      ),
+    };
+  }
+
+  if (record.payload.role === "user") {
+    return {
+      type: "submitted-user-message",
+      message: parseMessageTextContent(
+        record,
+        record.payload.content,
+        "input_text",
+        "response_item user message",
+      ),
+    };
+  }
+
+  return undefined;
+}
+
+function parseMessageTextContent(
+  record: Record<string, unknown>,
+  content: unknown,
+  expectedType: "input_text" | "output_text",
+  description: string,
+): string {
+  if (!Array.isArray(content)) {
+    throw new CodexJsonlRecordMalformedError(
+      record,
+      `expected array payload.content for ${description}`,
+    );
+  }
+
+  const parts: string[] = [];
+
+  for (const item of content) {
+    if (!isRecord(item)) {
+      throw new CodexJsonlRecordMalformedError(
+        record,
+        `expected object content item for ${description}`,
+      );
+    }
+
+    if (item.type !== expectedType) {
+      continue;
+    }
+
+    if (typeof item.text !== "string") {
+      throw new CodexJsonlRecordMalformedError(
+        record,
+        `expected string content item text for ${description}`,
+      );
+    }
+
+    parts.push(item.text);
+  }
+
+  return parts.join("");
 }
 
 function withProviderSessionId<T extends NormalizedCodexJsonlEvent>(

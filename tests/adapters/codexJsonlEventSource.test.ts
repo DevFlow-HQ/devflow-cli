@@ -28,7 +28,53 @@ test("codex JSONL normalizer maps task completion to turn-completed assistant co
   });
 });
 
-test("codex JSONL normalizer ignores partial assistant and native user records", () => {
+test("codex JSONL normalizer maps final assistant messages to turn-completed assistant content", () => {
+  const normalizer = createCodexJsonlNormalizer();
+
+  const event = normalizer.normalizeRecord({
+    timestamp: "2026-05-29T18:28:46.081Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        { type: "output_text", text: "Final answer " },
+        { type: "output_text", text: "INITIAL_DONE" },
+      ],
+    },
+  });
+
+  assert.deepEqual(event, {
+    type: "turn-completed",
+    assistantMessage: "Final answer INITIAL_DONE",
+  });
+});
+
+test("codex JSONL normalizer maps native user messages to submitted user events", () => {
+  const normalizer = createCodexJsonlNormalizer();
+
+  const event = normalizer.normalizeRecord({
+    timestamp: "2026-05-29T18:28:46.081Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "human " },
+        { type: "input_text", text: "reply" },
+      ],
+    },
+  });
+
+  assert.deepEqual(event, {
+    type: "submitted-user-message",
+    message: "human reply",
+    origin: "unknown",
+  });
+});
+
+test("codex JSONL normalizer ignores partial assistant records", () => {
   const normalizer = createCodexJsonlNormalizer();
 
   assert.equal(
@@ -39,19 +85,6 @@ test("codex JSONL normalizer ignores partial assistant and native user records",
         type: "message",
         role: "assistant",
         content: [{ type: "output_text", text: "partial answer" }],
-      },
-    }),
-    undefined,
-  );
-
-  assert.equal(
-    normalizer.normalizeRecord({
-      timestamp: "2026-05-29T18:28:46.081Z",
-      type: "response_item",
-      payload: {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "managed prompt" }],
       },
     }),
     undefined,
@@ -155,6 +188,21 @@ test("codex JSONL normalizer rejects malformed load-bearing records", () => {
         type: "session_meta",
         payload: {
           id: 42,
+        },
+      }),
+    CodexJsonlRecordMalformedError,
+  );
+
+  assert.throws(
+    () =>
+      normalizer.normalizeRecord({
+        timestamp: "2026-05-29T18:28:46.081Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          phase: "final_answer",
+          content: [{ type: "output_text" }],
         },
       }),
     CodexJsonlRecordMalformedError,

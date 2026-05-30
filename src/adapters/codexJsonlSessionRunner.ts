@@ -123,6 +123,7 @@ export async function runCodexJsonlSession(
       | ReturnType<typeof createJsonlTailEventSource>
       | undefined;
     const normalizer = createCodexJsonlNormalizer();
+    const pendingManagedPromptEchoes: string[] = [];
 
     const manager = createPhaseManager({
       provider: command.provider,
@@ -141,6 +142,7 @@ export async function runCodexJsonlSession(
 
     async function submitManagedPrompt(prompt: string): Promise<void> {
       submitPtyPrompt(processHandle, prompt);
+      pendingManagedPromptEchoes.push(prompt);
       await manager.handleEvent({
         type: "submitted-user-message",
         message: prompt,
@@ -391,14 +393,35 @@ export async function runCodexJsonlSession(
           normalizer,
           record,
         });
+        const classifiedEvent = classifySubmittedUserMessageOrigin(event);
 
-        if (event) {
-          await manager.handleEvent(event);
+        if (classifiedEvent) {
+          await manager.handleEvent(classifiedEvent);
           markFirstEventObserved();
         } else if (isNativeSessionMetaRecord(record)) {
           markFirstEventObserved();
         }
       }
+    }
+
+    function classifySubmittedUserMessageOrigin(
+      event: Parameters<typeof manager.handleEvent>[0] | undefined,
+    ): Parameters<typeof manager.handleEvent>[0] | undefined {
+      if (event?.type !== "submitted-user-message") {
+        return event;
+      }
+
+      const pendingIndex = pendingManagedPromptEchoes.indexOf(event.message);
+
+      if (pendingIndex !== -1) {
+        pendingManagedPromptEchoes.splice(pendingIndex, 1);
+        return undefined;
+      }
+
+      return {
+        ...event,
+        origin: "human",
+      };
     }
 
     function isNativeSessionMetaRecord(
