@@ -18,6 +18,7 @@ import {
   runCodexJsonlSession,
   type CodexJsonlSessionCommand,
 } from "../../src/adapters/codexJsonlSessionRunner.js";
+import type { SessionLogLocator } from "../../src/adapters/codexSessionLogLocator.js";
 import {
   type PtyProcess,
   type PtySpawnOptions,
@@ -231,14 +232,71 @@ async function appendNativeUserMessage(
   });
 }
 
+async function waitForPtyWrites(
+  process: FakePtyProcess,
+  count: number,
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+
+  while (process.writes.length < count) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${count} PTY writes.`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+function createFixedSessionLogLocator(filePath: string): SessionLogLocator {
+  return {
+    async snapshot() {
+      return { filePaths: new Set() };
+    },
+    async locateActiveLog() {
+      return {
+        filePath,
+        debug: {
+          scopedProviderHome: dirname(dirname(dirname(dirname(filePath)))),
+          searchedPattern: "sessions/**/rollout-*.jsonl",
+          candidates: [{ filePath, size: 0, mtimeMs: 0 }],
+          ignoredPreexistingCount: 0,
+          emptyCandidateCount: 0,
+          multipleCandidates: false,
+        },
+      };
+    },
+  };
+}
+
+async function prepareFixedRollout(projectRoot: string): Promise<{
+  codexHome: string;
+  rollout: string;
+  rolloutPath: string;
+  sessionLogLocator: SessionLogLocator;
+}> {
+  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
+  const rollout = "sessions/2026/05/30/rollout-session.jsonl";
+  const rolloutPath = join(codexHome, rollout);
+
+  await fs.ensureFile(rolloutPath);
+
+  return {
+    codexHome,
+    rollout,
+    rolloutPath,
+    sessionLogLocator: createFixedSessionLogLocator(rolloutPath),
+  };
+}
+
 test("Codex JSONL runner completes a single phase from rollout task completion without PTY capture", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
   const validationOrder: string[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
-    const codexHome = String(options.env?.CODEX_HOME);
-    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitForPtyWrites(spawner.process, 1);
     await appendRolloutRecord(codexHome, rollout, {
       timestamp: "2026-05-30T00:00:00.000Z",
       type: "session_meta",
@@ -271,12 +329,11 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
       ptySpawner: spawner,
       outputSink: { write() {} },
       terminal: { columns: 100, rows: 30 },
+      sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
   );
-
-  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
 
   assert.deepEqual(spawner.calls, [
     {
@@ -360,11 +417,13 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
 
 test("Codex JSONL runner classifies native user messages and suppresses managed prompt echoes", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
+  const output: string[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
-    const codexHome = String(options.env?.CODEX_HOME);
-    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitForPtyWrites(spawner.process, 1);
     await appendSessionMeta(codexHome, rollout);
     await appendNativeUserMessage(codexHome, rollout, "Start");
     await appendNativeUserMessage(codexHome, rollout, "human reply");
@@ -390,12 +449,14 @@ test("Codex JSONL runner classifies native user messages and suppresses managed 
     }),
     {
       ptySpawner: spawner,
-      outputSink: { write() {} },
+      outputSink: { write: (chunk) => output.push(chunk) },
+      sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
   );
 
+  assert.deepEqual(output, []);
   assert.deepEqual(
     events
       .filter((event) => event.type === "submitted-user-message")
@@ -412,17 +473,18 @@ test("Codex JSONL runner classifies native user messages and suppresses managed 
 
 test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
   const output: string[] = [];
   const events: ManagedProviderSessionEvent[] = [];
   const userInput = new FakeUserInput();
   const terminal = new FakeTerminal(90, 25);
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
-    const codexHome = String(options.env?.CODEX_HOME);
-    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-
+    assert.equal(options.env?.CODEX_HOME, codexHome);
     spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
     userInput.emitData("hello\r");
     terminal.emitResize(120, 40);
+    await waitForPtyWrites(spawner.process, 7);
     await appendSessionMeta(codexHome, rollout);
     await appendTaskComplete(codexHome, rollout, "JSONL says INITIAL_DONE");
     spawner.process.emitExit(0);
@@ -440,6 +502,7 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
       outputSink: { write: (chunk) => output.push(chunk) },
       terminal,
       userInput,
+      sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -449,13 +512,13 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
     "terminal marker INITIAL_DONE should not validate\n",
   ]);
   assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Start\u001b[201~\r",
     "h",
     "e",
     "l",
     "l",
     "o",
     "\r",
-    "\u001b[200~Start\u001b[201~\r",
   ]);
   assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.deepEqual(userInput.rawModeChanges, [true, false]);
@@ -512,11 +575,12 @@ test("Codex JSONL runner forwards Ctrl-C and reports requested interruption on p
 
 test("Codex JSONL runner submits continuation prompts through PTY and emits managed user events", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
-    const codexHome = String(options.env?.CODEX_HOME);
-    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitForPtyWrites(spawner.process, 1);
     await appendSessionMeta(codexHome, rollout);
     await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
     await appendTaskComplete(codexHome, rollout, "CONTINUATION_DONE");
@@ -545,6 +609,7 @@ test("Codex JSONL runner submits continuation prompts through PTY and emits mana
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
+      sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -573,13 +638,14 @@ test("Codex JSONL runner submits continuation prompts through PTY and emits mana
 
 test("Codex JSONL runner submits repair prompts through PTY and reports repair usage", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
   let validateCalls = 0;
   const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
-    const codexHome = String(options.env?.CODEX_HOME);
-    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-
+    assert.equal(options.env?.CODEX_HOME, codexHome);
     await appendSessionMeta(codexHome, rollout);
+    await waitForPtyWrites(spawner.process, 1);
     await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
     await appendTaskComplete(codexHome, rollout, "REPAIR_DONE");
     spawner.process.emitExit(0);
@@ -611,6 +677,7 @@ test("Codex JSONL runner submits repair prompts through PTY and reports repair u
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
+      sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -702,23 +769,19 @@ test("Codex JSONL runner classifies malformed load-bearing records as event capt
   );
 });
 
-test("Codex JSONL runner skips malformed unrelated completed lines and buffers incomplete trailing lines", async () => {
+test("Codex JSONL runner skips malformed unrelated completed lines", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, rolloutPath, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
+  await fs.appendFile(rolloutPath, "{unrelated}\n", "utf8");
+  await fs.appendFile(
+    rolloutPath,
+    '{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"INITIAL_DONE"}}\n',
+    "utf8",
+  );
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
-    const codexHome = String(options.env?.CODEX_HOME);
-    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-    const rolloutPath = join(codexHome, rollout);
-
-    await fs.ensureDir(dirname(rolloutPath));
-    await fs.appendFile(rolloutPath, "{unrelated}\n", "utf8");
-    await fs.appendFile(rolloutPath, '{"type":"event_msg"', "utf8");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    await fs.appendFile(
-      rolloutPath,
-      ',"payload":{"type":"task_complete","last_agent_message":"INITIAL_DONE"}}\n',
-      "utf8",
-    );
+    assert.equal(options.env?.CODEX_HOME, codexHome);
     spawner.process.emitExit(0);
   });
 
@@ -732,6 +795,7 @@ test("Codex JSONL runner skips malformed unrelated completed lines and buffers i
     {
       ptySpawner: spawner,
       outputSink: { write() {} },
+      sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
     },
@@ -777,18 +841,19 @@ test("Codex JSONL runner drains briefly after early PTY exit before incomplete-s
 
 test("Codex JSONL runner reports cleanup timeout after phase finalization", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
+  await appendSessionMeta(codexHome, rollout);
+  await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
-    const codexHome = String(options.env?.CODEX_HOME);
-    const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-
-    await appendSessionMeta(codexHome, rollout);
-    await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
+    assert.equal(options.env?.CODEX_HOME, codexHome);
   });
 
   await assert.rejects(
     runCodexJsonlSession(createCommand(), createInput(projectRoot), {
       ptySpawner: spawner,
       outputSink: { write() {} },
+      sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
       cleanupTimeoutMs: 20,

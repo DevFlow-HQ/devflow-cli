@@ -85,10 +85,15 @@ export function createCodexAdapter(
       throw new ProviderSessionLaunchError(provider, error);
     }
 
+    const args =
+      eventSource === "jsonl"
+        ? [...(input.model ? ["--model", input.model] : [])]
+        : [...(input.model ? ["--model", input.model] : []), input.initialPrompt];
+
     const command = {
       provider,
       executable,
-      args: [...(input.model ? ["--model", input.model] : []), input.initialPrompt],
+      args,
     };
 
     const runner = eventSource === "jsonl" ? jsonlRunner : hookRunner;

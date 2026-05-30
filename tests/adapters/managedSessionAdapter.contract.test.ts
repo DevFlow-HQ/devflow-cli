@@ -860,7 +860,7 @@ test("Codex adapter runSession delegates exclusively to JSONL runner when select
       command: {
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
-        args: codexHarness.expectedArgsWithoutModel,
+        args: [],
       },
       input: validRunInput,
     },
@@ -1012,7 +1012,7 @@ test("built-in managed-session selection wires codex JSONL mode before launch", 
       command: {
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
-        args: codexHarness.expectedArgsWithoutModel,
+        args: [],
       },
       input: validRunInput,
     },

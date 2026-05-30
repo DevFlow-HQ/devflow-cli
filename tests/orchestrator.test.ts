@@ -65,11 +65,12 @@ function createStructuredProviderEvent(
     ManagedProviderSessionEvent,
     "provider" | "source" | "structured"
   >,
+  source: ManagedProviderSessionEvent["source"] = "hooks",
 ): ManagedProviderSessionEvent {
   return {
     ...event,
     provider: getBuiltInProviderIdentity("codex"),
-    source: "hooks",
+    source,
     structured: true,
   } as ManagedProviderSessionEvent;
 }
@@ -1025,6 +1026,132 @@ test("structured-provider grill orchestration records normalized events instead 
   assert.match(transcript, /Prefer simple contracts\./);
   assert.doesNotMatch(transcript, /Provider protocol text/);
   assert.doesNotMatch(transcript, /managed PRD continuation prompt/);
+  assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
+  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+});
+
+test("structured Codex JSONL grill orchestration records transcripts from normalized events", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "jsonl",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.equal(input.transcript, undefined);
+      assert.ok(input.onProviderEvent);
+
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "turn-completed",
+            assistantMessage: [
+              "What should JSONL preserve?",
+              input.initialCompletionMarker,
+              "Codex protocol text that must not be persisted.",
+            ].join("\n"),
+          },
+          "jsonl",
+        ),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "submitted-user-message",
+            message: "Only reliable human replies.",
+            origin: "human",
+          },
+          "jsonl",
+        ),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "submitted-user-message",
+            message: "managed JSONL continuation prompt",
+            origin: "managed",
+          },
+          "jsonl",
+        ),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "submitted-user-message",
+            message: "unknown JSONL echo",
+            origin: "unknown",
+          },
+          "jsonl",
+        ),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const transcript = await fs.readFile(
+    join(runDirectory, "grill-transcript.md"),
+    "utf8",
+  );
+
+  assert.match(transcript, /What should JSONL preserve\?/);
+  assert.match(transcript, /Only reliable human replies\./);
+  assert.doesNotMatch(transcript, /Codex protocol text/);
+  assert.doesNotMatch(transcript, /managed JSONL continuation prompt/);
+  assert.doesNotMatch(transcript, /unknown JSONL echo/);
   assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
   assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
 });
