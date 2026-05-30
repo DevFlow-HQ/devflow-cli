@@ -398,7 +398,7 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
     controlTransport: "pty",
     eventSource: "hooks",
     supportsProviderSessionId: true,
-    supportsResume: false,
+    supportsResume: true,
     classifiesSubmittedUserMessageOrigin: true,
   };
 
@@ -432,7 +432,7 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
     controlTransport: "pty",
     eventSource: "jsonl",
     supportsProviderSessionId: true,
-    supportsResume: false,
+    supportsResume: true,
     classifiesSubmittedUserMessageOrigin: true,
   };
 

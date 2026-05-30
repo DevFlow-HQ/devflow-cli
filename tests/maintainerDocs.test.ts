@@ -7,27 +7,46 @@ import { fileURLToPath } from "node:url";
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 test("maintainer context records JSONL rollout constraints for future providers", async () => {
-  const context = await readFile(join(repoRoot, "CONTEXT.md"), "utf8");
+  const adr = await readFile(
+    join(
+      repoRoot,
+      "docs",
+      "adr",
+      "0002-keep-pty-control-with-structured-event-source-fallbacks.md",
+    ),
+    "utf8",
+  );
 
-  assert.match(context, /Claude Code/);
-  assert.match(context, /next required JSONL provider after Codex/);
-  assert.match(context, /hook-independent (session )?log discovery/);
-  assert.match(context, /must not rely on hook `transcript_path`/);
-  assert.match(context, /global directory guessing/);
-  assert.match(context, /hooks primary, JSONL structured fallback, PTY bottom fallback/);
+  assert.match(adr, /Claude Code/);
+  assert.match(adr, /next required JSONL provider after Codex/);
+  assert.match(adr, /hook-independent (session )?log discovery/);
+  assert.match(adr, /must not rely on hook `transcript_path`/);
+  assert.match(adr, /global directory guessing/);
+  assert.match(adr, /hooks/);
+  assert.match(adr, /JSONL/);
+  assert.match(adr, /PTY/);
 });
 
 test("maintainer context documents the structured grill transcript contract", async () => {
   const context = await readFile(join(repoRoot, "CONTEXT.md"), "utf8");
+  const adr = await readFile(
+    join(
+      repoRoot,
+      "docs",
+      "adr",
+      "0004-keep-structured-grill-transcript-policy-in-orchestration.md",
+    ),
+    "utf8",
+  );
 
   assert.match(context, /structured grill transcript contract/i);
-  assert.match(context, /adapters own provider-specific event normalization/i);
-  assert.match(context, /orchestration owns grill transcript artifact policy/i);
-  assert.match(context, /turn-completed\.assistantMessage/);
-  assert.match(context, /submitted-user-message/);
-  assert.match(context, /origin metadata/);
-  assert.match(context, /unknown-origin submitted user messages are excluded/i);
-  assert.match(context, /PTY fallback behavior remains available/i);
-  assert.match(context, /ProviderSessionEventCaptureError/);
-  assert.match(context, /ProviderSessionTranscriptCaptureError/);
+  assert.match(adr, /Adapters should own provider-specific event normalization/i);
+  assert.match(adr, /orchestration owns the durable grill transcript artifact policy/i);
+  assert.match(adr, /turn-completed\.assistantMessage/);
+  assert.match(adr, /submitted-user-message/);
+  assert.match(adr, /origin-bearing/);
+  assert.match(adr, /unknown-origin messages are excluded/i);
+  assert.match(adr, /PTY fallback behavior remains available/i);
+  assert.match(adr, /ProviderSessionEventCaptureError/);
+  assert.match(adr, /ProviderSessionTranscriptCaptureError/);
 });
