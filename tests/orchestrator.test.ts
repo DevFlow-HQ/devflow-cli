@@ -1030,6 +1030,299 @@ test("structured-provider grill orchestration records normalized events instead 
   assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
 });
 
+test("orchestrator persists reliable provider session ids from normalized session-start events", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "session-start",
+          providerSessionId: "codex-session-123",
+        }),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: `Ready ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const state = await fs.readJson(join(runDirectory, "provider-session.json"));
+
+  assert.deepEqual(
+    {
+      provider: state.provider,
+      providerSessionId: state.providerSessionId,
+      phase: state.phase,
+      status: state.status,
+    },
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      providerSessionId: "codex-session-123",
+      phase: {
+        id: `${(await listRunDirectories(projectRoot))[0]}:grill:attempt-1`,
+        kind: "grill",
+        attempt: 1,
+      },
+      status: "active",
+    },
+  );
+  assert.match(state.startedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(state.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("orchestrator refreshes provider session state from later normalized turn events", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  let prdPhaseId = "";
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          phaseId: input.phase?.id,
+          assistantMessage: `Grill ready ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+
+      const continuation = input.continuations?.[0];
+      assert.ok(continuation);
+      assert.ok(continuation.phase?.id);
+      prdPhaseId = continuation.phase.id;
+      await continuation.onStart?.();
+      await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# PRD\n");
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          phaseId: continuation.phase.id,
+          providerSessionId: "codex-session-late",
+          assistantMessage: `PRD ready ${continuation.completionMarker}`,
+        }),
+      );
+      await continuation.validate();
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const state = await fs.readJson(join(runDirectory, "provider-session.json"));
+
+  assert.equal(state.providerSessionId, "codex-session-late");
+  assert.deepEqual(state.phase, {
+    id: prdPhaseId,
+    kind: "prd",
+    attempt: 1,
+  });
+  assert.equal(state.status, "active");
+});
+
+test("orchestrator leaves fallback providers without reliable session ids on existing transcript behavior", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("claude"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "pty",
+      supportsProviderSessionId: false,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: false,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "claude" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.ok(input.transcript);
+      await input.onProviderEvent?.(
+        {
+          type: "session-start",
+          provider: getBuiltInProviderIdentity("claude"),
+          source: "pty",
+          structured: false,
+          providerSessionId: "unreliable-pty-id",
+        },
+      );
+      await input.transcript.onProviderOutput?.("Fallback transcript content.\n");
+      await input.transcript.onSubmittedUserMessage?.("Fallback user reply.\n");
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "claude",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "provider-session.json")),
+    false,
+  );
+  assert.match(
+    await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
+    /Fallback transcript content\./,
+  );
+});
+
 test("structured Codex JSONL grill orchestration records transcripts from normalized events", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });

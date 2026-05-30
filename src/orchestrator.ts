@@ -18,6 +18,8 @@ import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSes
 import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
+  type ManagedProviderSessionEvent,
+  type ManagedProviderSessionInput,
   type ManagedProviderSessionPhase,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
@@ -477,39 +479,43 @@ async function runIntentStage(options: {
     completionMarker,
   });
 
-  return options.adapter.runSession({
-    workingDirectory: options.request.projectRoot,
-    initialPrompt: prompt,
-    initialCompletionMarker: completionMarker,
-    phase: createProviderSessionPhase({
-      run: options.run,
-      kind: "intent",
-      attempt: options.attempt,
-    }),
-    ...(options.request.model ? { model: options.request.model } : {}),
-    async validate() {
-      await readIntentArtifact(options.run.paths.intentArtifact);
-    },
-    repair: {
+  return runManagedSessionWithProviderState({
+    run: options.run,
+    adapter: options.adapter,
+    input: {
+      workingDirectory: options.request.projectRoot,
+      initialPrompt: prompt,
+      initialCompletionMarker: completionMarker,
       phase: createProviderSessionPhase({
         run: options.run,
-        kind: "intent-repair",
+        kind: "intent",
         attempt: options.attempt,
       }),
-      completionMarker: repairCompletionMarker,
-      renderPrompt(validationError) {
-        return renderIntentRepairPrompt({
-          artifactPath: options.run.paths.intentArtifact,
-          completionMarker: repairCompletionMarker,
-          validationError,
-        });
+      ...(options.request.model ? { model: options.request.model } : {}),
+      async validate() {
+        await readIntentArtifact(options.run.paths.intentArtifact);
       },
-      mapFailure(validationError) {
-        return new StageArtifactValidationError({
-          stage: "intent",
-          artifactPath: options.run.paths.intentArtifact,
-          details: validationError.message,
-        });
+      repair: {
+        phase: createProviderSessionPhase({
+          run: options.run,
+          kind: "intent-repair",
+          attempt: options.attempt,
+        }),
+        completionMarker: repairCompletionMarker,
+        renderPrompt(validationError) {
+          return renderIntentRepairPrompt({
+            artifactPath: options.run.paths.intentArtifact,
+            completionMarker: repairCompletionMarker,
+            validationError,
+          });
+        },
+        mapFailure(validationError) {
+          return new StageArtifactValidationError({
+            stage: "intent",
+            artifactPath: options.run.paths.intentArtifact,
+            details: validationError.message,
+          });
+        },
       },
     },
   });
@@ -626,41 +632,45 @@ async function runBootstrapStage(options: {
       changedPaths: freshness.changedPaths,
     });
 
-    await options.adapter.runSession({
-      workingDirectory: options.request.projectRoot,
-      initialPrompt: prompt,
-      initialCompletionMarker: completionMarker,
-      phase: createProviderSessionPhase({
-        run: options.run,
-        kind: "bootstrap",
-        attempt: options.attempt,
-      }),
-      ...(options.request.model ? { model: options.request.model } : {}),
-      async validate() {
-        await readValidProjectContextCandidate(
-          options.run.paths.projectContextCandidate,
-        );
-      },
-      repair: {
+    await runManagedSessionWithProviderState({
+      run: options.run,
+      adapter: options.adapter,
+      input: {
+        workingDirectory: options.request.projectRoot,
+        initialPrompt: prompt,
+        initialCompletionMarker: completionMarker,
         phase: createProviderSessionPhase({
           run: options.run,
-          kind: "bootstrap-repair",
+          kind: "bootstrap",
           attempt: options.attempt,
         }),
-        completionMarker: repairCompletionMarker,
-        renderPrompt(validationError) {
-          return renderBootstrapProjectContextRepairPrompt({
-            candidatePath: options.run.paths.projectContextCandidate,
-            completionMarker: repairCompletionMarker,
-            validationError,
-          });
+        ...(options.request.model ? { model: options.request.model } : {}),
+        async validate() {
+          await readValidProjectContextCandidate(
+            options.run.paths.projectContextCandidate,
+          );
         },
-        mapFailure(validationError) {
-          return new StageArtifactValidationError({
-            stage: "bootstrap",
-            artifactPath: options.run.paths.projectContextCandidate,
-            details: validationError.message,
-          });
+        repair: {
+          phase: createProviderSessionPhase({
+            run: options.run,
+            kind: "bootstrap-repair",
+            attempt: options.attempt,
+          }),
+          completionMarker: repairCompletionMarker,
+          renderPrompt(validationError) {
+            return renderBootstrapProjectContextRepairPrompt({
+              candidatePath: options.run.paths.projectContextCandidate,
+              completionMarker: repairCompletionMarker,
+              validationError,
+            });
+          },
+          mapFailure(validationError) {
+            return new StageArtifactValidationError({
+              stage: "bootstrap",
+              artifactPath: options.run.paths.projectContextCandidate,
+              details: validationError.message,
+            });
+          },
         },
       },
     });
@@ -710,6 +720,91 @@ function createProviderSessionPhase(options: {
     kind: options.kind,
     attempt: options.attempt,
   };
+}
+
+function listManagedSessionPhases(
+  input: ManagedProviderSessionInput,
+): ManagedProviderSessionPhase[] {
+  return [
+    input.phase,
+    input.repair?.phase,
+    ...(input.continuations ?? []).flatMap((continuation) => [
+      continuation.phase,
+      continuation.repair?.phase,
+    ]),
+  ].filter((phase): phase is ManagedProviderSessionPhase => phase !== undefined);
+}
+
+function findProviderEventPhase(options: {
+  input: ManagedProviderSessionInput;
+  event: ManagedProviderSessionEvent;
+}): ManagedProviderSessionPhase | undefined {
+  if (options.event.phaseId === undefined) {
+    return options.input.phase;
+  }
+
+  return listManagedSessionPhases(options.input).find(
+    (phase) => phase.id === options.event.phaseId,
+  );
+}
+
+async function persistProviderSessionStateFromEvent(options: {
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  input: ManagedProviderSessionInput;
+  event: ManagedProviderSessionEvent;
+}): Promise<void> {
+  if (
+    !options.adapter.capabilities?.supportsProviderSessionId ||
+    options.event.providerSessionId === undefined
+  ) {
+    return;
+  }
+
+  const phase = findProviderEventPhase({
+    input: options.input,
+    event: options.event,
+  });
+
+  if (phase === undefined) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const existingState = await options.run.readProviderSessionState();
+  const preservesExistingStart =
+    existingState?.provider.id === options.adapter.provider.id &&
+    existingState.providerSessionId === options.event.providerSessionId;
+
+  await options.run.writeProviderSessionState({
+    provider: options.adapter.provider,
+    providerSessionId: options.event.providerSessionId,
+    phase,
+    status: options.event.type === "session-completed" ? "completed" : "active",
+    startedAt: preservesExistingStart ? existingState.startedAt : now,
+    updatedAt: now,
+  });
+}
+
+async function runManagedSessionWithProviderState(options: {
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  input: ManagedProviderSessionInput;
+}): Promise<ManagedProviderSessionResult> {
+  const existingOnProviderEvent = options.input.onProviderEvent;
+
+  return options.adapter.runSession({
+    ...options.input,
+    async onProviderEvent(event) {
+      await persistProviderSessionStateFromEvent({
+        run: options.run,
+        adapter: options.adapter,
+        input: options.input,
+        event,
+      });
+      await existingOnProviderEvent?.(event);
+    },
+  });
 }
 
 function createPrdRepairConfig(options: {
@@ -860,55 +955,59 @@ async function runGrillStage(options: {
       })
     : undefined;
 
-  await options.adapter.runSession({
-    workingDirectory: options.request.projectRoot,
-    initialPrompt: prompt,
-    initialCompletionMarker: completionMarker,
-    phase: createProviderSessionPhase({
-      run: options.run,
-      kind: "grill",
-      attempt: options.attempt,
-    }),
-    ...(options.request.model ? { model: options.request.model } : {}),
-    async validate() {
-      await writeCompletedGrillArtifacts({
-        request: options.request,
+  await runManagedSessionWithProviderState({
+    run: options.run,
+    adapter: options.adapter,
+    input: {
+      workingDirectory: options.request.projectRoot,
+      initialPrompt: prompt,
+      initialCompletionMarker: completionMarker,
+      phase: createProviderSessionPhase({
         run: options.run,
-        recorder,
-      });
-    },
-    continuations: [
-      {
-        prompt: prdPrompt,
-        completionMarker: prdCompletionMarker,
-        phase: createProviderSessionPhase({
+        kind: "grill",
+        attempt: options.attempt,
+      }),
+      ...(options.request.model ? { model: options.request.model } : {}),
+      async validate() {
+        await writeCompletedGrillArtifacts({
+          request: options.request,
           run: options.run,
-          kind: "prd",
-          attempt: options.attempt,
-        }),
-        onStart: options.onPrdStageStart,
-        async validate() {
-          await validatePrdArtifact(options.run.paths.prdArtifact);
-        },
-        repair: createPrdRepairConfig({
-          run: options.run,
-          completionMarker: prdRepairCompletionMarker,
-          attempt: options.attempt,
-        }),
+          recorder,
+        });
       },
-    ],
-    ...(recorder
-      ? {
-          onProviderEvent: (event) => recorder.recordEvent(event),
-        }
-      : {
-          transcript: {
-            onProviderOutput: (chunk: string) =>
-              options.run.appendGrillProviderMessage(chunk),
-            onSubmittedUserMessage: (message: string) =>
-              options.run.appendGrillUserMessage(message),
+      continuations: [
+        {
+          prompt: prdPrompt,
+          completionMarker: prdCompletionMarker,
+          phase: createProviderSessionPhase({
+            run: options.run,
+            kind: "prd",
+            attempt: options.attempt,
+          }),
+          onStart: options.onPrdStageStart,
+          async validate() {
+            await validatePrdArtifact(options.run.paths.prdArtifact);
           },
-        }),
+          repair: createPrdRepairConfig({
+            run: options.run,
+            completionMarker: prdRepairCompletionMarker,
+            attempt: options.attempt,
+          }),
+        },
+      ],
+      ...(recorder
+        ? {
+            onProviderEvent: (event) => recorder.recordEvent(event),
+          }
+        : {
+            transcript: {
+              onProviderOutput: (chunk: string) =>
+                options.run.appendGrillProviderMessage(chunk),
+              onSubmittedUserMessage: (message: string) =>
+                options.run.appendGrillUserMessage(message),
+            },
+          }),
+    },
   });
 }
 
@@ -928,24 +1027,28 @@ async function runPrdStage(options: {
     liveDiscussionAvailable: options.liveDiscussionAvailable,
   });
 
-  await options.adapter.runSession({
-    workingDirectory: options.request.projectRoot,
-    initialPrompt: prompt,
-    initialCompletionMarker: completionMarker,
-    phase: createProviderSessionPhase({
-      run: options.run,
-      kind: "prd",
-      attempt: options.attempt,
-    }),
-    ...(options.request.model ? { model: options.request.model } : {}),
-    async validate() {
-      await validatePrdArtifact(options.run.paths.prdArtifact);
+  await runManagedSessionWithProviderState({
+    run: options.run,
+    adapter: options.adapter,
+    input: {
+      workingDirectory: options.request.projectRoot,
+      initialPrompt: prompt,
+      initialCompletionMarker: completionMarker,
+      phase: createProviderSessionPhase({
+        run: options.run,
+        kind: "prd",
+        attempt: options.attempt,
+      }),
+      ...(options.request.model ? { model: options.request.model } : {}),
+      async validate() {
+        await validatePrdArtifact(options.run.paths.prdArtifact);
+      },
+      repair: createPrdRepairConfig({
+        run: options.run,
+        completionMarker: repairCompletionMarker,
+        attempt: options.attempt,
+      }),
     },
-    repair: createPrdRepairConfig({
-      run: options.run,
-      completionMarker: repairCompletionMarker,
-      attempt: options.attempt,
-    }),
   });
 
   await validatePrdArtifact(options.run.paths.prdArtifact);
