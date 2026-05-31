@@ -114,12 +114,12 @@ class CapturingCodexHookRunner {
 class CapturingClaudeHookRunner {
   readonly calls: Array<{
     command: ClaudeHookDrivenSessionCommand;
-    input: ManagedProviderSessionInput;
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput;
   }> = [];
 
   async runClaudeHookDrivenSession(
     command: ClaudeHookDrivenSessionCommand,
-    input: ManagedProviderSessionInput,
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput,
   ): Promise<ManagedProviderSessionResult> {
     this.calls.push({ command, input });
     await input.validate();
@@ -615,12 +615,12 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
   );
 });
 
-test("Claude adapter exposes hook-mode capabilities without claiming resume support", () => {
+test("Claude adapter exposes hook-mode capabilities including resume support", () => {
   const hookCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "hooks",
     supportsProviderSessionId: true,
-    supportsResume: false,
+    supportsResume: true,
     classifiesSubmittedUserMessageOrigin: true,
   };
 
@@ -630,7 +630,7 @@ test("Claude adapter exposes hook-mode capabilities without claiming resume supp
   );
   assert.equal(
     canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "hooks" })),
-    false,
+    true,
   );
   assert.equal(createClaudeAdapter().capabilities?.eventSource, "pty");
   assert.equal(
@@ -657,7 +657,7 @@ test("Claude adapter does not expose or claim JSONL fallback mode", () => {
   assert.deepEqual(createClaudeAdapter().capabilities, ptyCapabilities);
   assert.equal(typeof createClaudeAdapter().resumeSession, "undefined");
   assert.equal(
-    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "hooks" })),
+    canResumeManagedProviderSession(createClaudeAdapter()),
     false,
   );
   assert.deepEqual(
@@ -1056,6 +1056,95 @@ test("Claude adapter delegates hook-mode sessions to the hook-driven runner", as
         args: ["--model", "gpt-5.5", "Ship the contract"],
       },
       input: validRunInputWithModel,
+    },
+  ]);
+});
+
+test("Claude adapter resumeSession delegates hook resume with native --resume flag and prompt", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-claude-hooks-resume-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, "claude");
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const runner = new CapturingClaudeHookRunner();
+  const adapter = createClaudeAdapter({
+    eventSource: "hooks",
+    runClaudeHookDrivenSession:
+      runner.runClaudeHookDrivenSession.bind(runner),
+  });
+
+  assert.equal(canResumeManagedProviderSession(adapter), true);
+  if (!canResumeManagedProviderSession(adapter)) {
+    assert.fail("expected Claude adapter to support resume");
+  }
+
+  await adapter.resumeSession(validResumeInputWithModel);
+
+  assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("claude"),
+        executable: executablePath,
+        args: [
+          "--resume",
+          "codex-session-123",
+          "--model",
+          "gpt-5.5",
+          "Continue the interrupted work",
+        ],
+      },
+      input: validResumeInputWithModel,
+    },
+  ]);
+});
+
+test("Claude adapter resumeSession delegates hook resume without a model flag", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-claude-hooks-resume-no-model-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, "claude");
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const runner = new CapturingClaudeHookRunner();
+  const adapter = createClaudeAdapter({
+    eventSource: "hooks",
+    runClaudeHookDrivenSession:
+      runner.runClaudeHookDrivenSession.bind(runner),
+  });
+
+  await adapter.resumeSession?.(validResumeInput);
+
+  assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("claude"),
+        executable: executablePath,
+        args: ["--resume", "codex-session-123", "Continue the interrupted work"],
+      },
+      input: validResumeInput,
     },
   ]);
 });
