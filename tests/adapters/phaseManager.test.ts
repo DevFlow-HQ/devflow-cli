@@ -113,6 +113,55 @@ test("phase manager ignores turn completions without the active completion marke
   );
 });
 
+test("phase manager observes structured completion markers only from assistant turn boundaries", async () => {
+  const events: ManagedProviderSessionEvent[] = [];
+  let validateCalls = 0;
+  let finalizeCalls = 0;
+  const manager = createManager({
+    events,
+    input: {
+      async validate() {
+        validateCalls += 1;
+      },
+    },
+    onFinalize() {
+      finalizeCalls += 1;
+    },
+  });
+
+  await manager.handleEvent({
+    type: "submitted-user-message",
+    message: "User pasted INITIAL_DONE",
+    origin: "human",
+  });
+  await manager.handleEvent({
+    type: "session-completed",
+    exitCode: 0,
+    signal: null,
+  });
+
+  assert.equal(validateCalls, 0);
+  assert.equal(finalizeCalls, 0);
+  assert.equal(manager.isFinalized(), false);
+
+  await manager.handleEvent({
+    type: "turn-completed",
+    assistantMessage: "Provider accepted the answers INITIAL_DONE",
+  });
+
+  assert.equal(validateCalls, 1);
+  assert.equal(finalizeCalls, 1);
+  assert.equal(manager.isFinalized(), true);
+  assert.deepEqual(
+    events.map((event) => `${event.type}:${event.phaseId}`),
+    [
+      "submitted-user-message:initial",
+      "session-completed:initial",
+      "turn-completed:initial",
+    ],
+  );
+});
+
 test("phase manager validates a marker-matching turn once and finalizes when no continuations remain", async () => {
   const ordering: string[] = [];
   const manager = createManager({

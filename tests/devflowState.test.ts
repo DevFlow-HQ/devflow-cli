@@ -1186,6 +1186,41 @@ test("completed grill checkpoints can include associated provider session metada
   assert.deepEqual(await run.readGrillCheckpoint(), checkpoint);
 });
 
+test("provider session metadata does not make incomplete grill checkpoints trusted", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({
+    projectRoot,
+    clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
+  });
+  const run = await state.createRun();
+
+  await run.initializeGrillTranscript();
+  await run.appendGrillProviderMessage("The grill is still in progress.\n");
+
+  await assert.rejects(
+    run.writeGrillCheckpoint({
+      stage: "grill",
+      status: "complete",
+      completedAt: "2026-05-24T10:00:00.000Z",
+      rawTask: "resume work",
+      intentArtifactPath: run.paths.intentArtifact,
+      projectContextPath: run.paths.projectContextArtifact,
+      grillTranscriptPath: run.paths.grillTranscript,
+      prdArtifactPath: run.paths.prdArtifact,
+      providerSession: {
+        provider: { id: "codex", displayName: "Codex" },
+        providerSessionId: "codex-session-123",
+        phase: { id: "grill-initial", kind: "grill", attempt: 1 },
+      },
+    }),
+    (error: unknown) =>
+      error instanceof InvalidGrillCheckpointError &&
+      error.message.includes("transcript must be complete"),
+  );
+
+  assert.equal(await run.readGrillCheckpoint(), undefined);
+});
+
 test("run handles distinguish missing partial and completed grill transcripts", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
   const state = createDevFlowState({ projectRoot });

@@ -4771,6 +4771,23 @@ test("provider-backed stage retry classification keeps lifecycle failures non-re
   assert.equal(isRetryableProviderBackedStageFailure(new Error("setup failed")), false);
 });
 
+test("resume-aware orchestration keeps provider-native event and CLI details out of core recovery", async () => {
+  const source = await fs.readFile(
+    join(process.cwd(), "src", "orchestrator.ts"),
+    "utf8",
+  );
+
+  assert.doesNotMatch(source, /\bSessionStart\b/);
+  assert.doesNotMatch(source, /\bUserPromptSubmit\b/);
+  assert.doesNotMatch(source, /\bStop\b/);
+  assert.doesNotMatch(source, /\bsession_meta\b/);
+  assert.doesNotMatch(source, /\bevent_msg\b/);
+  assert.doesNotMatch(source, /\btask_complete\b/);
+  assert.doesNotMatch(source, /\bresponse_item\b/);
+  assert.doesNotMatch(source, /\blast_agent_message\b/);
+  assert.doesNotMatch(source, /\bcodex\s+resume\b/);
+});
+
 test("orchestrator surfaces interrupted provider sessions without retrying the intent stage", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });

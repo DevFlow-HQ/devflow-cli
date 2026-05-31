@@ -684,6 +684,77 @@ test("PTY managed-session runner captures raw terminal submissions without class
   ]);
 });
 
+test("PTY managed-session runner observes completion markers only from provider terminal output", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+  const submittedMessages: string[] = [];
+  const events: ManagedProviderSessionEvent[] = [];
+  let validateCalls = 0;
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("claude"),
+      executable: "claude",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      async validate() {
+        validateCalls += 1;
+      },
+      transcript: {
+        onSubmittedUserMessage(message) {
+          submittedMessages.push(message);
+        },
+      },
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("DEVFLOW_DONE\r");
+  await waitForAsyncHandlers();
+
+  assert.equal(validateCalls, 0);
+  assert.deepEqual(submittedMessages, ["DEVFLOW_DONE"]);
+  assert.deepEqual(
+    events.filter((event) => event.type === "turn-completed"),
+    [],
+  );
+
+  spawner.process.emitData("provider has finished DEVFLOW_DONE\n");
+
+  await runPromise;
+
+  assert.equal(validateCalls, 1);
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn-completed")
+      .map((event) => ({
+        providerId: event.provider.id,
+        source: event.source,
+        structured: event.structured,
+        assistantMessage:
+          event.type === "turn-completed" ? event.assistantMessage : undefined,
+      })),
+    [
+      {
+        providerId: "claude",
+        source: "pty",
+        structured: false,
+        assistantMessage: undefined,
+      },
+    ],
+  );
+});
+
 test("PTY managed-session runner excludes repair markers from provider transcript content", async () => {
   const spawner = new FakePtySpawner();
   const transcript: string[] = [];
