@@ -2798,6 +2798,248 @@ test("orchestrator retries only PRD synthesis from transcript after completed-gr
   assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD retry\n");
 });
 
+test("interrupted PRD synthesis resumes the completed grill provider session before transcript fallback", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  let prdOnlyCallCount = 0;
+  const resumeSessionInputs: ManagedProviderSessionResumeInput[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (isPrdSessionInput(input)) {
+        prdOnlyCallCount += 1;
+        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD fallback\n");
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "session-start",
+          phaseId: input.phase?.id,
+          providerSessionId: "codex-live-session-prd",
+        }),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          phaseId: input.phase?.id,
+          providerSessionId: "codex-live-session-prd",
+          assistantMessage: `Grill complete ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+
+      const continuation = input.continuations?.[0];
+      assert.ok(continuation);
+      await continuation.onStart?.();
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          phaseId: continuation.phase?.id,
+          providerSessionId: "codex-live-session-prd",
+          assistantMessage: "Writing PRD now.",
+        }),
+      );
+
+      throw new IncompleteProviderSessionError({
+        provider,
+        completionMarker: continuation.completionMarker,
+        exitCode: 1,
+        signal: null,
+      });
+    },
+    async resumeSession(input) {
+      resumeSessionInputs.push(input);
+      assert.equal(input.providerSessionId, "codex-live-session-prd");
+      assert.match(input.initialPrompt, /Continue the interrupted PRD synthesis/);
+      assert.match(input.initialPrompt, /Canonical PRD artifact path:/);
+      assert.match(input.initialPrompt, /prd\.md/);
+      assert.match(input.initialPrompt, /Do not interview the user/);
+      assert.doesNotMatch(input.initialPrompt, /Run the interactive grill stage/);
+
+      await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD resumed\n");
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(resumeSessionInputs.length, 1);
+  assert.equal(prdOnlyCallCount, 0);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD resumed\n");
+});
+
+test("failed PRD resume falls back once to PRD-only synthesis from the completed grill transcript", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  let resumeCallCount = 0;
+  let prdOnlyCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (isPrdSessionInput(input)) {
+        prdOnlyCallCount += 1;
+        assert.match(input.initialPrompt, /No live provider discussion is available/);
+        assert.match(input.initialPrompt, /Persisted grill transcript path:/);
+        assert.match(input.initialPrompt, /grill-transcript\.md/);
+        assert.doesNotMatch(input.initialPrompt, /Continue the interrupted PRD synthesis/);
+
+        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD fallback\n");
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          phaseId: input.phase?.id,
+          providerSessionId: "codex-prd-resume-reject",
+          assistantMessage: `Grill complete ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+
+      const continuation = input.continuations?.[0];
+      assert.ok(continuation);
+      await continuation.onStart?.();
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          phaseId: continuation.phase?.id,
+          providerSessionId: "codex-prd-resume-reject",
+          assistantMessage: "PRD interrupted.",
+        }),
+      );
+
+      throw new IncompleteProviderSessionError({
+        provider,
+        completionMarker: continuation.completionMarker,
+        exitCode: 1,
+        signal: null,
+      });
+    },
+    async resumeSession(input) {
+      resumeCallCount += 1;
+      assert.equal(input.providerSessionId, "codex-prd-resume-reject");
+      throw new ProviderSessionLaunchError(provider, new Error("resume rejected"));
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(resumeCallCount, 1);
+  assert.equal(prdOnlyCallCount, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD fallback\n");
+});
+
 test("orchestrator surfaces pre-completion grill transcript persistence failures as retryable grill-stage failures", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });

@@ -262,6 +262,23 @@ function renderInterruptedGrillResumePrompt(options: {
   ].join("\n");
 }
 
+function renderInterruptedPrdResumePrompt(options: {
+  prdArtifactPath: string;
+  completionMarker: string;
+}): string {
+  return [
+    "Continue the interrupted PRD synthesis.",
+    "",
+    "Canonical PRD artifact path:",
+    options.prdArtifactPath,
+    "",
+    "Write or repair only the canonical PRD artifact at that path.",
+    "Use the resumed provider context and the completed grill discussion already in this session.",
+    "Do not interview the user, write issues, or create alternate PRD files.",
+    `When the PRD artifact is valid, print exactly: ${options.completionMarker}`,
+  ].join("\n");
+}
+
 async function renderPrdPrompt(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
@@ -1078,39 +1095,63 @@ async function runPrdStage(options: {
   adapter: ManagedSessionAdapter;
   liveDiscussionAvailable: boolean;
   attempt: number;
+  resumeProviderSessionId?: string;
 }): Promise<void> {
   const completionMarker = createPrdCompletionMarker();
   const repairCompletionMarker = createPrdRepairCompletionMarker();
-  const prompt = await renderPrdPrompt({
-    request: options.request,
-    run: options.run,
-    completionMarker,
-    liveDiscussionAvailable: options.liveDiscussionAvailable,
-  });
+  const prompt =
+    options.resumeProviderSessionId === undefined
+      ? await renderPrdPrompt({
+          request: options.request,
+          run: options.run,
+          completionMarker,
+          liveDiscussionAvailable: options.liveDiscussionAvailable,
+        })
+      : renderInterruptedPrdResumePrompt({
+          prdArtifactPath: options.run.paths.prdArtifact,
+          completionMarker,
+        });
 
-  await runManagedSessionWithProviderState({
-    run: options.run,
-    adapter: options.adapter,
-    input: {
-      workingDirectory: options.request.projectRoot,
-      initialPrompt: prompt,
-      initialCompletionMarker: completionMarker,
-      phase: createProviderSessionPhase({
-        run: options.run,
-        kind: "prd",
-        attempt: options.attempt,
-      }),
-      ...(options.request.model ? { model: options.request.model } : {}),
-      async validate() {
-        await validatePrdArtifact(options.run.paths.prdArtifact);
-      },
-      repair: createPrdRepairConfig({
-        run: options.run,
-        completionMarker: repairCompletionMarker,
-        attempt: options.attempt,
-      }),
+  const input = {
+    workingDirectory: options.request.projectRoot,
+    initialPrompt: prompt,
+    initialCompletionMarker: completionMarker,
+    phase: createProviderSessionPhase({
+      run: options.run,
+      kind: "prd",
+      attempt: options.attempt,
+    }),
+    ...(options.request.model ? { model: options.request.model } : {}),
+    async validate() {
+      await validatePrdArtifact(options.run.paths.prdArtifact);
     },
-  });
+    repair: createPrdRepairConfig({
+      run: options.run,
+      completionMarker: repairCompletionMarker,
+      attempt: options.attempt,
+    }),
+  } satisfies ManagedProviderSessionInput;
+
+  if (options.resumeProviderSessionId !== undefined) {
+    if (!canResumeManagedProviderSession(options.adapter)) {
+      throw new Error("Adapter cannot resume provider sessions.");
+    }
+
+    await resumeManagedSessionWithProviderState({
+      run: options.run,
+      adapter: options.adapter,
+      input: {
+        ...input,
+        providerSessionId: options.resumeProviderSessionId,
+      },
+    });
+  } else {
+    await runManagedSessionWithProviderState({
+      run: options.run,
+      adapter: options.adapter,
+      input,
+    });
+  }
 
   await validatePrdArtifact(options.run.paths.prdArtifact);
 }
@@ -1120,15 +1161,24 @@ async function runPrdStageWithRetry(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
   liveDiscussionAvailable: boolean;
+  resumeProviderSessionId?: string;
 }): Promise<void> {
+  let resumeProviderSessionId = options.resumeProviderSessionId;
+
   await runProviderBackedStageWithRetry({
     stage: "prd",
     totalAttempts: PRD_STAGE_TOTAL_ATTEMPTS,
     async runAttempt(attempt) {
-      await runPrdStage({ ...options, attempt });
+      await runPrdStage({
+        ...options,
+        attempt,
+        resumeProviderSessionId:
+          attempt === 1 ? resumeProviderSessionId : undefined,
+      });
     },
     async cleanupBeforeRetry() {
       await fs.remove(options.run.paths.prdArtifact);
+      resumeProviderSessionId = undefined;
     },
   });
 }
@@ -1199,6 +1249,55 @@ async function readResumableGrillProviderSessionId(options: {
   return state.providerSessionId;
 }
 
+async function readResumablePrdProviderSessionId(options: {
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+}): Promise<string | undefined> {
+  if (!canResumeManagedProviderSession(options.adapter)) {
+    return undefined;
+  }
+
+  const state = await options.run.readProviderSessionState();
+
+  if (
+    state?.providerSessionId === undefined ||
+    state.provider.id !== options.adapter.provider.id ||
+    state.phase.kind !== "prd" ||
+    !["active", "interrupted"].includes(state.status)
+  ) {
+    return undefined;
+  }
+
+  return state.providerSessionId;
+}
+
+function isRecoverablePrdFailureAfterCompletedGrill(error: unknown): boolean {
+  return (
+    (error instanceof StageArtifactValidationError && error.stage === "prd") ||
+    (error instanceof IncompleteProviderSessionError &&
+      error.completionMarker.startsWith("DEVFLOW_PRD_COMPLETE_"))
+  );
+}
+
+async function runPrdRecoveryAfterCompletedGrill(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  onPrdStageStart: () => void | Promise<void>;
+}): Promise<void> {
+  await options.onPrdStageStart();
+  await runPrdStageWithRetry({
+    request: options.request,
+    run: options.run,
+    adapter: options.adapter,
+    liveDiscussionAvailable: false,
+    resumeProviderSessionId: await readResumablePrdProviderSessionId({
+      run: options.run,
+      adapter: options.adapter,
+    }),
+  });
+}
+
 async function runGrillStageWithRetry(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
@@ -1246,7 +1345,12 @@ async function runGrillStageWithRetry(options: {
             }
 
             if ((await options.run.getGrillTranscriptStatus()) === "complete") {
-              throw error;
+              if (!isRecoverablePrdFailureAfterCompletedGrill(error)) {
+                throw error;
+              }
+
+              await runPrdRecoveryAfterCompletedGrill(options);
+              return;
             }
 
             await appendGrillFailureNoteBestEffort(options.run, error);
@@ -1302,7 +1406,12 @@ async function runGrillStageWithRetry(options: {
       }
 
       if ((await options.run.getGrillTranscriptStatus()) === "complete") {
-        throw error;
+        if (!isRecoverablePrdFailureAfterCompletedGrill(error)) {
+          throw error;
+        }
+
+        await runPrdRecoveryAfterCompletedGrill(options);
+        return;
       }
 
       await appendGrillFailureNoteBestEffort(options.run, error);
