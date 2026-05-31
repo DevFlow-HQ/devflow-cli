@@ -9,6 +9,7 @@ import {
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   ProviderSessionLaunchError,
+  ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
@@ -97,6 +98,7 @@ export async function runClaudeHookDrivenSession(
     let cleanupTerminalResize = (): void => {};
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
+    const pendingManagedPrompts = [input.initialPrompt];
 
     const manager = createPhaseManager({
       provider: command.provider,
@@ -109,6 +111,7 @@ export async function runClaudeHookDrivenSession(
         }
 
         submitPtyPrompt(processHandle, prompt);
+        pendingManagedPrompts.push(prompt);
       },
       finalize() {
         phaseFinalized = true;
@@ -118,6 +121,13 @@ export async function runClaudeHookDrivenSession(
     });
 
     rejectEventCaptureFailure = (error: unknown): void => {
+      const transcriptError = findTranscriptCaptureError(error);
+
+      if (transcriptError) {
+        rejectSession(transcriptError);
+        return;
+      }
+
       rejectSession(new ProviderSessionEventCaptureError(command.provider, error));
     };
 
@@ -224,11 +234,13 @@ export async function runClaudeHookDrivenSession(
     }
 
     async function handlePayload(payload: unknown): Promise<void> {
-      const event = normalizeClaudeHookPayload(payload);
+      let event = normalizeClaudeHookPayload(payload);
 
       if (!event) {
         return;
       }
+
+      event = classifySubmittedUserMessageOrigin(event);
 
       if (!sessionStarted) {
         if (event.type !== "session-start") {
@@ -244,7 +256,55 @@ export async function runClaudeHookDrivenSession(
         }
       }
 
+      await captureHookTranscript(event);
       await manager.handleEvent(event);
+    }
+
+    function classifySubmittedUserMessageOrigin(
+      event: Parameters<typeof manager.handleEvent>[0],
+    ): Parameters<typeof manager.handleEvent>[0] {
+      if (event.type !== "submitted-user-message") {
+        return event;
+      }
+
+      const pendingIndex = pendingManagedPrompts.indexOf(event.message);
+
+      if (pendingIndex === -1) {
+        return {
+          ...event,
+          origin: "human",
+        };
+      }
+
+      pendingManagedPrompts.splice(pendingIndex, 1);
+
+      return {
+        ...event,
+        origin: "managed",
+      };
+    }
+
+    async function captureHookTranscript(
+      event: Parameters<typeof manager.handleEvent>[0],
+    ): Promise<void> {
+      try {
+        if (event.type === "submitted-user-message") {
+          await input.transcript?.onSubmittedUserMessage?.(event.message);
+          return;
+        }
+
+        if (
+          event.type === "turn-completed" &&
+          event.assistantMessage !== undefined
+        ) {
+          await input.transcript?.onProviderOutput?.(event.assistantMessage);
+        }
+      } catch (error) {
+        throw new ProviderSessionTranscriptCaptureError(
+          command.provider,
+          error,
+        );
+      }
     }
 
     function forwardInputChunk(chunk: string): void {
@@ -402,4 +462,20 @@ function getClaudeHookDirectory(input: ManagedProviderSessionInput): string {
   const runId = input.phase?.id.split(":")[0] ?? "unscoped-claude-session";
 
   return join(input.workingDirectory, ".devflow", "runs", runId, ".claude-hooks");
+}
+
+function findTranscriptCaptureError(
+  error: unknown,
+): ProviderSessionTranscriptCaptureError | undefined {
+  let current: unknown = error;
+
+  while (current instanceof Error) {
+    if (current instanceof ProviderSessionTranscriptCaptureError) {
+      return current;
+    }
+
+    current = current.cause;
+  }
+
+  return undefined;
 }

@@ -10,6 +10,7 @@ import fs from "fs-extra";
 import {
   IncompleteProviderSessionError,
   ProviderSessionEventCaptureError,
+  ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
 } from "../../src/adapters/managedSessionAdapter.js";
@@ -178,6 +179,11 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Manual clarification",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
       last_assistant_message: "done INITIAL_DONE",
       session_id: "claude-session-1",
@@ -248,6 +254,8 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
       structured: event.structured,
       exitCode: event.type === "session-completed" ? event.exitCode : undefined,
       signal: event.type === "session-completed" ? event.signal : undefined,
+      origin:
+        event.type === "submitted-user-message" ? event.origin : undefined,
     })),
     [
       {
@@ -258,6 +266,7 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
         structured: true,
         exitCode: undefined,
         signal: undefined,
+        origin: undefined,
       },
       {
         type: "submitted-user-message",
@@ -267,6 +276,17 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
         structured: true,
         exitCode: undefined,
         signal: undefined,
+        origin: "managed",
+      },
+      {
+        type: "submitted-user-message",
+        phaseId: "runabc123456:intent:attempt-1",
+        providerSessionId: "claude-session-1",
+        source: "hooks",
+        structured: true,
+        exitCode: undefined,
+        signal: undefined,
+        origin: "human",
       },
       {
         type: "turn-completed",
@@ -276,6 +296,7 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
         structured: true,
         exitCode: undefined,
         signal: undefined,
+        origin: undefined,
       },
       {
         type: "session-completed",
@@ -285,6 +306,7 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
         structured: true,
         exitCode: 0,
         signal: null,
+        origin: undefined,
       },
     ],
   );
@@ -491,4 +513,98 @@ test("Claude hook-driven runner submits repair prompts through PTY and reports r
   assert.equal(result.repairUsed, true);
   assert.equal(validateCalls, 2);
   assert.deepEqual(spawner.process.writes, ["\u001b[200~Repair\u001b[201~\r"]);
+});
+
+test("Claude hook-driven runner captures structured transcript events and preserves transcript failures", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const transcript: Array<{ type: "provider" | "user"; content: string }> = [];
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Start",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Human answer",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "Question before marker INITIAL_DONE protocol tail",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeHookDrivenSession(
+    createCommand(),
+    createInput(projectRoot, {
+      transcript: {
+        onProviderOutput(content) {
+          transcript.push({ type: "provider", content });
+        },
+        onSubmittedUserMessage(content) {
+          transcript.push({ type: "user", content });
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(transcript, [
+    { type: "user", content: "Start" },
+    { type: "user", content: "Human answer" },
+    {
+      type: "provider",
+      content: "Question before marker INITIAL_DONE protocol tail",
+    },
+  ]);
+
+  const failingSpawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-2",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Start",
+      session_id: "claude-session-2",
+    });
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(
+      createCommand(),
+      createInput(projectRoot, {
+        transcript: {
+          onSubmittedUserMessage() {
+            throw new Error("transcript failed");
+          },
+        },
+      }),
+      {
+        ptySpawner: failingSpawner,
+        outputSink: { write() {} },
+        firstEventTimeoutMs: 1_000,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionTranscriptCaptureError &&
+      error.message.includes("transcript failed"),
+  );
 });
