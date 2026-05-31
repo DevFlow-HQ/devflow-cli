@@ -13,6 +13,7 @@ import {
   InterruptedProviderSessionError,
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
+  ProviderSessionLaunchError,
   ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
@@ -188,7 +189,8 @@ function getHookScriptPath(projectRoot: string): string {
     ".devflow",
     "runs",
     "runabc123456",
-    ".claude-hooks",
+    ".claude",
+    "devflow-hooks",
     "hook.js",
   );
 }
@@ -228,14 +230,7 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
   const events: ManagedProviderSessionEvent[] = [];
   let validateCount = 0;
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
-    const hookScriptPath = join(
-      projectRoot,
-      ".devflow",
-      "runs",
-      "runabc123456",
-      ".claude-hooks",
-      "hook.js",
-    );
+    const hookScriptPath = getHookScriptPath(projectRoot);
 
     spawner.process.emitData("terminal marker INITIAL_DONE");
     assert.equal(validateCount, 0);
@@ -286,13 +281,25 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
     ".devflow",
     "runs",
     "runabc123456",
-    ".claude-hooks",
+    ".claude",
+    "devflow-hooks",
+  );
+  const claudeConfigDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
   );
   const settings = await fs.readJson(
-    join(projectRoot, ".claude", "settings.local.json"),
+    join(claudeConfigDirectory, "settings.local.json"),
   );
 
   assert.equal(await fs.pathExists(join(hookDirectory, "hook.js")), true);
+  assert.equal(
+    await fs.pathExists(join(projectRoot, ".claude", "settings.local.json")),
+    false,
+  );
   assert.deepEqual(settings.hooks.SessionStart[0], {
     matcher: "startup",
     hooks: [
@@ -312,6 +319,7 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
         rows: 30,
         env: {
           ...process.env,
+          CLAUDE_CONFIG_DIR: claudeConfigDirectory,
           DEVFLOW_HOOK_IPC_PATH: join(hookDirectory, "hook.sock"),
         },
       },
@@ -389,6 +397,164 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
     signal: null,
   });
   assert.equal(validateCount, 1);
+});
+
+test("Claude hook-driven runner seeds credentials from active source profile on linux", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const sourceConfigDirectory = await fs.mkdtemp(
+    join(tmpdir(), "devflow-claude-source-"),
+  );
+  await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
+    token: "source-token",
+  });
+
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "done INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    firstEventTimeoutMs: 1_000,
+    platform: "linux",
+    environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+  });
+
+  const scopedConfigDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
+  assert.deepEqual(
+    await fs.readJson(join(scopedConfigDirectory, ".credentials.json")),
+    { token: "source-token" },
+  );
+  assert.equal(
+    await fs.pathExists(join(scopedConfigDirectory, "settings.local.json")),
+    true,
+  );
+});
+
+test("Claude hook-driven runner allows missing source credentials on Windows", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const homeDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-home-"));
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "done INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    firstEventTimeoutMs: 1_000,
+    platform: "win32",
+    environment: {},
+    homeDirectory,
+  });
+
+  const scopedConfigDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
+  assert.equal(
+    await fs.pathExists(join(scopedConfigDirectory, ".credentials.json")),
+    false,
+  );
+  assert.equal(
+    spawner.calls[0]?.options.env?.CLAUDE_CONFIG_DIR,
+    scopedConfigDirectory,
+  );
+});
+
+test("Claude hook-driven runner does not seed credentials on macOS", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const sourceConfigDirectory = await fs.mkdtemp(
+    join(tmpdir(), "devflow-claude-source-"),
+  );
+  await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
+    token: "source-token",
+  });
+
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "done INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    firstEventTimeoutMs: 1_000,
+    platform: "darwin",
+    environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+  });
+
+  assert.equal(
+    await fs.pathExists(
+      join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        "runabc123456",
+        ".claude",
+        ".credentials.json",
+      ),
+    ),
+    false,
+  );
+});
+
+test("Claude hook-driven runner fails before launch when existing credentials cannot be copied", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const sourceConfigDirectory = await fs.mkdtemp(
+    join(tmpdir(), "devflow-claude-source-"),
+  );
+  await fs.ensureDir(join(sourceConfigDirectory, ".credentials.json"));
+  const spawner = new ScriptedClaudePtySpawner(async () => {});
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+      platform: "linux",
+      environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    }),
+    ProviderSessionLaunchError,
+  );
+  assert.deepEqual(spawner.calls, []);
 });
 
 test("Claude hook-driven runner rejects when the first structured event is not SessionStart", async () => {

@@ -26,20 +26,20 @@ test("claude hook artifacts create a run-scoped executable forwarding script", a
   assert.equal((await fs.stat(artifacts.hookScriptPath)).mode & 0o777, 0o755);
 });
 
-test("claude hook artifacts are compatible with project-local settings entries", async () => {
+test("claude hook artifacts are compatible with scoped config settings entries", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-project-"));
-  const runDirectory = join(projectRoot, ".devflow", "runs", "run-1");
+  const configDirectory = join(projectRoot, ".devflow", "runs", "run-1", ".claude");
   const artifacts = await createClaudeHookArtifacts({
-    hookDirectory: join(runDirectory, ".claude-hooks"),
+    hookDirectory: join(configDirectory, "devflow-hooks"),
   });
 
   await installClaudeHookSettings({
-    projectRoot,
+    configDirectory,
     hookScriptPath: artifacts.hookScriptPath,
   });
 
   const settings = await fs.readJson(
-    join(projectRoot, ".claude", "settings.local.json"),
+    join(configDirectory, "settings.local.json"),
   );
   assert.deepEqual(settings.hooks.SessionStart[0], {
     matcher: "startup",

@@ -6,7 +6,7 @@ const DEVFLOW_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop"] as cons
 type ClaudeHookEventName = (typeof DEVFLOW_HOOK_EVENTS)[number];
 
 interface ClaudeHookSettingsOptions {
-  projectRoot: string;
+  configDirectory: string;
   hookScriptPath: string;
 }
 
@@ -47,7 +47,7 @@ export class ClaudeHookSettingsError extends Error {
 export async function installClaudeHookSettings(
   options: ClaudeHookSettingsOptions,
 ): Promise<void> {
-  const settingsPath = claudeLocalSettingsPath(options.projectRoot);
+  const settingsPath = claudeLocalSettingsPath(options.configDirectory);
   const settings = await readClaudeLocalSettings(settingsPath);
   const hooks = ensureObjectProperty(settings, "hooks");
 
@@ -56,14 +56,14 @@ export async function installClaudeHookSettings(
     entries.push(claudeHookMatcherEntry(eventName, options.hookScriptPath));
   }
 
-  await fs.ensureDir(join(options.projectRoot, ".claude"));
+  await fs.ensureDir(options.configDirectory);
   await fs.writeJson(settingsPath, settings, { spaces: 2 });
 }
 
 export async function cleanupClaudeHookSettings(
   options: CleanupClaudeHookSettingsOptions,
 ): Promise<void> {
-  const settingsPath = claudeLocalSettingsPath(options.projectRoot);
+  const settingsPath = claudeLocalSettingsPath(options.configDirectory);
 
   if (!(await fs.pathExists(settingsPath))) {
     return;
@@ -92,8 +92,8 @@ export function claudeHookCommand(hookScriptPath: string): string {
   return `node ${shellQuote(hookScriptPath)}`;
 }
 
-function claudeLocalSettingsPath(projectRoot: string): string {
-  return join(projectRoot, ".claude", "settings.local.json");
+function claudeLocalSettingsPath(configDirectory: string): string {
+  return join(configDirectory, "settings.local.json");
 }
 
 async function readClaudeLocalSettings(settingsPath: string): Promise<JsonObject> {

@@ -11,19 +11,19 @@ import {
   installClaudeHookSettings,
 } from "../../src/adapters/claudeHookSettings.js";
 
-test("claude hook settings setup writes only project-local local settings", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
-  const hookScriptPath = join(projectRoot, ".devflow", "runs", "run-1", ".claude", "hook.js");
+test("claude hook settings setup writes only scoped local settings", async () => {
+  const configDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
+  const hookScriptPath = join(configDirectory, "devflow-hooks", "hook.js");
 
-  await installClaudeHookSettings({ projectRoot, hookScriptPath });
+  await installClaudeHookSettings({ configDirectory, hookScriptPath });
 
-  assert.equal(await fs.pathExists(join(projectRoot, ".claude", "settings.local.json")), true);
-  assert.equal(await fs.pathExists(join(projectRoot, ".claude", "settings.json")), false);
+  assert.equal(await fs.pathExists(join(configDirectory, "settings.local.json")), true);
+  assert.equal(await fs.pathExists(join(configDirectory, "settings.json")), false);
 });
 
 test("claude hook settings setup preserves settings and appends DevFlow hooks", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
-  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
+  const configDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
+  const settingsPath = join(configDirectory, "settings.local.json");
   const userStopHook = {
     hooks: [{ type: "command", command: "node user-stop.js" }],
   };
@@ -40,7 +40,7 @@ test("claude hook settings setup preserves settings and appends DevFlow hooks", 
   );
 
   await installClaudeHookSettings({
-    projectRoot,
+    configDirectory,
     hookScriptPath: "/tmp/devflow run/.claude/hook.js",
   });
 
@@ -62,14 +62,14 @@ test("claude hook settings setup preserves settings and appends DevFlow hooks", 
 });
 
 test("claude hook settings cleanup removes only matching DevFlow command hooks", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
-  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
+  const configDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
+  const settingsPath = join(configDirectory, "settings.local.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
   const otherDevFlowScriptPath = "/tmp/devflow-other/.claude/hook.js";
 
-  await installClaudeHookSettings({ projectRoot, hookScriptPath });
+  await installClaudeHookSettings({ configDirectory, hookScriptPath });
   await installClaudeHookSettings({
-    projectRoot,
+    configDirectory,
     hookScriptPath: otherDevFlowScriptPath,
   });
 
@@ -81,7 +81,7 @@ test("claude hook settings cleanup removes only matching DevFlow command hooks",
   await fs.writeJson(settingsPath, settings, { spaces: 2 });
 
   await cleanupClaudeHookSettings({
-    projectRoot,
+    configDirectory,
     hookScriptPath,
     deleteIfEmptyAndCreatedByDevFlow: false,
   });
@@ -98,8 +98,8 @@ test("claude hook settings cleanup removes only matching DevFlow command hooks",
 });
 
 test("claude hook settings cleanup preserves user commands sharing a matcher entry", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
-  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
+  const configDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
+  const settingsPath = join(configDirectory, "settings.local.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
 
   await fs.outputJson(
@@ -126,7 +126,7 @@ test("claude hook settings cleanup preserves user commands sharing a matcher ent
   );
 
   await cleanupClaudeHookSettings({
-    projectRoot,
+    configDirectory,
     hookScriptPath,
     deleteIfEmptyAndCreatedByDevFlow: false,
   });
@@ -145,13 +145,13 @@ test("claude hook settings cleanup preserves user commands sharing a matcher ent
 });
 
 test("claude hook settings cleanup deletes empty DevFlow-created local settings file", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
-  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
+  const configDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
+  const settingsPath = join(configDirectory, "settings.local.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
 
-  await installClaudeHookSettings({ projectRoot, hookScriptPath });
+  await installClaudeHookSettings({ configDirectory, hookScriptPath });
   await cleanupClaudeHookSettings({
-    projectRoot,
+    configDirectory,
     hookScriptPath,
     deleteIfEmptyAndCreatedByDevFlow: true,
   });
@@ -160,14 +160,14 @@ test("claude hook settings cleanup deletes empty DevFlow-created local settings 
 });
 
 test("claude hook settings cleanup preserves non-empty user settings", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
-  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
+  const configDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
+  const settingsPath = join(configDirectory, "settings.local.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
 
   await fs.outputJson(settingsPath, { env: { NODE_ENV: "test" } }, { spaces: 2 });
-  await installClaudeHookSettings({ projectRoot, hookScriptPath });
+  await installClaudeHookSettings({ configDirectory, hookScriptPath });
   await cleanupClaudeHookSettings({
-    projectRoot,
+    configDirectory,
     hookScriptPath,
     deleteIfEmptyAndCreatedByDevFlow: false,
   });
@@ -176,20 +176,20 @@ test("claude hook settings cleanup preserves non-empty user settings", async () 
 });
 
 test("claude hook settings setup fails clearly on malformed local settings JSON", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
-  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
+  const configDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-settings-"));
+  const settingsPath = join(configDirectory, "settings.local.json");
 
   await fs.outputFile(settingsPath, '{"hooks":');
 
   await assert.rejects(
     installClaudeHookSettings({
-      projectRoot,
+      configDirectory,
       hookScriptPath: "/tmp/devflow/.claude/hook.js",
     }),
     (error: unknown) => {
       assert.ok(error instanceof ClaudeHookSettingsError);
       assert.match(error.message, /Could not read Claude local settings/);
-      assert.match(error.message, /\.claude\/settings\.local\.json/);
+      assert.match(error.message, /settings\.local\.json/);
       return true;
     },
   );

@@ -1,4 +1,7 @@
+import { homedir } from "node:os";
 import { join } from "node:path";
+
+import fs from "fs-extra";
 
 import { createClaudeHookArtifacts } from "./claudeHookArtifacts.js";
 import { normalizeClaudeHookPayload } from "./claudeHookEventSource.js";
@@ -48,6 +51,9 @@ export interface ClaudeHookDrivenSessionDependencies {
   firstEventTimeoutMs?: number;
   cleanupTimeoutMs?: number;
   socketDrainMs?: number;
+  environment?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  homeDirectory?: string;
 }
 
 const DEFAULT_COLUMNS = 80;
@@ -75,17 +81,30 @@ export async function runClaudeHookDrivenSession(
   const cleanupTimeoutMs =
     dependencies.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS;
   const socketDrainMs = dependencies.socketDrainMs ?? DEFAULT_SOCKET_DRAIN_MS;
+  const environment = dependencies.environment ?? process.env;
+  const platform = dependencies.platform ?? process.platform;
+  const claudeConfigDirectory = getClaudeConfigDirectory(input);
   const artifacts = await createClaudeHookArtifacts({
-    hookDirectory: getClaudeHookDirectory(input),
+    hookDirectory: getClaudeHookDirectory(claudeConfigDirectory),
   });
 
   let processHandle: PtyProcess | undefined;
   let rejectEventCaptureFailure: (error: unknown) => void = () => {};
 
-  await installClaudeHookSettings({
-    projectRoot: input.workingDirectory,
-    hookScriptPath: artifacts.hookScriptPath,
-  });
+  try {
+    await seedClaudeCredentials({
+      claudeConfigDirectory,
+      environment,
+      platform,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    await installClaudeHookSettings({
+      configDirectory: claudeConfigDirectory,
+      hookScriptPath: artifacts.hookScriptPath,
+    });
+  } catch (error) {
+    throw new ProviderSessionLaunchError(command.provider, error);
+  }
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -392,7 +411,8 @@ export async function runClaudeHookDrivenSession(
           cols: terminal.columns ?? DEFAULT_COLUMNS,
           rows: terminal.rows ?? DEFAULT_ROWS,
           env: {
-            ...process.env,
+            ...environment,
+            CLAUDE_CONFIG_DIR: claudeConfigDirectory,
             DEVFLOW_HOOK_IPC_PATH: artifacts.socketPath,
           },
         });
@@ -456,10 +476,51 @@ export async function runClaudeHookDrivenSession(
   });
 }
 
-function getClaudeHookDirectory(input: ManagedProviderSessionInput): string {
+function getClaudeConfigDirectory(input: ManagedProviderSessionInput): string {
   const runId = input.phase?.id.split(":")[0] ?? "unscoped-claude-session";
 
-  return join(input.workingDirectory, ".devflow", "runs", runId, ".claude-hooks");
+  return join(input.workingDirectory, ".devflow", "runs", runId, ".claude");
+}
+
+function getClaudeHookDirectory(claudeConfigDirectory: string): string {
+  return join(claudeConfigDirectory, "devflow-hooks");
+}
+
+interface SeedClaudeCredentialsOptions {
+  claudeConfigDirectory: string;
+  environment: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  homeDirectory?: string;
+}
+
+async function seedClaudeCredentials({
+  claudeConfigDirectory,
+  environment,
+  platform,
+  homeDirectory,
+}: SeedClaudeCredentialsOptions): Promise<void> {
+  if (platform === "darwin") {
+    return;
+  }
+
+  const sourceConfigDirectory =
+    environment.CLAUDE_CONFIG_DIR ?? join(homeDirectory ?? homedir(), ".claude");
+  const sourceCredentialsPath = join(sourceConfigDirectory, ".credentials.json");
+  const targetCredentialsPath = join(
+    claudeConfigDirectory,
+    ".credentials.json",
+  );
+
+  if (sourceCredentialsPath === targetCredentialsPath) {
+    return;
+  }
+
+  if (!(await fs.pathExists(sourceCredentialsPath))) {
+    return;
+  }
+
+  await fs.ensureDir(claudeConfigDirectory);
+  await fs.copyFile(sourceCredentialsPath, targetCredentialsPath);
 }
 
 function formatMissingSessionStartDiagnostic(
@@ -467,7 +528,7 @@ function formatMissingSessionStartDiagnostic(
 ): string {
   return [
     "Claude SessionStart hook did not arrive; hook setup may have failed.",
-    "Check project-local .claude/settings.local.json for DevFlow hook entries,",
+    "Check the run-scoped Claude settings.local.json for DevFlow hook entries,",
     "ensure Claude disabled hooks settings or managed policy are not blocking hooks,",
     `verify the hook script exists and can run at ${artifacts.hookScriptPath},`,
     `and confirm the hook socket is reachable at ${artifacts.socketPath}.`,
