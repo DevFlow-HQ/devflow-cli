@@ -32,6 +32,7 @@ DevFlow is a provider-agnostic meta-orchestrator that delegates to AI coding CLI
 - **Live PRD continuation** — PRD synthesis injected into the same still-running provider session immediately after accepted grill completion.
 - **Dedicated stage session** — a provider session scoped to one stage or one issue-solving loop so later work does not inherit unnecessary context from earlier stages.
 - **Provider session state** — run-scoped recovery metadata for the current provider-backed **Managed session**, including provider identity, provider session id when available, and the current DevFlow phase.
+- **Provider session id** — a provider-native identifier for a **Managed session** that DevFlow persists only when the adapter can treat it as reliable.
 - **Provider session recovery** — continuing any interrupted **Managed session** from its provider session id when the adapter truthfully supports resume.
 - **Artifact fallback recovery** — starting a new provider session from durable DevFlow artifacts when the original provider session cannot be resumed.
 - **Run** — one user invocation of DevFlow, scoped to `.devflow/runs/<run-id>/`. A run may contain multiple managed sessions across stages.

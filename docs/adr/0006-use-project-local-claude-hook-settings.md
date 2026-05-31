@@ -1,0 +1,3 @@
+# Use Project-Local Claude Hook Settings
+
+Claude Code does not expose a documented scoped provider-home override equivalent to Codex's `CODEX_HOME`, while its documented hook configuration lives in user, shared project, local project, or managed settings. DevFlow should install Claude hook entries into project-local `.claude/settings.local.json`, point them at run-scoped hook scripts under `.devflow/runs/<run-id>/.claude/`, and clean up only DevFlow-owned entries afterward. This avoids mutating global user settings or committed project settings while keeping Claude JSONL log discovery deferred as a separate hook-independent problem.
