@@ -68,10 +68,11 @@ function createStructuredProviderEvent(
     "provider" | "source" | "structured"
   >,
   source: ManagedProviderSessionEvent["source"] = "hooks",
+  provider = getBuiltInProviderIdentity("codex"),
 ): ManagedProviderSessionEvent {
   return {
     ...event,
-    provider: getBuiltInProviderIdentity("codex"),
+    provider,
     source,
     structured: true,
   } as ManagedProviderSessionEvent;
@@ -1872,6 +1873,167 @@ test("structured Codex JSONL grill orchestration records transcripts from normal
   assert.doesNotMatch(transcript, /unknown JSONL echo/);
   assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
   assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+});
+
+test("structured Claude hook grill orchestration records normalized events and provider session ids", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("claude");
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "claude" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await input.onProviderEvent?.(
+          createStructuredProviderEvent(
+            {
+              type: "session-start",
+              providerSessionId: "claude-intent-session",
+            },
+            "hooks",
+            provider,
+          ),
+        );
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.equal(input.transcript, undefined);
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "session-start",
+            providerSessionId: "claude-grill-session",
+          },
+          "hooks",
+          provider,
+        ),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "submitted-user-message",
+            message: "Start",
+            origin: "managed",
+            providerSessionId: "claude-grill-session",
+          },
+          "hooks",
+          provider,
+        ),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "turn-completed",
+            assistantMessage: "Claude question from normalized assistant content.",
+            providerSessionId: "claude-grill-session",
+          },
+          "hooks",
+          provider,
+        ),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "submitted-user-message",
+            message: "Use normalized Claude hook events.",
+            origin: "human",
+            providerSessionId: "claude-grill-session",
+          },
+          "hooks",
+          provider,
+        ),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent(
+          {
+            type: "turn-completed",
+            assistantMessage: [
+              "Accepted Claude hook answer.",
+              input.initialCompletionMarker,
+              "Claude hook protocol tail that must not be persisted.",
+            ].join("\n"),
+            providerSessionId: "claude-grill-session",
+          },
+          "hooks",
+          provider,
+        ),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "claude",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter(providerId) {
+        assert.equal(providerId, "claude");
+        return adapter;
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const transcript = await fs.readFile(
+    join(runDirectory, "grill-transcript.md"),
+    "utf8",
+  );
+  const providerSessionState = await fs.readJson(
+    join(runDirectory, "provider-session.json"),
+  );
+
+  assert.match(transcript, /Use normalized Claude hook events\./);
+  assert.match(transcript, /Claude question from normalized assistant content\./);
+  assert.match(transcript, /Accepted Claude hook answer\./);
+  assert.doesNotMatch(transcript, /Start/);
+  assert.doesNotMatch(transcript, /hook_event_name/);
+  assert.doesNotMatch(transcript, /session_id/);
+  assert.doesNotMatch(transcript, /Claude hook protocol tail/);
+  assert.deepEqual(providerSessionState.provider, provider);
+  assert.equal(providerSessionState.providerSessionId, "claude-grill-session");
+  assert.equal(providerSessionState.phase.kind, "grill");
+  assert.equal(providerSessionState.status, "active");
 });
 
 test("structured-provider grill orchestration keeps repair discussion before accepted completion", async () => {

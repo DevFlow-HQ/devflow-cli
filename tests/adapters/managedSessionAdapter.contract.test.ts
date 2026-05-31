@@ -645,6 +645,37 @@ test("Claude adapter exposes hook-mode capabilities without claiming resume supp
   );
 });
 
+test("Claude adapter does not expose or claim JSONL fallback mode", () => {
+  const ptyCapabilities: ManagedProviderSessionCapabilities = {
+    controlTransport: "pty",
+    eventSource: "pty",
+    supportsProviderSessionId: false,
+    supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: false,
+  };
+
+  assert.deepEqual(createClaudeAdapter().capabilities, ptyCapabilities);
+  assert.equal(typeof createClaudeAdapter().resumeSession, "undefined");
+  assert.equal(
+    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "hooks" })),
+    false,
+  );
+  assert.deepEqual(
+    createClaudeAdapter({
+      // @ts-expect-error Claude intentionally supports only PTY and hooks.
+      eventSource: "jsonl",
+    }).capabilities,
+    ptyCapabilities,
+  );
+  assert.deepEqual(
+    createBuiltInManagedSessionAdapter("claude", {
+      // @ts-expect-error Claude built-in selection intentionally has no JSONL mode.
+      claudeEventSource: "jsonl",
+    }).capabilities,
+    ptyCapabilities,
+  );
+});
+
 const validResumeInput: ManagedProviderSessionResumeInput = {
   providerSessionId: "codex-session-123",
   workingDirectory: "/tmp/devflow",
