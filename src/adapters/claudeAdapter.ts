@@ -8,6 +8,10 @@ import {
   runClaudeHookDrivenSession,
   type ClaudeHookDrivenSessionCommand,
 } from "./claudeHookDrivenSessionRunner.js";
+import {
+  runClaudeJsonlSession,
+  type ClaudeJsonlSessionCommand,
+} from "./claudeJsonlSessionRunner.js";
 import { ProviderSessionLaunchError } from "./managedSessionAdapter.js";
 import type {
   ManagedProviderSessionCapabilities,
@@ -19,16 +23,22 @@ import type {
 } from "./managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "./providers.js";
 
-export type ClaudeManagedSessionEventSource = "pty" | "hooks";
+export type ClaudeManagedSessionEventSource = "pty" | "hooks" | "jsonl";
 
 export interface ClaudeAdapterOptions
   extends CommandManagedSessionAdapterOptions {
   eventSource?: ClaudeManagedSessionEventSource;
   runClaudeHookDrivenSession?: ClaudeHookDrivenRunner;
+  runClaudeJsonlSession?: ClaudeJsonlRunner;
 }
 
 export type ClaudeHookDrivenRunner = (
   command: ClaudeHookDrivenSessionCommand,
+  input: ManagedProviderSessionInput,
+) => Promise<ManagedProviderSessionResult>;
+
+export type ClaudeJsonlRunner = (
+  command: ClaudeJsonlSessionCommand,
   input: ManagedProviderSessionInput,
 ) => Promise<ManagedProviderSessionResult>;
 
@@ -48,11 +58,23 @@ const CLAUDE_HOOK_CAPABILITIES: ManagedProviderSessionCapabilities = {
   classifiesSubmittedUserMessageOrigin: true,
 };
 
+const CLAUDE_JSONL_CAPABILITIES: ManagedProviderSessionCapabilities = {
+  controlTransport: "pty",
+  eventSource: "jsonl",
+  supportsProviderSessionId: true,
+  supportsResume: false,
+  classifiesSubmittedUserMessageOrigin: false,
+};
+
 export function createClaudeAdapter(
   options: ClaudeAdapterOptions = {},
 ): ManagedSessionAdapter {
   if (options.eventSource === "hooks") {
     return createClaudeHookAdapter(options);
+  }
+
+  if (options.eventSource === "jsonl") {
+    return createClaudeJsonlAdapter(options);
   }
 
   const adapter = createCommandManagedSessionAdapter(
@@ -70,6 +92,64 @@ export function createClaudeAdapter(
   return {
     ...adapter,
     capabilities: CLAUDE_PTY_FALLBACK_CAPABILITIES,
+  };
+}
+
+function createClaudeJsonlAdapter(
+  options: ClaudeAdapterOptions,
+): ManagedSessionAdapter {
+  const provider = getBuiltInProviderIdentity("claude");
+  const jsonlRunner = options.runClaudeJsonlSession ?? runClaudeJsonlSession;
+
+  async function resolveExecutable(): Promise<string> {
+    return which("claude");
+  }
+
+  async function detectExecutable(): Promise<ProviderDetectionResult> {
+    try {
+      const executable = await resolveExecutable();
+
+      return {
+        isAvailable: true,
+        executable,
+      };
+    } catch (error) {
+      return {
+        isAvailable: false,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Unable to find executable 'claude' on PATH.",
+      };
+    }
+  }
+
+  async function runSession(
+    input: ManagedProviderSessionInput,
+  ): Promise<ManagedProviderSessionResult> {
+    let executable: string;
+
+    try {
+      executable = await resolveExecutable();
+    } catch (error) {
+      throw new ProviderSessionLaunchError(provider, error);
+    }
+
+    return jsonlRunner(
+      {
+        provider,
+        executable,
+        args: buildClaudeArgs(input),
+      },
+      input,
+    );
+  }
+
+  return {
+    provider,
+    capabilities: CLAUDE_JSONL_CAPABILITIES,
+    detect: detectExecutable,
+    runSession,
   };
 }
 

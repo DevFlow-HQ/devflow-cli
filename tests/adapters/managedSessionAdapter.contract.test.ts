@@ -33,6 +33,7 @@ import { createGeminiAdapter } from "../../src/adapters/geminiAdapter.js";
 import { createOpenCodeAdapter } from "../../src/adapters/opencodeAdapter.js";
 import { createBuiltInManagedSessionAdapter } from "../../src/adapters/builtInManagedSessionAdapter.js";
 import type { ClaudeHookDrivenSessionCommand } from "../../src/adapters/claudeHookDrivenSessionRunner.js";
+import type { ClaudeJsonlSessionCommand } from "../../src/adapters/claudeJsonlSessionRunner.js";
 import type { CodexHookDrivenSessionCommand } from "../../src/adapters/codexHookDrivenSessionRunner.js";
 import type { CodexJsonlSessionCommand } from "../../src/adapters/codexJsonlSessionRunner.js";
 
@@ -119,6 +120,26 @@ class CapturingClaudeHookRunner {
 
   async runClaudeHookDrivenSession(
     command: ClaudeHookDrivenSessionCommand,
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput,
+  ): Promise<ManagedProviderSessionResult> {
+    this.calls.push({ command, input });
+    await input.validate();
+    return {
+      repairUsed: false,
+      exitCode: 0,
+      signal: null,
+    };
+  }
+}
+
+class CapturingClaudeJsonlRunner {
+  readonly calls: Array<{
+    command: ClaudeJsonlSessionCommand;
+    input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput;
+  }> = [];
+
+  async runClaudeJsonlSession(
+    command: ClaudeJsonlSessionCommand,
     input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput,
   ): Promise<ManagedProviderSessionResult> {
     this.calls.push({ command, input });
@@ -645,7 +666,7 @@ test("Claude adapter exposes hook-mode capabilities including resume support", (
   );
 });
 
-test("Claude adapter does not expose or claim JSONL fallback mode", () => {
+test("Claude adapter exposes JSONL only when explicitly selected", () => {
   const ptyCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "pty",
@@ -660,19 +681,24 @@ test("Claude adapter does not expose or claim JSONL fallback mode", () => {
     canResumeManagedProviderSession(createClaudeAdapter()),
     false,
   );
-  assert.deepEqual(
-    createClaudeAdapter({
-      // @ts-expect-error Claude intentionally supports only PTY and hooks.
-      eventSource: "jsonl",
-    }).capabilities,
-    ptyCapabilities,
-  );
+  assert.deepEqual(createClaudeAdapter({ eventSource: "jsonl" }).capabilities, {
+    controlTransport: "pty",
+    eventSource: "jsonl",
+    supportsProviderSessionId: true,
+    supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: false,
+  });
   assert.deepEqual(
     createBuiltInManagedSessionAdapter("claude", {
-      // @ts-expect-error Claude built-in selection intentionally has no JSONL mode.
       claudeEventSource: "jsonl",
     }).capabilities,
-    ptyCapabilities,
+    {
+      controlTransport: "pty",
+      eventSource: "jsonl",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: false,
+    },
   );
 });
 
@@ -1049,6 +1075,54 @@ test("Claude adapter delegates hook-mode sessions to the hook-driven runner", as
     signal: null,
   });
   assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("claude"),
+        executable: executablePath,
+        args: ["--model", "gpt-5.5", "Ship the contract"],
+      },
+      input: validRunInputWithModel,
+    },
+  ]);
+});
+
+test("Claude adapter delegates fresh JSONL sessions to the JSONL runner", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-claude-jsonl-adapter-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, "claude");
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const hookRunner = new CapturingClaudeHookRunner();
+  const jsonlRunner = new CapturingClaudeJsonlRunner();
+  const adapter = createClaudeAdapter({
+    eventSource: "jsonl",
+    runClaudeHookDrivenSession:
+      hookRunner.runClaudeHookDrivenSession.bind(hookRunner),
+    runClaudeJsonlSession:
+      jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
+  });
+
+  const result = await adapter.runSession(validRunInputWithModel);
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.deepEqual(hookRunner.calls, []);
+  assert.deepEqual(jsonlRunner.calls, [
     {
       command: {
         provider: getBuiltInProviderIdentity("claude"),
