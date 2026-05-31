@@ -9,7 +9,9 @@ import {
   createDevFlowState,
   type GitChangedPath,
   type DevFlowRunHandle,
+  type DevFlowProviderSessionState,
   type DevFlowState,
+  InvalidProviderSessionStateError,
   type ProjectContextFreshness,
   type ProjectContextRefreshReason,
   validateProjectContextContent,
@@ -623,6 +625,19 @@ async function validatePrdArtifact(artifactPath: string): Promise<void> {
   }
 }
 
+async function hasValidPrdArtifact(artifactPath: string): Promise<boolean> {
+  try {
+    await validatePrdArtifact(artifactPath);
+    return true;
+  } catch (error) {
+    if (error instanceof StageArtifactValidationError) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 async function runBootstrapStage(options: {
   devFlowState: DevFlowState;
   request: ResolvedExecutionRequest;
@@ -1067,26 +1082,50 @@ async function runGrillStage(options: {
   } satisfies ManagedProviderSessionInput;
 
   if (options.resumeProviderSessionId !== undefined) {
-    if (!canResumeManagedProviderSession(options.adapter)) {
-      throw new Error("Adapter cannot resume provider sessions.");
-    }
+    try {
+      if (!canResumeManagedProviderSession(options.adapter)) {
+        throw new Error("Adapter cannot resume provider sessions.");
+      }
 
-    await resumeManagedSessionWithProviderState({
-      run: options.run,
-      adapter: options.adapter,
-      input: {
-        ...input,
-        providerSessionId: options.resumeProviderSessionId,
-      },
-    });
-    return;
+      await resumeManagedSessionWithProviderState({
+        run: options.run,
+        adapter: options.adapter,
+        input: {
+          ...input,
+          providerSessionId: options.resumeProviderSessionId,
+        },
+      });
+      return;
+    } catch (error) {
+      if (
+        isRetryableProviderBackedStageFailure(error) &&
+        (await options.run.getGrillTranscriptStatus()) === "complete" &&
+        (await hasValidPrdArtifact(options.run.paths.prdArtifact))
+      ) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
-  await runManagedSessionWithProviderState({
-    run: options.run,
-    adapter: options.adapter,
-    input,
-  });
+  try {
+    await runManagedSessionWithProviderState({
+      run: options.run,
+      adapter: options.adapter,
+      input,
+    });
+  } catch (error) {
+    if (
+      isRetryableProviderBackedStageFailure(error) &&
+      (await options.run.getGrillTranscriptStatus()) === "complete" &&
+      (await hasValidPrdArtifact(options.run.paths.prdArtifact))
+    ) {
+      return;
+    }
+
+    throw error;
+  }
 }
 
 async function runPrdStage(options: {
@@ -1133,24 +1172,46 @@ async function runPrdStage(options: {
   } satisfies ManagedProviderSessionInput;
 
   if (options.resumeProviderSessionId !== undefined) {
-    if (!canResumeManagedProviderSession(options.adapter)) {
-      throw new Error("Adapter cannot resume provider sessions.");
-    }
+    try {
+      if (!canResumeManagedProviderSession(options.adapter)) {
+        throw new Error("Adapter cannot resume provider sessions.");
+      }
 
-    await resumeManagedSessionWithProviderState({
-      run: options.run,
-      adapter: options.adapter,
-      input: {
-        ...input,
-        providerSessionId: options.resumeProviderSessionId,
-      },
-    });
+      await resumeManagedSessionWithProviderState({
+        run: options.run,
+        adapter: options.adapter,
+        input: {
+          ...input,
+          providerSessionId: options.resumeProviderSessionId,
+        },
+      });
+    } catch (error) {
+      if (
+        isRetryableProviderBackedStageFailure(error) &&
+        (await hasValidPrdArtifact(options.run.paths.prdArtifact))
+      ) {
+        return;
+      }
+
+      throw error;
+    }
   } else {
-    await runManagedSessionWithProviderState({
-      run: options.run,
-      adapter: options.adapter,
-      input,
-    });
+    try {
+      await runManagedSessionWithProviderState({
+        run: options.run,
+        adapter: options.adapter,
+        input,
+      });
+    } catch (error) {
+      if (
+        isRetryableProviderBackedStageFailure(error) &&
+        (await hasValidPrdArtifact(options.run.paths.prdArtifact))
+      ) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   await validatePrdArtifact(options.run.paths.prdArtifact);
@@ -1227,6 +1288,20 @@ async function recoverCompletedGrillCheckpointIfNeeded(options: {
   return true;
 }
 
+async function readAdvisoryProviderSessionState(
+  run: DevFlowRunHandle,
+): Promise<DevFlowProviderSessionState | undefined> {
+  try {
+    return await run.readProviderSessionState();
+  } catch (error) {
+    if (error instanceof InvalidProviderSessionStateError) {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
 async function readResumableGrillProviderSessionId(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
@@ -1235,7 +1310,7 @@ async function readResumableGrillProviderSessionId(options: {
     return undefined;
   }
 
-  const state = await options.run.readProviderSessionState();
+  const state = await readAdvisoryProviderSessionState(options.run);
 
   if (
     state?.providerSessionId === undefined ||
@@ -1257,7 +1332,7 @@ async function readResumablePrdProviderSessionId(options: {
     return undefined;
   }
 
-  const state = await options.run.readProviderSessionState();
+  const state = await readAdvisoryProviderSessionState(options.run);
 
   if (
     state?.providerSessionId === undefined ||
