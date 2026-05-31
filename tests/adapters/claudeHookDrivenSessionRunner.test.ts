@@ -10,6 +10,7 @@ import fs from "fs-extra";
 
 import {
   IncompleteProviderSessionError,
+  InterruptedProviderSessionError,
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   ProviderSessionTranscriptCaptureError,
@@ -24,11 +25,13 @@ import {
   type PtyProcess,
   type PtySpawnOptions,
   type PtySpawner,
+  type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
+  readonly resizes: Array<{ columns: number; rows: number }> = [];
   readonly emitter = new EventEmitter();
   killed = false;
 
@@ -48,6 +51,10 @@ class FakePtyProcess implements PtyProcess {
 
   kill(): void {
     this.killed = true;
+  }
+
+  resize(columns: number, rows: number): void {
+    this.resizes.push({ columns, rows });
   }
 
   emitData(data: string): void {
@@ -83,6 +90,69 @@ class ScriptedClaudePtySpawner implements PtySpawner {
       });
     });
     return this.process;
+  }
+}
+
+class FakeUserInput extends EventEmitter implements UserInput {
+  readonly rawModeChanges: boolean[] = [];
+  resumeCount = 0;
+  pauseCount = 0;
+
+  constructor(readonly isTTY = true, readonly isRaw = false) {
+    super();
+  }
+
+  setRawMode(enabled: boolean): void {
+    this.rawModeChanges.push(enabled);
+  }
+
+  override on(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): this {
+    return super.on(event, listener);
+  }
+
+  override off(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): this {
+    return super.off(event, listener);
+  }
+
+  resume(): void {
+    this.resumeCount += 1;
+  }
+
+  pause(): void {
+    this.pauseCount += 1;
+  }
+
+  emitData(chunk: Buffer | string): void {
+    this.emit("data", chunk);
+  }
+}
+
+class FakeTerminal extends EventEmitter {
+  constructor(
+    public columns: number | undefined,
+    public rows: number | undefined,
+  ) {
+    super();
+  }
+
+  override on(event: "resize", listener: () => void): this {
+    return super.on(event, listener);
+  }
+
+  override off(event: "resize", listener: () => void): this {
+    return super.off(event, listener);
+  }
+
+  emitResize(columns: number | undefined, rows: number | undefined): void {
+    this.columns = columns;
+    this.rows = rows;
+    this.emit("resize");
   }
 }
 
@@ -428,6 +498,94 @@ test("Claude hook-driven runner drains briefly after early PTY exit before decid
 
   assert.equal(validateCount, 1);
   assert.equal(result.exitCode, 0);
+});
+
+test("Claude hook-driven runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const output: string[] = [];
+  const events: ManagedProviderSessionEvent[] = [];
+  const userInput = new FakeUserInput();
+  const terminal = new FakeTerminal(90, 25);
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    userInput.emitData("hello\r");
+    terminal.emitResize(120, 40);
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeHookDrivenSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write: (chunk) => output.push(chunk) },
+      terminal,
+      userInput,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(output, [
+    "terminal marker INITIAL_DONE should not validate\n",
+  ]);
+  assert.deepEqual(spawner.process.writes, ["h", "e", "l", "l", "o", "\r"]);
+  assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["session-start", "turn-completed", "session-completed"],
+  );
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.resumeCount, 1);
+  assert.equal(userInput.pauseCount, 1);
+  assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(terminal.listenerCount("resize"), 0);
+});
+
+test("Claude hook-driven runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const userInput = new FakeUserInput();
+  let interrupted = false;
+  const spawner = new ScriptedClaudePtySpawner(async () => {
+    await delay(20);
+    userInput.emitData("\u0003");
+    interrupted = true;
+    spawner.process.emitExit(130, "SIGINT");
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      userInput,
+      userInterrupt: {
+        wasRequested() {
+          return interrupted;
+        },
+      },
+      firstEventTimeoutMs: 1_000,
+    }),
+    InterruptedProviderSessionError,
+  );
+
+  assert.equal(spawner.process.writes.includes("\u0003"), true);
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.listenerCount("data"), 0);
 });
 
 test("Claude hook-driven runner treats PTY exit after SessionStart but before finalization as incomplete after drain", async () => {
