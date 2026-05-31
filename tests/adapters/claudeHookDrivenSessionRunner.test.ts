@@ -8,6 +8,7 @@ import test from "node:test";
 import fs from "fs-extra";
 
 import {
+  IncompleteProviderSessionError,
   ProviderSessionEventCaptureError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
@@ -106,6 +107,17 @@ function createCommand(): ClaudeHookDrivenSessionCommand {
     executable: "claude",
     args: ["--model", "sonnet-test", "Start"],
   };
+}
+
+function getHookScriptPath(projectRoot: string): string {
+  return join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude-hooks",
+    "hook.js",
+  );
 }
 
 async function runHookScript(
@@ -288,14 +300,7 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
 test("Claude hook-driven runner rejects when the first structured event is not SessionStart", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
-    const hookScriptPath = join(
-      projectRoot,
-      ".devflow",
-      "runs",
-      "runabc123456",
-      ".claude-hooks",
-      "hook.js",
-    );
+    const hookScriptPath = getHookScriptPath(projectRoot);
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "UserPromptSubmit",
@@ -318,4 +323,172 @@ test("Claude hook-driven runner rejects when the first structured event is not S
       /before SessionStart/.test(error.message),
   );
   assert.equal(spawner.process.killed, true);
+});
+
+test("Claude hook-driven runner ignores Stop events without assistant content for marker validation", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  let validateCount = 0;
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(1);
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(
+      createCommand(),
+      createInput(projectRoot, {
+        async validate() {
+          validateCount += 1;
+        },
+      }),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        firstEventTimeoutMs: 1_000,
+        socketDrainMs: 1,
+      },
+    ),
+    (error) =>
+      error instanceof IncompleteProviderSessionError &&
+      error.completionMarker === "INITIAL_DONE",
+  );
+  assert.equal(validateCount, 0);
+});
+
+test("Claude hook-driven runner advances continuations from assistant markers and submits continuation prompts through PTY", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const events: ManagedProviderSessionEvent[] = [];
+  const validationOrder: string[] = [];
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "initial complete INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "prd complete CONTINUATION_DONE",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeHookDrivenSession(
+    createCommand(),
+    createInput(projectRoot, {
+      async validate() {
+        validationOrder.push("initial");
+      },
+      onProviderEvent(event) {
+        events.push(event);
+      },
+      continuations: [
+        {
+          prompt: "Continue",
+          completionMarker: "CONTINUATION_DONE",
+          phase: {
+            id: "runabc123456:prd:attempt-1",
+            kind: "prd",
+            attempt: 1,
+          },
+          async validate() {
+            validationOrder.push("continuation");
+          },
+        },
+      ],
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(validationOrder, ["initial", "continuation"]);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Continue\u001b[201~\r",
+  ]);
+  assert.deepEqual(
+    events.map((event) => `${event.type}:${event.phaseId}`),
+    [
+      "session-start:runabc123456:intent:attempt-1",
+      "turn-completed:runabc123456:intent:attempt-1",
+      "turn-completed:runabc123456:prd:attempt-1",
+      "session-completed:undefined",
+    ],
+  );
+});
+
+test("Claude hook-driven runner submits repair prompts through PTY and reports repair usage", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  let validateCalls = 0;
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "initial marker INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "repair marker REPAIR_DONE",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  const result = await runClaudeHookDrivenSession(
+    createCommand(),
+    createInput(projectRoot, {
+      async validate() {
+        validateCalls += 1;
+
+        if (validateCalls === 1) {
+          throw new Error("missing artifact");
+        }
+      },
+      repair: {
+        completionMarker: "REPAIR_DONE",
+        renderPrompt() {
+          return "Repair";
+        },
+        mapFailure(error) {
+          return error;
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.equal(result.repairUsed, true);
+  assert.equal(validateCalls, 2);
+  assert.deepEqual(spawner.process.writes, ["\u001b[200~Repair\u001b[201~\r"]);
 });
