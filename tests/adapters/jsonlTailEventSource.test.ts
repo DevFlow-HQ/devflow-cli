@@ -73,6 +73,44 @@ test("JSONL tailer reads only newly appended records across repeated reads", asy
   });
 });
 
+test("JSONL tailer starts from an explicit offset on the first read", async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const logPath = join(directory, "session.jsonl");
+  const completedTurn = '{"id":"completed"}\n';
+  await fs.writeFile(logPath, `${completedTurn}{"id":"resumed"}\n`, "utf8");
+  const tailer = createJsonlTailEventSource({
+    filePath: logPath,
+    startOffset: Buffer.byteLength(completedTurn, "utf8"),
+  });
+
+  assert.deepEqual(await tailer.readNewRecords(), {
+    records: [{ id: "resumed" }],
+    diagnostics: [],
+  });
+});
+
+test("JSONL tailer starts from offset zero when no offset is provided", async () => {
+  const readOffsets: number[] = [];
+  const readSegment: JsonlTailReadSegment = async (_filePath, offset) => {
+    readOffsets.push(offset);
+
+    return {
+      content: offset === 0 ? '{"id":1}\n' : "",
+      size: 9,
+    };
+  };
+  const tailer = createJsonlTailEventSource({
+    filePath: "/provider/session.jsonl",
+    readSegment,
+  });
+
+  assert.deepEqual(await tailer.readNewRecords(), {
+    records: [{ id: 1 }],
+    diagnostics: [],
+  });
+  assert.deepEqual(readOffsets, [0]);
+});
+
 test("JSONL tailer buffers an incomplete trailing line until it is terminated", async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
   const logPath = join(directory, "session.jsonl");

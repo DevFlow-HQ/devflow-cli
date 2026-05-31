@@ -45,6 +45,7 @@ export interface JsonlTailEventSource {
 
 export interface JsonlTailEventSourceOptions {
   filePath: string;
+  startOffset?: number;
   readSegment?: JsonlTailReadSegment;
   watchFile?: JsonlTailWatchFile;
 }
@@ -67,7 +68,7 @@ export function createJsonlTailEventSource(
   const readSegment = options.readSegment ?? readFileSegment;
   const watchFile = options.watchFile ?? watchJsonlFile;
   const selectedFilePath = resolve(options.filePath);
-  let offset = 0;
+  let offset = options.startOffset ?? 0;
   let bufferedLine = "";
   let reading = false;
   let watcher: JsonlTailWatcher | undefined;
