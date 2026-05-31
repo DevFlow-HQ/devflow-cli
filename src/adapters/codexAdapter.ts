@@ -116,6 +116,8 @@ export function createCodexAdapter(
         eventSource === "jsonl"
           ? resumePrefix
           : [...resumePrefix, input.initialPrompt],
+      resumeProviderSessionId:
+        eventSource === "jsonl" ? input.providerSessionId : undefined,
     });
   }
 
@@ -129,11 +131,15 @@ export function createCodexAdapter(
     executable: string;
     args: string[];
     input: ManagedProviderSessionInput;
+    resumeProviderSessionId?: string;
   }): Promise<ManagedProviderSessionResult> {
     const command = {
       provider,
       executable: options.executable,
       args: options.args,
+      ...(options.resumeProviderSessionId
+        ? { resumeProviderSessionId: options.resumeProviderSessionId }
+        : {}),
     };
     const runner = eventSource === "jsonl" ? jsonlRunner : hookRunner;
 

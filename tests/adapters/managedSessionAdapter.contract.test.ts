@@ -1364,6 +1364,7 @@ test("Codex adapter resumeSession delegates JSONL resume without putting prompt 
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: ["resume", "--model", "gpt-5.5", "codex-session-123"],
+        resumeProviderSessionId: "codex-session-123",
       },
       input: validResumeInputWithModel,
     },
