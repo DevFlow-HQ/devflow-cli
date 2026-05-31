@@ -594,6 +594,36 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
   );
 });
 
+test("Claude adapter exposes hook-mode capabilities without claiming resume support", () => {
+  const hookCapabilities: ManagedProviderSessionCapabilities = {
+    controlTransport: "pty",
+    eventSource: "hooks",
+    supportsProviderSessionId: true,
+    supportsResume: false,
+    classifiesSubmittedUserMessageOrigin: true,
+  };
+
+  assert.deepEqual(
+    createClaudeAdapter({ eventSource: "hooks" }).capabilities,
+    hookCapabilities,
+  );
+  assert.equal(
+    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "hooks" })),
+    false,
+  );
+  assert.equal(createClaudeAdapter().capabilities?.eventSource, "pty");
+  assert.equal(
+    createBuiltInManagedSessionAdapter("claude").capabilities?.eventSource,
+    "pty",
+  );
+  assert.deepEqual(
+    createBuiltInManagedSessionAdapter("claude", {
+      claudeEventSource: "hooks",
+    }).capabilities,
+    hookCapabilities,
+  );
+});
+
 const validResumeInput: ManagedProviderSessionResumeInput = {
   providerSessionId: "codex-session-123",
   workingDirectory: "/tmp/devflow",

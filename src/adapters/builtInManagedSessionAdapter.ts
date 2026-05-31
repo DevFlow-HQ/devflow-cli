@@ -1,4 +1,7 @@
-import { createClaudeAdapter } from "./claudeAdapter.js";
+import {
+  createClaudeAdapter,
+  type ClaudeManagedSessionEventSource,
+} from "./claudeAdapter.js";
 import type { CommandManagedSessionAdapterOptions } from "./commandManagedSessionAdapter.js";
 import {
   createCodexAdapter,
@@ -13,6 +16,7 @@ import type { BuiltInProviderId } from "./providers.js";
 export type BuiltInManagedSessionAdapterOptions =
   CommandManagedSessionAdapterOptions &
     Omit<CodexAdapterOptions, "eventSource"> & {
+      claudeEventSource?: ClaudeManagedSessionEventSource;
       codexEventSource?: CodexManagedSessionEventSource;
     };
 
@@ -22,7 +26,10 @@ export function createBuiltInManagedSessionAdapter(
 ): ManagedSessionAdapter {
   switch (providerId) {
     case "claude":
-      return createClaudeAdapter(options);
+      return createClaudeAdapter({
+        ...options,
+        eventSource: options?.claudeEventSource,
+      });
     case "gemini":
       return createGeminiAdapter(options);
     case "codex":
