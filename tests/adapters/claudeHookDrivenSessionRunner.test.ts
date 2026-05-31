@@ -4,11 +4,13 @@ import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import fs from "fs-extra";
 
 import {
   IncompleteProviderSessionError,
+  ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionEvent,
@@ -345,6 +347,203 @@ test("Claude hook-driven runner rejects when the first structured event is not S
       /before SessionStart/.test(error.message),
   );
   assert.equal(spawner.process.killed, true);
+});
+
+test("Claude hook-driven runner times out with Claude-specific diagnostics when SessionStart never arrives", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const spawner = new ScriptedClaudePtySpawner(async () => {});
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 5,
+    }),
+    (error) =>
+      error instanceof ProviderSessionEventCaptureError &&
+      /SessionStart/.test(error.message) &&
+      /settings\.local\.json/.test(error.message) &&
+      /disabled hooks/i.test(error.message) &&
+      /managed policy/i.test(error.message) &&
+      /hook\.js/.test(error.message) &&
+      /hook\.sock/.test(error.message),
+  );
+  assert.equal(spawner.process.killed, true);
+});
+
+test("Claude hook-driven runner treats PTY exit before SessionStart as incomplete hook setup", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const spawner = new ScriptedClaudePtySpawner(async () => {
+    spawner.process.emitExit(1);
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+    }),
+    (error) =>
+      error instanceof IncompleteProviderSessionError &&
+      /Claude hook setup may have failed before SessionStart/.test(
+        error.completionMarker,
+      ),
+  );
+});
+
+test("Claude hook-driven runner drains briefly after early PTY exit before deciding incomplete", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  let validateCount = 0;
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(0);
+    await delay(1);
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "late marker INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+  });
+
+  const result = await runClaudeHookDrivenSession(
+    createCommand(),
+    createInput(projectRoot, {
+      async validate() {
+        validateCount += 1;
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+      socketDrainMs: 500,
+    },
+  );
+
+  assert.equal(validateCount, 1);
+  assert.equal(result.exitCode, 0);
+});
+
+test("Claude hook-driven runner treats PTY exit after SessionStart but before finalization as incomplete after drain", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    spawner.process.emitExit(1);
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+      socketDrainMs: 5,
+    }),
+    (error) =>
+      error instanceof IncompleteProviderSessionError &&
+      error.completionMarker === "INITIAL_DONE",
+  );
+});
+
+test("Claude hook-driven runner raises cleanup errors when PTY does not exit after hook finalization", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "done INITIAL_DONE",
+      session_id: "claude-session-1",
+    });
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+      cleanupTimeoutMs: 5,
+    }),
+    ProviderSessionCleanupError,
+  );
+});
+
+test("Claude hook-driven runner maps hook payload schema failures to event capture errors", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+    });
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+    }),
+    (error) =>
+      error instanceof ProviderSessionEventCaptureError &&
+      /Malformed Claude hook payload/.test(error.message),
+  );
+});
+
+test("Claude hook-driven runner maps provider event callback failures to event capture errors", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    const hookScriptPath = getHookScriptPath(projectRoot);
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      matcher: "startup",
+      session_id: "claude-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Start",
+      session_id: "claude-session-1",
+    });
+  });
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(
+      createCommand(),
+      createInput(projectRoot, {
+        onProviderEvent(event) {
+          if (event.type === "submitted-user-message") {
+            throw new Error("consumer failed");
+          }
+        },
+      }),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        firstEventTimeoutMs: 1_000,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionEventCaptureError &&
+      /consumer failed/.test(error.message),
+  );
 });
 
 test("Claude hook-driven runner ignores Stop events without assistant content for marker validation", async () => {

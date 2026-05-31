@@ -382,9 +382,7 @@ export async function runClaudeHookDrivenSession(
           rejectSession(
             new ProviderSessionEventCaptureError(
               command.provider,
-              new Error(
-                "Claude SessionStart hook did not arrive; hook setup may have failed.",
-              ),
+              new Error(formatMissingSessionStartDiagnostic(artifacts)),
             ),
           );
         }, firstEventTimeoutMs);
@@ -462,6 +460,18 @@ function getClaudeHookDirectory(input: ManagedProviderSessionInput): string {
   const runId = input.phase?.id.split(":")[0] ?? "unscoped-claude-session";
 
   return join(input.workingDirectory, ".devflow", "runs", runId, ".claude-hooks");
+}
+
+function formatMissingSessionStartDiagnostic(
+  artifacts: Awaited<ReturnType<typeof createClaudeHookArtifacts>>,
+): string {
+  return [
+    "Claude SessionStart hook did not arrive; hook setup may have failed.",
+    "Check project-local .claude/settings.local.json for DevFlow hook entries,",
+    "ensure Claude disabled hooks settings or managed policy are not blocking hooks,",
+    `verify the hook script exists and can run at ${artifacts.hookScriptPath},`,
+    `and confirm the hook socket is reachable at ${artifacts.socketPath}.`,
+  ].join(" ");
 }
 
 function findTranscriptCaptureError(
