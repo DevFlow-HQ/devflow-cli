@@ -39,6 +39,7 @@ export class ClaudeJsonlRecordMalformedError extends Error {
 export function createClaudeJsonlNormalizer(): ClaudeJsonlNormalizer {
   let sessionStartEmitted = false;
   const completedMessageIds = new Set<string>();
+  const pendingTextByMessageId = new Map<string, string[]>();
 
   return {
     synthesizeSessionStart() {
@@ -61,12 +62,21 @@ export function createClaudeJsonlNormalizer(): ClaudeJsonlNormalizer {
         return undefined;
       }
 
+      const pendingText = pendingTextByMessageId.get(parsed.messageId) ?? [];
+      pendingText.push(parsed.assistantMessage);
+
+      if (!parsed.completesTurn) {
+        pendingTextByMessageId.set(parsed.messageId, pendingText);
+        return undefined;
+      }
+
+      pendingTextByMessageId.delete(parsed.messageId);
       completedMessageIds.add(parsed.messageId);
 
       return {
         type: "turn-completed",
         providerSessionId: parsed.providerSessionId,
-        assistantMessage: parsed.assistantMessage,
+        assistantMessage: pendingText.join(""),
       };
     },
   };
@@ -86,6 +96,7 @@ interface ParsedClaudeJsonlAssistantTurn {
   messageId: string;
   providerSessionId?: string;
   assistantMessage: string;
+  completesTurn: boolean;
 }
 
 function parseClaudeJsonlRecord(
@@ -121,8 +132,13 @@ function parseClaudeJsonlRecord(
     );
   }
 
-  if (record.message.stop_reason !== "end_turn") {
-    return undefined;
+  const stopReason = record.message.stop_reason;
+
+  if (stopReason === "stop_sequence" || stopReason === "max_tokens") {
+    throw new ClaudeJsonlRecordMalformedError(
+      record,
+      `unexpected assistant stop_reason ${stopReason}`,
+    );
   }
 
   const providerSessionId =
@@ -132,6 +148,7 @@ function parseClaudeJsonlRecord(
     messageId: record.message.id,
     providerSessionId,
     assistantMessage: parseTextContent(record, record.message.content),
+    completesTurn: stopReason === "end_turn",
   };
 }
 
