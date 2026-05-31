@@ -32,6 +32,7 @@ import { createCodexAdapter } from "../../src/adapters/codexAdapter.js";
 import { createGeminiAdapter } from "../../src/adapters/geminiAdapter.js";
 import { createOpenCodeAdapter } from "../../src/adapters/opencodeAdapter.js";
 import { createBuiltInManagedSessionAdapter } from "../../src/adapters/builtInManagedSessionAdapter.js";
+import type { ClaudeHookDrivenSessionCommand } from "../../src/adapters/claudeHookDrivenSessionRunner.js";
 import type { CodexHookDrivenSessionCommand } from "../../src/adapters/codexHookDrivenSessionRunner.js";
 import type { CodexJsonlSessionCommand } from "../../src/adapters/codexJsonlSessionRunner.js";
 
@@ -99,6 +100,26 @@ class CapturingCodexHookRunner {
   async runCodexHookDrivenSession(
     command: CodexHookDrivenSessionCommand,
     input: ManagedProviderSessionInput | ManagedProviderSessionResumeInput,
+  ): Promise<ManagedProviderSessionResult> {
+    this.calls.push({ command, input });
+    await input.validate();
+    return {
+      repairUsed: false,
+      exitCode: 0,
+      signal: null,
+    };
+  }
+}
+
+class CapturingClaudeHookRunner {
+  readonly calls: Array<{
+    command: ClaudeHookDrivenSessionCommand;
+    input: ManagedProviderSessionInput;
+  }> = [];
+
+  async runClaudeHookDrivenSession(
+    command: ClaudeHookDrivenSessionCommand,
+    input: ManagedProviderSessionInput,
   ): Promise<ManagedProviderSessionResult> {
     this.calls.push({ command, input });
     await input.validate();
@@ -963,6 +984,50 @@ for (const harness of providerHarnesses) {
     assert.equal("run" in adapter, false);
   });
 }
+
+test("Claude adapter delegates hook-mode sessions to the hook-driven runner", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-claude-hooks-adapter-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, "claude");
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const runner = new CapturingClaudeHookRunner();
+  const adapter = createClaudeAdapter({
+    eventSource: "hooks",
+    runClaudeHookDrivenSession:
+      runner.runClaudeHookDrivenSession.bind(runner),
+  });
+
+  const result = await adapter.runSession(validRunInputWithModel);
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("claude"),
+        executable: executablePath,
+        args: ["--model", "gpt-5.5", "Ship the contract"],
+      },
+      input: validRunInputWithModel,
+    },
+  ]);
+});
 
 test("Codex adapter runSession delegates provider startup config to the hook-driven runner", async (t) => {
   const originalPath = process.env.PATH;

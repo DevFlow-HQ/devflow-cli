@@ -1,18 +1,35 @@
+import which from "which";
+
 import {
   createCommandManagedSessionAdapter,
   type CommandManagedSessionAdapterOptions,
 } from "./commandManagedSessionAdapter.js";
+import {
+  runClaudeHookDrivenSession,
+  type ClaudeHookDrivenSessionCommand,
+} from "./claudeHookDrivenSessionRunner.js";
+import { ProviderSessionLaunchError } from "./managedSessionAdapter.js";
 import type {
   ManagedProviderSessionCapabilities,
+  ManagedProviderSessionInput,
+  ManagedProviderSessionResult,
   ManagedSessionAdapter,
+  ProviderDetectionResult,
 } from "./managedSessionAdapter.js";
+import { getBuiltInProviderIdentity } from "./providers.js";
 
 export type ClaudeManagedSessionEventSource = "pty" | "hooks";
 
 export interface ClaudeAdapterOptions
   extends CommandManagedSessionAdapterOptions {
   eventSource?: ClaudeManagedSessionEventSource;
+  runClaudeHookDrivenSession?: ClaudeHookDrivenRunner;
 }
+
+export type ClaudeHookDrivenRunner = (
+  command: ClaudeHookDrivenSessionCommand,
+  input: ManagedProviderSessionInput,
+) => Promise<ManagedProviderSessionResult>;
 
 const CLAUDE_PTY_FALLBACK_CAPABILITIES: ManagedProviderSessionCapabilities = {
   controlTransport: "pty",
@@ -33,6 +50,10 @@ const CLAUDE_HOOK_CAPABILITIES: ManagedProviderSessionCapabilities = {
 export function createClaudeAdapter(
   options: ClaudeAdapterOptions = {},
 ): ManagedSessionAdapter {
+  if (options.eventSource === "hooks") {
+    return createClaudeHookAdapter(options);
+  }
+
   const adapter = createCommandManagedSessionAdapter(
     {
       providerId: "claude",
@@ -47,9 +68,71 @@ export function createClaudeAdapter(
 
   return {
     ...adapter,
-    capabilities:
-      options.eventSource === "hooks"
-        ? CLAUDE_HOOK_CAPABILITIES
-        : CLAUDE_PTY_FALLBACK_CAPABILITIES,
+    capabilities: CLAUDE_PTY_FALLBACK_CAPABILITIES,
   };
+}
+
+function createClaudeHookAdapter(
+  options: ClaudeAdapterOptions,
+): ManagedSessionAdapter {
+  const provider = getBuiltInProviderIdentity("claude");
+  const hookRunner =
+    options.runClaudeHookDrivenSession ?? runClaudeHookDrivenSession;
+
+  async function resolveExecutable(): Promise<string> {
+    return which("claude");
+  }
+
+  async function detectExecutable(): Promise<ProviderDetectionResult> {
+    try {
+      const executable = await resolveExecutable();
+
+      return {
+        isAvailable: true,
+        executable,
+      };
+    } catch (error) {
+      return {
+        isAvailable: false,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Unable to find executable 'claude' on PATH.",
+      };
+    }
+  }
+
+  async function runSession(
+    input: ManagedProviderSessionInput,
+  ): Promise<ManagedProviderSessionResult> {
+    let executable: string;
+
+    try {
+      executable = await resolveExecutable();
+    } catch (error) {
+      throw new ProviderSessionLaunchError(provider, error);
+    }
+
+    return hookRunner(
+      {
+        provider,
+        executable,
+        args: buildClaudeArgs(input),
+      },
+      input,
+    );
+  }
+
+  return {
+    provider,
+    capabilities: CLAUDE_HOOK_CAPABILITIES,
+    detect: detectExecutable,
+    runSession,
+  };
+}
+
+function buildClaudeArgs(
+  input: Pick<ManagedProviderSessionInput, "model" | "initialPrompt">,
+): string[] {
+  return [...(input.model ? ["--model", input.model] : []), input.initialPrompt];
 }
