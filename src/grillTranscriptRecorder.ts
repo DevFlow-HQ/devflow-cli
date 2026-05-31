@@ -28,6 +28,7 @@ export function createStructuredGrillTranscriptRecorder(
 ): StructuredGrillTranscriptRecorder {
   let captureOpen = false;
   let closed = false;
+  let completionMarkerObserved = false;
 
   async function recordEvent(event: ManagedProviderSessionEvent): Promise<void> {
     if (closed) {
@@ -40,9 +41,14 @@ export function createStructuredGrillTranscriptRecorder(
       }
 
       captureOpen = true;
+      const activeCompletionMarker = options.getActiveCompletionMarker();
+      completionMarkerObserved =
+        completionMarkerObserved ||
+        (activeCompletionMarker !== undefined &&
+          event.assistantMessage.includes(activeCompletionMarker));
       const transcriptContent = stripCompletionMarker(
         event.assistantMessage,
-        options.getActiveCompletionMarker(),
+        activeCompletionMarker,
       );
 
       if (isEmptyTranscriptBlock(transcriptContent)) {
@@ -73,6 +79,13 @@ export function createStructuredGrillTranscriptRecorder(
   async function acceptCompletion(): Promise<void> {
     if (closed) {
       return;
+    }
+
+    if (!completionMarkerObserved) {
+      throw new ProviderSessionTranscriptCaptureError(
+        options.provider,
+        new Error("grill completion marker was not observed before acceptance"),
+      );
     }
 
     await capture(() => options.artifact.complete());

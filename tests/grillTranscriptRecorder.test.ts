@@ -66,7 +66,7 @@ test("structured grill transcript recorder opens on first provider response and 
   await recorder.recordEvent(
     createEvent({
       type: "turn-completed",
-      assistantMessage: "First question?",
+      assistantMessage: "First question? DONE",
     }),
   );
   await recorder.acceptCompletion();
@@ -78,7 +78,7 @@ test("structured grill transcript recorder opens on first provider response and 
     }),
   );
 
-  assert.deepEqual(artifact.writes, ["provider:First question?", "complete"]);
+  assert.deepEqual(artifact.writes, ["provider:First question? ", "complete"]);
 });
 
 test("structured grill transcript recorder captures provider turn-completed assistant messages", async () => {

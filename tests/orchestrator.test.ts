@@ -13,6 +13,7 @@ import {
 import { createBuiltInManagedSessionAdapter } from "../src/adapters/builtInManagedSessionAdapter.js";
 import type {
   ManagedProviderSessionInput,
+  ManagedProviderSessionResumeInput,
   ManagedProviderSessionEvent,
   ManagedProviderSessionResult,
   ManagedSessionAdapter,
@@ -22,6 +23,7 @@ import {
   InterruptedProviderSessionError,
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
+  ProviderSessionLaunchError,
   ProviderSessionTranscriptCaptureError,
 } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
@@ -109,6 +111,12 @@ async function completeGrillSession(
 ): Promise<ManagedProviderSessionResult> {
   assert.match(input.initialCompletionMarker, /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/);
   assert.match(input.initialPrompt, /Run the interactive grill stage/);
+  await input.onProviderEvent?.(
+    createStructuredProviderEvent({
+      type: "turn-completed",
+      assistantMessage: `Ready ${input.initialCompletionMarker}`,
+    }),
+  );
   await input.validate();
   await completeSessionContinuations(input);
 
@@ -1232,6 +1240,423 @@ test("orchestrator refreshes provider session state from later normalized turn e
     attempt: 1,
   });
   assert.equal(state.status, "active");
+});
+
+test("interrupted incomplete grill recovery resumes a reliable provider session before partial-transcript fallback", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  const runSessionInputs: ManagedProviderSessionInput[] = [];
+  const resumeSessionInputs: ManagedProviderSessionResumeInput[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionInputs.push(input);
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "session-start",
+          providerSessionId: "codex-grill-session-1",
+        }),
+      );
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: "What decision remains?",
+        }),
+      );
+
+      throw new IncompleteProviderSessionError({
+        provider,
+        completionMarker: input.initialCompletionMarker,
+        exitCode: 1,
+        signal: null,
+      });
+    },
+    async resumeSession(input) {
+      resumeSessionInputs.push(input);
+      assert.equal(input.providerSessionId, "codex-grill-session-1");
+      assert.match(input.initialPrompt, /Continue the interrupted grill/);
+      assert.match(input.initialPrompt, /Ask the next unresolved question one at a time/);
+      assert.match(input.initialPrompt, /print only/);
+      assert.doesNotMatch(input.initialPrompt, /Partial grill transcript path/);
+      assert.ok(input.onProviderEvent);
+      await input.onProviderEvent(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          providerSessionId: "codex-grill-session-1",
+          assistantMessage: `Resolved ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(runSessionInputs.filter(isGrillSessionInput).length, 1);
+  assert.equal(resumeSessionInputs.length, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.match(
+    await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
+    /Resolved/,
+  );
+  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+});
+
+test("failed grill resume falls back once to a fresh partial-transcript grill attempt", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  const grillPrompts: string[] = [];
+  let resumeCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillPrompts.push(input.initialPrompt);
+
+      if (grillPrompts.length === 1) {
+        assert.ok(input.onProviderEvent);
+        await input.onProviderEvent(
+          createStructuredProviderEvent({
+            type: "session-start",
+            providerSessionId: "codex-grill-session-2",
+          }),
+        );
+        await input.onProviderEvent(
+          createStructuredProviderEvent({
+            type: "turn-completed",
+            assistantMessage: "Partial question",
+          }),
+        );
+        throw new IncompleteProviderSessionError({
+          provider,
+          completionMarker: input.initialCompletionMarker,
+          exitCode: 1,
+          signal: null,
+        });
+      }
+
+      assert.match(input.initialPrompt, /Partial grill transcript path/);
+      assert.doesNotMatch(input.initialPrompt, /Continue the interrupted grill/);
+      await input.onProviderEvent?.(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: `Fallback complete ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+    async resumeSession(input) {
+      resumeCallCount += 1;
+      throw new ProviderSessionLaunchError(provider, new Error(input.providerSessionId));
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(resumeCallCount, 1);
+  assert.equal(grillPrompts.length, 2);
+});
+
+test("unsupported grill resume keeps the partial-transcript new attempt path", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  const grillPrompts: string[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      grillPrompts.push(input.initialPrompt);
+
+      if (grillPrompts.length === 1) {
+        assert.ok(input.onProviderEvent);
+        await input.onProviderEvent(
+          createStructuredProviderEvent({
+            type: "session-start",
+            providerSessionId: "codex-grill-session-3",
+          }),
+        );
+        throw new IncompleteProviderSessionError({
+          provider,
+          completionMarker: input.initialCompletionMarker,
+          exitCode: 1,
+          signal: null,
+        });
+      }
+
+      assert.match(input.initialPrompt, /Partial grill transcript path/);
+      await input.onProviderEvent?.(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: `Fallback complete ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(grillPrompts.length, 2);
+});
+
+test("grill resume does not accept session-completed without marker observation", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  let resumeCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (!isGrillSessionInput(input)) {
+        await fs.outputJson(
+          join(runDirectory, "intent.json"),
+          {
+            classification: "feature",
+            summary: "Resume the current workstream.",
+            rawTask: "resume work",
+            needsClarification: false,
+          },
+          { spaces: 2 },
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (resumeCallCount === 0) {
+        await input.onProviderEvent?.(
+          createStructuredProviderEvent({
+            type: "session-start",
+            providerSessionId: "codex-grill-session-4",
+          }),
+        );
+        throw new IncompleteProviderSessionError({
+          provider,
+          completionMarker: input.initialCompletionMarker,
+          exitCode: 1,
+          signal: null,
+        });
+      }
+
+      await input.onProviderEvent?.(
+        createStructuredProviderEvent({
+          type: "turn-completed",
+          assistantMessage: `Fallback complete ${input.initialCompletionMarker}`,
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+    async resumeSession(input) {
+      resumeCallCount += 1;
+      await input.onProviderEvent?.(
+        createStructuredProviderEvent({
+          type: "session-completed",
+          providerSessionId: "codex-grill-session-4",
+          exitCode: 0,
+          signal: null,
+        }),
+      );
+      await input.validate();
+      await completeSessionContinuations(input);
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(resumeCallCount, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.match(
+    await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
+    /Fallback complete/,
+  );
 });
 
 test("orchestrator leaves fallback providers without reliable session ids on existing transcript behavior", async () => {

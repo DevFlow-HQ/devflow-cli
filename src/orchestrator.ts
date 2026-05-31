@@ -16,11 +16,13 @@ import {
 } from "./devflowState.js";
 import { createBuiltInManagedSessionAdapter } from "./adapters/builtInManagedSessionAdapter.js";
 import {
+  canResumeManagedProviderSession,
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionPhase,
+  type ManagedProviderSessionResumeInput,
   type ManagedProviderSessionResult,
   type ManagedSessionAdapter,
   ProviderSessionCleanupError,
@@ -247,6 +249,17 @@ async function renderGrillPrompt(options: {
       formatPartialGrillTranscriptContext(options.partialTranscriptPath),
     )
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
+}
+
+function renderInterruptedGrillResumePrompt(options: {
+  completionMarker: string;
+}): string {
+  return [
+    "Continue the interrupted grill session.",
+    "Rely on the resumed provider context for prior answers instead of asking for a transcript dump.",
+    "Ask the next unresolved question one at a time.",
+    `When the grill is complete, print only: ${options.completionMarker}`,
+  ].join("\n");
 }
 
 async function renderPrdPrompt(options: {
@@ -807,6 +820,31 @@ async function runManagedSessionWithProviderState(options: {
   });
 }
 
+async function resumeManagedSessionWithProviderState(options: {
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter & {
+    resumeSession(
+      input: ManagedProviderSessionResumeInput,
+    ): Promise<ManagedProviderSessionResult>;
+  };
+  input: ManagedProviderSessionResumeInput;
+}): Promise<ManagedProviderSessionResult> {
+  const existingOnProviderEvent = options.input.onProviderEvent;
+
+  return options.adapter.resumeSession({
+    ...options.input,
+    async onProviderEvent(event) {
+      await persistProviderSessionStateFromEvent({
+        run: options.run,
+        adapter: options.adapter,
+        input: options.input,
+        event,
+      });
+      await existingOnProviderEvent?.(event);
+    },
+  });
+}
+
 function createPrdRepairConfig(options: {
   run: DevFlowRunHandle;
   completionMarker: string;
@@ -902,19 +940,23 @@ async function runGrillStage(options: {
   parsedIntent: IntentArtifact;
   attempt: number;
   onPrdStageStart: () => void | Promise<void>;
+  resumeProviderSessionId?: string;
 }): Promise<void> {
   const completionMarker = createCompletionMarker("DEVFLOW_GRILL_COMPLETE");
   const prdCompletionMarker = createPrdCompletionMarker();
   const prdRepairCompletionMarker = createPrdRepairCompletionMarker();
-  const prompt = await renderGrillPrompt({
-    rawTask: options.request.rawTask,
-    intentArtifact: options.parsedIntent,
-    intentArtifactPath: options.run.paths.intentArtifact,
-    projectContextPath: options.run.paths.projectContextArtifact,
-    partialTranscriptPath:
-      options.attempt === 1 ? undefined : options.run.paths.grillTranscript,
-    completionMarker,
-  });
+  const prompt =
+    options.resumeProviderSessionId === undefined
+      ? await renderGrillPrompt({
+          rawTask: options.request.rawTask,
+          intentArtifact: options.parsedIntent,
+          intentArtifactPath: options.run.paths.intentArtifact,
+          projectContextPath: options.run.paths.projectContextArtifact,
+          partialTranscriptPath:
+            options.attempt === 1 ? undefined : options.run.paths.grillTranscript,
+          completionMarker,
+        })
+      : renderInterruptedGrillResumePrompt({ completionMarker });
   const prdPrompt = await renderPrdPrompt({
     request: options.request,
     run: options.run,
@@ -955,59 +997,78 @@ async function runGrillStage(options: {
       })
     : undefined;
 
+  const input = {
+    workingDirectory: options.request.projectRoot,
+    initialPrompt: prompt,
+    initialCompletionMarker: completionMarker,
+    phase: createProviderSessionPhase({
+      run: options.run,
+      kind: "grill",
+      attempt: options.attempt,
+    }),
+    ...(options.request.model ? { model: options.request.model } : {}),
+    async validate() {
+      await writeCompletedGrillArtifacts({
+        request: options.request,
+        run: options.run,
+        recorder,
+      });
+    },
+    continuations: [
+      {
+        prompt: prdPrompt,
+        completionMarker: prdCompletionMarker,
+        phase: createProviderSessionPhase({
+          run: options.run,
+          kind: "prd",
+          attempt: options.attempt,
+        }),
+        onStart: options.onPrdStageStart,
+        async validate() {
+          await validatePrdArtifact(options.run.paths.prdArtifact);
+        },
+        repair: createPrdRepairConfig({
+          run: options.run,
+          completionMarker: prdRepairCompletionMarker,
+          attempt: options.attempt,
+        }),
+      },
+    ],
+    ...(recorder
+      ? {
+          onProviderEvent: (event: ManagedProviderSessionEvent) =>
+            recorder.recordEvent(event),
+        }
+      : {
+          transcript: {
+            onProviderOutput: (chunk: string) =>
+              options.run.appendGrillProviderMessage(chunk),
+            onSubmittedUserMessage: (message: string) =>
+              options.run.appendGrillUserMessage(message),
+          },
+        }),
+  } satisfies ManagedProviderSessionInput;
+
+  if (options.resumeProviderSessionId !== undefined) {
+    if (!canResumeManagedProviderSession(options.adapter)) {
+      throw new Error("Adapter cannot resume provider sessions.");
+    }
+
+    await resumeManagedSessionWithProviderState({
+      run: options.run,
+      adapter: options.adapter,
+      input: {
+        ...input,
+        providerSessionId: options.resumeProviderSessionId,
+      },
+    });
+    return;
+  }
+
   await runManagedSessionWithProviderState({
     run: options.run,
     adapter: options.adapter,
-    input: {
-      workingDirectory: options.request.projectRoot,
-      initialPrompt: prompt,
-      initialCompletionMarker: completionMarker,
-      phase: createProviderSessionPhase({
-        run: options.run,
-        kind: "grill",
-        attempt: options.attempt,
-      }),
-      ...(options.request.model ? { model: options.request.model } : {}),
-      async validate() {
-        await writeCompletedGrillArtifacts({
-          request: options.request,
-          run: options.run,
-          recorder,
-        });
-      },
-      continuations: [
-        {
-          prompt: prdPrompt,
-          completionMarker: prdCompletionMarker,
-          phase: createProviderSessionPhase({
-            run: options.run,
-            kind: "prd",
-            attempt: options.attempt,
-          }),
-          onStart: options.onPrdStageStart,
-          async validate() {
-            await validatePrdArtifact(options.run.paths.prdArtifact);
-          },
-          repair: createPrdRepairConfig({
-            run: options.run,
-            completionMarker: prdRepairCompletionMarker,
-            attempt: options.attempt,
-          }),
-        },
-      ],
-      ...(recorder
-        ? {
-            onProviderEvent: (event) => recorder.recordEvent(event),
-          }
-        : {
-            transcript: {
-              onProviderOutput: (chunk: string) =>
-                options.run.appendGrillProviderMessage(chunk),
-              onSubmittedUserMessage: (message: string) =>
-                options.run.appendGrillUserMessage(message),
-            },
-          }),
-    },
+    input,
   });
 }
 
@@ -1116,6 +1177,28 @@ async function recoverCompletedGrillCheckpointIfNeeded(options: {
   return true;
 }
 
+async function readResumableGrillProviderSessionId(options: {
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+}): Promise<string | undefined> {
+  if (!canResumeManagedProviderSession(options.adapter)) {
+    return undefined;
+  }
+
+  const state = await options.run.readProviderSessionState();
+
+  if (
+    state?.providerSessionId === undefined ||
+    state.provider.id !== options.adapter.provider.id ||
+    state.phase.kind !== "grill" ||
+    !["active", "interrupted"].includes(state.status)
+  ) {
+    return undefined;
+  }
+
+  return state.providerSessionId;
+}
+
 async function runGrillStageWithRetry(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
@@ -1125,6 +1208,52 @@ async function runGrillStageWithRetry(options: {
 }): Promise<void> {
   for (let attempt = 1; attempt <= GRILL_STAGE_TOTAL_ATTEMPTS; attempt += 1) {
     try {
+      if (attempt > 1) {
+        const resumeProviderSessionId =
+          await readResumableGrillProviderSessionId({
+            run: options.run,
+            adapter: options.adapter,
+          });
+
+        if (resumeProviderSessionId !== undefined) {
+          try {
+            await runGrillStage({
+              ...options,
+              attempt,
+              resumeProviderSessionId,
+            });
+            await validatePrdArtifact(options.run.paths.prdArtifact);
+            return;
+          } catch (error) {
+            if (!isRetryableProviderBackedStageFailure(error)) {
+              throw error;
+            }
+
+            if (
+              await recoverCompletedGrillCheckpointIfNeeded({
+                request: options.request,
+                run: options.run,
+              })
+            ) {
+              await options.onPrdStageStart();
+              await runPrdStageWithRetry({
+                request: options.request,
+                run: options.run,
+                adapter: options.adapter,
+                liveDiscussionAvailable: false,
+              });
+              return;
+            }
+
+            if ((await options.run.getGrillTranscriptStatus()) === "complete") {
+              throw error;
+            }
+
+            await appendGrillFailureNoteBestEffort(options.run, error);
+          }
+        }
+      }
+
       await runGrillStage({ ...options, attempt });
       await validatePrdArtifact(options.run.paths.prdArtifact);
       return;
