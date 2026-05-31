@@ -58,6 +58,15 @@ export function createClaudeJsonlNormalizer(): ClaudeJsonlNormalizer {
         return undefined;
       }
 
+      if (parsed.type === "submitted-user-message") {
+        return {
+          type: "submitted-user-message",
+          providerSessionId: parsed.providerSessionId,
+          message: parsed.message,
+          origin: "unknown",
+        };
+      }
+
       if (completedMessageIds.has(parsed.messageId)) {
         return undefined;
       }
@@ -93,21 +102,32 @@ export function normalizeClaudeJsonlRecordForProvider(
 }
 
 interface ParsedClaudeJsonlAssistantTurn {
+  type: "turn-completed";
   messageId: string;
   providerSessionId?: string;
   assistantMessage: string;
   completesTurn: boolean;
 }
 
+interface ParsedClaudeJsonlUserMessage {
+  type: "submitted-user-message";
+  providerSessionId?: string;
+  message: string;
+}
+
 function parseClaudeJsonlRecord(
   record: unknown,
-): ParsedClaudeJsonlAssistantTurn | undefined {
+): ParsedClaudeJsonlAssistantTurn | ParsedClaudeJsonlUserMessage | undefined {
   if (!isRecord(record)) {
     throw new ClaudeJsonlRecordMalformedError(record, "expected an object");
   }
 
   if (record.isSidechain === true) {
     return undefined;
+  }
+
+  if (record.type === "user") {
+    return parseUserRecord(record);
   }
 
   if (record.type !== "assistant") {
@@ -145,11 +165,91 @@ function parseClaudeJsonlRecord(
     typeof record.sessionId === "string" ? record.sessionId : undefined;
 
   return {
+    type: "turn-completed",
     messageId: record.message.id,
     providerSessionId,
     assistantMessage: parseTextContent(record, record.message.content),
     completesTurn: stopReason === "end_turn",
   };
+}
+
+function parseUserRecord(
+  record: Record<string, unknown>,
+): ParsedClaudeJsonlUserMessage | undefined {
+  if (!isRecord(record.message)) {
+    throw new ClaudeJsonlRecordMalformedError(
+      record,
+      "expected object message for user record",
+    );
+  }
+
+  if (record.message.role !== "user") {
+    return undefined;
+  }
+
+  const message = parseUserPromptContent(record, record.message.content);
+
+  if (!message || isSyntheticInterruptedRequestText(message)) {
+    return undefined;
+  }
+
+  return {
+    type: "submitted-user-message",
+    providerSessionId:
+      typeof record.sessionId === "string" ? record.sessionId : undefined,
+    message,
+  };
+}
+
+function parseUserPromptContent(
+  record: Record<string, unknown>,
+  content: unknown,
+): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    throw new ClaudeJsonlRecordMalformedError(
+      record,
+      "expected string or array message.content for user record",
+    );
+  }
+
+  const parts: string[] = [];
+
+  for (const item of content) {
+    if (!isRecord(item)) {
+      throw new ClaudeJsonlRecordMalformedError(
+        record,
+        "expected object content item for user record",
+      );
+    }
+
+    if (item.type !== "text") {
+      continue;
+    }
+
+    if (typeof item.text !== "string") {
+      throw new ClaudeJsonlRecordMalformedError(
+        record,
+        "expected string text content for user record",
+      );
+    }
+
+    parts.push(item.text);
+  }
+
+  return parts.length === 0 ? undefined : parts.join("");
+}
+
+function isSyntheticInterruptedRequestText(message: string): boolean {
+  const normalized = message.trim();
+
+  return (
+    normalized === "[Request interrupted by user]" ||
+    normalized === "Request interrupted by user"
+  );
 }
 
 function parseTextContent(record: Record<string, unknown>, content: unknown): string {

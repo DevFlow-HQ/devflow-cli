@@ -117,6 +117,7 @@ export async function runClaudeJsonlSession(
       | ReturnType<typeof createJsonlTailEventSource>
       | undefined;
     const normalizer = createClaudeJsonlNormalizer();
+    const pendingManagedPromptEchoes: string[] = [input.initialPrompt];
 
     const manager = createPhaseManager({
       provider: command.provider,
@@ -265,12 +266,33 @@ export async function runClaudeJsonlSession(
           normalizer,
           record,
         });
+        const classifiedEvent = classifySubmittedUserMessageOrigin(event);
 
-        if (event) {
-          await manager.handleEvent(event);
+        if (classifiedEvent) {
+          await manager.handleEvent(classifiedEvent);
           markFirstEventObserved();
         }
       }
+    }
+
+    function classifySubmittedUserMessageOrigin(
+      event: Parameters<typeof manager.handleEvent>[0] | undefined,
+    ): Parameters<typeof manager.handleEvent>[0] | undefined {
+      if (event?.type !== "submitted-user-message") {
+        return event;
+      }
+
+      const pendingIndex = pendingManagedPromptEchoes.indexOf(event.message);
+
+      if (pendingIndex !== -1) {
+        pendingManagedPromptEchoes.splice(pendingIndex, 1);
+        return undefined;
+      }
+
+      return {
+        ...event,
+        origin: "human",
+      };
     }
 
     function startFileWatch(

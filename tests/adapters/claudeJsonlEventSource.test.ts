@@ -38,6 +38,17 @@ function assistantRecord(
   };
 }
 
+function userRecord(content: unknown) {
+  return {
+    type: "user",
+    sessionId: "claude-session-1",
+    message: {
+      role: "user",
+      content,
+    },
+  };
+}
+
 test("Claude JSONL normalizer emits one turn completion from end-turn assistant message text blocks", () => {
   const normalizer = createClaudeJsonlNormalizer();
 
@@ -62,6 +73,51 @@ test("Claude JSONL normalizer emits one turn completion from end-turn assistant 
     }),
     undefined,
   );
+});
+
+test("Claude JSONL normalizer maps real user prompts to submitted user messages", () => {
+  const normalizer = createClaudeJsonlNormalizer();
+
+  assert.deepEqual(
+    normalizer.normalizeRecord(userRecord("human typed reply")),
+    {
+      type: "submitted-user-message",
+      providerSessionId: "claude-session-1",
+      message: "human typed reply",
+      origin: "unknown",
+    },
+  );
+
+  assert.deepEqual(
+    normalizer.normalizeRecord(
+      userRecord([
+        { type: "text", text: "describe " },
+        { type: "image", source: { type: "base64", media_type: "image/png" } },
+        { type: "text", text: "this" },
+      ]),
+    ),
+    {
+      type: "submitted-user-message",
+      providerSessionId: "claude-session-1",
+      message: "describe this",
+      origin: "unknown",
+    },
+  );
+});
+
+test("Claude JSONL normalizer filters non-prompt user and provider meta records", () => {
+  const normalizer = createClaudeJsonlNormalizer();
+
+  for (const record of [
+    userRecord([{ type: "tool_result", content: "tool output" }]),
+    userRecord([{ type: "text", text: "[Request interrupted by user]" }]),
+    { type: "system", message: { content: "meta" } },
+    { type: "summary", message: { content: "compact summary" } },
+    { type: "attachment", message: { content: "README.md" } },
+    { type: "queue_operation", message: { content: "queued" } },
+  ]) {
+    assert.equal(normalizer.normalizeRecord(record), undefined);
+  }
 });
 
 test("Claude JSONL normalizer fails capture for abnormal assistant stop reasons", () => {

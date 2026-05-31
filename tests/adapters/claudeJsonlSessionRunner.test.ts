@@ -228,3 +228,68 @@ test("Claude JSONL runner completes a fresh first turn from a scoped transcript"
     signal: null,
   });
 });
+
+test("Claude JSONL runner classifies human user records and suppresses managed prompt echoes", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const events: ManagedProviderSessionEvent[] = [];
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "user",
+      sessionId: "claude-session-1",
+      message: {
+        role: "user",
+        content: "Start",
+      },
+    });
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "user",
+      sessionId: "claude-session-1",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "human " },
+          { type: "image", source: { type: "base64", media_type: "image/png" } },
+          { type: "text", text: "reply" },
+        ],
+      },
+    });
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "submitted-user-message")
+      .map((event) => `${event.origin}:${event.message}`),
+    ["human:human reply"],
+  );
+});
