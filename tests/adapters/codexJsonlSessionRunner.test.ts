@@ -247,6 +247,18 @@ async function waitForPtyWrites(
   }
 }
 
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+
+  while (!(await fs.pathExists(path))) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${path}.`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 function createFixedSessionLogLocator(filePath: string): SessionLogLocator {
   return {
     async snapshot() {
@@ -570,42 +582,55 @@ test("Codex JSONL runner resumes by tailing an existing rollout from the capture
 test("Codex JSONL runner fresh launch snapshots before spawn and tails selected rollouts from offset zero", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
   const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
-  const rollout = "sessions/2026/05/30/rollout-session.jsonl";
-  const rolloutPath = join(codexHome, rollout);
+  const existingRollout = "sessions/2026/05/30/rollout-existing.jsonl";
+  const freshRollout = "sessions/2026/05/30/rollout-fresh.jsonl";
+  const existingRolloutPath = join(codexHome, existingRollout);
+  const freshRolloutPath = join(codexHome, freshRollout);
   const events: ManagedProviderSessionEvent[] = [];
   const calls: string[] = [];
-  const snapshot = { filePaths: new Set<string>() };
+  const snapshot = { filePaths: new Set<string>([existingRolloutPath]) };
 
-  await appendSessionMeta(codexHome, rollout);
-  await appendTaskComplete(codexHome, rollout, "fresh turn INITIAL_DONE");
+  await appendSessionMeta(codexHome, existingRollout);
+  await appendTaskComplete(
+    codexHome,
+    existingRollout,
+    "preexisting turn INITIAL_DONE",
+  );
 
   const sessionLogLocator: SessionLogLocator = {
     async snapshot() {
       calls.push("snapshot");
+      assert.equal(spawner.calls.length, 0);
       return snapshot;
     },
     async locateActiveLog(receivedSnapshot) {
       calls.push("locateActiveLog");
       assert.equal(receivedSnapshot, snapshot);
+      assert.deepEqual(Array.from(receivedSnapshot.filePaths), [
+        existingRolloutPath,
+      ]);
+      await waitForFile(freshRolloutPath);
       return {
-        filePath: rolloutPath,
+        filePath: freshRolloutPath,
         debug: {
           scopedProviderHome: codexHome,
           searchedPattern: "sessions/**/rollout-*.jsonl",
-          candidates: [{ filePath: rolloutPath, size: 0, mtimeMs: 0 }],
-          ignoredPreexistingCount: 0,
+          candidates: [{ filePath: freshRolloutPath, size: 0, mtimeMs: 0 }],
+          ignoredPreexistingCount: 1,
           emptyCandidateCount: 0,
           multipleCandidates: false,
         },
       };
     },
-    async locateResumeLog() {
-      calls.push("locateResumeLog");
+    async locateResumeLog(providerSessionId) {
+      calls.push(`locateResumeLog:${providerSessionId}`);
       throw new Error("fresh launch should not use resume lookup");
     },
   };
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     assert.equal(options.env?.CODEX_HOME, codexHome);
+    await appendSessionMeta(codexHome, freshRollout);
+    await appendTaskComplete(codexHome, freshRollout, "fresh turn INITIAL_DONE");
     await waitForPtyWrites(spawner.process, 1);
     spawner.process.emitExit(0);
   });
@@ -632,6 +657,9 @@ test("Codex JSONL runner fresh launch snapshots before spawn and tails selected 
   );
 
   assert.deepEqual(calls, ["snapshot", "spawn", "locateActiveLog"]);
+  assert.deepEqual(spawner.calls.map((call) => call.args), [
+    ["--model", "gpt-test"],
+  ]);
   assert.deepEqual(
     events.map((event) =>
       event.type === "turn-completed"
