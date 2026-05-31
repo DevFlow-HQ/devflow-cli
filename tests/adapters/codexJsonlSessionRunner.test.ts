@@ -485,6 +485,168 @@ test("Codex JSONL runner classifies native user messages and suppresses managed 
   );
 });
 
+test("Codex JSONL runner resumes by tailing an existing rollout from the captured offset", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
+  const rollout =
+    "sessions/2026/05/30/rollout-2026-05-30T00-00-00-codex-session-1.jsonl";
+  const rolloutPath = join(codexHome, rollout);
+  const events: ManagedProviderSessionEvent[] = [];
+  const locatorCalls: string[] = [];
+
+  await appendSessionMeta(codexHome, rollout);
+  await appendTaskComplete(codexHome, rollout, "previous turn INITIAL_DONE");
+  const startOffset = (await fs.stat(rolloutPath)).size;
+
+  const sessionLogLocator: SessionLogLocator = {
+    async snapshot() {
+      locatorCalls.push("snapshot");
+      throw new Error("resume should not snapshot");
+    },
+    async locateActiveLog() {
+      locatorCalls.push("locateActiveLog");
+      throw new Error("resume should not use snapshot-diff discovery");
+    },
+    async locateResumeLog(providerSessionId) {
+      locatorCalls.push(`locateResumeLog:${providerSessionId}`);
+      return {
+        filePath: rolloutPath,
+        startOffset,
+        debug: {
+          scopedProviderHome: codexHome,
+          searchedPattern: "sessions/**/rollout-*.jsonl",
+          candidates: [{ filePath: rolloutPath, size: startOffset, mtimeMs: 0 }],
+          ignoredPreexistingCount: 0,
+          emptyCandidateCount: 0,
+          multipleCandidates: false,
+        },
+      };
+    },
+  };
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitForPtyWrites(spawner.process, 1);
+    await appendTaskComplete(codexHome, rollout, "resumed turn INITIAL_DONE");
+    spawner.process.emitExit(0);
+  });
+
+  await runCodexJsonlSession(
+    {
+      ...createCommand(),
+      args: ["resume", "codex-session-1"],
+      resumeProviderSessionId: "codex-session-1",
+    },
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(locatorCalls, ["locateResumeLog:codex-session-1"]);
+  assert.deepEqual(spawner.process.writes, ["\u001b[200~Start\u001b[201~\r"]);
+  assert.deepEqual(
+    events.map((event) =>
+      event.type === "turn-completed"
+        ? `${event.type}:${event.assistantMessage}`
+        : event.type,
+    ),
+    [
+      "session-start",
+      "submitted-user-message",
+      "turn-completed:resumed turn INITIAL_DONE",
+      "session-completed",
+    ],
+  );
+});
+
+test("Codex JSONL runner fresh launch snapshots before spawn and tails selected rollouts from offset zero", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
+  const rollout = "sessions/2026/05/30/rollout-session.jsonl";
+  const rolloutPath = join(codexHome, rollout);
+  const events: ManagedProviderSessionEvent[] = [];
+  const calls: string[] = [];
+  const snapshot = { filePaths: new Set<string>() };
+
+  await appendSessionMeta(codexHome, rollout);
+  await appendTaskComplete(codexHome, rollout, "fresh turn INITIAL_DONE");
+
+  const sessionLogLocator: SessionLogLocator = {
+    async snapshot() {
+      calls.push("snapshot");
+      return snapshot;
+    },
+    async locateActiveLog(receivedSnapshot) {
+      calls.push("locateActiveLog");
+      assert.equal(receivedSnapshot, snapshot);
+      return {
+        filePath: rolloutPath,
+        debug: {
+          scopedProviderHome: codexHome,
+          searchedPattern: "sessions/**/rollout-*.jsonl",
+          candidates: [{ filePath: rolloutPath, size: 0, mtimeMs: 0 }],
+          ignoredPreexistingCount: 0,
+          emptyCandidateCount: 0,
+          multipleCandidates: false,
+        },
+      };
+    },
+    async locateResumeLog() {
+      calls.push("locateResumeLog");
+      throw new Error("fresh launch should not use resume lookup");
+    },
+  };
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitForPtyWrites(spawner.process, 1);
+    spawner.process.emitExit(0);
+  });
+  const originalSpawn = spawner.spawn.bind(spawner);
+  spawner.spawn = (...args) => {
+    calls.push("spawn");
+    return originalSpawn(...args);
+  };
+
+  await runCodexJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(calls, ["snapshot", "spawn", "locateActiveLog"]);
+  assert.deepEqual(
+    events.map((event) =>
+      event.type === "turn-completed"
+        ? `${event.type}:${event.assistantMessage}`
+        : event.type,
+    ),
+    [
+      "session-start",
+      "submitted-user-message",
+      "turn-completed:fresh turn INITIAL_DONE",
+      "session-completed",
+    ],
+  );
+});
+
 test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
   const { codexHome, rollout, sessionLogLocator } =

@@ -9,6 +9,7 @@ import {
   getScopedCodexProviderHome,
   locateCodexSessionLogForProvider,
   type SessionLogLocator,
+  type SessionLogResumeLocation,
 } from "./codexSessionLogLocator.js";
 import {
   createJsonlTailEventSource,
@@ -41,6 +42,7 @@ export interface CodexJsonlSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
+  resumeProviderSessionId?: string;
 }
 
 export interface CodexJsonlSessionDependencies {
@@ -86,11 +88,14 @@ export async function runCodexJsonlSession(
     dependencies.earlyExitDrainTimeoutMs ?? DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS;
   await fs.ensureDir(codexHome);
 
+  const resumeProviderSessionId = command.resumeProviderSessionId;
   let snapshot;
-  try {
-    snapshot = await locator.snapshot();
-  } catch (error) {
-    throw new ProviderSessionEventCaptureError(command.provider, error);
+  if (!resumeProviderSessionId) {
+    try {
+      snapshot = await locator.snapshot();
+    } catch (error) {
+      throw new ProviderSessionEventCaptureError(command.provider, error);
+    }
   }
 
   let processHandle: PtyProcess;
@@ -527,14 +532,19 @@ export async function runCodexJsonlSession(
     }, firstEventTimeoutMs);
 
     void (async () => {
-      const location = await locateCodexSessionLogForProvider({
-        provider: command.provider,
-        locator,
-        snapshot,
-        timeoutMs: locatorTimeoutMs,
-      });
+      const location = resumeProviderSessionId
+        ? await locateResumeLogForProvider(resumeProviderSessionId)
+        : await locateCodexSessionLogForProvider({
+            provider: command.provider,
+            locator,
+            snapshot: snapshot!,
+            timeoutMs: locatorTimeoutMs,
+          });
       const eventSource = createJsonlTailEventSource({
         filePath: location.filePath,
+        startOffset: isResumeLocation(location)
+          ? location.startOffset
+          : undefined,
       });
       activeEventSource = eventSource;
 
@@ -550,4 +560,20 @@ export async function runCodexJsonlSession(
       startFileWatch(eventSource);
     })().catch(rejectEventCaptureFailure);
   });
+
+  async function locateResumeLogForProvider(providerSessionId: string) {
+    try {
+      return await locator.locateResumeLog(providerSessionId);
+    } catch (error) {
+      throw new ProviderSessionEventCaptureError(command.provider, error);
+    }
+  }
+}
+
+function isResumeLocation(
+  location:
+    | Awaited<ReturnType<typeof locateCodexSessionLogForProvider>>
+    | SessionLogResumeLocation,
+): location is SessionLogResumeLocation {
+  return "startOffset" in location;
 }
