@@ -18,6 +18,10 @@ export interface SessionLogLocation {
   debug: SessionLogLocationDebug;
 }
 
+export interface SessionLogResumeLocation extends SessionLogLocation {
+  startOffset: number;
+}
+
 export interface SessionLogLocationDebug {
   scopedProviderHome: string;
   searchedPattern: string;
@@ -39,6 +43,7 @@ export interface SessionLogLocator {
     snapshot: SessionLogSnapshot,
     options?: SessionLogLocateOptions,
   ): Promise<SessionLogLocation>;
+  locateResumeLog(providerSessionId: string): Promise<SessionLogResumeLocation>;
 }
 
 export interface SessionLogLocateOptions {
@@ -91,6 +96,26 @@ export class CodexSessionLogLocatorTimeoutError extends Error {
     this.scopedProviderHome = options.scopedProviderHome;
     this.searchedPattern = options.searchedPattern;
     this.timeoutMs = options.timeoutMs;
+  }
+}
+
+export class CodexSessionLogLocatorResumeNotFoundError extends Error {
+  readonly scopedProviderHome: string;
+  readonly searchedPattern: string;
+  readonly providerSessionId: string;
+
+  constructor(options: {
+    scopedProviderHome: string;
+    searchedPattern: string;
+    providerSessionId: string;
+  }) {
+    super(
+      `Codex rollout log for provider session "${options.providerSessionId}" was not found under scoped provider home "${options.scopedProviderHome}". Searched pattern: ${options.searchedPattern}.`,
+    );
+    this.name = "CodexSessionLogLocatorResumeNotFoundError";
+    this.scopedProviderHome = options.scopedProviderHome;
+    this.searchedPattern = options.searchedPattern;
+    this.providerSessionId = options.providerSessionId;
   }
 }
 
@@ -174,6 +199,24 @@ export function createCodexSessionLogLocator(
         timeoutMs,
       });
     },
+
+    async locateResumeLog(providerSessionId) {
+      const selected = await findResumeCandidate({
+        scopedProviderHome,
+        sessionsRoot,
+        providerSessionId,
+      });
+
+      if (selected) {
+        return selected;
+      }
+
+      throw new CodexSessionLogLocatorResumeNotFoundError({
+        scopedProviderHome,
+        searchedPattern: CODEX_ROLLOUT_PATTERN,
+        providerSessionId,
+      });
+    },
   };
 }
 
@@ -213,6 +256,39 @@ async function findSelectableCandidate(options: {
       candidates,
       ignoredPreexistingCount: options.snapshot.filePaths.size,
       emptyCandidateCount: options.emptyCandidatesSeen.size,
+      multipleCandidates: candidates.length > 1,
+    },
+  };
+}
+
+async function findResumeCandidate(options: {
+  scopedProviderHome: string;
+  sessionsRoot: string;
+  providerSessionId: string;
+}): Promise<SessionLogResumeLocation | undefined> {
+  const files = await findRolloutFiles({
+    scopedProviderHome: options.scopedProviderHome,
+    sessionsRoot: options.sessionsRoot,
+  });
+  const candidates = sortCandidates(
+    files.filter((file) =>
+      isRolloutForProviderSession(file.filePath, options.providerSessionId),
+    ),
+  );
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  return {
+    filePath: candidates[0].filePath,
+    startOffset: candidates[0].size,
+    debug: {
+      scopedProviderHome: options.scopedProviderHome,
+      searchedPattern: CODEX_ROLLOUT_PATTERN,
+      candidates,
+      ignoredPreexistingCount: 0,
+      emptyCandidateCount: 0,
       multipleCandidates: candidates.length > 1,
     },
   };
@@ -307,6 +383,15 @@ function isRolloutJsonlPath(filePath: string): boolean {
   const fileName = filePath.split(/[\\/]/).at(-1) ?? "";
 
   return fileName.startsWith("rollout-") && fileName.endsWith(".jsonl");
+}
+
+function isRolloutForProviderSession(
+  filePath: string,
+  providerSessionId: string,
+): boolean {
+  const fileName = filePath.split(/[\\/]/).at(-1) ?? "";
+
+  return fileName.endsWith(`-${providerSessionId}.jsonl`);
 }
 
 function isPathInside(candidate: string, root: string): boolean {

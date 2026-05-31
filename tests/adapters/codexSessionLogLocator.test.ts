@@ -6,6 +6,7 @@ import test from "node:test";
 import fs from "fs-extra";
 
 import {
+  CodexSessionLogLocatorResumeNotFoundError,
   CodexSessionLogLocatorTimeoutError,
   createCodexSessionLogLocator,
   getScopedCodexProviderHome,
@@ -205,6 +206,64 @@ test("Codex session log locator deterministically selects the most recent non-em
   assert.deepEqual(
     located.debug.candidates.map((candidate) => candidate.filePath),
     [newerLog, olderLog],
+  );
+});
+
+test("Codex session log locator finds a resume rollout by provider session id and captures its end offset", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
+  const providerSessionId = "codex-session-123";
+  const matchingContent = '{"type":"session_meta"}\n{"type":"task_complete"}\n';
+  const locator = createCodexSessionLogLocator({
+    codexHome,
+  });
+
+  await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-codex-session-123-old.jsonl",
+  );
+  const matchingLog = await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-2026-05-29T10-00-00-codex-session-123.jsonl",
+    matchingContent,
+  );
+  await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-other-session.jsonl",
+  );
+
+  const located = await locator.locateResumeLog(providerSessionId);
+
+  assert.equal(located.filePath, matchingLog);
+  assert.equal(located.startOffset, Buffer.byteLength(matchingContent, "utf8"));
+  assert.deepEqual(
+    located.debug.candidates.map((candidate) => candidate.filePath),
+    [matchingLog],
+  );
+});
+
+test("Codex session log locator fails resume lookup with a typed error when no rollout matches the provider session id", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
+  const locator = createCodexSessionLogLocator({
+    codexHome,
+  });
+
+  await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-other-session.jsonl",
+  );
+
+  await assert.rejects(
+    locator.locateResumeLog("codex-session-123"),
+    (error: unknown) => {
+      assert.ok(error instanceof CodexSessionLogLocatorResumeNotFoundError);
+      assert.equal(error.scopedProviderHome, codexHome);
+      assert.equal(error.searchedPattern, "sessions/**/rollout-*.jsonl");
+      assert.equal(error.providerSessionId, "codex-session-123");
+      assert.match(error.message, /codex-session-123/);
+      return true;
+    },
   );
 });
 

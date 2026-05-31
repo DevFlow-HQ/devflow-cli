@@ -265,6 +265,20 @@ function createFixedSessionLogLocator(filePath: string): SessionLogLocator {
         },
       };
     },
+    async locateResumeLog() {
+      return {
+        filePath,
+        startOffset: 0,
+        debug: {
+          scopedProviderHome: dirname(dirname(dirname(dirname(filePath)))),
+          searchedPattern: "sessions/**/rollout-*.jsonl",
+          candidates: [{ filePath, size: 0, mtimeMs: 0 }],
+          ignoredPreexistingCount: 0,
+          emptyCandidateCount: 0,
+          multipleCandidates: false,
+        },
+      };
+    },
   };
 }
 
