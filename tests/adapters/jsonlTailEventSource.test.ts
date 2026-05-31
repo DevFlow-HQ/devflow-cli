@@ -89,6 +89,35 @@ test("JSONL tailer starts from an explicit offset on the first read", async () =
   });
 });
 
+test("JSONL tailer watches later appends after starting from an explicit offset", async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const logPath = join(directory, "session.jsonl");
+  const staleRecord = '{"id":"stale"}\n';
+  const watcher = new FakeJsonlTailWatcher();
+  const results: Array<unknown[]> = [];
+  await fs.writeFile(logPath, staleRecord, "utf8");
+  const tailer = createJsonlTailEventSource({
+    filePath: logPath,
+    startOffset: Buffer.byteLength(staleRecord, "utf8"),
+    watchFile() {
+      return watcher;
+    },
+  });
+
+  tailer.watch(
+    (result) => {
+      results.push(result.records);
+    },
+    (error) => assert.fail(error as Error),
+  );
+
+  await fs.appendFile(logPath, '{"id":"resumed"}\n', "utf8");
+  watcher.emit("change", logPath);
+  await waitFor(() => results.length === 1);
+
+  assert.deepEqual(results, [[{ id: "resumed" }]]);
+});
+
 test("JSONL tailer starts from offset zero when no offset is provided", async () => {
   const readOffsets: number[] = [];
   const readSegment: JsonlTailReadSegment = async (_filePath, offset) => {
