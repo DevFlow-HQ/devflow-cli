@@ -99,10 +99,17 @@ const PRD_PROMPT_PATH = join(
   "prompts",
   "prd.md",
 );
+const ISSUES_PROMPT_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "prompts",
+  "issues.md",
+);
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
 const GRILL_STAGE_TOTAL_ATTEMPTS = 2;
 const PRD_STAGE_TOTAL_ATTEMPTS = 2;
+const ISSUES_STAGE_TOTAL_ATTEMPTS = 1;
 
 const intentArtifactSchema = z
   .object({
@@ -304,6 +311,21 @@ async function renderPrdPrompt(options: {
     )
     .replaceAll("{{GRILL_TRANSCRIPT_PATH}}", options.run.paths.grillTranscript)
     .replaceAll("{{PRD_ARTIFACT_PATH}}", options.run.paths.prdArtifact)
+    .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
+}
+
+async function renderIssuesPrompt(options: {
+  prdArtifactPath: string;
+  projectContextPath: string;
+  issuesDirectory: string;
+  completionMarker: string;
+}): Promise<string> {
+  const promptTemplate = await fs.readFile(ISSUES_PROMPT_PATH, "utf8");
+
+  return promptTemplate
+    .replaceAll("{{PRD_ARTIFACT_PATH}}", options.prdArtifactPath)
+    .replaceAll("{{PROJECT_CONTEXT_PATH}}", options.projectContextPath)
+    .replaceAll("{{ISSUES_DIRECTORY}}", options.issuesDirectory)
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
 }
 
@@ -623,6 +645,41 @@ async function validatePrdArtifact(artifactPath: string): Promise<void> {
       details: "PRD artifact must contain non-whitespace content.",
     });
   }
+}
+
+export async function validateIssueArtifacts(
+  issuesDirectory: string,
+): Promise<void> {
+  let entries: string[];
+
+  try {
+    entries = await fs.readdir(issuesDirectory);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "issues",
+      artifactPath: issuesDirectory,
+      details,
+    });
+  }
+
+  const markdownFiles = entries.filter((entry) => entry.endsWith(".md"));
+
+  for (const markdownFile of markdownFiles) {
+    const issuePath = join(issuesDirectory, markdownFile);
+    const content = await fs.readFile(issuePath, "utf8");
+
+    if (content.trim().length > 0) {
+      return;
+    }
+  }
+
+  throw new StageArtifactValidationError({
+    stage: "issues",
+    artifactPath: issuesDirectory,
+    details: "Issues directory must contain at least one non-empty markdown file.",
+  });
 }
 
 async function hasValidPrdArtifact(artifactPath: string): Promise<boolean> {
@@ -1244,6 +1301,57 @@ async function runPrdStageWithRetry(options: {
   });
 }
 
+async function runIssuesStage(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+  attempt: number;
+}): Promise<void> {
+  const completionMarker = createCompletionMarker("DEVFLOW_ISSUES_COMPLETE");
+  const prompt = await renderIssuesPrompt({
+    prdArtifactPath: options.run.paths.prdArtifact,
+    projectContextPath: options.run.paths.projectContextArtifact,
+    issuesDirectory: options.run.paths.issuesDirectory,
+    completionMarker,
+  });
+
+  await runManagedSessionWithProviderState({
+    run: options.run,
+    adapter: options.adapter,
+    input: {
+      workingDirectory: options.request.projectRoot,
+      initialPrompt: prompt,
+      initialCompletionMarker: completionMarker,
+      phase: createProviderSessionPhase({
+        run: options.run,
+        kind: "issues",
+        attempt: options.attempt,
+      }),
+      ...(options.request.model ? { model: options.request.model } : {}),
+      async validate() {
+        await validateIssueArtifacts(options.run.paths.issuesDirectory);
+      },
+    },
+  });
+}
+
+async function runIssuesStageWithRetry(options: {
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+}): Promise<void> {
+  await runProviderBackedStageWithRetry({
+    stage: "issues",
+    totalAttempts: ISSUES_STAGE_TOTAL_ATTEMPTS,
+    async runAttempt(attempt) {
+      await runIssuesStage({ ...options, attempt });
+    },
+    async cleanupBeforeRetry() {
+      await fs.emptyDir(options.run.paths.issuesDirectory);
+    },
+  });
+}
+
 async function appendGrillFailureNoteBestEffort(
   run: DevFlowRunHandle,
   error: unknown,
@@ -1568,7 +1676,14 @@ export async function runExecutionRequest(
     onPrdStageStart: () => startStage("prd", options),
   });
 
-  for (const stage of PIPELINE_STAGES.slice(4)) {
+  await startStage("issues", options);
+  await runIssuesStageWithRetry({
+    request,
+    run,
+    adapter,
+  });
+
+  for (const stage of PIPELINE_STAGES.slice(5)) {
     await startStage(stage, options);
     await runNoopStage();
   }

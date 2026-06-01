@@ -58,6 +58,10 @@ function isPrdSessionInput(input: ManagedProviderSessionInput): boolean {
   return input.initialCompletionMarker.startsWith("DEVFLOW_PRD_COMPLETE_");
 }
 
+function isIssuesSessionInput(input: ManagedProviderSessionInput): boolean {
+  return input.initialCompletionMarker.startsWith("DEVFLOW_ISSUES_COMPLETE_");
+}
+
 type DistributiveOmit<T, K extends keyof any> = T extends unknown
   ? Omit<T, K>
   : never;
@@ -83,6 +87,32 @@ function extractPrdArtifactPath(prompt: string): string {
 
   assert.ok(match?.[1], "expected PRD prompt to include artifact path");
   return match[1];
+}
+
+function extractIssuesDirectory(prompt: string): string {
+  const match = prompt.match(/Issues directory:\n([^\n]+)/);
+
+  assert.ok(match?.[1], "expected issues prompt to include issues directory");
+  return match[1];
+}
+
+async function completeIssuesSession(
+  input: ManagedProviderSessionInput,
+): Promise<ManagedProviderSessionResult> {
+  assert.match(input.initialCompletionMarker, /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(input.initialPrompt, /Decompose the accepted PRD/);
+  assert.match(input.initialPrompt, /Canonical PRD artifact path:/);
+  assert.match(input.initialPrompt, /Project context path:/);
+  assert.match(input.initialPrompt, /Issues directory:/);
+  assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+
+  await fs.outputFile(
+    join(extractIssuesDirectory(input.initialPrompt), "first-issue.md"),
+    "# First issue\n",
+  );
+  await input.validate();
+
+  return { repairUsed: false, exitCode: 0, signal: null };
 }
 
 async function completeSessionContinuations(
@@ -174,6 +204,10 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionInputs.push(input);
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
@@ -265,6 +299,10 @@ test("orchestrator can complete the active intent stage through a built-in Codex
               return completeGrillSession(input);
             }
 
+            if (isIssuesSessionInput(input)) {
+              return completeIssuesSession(input);
+            }
+
             await fs.outputJson(
               join(
                 projectRoot,
@@ -302,7 +340,7 @@ test("orchestrator can complete the active intent stage through a built-in Codex
     needsClarification: false,
   });
   assert.equal(result.bootstrapProvenance, "reused");
-  assert.equal(sessionCalls.length, 2);
+  assert.equal(sessionCalls.length, 3);
   assert.equal(sessionCalls[0]?.executable, executablePath);
   assert.equal(sessionCalls[0]?.args[0], "--model");
   assert.equal(sessionCalls[0]?.args[1], "gpt-5.5/fast beta");
@@ -340,6 +378,10 @@ test("orchestrator leaves Codex event-source selection behind the managed-sessio
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       capabilitiesSeen.push(adapter.capabilities?.eventSource);
       sessionPhaseKinds.push(input.phase?.kind);
 
@@ -415,6 +457,10 @@ test("orchestrator reports intent repair metadata from a built-in provider adapt
               return completeGrillSession(input);
             }
 
+            if (isIssuesSessionInput(input)) {
+              return completeIssuesSession(input);
+            }
+
             await assert.rejects(input.validate());
             assert.ok(input.repair);
             const repairPrompt = input.repair.renderPrompt(
@@ -478,6 +524,10 @@ test("orchestrator retries a retryable intent provider-session failure inside th
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -586,6 +636,10 @@ test("orchestrator retries intent after failed in-session repair and accepts a v
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -698,6 +752,10 @@ test("orchestrator raises a typed retry-exhausted error and preserves the final 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -823,6 +881,24 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
           },
           { spaces: 2 },
         );
+      } else if (isIssuesSessionInput(input)) {
+        assert.ok(input.phase?.id, "expected issues phase id");
+        assert.equal(input.phase.kind, "issues");
+        assert.equal(input.phase.attempt, 1);
+        assert.match(input.initialCompletionMarker, /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/);
+        assert.match(input.initialPrompt, /Decompose the accepted PRD/);
+        assert.match(input.initialPrompt, /Canonical PRD artifact path:/);
+        assert.match(input.initialPrompt, /prd\.md/);
+        assert.match(input.initialPrompt, /Project context path:/);
+        assert.match(input.initialPrompt, /project-context\.md/);
+        assert.match(input.initialPrompt, /Issues directory:/);
+        assert.match(input.initialPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/issues/);
+        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+
+        await fs.outputFile(
+          join(runDirectory, "issues", "first-issue.md"),
+          "# First issue\n",
+        );
       } else {
         assert.ok(input.phase?.id, "expected grill phase id");
         assert.equal(input.phase.kind, "grill");
@@ -877,7 +953,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     "execute",
     "validate",
   ]);
-  assert.equal(runSessionInputs.length, 2);
+  assert.equal(runSessionInputs.length, 3);
 
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
@@ -929,7 +1005,10 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     },
   );
   assert.match(grillCheckpoint.completedAt, /^\d{4}-\d{2}-\d{2}T/);
-  assert.equal(await fs.pathExists(join(runDirectory, "issues")), false);
+  assert.equal(
+    await fs.readFile(join(runDirectory, "issues", "first-issue.md"), "utf8"),
+    "# First issue\n",
+  );
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
@@ -950,6 +1029,10 @@ test("structured-provider grill orchestration records normalized events instead 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1056,6 +1139,10 @@ test("orchestrator persists reliable provider session ids from normalized sessio
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1160,6 +1247,10 @@ test("orchestrator refreshes provider session state from later normalized turn e
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1263,6 +1354,10 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionInputs.push(input);
       const runDirectory = join(
         projectRoot,
@@ -1378,6 +1473,10 @@ test("failed grill resume falls back once to a fresh partial-transcript grill at
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1480,6 +1579,10 @@ test("unsupported grill resume keeps the partial-transcript new attempt path", a
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1570,6 +1673,10 @@ test("grill resume does not accept session-completed without marker observation"
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1677,6 +1784,10 @@ test("orchestrator leaves fallback providers without reliable session ids on exi
       return { isAvailable: true, executable: "claude" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1766,6 +1877,10 @@ test("structured Codex JSONL grill orchestration records transcripts from normal
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -1893,6 +2008,10 @@ test("structured Claude hook grill orchestration records normalized events and p
       return { isAvailable: true, executable: "claude" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2053,6 +2172,10 @@ test("structured-provider grill orchestration keeps repair discussion before acc
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2164,6 +2287,10 @@ test("structured-provider grill transcript persistence failures retry without wr
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2244,6 +2371,10 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2355,6 +2486,10 @@ test("orchestrator exhausts grill retries after two pre-completion attempts", as
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2440,6 +2575,10 @@ test("orchestrator does not retry interactive grill after transcript completion"
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2518,6 +2657,10 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2622,6 +2765,10 @@ test("orchestrator replaces a corrupt checkpoint from a completed grill transcri
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2697,6 +2844,10 @@ test("orchestrator repairs a missing PRD artifact inside the completed grill ses
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2789,6 +2940,10 @@ test("orchestrator repairs an empty PRD artifact with the same non-empty validat
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2875,6 +3030,10 @@ test("orchestrator retries only PRD synthesis from transcript after completed-gr
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2980,6 +3139,10 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3106,6 +3269,10 @@ test("failed PRD resume falls back once to PRD-only synthesis from the completed
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3222,6 +3389,10 @@ test("completed PRD artifact prevents PRD resume or fallback from running again"
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3333,6 +3504,10 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3427,6 +3602,10 @@ test("completed grill checkpoint overrides stale active grill provider state dur
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3539,6 +3718,10 @@ test("orchestrator surfaces pre-completion grill transcript persistence failures
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       await fs.outputJson(
         join(
           projectRoot,
@@ -3613,6 +3796,10 @@ test("orchestrator reuses fresh project context during bootstrap without provide
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionInputs.push(input);
 
       if (isGrillSessionInput(input)) {
@@ -3708,6 +3895,10 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionCallCount += 1;
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
@@ -3812,6 +4003,10 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionCallCount += 1;
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
@@ -3919,6 +4114,10 @@ test("orchestrator generates missing project context through the managed provide
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionInputs.push(input);
       const runIds = await listRunDirectories(projectRoot);
       const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -4096,6 +4295,10 @@ test("orchestrator refreshes semantically stale project context through the mana
         return { isAvailable: true, executable: "codex" };
       },
       async runSession(input) {
+        if (isIssuesSessionInput(input)) {
+          return completeIssuesSession(input);
+        }
+
         if (isGrillSessionInput(input)) {
           return completeGrillSession(input);
         }
@@ -4207,6 +4410,10 @@ test("orchestrator rejects invalid generated project-context candidates during b
         return { isAvailable: true, executable: "codex" };
       },
       async runSession(input) {
+        if (isIssuesSessionInput(input)) {
+          return completeIssuesSession(input);
+        }
+
         runSessionCallCount += 1;
         const runIds = await listRunDirectories(projectRoot);
         const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -4288,6 +4495,10 @@ test("orchestrator supplies bootstrap validation and one in-session repair attem
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -4389,6 +4600,10 @@ test("orchestrator retries bootstrap after repair failure and removes the failed
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -4463,6 +4678,10 @@ test("orchestrator preserves the final failed bootstrap candidate after retry ex
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -4587,6 +4806,10 @@ test("orchestrator treats bootstrap candidate cleanup failure after persistence 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -4702,6 +4925,10 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -4784,6 +5011,10 @@ test("orchestrator preserves the final failed repair validation error as the ret
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       try {
         await input.validate();
       } catch (error) {
@@ -5056,6 +5287,10 @@ test("orchestrator stops after cleanup failure even when the intent artifact is 
       return { isAvailable: true, executable: "codex" };
     },
     async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
       await fs.outputJson(
         join(
           projectRoot,

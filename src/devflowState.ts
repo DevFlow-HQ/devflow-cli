@@ -340,6 +340,7 @@ export interface DevFlowRunHandle {
     grillCheckpoint: string;
     providerSessionState: string;
     prdArtifact: string;
+    issuesDirectory: string;
   };
 }
 
@@ -564,6 +565,13 @@ function getRunIssueArtifactPath(
     getRunDirectoryPath(projectRoot, runId),
     DEVFLOW_RUN_ISSUES_DIRECTORY,
     `${normalizedSlug}.md`,
+  );
+}
+
+function getRunIssuesDirectoryPath(projectRoot: string, runId: string): string {
+  return join(
+    getRunDirectoryPath(projectRoot, runId),
+    DEVFLOW_RUN_ISSUES_DIRECTORY,
   );
 }
 
@@ -1661,6 +1669,7 @@ async function createRun(
       grillCheckpoint: grillCheckpointPath,
       providerSessionState: providerSessionStatePath,
       prdArtifact: getRunArtifactPath(projectRoot, runId, "prd"),
+      issuesDirectory: getRunIssuesDirectoryPath(projectRoot, runId),
     },
   };
 }

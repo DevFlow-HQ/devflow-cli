@@ -1431,6 +1431,11 @@ test("run handles write issue artifacts through canonical normalized filenames",
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
+  assert.equal(
+    run.paths.issuesDirectory,
+    join(run.paths.runDirectory, "issues"),
+  );
+
   await run.writeIssue("  Release_Prep Plan  ", "# Issue\n");
 
   assert.equal(
