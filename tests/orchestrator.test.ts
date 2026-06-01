@@ -115,6 +115,27 @@ async function completeIssuesSession(
   return { repairUsed: false, exitCode: 0, signal: null };
 }
 
+function assertIssuesPromptContract(input: ManagedProviderSessionInput): void {
+  assert.match(input.initialCompletionMarker, /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(input.initialPrompt, /Canonical PRD artifact path:\n.+prd\.md/);
+  assert.match(input.initialPrompt, /Project context path:\n.+project-context\.md/);
+  assert.match(input.initialPrompt, /Issues directory:\n.+\/issues/);
+  assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+  assert.doesNotMatch(input.initialPrompt, /\{\{[A-Z_]+\}\}/);
+
+  assert.match(input.initialPrompt, /write markdown files directly into the supplied issues directory/i);
+  assert.match(input.initialPrompt, /vertical-slice/i);
+  assert.match(input.initialPrompt, /demoable\/verifiable acceptance criteria/i);
+  assert.match(input.initialPrompt, /blocked-by sibling slugs/i);
+  assert.match(input.initialPrompt, /HITL\/AFK/i);
+  assert.match(input.initialPrompt, /single headless self-critique/i);
+
+  assert.doesNotMatch(input.initialPrompt, /\/setup-matt-pocock-skills/);
+  assert.doesNotMatch(input.initialPrompt, /\bgh\b/);
+  assert.doesNotMatch(input.initialPrompt, /issue-tracker publishing/i);
+  assert.doesNotMatch(input.initialPrompt, /triage[- ]label instructions/i);
+}
+
 async function completeSessionContinuations(
   input: ManagedProviderSessionInput,
 ): Promise<void> {
@@ -885,15 +906,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
         assert.ok(input.phase?.id, "expected issues phase id");
         assert.equal(input.phase.kind, "issues");
         assert.equal(input.phase.attempt, 1);
-        assert.match(input.initialCompletionMarker, /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/);
-        assert.match(input.initialPrompt, /Decompose the accepted PRD/);
-        assert.match(input.initialPrompt, /Canonical PRD artifact path:/);
-        assert.match(input.initialPrompt, /prd\.md/);
-        assert.match(input.initialPrompt, /Project context path:/);
-        assert.match(input.initialPrompt, /project-context\.md/);
-        assert.match(input.initialPrompt, /Issues directory:/);
-        assert.match(input.initialPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/issues/);
-        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+        assertIssuesPromptContract(input);
 
         await fs.outputFile(
           join(runDirectory, "issues", "first-issue.md"),
