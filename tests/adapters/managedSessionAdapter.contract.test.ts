@@ -685,9 +685,13 @@ test("Claude adapter exposes JSONL only when explicitly selected", () => {
     controlTransport: "pty",
     eventSource: "jsonl",
     supportsProviderSessionId: true,
-    supportsResume: false,
-    classifiesSubmittedUserMessageOrigin: false,
+    supportsResume: true,
+    classifiesSubmittedUserMessageOrigin: true,
   });
+  assert.equal(
+    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "jsonl" })),
+    true,
+  );
   assert.deepEqual(
     createBuiltInManagedSessionAdapter("claude", {
       claudeEventSource: "jsonl",
@@ -696,8 +700,8 @@ test("Claude adapter exposes JSONL only when explicitly selected", () => {
       controlTransport: "pty",
       eventSource: "jsonl",
       supportsProviderSessionId: true,
-      supportsResume: false,
-      classifiesSubmittedUserMessageOrigin: false,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
     },
   );
 });
@@ -1219,6 +1223,61 @@ test("Claude adapter resumeSession delegates hook resume without a model flag", 
         args: ["--resume", "codex-session-123", "Continue the interrupted work"],
       },
       input: validResumeInput,
+    },
+  ]);
+});
+
+test("Claude adapter resumeSession delegates JSONL resume with native --resume flag and provider session id", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-claude-jsonl-resume-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, "claude");
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const hookRunner = new CapturingClaudeHookRunner();
+  const jsonlRunner = new CapturingClaudeJsonlRunner();
+  const adapter = createClaudeAdapter({
+    eventSource: "jsonl",
+    runClaudeHookDrivenSession:
+      hookRunner.runClaudeHookDrivenSession.bind(hookRunner),
+    runClaudeJsonlSession:
+      jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
+  });
+
+  assert.equal(canResumeManagedProviderSession(adapter), true);
+  if (!canResumeManagedProviderSession(adapter)) {
+    assert.fail("expected Claude JSONL adapter to support resume");
+  }
+
+  await adapter.resumeSession(validResumeInputWithModel);
+
+  assert.deepEqual(hookRunner.calls, []);
+  assert.deepEqual(jsonlRunner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("claude"),
+        executable: executablePath,
+        args: [
+          "--resume",
+          "codex-session-123",
+          "--model",
+          "gpt-5.5",
+          "Continue the interrupted work",
+        ],
+        resumeProviderSessionId: "codex-session-123",
+      },
+      input: validResumeInputWithModel,
     },
   ]);
 });

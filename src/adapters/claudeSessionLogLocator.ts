@@ -11,6 +11,7 @@ import type { ProviderIdentity } from "./providers.js";
 import type {
   SessionLogCandidateDebug,
   SessionLogLocation,
+  SessionLogResumeLocation,
   SessionLogLocator,
   SessionLogSnapshot,
   SessionLogWatchEvent,
@@ -52,6 +53,29 @@ export class ClaudeSessionLogLocatorTimeoutError extends Error {
     this.name = "ClaudeSessionLogLocatorTimeoutError";
     this.scopedProviderHome = options.scopedProviderHome;
     this.searchedPattern = options.searchedPattern;
+    this.timeoutMs = options.timeoutMs;
+  }
+}
+
+export class ClaudeSessionLogLocatorResumeNotFoundError extends Error {
+  readonly scopedProviderHome: string;
+  readonly searchedPattern: string;
+  readonly providerSessionId: string;
+  readonly timeoutMs: number;
+
+  constructor(options: {
+    scopedProviderHome: string;
+    searchedPattern: string;
+    providerSessionId: string;
+    timeoutMs: number;
+  }) {
+    super(
+      `Claude transcript log for provider session "${options.providerSessionId}" was not found under scoped provider home "${options.scopedProviderHome}" before ${options.timeoutMs}ms elapsed. Searched pattern: ${options.searchedPattern}.`,
+    );
+    this.name = "ClaudeSessionLogLocatorResumeNotFoundError";
+    this.scopedProviderHome = options.scopedProviderHome;
+    this.searchedPattern = options.searchedPattern;
+    this.providerSessionId = options.providerSessionId;
     this.timeoutMs = options.timeoutMs;
   }
 }
@@ -137,8 +161,56 @@ export function createClaudeSessionLogLocator(
       });
     },
 
-    async locateResumeLog() {
-      throw new Error("Claude JSONL resume lookup is not implemented yet.");
+    async locateResumeLog(providerSessionId, locateOptions = {}) {
+      const timeoutMs =
+        locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
+      const watcher = watchProjectsTree(projectsRoot);
+      let wakeup: (() => void) | undefined;
+      const notifyWakeup = (): void => {
+        wakeup?.();
+      };
+
+      watcher.on("add", notifyWakeup);
+      watcher.on("change", notifyWakeup);
+
+      try {
+        do {
+          const selected = await findResumeCandidate({
+            scopedProviderHome,
+            projectsRoot,
+            providerSessionId,
+          });
+
+          if (selected) {
+            return selected;
+          }
+
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) {
+            break;
+          }
+
+          await waitForWatcherWakeup({
+            timeoutMs: remainingMs,
+            register(resolveWakeup) {
+              wakeup = resolveWakeup;
+            },
+            unregister() {
+              wakeup = undefined;
+            },
+          });
+        } while (true);
+      } finally {
+        await watcher.close();
+      }
+
+      throw new ClaudeSessionLogLocatorResumeNotFoundError({
+        scopedProviderHome,
+        searchedPattern: CLAUDE_TRANSCRIPT_PATTERN,
+        providerSessionId,
+        timeoutMs,
+      });
     },
   };
 }
@@ -194,6 +266,73 @@ async function findSelectableCandidate(options: {
       multipleCandidates: candidates.length > 1,
     },
   };
+}
+
+async function findResumeCandidate(options: {
+  scopedProviderHome: string;
+  projectsRoot: string;
+  providerSessionId: string;
+}): Promise<SessionLogResumeLocation | undefined> {
+  const files = await findTranscriptFiles({
+    scopedProviderHome: options.scopedProviderHome,
+    projectsRoot: options.projectsRoot,
+  });
+  const matchingCandidates: SessionLogCandidateDebug[] = [];
+
+  for (const file of files) {
+    if (await transcriptContainsSessionId(file.filePath, options.providerSessionId)) {
+      matchingCandidates.push(file);
+    }
+  }
+
+  const candidates = sortCandidates(matchingCandidates);
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  return {
+    filePath: candidates[0].filePath,
+    startOffset: candidates[0].size,
+    debug: {
+      scopedProviderHome: options.scopedProviderHome,
+      searchedPattern: CLAUDE_TRANSCRIPT_PATTERN,
+      candidates,
+      ignoredPreexistingCount: 0,
+      emptyCandidateCount: 0,
+      multipleCandidates: candidates.length > 1,
+    },
+  };
+}
+
+async function transcriptContainsSessionId(
+  filePath: string,
+  providerSessionId: string,
+): Promise<boolean> {
+  const content = await fs.readFile(filePath, "utf8");
+
+  for (const line of content.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+
+    try {
+      const record = JSON.parse(line) as unknown;
+
+      if (
+        typeof record === "object" &&
+        record !== null &&
+        "sessionId" in record &&
+        record.sessionId === providerSessionId
+      ) {
+        return true;
+      }
+    } catch {
+      // Ignore unrelated malformed transcript lines during lookup.
+    }
+  }
+
+  return false;
 }
 
 async function waitForWatcherWakeup(options: {

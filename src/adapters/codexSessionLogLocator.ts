@@ -43,7 +43,10 @@ export interface SessionLogLocator {
     snapshot: SessionLogSnapshot,
     options?: SessionLogLocateOptions,
   ): Promise<SessionLogLocation>;
-  locateResumeLog(providerSessionId: string): Promise<SessionLogResumeLocation>;
+  locateResumeLog(
+    providerSessionId: string,
+    options?: SessionLogLocateOptions,
+  ): Promise<SessionLogResumeLocation>;
 }
 
 export interface SessionLogLocateOptions {

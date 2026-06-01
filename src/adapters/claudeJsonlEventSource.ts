@@ -14,7 +14,7 @@ export type NormalizedClaudeJsonlEvent = DistributiveOmit<
 >;
 
 export interface ClaudeJsonlNormalizer {
-  synthesizeSessionStart(): NormalizedClaudeJsonlEvent | undefined;
+  synthesizeSessionStart(providerSessionId?: string): NormalizedClaudeJsonlEvent | undefined;
   normalizeRecord(record: unknown): NormalizedClaudeJsonlEvent | undefined;
 }
 
@@ -42,13 +42,15 @@ export function createClaudeJsonlNormalizer(): ClaudeJsonlNormalizer {
   const pendingTextByMessageId = new Map<string, string[]>();
 
   return {
-    synthesizeSessionStart() {
+    synthesizeSessionStart(providerSessionId) {
       if (sessionStartEmitted) {
         return undefined;
       }
 
       sessionStartEmitted = true;
-      return { type: "session-start" };
+      return providerSessionId
+        ? { type: "session-start", providerSessionId }
+        : { type: "session-start" };
     },
 
     normalizeRecord(record) {

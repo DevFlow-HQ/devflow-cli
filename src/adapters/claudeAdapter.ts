@@ -62,8 +62,8 @@ const CLAUDE_JSONL_CAPABILITIES: ManagedProviderSessionCapabilities = {
   controlTransport: "pty",
   eventSource: "jsonl",
   supportsProviderSessionId: true,
-  supportsResume: false,
-  classifiesSubmittedUserMessageOrigin: false,
+  supportsResume: true,
+  classifiesSubmittedUserMessageOrigin: true,
 };
 
 export function createClaudeAdapter(
@@ -145,11 +145,34 @@ function createClaudeJsonlAdapter(
     );
   }
 
+  async function resumeSession(
+    input: ManagedProviderSessionResumeInput,
+  ): Promise<ManagedProviderSessionResult> {
+    let executable: string;
+
+    try {
+      executable = await resolveExecutable();
+    } catch (error) {
+      throw new ProviderSessionLaunchError(provider, error);
+    }
+
+    return jsonlRunner(
+      {
+        provider,
+        executable,
+        args: buildClaudeResumeArgs(input),
+        resumeProviderSessionId: input.providerSessionId,
+      },
+      input,
+    );
+  }
+
   return {
     provider,
     capabilities: CLAUDE_JSONL_CAPABILITIES,
     detect: detectExecutable,
     runSession,
+    resumeSession,
   };
 }
 

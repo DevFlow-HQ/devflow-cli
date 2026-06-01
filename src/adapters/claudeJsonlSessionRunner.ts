@@ -32,12 +32,16 @@ import {
   type UserInterruptState,
 } from "./ptyManagedSessionRunner.js";
 import type { ProviderIdentity } from "./providers.js";
-import type { SessionLogLocator } from "./codexSessionLogLocator.js";
+import type {
+  SessionLogLocator,
+  SessionLogResumeLocation,
+} from "./codexSessionLogLocator.js";
 
 export interface ClaudeJsonlSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
+  resumeProviderSessionId?: string;
 }
 
 export interface ClaudeJsonlSessionDependencies {
@@ -82,11 +86,23 @@ export async function runClaudeJsonlSession(
 
   await fs.ensureDir(claudeHome);
 
+  const resumeProviderSessionId = command.resumeProviderSessionId;
   let snapshot;
-  try {
-    snapshot = await locator.snapshot();
-  } catch (error) {
-    throw new ProviderSessionEventCaptureError(command.provider, error);
+  let resumeLocation: SessionLogResumeLocation | undefined;
+  if (resumeProviderSessionId) {
+    try {
+      resumeLocation = await locator.locateResumeLog(resumeProviderSessionId, {
+        timeoutMs: locatorTimeoutMs,
+      });
+    } catch (error) {
+      throw new ProviderSessionEventCaptureError(command.provider, error);
+    }
+  } else {
+    try {
+      snapshot = await locator.snapshot();
+    } catch (error) {
+      throw new ProviderSessionEventCaptureError(command.provider, error);
+    }
   }
 
   let processHandle: PtyProcess;
@@ -243,7 +259,7 @@ export async function runClaudeJsonlSession(
     }
 
     async function emitAttachedSessionStart(): Promise<void> {
-      const event = normalizer.synthesizeSessionStart();
+      const event = normalizer.synthesizeSessionStart(resumeProviderSessionId);
 
       if (event) {
         await manager.handleEvent(event);
@@ -386,14 +402,19 @@ export async function runClaudeJsonlSession(
     }, firstEventTimeoutMs);
 
     void (async () => {
-      const location = await locateClaudeSessionLogForProvider({
-        provider: command.provider,
-        locator,
-        snapshot,
-        timeoutMs: locatorTimeoutMs,
-      });
+      const location =
+        resumeLocation ??
+        (await locateClaudeSessionLogForProvider({
+          provider: command.provider,
+          locator,
+          snapshot: snapshot!,
+          timeoutMs: locatorTimeoutMs,
+        }));
       const eventSource = createJsonlTailEventSource({
         filePath: location.filePath,
+        startOffset: isResumeLocation(location)
+          ? location.startOffset
+          : undefined,
       });
       activeEventSource = eventSource;
 
@@ -408,4 +429,12 @@ export async function runClaudeJsonlSession(
       startFileWatch(eventSource);
     })().catch(rejectEventCaptureFailure);
   });
+}
+
+function isResumeLocation(
+  location:
+    | Awaited<ReturnType<typeof locateClaudeSessionLogForProvider>>
+    | SessionLogResumeLocation,
+): location is SessionLogResumeLocation {
+  return "startOffset" in location;
 }

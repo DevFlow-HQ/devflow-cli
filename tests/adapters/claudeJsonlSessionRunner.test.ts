@@ -9,6 +9,7 @@ import fs from "fs-extra";
 import {
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
+  ProviderSessionEventCaptureError,
 } from "../../src/adapters/managedSessionAdapter.js";
 import {
   runClaudeJsonlSession,
@@ -99,6 +100,15 @@ function createCommand(): ClaudeJsonlSessionCommand {
   };
 }
 
+function createResumeCommand(): ClaudeJsonlSessionCommand {
+  return {
+    provider: getBuiltInProviderIdentity("claude"),
+    executable: "claude",
+    args: ["--resume", "claude-session-1", "--model", "sonnet", "Resume"],
+    resumeProviderSessionId: "claude-session-1",
+  };
+}
+
 async function appendTranscriptRecord(
   claudeHome: string,
   relativePath: string,
@@ -130,6 +140,27 @@ function createFixedSessionLogLocator(filePath: string): SessionLogLocator {
     },
     async locateResumeLog() {
       throw new Error("resume is out of scope for this test");
+    },
+  };
+}
+
+function createFixedResumeSessionLogLocator(
+  location: Awaited<ReturnType<SessionLogLocator["locateResumeLog"]>>,
+  options: {
+    onSnapshot?: () => void;
+  } = {},
+): SessionLogLocator {
+  return {
+    async snapshot() {
+      options.onSnapshot?.();
+      return { filePaths: new Set() };
+    },
+    async locateActiveLog() {
+      throw new Error("fresh lookup is out of scope for this test");
+    },
+    async locateResumeLog(providerSessionId) {
+      assert.equal(providerSessionId, "claude-session-1");
+      return location;
     },
   };
 }
@@ -291,5 +322,150 @@ test("Claude JSONL runner classifies human user records and suppresses managed p
       .filter((event) => event.type === "submitted-user-message")
       .map((event) => `${event.origin}:${event.message}`),
     ["human:human reply"],
+  );
+});
+
+test("Claude JSONL runner resumes by tailing an existing transcript from the captured offset", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-resume-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const events: ManagedProviderSessionEvent[] = [];
+  const validationOrder: string[] = [];
+  let snapshotCalled = false;
+  const staleRecord = `${JSON.stringify({
+    type: "assistant",
+    sessionId: "claude-session-1",
+    message: {
+      id: "msg_stale",
+      role: "assistant",
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "stale INITIAL_DONE" }],
+    },
+  })}\n`;
+
+  await fs.ensureDir(dirname(transcriptPath));
+  await fs.writeFile(transcriptPath, staleRecord, "utf8");
+
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "user",
+      sessionId: "claude-session-1",
+      message: {
+        role: "user",
+        content: "Resume",
+      },
+    });
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_resumed",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "resumed INITIAL_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  const result = await runClaudeJsonlSession(
+    createResumeCommand(),
+    createInput(projectRoot, {
+      initialPrompt: "Resume",
+      async validate() {
+        validationOrder.push("validate");
+      },
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedResumeSessionLogLocator(
+        {
+          filePath: transcriptPath,
+          startOffset: Buffer.byteLength(staleRecord, "utf8"),
+          debug: {
+            scopedProviderHome: claudeHome,
+            searchedPattern: "projects/**/*.jsonl",
+            candidates: [],
+            ignoredPreexistingCount: 0,
+            emptyCandidateCount: 0,
+            multipleCandidates: false,
+          },
+        },
+        {
+          onSnapshot() {
+            snapshotCalled = true;
+          },
+        },
+      ),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.equal(snapshotCalled, false);
+  assert.deepEqual(spawner.calls.map((call) => call.args), [
+    ["--resume", "claude-session-1", "--model", "sonnet", "Resume"],
+  ]);
+  assert.deepEqual(validationOrder, ["validate"]);
+  assert.deepEqual(
+    events.map((event) =>
+      event.type === "turn-completed"
+        ? `${event.type}:${event.providerSessionId}:${event.assistantMessage}`
+        : event.type === "submitted-user-message"
+          ? `${event.type}:${event.origin}:${event.message}`
+          : `${event.type}:${event.providerSessionId}`,
+    ),
+    [
+      "session-start:claude-session-1",
+      "turn-completed:claude-session-1:resumed INITIAL_DONE",
+      "session-completed:undefined",
+    ],
+  );
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+});
+
+test("Claude JSONL runner wraps resume transcript lookup failures as provider event capture errors", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-resume-missing-"));
+  const lookupFailure = new Error("resume transcript missing");
+  const locator: SessionLogLocator = {
+    async snapshot() {
+      throw new Error("snapshot should not be called for resume");
+    },
+    async locateActiveLog() {
+      throw new Error("fresh lookup should not be called for resume");
+    },
+    async locateResumeLog() {
+      throw lookupFailure;
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      runClaudeJsonlSession(
+        createResumeCommand(),
+        createInput(projectRoot, { initialPrompt: "Resume" }),
+        {
+          ptySpawner: new ScriptedClaudePtySpawner(async () => {}),
+          outputSink: { write() {} },
+          sessionLogLocator: locator,
+          locatorTimeoutMs: 10,
+          firstEventTimeoutMs: 10,
+        },
+      ),
+    (error) => {
+      assert.ok(error instanceof ProviderSessionEventCaptureError);
+      assert.equal(error.cause, lookupFailure);
+      return true;
+    },
   );
 });
