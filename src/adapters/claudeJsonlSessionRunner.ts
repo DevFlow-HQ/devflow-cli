@@ -22,16 +22,19 @@ import {
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   ProviderSessionLaunchError,
+  ProviderSessionTranscriptCaptureError,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";
 import { createPhaseManager } from "./phaseManager.js";
 import {
   nodePtySpawner,
+  submitPtyPrompt,
   type OutputSink,
   type PtyProcess,
   type PtySpawner,
   type TerminalDimensions,
+  type UserInput,
   type UserInterruptState,
 } from "./ptyManagedSessionRunner.js";
 import type { ProviderIdentity } from "./providers.js";
@@ -51,6 +54,7 @@ export interface ClaudeJsonlSessionDependencies {
   ptySpawner?: PtySpawner;
   outputSink?: OutputSink;
   terminal?: TerminalDimensions;
+  userInput?: UserInput;
   userInterrupt?: UserInterruptState;
   sessionLogLocator?: SessionLogLocator;
   locatorTimeoutMs?: number;
@@ -77,6 +81,7 @@ export async function runClaudeJsonlSession(
   const ptySpawner = dependencies.ptySpawner ?? nodePtySpawner;
   const outputSink = dependencies.outputSink ?? process.stdout;
   const terminal = dependencies.terminal ?? process.stdout;
+  const userInput = dependencies.userInput ?? process.stdin;
   const environment = dependencies.environment ?? process.env;
   const platform = dependencies.platform ?? process.platform;
   const claudeHome = getScopedClaudeProviderHome(input);
@@ -144,6 +149,8 @@ export async function runClaudeJsonlSession(
     let exitObserved = false;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
+    let cleanupUserInputBridge = (): void => {};
+    let cleanupTerminalResize = (): void => {};
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
     let earlyExitDrainTimer: NodeJS.Timeout | undefined;
@@ -158,10 +165,8 @@ export async function runClaudeJsonlSession(
       source: "jsonl",
       structured: true,
       input,
-      submitPrompt() {
-        throw new Error(
-          "Claude JSONL continuation prompts are not implemented yet.",
-        );
+      submitPrompt(prompt) {
+        return submitManagedPrompt(prompt);
       },
       finalize() {
         phaseFinalized = true;
@@ -169,6 +174,18 @@ export async function runClaudeJsonlSession(
         armCleanupTimer();
       },
     });
+
+    async function submitManagedPrompt(prompt: string): Promise<void> {
+      submitPtyPrompt(processHandle, prompt);
+      pendingManagedPromptEchoes.push(prompt);
+      const event = {
+        type: "submitted-user-message" as const,
+        message: prompt,
+        origin: "managed" as const,
+      };
+      await captureJsonlTranscript(event);
+      await manager.handleEvent(event);
+    }
 
     function clearTimers(): void {
       if (firstEventTimer) {
@@ -194,6 +211,8 @@ export async function runClaudeJsonlSession(
 
       settled = true;
       clearTimers();
+      cleanupInteractiveInput();
+      cleanupResizeListener();
       void activeEventSource?.close();
       resolve(result);
     }
@@ -205,6 +224,8 @@ export async function runClaudeJsonlSession(
 
       settled = true;
       clearTimers();
+      cleanupInteractiveInput();
+      cleanupResizeListener();
       void activeEventSource?.close();
       try {
         processHandle.kill();
@@ -215,6 +236,11 @@ export async function runClaudeJsonlSession(
     }
 
     function rejectEventCaptureFailure(error: unknown): void {
+      if (error instanceof ProviderSessionTranscriptCaptureError) {
+        rejectSession(error);
+        return;
+      }
+
       rejectSession(
         error instanceof ProviderSessionEventCaptureError
           ? error
@@ -228,6 +254,50 @@ export async function runClaudeJsonlSession(
         exitCode,
         signal,
       };
+    }
+
+    function cleanupInteractiveInput(): void {
+      cleanupUserInputBridge();
+      cleanupUserInputBridge = (): void => {};
+    }
+
+    function cleanupResizeListener(): void {
+      cleanupTerminalResize();
+      cleanupTerminalResize = (): void => {};
+    }
+
+    function getActiveCompletionMarker(): string {
+      const state = manager.getState();
+
+      if (state.type === "continuation") {
+        return (
+          input.continuations?.[state.index]?.completionMarker ??
+          input.initialCompletionMarker
+        );
+      }
+
+      if (state.type === "repair") {
+        const continuation =
+          state.base.type === "continuation"
+            ? input.continuations?.[state.base.index]
+            : undefined;
+        const repair = continuation?.repair ?? input.repair;
+
+        return repair?.completionMarker ?? input.initialCompletionMarker;
+      }
+
+      return input.initialCompletionMarker;
+    }
+
+    function rejectIncompleteSession(): void {
+      rejectSession(
+        new IncompleteProviderSessionError({
+          provider: command.provider,
+          completionMarker: getActiveCompletionMarker(),
+          exitCode,
+          signal,
+        }),
+      );
     }
 
     function maybeResolve(): void {
@@ -303,9 +373,33 @@ export async function runClaudeJsonlSession(
         const classifiedEvent = classifySubmittedUserMessageOrigin(event);
 
         if (classifiedEvent) {
+          await captureJsonlTranscript(classifiedEvent);
           await manager.handleEvent(classifiedEvent);
           markFirstEventObserved();
         }
+      }
+    }
+
+    async function captureJsonlTranscript(
+      event: Parameters<typeof manager.handleEvent>[0],
+    ): Promise<void> {
+      try {
+        if (event.type === "submitted-user-message") {
+          await input.transcript?.onSubmittedUserMessage?.(event.message);
+          return;
+        }
+
+        if (
+          event.type === "turn-completed" &&
+          event.assistantMessage !== undefined
+        ) {
+          await input.transcript?.onProviderOutput?.(event.assistantMessage);
+        }
+      } catch (error) {
+        throw new ProviderSessionTranscriptCaptureError(
+          command.provider,
+          error,
+        );
       }
     }
 
@@ -358,16 +452,72 @@ export async function runClaudeJsonlSession(
           return;
         }
 
-        rejectSession(
-          new IncompleteProviderSessionError({
-            provider: command.provider,
-            completionMarker: input.initialCompletionMarker,
-            exitCode,
-            signal,
-          }),
-        );
+        rejectIncompleteSession();
       }, earlyExitDrainTimeoutMs);
     }
+
+    function forwardInputChunk(chunk: string): void {
+      for (const character of chunk) {
+        processHandle.write(character);
+      }
+    }
+
+    function setupUserInputBridge(): void {
+      if (!userInput.isTTY) {
+        return;
+      }
+
+      const wasRaw = userInput.isRaw === true;
+      const onData = (chunk: Buffer | string): void => {
+        forwardInputChunk(
+          typeof chunk === "string" ? chunk : chunk.toString("utf8"),
+        );
+      };
+
+      userInput.setRawMode?.(true);
+      userInput.resume?.();
+      userInput.on("data", onData);
+
+      cleanupUserInputBridge = () => {
+        if (userInput.off) {
+          userInput.off("data", onData);
+        } else {
+          userInput.removeListener?.("data", onData);
+        }
+
+        if (!wasRaw) {
+          userInput.setRawMode?.(false);
+        }
+
+        userInput.pause?.();
+      };
+    }
+
+    function setupTerminalResizeForwarding(): void {
+      if (!terminal.on) {
+        return;
+      }
+
+      const onResize = (): void => {
+        processHandle.resize?.(
+          terminal.columns ?? DEFAULT_COLUMNS,
+          terminal.rows ?? DEFAULT_ROWS,
+        );
+      };
+
+      terminal.on("resize", onResize);
+
+      cleanupTerminalResize = () => {
+        if (terminal.off) {
+          terminal.off("resize", onResize);
+        } else {
+          terminal.removeListener?.("resize", onResize);
+        }
+      };
+    }
+
+    setupUserInputBridge();
+    setupTerminalResizeForwarding();
 
     processHandle.onData((chunk) => {
       outputSink.write(chunk);

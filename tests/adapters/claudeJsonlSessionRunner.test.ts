@@ -7,6 +7,7 @@ import test from "node:test";
 import fs from "fs-extra";
 
 import {
+  InterruptedProviderSessionError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
   ProviderSessionEventCaptureError,
@@ -20,11 +21,15 @@ import {
   type PtyProcess,
   type PtySpawnOptions,
   type PtySpawner,
+  type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 
 class FakePtyProcess implements PtyProcess {
+  readonly writes: string[] = [];
+  readonly resizes: Array<{ columns: number; rows: number }> = [];
   readonly emitter = new EventEmitter();
+  killed = false;
 
   onData(listener: (data: string) => void): void {
     this.emitter.on("data", listener);
@@ -36,9 +41,17 @@ class FakePtyProcess implements PtyProcess {
     this.emitter.on("exit", listener);
   }
 
-  write(): void {}
+  write(data: string): void {
+    this.writes.push(data);
+  }
 
-  kill(): void {}
+  kill(): void {
+    this.killed = true;
+  }
+
+  resize(columns: number, rows: number): void {
+    this.resizes.push({ columns, rows });
+  }
 
   emitData(data: string): void {
     this.emitter.emit("data", data);
@@ -46,6 +59,69 @@ class FakePtyProcess implements PtyProcess {
 
   emitExit(exitCode: number, signal: NodeJS.Signals | null = null): void {
     this.emitter.emit("exit", { exitCode, signal });
+  }
+}
+
+class FakeUserInput extends EventEmitter implements UserInput {
+  readonly rawModeChanges: boolean[] = [];
+  resumeCount = 0;
+  pauseCount = 0;
+
+  constructor(readonly isTTY = true, readonly isRaw = false) {
+    super();
+  }
+
+  setRawMode(enabled: boolean): void {
+    this.rawModeChanges.push(enabled);
+  }
+
+  override on(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): this {
+    return super.on(event, listener);
+  }
+
+  override off(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): this {
+    return super.off(event, listener);
+  }
+
+  resume(): void {
+    this.resumeCount += 1;
+  }
+
+  pause(): void {
+    this.pauseCount += 1;
+  }
+
+  emitData(chunk: Buffer | string): void {
+    this.emit("data", chunk);
+  }
+}
+
+class FakeTerminal extends EventEmitter {
+  constructor(
+    public columns: number | undefined,
+    public rows: number | undefined,
+  ) {
+    super();
+  }
+
+  override on(event: "resize", listener: () => void): this {
+    return super.on(event, listener);
+  }
+
+  override off(event: "resize", listener: () => void): this {
+    return super.off(event, listener);
+  }
+
+  emitResize(columns: number | undefined, rows: number | undefined): void {
+    this.columns = columns;
+    this.rows = rows;
+    this.emit("resize");
   }
 }
 
@@ -171,6 +247,21 @@ async function waitForFile(path: string): Promise<void> {
   while (!(await fs.pathExists(path))) {
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for ${path}.`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+async function waitForPtyWrites(
+  process: FakePtyProcess,
+  count: number,
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+
+  while (process.writes.length < count) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${count} PTY writes.`);
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1));
@@ -525,6 +616,254 @@ test("Claude JSONL runner resumes by tailing an existing transcript from the cap
     exitCode: 0,
     signal: null,
   });
+});
+
+test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const output: string[] = [];
+  const events: ManagedProviderSessionEvent[] = [];
+  const userInput = new FakeUserInput();
+  const terminal = new FakeTerminal(90, 25);
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await fs.ensureDir(dirname(transcriptPath));
+    await fs.writeFile(transcriptPath, "", "utf8");
+    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    userInput.emitData("hello\r");
+    terminal.emitResize(120, 40);
+    await waitForPtyWrites(spawner.process, 6);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "JSONL says INITIAL_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write: (chunk) => output.push(chunk) },
+      terminal,
+      userInput,
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(output, [
+    "terminal marker INITIAL_DONE should not validate\n",
+  ]);
+  assert.deepEqual(spawner.process.writes, ["h", "e", "l", "l", "o", "\r"]);
+  assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.resumeCount, 1);
+  assert.equal(userInput.pauseCount, 1);
+  assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(terminal.listenerCount("resize"), 0);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["session-start", "turn-completed", "session-completed"],
+  );
+});
+
+test("Claude JSONL runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const userInput = new FakeUserInput();
+  let interrupted = false;
+  const spawner = new ScriptedClaudePtySpawner(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    userInput.emitData("\u0003");
+    interrupted = true;
+    spawner.process.emitExit(130, "SIGINT");
+  });
+
+  await assert.rejects(
+    runClaudeJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      userInput,
+      userInterrupt: {
+        wasRequested() {
+          return interrupted;
+        },
+      },
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    }),
+    InterruptedProviderSessionError,
+  );
+
+  assert.equal(spawner.process.writes.includes("\u0003"), true);
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.listenerCount("data"), 0);
+});
+
+test("Claude JSONL runner submits continuation prompts through PTY and emits managed user events", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const events: ManagedProviderSessionEvent[] = [];
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_initial",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "initial INITIAL_DONE" }],
+      },
+    });
+    await waitForPtyWrites(spawner.process, 1);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_continuation",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "continued CONTINUATION_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+      continuations: [
+        {
+          prompt: "Continue",
+          completionMarker: "CONTINUATION_DONE",
+          phase: {
+            id: "runabc123456:prd:attempt-1",
+            kind: "prd",
+            attempt: 1,
+          },
+          async validate() {},
+        },
+      ],
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.deepEqual(spawner.process.writes, ["\u001b[200~Continue\u001b[201~\r"]);
+  assert.deepEqual(
+    events.map((event) =>
+      event.type === "submitted-user-message"
+        ? `${event.type}:${event.phaseId}:${event.origin}:${event.message}`
+        : `${event.type}:${event.phaseId}`,
+    ),
+    [
+      "session-start:runabc123456:intent:attempt-1",
+      "turn-completed:runabc123456:intent:attempt-1",
+      "submitted-user-message:runabc123456:prd:attempt-1:managed:Continue",
+      "turn-completed:runabc123456:prd:attempt-1",
+      "session-completed:undefined",
+    ],
+  );
+});
+
+test("Claude JSONL runner submits repair prompts through PTY and reports repair usage", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  let validateCalls = 0;
+  const events: ManagedProviderSessionEvent[] = [];
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_initial",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "initial INITIAL_DONE" }],
+      },
+    });
+    await waitForPtyWrites(spawner.process, 1);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_repair",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "repaired REPAIR_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  const result = await runClaudeJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+      async validate() {
+        validateCalls += 1;
+
+        if (validateCalls === 1) {
+          throw new Error("missing artifact");
+        }
+      },
+      repair: {
+        completionMarker: "REPAIR_DONE",
+        renderPrompt() {
+          return "Repair";
+        },
+        mapFailure(error) {
+          return error;
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+    },
+  );
+
+  assert.equal(result.repairUsed, true);
+  assert.deepEqual(spawner.process.writes, ["\u001b[200~Repair\u001b[201~\r"]);
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "submitted-user-message")
+      .map((event) => `${event.phaseId}:${event.origin}:${event.message}`),
+    ["runabc123456:intent:attempt-1:repair-1:managed:Repair"],
+  );
 });
 
 test("Claude JSONL runner wraps resume transcript lookup failures as provider event capture errors", async () => {
