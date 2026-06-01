@@ -35,6 +35,7 @@ import {
   runExecutionRequest,
   runProviderBackedStageWithRetry,
   StageArtifactValidationError,
+  validateIssueArtifacts,
   type PipelineStage,
 } from "../src/orchestrator.js";
 
@@ -212,6 +213,73 @@ async function createExecutableOnPath(
 
   return executablePath;
 }
+
+test("validateIssueArtifacts accepts at least one non-empty markdown issue file", async () => {
+  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  await fs.writeFile(
+    join(issuesDirectory, "Not a Provider Slug.md"),
+    "plain issue body without required headings or blocked-by references\n",
+  );
+
+  await validateIssueArtifacts(issuesDirectory);
+});
+
+test("validateIssueArtifacts rejects a missing issues directory", async () => {
+  const tempRoot = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  const issuesDirectory = join(tempRoot, "missing");
+
+  await assert.rejects(
+    validateIssueArtifacts(issuesDirectory),
+    (error: unknown) => {
+      assert.ok(error instanceof StageArtifactValidationError);
+      assert.equal(error.stage, "issues");
+      assert.equal(error.artifactPath, issuesDirectory);
+      return true;
+    },
+  );
+});
+
+test("validateIssueArtifacts rejects directories with no markdown issue files", async () => {
+  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  await fs.writeFile(join(issuesDirectory, "notes.txt"), "not an issue\n");
+
+  await assert.rejects(
+    validateIssueArtifacts(issuesDirectory),
+    (error: unknown) => {
+      assert.ok(error instanceof StageArtifactValidationError);
+      assert.equal(error.stage, "issues");
+      assert.equal(error.artifactPath, issuesDirectory);
+      assert.match(error.message, /at least one non-empty markdown file/);
+      return true;
+    },
+  );
+});
+
+test("validateIssueArtifacts rejects directories where all markdown issue files are whitespace-only", async () => {
+  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  await fs.writeFile(join(issuesDirectory, "first.md"), " \n\t\n");
+  await fs.writeFile(join(issuesDirectory, "second.md"), "\n\n");
+
+  await assert.rejects(
+    validateIssueArtifacts(issuesDirectory),
+    (error: unknown) => {
+      assert.ok(error instanceof StageArtifactValidationError);
+      assert.equal(error.stage, "issues");
+      assert.equal(error.artifactPath, issuesDirectory);
+      assert.match(error.message, /at least one non-empty markdown file/);
+      return true;
+    },
+  );
+});
+
+test("validateIssueArtifacts accepts a mixed issues directory when one markdown file is non-empty", async () => {
+  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  await fs.writeFile(join(issuesDirectory, "empty.md"), "\n");
+  await fs.writeFile(join(issuesDirectory, "valid.md"), "# Issue\n");
+  await fs.writeFile(join(issuesDirectory, "also-empty.md"), "   ");
+
+  await validateIssueArtifacts(issuesDirectory);
+});
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
