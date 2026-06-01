@@ -3,10 +3,8 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 import chokidar from "chokidar";
 
-import {
-  ProviderSessionEventCaptureError,
-  type ManagedProviderSessionInput,
-} from "./managedSessionAdapter.js";
+import { ProviderSessionEventCaptureError } from "./managedSessionAdapter.js";
+export { getScopedClaudeProviderHome } from "./claudeProviderHome.js";
 import type { ProviderIdentity } from "./providers.js";
 import type {
   SessionLogCandidateDebug,
@@ -78,14 +76,6 @@ export class ClaudeSessionLogLocatorResumeNotFoundError extends Error {
     this.providerSessionId = options.providerSessionId;
     this.timeoutMs = options.timeoutMs;
   }
-}
-
-export function getScopedClaudeProviderHome(
-  input: ManagedProviderSessionInput,
-): string {
-  const runId = input.phase?.id.split(":")[0] ?? "unscoped-claude-session";
-
-  return join(input.workingDirectory, ".devflow", "runs", runId, ".claude");
 }
 
 export function createClaudeSessionLogLocator(

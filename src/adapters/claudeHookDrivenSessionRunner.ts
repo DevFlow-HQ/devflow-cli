@@ -1,11 +1,11 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-
-import fs from "fs-extra";
-
 import { createClaudeHookArtifacts } from "./claudeHookArtifacts.js";
 import { normalizeClaudeHookPayload } from "./claudeHookEventSource.js";
 import { installClaudeHookSettings } from "./claudeHookSettings.js";
+import {
+  getClaudeHookDirectory,
+  getScopedClaudeProviderHome,
+  seedClaudeCredentials,
+} from "./claudeProviderHome.js";
 import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
@@ -83,7 +83,7 @@ export async function runClaudeHookDrivenSession(
   const socketDrainMs = dependencies.socketDrainMs ?? DEFAULT_SOCKET_DRAIN_MS;
   const environment = dependencies.environment ?? process.env;
   const platform = dependencies.platform ?? process.platform;
-  const claudeConfigDirectory = getClaudeConfigDirectory(input);
+  const claudeConfigDirectory = getScopedClaudeProviderHome(input);
   const artifacts = await createClaudeHookArtifacts({
     hookDirectory: getClaudeHookDirectory(claudeConfigDirectory),
   });
@@ -474,53 +474,6 @@ export async function runClaudeHookDrivenSession(
       });
     })();
   });
-}
-
-function getClaudeConfigDirectory(input: ManagedProviderSessionInput): string {
-  const runId = input.phase?.id.split(":")[0] ?? "unscoped-claude-session";
-
-  return join(input.workingDirectory, ".devflow", "runs", runId, ".claude");
-}
-
-function getClaudeHookDirectory(claudeConfigDirectory: string): string {
-  return join(claudeConfigDirectory, "devflow-hooks");
-}
-
-interface SeedClaudeCredentialsOptions {
-  claudeConfigDirectory: string;
-  environment: NodeJS.ProcessEnv;
-  platform: NodeJS.Platform;
-  homeDirectory?: string;
-}
-
-async function seedClaudeCredentials({
-  claudeConfigDirectory,
-  environment,
-  platform,
-  homeDirectory,
-}: SeedClaudeCredentialsOptions): Promise<void> {
-  if (platform === "darwin") {
-    return;
-  }
-
-  const sourceConfigDirectory =
-    environment.CLAUDE_CONFIG_DIR ?? join(homeDirectory ?? homedir(), ".claude");
-  const sourceCredentialsPath = join(sourceConfigDirectory, ".credentials.json");
-  const targetCredentialsPath = join(
-    claudeConfigDirectory,
-    ".credentials.json",
-  );
-
-  if (sourceCredentialsPath === targetCredentialsPath) {
-    return;
-  }
-
-  if (!(await fs.pathExists(sourceCredentialsPath))) {
-    return;
-  }
-
-  await fs.ensureDir(claudeConfigDirectory);
-  await fs.copyFile(sourceCredentialsPath, targetCredentialsPath);
 }
 
 function formatMissingSessionStartDiagnostic(

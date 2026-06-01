@@ -260,6 +260,99 @@ test("Claude JSONL runner completes a fresh first turn from a scoped transcript"
   });
 });
 
+test("Claude JSONL runner seeds scoped credentials without installing hook settings", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const sourceConfigDirectory = await fs.mkdtemp(
+    join(tmpdir(), "devflow-claude-source-"),
+  );
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+
+  await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
+    token: "source-token",
+  });
+
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeJsonlSession(
+    createCommand(),
+    createInput(projectRoot),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      platform: "linux",
+      environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    },
+  );
+
+  assert.deepEqual(await fs.readJson(join(claudeHome, ".credentials.json")), {
+    token: "source-token",
+  });
+  assert.equal(await fs.pathExists(join(claudeHome, "settings.local.json")), false);
+  assert.equal(await fs.pathExists(join(claudeHome, "devflow-hooks")), false);
+});
+
+test("Claude JSONL runner preserves macOS credential seeding skip", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const sourceConfigDirectory = await fs.mkdtemp(
+    join(tmpdir(), "devflow-claude-source-"),
+  );
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+
+  await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
+    token: "source-token",
+  });
+
+  const spawner = new ScriptedClaudePtySpawner(async () => {
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runClaudeJsonlSession(
+    createCommand(),
+    createInput(projectRoot),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      platform: "darwin",
+      environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    },
+  );
+
+  assert.equal(await fs.pathExists(join(claudeHome, ".credentials.json")), false);
+});
+
 test("Claude JSONL runner classifies human user records and suppresses managed prompt echoes", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
   const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");

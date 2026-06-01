@@ -6,9 +6,12 @@ import {
 } from "./claudeJsonlEventSource.js";
 import {
   createClaudeSessionLogLocator,
-  getScopedClaudeProviderHome,
   locateClaudeSessionLogForProvider,
 } from "./claudeSessionLogLocator.js";
+import {
+  getScopedClaudeProviderHome,
+  seedClaudeCredentials,
+} from "./claudeProviderHome.js";
 import {
   createJsonlTailEventSource,
   type JsonlTailReadResult,
@@ -54,6 +57,9 @@ export interface ClaudeJsonlSessionDependencies {
   firstEventTimeoutMs?: number;
   cleanupTimeoutMs?: number;
   earlyExitDrainTimeoutMs?: number;
+  environment?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  homeDirectory?: string;
 }
 
 const DEFAULT_COLUMNS = 80;
@@ -71,6 +77,8 @@ export async function runClaudeJsonlSession(
   const ptySpawner = dependencies.ptySpawner ?? nodePtySpawner;
   const outputSink = dependencies.outputSink ?? process.stdout;
   const terminal = dependencies.terminal ?? process.stdout;
+  const environment = dependencies.environment ?? process.env;
+  const platform = dependencies.platform ?? process.platform;
   const claudeHome = getScopedClaudeProviderHome(input);
   const locator =
     dependencies.sessionLogLocator ??
@@ -84,7 +92,17 @@ export async function runClaudeJsonlSession(
   const earlyExitDrainTimeoutMs =
     dependencies.earlyExitDrainTimeoutMs ?? DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS;
 
-  await fs.ensureDir(claudeHome);
+  try {
+    await seedClaudeCredentials({
+      claudeConfigDirectory: claudeHome,
+      environment,
+      platform,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    await fs.ensureDir(claudeHome);
+  } catch (error) {
+    throw new ProviderSessionLaunchError(command.provider, error);
+  }
 
   const resumeProviderSessionId = command.resumeProviderSessionId;
   let snapshot;
@@ -112,7 +130,7 @@ export async function runClaudeJsonlSession(
       cols: terminal.columns ?? DEFAULT_COLUMNS,
       rows: terminal.rows ?? DEFAULT_ROWS,
       env: {
-        ...process.env,
+        ...environment,
         CLAUDE_CONFIG_DIR: claudeHome,
       },
     });
