@@ -1090,6 +1090,52 @@ test("Claude adapter delegates hook-mode sessions to the hook-driven runner", as
   ]);
 });
 
+test("Claude adapter does not relaunch hook-mode failures through JSONL", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-claude-hooks-no-jsonl-fallback-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, "claude");
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const hookFailure = new Error("hook setup failed");
+  const hookCalls: ClaudeHookDrivenSessionCommand[] = [];
+  const jsonlRunner = new CapturingClaudeJsonlRunner();
+  const adapter = createClaudeAdapter({
+    eventSource: "hooks",
+    async runClaudeHookDrivenSession(command) {
+      hookCalls.push(command);
+      throw hookFailure;
+    },
+    runClaudeJsonlSession:
+      jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
+  });
+
+  await assert.rejects(
+    adapter.runSession(validRunInput),
+    (error: unknown) => error === hookFailure,
+  );
+
+  assert.deepEqual(hookCalls, [
+    {
+      provider: getBuiltInProviderIdentity("claude"),
+      executable: executablePath,
+      args: ["Ship the contract"],
+    },
+  ]);
+  assert.deepEqual(jsonlRunner.calls, []);
+});
+
 test("Claude adapter delegates fresh JSONL sessions to the JSONL runner", async (t) => {
   const originalPath = process.env.PATH;
   t.after(() => {
