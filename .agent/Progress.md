@@ -1,84 +1,80 @@
 # DevFlow Progress
-_Last updated: 2026-05-24_
+_Last updated: 2026-06-01_
 
-Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md`.
+Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md` and `new_spec.md`.
 Hard limit: 100 lines.
 
 ## Done
-- Architecture, MVP scope, library choices, state layout, and implementation order are locked in `HANDOFF_2.md`.
-- Node/TypeScript CLI scaffold exists with strict ESM TypeScript, `devflow` bin mapping, `tsup` build config, repo `.gitignore`, package lock, and installed runtime/dev dependencies.
-- Completed the adapter and discovery foundation:
-  - built-in Claude, Gemini, Codex, and OpenCode provider identity metadata lives in `src/adapters/providers.ts`
-  - managed-session adapters expose discovery plus `runSession(...)`, validation callbacks, optional in-session repair prompts, typed lifecycle failures, and structured success metadata
-  - provider discovery stays focused on availability detection, canonical built-in ordering, unavailable-provider degradation, and injected adapter factories for tests
-- Completed the CLI/bootstrap slice:
-  - `src/cli.ts` provides the `commander` entrypoint with free-form task parsing, help/version passthrough, clear missing-task failures, and concise provider/session error mapping
-  - `src/projectRoot.ts` resolves the Git repo root when present and falls back to the current working directory outside Git
-  - repo-local default-provider config is validated strictly, saved through the state facade, and repaired with clear malformed-config guidance
-  - first-run provider setup, cancellation without side effects, strict `--provider` overrides, and opaque invocation-only `--model` forwarding are implemented and tested
-- Completed the `.devflow` filesystem state boundary:
-  - `src/devflowState.ts` owns config persistence, shared project context, run creation, canonical run paths, immutable `intent.json`/`prd.md`/`validation.json` artifacts, and normalized issue markdown writes
-  - duplicate artifact writes, invalid issue slugs, invalid run ids, malformed config, invalid project context, and invalid metadata surface as typed domain errors
-  - the active CLI-to-orchestrator path threads the typed state facade into `src/orchestrator.ts`
-- Completed project-context freshness tracking:
-  - `.devflow/project-context.md` writes reject empty content and content over 150 lines
-  - `.devflow/project-context.meta.json` stores `generatedAt`, baseline `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`
-  - freshness checks return structured fresh/stale results for missing context, missing metadata, invalid metadata, version changes, max age, unavailable Git baselines, and relevant changes
-  - Git freshness uses committed changes since the stored baseline plus staged, unstaged, and untracked dirty-tree fingerprints
-  - repeated runs on the same dirty tree stay fresh; clean trees store `dirtyFingerprint: null`
-  - hardcoded freshness ignores are limited to DevFlow/agent/Git internal paths; Git-ignored untracked files are ignored by Git itself
-  - untracked fingerprinting is streamed through file paths/byte lengths instead of eagerly buffering all content
-  - non-Git repos use metadata/context presence, metadata validity, context version, and a three-day max-age fallback
-  - the public state contract now exposes project context only through the grouped `projectContext` capability
-- Completed the active intent stage:
-  - `runExecutionRequest()` creates a run, renders `prompts/intent.md` with the raw task, canonical artifact path, schema requirements, and nonce completion marker, then invokes the selected managed-session adapter
-  - intent artifact validation is strict JSON/schema validation over the provider-owned `intent.json`
-  - invalid intent artifacts can be repaired once inside the same PTY session with a targeted repair prompt
-  - intent gets 2 total whole-stage attempts inside one run; retryable failures clean failed output before retry and retry exhaustion preserves the final failed artifact for inspection
-  - setup/config failures, interruptions, and cleanup failures stay outside retry
-- Completed bootstrap/project-context activation:
-  - run handles expose `.devflow/runs/<run-id>/project-context.candidate.md` for provider-written context candidates
-  - bootstrap reuses fresh project context, repairs missing/invalid metadata without provider work, and generates missing context through the managed provider
-  - stale context refresh handles version, age, unavailable baseline, and relevant-change freshness results with prior context plus changed-path hints
-  - bootstrap candidate validation uses the exported project-context content validator, supports one in-session repair attempt, and has an independent 2-attempt whole-stage retry budget
-  - successful candidates persist through `projectContext.write(...)`, refresh metadata even for unchanged text, and best-effort cleanup failures are non-fatal
-  - orchestrator results now expose parsed canonical intent, the intent managed-session result, and bootstrap provenance: `reused`, `generated`, `refreshed`, or `metadata-updated`
-- Completed the PTY-based managed-session transport:
-  - `node-pty` and `strip-ansi` are wired through `src/adapters/ptyManagedSessionRunner.ts`
-  - built-in adapters resolve executables at launch, pass model overrides through provider-native flags, mirror stripped/bounded output for marker scanning, and send cleanup after successful validation
-  - TTY stdin raw-mode bridging, first/second Ctrl-C behavior, terminal resize forwarding, launch failures, incomplete sessions, interruptions, cleanup failures, and in-session repair are typed and covered by regression tests
-- Regression coverage now spans adapter contracts, provider discovery, CLI parsing/bootstrap/error handling, repo config, state boundary, project-context Git freshness, PTY sessions, orchestrator intent/bootstrap execution, in-session repair, and whole-stage retry.
+- Architecture, MVP scope, library choices, state layout, provider integration direction, and implementation order are captured in `HANDOFF_2.md`, `new_spec.md`, and `.agent/task_progress.md`.
+- Node/TypeScript CLI scaffold is in place with strict ESM TypeScript, `devflow` bin mapping, `tsup`, package lock, runtime/dev dependencies, and repo `.gitignore`.
+- CLI/bootstrap foundation is complete:
+  - `src/cli.ts` handles free-form task parsing, help/version passthrough, Git-root resolution through `src/projectRoot.ts`, provider/model overrides, first-run provider setup, and concise provider/session error mapping
+  - repo-local default-provider config is strictly validated, persisted through the state facade, and repaired with clear malformed-config guidance
+- `.devflow` state boundary is complete:
+  - `src/devflowState.ts` owns config, shared project context, run creation, canonical run paths, immutable intent/PRD/validation artifacts, normalized issue markdown writes, grill transcripts/checkpoints, and provider-session recovery metadata
+  - duplicate writes, malformed config/context/metadata/session state, invalid issue slugs, and invalid run ids surface as typed domain errors
+- Project-context freshness and bootstrap are complete:
+  - `.devflow/project-context.md` is bounded and paired with metadata carrying `generatedAt`, baseline `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`
+  - Git freshness compares committed changes since baseline plus streamed staged/unstaged/untracked dirty fingerprints, while hardcoded ignores are limited to DevFlow/agent/Git internal paths
+  - bootstrap reuses fresh context, repairs missing/invalid metadata without provider work, generates or refreshes stale context through the provider, validates candidates, supports repair, and records provenance: `reused`, `generated`, `refreshed`, or `metadata-updated`
+- Managed-session adapter foundation is complete:
+  - built-in Claude, Gemini, Codex, and OpenCode identity metadata lives in `src/adapters/providers.ts`
+  - adapters expose discovery, `runSession(...)`, optional `resumeSession(...)`, validation callbacks, repair/continuation config, normalized provider events, capabilities, and typed lifecycle failures
+  - provider discovery preserves canonical ordering, degrades unavailable/failing providers safely, and remains testable through injected factories
+- PTY fallback transport is complete:
+  - `src/adapters/ptyManagedSessionRunner.ts` launches provider CLIs, mirrors output, scans ANSI-stripped bounded output for fallback markers, validates artifacts, sends cleanup, and supports same-session repair/continuations
+  - TTY stdin raw-mode bridging, first/second Ctrl-C behavior, terminal resize forwarding, launch failures, incomplete sessions, interruptions, cleanup failures, transcript callbacks, and event callback failures are typed and covered
+- Provider event/capability architecture is complete:
+  - normalized events are `session-start`, `submitted-user-message`, `turn-completed`, and `session-completed`
+  - provider-specific hook/JSONL schemas stay inside adapters; orchestration sees provider-neutral events with source, structured/unstructured status, provider session ids, submitted-message origin, and phase metadata
+  - completion markers are authoritative from structured `turn-completed.assistantMessage` for structured providers and from terminal output only for PTY fallback providers
+- Structured provider sources are complete for Codex:
+  - Codex hook mode is the default structured data plane, with PTY used only for control transport
+  - Codex JSONL mode is selectable internally, discovers scoped rollout logs, tails with watcher-backed offset reads, normalizes rollout records, supports fresh launch and resume, and preserves PTY interactivity
+  - Codex resume uses `codex resume` with reliable provider session ids for hook and JSONL selected data planes
+- Structured provider sources are complete for Claude:
+  - Claude hook mode normalizes `SessionStart`, `UserPromptSubmit`, and `Stop`, uses scoped hook artifacts/settings, classifies managed vs human submissions, preserves PTY control behavior, reports provider session ids, and supports resume through Claude's native `--resume`
+  - Claude JSONL mode is explicitly selectable, uses scoped provider home and credential seeding without hook settings, discovers fresh/resume transcripts under the scoped home, tails from offset 0 or resume end offset, normalizes assistant/user records, supports JSONL resume, and reports JSONL capabilities only for that selected path
+  - Claude adapter contract coverage locks hook/JSONL/PTY fallback routing, selected-path capabilities, no source mixing, and no automatic hook-failure relaunch into JSONL
+- Structured grill transcript capture is complete:
+  - `src/grillTranscriptRecorder.ts` records assistant content from `turn-completed.assistantMessage`, records only human-origin submitted messages, excludes managed/unknown submissions, strips active markers and post-marker text, and keeps capture open through accepted repair discussion
+  - structured transcript failures remain `ProviderSessionTranscriptCaptureError`, distinct from provider event capture failures and retryable through provider-backed stage retry
+- Provider session recovery is complete:
+  - runs persist advisory `provider-session.json` with provider identity, optional reliable provider session id, phase metadata, status, and timestamps
+  - recovery uses durable artifacts first; malformed/stale provider-session state degrades to completed grill/PRD artifacts where possible
+  - resumable reliable adapters can recover interrupted grill and PRD phases before falling back to fresh partial-transcript grill or PRD-only synthesis
+- Active provider-backed stages are complete through PRD:
+  - intent writes and strictly validates `intent.json`, supports one in-session repair, and has a two-attempt whole-stage retry budget
+  - grill always runs after intent/bootstrap, asks one question at a time, persists `grill-transcript.md`, writes/recreates durable `grill-checkpoint.json`, resumes reliable interrupted sessions when possible, and avoids repeating completed interviews
+  - PRD synthesis continues in the accepted live grill session when healthy, writes canonical `prd.md`, validates non-empty content, supports targeted repair, resumes reliable interrupted PRD sessions, and falls back to PRD-only synthesis from completed grill artifacts
+  - provider-backed retry classification keeps interruptions and cleanup failures non-retryable while allowing incomplete sessions, launch/event/transcript capture failures, and artifact validation failures to retry
+- Maintainer documentation/tests now pin structured provider constraints, structured grill transcript policy, and provider-native boundary isolation.
 
 ## Current State
-- The repo has a working CLI/bootstrap/state/orchestration boundary across `src/cli.ts`, `src/projectRoot.ts`, `src/bootstrapProvider.ts`, `src/devflowState.ts`, `src/orchestrator.ts`, provider session code, and `src/adapters/`.
-- Built-in provider discovery, repo-root resolution, default-provider state, provider/model override handling, first-run provider selection, shared context storage/freshness, run creation, immutable run artifact writes, PTY-backed managed sessions, strict intent validation, active bootstrap/project-context generation, in-session repair, and whole-stage retry are implemented and regression-tested.
-- The MVP pipeline currently has `intent` and `bootstrap` active; `grill`, `prd`, `issues`, `execute`, and `validate` are observable no-op placeholders that do not write fake artifacts.
-- There are no remaining AFK tasks in the project-context freshness, managed-session/retry, or bootstrap project-context workstreams from `.agent/task_progress.md`.
-- Latest verification: `npm run test` on 2026-05-24 passed with 146 tests.
+- The working pipeline is active through `intent`, `bootstrap`, `grill`, and `prd`.
+- `issues`, `execute`, and `validate` remain stage-order placeholders in `src/orchestrator.ts`; they start for progress reporting but do not yet write issue, execution, or validation artifacts.
+- Gemini, OpenCode, and Claude PTY fallback sessions remain PTY-marker/transcript fallback providers without reliable provider session ids or resume support.
+- Codex hook/JSONL and Claude hook/JSONL structured paths use PTY as control transport and normalized provider events as the data plane.
+- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, or Claude JSONL workstreams from `.agent/task_progress.md`.
+- Latest verification: `npm run test` on 2026-06-01 passed with 359 tests.
 
 ## Remaining MVP Tasks
-1. Activate the grill stage:
-  - always run a provider-backed user-facing grill session after intent/bootstrap
-  - persist an append-only `grill-transcript.md` with provider output and submitted user messages, across retry attempts
-  - write a durable grill completion boundary plus immutable `grill-checkpoint.json` before PRD synthesis
-  - synthesize canonical `prd.md` from the completed grill transcript in the coupled PRD phase and validate it as non-empty
-  - keep downstream stages consuming only `prd.md`
-2. Add resume support for completed grill sessions:
-  - expose a CLI resume path that uses `grill-transcript.md`/`grill-checkpoint.json` to regenerate missing or invalid `prd.md`
-  - never repeat the interactive grill when the transcript completion boundary proves grill completion
-3. Activate issue decomposition:
+1. Activate issue decomposition:
   - add an issues prompt template and artifact contract
-  - produce normalized issue markdown files under the run `issues/` directory
+  - produce normalized issue markdown files under each run's `issues/` directory
   - validate issue slugs, ordering, file-scope hints, and actionable acceptance criteria
-4. Activate execution:
+2. Activate execution:
   - run each MVP issue sequentially through provider-backed sessions
   - pass bounded context, PRD, issue content, and prior issue outputs
   - record execution summaries without inventing success when provider work fails
-5. Activate validation:
+3. Activate validation:
   - run configured or inferred lint/tests/build checks
   - retry failed validation once through the provider
   - write `validation.json` and escalate clearly after the second failure
-6. Finish MVP CLI UX:
+4. Finish MVP CLI UX:
   - expose concise stage progress
   - map new stage/artifact validation failures to user-facing errors
   - produce a final run summary with artifact paths and next manual steps
+5. Future provider work:
+  - keep PTY marker completion and transcript callbacks as fallback behavior
+  - graduate Gemini and OpenCode from PTY fallback only when their structured sources can truthfully support the normalized event contract
