@@ -32,6 +32,7 @@ import {
   MissingProviderIdError,
   ProviderStageRetryExhaustedError,
   isRetryableProviderBackedStageFailure,
+  renderExecutePrompt,
   runExecutionRequest,
   runProviderBackedStageWithRetry,
   StageArtifactValidationError,
@@ -95,6 +96,10 @@ function extractIssuesDirectory(prompt: string): string {
 
   assert.ok(match?.[1], "expected issues prompt to include issues directory");
   return match[1];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function completeIssuesSession(
@@ -279,6 +284,51 @@ test("validateIssueArtifacts accepts a mixed issues directory when one markdown 
   await fs.writeFile(join(issuesDirectory, "also-empty.md"), "   ");
 
   await validateIssueArtifacts(issuesDirectory);
+});
+
+test("renderExecutePrompt injects manual-flow issue and commit context with artifact path references", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-execute-prompt-"));
+  const issuesDirectory = join(projectRoot, ".devflow", "runs", "run123", "issues");
+  const prdArtifactPath = join(projectRoot, ".devflow", "runs", "run123", "prd.md");
+  const projectContextPath = join(projectRoot, ".devflow", "project-context.md");
+  const tddGuidePath = join(projectRoot, "prompts", "tdd.md");
+
+  await fs.outputFile(
+    join(issuesDirectory, "001-first-afk.md"),
+    "## Type\n\nAFK\n\n## What to build\n\nImplement first slice.\n",
+  );
+  await fs.outputFile(
+    join(issuesDirectory, "notes.txt"),
+    "This is not an issue file.\n",
+  );
+
+  const prompt = await renderExecutePrompt({
+    issuesDirectory,
+    recentCommits:
+      "b13431b Extend managed session completion markers\n8e95fc2 Enhance documentation",
+    prdArtifactPath,
+    projectContextPath,
+    tddGuidePath,
+    iterationMarker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+    terminalMarker: "DEVFLOW_EXECUTION_NO_MORE_TASKS_test",
+  });
+
+  assert.match(prompt, /001-first-afk\.md/);
+  assert.match(prompt, /Implement first slice/);
+  assert.match(prompt, /b13431b Extend managed session completion markers/);
+  assert.match(prompt, new RegExp(escapeRegExp(prdArtifactPath)));
+  assert.match(prompt, new RegExp(escapeRegExp(projectContextPath)));
+  assert.match(prompt, new RegExp(escapeRegExp(tddGuidePath)));
+  assert.match(prompt, /DEVFLOW_EXECUTION_ITERATION_COMPLETE_test/);
+  assert.match(prompt, /DEVFLOW_EXECUTION_NO_MORE_TASKS_test/);
+  assert.doesNotMatch(prompt, /This is not an issue file/);
+  assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}/);
+  assert.match(prompt, /complete exactly one AFK issue/i);
+  assert.match(prompt, /move the issue file to `issues\/done\/` before committing/i);
+  assert.match(prompt, /leave HITL issues untouched/i);
+  assert.match(prompt, /discover the project-owned test, typecheck, and build commands/i);
+  assert.doesNotMatch(prompt, /npm run test/);
+  assert.doesNotMatch(prompt, /npm run typecheck/);
 });
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {

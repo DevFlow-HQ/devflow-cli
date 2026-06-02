@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import fs from "fs-extra";
@@ -104,6 +104,12 @@ const ISSUES_PROMPT_PATH = join(
   "..",
   "prompts",
   "issues.md",
+);
+const EXECUTE_PROMPT_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "prompts",
+  "execute.md",
 );
 const INTENT_STAGE_TOTAL_ATTEMPTS = 2;
 const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
@@ -327,6 +333,57 @@ async function renderIssuesPrompt(options: {
     .replaceAll("{{PROJECT_CONTEXT_PATH}}", options.projectContextPath)
     .replaceAll("{{ISSUES_DIRECTORY}}", options.issuesDirectory)
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
+}
+
+export async function renderExecutePrompt(options: {
+  issuesDirectory: string;
+  recentCommits: string;
+  prdArtifactPath: string;
+  projectContextPath: string;
+  tddGuidePath: string;
+  iterationMarker: string;
+  terminalMarker: string;
+}): Promise<string> {
+  const promptTemplate = await fs.readFile(EXECUTE_PROMPT_PATH, "utf8");
+
+  return promptTemplate
+    .replaceAll(
+      "{{OPEN_ISSUES}}",
+      await readOpenIssuesForExecutePrompt(options.issuesDirectory),
+    )
+    .replaceAll("{{RECENT_COMMITS}}", options.recentCommits)
+    .replaceAll("{{PRD_ARTIFACT_PATH}}", options.prdArtifactPath)
+    .replaceAll("{{PROJECT_CONTEXT_PATH}}", options.projectContextPath)
+    .replaceAll("{{TDD_GUIDE_PATH}}", options.tddGuidePath)
+    .replaceAll("{{ITERATION_MARKER}}", options.iterationMarker)
+    .replaceAll("{{TERMINAL_MARKER}}", options.terminalMarker);
+}
+
+async function readOpenIssuesForExecutePrompt(
+  issuesDirectory: string,
+): Promise<string> {
+  const issueFilenames = (await fs.readdir(issuesDirectory))
+    .filter((entry) => entry.endsWith(".md"))
+    .sort();
+
+  if (issueFilenames.length === 0) {
+    return "No open issue markdown files were found.";
+  }
+
+  const issueBlocks = await Promise.all(
+    issueFilenames.map(async (issueFilename) => {
+      const issuePath = join(issuesDirectory, issueFilename);
+      const issueContent = await fs.readFile(issuePath, "utf8");
+
+      return [
+        `--- BEGIN ISSUE ${basename(issueFilename)} ---`,
+        issueContent.trimEnd(),
+        `--- END ISSUE ${basename(issueFilename)} ---`,
+      ].join("\n");
+    }),
+  );
+
+  return issueBlocks.join("\n\n");
 }
 
 function renderIntentRepairPrompt(options: {
