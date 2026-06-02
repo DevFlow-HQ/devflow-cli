@@ -1271,14 +1271,142 @@ test("orchestrator surfaces issues validation failure after failed in-session re
       },
     ),
     (error: unknown) =>
-      error instanceof StageArtifactValidationError &&
+      error instanceof ProviderStageRetryExhaustedError &&
       error.stage === "issues" &&
-      error.artifactPath.endsWith("/issues") &&
-      error.message.includes("at least one non-empty markdown file"),
+      error.attempts === 2 &&
+      error.cause instanceof StageArtifactValidationError &&
+      error.cause.artifactPath.endsWith("/issues") &&
+      error.cause.message.includes("at least one non-empty markdown file"),
   );
 
-  assert.equal(issuesRunSessionCount, 1);
-  assert.equal(repairPrompts.length, 1);
+  assert.equal(issuesRunSessionCount, 2);
+  assert.equal(repairPrompts.length, 2);
+});
+
+test("orchestrator retries issues with a clean issues directory without repeating grill or PRD", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const stages: PipelineStage[] = [];
+  const staleIssueExistedAtAttemptStart: boolean[] = [];
+  let issuesRunSessionCount = 0;
+  let grillRunSessionCount = 0;
+  let prdContinuationCount = 0;
+  const provider = getBuiltInProviderIdentity("codex");
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        issuesRunSessionCount += 1;
+        const issuesDirectory = extractIssuesDirectory(input.initialPrompt);
+
+        assert.ok(input.phase?.id, "expected issues phase id");
+        assert.equal(input.phase.kind, "issues");
+        assert.equal(input.phase.attempt, issuesRunSessionCount);
+        staleIssueExistedAtAttemptStart.push(
+          await fs.pathExists(join(issuesDirectory, "stale-issue.md")),
+        );
+
+        if (issuesRunSessionCount === 1) {
+          await fs.outputFile(
+            join(issuesDirectory, "stale-issue.md"),
+            "# Stale issue\n",
+          );
+          throw new IncompleteProviderSessionError({
+            provider,
+            completionMarker: input.initialCompletionMarker,
+            exitCode: 1,
+            signal: null,
+          });
+        }
+
+        await fs.outputFile(
+          join(issuesDirectory, "fresh-issue.md"),
+          "# Fresh issue\n",
+        );
+        await input.validate();
+
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isGrillSessionInput(input)) {
+        grillRunSessionCount += 1;
+        const originalContinuations = input.continuations ?? [];
+        return completeGrillSession({
+          ...input,
+          continuations: originalContinuations.map((continuation) => ({
+            ...continuation,
+            async validate() {
+              prdContinuationCount += 1;
+              await continuation.validate();
+            },
+          })),
+        });
+      }
+
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.equal(issuesRunSessionCount, 2);
+  assert.deepEqual(staleIssueExistedAtAttemptStart, [false, false]);
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "issues", "stale-issue.md")),
+    false,
+  );
+  assert.equal(
+    await fs.readFile(join(runDirectory, "issues", "fresh-issue.md"), "utf8"),
+    "# Fresh issue\n",
+  );
+  assert.equal(grillRunSessionCount, 1);
+  assert.equal(prdContinuationCount, 1);
+  assert.deepEqual(
+    stages.filter((stage) => stage === "grill" || stage === "prd"),
+    ["grill", "prd"],
+  );
 });
 
 test("structured-provider grill orchestration records normalized events instead of raw transcript callbacks", async () => {
