@@ -1093,6 +1093,194 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
+test("orchestrator repairs missing issue files inside the same issues managed session", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  let issuesRunSessionCount = 0;
+  const repairPrompts: string[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        issuesRunSessionCount += 1;
+        assert.ok(input.phase?.id, "expected issues phase id");
+        assert.equal(input.phase.kind, "issues");
+        assert.equal(input.phase.attempt, 1);
+        await fs.ensureDir(extractIssuesDirectory(input.initialPrompt));
+
+        const initialValidationError = await input.validate().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        assert.ok(initialValidationError instanceof Error);
+        assert.ok(input.repair);
+        assert.ok(input.repair.phase?.id, "expected issues repair phase id");
+        assert.equal(input.repair.phase.kind, "issues-repair");
+        assert.equal(input.repair.phase.attempt, 1);
+        assert.notEqual(input.repair.phase.id, input.phase.id);
+        assert.match(
+          input.repair.completionMarker,
+          /^DEVFLOW_ISSUES_REPAIR_COMPLETE_[a-f0-9]{32}$/,
+        );
+
+        const repairPrompt = input.repair.renderPrompt(initialValidationError);
+        repairPrompts.push(repairPrompt);
+        assert.match(repairPrompt, /Repair only the issue decomposition artifacts/);
+        assert.match(repairPrompt, /Issues directory:\n.+\/issues/);
+        assert.match(repairPrompt, /at least one non-empty markdown file/i);
+        assert.match(
+          repairPrompt,
+          /Write at least one non-empty issue markdown file directly to the issues directory\./,
+        );
+        assert.match(repairPrompt, new RegExp(input.repair.completionMarker));
+
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "repaired-issue.md"),
+          "# Repaired issue\n",
+        );
+        await input.validate();
+
+        return { repairUsed: true, exitCode: 0, signal: null };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(issuesRunSessionCount, 1);
+  assert.equal(repairPrompts.length, 1);
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  assert.equal(
+    await fs.readFile(join(runDirectory, "issues", "repaired-issue.md"), "utf8"),
+    "# Repaired issue\n",
+  );
+});
+
+test("orchestrator surfaces issues validation failure after failed in-session repair", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  let issuesRunSessionCount = 0;
+  const repairPrompts: string[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        issuesRunSessionCount += 1;
+        await fs.ensureDir(extractIssuesDirectory(input.initialPrompt));
+        const initialValidationError = await input.validate().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        assert.ok(initialValidationError instanceof Error);
+        assert.ok(input.repair);
+        repairPrompts.push(input.repair.renderPrompt(initialValidationError));
+
+        try {
+          await input.validate();
+        } catch (repairError) {
+          assert.ok(repairError instanceof Error);
+          throw input.repair.mapFailure(repairError);
+        }
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof StageArtifactValidationError &&
+      error.stage === "issues" &&
+      error.artifactPath.endsWith("/issues") &&
+      error.message.includes("at least one non-empty markdown file"),
+  );
+
+  assert.equal(issuesRunSessionCount, 1);
+  assert.equal(repairPrompts.length, 1);
+});
+
 test("structured-provider grill orchestration records normalized events instead of raw transcript callbacks", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });

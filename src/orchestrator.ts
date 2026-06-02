@@ -384,6 +384,26 @@ function renderPrdRepairPrompt(options: {
   ].join("\n");
 }
 
+function renderIssuesRepairPrompt(options: {
+  issuesDirectory: string;
+  completionMarker: string;
+  validationError: Error;
+}): string {
+  return [
+    "Repair only the issue decomposition artifacts.",
+    "",
+    "Issues directory:",
+    options.issuesDirectory,
+    "",
+    "Validation failure:",
+    options.validationError.message,
+    "",
+    "Write at least one non-empty issue markdown file directly to the issues directory.",
+    "Do not interview the user, edit the PRD, or create execution/validation artifacts.",
+    `When the issue artifacts are repaired, print exactly: ${options.completionMarker}`,
+  ].join("\n");
+}
+
 function createCompletionMarker(prefix = "DEVFLOW_INTENT_COMPLETE"): string {
   return `${prefix}_${crypto.randomBytes(16).toString("hex")}`;
 }
@@ -812,6 +832,10 @@ function createPrdRepairCompletionMarker(): string {
   return createCompletionMarker("DEVFLOW_PRD_REPAIR_COMPLETE");
 }
 
+function createIssuesRepairCompletionMarker(): string {
+  return createCompletionMarker("DEVFLOW_ISSUES_REPAIR_COMPLETE");
+}
+
 function createProviderSessionPhase(options: {
   run: DevFlowRunHandle;
   kind: string;
@@ -957,6 +981,35 @@ function createPrdRepairConfig(options: {
       return new StageArtifactValidationError({
         stage: "prd",
         artifactPath: options.run.paths.prdArtifact,
+        details: validationError.message,
+      });
+    },
+  };
+}
+
+function createIssuesRepairConfig(options: {
+  run: DevFlowRunHandle;
+  completionMarker: string;
+  attempt: number;
+}) {
+  return {
+    phase: createProviderSessionPhase({
+      run: options.run,
+      kind: "issues-repair",
+      attempt: options.attempt,
+    }),
+    completionMarker: options.completionMarker,
+    renderPrompt(validationError: Error) {
+      return renderIssuesRepairPrompt({
+        issuesDirectory: options.run.paths.issuesDirectory,
+        completionMarker: options.completionMarker,
+        validationError,
+      });
+    },
+    mapFailure(validationError: Error) {
+      return new StageArtifactValidationError({
+        stage: "issues",
+        artifactPath: options.run.paths.issuesDirectory,
         details: validationError.message,
       });
     },
@@ -1308,6 +1361,7 @@ async function runIssuesStage(options: {
   attempt: number;
 }): Promise<void> {
   const completionMarker = createCompletionMarker("DEVFLOW_ISSUES_COMPLETE");
+  const repairCompletionMarker = createIssuesRepairCompletionMarker();
   const prompt = await renderIssuesPrompt({
     prdArtifactPath: options.run.paths.prdArtifact,
     projectContextPath: options.run.paths.projectContextArtifact,
@@ -1331,6 +1385,11 @@ async function runIssuesStage(options: {
       async validate() {
         await validateIssueArtifacts(options.run.paths.issuesDirectory);
       },
+      repair: createIssuesRepairConfig({
+        run: options.run,
+        completionMarker: repairCompletionMarker,
+        attempt: options.attempt,
+      }),
     },
   });
 }
