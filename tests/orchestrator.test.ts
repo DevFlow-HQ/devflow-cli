@@ -29,6 +29,7 @@ import {
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
+  ExecutionLoopCapError,
   MissingProviderIdError,
   ProviderStageRetryExhaustedError,
   isRetryableProviderBackedStageFailure,
@@ -153,7 +154,7 @@ async function completeExecuteSession(
     repairUsed: false,
     exitCode: 0,
     signal: null,
-    matchedCompletionMarker: input.initialCompletionMarker,
+    matchedCompletionMarker: input.initialTerminalCompletionMarker,
   };
 }
 
@@ -339,7 +340,7 @@ test("validateExecutionArtifact rejects malformed JSON ledgers", async () => {
   );
 });
 
-test("validateExecutionArtifact rejects zero-iteration ledgers", async () => {
+test("validateExecutionArtifact accepts zero-iteration no-file ledgers", async () => {
   const artifactPath = join(
     fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
     "execution.json",
@@ -354,14 +355,7 @@ test("validateExecutionArtifact rejects zero-iteration ledgers", async () => {
     },
   });
 
-  await assert.rejects(
-    validateExecutionArtifact(artifactPath),
-    (error: unknown) =>
-      error instanceof StageArtifactValidationError &&
-      error.stage === "execute" &&
-      error.artifactPath === artifactPath &&
-      error.message.includes("at least one iteration"),
-  );
+  await validateExecutionArtifact(artifactPath);
 });
 
 test("validateExecutionArtifact accepts well-formed ledgers with a final block", async () => {
@@ -521,7 +515,7 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
           repairUsed: false,
           exitCode: 0,
           signal: null,
-          matchedCompletionMarker: input.initialCompletionMarker,
+          matchedCompletionMarker: input.initialTerminalCompletionMarker,
           providerSessionId: "execute-provider-session-1",
         };
       }
@@ -576,7 +570,7 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
       {
         iteration: 1,
         marker: runSessionInputs.filter(isExecuteSessionInput)[0]
-          .initialCompletionMarker,
+          .initialTerminalCompletionMarker,
         providerSessionId: "execute-provider-session-1",
         gitHeadBefore: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         gitHeadAfter: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -596,6 +590,392 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
   assert.equal(providerSessionState.providerSessionId, "execute-provider-session-1");
   assert.equal(providerSessionState.phase.kind, "execute");
   assert.equal(providerSessionState.status, "active");
+});
+
+test("orchestrator stops execute with no-file before opening a provider session", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const runSessionInputs: ManagedProviderSessionInput[] = [];
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "jsonl",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionInputs.push(input);
+
+      if (isIssuesSessionInput(input)) {
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "001-first.md"),
+          "# First issue\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        throw new Error("Execute session should not start when no files remain.");
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      async onStageStart(stage) {
+        if (stage !== "execute") {
+          return;
+        }
+
+        const [runId] = await listRunDirectories(projectRoot);
+        await fs.remove(
+          join(projectRoot, ".devflow", "runs", runId, "issues", "001-first.md"),
+        );
+      },
+    },
+  );
+
+  assert.equal(runSessionInputs.filter(isExecuteSessionInput).length, 0);
+  const [runId] = await listRunDirectories(projectRoot);
+  assert.deepEqual(
+    await fs.readJson(join(projectRoot, ".devflow", "runs", runId, "execution.json")),
+    {
+      stage: "execute",
+      iterations: [],
+      final: {
+        stopReason: "no-file",
+        completedIssueFilenames: [],
+        remainingIssueFilenames: [],
+      },
+    },
+  );
+});
+
+test("orchestrator loops fresh execute sessions until active issues are gone", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const executeInputs: ManagedProviderSessionInput[] = [];
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        const issuesDirectory = extractIssuesDirectory(input.initialPrompt);
+        await fs.outputFile(join(issuesDirectory, "001-first.md"), "# First\n");
+        await fs.outputFile(join(issuesDirectory, "002-second.md"), "# Second\n");
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        executeInputs.push(input);
+        await input.onProviderEvent?.(
+          createStructuredProviderEvent({
+            type: "session-start",
+            providerSessionId: `execute-${executeInputs.length}`,
+            phaseId: input.phase?.id,
+          }),
+        );
+        const runDirectory = join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+        );
+        const issueFilename =
+          executeInputs.length === 1 ? "001-first.md" : "002-second.md";
+        await fs.move(
+          join(runDirectory, "issues", issueFilename),
+          join(runDirectory, "issues", "done", issueFilename),
+        );
+        await input.validate();
+        return {
+          repairUsed: false,
+          exitCode: 0,
+          signal: null,
+          matchedCompletionMarker: input.initialCompletionMarker,
+        };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(executeInputs.length, 2);
+  assert.notEqual(executeInputs[0].phase?.id, executeInputs[1].phase?.id);
+  const [runId] = await listRunDirectories(projectRoot);
+  assert.deepEqual(
+    await fs.readJson(join(projectRoot, ".devflow", "runs", runId, "execution.json")),
+    {
+      stage: "execute",
+      iterations: [
+        {
+          iteration: 1,
+          marker: executeInputs[0].initialCompletionMarker,
+          gitHeadBefore: null,
+          gitHeadAfter: null,
+        },
+        {
+          iteration: 2,
+          marker: executeInputs[1].initialCompletionMarker,
+          gitHeadBefore: null,
+          gitHeadAfter: null,
+        },
+      ],
+      final: {
+        stopReason: "no-file",
+        completedIssueFilenames: ["001-first.md", "002-second.md"],
+        remainingIssueFilenames: [],
+      },
+    },
+  );
+});
+
+test("orchestrator stops execute with cap failure and writes the cap ledger", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  let executeCallCount = 0;
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "001-first.md"),
+          "# First\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        executeCallCount += 1;
+        await input.validate();
+        return {
+          repairUsed: false,
+          exitCode: 0,
+          signal: null,
+          matchedCompletionMarker: input.initialCompletionMarker,
+        };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ExecutionLoopCapError && error.maxIterations === 7,
+  );
+
+  assert.equal(executeCallCount, 7);
+  const [runId] = await listRunDirectories(projectRoot);
+  const ledger = await fs.readJson(
+    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  );
+  assert.equal(ledger.final.stopReason, "cap");
+  assert.equal(ledger.iterations.length, 7);
+  assert.deepEqual(ledger.final.completedIssueFilenames, []);
+  assert.deepEqual(ledger.final.remainingIssueFilenames, ["001-first.md"]);
+});
+
+test("orchestrator writes an error ledger before surfacing incomplete execute sessions", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "001-first.md"),
+          "# First\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        throw new IncompleteProviderSessionError({
+          provider,
+          completionMarker: input.initialCompletionMarker,
+          exitCode: 1,
+          signal: null,
+        });
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "codex",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          return adapter;
+        },
+      },
+    ),
+    IncompleteProviderSessionError,
+  );
+
+  const [runId] = await listRunDirectories(projectRoot);
+  const ledger = await fs.readJson(
+    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  );
+  assert.equal(ledger.final.stopReason, "error");
+  assert.equal(ledger.iterations.length, 1);
+  assert.deepEqual(ledger.final.completedIssueFilenames, []);
+  assert.deepEqual(ledger.final.remainingIssueFilenames, ["001-first.md"]);
 });
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
@@ -1329,8 +1709,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
         assert.ok(input.phase?.id, "expected execute phase id");
         assert.equal(input.phase.kind, "execute");
         assert.equal(input.phase.attempt, 1);
-        await completeExecuteSession(input);
-        return { repairUsed: false, exitCode: 0, signal: null };
+        return completeExecuteSession(input);
       } else {
         assert.ok(input.phase?.id, "expected grill phase id");
         assert.equal(input.phase.kind, "grill");
@@ -1555,9 +1934,7 @@ test("orchestrator leaves provider-authored issues untouched after execute", asy
 
       if (isExecuteSessionInput(input)) {
         assert.match(input.initialPrompt, /provider-authored-dag\.md/);
-        await completeExecuteSession(input);
-        installIssuesAccessGuard();
-        return { repairUsed: false, exitCode: 0, signal: null };
+        return completeExecuteSession(input);
       }
 
       if (isGrillSessionInput(input)) {
@@ -1666,6 +2043,10 @@ test("orchestrator repairs missing issue files inside the same issues managed se
         await input.validate();
 
         return { repairUsed: true, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       if (isGrillSessionInput(input)) {
@@ -1853,6 +2234,10 @@ test("orchestrator retries issues with a clean issues directory without repeatin
         return { repairUsed: false, exitCode: 0, signal: null };
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         grillRunSessionCount += 1;
         const originalContinuations = input.continuations ?? [];
@@ -1991,6 +2376,10 @@ test("orchestrator persists provider session metadata for the dedicated issues s
         return { repairUsed: false, exitCode: 0, signal: null };
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -2112,6 +2501,10 @@ test("orchestrator retries issues in fresh sessions without resuming prior issue
         );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       if (isGrillSessionInput(input)) {

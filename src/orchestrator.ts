@@ -171,8 +171,7 @@ const executionLedgerSchema = z
             gitHeadAfter: gitExecutionHeadSchema,
           })
           .strict(),
-      )
-      .min(1, { message: "Execution ledger must contain at least one iteration." }),
+      ),
     final: z
       .object({
         stopReason: executionStopReasonSchema,
@@ -241,6 +240,16 @@ export class ProviderStageRetryExhaustedError extends Error {
     this.stage = options.stage;
     this.attempts = options.attempts;
     this.cause = options.cause;
+  }
+}
+
+export class ExecutionLoopCapError extends Error {
+  readonly maxIterations: number;
+
+  constructor(maxIterations: number) {
+    super(`Execution loop reached the maximum of ${maxIterations} iterations.`);
+    this.name = "ExecutionLoopCapError";
+    this.maxIterations = maxIterations;
   }
 }
 
@@ -1562,74 +1571,142 @@ async function runExecuteStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
-}): Promise<ManagedProviderSessionResult> {
-  const iterationMarker = createCompletionMarker(
-    "DEVFLOW_EXECUTION_ITERATION_COMPLETE",
-  );
-  const terminalMarker = createCompletionMarker(
-    "DEVFLOW_EXECUTION_NO_MORE_TASKS",
-  );
-  const gitHeadBefore = await options.devFlowState.git.getCurrentHead();
-  const issueFilenames = await listExecutionIssueFilenames(
+}): Promise<void> {
+  const initialIssueFilenames = await listExecutionIssueFilenames(
     options.run.paths.issuesDirectory,
   );
-  const prompt = await renderExecutePrompt({
-    issuesDirectory: options.run.paths.issuesDirectory,
-    recentCommits: await options.devFlowState.git.getRecentCommits(),
-    prdArtifactPath: options.run.paths.prdArtifact,
-    projectContextPath: options.run.paths.projectContextArtifact,
-    tddGuidePath: TDD_GUIDE_PATH,
-    iterationMarker,
-    terminalMarker,
-  });
+  const maxIterations = initialIssueFilenames.length * 2 + 5;
+  const iterations: ExecutionLedger["iterations"] = [];
 
-  const result = await runManagedSessionWithProviderState({
-    run: options.run,
-    adapter: options.adapter,
-    input: {
-      workingDirectory: options.request.projectRoot,
-      initialPrompt: prompt,
-      initialCompletionMarker: iterationMarker,
-      initialTerminalCompletionMarker: terminalMarker,
-      phase: createProviderSessionPhase({
+  async function buildLedger(
+    stopReason: ExecutionLedger["final"]["stopReason"],
+  ): Promise<ExecutionLedger> {
+    const remainingIssueFilenames = await listExecutionIssueFilenames(
+      options.run.paths.issuesDirectory,
+    );
+    const remainingIssueFilenameSet = new Set(remainingIssueFilenames);
+
+    return {
+      stage: "execute",
+      iterations,
+      final: {
+        stopReason,
+        completedIssueFilenames: initialIssueFilenames.filter(
+          (issueFilename) => !remainingIssueFilenameSet.has(issueFilename),
+        ),
+        remainingIssueFilenames,
+      },
+    };
+  }
+
+  async function writeLedger(
+    stopReason: ExecutionLedger["final"]["stopReason"],
+  ): Promise<void> {
+    await options.run.writeExecution(
+      JSON.stringify(await buildLedger(stopReason), null, 2),
+    );
+    await validateExecutionArtifact(options.run.paths.executionArtifact);
+  }
+
+  for (let iteration = 1; ; iteration += 1) {
+    const currentIssueFilenames = await listExecutionIssueFilenames(
+      options.run.paths.issuesDirectory,
+    );
+
+    if (currentIssueFilenames.length === 0) {
+      await writeLedger("no-file");
+      return;
+    }
+
+    const iterationMarker = createCompletionMarker(
+      "DEVFLOW_EXECUTION_ITERATION_COMPLETE",
+    );
+    const terminalMarker = createCompletionMarker(
+      "DEVFLOW_EXECUTION_NO_MORE_TASKS",
+    );
+    const gitHeadBefore = await options.devFlowState.git.getCurrentHead();
+    const prompt = await renderExecutePrompt({
+      issuesDirectory: options.run.paths.issuesDirectory,
+      recentCommits: await options.devFlowState.git.getRecentCommits(),
+      prdArtifactPath: options.run.paths.prdArtifact,
+      projectContextPath: options.run.paths.projectContextArtifact,
+      tddGuidePath: TDD_GUIDE_PATH,
+      iterationMarker,
+      terminalMarker,
+    });
+
+    let result: ManagedProviderSessionResult;
+
+    try {
+      result = await runManagedSessionWithProviderState({
         run: options.run,
-        kind: "execute",
-        attempt: 1,
-      }),
-      ...(options.request.model ? { model: options.request.model } : {}),
-      async validate() {
-        // The provider owns issue selection and movement. This first slice only
-        // records that a fresh execution session reached a configured marker.
-      },
-    },
-  });
-  const gitHeadAfter = await options.devFlowState.git.getCurrentHead();
-  const providerSessionState = await readAdvisoryProviderSessionState(options.run);
-  const matchedCompletionMarker = result.matchedCompletionMarker ?? iterationMarker;
-  const ledger: ExecutionLedger = {
-    stage: "execute",
-    iterations: [
-      {
-        iteration: 1,
-        marker: matchedCompletionMarker,
-        ...(providerSessionState?.providerSessionId
-          ? { providerSessionId: providerSessionState.providerSessionId }
-          : {}),
-        gitHeadBefore,
-        gitHeadAfter,
-      },
-    ],
-    final: {
-      stopReason: "terminal",
-      completedIssueFilenames: [],
-      remainingIssueFilenames: issueFilenames,
-    },
-  };
+        adapter: options.adapter,
+        input: {
+          workingDirectory: options.request.projectRoot,
+          initialPrompt: prompt,
+          initialCompletionMarker: iterationMarker,
+          initialTerminalCompletionMarker: terminalMarker,
+          phase: createProviderSessionPhase({
+            run: options.run,
+            kind: "execute",
+            attempt: iteration,
+          }),
+          ...(options.request.model ? { model: options.request.model } : {}),
+          async validate() {
+            // The provider owns issue selection and movement. The loop only
+            // records marker-driven progress and final issue-file accounting.
+          },
+        },
+      });
+    } catch (error) {
+      if (error instanceof IncompleteProviderSessionError) {
+        iterations.push({
+          iteration,
+          marker: error.completionMarker,
+          gitHeadBefore,
+          gitHeadAfter: await options.devFlowState.git.getCurrentHead(),
+        });
+        await writeLedger("error");
+      }
 
-  await options.run.writeExecution(JSON.stringify(ledger, null, 2));
-  await validateExecutionArtifact(options.run.paths.executionArtifact);
+      throw error;
+    }
 
-  return result;
+    const gitHeadAfter = await options.devFlowState.git.getCurrentHead();
+    const providerSessionState = await readAdvisoryProviderSessionState(options.run);
+    const matchedCompletionMarker = result.matchedCompletionMarker;
+
+    iterations.push({
+      iteration,
+      marker: matchedCompletionMarker ?? iterationMarker,
+      ...(providerSessionState?.providerSessionId
+        ? { providerSessionId: providerSessionState.providerSessionId }
+        : {}),
+      gitHeadBefore,
+      gitHeadAfter,
+    });
+
+    if (matchedCompletionMarker === terminalMarker) {
+      await writeLedger("terminal");
+      return;
+    }
+
+    if (matchedCompletionMarker !== iterationMarker) {
+      const error = new IncompleteProviderSessionError({
+        provider: options.adapter.provider,
+        completionMarker: iterationMarker,
+        exitCode: result.exitCode,
+        signal: result.signal,
+      });
+      await writeLedger("error");
+      throw error;
+    }
+
+    if (iterations.length >= maxIterations) {
+      await writeLedger("cap");
+      throw new ExecutionLoopCapError(maxIterations);
+    }
+  }
 }
 
 async function appendGrillFailureNoteBestEffort(
