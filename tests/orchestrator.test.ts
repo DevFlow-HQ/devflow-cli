@@ -1409,6 +1409,248 @@ test("orchestrator retries issues with a clean issues directory without repeatin
   );
 });
 
+test("orchestrator persists provider session metadata for the dedicated issues session", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  let issuesRunSessionCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        issuesRunSessionCount += 1;
+        assert.ok(input.onProviderEvent);
+        assert.ok(input.phase?.id, "expected issues phase id");
+        assert.equal(input.phase.kind, "issues");
+        assert.equal(input.phase.attempt, 1);
+        assert.ok(input.repair?.phase?.id, "expected issues repair phase id");
+        assert.equal(input.repair.phase.kind, "issues-repair");
+
+        await input.onProviderEvent(
+          createStructuredProviderEvent(
+            {
+              type: "session-start",
+              phaseId: input.phase.id,
+              providerSessionId: "codex-issues-session",
+            },
+            "hooks",
+            provider,
+          ),
+        );
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "provider-backed.md"),
+          "# Provider-backed issue\n",
+        );
+        await input.validate();
+        await input.onProviderEvent(
+          createStructuredProviderEvent(
+            {
+              type: "session-completed",
+              phaseId: input.phase.id,
+              providerSessionId: "codex-issues-session",
+              exitCode: 0,
+              signal: null,
+            },
+            "hooks",
+            provider,
+          ),
+        );
+
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+    async resumeSession() {
+      throw new Error("issues orchestration should not resume provider sessions");
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    (await listRunDirectories(projectRoot))[0],
+  );
+  const providerSessionState = await fs.readJson(
+    join(runDirectory, "provider-session.json"),
+  );
+
+  assert.equal(issuesRunSessionCount, 1);
+  assert.deepEqual(providerSessionState.provider, provider);
+  assert.equal(providerSessionState.providerSessionId, "codex-issues-session");
+  assert.equal(providerSessionState.phase.kind, "issues");
+  assert.equal(providerSessionState.phase.attempt, 1);
+  assert.equal(providerSessionState.status, "completed");
+});
+
+test("orchestrator retries issues in fresh sessions without resuming prior issues metadata", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const provider = getBuiltInProviderIdentity("codex");
+  const issuesPrompts: string[] = [];
+  const issuesCompletionMarkers: string[] = [];
+  let issuesRunSessionCount = 0;
+  let resumeCallCount = 0;
+  const adapter: ManagedSessionAdapter = {
+    provider,
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        issuesRunSessionCount += 1;
+        issuesPrompts.push(input.initialPrompt);
+        issuesCompletionMarkers.push(input.initialCompletionMarker);
+        assert.ok(input.onProviderEvent);
+        assert.ok(input.phase?.id, "expected issues phase id");
+        assert.equal(input.phase.kind, "issues");
+        assert.equal(input.phase.attempt, issuesRunSessionCount);
+        assertIssuesPromptContract(input);
+        assert.doesNotMatch(input.initialPrompt, /grill-transcript\.md/);
+        assert.doesNotMatch(input.initialPrompt, /What tradeoff matters/);
+        assert.doesNotMatch(input.initialPrompt, /Continue the interrupted/);
+
+        if (issuesRunSessionCount === 1) {
+          await input.onProviderEvent(
+            createStructuredProviderEvent(
+              {
+                type: "session-start",
+                phaseId: input.phase.id,
+                providerSessionId: "stale-issues-session",
+              },
+              "hooks",
+              provider,
+            ),
+          );
+          throw new IncompleteProviderSessionError({
+            provider,
+            completionMarker: input.initialCompletionMarker,
+            exitCode: 1,
+            signal: null,
+          });
+        }
+
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "fresh-session.md"),
+          "# Fresh session issue\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isGrillSessionInput(input)) {
+        await input.transcript?.onProviderOutput?.("What tradeoff matters?\n");
+        return completeGrillSession(input);
+      }
+
+      const runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+    async resumeSession() {
+      resumeCallCount += 1;
+      throw new Error("issues retry attempts must use runSession");
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(issuesRunSessionCount, 2);
+  assert.equal(resumeCallCount, 0);
+  assert.equal(issuesCompletionMarkers.length, 2);
+  assert.notEqual(issuesCompletionMarkers[0], issuesCompletionMarkers[1]);
+  assert.equal(
+    issuesPrompts[0].match(/Canonical PRD artifact path:\n([^\n]+)/)?.[1],
+    issuesPrompts[1].match(/Canonical PRD artifact path:\n([^\n]+)/)?.[1],
+  );
+  assert.equal(
+    issuesPrompts[0].match(/Project context path:\n([^\n]+)/)?.[1],
+    issuesPrompts[1].match(/Project context path:\n([^\n]+)/)?.[1],
+  );
+});
+
 test("structured-provider grill orchestration records normalized events instead of raw transcript callbacks", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
