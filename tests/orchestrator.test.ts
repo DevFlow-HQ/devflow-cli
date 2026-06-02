@@ -65,6 +65,12 @@ function isIssuesSessionInput(input: ManagedProviderSessionInput): boolean {
   return input.initialCompletionMarker.startsWith("DEVFLOW_ISSUES_COMPLETE_");
 }
 
+function isExecuteSessionInput(input: ManagedProviderSessionInput): boolean {
+  return input.initialCompletionMarker.startsWith(
+    "DEVFLOW_EXECUTION_ITERATION_COMPLETE_",
+  );
+}
+
 type DistributiveOmit<T, K extends keyof any> = T extends unknown
   ? Omit<T, K>
   : never;
@@ -120,6 +126,35 @@ async function completeIssuesSession(
   await input.validate();
 
   return { repairUsed: false, exitCode: 0, signal: null };
+}
+
+async function completeExecuteSession(
+  input: ManagedProviderSessionInput,
+): Promise<ManagedProviderSessionResult> {
+  assert.match(
+    input.initialCompletionMarker,
+    /^DEVFLOW_EXECUTION_ITERATION_COMPLETE_[a-f0-9]{32}$/,
+  );
+  assert.match(
+    input.initialTerminalCompletionMarker ?? "",
+    /^DEVFLOW_EXECUTION_NO_MORE_TASKS_[a-f0-9]{32}$/,
+  );
+  assert.match(input.initialPrompt, /running one DevFlow execution iteration/i);
+  assert.match(input.initialPrompt, /Select and complete exactly one AFK issue/i);
+  assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+  assert.equal(
+    input.initialPrompt.includes(input.initialTerminalCompletionMarker ?? ""),
+    true,
+  );
+
+  await input.validate();
+
+  return {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: input.initialCompletionMarker,
+  };
 }
 
 function assertIssuesPromptContract(input: ManagedProviderSessionInput): void {
@@ -400,6 +435,169 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
   assert.doesNotMatch(prompt, /npm run typecheck/);
 });
 
+test("orchestrator runs one fresh execute iteration with rendered context and records the session result", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await baseDevFlowState.projectContext.write("# Project context\n", {
+    refreshReason: "manual",
+  });
+  const devFlowState: DevFlowState = {
+    ...baseDevFlowState,
+    git: {
+      async getCurrentHead() {
+        return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      },
+      async getRecentCommits() {
+        return [
+          "0247da877ae9c3d8a9831875c2048ae24422a260",
+          "2026-06-02",
+          "Add execution ledger state support",
+        ].join("\n");
+      },
+    },
+  };
+  const runSessionInputs: ManagedProviderSessionInput[] = [];
+  const resumeSessionInputs: ManagedProviderSessionResumeInput[] = [];
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "jsonl",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runSessionInputs.push(input);
+      const runIds = await listRunDirectories(projectRoot);
+      const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
+
+      if (isIssuesSessionInput(input)) {
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "004-run-one.md"),
+          "## Type\n\nAFK\n\n## What to build\n\nRun one execution iteration.\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        assert.equal(input.workingDirectory, projectRoot);
+        assert.equal(input.model, "gpt-5");
+        assert.match(
+          input.initialCompletionMarker,
+          /^DEVFLOW_EXECUTION_ITERATION_COMPLETE_[a-f0-9]{32}$/,
+        );
+        assert.match(
+          input.initialTerminalCompletionMarker ?? "",
+          /^DEVFLOW_EXECUTION_NO_MORE_TASKS_[a-f0-9]{32}$/,
+        );
+        assert.equal(input.phase?.kind, "execute");
+        assert.equal(input.phase?.attempt, 1);
+        assert.match(input.initialPrompt, /004-run-one\.md/);
+        assert.match(input.initialPrompt, /Run one execution iteration/);
+        assert.match(input.initialPrompt, /Add execution ledger state support/);
+        assert.match(input.initialPrompt, /prd\.md/);
+        assert.match(input.initialPrompt, /project-context\.md/);
+        assert.match(input.initialPrompt, /prompts\/tdd\.md/);
+        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+        assert.equal(
+          input.initialPrompt.includes(input.initialTerminalCompletionMarker ?? ""),
+          true,
+        );
+
+        await input.onProviderEvent?.(
+          createStructuredProviderEvent({
+            type: "session-start",
+            providerSessionId: "execute-provider-session-1",
+            phaseId: input.phase?.id,
+          }),
+        );
+        await input.validate();
+        return {
+          repairUsed: false,
+          exitCode: 0,
+          signal: null,
+          matchedCompletionMarker: input.initialCompletionMarker,
+          providerSessionId: "execute-provider-session-1",
+        };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+    async resumeSession(input) {
+      resumeSessionInputs.push(input);
+      throw new Error("Execution must not resume provider sessions.");
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+      model: "gpt-5",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(runSessionInputs.filter(isExecuteSessionInput).length, 1);
+  assert.equal(resumeSessionInputs.length, 0);
+
+  const [runId] = await listRunDirectories(projectRoot);
+  const runDirectory = join(projectRoot, ".devflow", "runs", runId);
+  const executionLedger = await fs.readJson(join(runDirectory, "execution.json"));
+  assert.deepEqual(executionLedger, {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: runSessionInputs.filter(isExecuteSessionInput)[0]
+          .initialCompletionMarker,
+        providerSessionId: "execute-provider-session-1",
+        gitHeadBefore: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        gitHeadAfter: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: [],
+      remainingIssueFilenames: ["004-run-one.md"],
+    },
+  });
+  await validateExecutionArtifact(join(runDirectory, "execution.json"));
+
+  const providerSessionState = await fs.readJson(
+    join(runDirectory, "provider-session.json"),
+  );
+  assert.equal(providerSessionState.providerSessionId, "execute-provider-session-1");
+  assert.equal(providerSessionState.phase.kind, "execute");
+  assert.equal(providerSessionState.status, "active");
+});
+
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
@@ -414,6 +612,10 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       runSessionInputs.push(input);
@@ -511,6 +713,10 @@ test("orchestrator can complete the active intent stage through a built-in Codex
               return completeIssuesSession(input);
             }
 
+            if (isExecuteSessionInput(input)) {
+              return completeExecuteSession(input);
+            }
+
             await fs.outputJson(
               join(
                 projectRoot,
@@ -548,7 +754,7 @@ test("orchestrator can complete the active intent stage through a built-in Codex
     needsClarification: false,
   });
   assert.equal(result.bootstrapProvenance, "reused");
-  assert.equal(sessionCalls.length, 3);
+  assert.equal(sessionCalls.length, 4);
   assert.equal(sessionCalls[0]?.executable, executablePath);
   assert.equal(sessionCalls[0]?.args[0], "--model");
   assert.equal(sessionCalls[0]?.args[1], "gpt-5.5/fast beta");
@@ -588,6 +794,10 @@ test("orchestrator leaves Codex event-source selection behind the managed-sessio
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       capabilitiesSeen.push(adapter.capabilities?.eventSource);
@@ -669,6 +879,10 @@ test("orchestrator reports intent repair metadata from a built-in provider adapt
               return completeIssuesSession(input);
             }
 
+            if (isExecuteSessionInput(input)) {
+              return completeExecuteSession(input);
+            }
+
             await assert.rejects(input.validate());
             assert.ok(input.repair);
             const repairPrompt = input.repair.renderPrompt(
@@ -734,6 +948,10 @@ test("orchestrator retries a retryable intent provider-session failure inside th
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       if (isGrillSessionInput(input)) {
@@ -846,6 +1064,10 @@ test("orchestrator retries intent after failed in-session repair and accepts a v
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       if (isGrillSessionInput(input)) {
@@ -962,6 +1184,10 @@ test("orchestrator raises a typed retry-exhausted error and preserves the final 
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       if (isGrillSessionInput(input)) {
@@ -1099,6 +1325,12 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
           join(runDirectory, "issues", "first-issue.md"),
           "# First issue\n",
         );
+      } else if (isExecuteSessionInput(input)) {
+        assert.ok(input.phase?.id, "expected execute phase id");
+        assert.equal(input.phase.kind, "execute");
+        assert.equal(input.phase.attempt, 1);
+        await completeExecuteSession(input);
+        return { repairUsed: false, exitCode: 0, signal: null };
       } else {
         assert.ok(input.phase?.id, "expected grill phase id");
         assert.equal(input.phase.kind, "grill");
@@ -1153,7 +1385,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     "execute",
     "validate",
   ]);
-  assert.equal(runSessionInputs.length, 3);
+  assert.equal(runSessionInputs.length, 4);
 
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);
@@ -1212,7 +1444,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
-test("orchestrator leaves provider-authored issues untouched through execute and validate placeholders", async (t) => {
+test("orchestrator leaves provider-authored issues untouched after execute", async (t) => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
@@ -1317,8 +1549,14 @@ test("orchestrator leaves provider-authored issues untouched through execute and
         issueDirectoryEntriesBeforeDownstream = (
           await fs.readdir(issuesDirectory)
         ).sort();
-        installIssuesAccessGuard();
 
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        assert.match(input.initialPrompt, /provider-authored-dag\.md/);
+        await completeExecuteSession(input);
+        installIssuesAccessGuard();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
 
@@ -1955,6 +2193,10 @@ test("structured-provider grill orchestration records normalized events instead 
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2065,6 +2307,10 @@ test("orchestrator persists reliable provider session ids from normalized sessio
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2173,6 +2419,10 @@ test("orchestrator refreshes provider session state from later normalized turn e
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2278,6 +2528,10 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       runSessionInputs.push(input);
@@ -2399,6 +2653,10 @@ test("failed grill resume falls back once to a fresh partial-transcript grill at
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2505,6 +2763,10 @@ test("unsupported grill resume keeps the partial-transcript new attempt path", a
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2597,6 +2859,10 @@ test("grill resume does not accept session-completed without marker observation"
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -2710,6 +2976,10 @@ test("orchestrator leaves fallback providers without reliable session ids on exi
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -2801,6 +3071,10 @@ test("structured Codex JSONL grill orchestration records transcripts from normal
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -2932,6 +3206,10 @@ test("structured Claude hook grill orchestration records normalized events and p
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -3098,6 +3376,10 @@ test("structured-provider grill orchestration keeps repair discussion before acc
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3213,6 +3495,10 @@ test("structured-provider grill transcript persistence failures retry without wr
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3295,6 +3581,10 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -3412,6 +3702,10 @@ test("orchestrator exhausts grill retries after two pre-completion attempts", as
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3501,6 +3795,10 @@ test("orchestrator does not retry interactive grill after transcript completion"
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3581,6 +3879,10 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -3691,6 +3993,10 @@ test("orchestrator replaces a corrupt checkpoint from a completed grill transcri
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3768,6 +4074,10 @@ test("orchestrator repairs a missing PRD artifact inside the completed grill ses
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -3866,6 +4176,10 @@ test("orchestrator repairs an empty PRD artifact with the same non-empty validat
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -3954,6 +4268,10 @@ test("orchestrator retries only PRD synthesis from transcript after completed-gr
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -4063,6 +4381,10 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -4195,6 +4517,10 @@ test("failed PRD resume falls back once to PRD-only synthesis from the completed
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -4315,6 +4641,10 @@ test("completed PRD artifact prevents PRD resume or fallback from running again"
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -4430,6 +4760,10 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       const runDirectory = join(
         projectRoot,
         ".devflow",
@@ -4526,6 +4860,10 @@ test("completed grill checkpoint overrides stale active grill provider state dur
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       const runDirectory = join(
@@ -4644,6 +4982,10 @@ test("orchestrator surfaces pre-completion grill transcript persistence failures
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       await fs.outputJson(
         join(
           projectRoot,
@@ -4720,6 +5062,10 @@ test("orchestrator reuses fresh project context during bootstrap without provide
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       runSessionInputs.push(input);
@@ -4819,6 +5165,10 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       runSessionCallCount += 1;
@@ -4927,6 +5277,10 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       runSessionCallCount += 1;
@@ -5038,6 +5392,10 @@ test("orchestrator generates missing project context through the managed provide
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       runSessionInputs.push(input);
@@ -5219,6 +5577,10 @@ test("orchestrator refreshes semantically stale project context through the mana
       async runSession(input) {
         if (isIssuesSessionInput(input)) {
           return completeIssuesSession(input);
+        }
+
+        if (isExecuteSessionInput(input)) {
+          return completeExecuteSession(input);
         }
 
         if (isGrillSessionInput(input)) {
@@ -5421,6 +5783,10 @@ test("orchestrator supplies bootstrap validation and one in-session repair attem
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -5526,6 +5892,10 @@ test("orchestrator retries bootstrap after repair failure and removes the failed
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -5602,6 +5972,10 @@ test("orchestrator preserves the final failed bootstrap candidate after retry ex
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       runSessionCallCount += 1;
@@ -5732,6 +6106,10 @@ test("orchestrator treats bootstrap candidate cleanup failure after persistence 
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       runSessionCallCount += 1;
       const runIds = await listRunDirectories(projectRoot);
       const runDirectory = join(projectRoot, ".devflow", "runs", runIds[0]);
@@ -5851,6 +6229,10 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
         return completeIssuesSession(input);
       }
 
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
       if (isGrillSessionInput(input)) {
         return completeGrillSession(input);
       }
@@ -5935,6 +6317,10 @@ test("orchestrator preserves the final failed repair validation error as the ret
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       try {
@@ -6211,6 +6597,10 @@ test("orchestrator stops after cleanup failure even when the intent artifact is 
     async runSession(input) {
       if (isIssuesSessionInput(input)) {
         return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
       }
 
       await fs.outputJson(

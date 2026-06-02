@@ -116,6 +116,12 @@ const BOOTSTRAP_STAGE_TOTAL_ATTEMPTS = 2;
 const GRILL_STAGE_TOTAL_ATTEMPTS = 2;
 const PRD_STAGE_TOTAL_ATTEMPTS = 2;
 const ISSUES_STAGE_TOTAL_ATTEMPTS = 2;
+const TDD_GUIDE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "prompts",
+  "tdd.md",
+);
 
 const intentArtifactSchema = z
   .object({
@@ -1543,6 +1549,89 @@ async function runIssuesStageWithRetry(options: {
   });
 }
 
+async function listExecutionIssueFilenames(
+  issuesDirectory: string,
+): Promise<string[]> {
+  return (await fs.readdir(issuesDirectory))
+    .filter((entry) => entry.endsWith(".md"))
+    .sort();
+}
+
+async function runExecuteStage(options: {
+  devFlowState: DevFlowState;
+  request: ResolvedExecutionRequest;
+  run: DevFlowRunHandle;
+  adapter: ManagedSessionAdapter;
+}): Promise<ManagedProviderSessionResult> {
+  const iterationMarker = createCompletionMarker(
+    "DEVFLOW_EXECUTION_ITERATION_COMPLETE",
+  );
+  const terminalMarker = createCompletionMarker(
+    "DEVFLOW_EXECUTION_NO_MORE_TASKS",
+  );
+  const gitHeadBefore = await options.devFlowState.git.getCurrentHead();
+  const issueFilenames = await listExecutionIssueFilenames(
+    options.run.paths.issuesDirectory,
+  );
+  const prompt = await renderExecutePrompt({
+    issuesDirectory: options.run.paths.issuesDirectory,
+    recentCommits: await options.devFlowState.git.getRecentCommits(),
+    prdArtifactPath: options.run.paths.prdArtifact,
+    projectContextPath: options.run.paths.projectContextArtifact,
+    tddGuidePath: TDD_GUIDE_PATH,
+    iterationMarker,
+    terminalMarker,
+  });
+
+  const result = await runManagedSessionWithProviderState({
+    run: options.run,
+    adapter: options.adapter,
+    input: {
+      workingDirectory: options.request.projectRoot,
+      initialPrompt: prompt,
+      initialCompletionMarker: iterationMarker,
+      initialTerminalCompletionMarker: terminalMarker,
+      phase: createProviderSessionPhase({
+        run: options.run,
+        kind: "execute",
+        attempt: 1,
+      }),
+      ...(options.request.model ? { model: options.request.model } : {}),
+      async validate() {
+        // The provider owns issue selection and movement. This first slice only
+        // records that a fresh execution session reached a configured marker.
+      },
+    },
+  });
+  const gitHeadAfter = await options.devFlowState.git.getCurrentHead();
+  const providerSessionState = await readAdvisoryProviderSessionState(options.run);
+  const matchedCompletionMarker = result.matchedCompletionMarker ?? iterationMarker;
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: matchedCompletionMarker,
+        ...(providerSessionState?.providerSessionId
+          ? { providerSessionId: providerSessionState.providerSessionId }
+          : {}),
+        gitHeadBefore,
+        gitHeadAfter,
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: [],
+      remainingIssueFilenames: issueFilenames,
+    },
+  };
+
+  await options.run.writeExecution(JSON.stringify(ledger, null, 2));
+  await validateExecutionArtifact(options.run.paths.executionArtifact);
+
+  return result;
+}
+
 async function appendGrillFailureNoteBestEffort(
   run: DevFlowRunHandle,
   error: unknown,
@@ -1874,10 +1963,16 @@ export async function runExecutionRequest(
     adapter,
   });
 
-  for (const stage of PIPELINE_STAGES.slice(5)) {
-    await startStage(stage, options);
-    await runNoopStage();
-  }
+  await startStage("execute", options);
+  await runExecuteStage({
+    devFlowState,
+    request,
+    run,
+    adapter,
+  });
+
+  await startStage("validate", options);
+  await runNoopStage();
 
   return { intent, parsedIntent, bootstrapProvenance };
 }
