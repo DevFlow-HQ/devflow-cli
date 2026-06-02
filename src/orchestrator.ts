@@ -67,6 +67,9 @@ export interface RunExecutionRequestOptions {
     providerId: BuiltInProviderId,
   ) => ManagedSessionAdapter;
   onStageStart?: (stage: PipelineStage) => void | Promise<void>;
+  onExecutionIteration?: (event: {
+    iteration: number;
+  }) => void | Promise<void>;
 }
 
 export interface RunExecutionRequestResult {
@@ -1571,6 +1574,7 @@ async function runExecuteStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  onExecutionIteration?: RunExecutionRequestOptions["onExecutionIteration"];
 }): Promise<void> {
   const initialIssueFilenames = await listExecutionIssueFilenames(
     options.run.paths.issuesDirectory,
@@ -1638,6 +1642,7 @@ async function runExecuteStage(options: {
     let result: ManagedProviderSessionResult;
 
     try {
+      await options.onExecutionIteration?.({ iteration });
       result = await runManagedSessionWithProviderState({
         run: options.run,
         adapter: options.adapter,
@@ -2046,6 +2051,7 @@ export async function runExecutionRequest(
     request,
     run,
     adapter,
+    onExecutionIteration: options.onExecutionIteration,
   });
 
   await startStage("validate", options);

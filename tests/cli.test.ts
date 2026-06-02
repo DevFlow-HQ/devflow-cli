@@ -8,6 +8,7 @@ import { execa } from "execa";
 import fs from "fs-extra";
 
 import {
+  IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   ManagedProviderSessionNotImplementedError,
   ProviderSessionLaunchError,
@@ -19,6 +20,10 @@ import {
 import { runCli } from "../src/cli.js";
 import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.js";
 import { createDevFlowState } from "../src/devflowState.js";
+import {
+  ExecutionLoopCapError,
+  type RunExecutionRequestOptions,
+} from "../src/orchestrator.js";
 
 function createWritableBuffer() {
   let output = "";
@@ -226,7 +231,10 @@ test("cli resolves the git repository root before handing off the execution requ
 test("cli passes the resolved state facade through to the orchestrator runner", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-state-pass-through-"));
   const devFlowState = createDevFlowState({ projectRoot });
-  const receivedCalls: unknown[] = [];
+  const receivedCalls: Array<{
+    request: unknown;
+    options: RunExecutionRequestOptions;
+  }> = [];
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
@@ -249,9 +257,45 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
       },
       options: {
         devFlowState,
+        onExecutionIteration: receivedCalls[0]?.options.onExecutionIteration,
       },
     },
   ]);
+  assert.equal(typeof receivedCalls[0]?.options.onExecutionIteration, "function");
+});
+
+test("cli prints a thin separator before each execution iteration starts", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-execute-iteration-"));
+  const stdout = createWritableBuffer();
+  const stderr = createWritableBuffer();
+  const observedStdoutBeforeRun: string[] = [];
+  let commandError: CommanderError | undefined;
+
+  try {
+    await runCli(["resume", "work"], {
+      stdout,
+      stderr,
+      cwd: projectRoot,
+      providerId: "codex",
+      runExecutionRequest: async (_request, options) => {
+        await options.onExecutionIteration?.({ iteration: 1 });
+        observedStdoutBeforeRun.push(stdout.read());
+      },
+      configureProgram(program) {
+        program.exitOverride();
+      },
+    });
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      commandError = error;
+    } else {
+      throw error;
+    }
+  }
+
+  assert.equal(commandError, undefined);
+  assert.deepEqual(observedStdoutBeforeRun, ["\n----- execution iteration 1 -----\n"]);
+  assert.equal(stderr.read(), "");
 });
 
 test("cli falls back to the current directory outside git before running the request", async () => {
@@ -341,6 +385,49 @@ test("cli maps interrupted provider sessions to concise user-facing errors", asy
   assert.equal(result.commandError?.code, "commander.error");
   assert.equal(result.stdout, "");
   assert.equal(result.stderr, "Provider session for Codex (codex) was interrupted.\n");
+});
+
+test("cli maps execution cap stops to a clear failure", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-cap-error-"));
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new ExecutionLoopCapError(7);
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Execution failed: reached the maximum of 7 iterations.\n",
+  );
+});
+
+test("cli maps execution error stops to a clear failure", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-execute-error-"));
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new IncompleteProviderSessionError({
+        provider: getBuiltInProviderIdentity("codex"),
+        completionMarker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        exitCode: 1,
+        signal: null,
+      });
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Execution failed: provider session for Codex (codex) stopped before completing the execution iteration.\n",
+  );
 });
 
 test("cli reuses a valid repo-local default provider config when no override is supplied", async () => {

@@ -13,6 +13,7 @@ import {
 import type { BuiltInProviderId } from "./adapters/providers.js";
 import type { ProviderDiscoveryResult } from "./adapters/providerDiscovery.js";
 import {
+  IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   ManagedProviderSessionNotImplementedError,
   ProviderSessionLaunchError,
@@ -24,6 +25,7 @@ import {
   type DevFlowState,
 } from "./devflowState.js";
 import {
+  ExecutionLoopCapError,
   runExecutionRequest,
   type RunExecutionRequestOptions,
   type ResolvedExecutionRequest,
@@ -101,6 +103,16 @@ function formatInterruptedProviderSessionError(
   return `Provider session for ${formatProviderLabel(error.provider)} was interrupted.`;
 }
 
+function formatExecutionIncompleteProviderSessionError(
+  error: IncompleteProviderSessionError,
+): string {
+  return `Execution failed: provider session for ${formatProviderLabel(error.provider)} stopped before completing the execution iteration.`;
+}
+
+function formatExecutionLoopCapError(error: ExecutionLoopCapError): string {
+  return `Execution failed: reached the maximum of ${error.maxIterations} iterations.`;
+}
+
 export function createCli(options: RunCliOptions = {}): Command {
   const program = new Command();
 
@@ -142,7 +154,12 @@ export function createCli(options: RunCliOptions = {}): Command {
         commandOptions.model ?? options.model,
       );
 
-      await executionRequestRunner(request, { devFlowState });
+      await executionRequestRunner(request, {
+        devFlowState,
+        onExecutionIteration({ iteration }) {
+          options.stdout?.write(`\n----- execution iteration ${iteration} -----\n`);
+        },
+      });
     });
 
   program.configureOutput({
@@ -190,6 +207,17 @@ export async function runCli(
 
     if (error instanceof InterruptedProviderSessionError) {
       program.error(formatInterruptedProviderSessionError(error));
+    }
+
+    if (
+      error instanceof IncompleteProviderSessionError &&
+      error.completionMarker.startsWith("DEVFLOW_EXECUTION_")
+    ) {
+      program.error(formatExecutionIncompleteProviderSessionError(error));
+    }
+
+    if (error instanceof ExecutionLoopCapError) {
+      program.error(formatExecutionLoopCapError(error));
     }
 
     if (error instanceof InvalidDevFlowConfigError) {

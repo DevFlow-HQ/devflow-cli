@@ -814,6 +814,7 @@ test("orchestrator stops execute with cap failure and writes the cap ledger", as
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
+  const stages: PipelineStage[] = [];
   let executeCallCount = 0;
 
   const adapter: ManagedSessionAdapter = {
@@ -879,6 +880,9 @@ test("orchestrator stops execute with cap failure and writes the cap ledger", as
         createManagedSessionAdapter() {
           return adapter;
         },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
       },
     ),
     (error: unknown) =>
@@ -886,20 +890,32 @@ test("orchestrator stops execute with cap failure and writes the cap ledger", as
   );
 
   assert.equal(executeCallCount, 7);
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+  ]);
   const [runId] = await listRunDirectories(projectRoot);
+  const runDirectory = join(projectRoot, ".devflow", "runs", runId);
   const ledger = await fs.readJson(
-    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+    join(runDirectory, "execution.json"),
   );
   assert.equal(ledger.final.stopReason, "cap");
   assert.equal(ledger.iterations.length, 7);
   assert.deepEqual(ledger.final.completedIssueFilenames, []);
   assert.deepEqual(ledger.final.remainingIssueFilenames, ["001-first.md"]);
+  assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), true);
+  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
 test("orchestrator writes an error ledger before surfacing incomplete execute sessions", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
+  const stages: PipelineStage[] = [];
   const provider = getBuiltInProviderIdentity("codex");
 
   const adapter: ManagedSessionAdapter = {
@@ -963,19 +979,33 @@ test("orchestrator writes an error ledger before surfacing incomplete execute se
         createManagedSessionAdapter() {
           return adapter;
         },
+        onStageStart(stage) {
+          stages.push(stage);
+        },
       },
     ),
     IncompleteProviderSessionError,
   );
 
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+  ]);
   const [runId] = await listRunDirectories(projectRoot);
+  const runDirectory = join(projectRoot, ".devflow", "runs", runId);
   const ledger = await fs.readJson(
-    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+    join(runDirectory, "execution.json"),
   );
   assert.equal(ledger.final.stopReason, "error");
   assert.equal(ledger.iterations.length, 1);
   assert.deepEqual(ledger.final.completedIssueFilenames, []);
   assert.deepEqual(ledger.final.remainingIssueFilenames, ["001-first.md"]);
+  assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), true);
+  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
