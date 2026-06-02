@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-06-01_
+_Last updated: 2026-06-02_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md` and `new_spec.md`.
 Hard limit: 100 lines.
@@ -48,33 +48,35 @@ Hard limit: 100 lines.
   - grill always runs after intent/bootstrap, asks one question at a time, persists `grill-transcript.md`, writes/recreates durable `grill-checkpoint.json`, resumes reliable interrupted sessions when possible, and avoids repeating completed interviews
   - PRD synthesis continues in the accepted live grill session when healthy, writes canonical `prd.md`, validates non-empty content, supports targeted repair, resumes reliable interrupted PRD sessions, and falls back to PRD-only synthesis from completed grill artifacts
   - provider-backed retry classification keeps interruptions and cleanup failures non-retryable while allowing incomplete sessions, launch/event/transcript capture failures, and artifact validation failures to retry
+- Issue decomposition is complete:
+  - run paths expose the run-scoped `issues/` directory, and the orchestrator runs a real provider-backed `issues` stage after `prd` and before placeholder `execute`/`validate`
+  - `prompts/issues.md` gives providers the canonical PRD path, project-context path, issues directory, and completion marker; it requires direct markdown issue writes, vertical slices, acceptance criteria, blocked-by sibling slugs, HITL/AFK tags, and one headless self-critique without external skills or tracker publishing
+  - `validateIssueArtifacts()` enforces only the ADR-0009 durable contract: at least one non-empty markdown file in the issues directory
+  - issue sessions support same-session targeted repair, two-attempt whole-stage retry with clean issues-directory retry setup, provider-session diagnostic metadata, and no issue-session resume
+  - regression coverage locks the fixed stage order and proves downstream placeholder stages do not read, parse, rewrite, delete, mark complete, or otherwise consume provider-authored issue files
 - Maintainer documentation/tests now pin structured provider constraints, structured grill transcript policy, and provider-native boundary isolation.
 
 ## Current State
-- The working pipeline is active through `intent`, `bootstrap`, `grill`, and `prd`.
-- `issues`, `execute`, and `validate` remain stage-order placeholders in `src/orchestrator.ts`; they start for progress reporting but do not yet write issue, execution, or validation artifacts.
+- The working pipeline is active through `intent`, `bootstrap`, `grill`, `prd`, and `issues`.
+- `execute` and `validate` remain stage-order placeholders in `src/orchestrator.ts`; they start for progress reporting but do not yet consume issues or write execution/validation artifacts.
 - Gemini, OpenCode, and Claude PTY fallback sessions remain PTY-marker/transcript fallback providers without reliable provider session ids or resume support.
 - Codex hook/JSONL and Claude hook/JSONL structured paths use PTY as control transport and normalized provider events as the data plane.
-- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, or Claude JSONL workstreams from `.agent/task_progress.md`.
+- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, or Claude JSONL workstreams from `.agent/task_progress.md`.
 - Latest verification: `npm run test` on 2026-06-01 passed with 359 tests.
 
 ## Remaining MVP Tasks
-1. Activate issue decomposition:
-  - add an issues prompt template and artifact contract
-  - produce normalized issue markdown files under each run's `issues/` directory
-  - validate issue slugs, ordering, file-scope hints, and actionable acceptance criteria
-2. Activate execution:
+1. Activate execution:
   - run each MVP issue sequentially through provider-backed sessions
   - pass bounded context, PRD, issue content, and prior issue outputs
   - record execution summaries without inventing success when provider work fails
-3. Activate validation:
+2. Activate validation:
   - run configured or inferred lint/tests/build checks
   - retry failed validation once through the provider
   - write `validation.json` and escalate clearly after the second failure
-4. Finish MVP CLI UX:
+3. Finish MVP CLI UX:
   - expose concise stage progress
   - map new stage/artifact validation failures to user-facing errors
   - produce a final run summary with artifact paths and next manual steps
-5. Future provider work:
+4. Future provider work:
   - keep PTY marker completion and transcript callbacks as fallback behavior
   - graduate Gemini and OpenCode from PTY fallback only when their structured sources can truthfully support the normalized event contract
