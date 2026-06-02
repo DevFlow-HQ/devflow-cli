@@ -162,6 +162,49 @@ test("phase manager observes structured completion markers only from assistant t
   );
 });
 
+test("phase manager completes a structured turn with the terminal marker", async () => {
+  let validateCalls = 0;
+  let finalizeCalls = 0;
+  const manager = createManager({
+    input: {
+      initialTerminalCompletionMarker: "NO_MORE_TASKS",
+      async validate() {
+        validateCalls += 1;
+      },
+    },
+    onFinalize() {
+      finalizeCalls += 1;
+    },
+  });
+
+  await manager.handleEvent({
+    type: "turn-completed",
+    assistantMessage: "Provider found no more work NO_MORE_TASKS",
+  });
+
+  assert.equal(validateCalls, 1);
+  assert.equal(finalizeCalls, 1);
+  assert.equal(manager.isFinalized(), true);
+  assert.equal(manager.matchedCompletionMarker(), "NO_MORE_TASKS");
+});
+
+test("phase manager gives terminal marker precedence when both structured markers appear", async () => {
+  const manager = createManager({
+    input: {
+      initialCompletionMarker: "ITERATION_DONE",
+      initialTerminalCompletionMarker: "NO_MORE_TASKS",
+    },
+  });
+
+  await manager.handleEvent({
+    type: "turn-completed",
+    assistantMessage: "Completed one issue ITERATION_DONE NO_MORE_TASKS",
+  });
+
+  assert.equal(manager.isFinalized(), true);
+  assert.equal(manager.matchedCompletionMarker(), "NO_MORE_TASKS");
+});
+
 test("phase manager validates a marker-matching turn once and finalizes when no continuations remain", async () => {
   const ordering: string[] = [];
   const manager = createManager({

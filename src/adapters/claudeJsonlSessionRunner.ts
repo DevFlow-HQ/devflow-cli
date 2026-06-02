@@ -253,6 +253,7 @@ export async function runClaudeJsonlSession(
         repairUsed: manager.repairUsed(),
         exitCode,
         signal,
+        matchedCompletionMarker: manager.matchedCompletionMarker(),
       };
     }
 

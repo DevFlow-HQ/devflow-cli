@@ -206,6 +206,7 @@ export async function runClaudeHookDrivenSession(
         repairUsed: manager.repairUsed(),
         exitCode,
         signal,
+        matchedCompletionMarker: manager.matchedCompletionMarker(),
       };
     }
 

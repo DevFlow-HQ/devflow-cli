@@ -438,6 +438,7 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
     repairUsed: false,
     exitCode: 0,
     signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
   });
 });
 

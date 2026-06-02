@@ -2,6 +2,7 @@ import stripAnsi from "strip-ansi";
 import pty from "node-pty";
 
 import {
+  findMatchedCompletionMarker,
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
   ProviderSessionLaunchError,
@@ -180,6 +181,7 @@ export async function runPtyManagedSession(
     let signal: NodeJS.Signals | null = null;
     let activeContinuationIndex: number | null = null;
     let repairUsed = false;
+    let matchedCompletionMarker: string | undefined;
     let interruptCount = 0;
     let interruptRequested = false;
     let submittedUserMessageBuffer = "";
@@ -246,11 +248,14 @@ export async function runPtyManagedSession(
         providerTranscriptRemainder + chunk,
       );
       providerTranscriptRemainder = "";
-      const activeCompletionMarker = getActiveCompletionMarker();
+      const matchedTranscriptMarker = findMatchedCompletionMarker(
+        normalizedChunk,
+        getActiveCompletionMarkerSet(),
+      );
       const markerIndex =
-        activeCompletionMarker === undefined
+        matchedTranscriptMarker === undefined
           ? -1
-          : normalizedChunk.indexOf(activeCompletionMarker);
+          : normalizedChunk.indexOf(matchedTranscriptMarker);
       const transcriptChunk =
         markerIndex === -1
           ? normalizedChunk
@@ -258,7 +263,7 @@ export async function runPtyManagedSession(
 
       if (markerIndex !== -1) {
         providerTranscriptStopped = true;
-        const detectedCompletionMarker = activeCompletionMarker;
+        const detectedCompletionMarker = matchedTranscriptMarker;
 
         if (detectedCompletionMarker === undefined) {
           return;
@@ -301,11 +306,37 @@ export async function runPtyManagedSession(
     }
 
     function getActiveCompletionMarker(): string | undefined {
+      return getActiveCompletionMarkerSet()?.completionMarker;
+    }
+
+    function getActiveCompletionMarkerSet():
+      | {
+          completionMarker: string;
+          terminalCompletionMarker?: string;
+        }
+      | undefined {
       if (waitingForRepair) {
-        return getActiveRepair()?.completionMarker;
+        const repairMarker = getActiveRepair()?.completionMarker;
+
+        return repairMarker === undefined
+          ? undefined
+          : {
+              completionMarker: repairMarker,
+            };
       }
 
-      return getActiveContinuation()?.completionMarker ?? input.initialCompletionMarker;
+      const continuation = getActiveContinuation();
+
+      if (continuation) {
+        return {
+          completionMarker: continuation.completionMarker,
+        };
+      }
+
+      return {
+        completionMarker: input.initialCompletionMarker,
+        terminalCompletionMarker: input.initialTerminalCompletionMarker,
+      };
     }
 
     function getActivePhaseId(): string | undefined {
@@ -409,6 +440,7 @@ export async function runPtyManagedSession(
         repairUsed,
         exitCode,
         signal,
+        matchedCompletionMarker,
       };
     }
 
@@ -618,12 +650,13 @@ export async function runPtyManagedSession(
       })();
     }
 
-    function handlePhaseCompletion(): void {
+    function handlePhaseCompletion(completionMarker: string): void {
       if (phaseMarkerDetected) {
         return;
       }
 
       phaseMarkerDetected = true;
+      matchedCompletionMarker = completionMarker;
 
       void (async () => {
         try {
@@ -675,6 +708,7 @@ export async function runPtyManagedSession(
           return;
         }
 
+        matchedCompletionMarker = repair.completionMarker;
         await emitProviderEventWithPhase(
           {
             type: "turn-completed",
@@ -722,13 +756,13 @@ export async function runPtyManagedSession(
         return;
       }
 
-      const activeCompletionMarker = getActiveCompletionMarker();
+      const activeCompletionMarker = findMatchedCompletionMarker(
+        rollingOutput,
+        getActiveCompletionMarkerSet(),
+      );
 
-      if (
-        activeCompletionMarker !== undefined &&
-        rollingOutput.includes(activeCompletionMarker)
-      ) {
-        handlePhaseCompletion();
+      if (activeCompletionMarker !== undefined) {
+        handlePhaseCompletion(activeCompletionMarker);
       }
     });
 

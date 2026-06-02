@@ -239,6 +239,69 @@ test("PTY managed-session runner mirrors raw output and validates after an ANSI-
     repairUsed: false,
     exitCode: 0,
     signal: null,
+    matchedCompletionMarker: "DEVFLOW_DONE",
+  });
+});
+
+test("PTY managed-session runner completes with a terminal marker from raw output", async () => {
+  const spawner = new FakePtySpawner();
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "ITERATION_DONE",
+      initialTerminalCompletionMarker: "NO_MORE_TASKS",
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("no active AFK work NO_MORE_TASKS\n");
+
+  assert.deepEqual(await runPromise, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "NO_MORE_TASKS",
+  });
+});
+
+test("PTY managed-session runner gives terminal marker precedence when both raw markers appear", async () => {
+  const spawner = new FakePtySpawner();
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "ITERATION_DONE",
+      initialTerminalCompletionMarker: "NO_MORE_TASKS",
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("finished ITERATION_DONE and terminal NO_MORE_TASKS\n");
+
+  assert.deepEqual(await runPromise, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "NO_MORE_TASKS",
   });
 });
 
@@ -1503,6 +1566,7 @@ test("PTY managed-session runner repairs invalid artifacts inside the same sessi
     repairUsed: true,
     exitCode: 0,
     signal: null,
+    matchedCompletionMarker: "REPAIR_DONE",
   });
 });
 

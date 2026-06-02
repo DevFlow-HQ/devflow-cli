@@ -395,6 +395,7 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
     repairUsed: false,
     exitCode: 0,
     signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
   });
   assert.equal(validateCount, 1);
 });

@@ -231,6 +231,7 @@ export async function runCodexJsonlSession(
         repairUsed: manager.repairUsed(),
         exitCode,
         signal,
+        matchedCompletionMarker: manager.matchedCompletionMarker(),
       };
     }
 

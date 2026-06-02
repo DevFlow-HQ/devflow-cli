@@ -77,6 +77,7 @@ export interface ManagedProviderSessionInput {
   workingDirectory: string;
   initialPrompt: string;
   initialCompletionMarker: string;
+  initialTerminalCompletionMarker?: string;
   model?: string;
   phase?: ManagedProviderSessionPhase;
   validate(): Promise<void>;
@@ -104,6 +105,32 @@ export interface ManagedProviderSessionResult {
   repairUsed: boolean;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
+  matchedCompletionMarker?: string;
+}
+
+export interface ManagedProviderCompletionMarkerSet {
+  completionMarker: string;
+  terminalCompletionMarker?: string;
+}
+
+export function findMatchedCompletionMarker(
+  text: string,
+  markerSet: ManagedProviderCompletionMarkerSet | undefined,
+): string | undefined {
+  if (!markerSet) {
+    return undefined;
+  }
+
+  if (
+    markerSet.terminalCompletionMarker !== undefined &&
+    text.includes(markerSet.terminalCompletionMarker)
+  ) {
+    return markerSet.terminalCompletionMarker;
+  }
+
+  return text.includes(markerSet.completionMarker)
+    ? markerSet.completionMarker
+    : undefined;
 }
 
 export interface ManagedProviderSessionTranscriptCallbacks {

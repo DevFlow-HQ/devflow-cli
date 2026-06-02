@@ -201,6 +201,7 @@ export async function runCodexHookDrivenSession(
         repairUsed: manager.repairUsed(),
         exitCode,
         signal,
+        matchedCompletionMarker: manager.matchedCompletionMarker(),
       };
     }
 

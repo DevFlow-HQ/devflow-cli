@@ -348,6 +348,7 @@ test("Claude JSONL runner completes a fresh first turn from a scoped transcript"
     repairUsed: false,
     exitCode: 0,
     signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
   });
 });
 
@@ -615,6 +616,7 @@ test("Claude JSONL runner resumes by tailing an existing transcript from the cap
     repairUsed: false,
     exitCode: 0,
     signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
   });
 });
 

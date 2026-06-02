@@ -1,4 +1,5 @@
 import {
+  findMatchedCompletionMarker,
   type ManagedProviderSessionContinuation,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionEventSource,
@@ -54,11 +55,13 @@ export interface PhaseManager {
   getState(): PhaseManagerState;
   isFinalized(): boolean;
   repairUsed(): boolean;
+  matchedCompletionMarker(): string | undefined;
 }
 
 export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
   let state: PhaseManagerState = { type: "initial" };
   let usedRepair = false;
+  let matchedCompletionMarker: string | undefined;
 
   async function handleEvent(event: PhaseManagerEventInput): Promise<void> {
     if (state.type === "finalized") {
@@ -75,14 +78,16 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
       return;
     }
 
-    const completionMarker = getActiveCompletionMarker(state, options.input);
+    const completionMarker = findMatchedCompletionMarker(
+      event.assistantMessage,
+      getActiveCompletionMarkerSet(state, options.input),
+    );
 
-    if (
-      completionMarker === undefined ||
-      !event.assistantMessage.includes(completionMarker)
-    ) {
+    if (completionMarker === undefined) {
       return;
     }
+
+    matchedCompletionMarker = completionMarker;
 
     if (state.type === "repair") {
       await completeRepairPhase(state);
@@ -186,6 +191,9 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
     repairUsed() {
       return usedRepair;
     },
+    matchedCompletionMarker() {
+      return matchedCompletionMarker;
+    },
   };
 }
 
@@ -222,18 +230,37 @@ function getActiveRepair(
   return getActiveContinuation(state, input)?.repair ?? input.repair;
 }
 
-function getActiveCompletionMarker(
+function getActiveCompletionMarkerSet(
   state: PhaseManagerState,
   input: ManagedProviderSessionInput,
-): string | undefined {
+):
+  | {
+      completionMarker: string;
+      terminalCompletionMarker?: string;
+    }
+  | undefined {
   if (state.type === "repair") {
-    return getActiveRepair(state, input)?.completionMarker;
+    const repairMarker = getActiveRepair(state, input)?.completionMarker;
+
+    return repairMarker === undefined
+      ? undefined
+      : {
+          completionMarker: repairMarker,
+        };
   }
 
-  return (
-    getActiveContinuation(state, input)?.completionMarker ??
-    input.initialCompletionMarker
-  );
+  const continuation = getActiveContinuation(state, input);
+
+  if (continuation) {
+    return {
+      completionMarker: continuation.completionMarker,
+    };
+  }
+
+  return {
+    completionMarker: input.initialCompletionMarker,
+    terminalCompletionMarker: input.initialTerminalCompletionMarker,
+  };
 }
 
 function getActivePhaseId(

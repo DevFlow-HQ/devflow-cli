@@ -432,6 +432,7 @@ test("managed-session input exposes validation and repair lifecycle configuratio
     workingDirectory: "/tmp/devflow",
     initialPrompt: "Ship the contract",
     initialCompletionMarker: "DEVFLOW_DONE",
+    initialTerminalCompletionMarker: "DEVFLOW_NO_MORE_TASKS",
     model: "gpt-5.5",
     async validate() {},
     repair: {
@@ -460,8 +461,16 @@ test("managed-session input exposes validation and repair lifecycle configuratio
       },
     ],
   };
+  const result: ManagedProviderSessionResult = {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "DEVFLOW_NO_MORE_TASKS",
+  };
 
   assert.equal(input.model, "gpt-5.5");
+  assert.equal(input.initialTerminalCompletionMarker, "DEVFLOW_NO_MORE_TASKS");
+  assert.equal(result.matchedCompletionMarker, "DEVFLOW_NO_MORE_TASKS");
   assert.equal(
     input.repair?.renderPrompt(new Error("invalid")),
     "repair: invalid",

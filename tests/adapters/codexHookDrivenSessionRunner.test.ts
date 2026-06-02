@@ -330,6 +330,7 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
     repairUsed: false,
     exitCode: 0,
     signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
   });
 });
 
