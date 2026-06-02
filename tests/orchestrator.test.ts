@@ -1093,6 +1093,170 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
 });
 
+test("orchestrator leaves provider-authored issues untouched through execute and validate placeholders", async (t) => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const stages: PipelineStage[] = [];
+  const issueAccessesAfterIssuesStage: string[] = [];
+  let runDirectory = "";
+  let issuesDirectory = "";
+  let issueFilePath = "";
+  let issueContentBeforeDownstream = "";
+  let issueMtimeBeforeDownstream = 0;
+  let issueDirectoryEntriesBeforeDownstream: string[] = [];
+  let restoreIssuesAccessGuard = () => {};
+
+  function isIssuePath(value: unknown): boolean {
+    return (
+      typeof value === "string" &&
+      issuesDirectory.length > 0 &&
+      (value === issuesDirectory || value.startsWith(`${issuesDirectory}/`))
+    );
+  }
+
+  function installIssuesAccessGuard(): void {
+    const guardedMethods = [
+      "readdir",
+      "readFile",
+      "writeFile",
+      "outputFile",
+      "remove",
+      "unlink",
+      "move",
+    ] as const;
+    const originals = new Map<string, unknown>();
+
+    for (const method of guardedMethods) {
+      const original = fs[method];
+      originals.set(method, original);
+      (fs as Record<string, unknown>)[method] = async (
+        pathOrSource: unknown,
+        ...args: unknown[]
+      ) => {
+        if (isIssuePath(pathOrSource) || isIssuePath(args[0])) {
+          issueAccessesAfterIssuesStage.push(`${method}:${String(pathOrSource)}`);
+          throw new Error(
+            `Downstream stages must not access issue artifacts after issues validation: ${method} ${String(pathOrSource)}`,
+          );
+        }
+
+        return (original as (...methodArgs: unknown[]) => unknown)(
+          pathOrSource,
+          ...args,
+        );
+      };
+    }
+
+    restoreIssuesAccessGuard = () => {
+      for (const [method, original] of originals) {
+        (fs as Record<string, unknown>)[method] = original;
+      }
+    };
+    t.after(restoreIssuesAccessGuard);
+  }
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      runDirectory = join(
+        projectRoot,
+        ".devflow",
+        "runs",
+        (await listRunDirectories(projectRoot))[0],
+      );
+
+      if (isIssuesSessionInput(input)) {
+        issuesDirectory = extractIssuesDirectory(input.initialPrompt);
+        issueFilePath = join(issuesDirectory, "provider-authored-dag.md");
+        await fs.outputFile(
+          issueFilePath,
+          [
+            "## Type",
+            "",
+            "HITL",
+            "",
+            "## Acceptance criteria",
+            "",
+            "- [ ] Do not mark this complete.",
+            "",
+            "## Blocked by",
+            "",
+            "- `missing-provider-authored-sibling`",
+            "",
+            "This intentionally contains unresolved HITL and blocked-by data.",
+            "",
+          ].join("\n"),
+        );
+
+        await input.validate();
+        issueContentBeforeDownstream = await fs.readFile(issueFilePath, "utf8");
+        issueMtimeBeforeDownstream = (await fs.stat(issueFilePath)).mtimeMs;
+        issueDirectoryEntriesBeforeDownstream = (
+          await fs.readdir(issuesDirectory)
+        ).sort();
+        installIssuesAccessGuard();
+
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Keep downstream issue consumers out of scope.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      onStageStart(stage) {
+        stages.push(stage);
+      },
+    },
+  );
+  restoreIssuesAccessGuard();
+
+  assert.deepEqual(stages, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+    "validate",
+  ]);
+  assert.deepEqual(issueAccessesAfterIssuesStage, []);
+  assert.deepEqual((await fs.readdir(issuesDirectory)).sort(), issueDirectoryEntriesBeforeDownstream);
+  assert.equal(await fs.readFile(issueFilePath, "utf8"), issueContentBeforeDownstream);
+  assert.equal((await fs.stat(issueFilePath)).mtimeMs, issueMtimeBeforeDownstream);
+  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+  assert.equal(await fs.pathExists(join(issuesDirectory, "done")), false);
+});
+
 test("orchestrator repairs missing issue files inside the same issues managed session", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
