@@ -36,6 +36,7 @@ import {
   runExecutionRequest,
   runProviderBackedStageWithRetry,
   StageArtifactValidationError,
+  validateExecutionArtifact,
   validateIssueArtifacts,
   type PipelineStage,
 } from "../src/orchestrator.js";
@@ -284,6 +285,74 @@ test("validateIssueArtifacts accepts a mixed issues directory when one markdown 
   await fs.writeFile(join(issuesDirectory, "also-empty.md"), "   ");
 
   await validateIssueArtifacts(issuesDirectory);
+});
+
+test("validateExecutionArtifact rejects malformed JSON ledgers", async () => {
+  const artifactPath = join(
+    fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
+    "execution.json",
+  );
+  await fs.writeFile(artifactPath, '{"stage":"execute"');
+
+  await assert.rejects(
+    validateExecutionArtifact(artifactPath),
+    (error: unknown) =>
+      error instanceof StageArtifactValidationError &&
+      error.stage === "execute" &&
+      error.artifactPath === artifactPath &&
+      error.message.includes("execution.json"),
+  );
+});
+
+test("validateExecutionArtifact rejects zero-iteration ledgers", async () => {
+  const artifactPath = join(
+    fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
+    "execution.json",
+  );
+  await fs.writeJson(artifactPath, {
+    stage: "execute",
+    iterations: [],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: [],
+      remainingIssueFilenames: [],
+    },
+  });
+
+  await assert.rejects(
+    validateExecutionArtifact(artifactPath),
+    (error: unknown) =>
+      error instanceof StageArtifactValidationError &&
+      error.stage === "execute" &&
+      error.artifactPath === artifactPath &&
+      error.message.includes("at least one iteration"),
+  );
+});
+
+test("validateExecutionArtifact accepts well-formed ledgers with a final block", async () => {
+  const artifactPath = join(
+    fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
+    "execution.json",
+  );
+  await fs.writeJson(artifactPath, {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        providerSessionId: "provider-session-1",
+        gitHeadBefore: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        gitHeadAfter: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: ["001-first.md"],
+      remainingIssueFilenames: ["002-hitl.md"],
+    },
+  });
+
+  await validateExecutionArtifact(artifactPath);
 });
 
 test("renderExecutePrompt injects manual-flow issue and commit context with artifact path references", async () => {
@@ -6317,6 +6386,14 @@ test("orchestrator surfaces run creation failures before starting a stage or pro
           status: "stale",
           refreshReason: "missing-context",
         };
+      },
+    },
+    git: {
+      async getCurrentHead() {
+        return null;
+      },
+      async getRecentCommits() {
+        return "No commits found.";
       },
     },
     async createRun() {

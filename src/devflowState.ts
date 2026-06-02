@@ -28,6 +28,7 @@ const DEVFLOW_RUN_GRILL_TRANSCRIPT_FILENAME = "grill-transcript.md";
 const DEVFLOW_RUN_GRILL_CHECKPOINT_FILENAME = "grill-checkpoint.json";
 const DEVFLOW_RUN_PROVIDER_SESSION_FILENAME = "provider-session.json";
 const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
+const DEVFLOW_RUN_EXECUTION_FILENAME = "execution.json";
 const DEVFLOW_RUN_VALIDATION_FILENAME = "validation.json";
 const DEVFLOW_RUN_ISSUES_DIRECTORY = "issues";
 const DEVFLOW_RUN_ID_LENGTH = 12;
@@ -36,6 +37,7 @@ const devFlowIssueSlugAllowedPattern = /^[A-Za-z0-9 _-]+$/;
 const devFlowRunArtifactFilenames = {
   intent: DEVFLOW_RUN_INTENT_FILENAME,
   prd: DEVFLOW_RUN_PRD_FILENAME,
+  execution: DEVFLOW_RUN_EXECUTION_FILENAME,
   validation: DEVFLOW_RUN_VALIDATION_FILENAME,
 } as const;
 const DEVFLOW_PROJECT_CONTEXT_VERSION = 1;
@@ -285,6 +287,7 @@ export interface GitDirtyState {
 export interface GitProjectContextProbe {
   isRepository(projectRoot: string): Promise<boolean>;
   getCurrentHead(projectRoot: string): Promise<string | null>;
+  getRecentCommits(projectRoot: string): Promise<string>;
   getCommittedChangesSince(
     projectRoot: string,
     baseline: string,
@@ -330,6 +333,7 @@ export interface DevFlowRunHandle {
   writeProviderSessionState(state: DevFlowProviderSessionState): Promise<void>;
   writeIssue(slug: string, content: string): Promise<void>;
   writePrd(content: string): Promise<void>;
+  writeExecution(content: string): Promise<void>;
   writeValidation(content: string): Promise<void>;
   paths: {
     runDirectory: string;
@@ -340,6 +344,7 @@ export interface DevFlowRunHandle {
     grillCheckpoint: string;
     providerSessionState: string;
     prdArtifact: string;
+    executionArtifact: string;
     issuesDirectory: string;
   };
 }
@@ -371,6 +376,10 @@ export interface DevFlowState {
     ): Promise<void>;
     readMetadata(): Promise<ProjectContextMetadata | undefined>;
     checkFreshness(): Promise<ProjectContextFreshness>;
+  };
+  git: {
+    getCurrentHead(): Promise<string | null>;
+    getRecentCommits(): Promise<string>;
   };
   createRun(): Promise<DevFlowRunHandle>;
 }
@@ -716,6 +725,30 @@ async function runGitBuffer(
   return Buffer.from(result.stdout);
 }
 
+function formatRecentCommitsForManualFlow(output: string): string {
+  const commits = output
+    .split("\x1e")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  if (commits.length === 0) {
+    return "No commits found.";
+  }
+
+  return commits
+    .map((entry) => {
+      const [hash = "", date = "", subject = "", body = ""] = entry.split("\x1f");
+      const lines = [hash, date, subject];
+
+      if (body.trim().length > 0) {
+        lines.push(body.trim());
+      }
+
+      return lines.join("\n");
+    })
+    .join("\n---\n");
+}
+
 async function mapWithConcurrency<Input, Output>(
   inputs: Input[],
   concurrency: number,
@@ -762,6 +795,20 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
         return await runGit(projectRoot, ["rev-parse", "HEAD"]);
       } catch {
         return null;
+      }
+    },
+    async getRecentCommits(projectRoot) {
+      try {
+        const output = await runGit(projectRoot, [
+          "log",
+          "-5",
+          "--date=short",
+          "--format=%x1e%H%x1f%ad%x1f%s%x1f%b",
+        ]);
+
+        return formatRecentCommitsForManualFlow(output);
+      } catch {
+        return "No commits found.";
       }
     },
     async getCommittedChangesSince(projectRoot, baseline) {
@@ -1651,6 +1698,12 @@ async function createRun(
     },
     writePrd: (content) =>
       writeArtifact("prd", getRunArtifactPath(projectRoot, runId, "prd"), content),
+    writeExecution: (content) =>
+      writeArtifact(
+        "execution",
+        getRunArtifactPath(projectRoot, runId, "execution"),
+        content,
+      ),
     writeValidation: (content) =>
       writeArtifact(
         "validation",
@@ -1669,6 +1722,7 @@ async function createRun(
       grillCheckpoint: grillCheckpointPath,
       providerSessionState: providerSessionStatePath,
       prdArtifact: getRunArtifactPath(projectRoot, runId, "prd"),
+      executionArtifact: getRunArtifactPath(projectRoot, runId, "execution"),
       issuesDirectory: getRunIssuesDirectoryPath(projectRoot, runId),
     },
   };
@@ -1698,6 +1752,10 @@ export function createDevFlowState(
       readMetadata: () => readProjectContextMetadata(options.projectRoot),
       checkFreshness: () =>
         checkProjectContextFreshness(options.projectRoot, clock, gitProbe),
+    },
+    git: {
+      getCurrentHead: () => gitProbe.getCurrentHead(options.projectRoot),
+      getRecentCommits: () => gitProbe.getRecentCommits(options.projectRoot),
     },
     createRun: () => createRun(options.projectRoot, clock),
   };

@@ -132,6 +132,53 @@ const intentArtifactSchema = z
 
 export type IntentArtifact = z.infer<typeof intentArtifactSchema>;
 
+const gitExecutionHeadSchema = z
+  .string()
+  .regex(/^[0-9a-f]{40}$/)
+  .nullable();
+
+const executionStopReasonSchema = z.enum([
+  "terminal",
+  "no-file",
+  "cap",
+  "error",
+]);
+
+const executionLedgerSchema = z
+  .object({
+    stage: z.literal("execute"),
+    iterations: z
+      .array(
+        z
+          .object({
+            iteration: z.number().int().positive(),
+            marker: z.string().refine((value) => value.trim().length > 0, {
+              message: "Must be a non-empty string.",
+            }),
+            providerSessionId: z
+              .string()
+              .refine((value) => value.trim().length > 0, {
+                message: "Must be a non-empty string.",
+              })
+              .optional(),
+            gitHeadBefore: gitExecutionHeadSchema,
+            gitHeadAfter: gitExecutionHeadSchema,
+          })
+          .strict(),
+      )
+      .min(1, { message: "Execution ledger must contain at least one iteration." }),
+    final: z
+      .object({
+        stopReason: executionStopReasonSchema,
+        completedIssueFilenames: z.array(z.string()),
+        remainingIssueFilenames: z.array(z.string()),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type ExecutionLedger = z.infer<typeof executionLedgerSchema>;
+
 export type BootstrapProvenance =
   | "reused"
   | "generated"
@@ -757,6 +804,34 @@ export async function validateIssueArtifacts(
     artifactPath: issuesDirectory,
     details: "Issues directory must contain at least one non-empty markdown file.",
   });
+}
+
+export async function validateExecutionArtifact(
+  artifactPath: string,
+): Promise<void> {
+  let parsedArtifact: unknown;
+
+  try {
+    parsedArtifact = await fs.readJson(artifactPath);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+
+    throw new StageArtifactValidationError({
+      stage: "execute",
+      artifactPath,
+      details,
+    });
+  }
+
+  const result = executionLedgerSchema.safeParse(parsedArtifact);
+
+  if (!result.success) {
+    throw new StageArtifactValidationError({
+      stage: "execute",
+      artifactPath,
+      details: result.error.message,
+    });
+  }
 }
 
 async function hasValidPrdArtifact(artifactPath: string): Promise<boolean> {

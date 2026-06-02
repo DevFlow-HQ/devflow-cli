@@ -98,6 +98,26 @@ test("default git probe reports committed changes since the stored baseline", as
   });
 });
 
+test("default git probe formats fewer than five recent commits for execution context", async () => {
+  const { projectRoot, initialHead } = await createGitProject();
+  const state = createDevFlowState({ projectRoot });
+
+  assert.equal(
+    await state.git.getRecentCommits(),
+    `${initialHead}\n${new Date().toISOString().slice(0, 10)}\nInitial commit`,
+  );
+});
+
+test("default git probe returns a stable placeholder when a repository has no commits", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-git-empty-"));
+  await git(projectRoot, ["init"]);
+
+  const state = createDevFlowState({ projectRoot });
+
+  assert.equal(await state.git.getCurrentHead(), null);
+  assert.equal(await state.git.getRecentCommits(), "No commits found.");
+});
+
 test("default git probe includes untracked file content in dirty fingerprints", async () => {
   const { projectRoot } = await createGitProject();
   const state = createDevFlowState({
