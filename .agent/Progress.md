@@ -75,6 +75,9 @@ Hard limit: 100 lines.
   - remove the `validate` stage placeholder from orchestration/progress reporting and any related placeholder artifact handling
   - map new stage/artifact validation failures to user-facing errors
   - produce a final run summary with artifact paths and next manual steps
-2. Future provider work:
+2. Logging architecture (not part of the current CLI UX slice):
+  - design a DevFlow logging architecture; route unexpected-error dumps (full message + stack) to a log file instead of the terminal
+  - once logging lands, remove the interim one-line `(ErrorName: first line)` parenthetical from the CLI unexpected-error message and point at the log file instead
+3. Future provider work:
   - keep PTY marker completion and transcript callbacks as fallback behavior
   - graduate Gemini and OpenCode from PTY fallback only when their structured sources can truthfully support the normalized event contract
