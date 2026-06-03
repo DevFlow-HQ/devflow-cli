@@ -17,13 +17,24 @@ import {
   BUILT_IN_PROVIDERS,
   getBuiltInProviderIdentity,
 } from "../src/adapters/providers.js";
-import { runCli } from "../src/cli.js";
+import {
+  formatInvalidIntentArtifactError,
+  formatMissingProviderIdError,
+  formatProviderStageRetryExhaustedError,
+  formatStageArtifactValidationError,
+  formatUnexpectedCliError,
+  runCli,
+} from "../src/cli.js";
 import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.js";
 import { createDevFlowState } from "../src/devflowState.js";
 import {
   ExecutionLoopCapError,
+  InvalidIntentArtifactError,
+  MissingProviderIdError,
   PIPELINE_STAGES,
+  ProviderStageRetryExhaustedError,
   type RunExecutionRequestOptions,
+  StageArtifactValidationError,
 } from "../src/orchestrator.js";
 
 function createWritableBuffer() {
@@ -476,6 +487,173 @@ test("cli maps execution error stops to a clear failure", async () => {
   assert.equal(
     result.stderr,
     "Execution failed: provider session for Codex (codex) stopped before completing the execution iteration.\n",
+  );
+});
+
+test("cli formats stage artifact validation failures with stage, artifact, and next action", () => {
+  const message = formatStageArtifactValidationError(
+    new StageArtifactValidationError({
+      stage: "prd",
+      artifactPath: "/repo/.devflow/runs/run-1/prd.md",
+      details: "Artifact is empty.",
+    }),
+  );
+
+  assert.match(message, /prd stage/);
+  assert.match(message, /\/repo\/\.devflow\/runs\/run-1\/prd\.md/);
+  assert.match(message, /Re-run DevFlow/);
+});
+
+test("cli formats provider retry exhaustion with stage, provider, attempts, cause, and next action", () => {
+  const message = formatProviderStageRetryExhaustedError(
+    new ProviderStageRetryExhaustedError({
+      stage: "issues",
+      providerId: "codex",
+      attempts: 2,
+      cause: new Error("first line\nstack-like detail"),
+    }),
+  );
+
+  assert.match(message, /issues stage/);
+  assert.match(message, /codex/);
+  assert.match(message, /2 attempts/);
+  assert.match(message, /first line/);
+  assert.doesNotMatch(message, /stack-like detail/);
+  assert.match(message, /Re-run DevFlow/);
+});
+
+test("cli formats invalid intent artifacts with artifact path and new-run action", () => {
+  const message = formatInvalidIntentArtifactError(
+    new InvalidIntentArtifactError(
+      "/repo/.devflow/runs/run-1/intent.json",
+      "Expected object.",
+    ),
+  );
+
+  assert.match(message, /intent artifact/);
+  assert.match(message, /\/repo\/\.devflow\/runs\/run-1\/intent\.json/);
+  assert.match(message, /Start a new DevFlow run/);
+});
+
+test("cli formats missing providers with provider guidance", () => {
+  const message = formatMissingProviderIdError(new MissingProviderIdError());
+
+  assert.match(message, /provider id/);
+  assert.match(message, /Re-run DevFlow/);
+  assert.match(message, /installed provider/);
+});
+
+test("cli maps stage artifact validation failures to concise user-facing errors", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-stage-artifact-"));
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new StageArtifactValidationError({
+        stage: "prd",
+        artifactPath: join(projectRoot, ".devflow", "runs", "run-1", "prd.md"),
+        details: "Artifact is empty.",
+      });
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /prd stage/);
+  assert.match(result.stderr, /prd\.md/);
+  assert.match(result.stderr, /Re-run DevFlow/);
+});
+
+test("cli maps provider stage retry exhaustion to concise user-facing errors", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-retry-exhausted-"));
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new ProviderStageRetryExhaustedError({
+        stage: "issues",
+        providerId: "codex",
+        attempts: 2,
+        cause: new Error("issues directory stayed empty\nError: stack detail"),
+      });
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /issues stage/);
+  assert.match(result.stderr, /codex/);
+  assert.match(result.stderr, /2 attempts/);
+  assert.match(result.stderr, /issues directory stayed empty/);
+  assert.doesNotMatch(result.stderr, /stack detail/);
+  assert.match(result.stderr, /Re-run DevFlow/);
+});
+
+test("cli maps invalid intent artifacts to concise user-facing errors", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-invalid-intent-"));
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new InvalidIntentArtifactError(
+        join(projectRoot, ".devflow", "runs", "run-1", "intent.json"),
+        "Expected object.",
+      );
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /intent artifact/);
+  assert.match(result.stderr, /intent\.json/);
+  assert.match(result.stderr, /Start a new DevFlow run/);
+});
+
+test("cli maps missing provider errors to concise user-facing errors", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-missing-provider-"));
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new MissingProviderIdError();
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /provider id/);
+  assert.match(result.stderr, /Re-run DevFlow/);
+  assert.match(result.stderr, /installed provider/);
+});
+
+test("cli maps unexpected errors to a single generic line without a stack", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-unexpected-error-"));
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw new TypeError("boom\n    at internal frame");
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "DevFlow hit an unexpected internal error. Re-run DevFlow or check Progress.md for the upcoming logging work. (TypeError: boom)\n",
+  );
+  assert.doesNotMatch(result.stderr, /\n\s+at /);
+});
+
+test("cli formats non-error unexpected failures as a one-line generic error", () => {
+  assert.equal(
+    formatUnexpectedCliError("boom"),
+    "DevFlow hit an unexpected internal error. Re-run DevFlow or check Progress.md for the upcoming logging work. (Error: boom)",
   );
 });
 

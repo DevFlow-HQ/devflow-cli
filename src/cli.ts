@@ -26,10 +26,14 @@ import {
 } from "./devflowState.js";
 import {
   ExecutionLoopCapError,
+  InvalidIntentArtifactError,
+  MissingProviderIdError,
+  ProviderStageRetryExhaustedError,
   runExecutionRequest,
   type PipelineStage,
   type RunExecutionRequestOptions,
   type ResolvedExecutionRequest,
+  StageArtifactValidationError,
 } from "./orchestrator.js";
 import { resolveProjectRoot } from "./projectRoot.js";
 
@@ -112,6 +116,48 @@ function formatExecutionIncompleteProviderSessionError(
 
 function formatExecutionLoopCapError(error: ExecutionLoopCapError): string {
   return `Execution failed: reached the maximum of ${error.maxIterations} iterations.`;
+}
+
+export function formatStageArtifactValidationError(
+  error: StageArtifactValidationError,
+): string {
+  return `The ${error.stage} stage produced an invalid artifact at ${error.artifactPath}. Re-run DevFlow to regenerate the artifact.`;
+}
+
+function getFirstMessageLine(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.split(/\r?\n/, 1)[0] || "Unknown error";
+  }
+
+  return String(error).split(/\r?\n/, 1)[0] || "Unknown error";
+}
+
+export function formatProviderStageRetryExhaustedError(
+  error: ProviderStageRetryExhaustedError,
+): string {
+  const providerId = error.providerId ?? "unknown provider";
+  const causeLine = getFirstMessageLine(error.cause);
+
+  return `The ${error.stage} stage failed with provider ${providerId} after ${error.attempts} attempts. Cause: ${causeLine}. Re-run DevFlow to resume from durable artifacts.`;
+}
+
+export function formatInvalidIntentArtifactError(
+  error: InvalidIntentArtifactError,
+): string {
+  return `The intent artifact at ${error.artifactPath} is invalid. Start a new DevFlow run.`;
+}
+
+export function formatMissingProviderIdError(
+  _error: MissingProviderIdError,
+): string {
+  return "Missing provider id for provider-backed orchestration. Re-run DevFlow to pick an installed provider.";
+}
+
+export function formatUnexpectedCliError(error: unknown): string {
+  const name = error instanceof Error ? error.name : "Error";
+  const message = getFirstMessageLine(error);
+
+  return `DevFlow hit an unexpected internal error. Re-run DevFlow or check Progress.md for the upcoming logging work. (${name}: ${message})`;
 }
 
 function formatStageStartLine(stage: PipelineStage): string {
@@ -228,6 +274,22 @@ export async function runCli(
       program.error(formatExecutionLoopCapError(error));
     }
 
+    if (error instanceof StageArtifactValidationError) {
+      program.error(formatStageArtifactValidationError(error));
+    }
+
+    if (error instanceof ProviderStageRetryExhaustedError) {
+      program.error(formatProviderStageRetryExhaustedError(error));
+    }
+
+    if (error instanceof InvalidIntentArtifactError) {
+      program.error(formatInvalidIntentArtifactError(error));
+    }
+
+    if (error instanceof MissingProviderIdError) {
+      program.error(formatMissingProviderIdError(error));
+    }
+
     if (error instanceof InvalidDevFlowConfigError) {
       program.error(formatInvalidDevFlowConfigError(error));
     }
@@ -241,7 +303,7 @@ export async function runCli(
       program.error(error.message);
     }
 
-    throw error;
+    program.error(formatUnexpectedCliError(error));
   }
 }
 

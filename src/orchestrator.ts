@@ -229,11 +229,13 @@ export class StageArtifactValidationError extends Error {
 
 export class ProviderStageRetryExhaustedError extends Error {
   readonly stage: PipelineStage;
+  readonly providerId?: string;
   readonly attempts: number;
   readonly cause: unknown;
 
   constructor(options: {
     stage: PipelineStage;
+    providerId?: string;
     attempts: number;
     cause: unknown;
   }) {
@@ -247,6 +249,7 @@ export class ProviderStageRetryExhaustedError extends Error {
     );
     this.name = "ProviderStageRetryExhaustedError";
     this.stage = options.stage;
+    this.providerId = options.providerId;
     this.attempts = options.attempts;
     this.cause = options.cause;
   }
@@ -634,6 +637,7 @@ export function isRetryableProviderBackedStageFailure(error: unknown): boolean {
 
 export async function runProviderBackedStageWithRetry<T>(options: {
   stage: PipelineStage;
+  providerId?: string;
   totalAttempts: number;
   runAttempt(attempt: number): Promise<T>;
   cleanupBeforeRetry(): Promise<void>;
@@ -653,6 +657,7 @@ export async function runProviderBackedStageWithRetry<T>(options: {
 
         throw new ProviderStageRetryExhaustedError({
           stage: options.stage,
+          providerId: options.providerId,
           attempts: options.totalAttempts,
           cause: error,
         });
@@ -1489,6 +1494,7 @@ async function runPrdStageWithRetry(options: {
 
   await runProviderBackedStageWithRetry({
     stage: "prd",
+    providerId: options.request.providerId,
     totalAttempts: PRD_STAGE_TOTAL_ATTEMPTS,
     async runAttempt(attempt) {
       await runPrdStage({
@@ -1552,6 +1558,7 @@ async function runIssuesStageWithRetry(options: {
 }): Promise<void> {
   await runProviderBackedStageWithRetry({
     stage: "issues",
+    providerId: options.request.providerId,
     totalAttempts: ISSUES_STAGE_TOTAL_ATTEMPTS,
     async runAttempt(attempt) {
       await runIssuesStage({ ...options, attempt });
@@ -1982,6 +1989,7 @@ async function runGrillStageWithRetry(options: {
       if (attempt >= GRILL_STAGE_TOTAL_ATTEMPTS) {
         throw new ProviderStageRetryExhaustedError({
           stage: "grill",
+          providerId: options.request.providerId,
           attempts: GRILL_STAGE_TOTAL_ATTEMPTS,
           cause: error,
         });
@@ -2016,6 +2024,7 @@ export async function runExecutionRequest(
   await startStage("intent", options);
   const intent = await runProviderBackedStageWithRetry({
     stage: "intent",
+    providerId,
     totalAttempts: INTENT_STAGE_TOTAL_ATTEMPTS,
     async runAttempt(attempt) {
       const result = await runIntentStage({
@@ -2038,6 +2047,7 @@ export async function runExecutionRequest(
   await startStage("bootstrap", options);
   const bootstrapProvenance = await runProviderBackedStageWithRetry({
     stage: "bootstrap",
+    providerId,
     totalAttempts: BOOTSTRAP_STAGE_TOTAL_ATTEMPTS,
     async runAttempt(attempt) {
       return runBootstrapStage({ devFlowState, request, run, adapter, attempt });
