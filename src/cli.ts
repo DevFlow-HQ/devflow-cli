@@ -34,8 +34,13 @@ import {
   type RunExecutionRequestOptions,
   type ResolvedExecutionRequest,
   StageArtifactValidationError,
+  readExecutionLedger,
 } from "./orchestrator.js";
 import { resolveProjectRoot } from "./projectRoot.js";
+import {
+  renderRunSummary,
+  type RunSummaryPaths,
+} from "./runSummary.js";
 
 const DEFAULT_VERSION = "0.1.0";
 const REQUIRED_TASK_ERROR = "A task is required.";
@@ -164,8 +169,14 @@ function formatStageStartLine(stage: PipelineStage): string {
   return `Starting ${stage} stage...\n`;
 }
 
+interface CreatedRunSummaryContext {
+  id: string;
+  paths: RunSummaryPaths;
+}
+
 export function createCli(options: RunCliOptions = {}): Command {
   const program = new Command();
+  let createdRun: CreatedRunSummaryContext | undefined;
 
   program
     .name("devflow")
@@ -207,6 +218,16 @@ export function createCli(options: RunCliOptions = {}): Command {
 
       await executionRequestRunner(request, {
         devFlowState,
+        async onRunCreated(run) {
+          createdRun = {
+            id: run.id,
+            paths: {
+              prdArtifact: run.paths.prdArtifact,
+              issuesDirectory: run.paths.issuesDirectory,
+              executionArtifact: run.paths.executionArtifact,
+            },
+          };
+        },
         onStageStart(stage) {
           options.stdout?.write(formatStageStartLine(stage));
         },
@@ -214,6 +235,13 @@ export function createCli(options: RunCliOptions = {}): Command {
           options.stdout?.write(`\n----- execution iteration ${iteration} -----\n`);
         },
       });
+
+      if (createdRun !== undefined) {
+        const ledger = await readExecutionLedger(
+          createdRun.paths.executionArtifact,
+        );
+        options.stdout?.write(renderRunSummary(ledger, createdRun.paths));
+      }
     });
 
   program.configureOutput({

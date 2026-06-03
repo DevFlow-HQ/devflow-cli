@@ -29,6 +29,7 @@ import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.
 import { createDevFlowState } from "../src/devflowState.js";
 import {
   ExecutionLoopCapError,
+  type ExecutionLedger,
   InvalidIntentArtifactError,
   MissingProviderIdError,
   PIPELINE_STAGES,
@@ -269,11 +270,13 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
       },
       options: {
         devFlowState,
+        onRunCreated: receivedCalls[0]?.options.onRunCreated,
         onStageStart: receivedCalls[0]?.options.onStageStart,
         onExecutionIteration: receivedCalls[0]?.options.onExecutionIteration,
       },
     },
   ]);
+  assert.equal(typeof receivedCalls[0]?.options.onRunCreated, "function");
   assert.equal(typeof receivedCalls[0]?.options.onStageStart, "function");
   assert.equal(typeof receivedCalls[0]?.options.onExecutionIteration, "function");
 });
@@ -356,6 +359,54 @@ test("cli prints a thin separator before each execution iteration starts", async
   assert.equal(commandError, undefined);
   assert.deepEqual(observedStdoutBeforeRun, ["\n----- execution iteration 1 -----\n"]);
   assert.equal(stderr.read(), "");
+});
+
+test("cli prints a run summary from the on-disk execution ledger after a successful run", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-run-summary-"));
+  const runDirectory = join(projectRoot, ".devflow", "runs", "run-summary");
+  const executionArtifact = join(runDirectory, "execution.json");
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: ["001-done.md"],
+      remainingIssueFilenames: ["002-hitl.md"],
+    },
+  };
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async (_request, options) => {
+      await options.onRunCreated?.({
+        id: "run-summary",
+        paths: {
+          runDirectory,
+          prdArtifact: join(runDirectory, "prd.md"),
+          issuesDirectory: join(runDirectory, "issues"),
+          executionArtifact,
+        },
+      });
+      await fs.outputJson(executionArtifact, ledger, { spaces: 2 });
+    },
+  });
+
+  assert.equal(result.commandError, undefined);
+  assert.match(result.stdout, /Run summary/);
+  assert.match(result.stdout, /no more AFK tasks remain/);
+  assert.match(result.stdout, /Iteration 1/);
+  assert.match(result.stdout, /001-done\.md/);
+  assert.match(result.stdout, /002-hitl\.md/);
+  assert.match(result.stdout, /Execution ledger: .+execution\.json/);
+  assert.equal(result.stderr, "");
 });
 
 test("cli falls back to the current directory outside git before running the request", async () => {

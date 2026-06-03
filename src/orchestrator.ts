@@ -66,6 +66,15 @@ export interface RunExecutionRequestOptions {
   createManagedSessionAdapter?: (
     providerId: BuiltInProviderId,
   ) => ManagedSessionAdapter;
+  onRunCreated?: (run: {
+    id: string;
+    paths: {
+      runDirectory: string;
+      prdArtifact: string;
+      issuesDirectory: string;
+      executionArtifact: string;
+    };
+  }) => void | Promise<void>;
   onStageStart?: (stage: PipelineStage) => void | Promise<void>;
   onExecutionIteration?: (event: {
     iteration: number;
@@ -838,6 +847,12 @@ export async function validateIssueArtifacts(
 export async function validateExecutionArtifact(
   artifactPath: string,
 ): Promise<void> {
+  await readExecutionLedger(artifactPath);
+}
+
+export async function readExecutionLedger(
+  artifactPath: string,
+): Promise<ExecutionLedger> {
   let parsedArtifact: unknown;
 
   try {
@@ -861,6 +876,8 @@ export async function validateExecutionArtifact(
       details: result.error.message,
     });
   }
+
+  return result.data;
 }
 
 async function hasValidPrdArtifact(artifactPath: string): Promise<boolean> {
@@ -2020,6 +2037,16 @@ export async function runExecutionRequest(
     options.createManagedSessionAdapter ?? createBuiltInManagedSessionAdapter;
   const adapter = createManagedSessionAdapter(providerId);
   const run = await devFlowState.createRun();
+
+  await options.onRunCreated?.({
+    id: run.id,
+    paths: {
+      runDirectory: run.paths.runDirectory,
+      prdArtifact: run.paths.prdArtifact,
+      issuesDirectory: run.paths.issuesDirectory,
+      executionArtifact: run.paths.executionArtifact,
+    },
+  });
 
   await startStage("intent", options);
   const intent = await runProviderBackedStageWithRetry({

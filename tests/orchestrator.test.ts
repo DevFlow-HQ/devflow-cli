@@ -624,6 +624,103 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
   assert.equal(providerSessionState.status, "active");
 });
 
+test("orchestrator surfaces the run id and canonical run paths when the run is created", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-run-created-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const createdRuns: unknown[] = [];
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      const [runId] = await listRunDirectories(projectRoot);
+      const runDirectory = join(projectRoot, ".devflow", "runs", runId);
+
+      if (isIssuesSessionInput(input)) {
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "001-first.md"),
+          "# First\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        const runDirectory = join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+        );
+        await fs.remove(join(runDirectory, "issues", "001-first.md"));
+        await input.validate();
+        return {
+          repairUsed: false,
+          exitCode: 0,
+          signal: null,
+          matchedCompletionMarker: input.initialTerminalCompletionMarker,
+        };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(runDirectory, "intent.json"),
+        {
+          classification: "feature",
+          summary: "Resume work.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+      onRunCreated(run) {
+        createdRuns.push(run);
+      },
+    },
+  );
+
+  const [runId] = await listRunDirectories(projectRoot);
+  assert.deepEqual(createdRuns, [
+    {
+      id: runId,
+      paths: {
+        runDirectory: join(projectRoot, ".devflow", "runs", runId),
+        prdArtifact: join(projectRoot, ".devflow", "runs", runId, "prd.md"),
+        issuesDirectory: join(projectRoot, ".devflow", "runs", runId, "issues"),
+        executionArtifact: join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          runId,
+          "execution.json",
+        ),
+      },
+    },
+  ]);
+});
+
 test("orchestrator stops execute with no-file before opening a provider session", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
