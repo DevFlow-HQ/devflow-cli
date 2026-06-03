@@ -27,6 +27,7 @@ import {
 import {
   ExecutionLoopCapError,
   runExecutionRequest,
+  type PipelineStage,
   type RunExecutionRequestOptions,
   type ResolvedExecutionRequest,
 } from "./orchestrator.js";
@@ -113,6 +114,10 @@ function formatExecutionLoopCapError(error: ExecutionLoopCapError): string {
   return `Execution failed: reached the maximum of ${error.maxIterations} iterations.`;
 }
 
+function formatStageStartLine(stage: PipelineStage): string {
+  return `Starting ${stage} stage...\n`;
+}
+
 export function createCli(options: RunCliOptions = {}): Command {
   const program = new Command();
 
@@ -156,6 +161,9 @@ export function createCli(options: RunCliOptions = {}): Command {
 
       await executionRequestRunner(request, {
         devFlowState,
+        onStageStart(stage) {
+          options.stdout?.write(formatStageStartLine(stage));
+        },
         onExecutionIteration({ iteration }) {
           options.stdout?.write(`\n----- execution iteration ${iteration} -----\n`);
         },

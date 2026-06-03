@@ -22,6 +22,7 @@ import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.
 import { createDevFlowState } from "../src/devflowState.js";
 import {
   ExecutionLoopCapError,
+  PIPELINE_STAGES,
   type RunExecutionRequestOptions,
 } from "../src/orchestrator.js";
 
@@ -257,11 +258,59 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
       },
       options: {
         devFlowState,
+        onStageStart: receivedCalls[0]?.options.onStageStart,
         onExecutionIteration: receivedCalls[0]?.options.onExecutionIteration,
       },
     },
   ]);
+  assert.equal(typeof receivedCalls[0]?.options.onStageStart, "function");
   assert.equal(typeof receivedCalls[0]?.options.onExecutionIteration, "function");
+});
+
+test("cli prints stage start one-liners in pipeline order", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-stage-start-"));
+  const stdout = createWritableBuffer();
+  const stderr = createWritableBuffer();
+  const observedStdoutBeforeRun: string[] = [];
+  let commandError: CommanderError | undefined;
+
+  try {
+    await runCli(["resume", "work"], {
+      stdout,
+      stderr,
+      cwd: projectRoot,
+      providerId: "codex",
+      runExecutionRequest: async (_request, options) => {
+        for (const stage of PIPELINE_STAGES) {
+          await options.onStageStart?.(stage);
+        }
+        observedStdoutBeforeRun.push(stdout.read());
+      },
+      configureProgram(program) {
+        program.exitOverride();
+      },
+    });
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      commandError = error;
+    } else {
+      throw error;
+    }
+  }
+
+  assert.equal(commandError, undefined);
+  assert.deepEqual(observedStdoutBeforeRun, [
+    [
+      "Starting intent stage...\n",
+      "Starting bootstrap stage...\n",
+      "Starting grill stage...\n",
+      "Starting prd stage...\n",
+      "Starting issues stage...\n",
+      "Starting execute stage...\n",
+    ].join(""),
+  ]);
+  assert.doesNotMatch(stdout.read(), /\x1B\[[0-?]*[ -/]*[@-~]/);
+  assert.equal(stderr.read(), "");
 });
 
 test("cli prints a thin separator before each execution iteration starts", async () => {
