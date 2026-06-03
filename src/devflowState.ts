@@ -29,7 +29,6 @@ const DEVFLOW_RUN_GRILL_CHECKPOINT_FILENAME = "grill-checkpoint.json";
 const DEVFLOW_RUN_PROVIDER_SESSION_FILENAME = "provider-session.json";
 const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
 const DEVFLOW_RUN_EXECUTION_FILENAME = "execution.json";
-const DEVFLOW_RUN_VALIDATION_FILENAME = "validation.json";
 const DEVFLOW_RUN_ISSUES_DIRECTORY = "issues";
 const DEVFLOW_RUN_ID_LENGTH = 12;
 const devFlowRunIdPattern = /^[a-z0-9]{12}$/;
@@ -38,7 +37,6 @@ const devFlowRunArtifactFilenames = {
   intent: DEVFLOW_RUN_INTENT_FILENAME,
   prd: DEVFLOW_RUN_PRD_FILENAME,
   execution: DEVFLOW_RUN_EXECUTION_FILENAME,
-  validation: DEVFLOW_RUN_VALIDATION_FILENAME,
 } as const;
 const DEVFLOW_PROJECT_CONTEXT_VERSION = 1;
 const projectContextLineCap = 150;
@@ -334,7 +332,6 @@ export interface DevFlowRunHandle {
   writeIssue(slug: string, content: string): Promise<void>;
   writePrd(content: string): Promise<void>;
   writeExecution(content: string): Promise<void>;
-  writeValidation(content: string): Promise<void>;
   paths: {
     runDirectory: string;
     intentArtifact: string;
@@ -1702,12 +1699,6 @@ async function createRun(
       writeArtifact(
         "execution",
         getRunArtifactPath(projectRoot, runId, "execution"),
-        content,
-      ),
-    writeValidation: (content) =>
-      writeArtifact(
-        "validation",
-        getRunArtifactPath(projectRoot, runId, "validation"),
         content,
       ),
     paths: {

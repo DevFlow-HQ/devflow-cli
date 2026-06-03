@@ -56,7 +56,6 @@ export const PIPELINE_STAGES = [
   "prd",
   "issues",
   "execute",
-  "validate",
 ] as const;
 
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
@@ -967,11 +966,6 @@ async function runBootstrapStage(options: {
   }
 
   return "reused";
-}
-
-async function runNoopStage(): Promise<void> {
-  // Placeholder for the MVP pipeline stage order. Later slices will replace
-  // these no-op stages with provider-backed or state-writing work.
 }
 
 function createPrdCompletionMarker(): string {
@@ -2053,9 +2047,6 @@ export async function runExecutionRequest(
     adapter,
     onExecutionIteration: options.onExecutionIteration,
   });
-
-  await startStage("validate", options);
-  await runNoopStage();
 
   return { intent, parsedIntent, bootstrapProvenance };
 }

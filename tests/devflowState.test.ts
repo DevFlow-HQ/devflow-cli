@@ -1030,7 +1030,6 @@ test("run handles write canonical immutable artifacts without exposing filenames
 
   await run.writeIntent('{"goal":"ship it"}');
   await run.writePrd("# PRD\n");
-  await run.writeValidation('{"status":"pending"}');
   await run.writeExecution('{"stage":"execute"}');
 
   assert.equal(
@@ -1042,12 +1041,12 @@ test("run handles write canonical immutable artifacts without exposing filenames
     "# PRD\n",
   );
   assert.equal(
-    await fs.readFile(join(run.paths.runDirectory, "validation.json"), "utf8"),
-    '{"status":"pending"}',
-  );
-  assert.equal(
     await fs.readFile(join(run.paths.runDirectory, "execution.json"), "utf8"),
     '{"stage":"execute"}',
+  );
+  assert.equal(
+    await fs.pathExists(join(run.paths.runDirectory, "validation.json")),
+    false,
   );
 });
 
@@ -1417,13 +1416,12 @@ test("run artifact writes reject duplicates with a domain-specific error", async
   );
 });
 
-test("run handles reject duplicate PRD, validation, execution, and normalized issue artifact writes while retaining the first artifact", async () => {
+test("run handles reject duplicate PRD, execution, and normalized issue artifact writes while retaining the first artifact", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
   await run.writePrd("# First PRD\n");
-  await run.writeValidation('{"status":"first"}');
   await run.writeExecution('{"stage":"first"}');
   await run.writeIssue("Release Prep", "# First issue\n");
 
@@ -1434,14 +1432,6 @@ test("run handles reject duplicate PRD, validation, execution, and normalized is
       error.runId === run.id &&
       error.artifactName === "prd" &&
       error.artifactPath.endsWith("/prd.md"),
-  );
-  await assert.rejects(
-    run.writeValidation('{"status":"second"}'),
-    (error: unknown) =>
-      error instanceof DuplicateDevFlowRunArtifactError &&
-      error.runId === run.id &&
-      error.artifactName === "validation" &&
-      error.artifactPath.endsWith("/validation.json"),
   );
   await assert.rejects(
     run.writeIssue("release_prep", "# Second issue\n"),
@@ -1465,12 +1455,12 @@ test("run handles reject duplicate PRD, validation, execution, and normalized is
     "# First PRD\n",
   );
   assert.equal(
-    await fs.readFile(join(run.paths.runDirectory, "validation.json"), "utf8"),
-    '{"status":"first"}',
-  );
-  assert.equal(
     await fs.readFile(join(run.paths.runDirectory, "execution.json"), "utf8"),
     '{"stage":"first"}',
+  );
+  assert.equal(
+    await fs.pathExists(join(run.paths.runDirectory, "validation.json")),
+    false,
   );
   assert.equal(
     await fs.readFile(

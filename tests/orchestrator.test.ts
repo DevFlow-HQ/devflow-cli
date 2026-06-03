@@ -31,6 +31,7 @@ import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
 import {
   ExecutionLoopCapError,
   MissingProviderIdError,
+  PIPELINE_STAGES,
   ProviderStageRetryExhaustedError,
   isRetryableProviderBackedStageFailure,
   renderExecutePrompt,
@@ -41,6 +42,17 @@ import {
   validateIssueArtifacts,
   type PipelineStage,
 } from "../src/orchestrator.js";
+
+test("pipeline stages end at execute without a validate placeholder", () => {
+  assert.deepEqual(PIPELINE_STAGES, [
+    "intent",
+    "bootstrap",
+    "grill",
+    "prd",
+    "issues",
+    "execute",
+  ]);
+});
 
 async function listRunDirectories(
   projectRoot: string,
@@ -1792,7 +1804,6 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     "prd",
     "issues",
     "execute",
-    "validate",
   ]);
   assert.equal(runSessionInputs.length, 4);
 
@@ -2011,7 +2022,6 @@ test("orchestrator leaves provider-authored issues untouched after execute", asy
     "prd",
     "issues",
     "execute",
-    "validate",
   ]);
   assert.deepEqual(issueAccessesAfterIssuesStage, []);
   assert.deepEqual((await fs.readdir(issuesDirectory)).sort(), issueDirectoryEntriesBeforeDownstream);
@@ -4370,7 +4380,6 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
     "prd",
     "issues",
     "execute",
-    "validate",
   ]);
   const runDirectory = join(
     projectRoot,
@@ -5547,7 +5556,6 @@ test("orchestrator reuses fresh project context during bootstrap without provide
     "prd",
     "issues",
     "execute",
-    "validate",
   ]);
   assert.equal(await fs.readFile(metadataPath, "utf8"), metadataBefore);
 });
@@ -5657,7 +5665,6 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
     "prd",
     "issues",
     "execute",
-    "validate",
   ]);
 });
 
