@@ -517,6 +517,78 @@ test("cli maps execution cap stops to a clear failure", async () => {
   );
 });
 
+test("cli prints a run summary after an execution cap failure with the error first", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-cap-summary-"));
+  const runDirectory = join(projectRoot, ".devflow", "runs", "run-cap-summary");
+  const executionArtifact = join(runDirectory, "execution.json");
+  const writes: Array<{ stream: "stdout" | "stderr"; chunk: string }> = [];
+  let commandError: CommanderError | undefined;
+
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+      },
+    ],
+    final: {
+      stopReason: "cap",
+      completedIssueFilenames: ["001-done.md"],
+      remainingIssueFilenames: ["002-left.md"],
+    },
+  };
+
+  try {
+    await runCli(["resume", "work"], {
+      stdout: {
+        write(chunk) {
+          writes.push({ stream: "stdout", chunk });
+        },
+      },
+      stderr: {
+        write(chunk) {
+          writes.push({ stream: "stderr", chunk });
+        },
+      },
+      cwd: projectRoot,
+      providerId: "codex",
+      runExecutionRequest: async (_request, options) => {
+        await options.onRunCreated?.({
+          id: "run-cap-summary",
+          paths: {
+            runDirectory,
+            prdArtifact: join(runDirectory, "prd.md"),
+            issuesDirectory: join(runDirectory, "issues"),
+            executionArtifact,
+          },
+        });
+        await fs.outputJson(executionArtifact, ledger, { spaces: 2 });
+        throw new ExecutionLoopCapError(7);
+      },
+      configureProgram(program) {
+        program.exitOverride();
+      },
+    });
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      commandError = error;
+    } else {
+      throw error;
+    }
+  }
+
+  assert.equal(commandError?.code, "commander.error");
+  assert.equal(writes[0]?.stream, "stderr");
+  assert.match(writes[0]?.chunk ?? "", /maximum of 7 iterations/);
+  assert.equal(writes[1]?.stream, "stdout");
+  assert.match(writes[1]?.chunk ?? "", /Run summary/);
+  assert.match(writes[1]?.chunk ?? "", /iteration cap/);
+  assert.match(writes[1]?.chunk ?? "", /001-done\.md/);
+});
+
 test("cli maps execution error stops to a clear failure", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-execute-error-"));
 
@@ -539,6 +611,115 @@ test("cli maps execution error stops to a clear failure", async () => {
     result.stderr,
     "Execution failed: provider session for Codex (codex) stopped before completing the execution iteration.\n",
   );
+});
+
+test("cli prints a run summary after an execution error failure", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-error-summary-"));
+  const runDirectory = join(projectRoot, ".devflow", "runs", "run-error-summary");
+  const executionArtifact = join(runDirectory, "execution.json");
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+      },
+    ],
+    final: {
+      stopReason: "error",
+      completedIssueFilenames: [],
+      remainingIssueFilenames: ["001-left.md"],
+    },
+  };
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async (_request, options) => {
+      await options.onRunCreated?.({
+        id: "run-error-summary",
+        paths: {
+          runDirectory,
+          prdArtifact: join(runDirectory, "prd.md"),
+          issuesDirectory: join(runDirectory, "issues"),
+          executionArtifact,
+        },
+      });
+      await fs.outputJson(executionArtifact, ledger, { spaces: 2 });
+      throw new IncompleteProviderSessionError({
+        provider: getBuiltInProviderIdentity("codex"),
+        completionMarker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        exitCode: 1,
+        signal: null,
+      });
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.match(result.stderr, /stopped before completing/);
+  assert.match(result.stdout, /Run summary/);
+  assert.match(result.stdout, /execution error/);
+  assert.match(result.stdout, /001-left\.md/);
+});
+
+test("cli skips failure summary when no execution ledger exists", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-ledger-summary-"));
+  const runDirectory = join(projectRoot, ".devflow", "runs", "run-no-ledger");
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async (_request, options) => {
+      await options.onRunCreated?.({
+        id: "run-no-ledger",
+        paths: {
+          runDirectory,
+          prdArtifact: join(runDirectory, "prd.md"),
+          issuesDirectory: join(runDirectory, "issues"),
+          executionArtifact: join(runDirectory, "execution.json"),
+        },
+      });
+      throw new StageArtifactValidationError({
+        stage: "prd",
+        artifactPath: join(runDirectory, "prd.md"),
+        details: "Artifact is empty.",
+      });
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.match(result.stderr, /prd stage/);
+  assert.equal(result.stdout, "");
+});
+
+test("cli reports summary unavailable for a corrupt execution ledger without masking success", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-corrupt-summary-"));
+  const runDirectory = join(projectRoot, ".devflow", "runs", "run-corrupt-summary");
+  const executionArtifact = join(runDirectory, "execution.json");
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    providerId: "codex",
+    runExecutionRequest: async (_request, options) => {
+      await options.onRunCreated?.({
+        id: "run-corrupt-summary",
+        paths: {
+          runDirectory,
+          prdArtifact: join(runDirectory, "prd.md"),
+          issuesDirectory: join(runDirectory, "issues"),
+          executionArtifact,
+        },
+      });
+      await fs.outputFile(executionArtifact, "{not json");
+    },
+  });
+
+  assert.equal(result.commandError, undefined);
+  assert.match(result.stdout, /Run summary unavailable: execution ledger could not be read\./);
+  assert.doesNotMatch(result.stdout, /Run summary\n/);
+  assert.equal(result.stderr, "");
 });
 
 test("cli formats stage artifact validation failures with stage, artifact, and next action", () => {

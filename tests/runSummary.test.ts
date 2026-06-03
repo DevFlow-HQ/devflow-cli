@@ -92,3 +92,43 @@ test("run summary renders no-file ledgers and empty issue lists", () => {
     ].join("\n"),
   );
 });
+
+test("run summary renders a distinct friendly line for every execute stop reason", () => {
+  const stopReasons: Array<{
+    stopReason: ExecutionLedger["final"]["stopReason"];
+    expectedLine: string;
+  }> = [
+    {
+      stopReason: "terminal",
+      expectedLine:
+        "Execution stopped because the provider reported that no more AFK tasks remain.",
+    },
+    {
+      stopReason: "no-file",
+      expectedLine:
+        "Execution stopped because there were no AFK issue files left to run.",
+    },
+    {
+      stopReason: "cap",
+      expectedLine: "Execution stopped after reaching the iteration cap.",
+    },
+    {
+      stopReason: "error",
+      expectedLine: "Execution stopped after an execution error.",
+    },
+  ];
+
+  for (const { stopReason, expectedLine } of stopReasons) {
+    const ledger: ExecutionLedger = {
+      stage: "execute",
+      iterations: [],
+      final: {
+        stopReason,
+        completedIssueFilenames: [],
+        remainingIssueFilenames: [],
+      },
+    };
+
+    assert.match(renderRunSummary(ledger, runPaths), new RegExp(expectedLine));
+  }
+});

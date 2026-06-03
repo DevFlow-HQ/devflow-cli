@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 
 import { Command, CommanderError } from "commander";
+import fs from "fs-extra";
 
 import {
   NoSupportedProvidersInstalledError,
@@ -174,6 +175,88 @@ interface CreatedRunSummaryContext {
   paths: RunSummaryPaths;
 }
 
+const RUN_SUMMARY_UNAVAILABLE_MESSAGE =
+  "Run summary unavailable: execution ledger could not be read.";
+
+async function readRunSummary(
+  paths: RunSummaryPaths,
+  options: { missingLedger: "skip" | "unavailable" },
+): Promise<string | undefined> {
+  if (!(await fs.pathExists(paths.executionArtifact))) {
+    return options.missingLedger === "skip"
+      ? undefined
+      : `${RUN_SUMMARY_UNAVAILABLE_MESSAGE}\n`;
+  }
+
+  try {
+    const ledger = await readExecutionLedger(paths.executionArtifact);
+
+    return renderRunSummary(ledger, paths);
+  } catch {
+    return `${RUN_SUMMARY_UNAVAILABLE_MESSAGE}\n`;
+  }
+}
+
+function formatCliError(error: unknown): string | undefined {
+  if (error instanceof Error && error.message === REQUIRED_TASK_ERROR) {
+    return REQUIRED_TASK_ERROR;
+  }
+
+  if (error instanceof ManagedProviderSessionNotImplementedError) {
+    return error.message;
+  }
+
+  if (error instanceof ProviderSessionLaunchError) {
+    return formatProviderSessionLaunchError(error);
+  }
+
+  if (error instanceof InterruptedProviderSessionError) {
+    return formatInterruptedProviderSessionError(error);
+  }
+
+  if (
+    error instanceof IncompleteProviderSessionError &&
+    error.completionMarker.startsWith("DEVFLOW_EXECUTION_")
+  ) {
+    return formatExecutionIncompleteProviderSessionError(error);
+  }
+
+  if (error instanceof ExecutionLoopCapError) {
+    return formatExecutionLoopCapError(error);
+  }
+
+  if (error instanceof StageArtifactValidationError) {
+    return formatStageArtifactValidationError(error);
+  }
+
+  if (error instanceof ProviderStageRetryExhaustedError) {
+    return formatProviderStageRetryExhaustedError(error);
+  }
+
+  if (error instanceof InvalidIntentArtifactError) {
+    return formatInvalidIntentArtifactError(error);
+  }
+
+  if (error instanceof MissingProviderIdError) {
+    return formatMissingProviderIdError(error);
+  }
+
+  if (error instanceof InvalidDevFlowConfigError) {
+    return formatInvalidDevFlowConfigError(error);
+  }
+
+  if (
+    error instanceof NoSupportedProvidersInstalledError ||
+    error instanceof ProviderSetupCancelledError ||
+    error instanceof UnsupportedProviderError ||
+    error instanceof ProviderUnavailableError
+  ) {
+    return error.message;
+  }
+
+  return undefined;
+}
+
 export function createCli(options: RunCliOptions = {}): Command {
   const program = new Command();
   let createdRun: CreatedRunSummaryContext | undefined;
@@ -216,31 +299,51 @@ export function createCli(options: RunCliOptions = {}): Command {
         commandOptions.model ?? options.model,
       );
 
-      await executionRequestRunner(request, {
-        devFlowState,
-        async onRunCreated(run) {
-          createdRun = {
-            id: run.id,
-            paths: {
-              prdArtifact: run.paths.prdArtifact,
-              issuesDirectory: run.paths.issuesDirectory,
-              executionArtifact: run.paths.executionArtifact,
-            },
-          };
-        },
-        onStageStart(stage) {
-          options.stdout?.write(formatStageStartLine(stage));
-        },
-        onExecutionIteration({ iteration }) {
-          options.stdout?.write(`\n----- execution iteration ${iteration} -----\n`);
-        },
-      });
+      try {
+        await executionRequestRunner(request, {
+          devFlowState,
+          async onRunCreated(run) {
+            createdRun = {
+              id: run.id,
+              paths: {
+                prdArtifact: run.paths.prdArtifact,
+                issuesDirectory: run.paths.issuesDirectory,
+                executionArtifact: run.paths.executionArtifact,
+              },
+            };
+          },
+          onStageStart(stage) {
+            options.stdout?.write(formatStageStartLine(stage));
+          },
+          onExecutionIteration({ iteration }) {
+            options.stdout?.write(`\n----- execution iteration ${iteration} -----\n`);
+          },
+        });
 
-      if (createdRun !== undefined) {
-        const ledger = await readExecutionLedger(
-          createdRun.paths.executionArtifact,
-        );
-        options.stdout?.write(renderRunSummary(ledger, createdRun.paths));
+        if (createdRun !== undefined) {
+          const summary = await readRunSummary(createdRun.paths, {
+            missingLedger: "unavailable",
+          });
+
+          if (summary !== undefined) {
+            options.stdout?.write(summary);
+          }
+        }
+      } catch (error) {
+        const message = formatCliError(error) ?? formatUnexpectedCliError(error);
+        options.stderr?.write(`${message}\n`);
+
+        if (createdRun !== undefined) {
+          const summary = await readRunSummary(createdRun.paths, {
+            missingLedger: "skip",
+          });
+
+          if (summary !== undefined) {
+            options.stdout?.write(summary);
+          }
+        }
+
+        throw new CommanderError(1, "commander.error", message);
       }
     });
 
@@ -275,60 +378,14 @@ export async function runCli(
       return;
     }
 
-    if (error instanceof Error && error.message === REQUIRED_TASK_ERROR) {
-      program.error(REQUIRED_TASK_ERROR);
+    if (error instanceof CommanderError && error.code === "commander.error") {
+      throw error;
     }
 
-    if (error instanceof ManagedProviderSessionNotImplementedError) {
-      program.error(error.message);
-    }
+    const message = formatCliError(error);
 
-    if (error instanceof ProviderSessionLaunchError) {
-      program.error(formatProviderSessionLaunchError(error));
-    }
-
-    if (error instanceof InterruptedProviderSessionError) {
-      program.error(formatInterruptedProviderSessionError(error));
-    }
-
-    if (
-      error instanceof IncompleteProviderSessionError &&
-      error.completionMarker.startsWith("DEVFLOW_EXECUTION_")
-    ) {
-      program.error(formatExecutionIncompleteProviderSessionError(error));
-    }
-
-    if (error instanceof ExecutionLoopCapError) {
-      program.error(formatExecutionLoopCapError(error));
-    }
-
-    if (error instanceof StageArtifactValidationError) {
-      program.error(formatStageArtifactValidationError(error));
-    }
-
-    if (error instanceof ProviderStageRetryExhaustedError) {
-      program.error(formatProviderStageRetryExhaustedError(error));
-    }
-
-    if (error instanceof InvalidIntentArtifactError) {
-      program.error(formatInvalidIntentArtifactError(error));
-    }
-
-    if (error instanceof MissingProviderIdError) {
-      program.error(formatMissingProviderIdError(error));
-    }
-
-    if (error instanceof InvalidDevFlowConfigError) {
-      program.error(formatInvalidDevFlowConfigError(error));
-    }
-
-    if (
-      error instanceof NoSupportedProvidersInstalledError ||
-      error instanceof ProviderSetupCancelledError ||
-      error instanceof UnsupportedProviderError ||
-      error instanceof ProviderUnavailableError
-    ) {
-      program.error(error.message);
+    if (message !== undefined) {
+      program.error(message);
     }
 
     program.error(formatUnexpectedCliError(error));
