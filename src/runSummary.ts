@@ -6,6 +6,8 @@ export interface RunSummaryPaths {
   executionArtifact: string;
 }
 
+const ITERATION_MESSAGE_WIDTH = 82;
+
 function formatStopReason(stopReason: ExecutionLedger["final"]["stopReason"]): string {
   switch (stopReason) {
     case "terminal":
@@ -32,7 +34,59 @@ function formatIterations(iterations: ExecutionLedger["iterations"]): string[] {
     return ["- None"];
   }
 
-  return iterations.map((iteration) => `- Iteration ${iteration.iteration}`);
+  const iterationColumnWidth = Math.max(
+    2,
+    ...iterations.map((iteration) => iteration.iteration.toString().length),
+  );
+
+  return iterations.flatMap((iteration) => {
+    const message = iteration.finalAssistantMessage ?? "(no summary available)";
+    const wrappedLines = wrapMessage(message, ITERATION_MESSAGE_WIDTH);
+    const firstPrefix = `${iteration.iteration
+      .toString()
+      .padStart(iterationColumnWidth)} │ `;
+    const continuationPrefix = `${" ".repeat(iterationColumnWidth)} │ `;
+
+    return wrappedLines.map((line, index) => {
+      const prefix = index === 0 ? firstPrefix : continuationPrefix;
+      return `${prefix}${line}`;
+    });
+  });
+}
+
+function wrapMessage(message: string, width: number): string[] {
+  return message
+    .split(/\r?\n/)
+    .flatMap((line) => wrapLine(line.trimEnd(), width));
+}
+
+function wrapLine(line: string, width: number): string[] {
+  if (line.length === 0) {
+    return [""];
+  }
+
+  const words = line.split(/\s+/);
+  const wrappedLines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    if (currentLine.length === 0) {
+      currentLine = word;
+      continue;
+    }
+
+    const candidate = `${currentLine} ${word}`;
+    if (candidate.length > width) {
+      wrappedLines.push(currentLine);
+      currentLine = word;
+      continue;
+    }
+
+    currentLine = candidate;
+  }
+
+  wrappedLines.push(currentLine);
+  return wrappedLines;
 }
 
 export function renderRunSummary(

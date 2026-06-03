@@ -36,7 +36,7 @@ test("run summary renders successful terminal ledgers with issue filenames and a
       "Execution stopped because the provider reported that no more AFK tasks remain.",
       "",
       "Iterations:",
-      "- Iteration 1",
+      " 1 │ (no summary available)",
       "",
       "Completed issues:",
       "- 001-first.md",
@@ -131,4 +131,104 @@ test("run summary renders a distinct friendly line for every execute stop reason
 
     assert.match(renderRunSummary(ledger, runPaths), new RegExp(expectedLine));
   }
+});
+
+test("run summary renders full iteration final messages under a gutter", () => {
+  const fullMessage =
+    "Implemented the execution summary renderer and added a regression test that keeps this long narrative visible without truncating any words from the provider's final message.";
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+        finalAssistantMessage: fullMessage,
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: [],
+      remainingIssueFilenames: [],
+    },
+  };
+
+  const summary = renderRunSummary(ledger, runPaths);
+
+  assert.match(
+    summary,
+    / 1 │ Implemented the execution summary renderer and added a regression test that keeps\n   │ this long narrative visible without truncating any words from the provider's final\n   │ message\./,
+  );
+  assert.match(summary, /without truncating any words/);
+});
+
+test("run summary renders multi-iteration narratives and missing-message placeholders", () => {
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_first",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+        finalAssistantMessage: "Added the first execution slice.",
+      },
+      {
+        iteration: 2,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_second",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+      },
+      {
+        iteration: 12,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_twelfth",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+        finalAssistantMessage: "Finished the final execution slice.",
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: [],
+      remainingIssueFilenames: [],
+    },
+  };
+
+  assert.match(
+    renderRunSummary(ledger, runPaths),
+    / 1 │ Added the first execution slice\.\n 2 │ \(no summary available\)\n12 │ Finished the final execution slice\./,
+  );
+});
+
+test("run summary does not attribute iterations to completed issue filenames", () => {
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+        finalAssistantMessage: "Completed renderer updates.",
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: ["013-iteration-narratives-gutter-layout.md"],
+      remainingIssueFilenames: [],
+    },
+  };
+
+  const summary = renderRunSummary(ledger, runPaths);
+  const iterationsSection = summary.slice(
+    summary.indexOf("Iterations:"),
+    summary.indexOf("Completed issues:"),
+  );
+
+  assert.doesNotMatch(
+    iterationsSection,
+    /013-iteration-narratives-gutter-layout\.md/,
+  );
+  assert.doesNotMatch(iterationsSection, /issue/i);
 });

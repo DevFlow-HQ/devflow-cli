@@ -402,7 +402,7 @@ test("cli prints a run summary from the on-disk execution ledger after a success
   assert.equal(result.commandError, undefined);
   assert.match(result.stdout, /Run summary/);
   assert.match(result.stdout, /no more AFK tasks remain/);
-  assert.match(result.stdout, /Iteration 1/);
+  assert.match(result.stdout, / 1 │ \(no summary available\)/);
   assert.match(result.stdout, /001-done\.md/);
   assert.match(result.stdout, /002-hitl\.md/);
   assert.match(result.stdout, /Execution ledger: .+execution\.json/);
