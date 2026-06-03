@@ -28,10 +28,11 @@ Behavior:
 - Run the relevant discovered feedback loops before finishing.
 - Move the issue file to `issues/done/` before committing.
 - Commit the completed work if repository policy and available credentials permit it.
+- Before the marker, state a brief summary of the changes made and functionality added in this session in the reply only. Do not write that summary as a new artifact.
 
 Completion:
-- If you completed one AFK issue, moved it to `issues/done/`, and committed when permitted, reply with this iteration marker and no other text:
+- If you completed one AFK issue, moved it to `issues/done/`, and committed when permitted, reply with the brief summary followed by this iteration marker:
 {{ITERATION_MARKER}}
-- If there are no AFK issues that can be completed without human input, reply with this terminal marker and no other text:
+- If there are no AFK issues that can be completed without human input, reply with this terminal marker:
 {{TERMINAL_MARKER}}
 - Emit exactly one of those markers.

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createStructuredGrillTranscriptRecorder,
+  stripCompletionMarkers,
   type GrillTranscriptArtifact,
 } from "../src/grillTranscriptRecorder.js";
 import {
@@ -180,6 +181,16 @@ test("structured grill transcript recorder strips active marker, excludes post-m
     "provider:Decision text ",
     "provider:Repair answer ",
   ]);
+});
+
+test("shared completion marker stripping removes content from the earliest active marker", () => {
+  assert.equal(
+    stripCompletionMarkers("Summary TERMINAL later ITERATION", [
+      "ITERATION",
+      "TERMINAL",
+    ]),
+    "Summary ",
+  );
 });
 
 test("structured grill transcript recorder keeps capture open through grill repair after marker observation", async () => {

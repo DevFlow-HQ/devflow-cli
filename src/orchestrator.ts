@@ -39,6 +39,7 @@ import {
 import { UnsupportedProviderError } from "./bootstrapProvider.js";
 import {
   createStructuredGrillTranscriptRecorder,
+  stripCompletionMarkers,
   type StructuredGrillTranscriptRecorder,
 } from "./grillTranscriptRecorder.js";
 
@@ -171,6 +172,12 @@ const executionLedgerSchema = z
               .optional(),
             gitHeadBefore: gitExecutionHeadSchema,
             gitHeadAfter: gitExecutionHeadSchema,
+            finalAssistantMessage: z
+              .string()
+              .refine((value) => value.trim().length > 0, {
+                message: "Must be a non-empty string.",
+              })
+              .optional(),
           })
           .strict(),
       ),
@@ -1634,6 +1641,7 @@ async function runExecuteStage(options: {
     });
 
     let result: ManagedProviderSessionResult;
+    let finalAssistantMessage: string | undefined;
 
     try {
       await options.onExecutionIteration?.({ iteration });
@@ -1655,6 +1663,15 @@ async function runExecuteStage(options: {
             // The provider owns issue selection and movement. The loop only
             // records marker-driven progress and final issue-file accounting.
           },
+          onProviderEvent(event) {
+            if (
+              event.structured &&
+              event.type === "turn-completed" &&
+              event.assistantMessage !== undefined
+            ) {
+              finalAssistantMessage = event.assistantMessage;
+            }
+          },
         },
       });
     } catch (error) {
@@ -1674,6 +1691,10 @@ async function runExecuteStage(options: {
     const gitHeadAfter = await options.devFlowState.git.getCurrentHead();
     const providerSessionState = await readAdvisoryProviderSessionState(options.run);
     const matchedCompletionMarker = result.matchedCompletionMarker;
+    const markerStrippedFinalAssistantMessage = stripCompletionMarkers(
+      finalAssistantMessage ?? "",
+      [iterationMarker, terminalMarker],
+    );
 
     iterations.push({
       iteration,
@@ -1683,6 +1704,9 @@ async function runExecuteStage(options: {
         : {}),
       gitHeadBefore,
       gitHeadAfter,
+      ...(markerStrippedFinalAssistantMessage.trim().length > 0
+        ? { finalAssistantMessage: markerStrippedFinalAssistantMessage }
+        : {}),
     });
 
     if (matchedCompletionMarker === terminalMarker) {

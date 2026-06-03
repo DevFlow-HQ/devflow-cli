@@ -46,9 +46,9 @@ export function createStructuredGrillTranscriptRecorder(
         completionMarkerObserved ||
         (activeCompletionMarker !== undefined &&
           event.assistantMessage.includes(activeCompletionMarker));
-      const transcriptContent = stripCompletionMarker(
+      const transcriptContent = stripCompletionMarkers(
         event.assistantMessage,
-        activeCompletionMarker,
+        [activeCompletionMarker],
       );
 
       if (isEmptyTranscriptBlock(transcriptContent)) {
@@ -106,14 +106,20 @@ export function createStructuredGrillTranscriptRecorder(
   };
 }
 
-function stripCompletionMarker(content: string, marker: string | undefined): string {
-  if (!marker) {
+export function stripCompletionMarkers(
+  content: string,
+  markers: Array<string | undefined>,
+): string {
+  const markerIndexes = markers
+    .filter((marker): marker is string => marker !== undefined && marker.length > 0)
+    .map((marker) => content.indexOf(marker))
+    .filter((markerIndex) => markerIndex !== -1);
+
+  if (markerIndexes.length === 0) {
     return content;
   }
 
-  const markerIndex = content.indexOf(marker);
-
-  return markerIndex === -1 ? content : content.slice(0, markerIndex);
+  return content.slice(0, Math.min(...markerIndexes));
 }
 
 function isEmptyTranscriptBlock(content: string): boolean {

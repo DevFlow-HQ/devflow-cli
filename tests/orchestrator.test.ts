@@ -104,6 +104,21 @@ function createStructuredProviderEvent(
   } as ManagedProviderSessionEvent;
 }
 
+function createPtyProviderEvent(
+  event: DistributiveOmit<
+    ManagedProviderSessionEvent,
+    "provider" | "source" | "structured"
+  >,
+  provider = getBuiltInProviderIdentity("codex"),
+): ManagedProviderSessionEvent {
+  return {
+    ...event,
+    provider,
+    source: "pty",
+    structured: false,
+  } as ManagedProviderSessionEvent;
+}
+
 function extractPrdArtifactPath(prompt: string): string {
   const match = prompt.match(/Canonical PRD artifact path:\n([^\n]+)/);
 
@@ -384,6 +399,7 @@ test("validateExecutionArtifact accepts well-formed ledgers with a final block",
         providerSessionId: "provider-session-1",
         gitHeadBefore: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         gitHeadAfter: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        finalAssistantMessage: "Implemented first slice.",
       },
     ],
     final: {
@@ -437,6 +453,10 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
   assert.match(prompt, /move the issue file to `issues\/done\/` before committing/i);
   assert.match(prompt, /leave HITL issues untouched/i);
   assert.match(prompt, /discover the project-owned test, typecheck, and build commands/i);
+  assert.match(
+    prompt,
+    /before the marker, state a brief summary of the changes made and functionality added in this session/i,
+  );
   assert.doesNotMatch(prompt, /npm run test/);
   assert.doesNotMatch(prompt, /npm run typecheck/);
 });
@@ -822,6 +842,226 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
   );
 });
 
+test("orchestrator records marker-stripped final assistant messages for structured execute iterations", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+  const executeInputs: ManagedProviderSessionInput[] = [];
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "api",
+      eventSource: "hooks",
+      supportsProviderSessionId: true,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "001-first.md"),
+          "# First\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        executeInputs.push(input);
+        await input.onProviderEvent?.(
+          createStructuredProviderEvent({
+            type: "turn-completed",
+            assistantMessage: "Still working.",
+          }),
+        );
+        await input.onProviderEvent?.(
+          createStructuredProviderEvent({
+            type: "turn-completed",
+            assistantMessage: `Implemented issue 010.\n${input.initialCompletionMarker}\nProtocol footer.`,
+          }),
+        );
+        const runDirectory = join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+        );
+        await fs.move(
+          join(runDirectory, "issues", "001-first.md"),
+          join(runDirectory, "issues", "done", "001-first.md"),
+        );
+        await input.validate();
+        return {
+          repairUsed: false,
+          exitCode: 0,
+          signal: null,
+          matchedCompletionMarker: input.initialCompletionMarker,
+        };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  assert.equal(executeInputs.length, 1);
+  const [runId] = await listRunDirectories(projectRoot);
+  const ledger = await fs.readJson(
+    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  );
+  assert.equal(
+    ledger.iterations[0].finalAssistantMessage,
+    "Implemented issue 010.\n",
+  );
+  assert.doesNotMatch(
+    ledger.iterations[0].finalAssistantMessage,
+    /DEVFLOW_EXECUTION_ITERATION_COMPLETE/,
+  );
+  await validateExecutionArtifact(
+    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  );
+});
+
+test("orchestrator omits final assistant messages for PTY fallback execute iterations", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n");
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "pty",
+      supportsProviderSessionId: false,
+      supportsResume: false,
+      classifiesSubmittedUserMessageOrigin: false,
+    },
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        await fs.outputFile(
+          join(extractIssuesDirectory(input.initialPrompt), "001-first.md"),
+          "# First\n",
+        );
+        await input.validate();
+        return { repairUsed: false, exitCode: 0, signal: null };
+      }
+
+      if (isExecuteSessionInput(input)) {
+        await input.onProviderEvent?.(
+          createPtyProviderEvent({
+            type: "turn-completed",
+            assistantMessage: `PTY text ${input.initialCompletionMarker}`,
+          }),
+        );
+        const runDirectory = join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+        );
+        await fs.move(
+          join(runDirectory, "issues", "001-first.md"),
+          join(runDirectory, "issues", "done", "001-first.md"),
+        );
+        await input.validate();
+        return {
+          repairUsed: false,
+          exitCode: 0,
+          signal: null,
+          matchedCompletionMarker: input.initialCompletionMarker,
+        };
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const [runId] = await listRunDirectories(projectRoot);
+  const ledger = await fs.readJson(
+    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  );
+  assert.equal("finalAssistantMessage" in ledger.iterations[0], false);
+  await validateExecutionArtifact(
+    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  );
+});
+
 test("orchestrator stops execute with cap failure and writes the cap ledger", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
@@ -1014,6 +1254,7 @@ test("orchestrator writes an error ledger before surfacing incomplete execute se
   );
   assert.equal(ledger.final.stopReason, "error");
   assert.equal(ledger.iterations.length, 1);
+  assert.equal("finalAssistantMessage" in ledger.iterations[0], false);
   assert.deepEqual(ledger.final.completedIssueFilenames, []);
   assert.deepEqual(ledger.final.remainingIssueFilenames, ["001-first.md"]);
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), true);
