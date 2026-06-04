@@ -355,12 +355,15 @@ export function createCli(options: RunCliOptions = {}): Command {
         }
       } catch (error) {
         const cliErrorMessage = formatCliError(error);
-        const message =
-          cliErrorMessage ??
-          formatUnexpectedCliError({
-            ref: logger.critical("unexpected cli error", { err: error }),
-            logPath: diagnosticLogPath,
-          });
+        const message = cliErrorMessage ?? formatUnexpectedCliError({
+          ref: logger.critical("unexpected cli error", { err: error }),
+          logPath: diagnosticLogPath,
+        });
+
+        if (cliErrorMessage !== undefined) {
+          logger.error("anticipated cli error", { err: error });
+        }
+
         options.stderr?.write(`${message}\n`);
 
         if (createdRun !== undefined) {

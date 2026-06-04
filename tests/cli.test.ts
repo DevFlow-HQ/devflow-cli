@@ -37,6 +37,7 @@ import {
   type RunExecutionRequestOptions,
   StageArtifactValidationError,
 } from "../src/orchestrator.js";
+import type { LogContext, Logger } from "../src/logger.js";
 
 function createWritableBuffer() {
   let output = "";
@@ -49,6 +50,37 @@ function createWritableBuffer() {
       return output;
     },
   };
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context?: LogContext;
+    ref?: string;
+  }> = [];
+
+  const logger: Logger = {
+    debug(msg, context) {
+      entries.push({ level: "debug", msg, context });
+    },
+    info(msg, context) {
+      entries.push({ level: "info", msg, context });
+    },
+    warn(msg, context) {
+      entries.push({ level: "warn", msg, context });
+    },
+    error(msg, context) {
+      entries.push({ level: "error", msg, context });
+    },
+    critical(msg, context) {
+      const ref = "err_captured";
+      entries.push({ level: "critical", msg, context, ref });
+      return ref;
+    },
+  };
+
+  return { entries, logger };
 }
 
 async function invokeCli(argv: string[]) {
@@ -476,6 +508,40 @@ test("cli maps provider launch failures to concise user-facing errors", async ()
     result.stderr,
     "Unable to launch Codex (codex): spawn codex ENOENT.\n",
   );
+});
+
+test("cli logs anticipated typed failures at error without printing a correlation ref", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-typed-error-log-"));
+  const { entries, logger } = createCapturingLogger();
+  const error = new ProviderSessionLaunchError(
+    getBuiltInProviderIdentity("codex"),
+    new Error("spawn codex ENOENT"),
+  );
+
+  const result = await invokeCliWithOptions(["draft", "plan"], {
+    cwd: projectRoot,
+    logger,
+    providerId: "codex",
+    runExecutionRequest: async () => {
+      throw error;
+    },
+  });
+
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Unable to launch Codex (codex): spawn codex ENOENT.\n",
+  );
+  assert.doesNotMatch(result.stderr, /Correlation ref/);
+  assert.doesNotMatch(result.stderr, /err_captured/);
+  assert.deepEqual(entries, [
+    {
+      level: "error",
+      msg: "anticipated cli error",
+      context: { err: error },
+    },
+  ]);
 });
 
 test("cli maps interrupted provider sessions to concise user-facing errors", async () => {
