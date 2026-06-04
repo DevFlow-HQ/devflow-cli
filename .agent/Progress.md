@@ -81,3 +81,4 @@ Hard limit: 100 lines.
 2. Future provider work:
   - keep PTY marker completion and transcript callbacks as fallback behavior
   - graduate Gemini and OpenCode from PTY fallback only when their structured sources can truthfully support the normalized event contract
+  - adapter-deep `debug` tracing (per provider event, marker scans, fallback-tier selection) once the logging architecture lands; the injected `Logger` lets adapters adopt it incrementally with zero call-site rework
