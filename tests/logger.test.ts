@@ -163,3 +163,23 @@ test("logger falls back to home logs and never throws when writes fail", () => {
 
   assert.doesNotThrow(() => degradedLogger.error("degraded silently"));
 });
+
+test("logger prunes diagnostic log files older than thirty days on startup", () => {
+  const { repoLogsDirectory, homeLogsDirectory } = createTempLogsDirectories();
+  fs.writeFileSync(join(repoLogsDirectory, "devflow-2026-04-23.log"), "old\n");
+  fs.writeFileSync(join(repoLogsDirectory, "devflow-2026-04-24.log"), "boundary\n");
+  fs.writeFileSync(join(repoLogsDirectory, "devflow-2026-05-04.log"), "newer\n");
+  fs.writeFileSync(join(repoLogsDirectory, "notes.txt"), "unrelated\n");
+
+  createLogger({
+    repoLogsDirectory,
+    homeLogsDirectory,
+    clock: { now: () => new Date("2026-05-24T10:11:12.000Z") },
+  });
+
+  assert.deepEqual(fs.readdirSync(repoLogsDirectory).sort(), [
+    "devflow-2026-04-24.log",
+    "devflow-2026-05-04.log",
+    "notes.txt",
+  ]);
+});

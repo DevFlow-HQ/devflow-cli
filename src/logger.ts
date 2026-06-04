@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import type { DevFlowClock } from "./devflowState.js";
@@ -43,9 +43,14 @@ export const NoopLogger: Logger = {
 
 export function createLogger(options: CreateLoggerOptions): Logger {
   const ensuredDirectories = new Set<string>();
+  let startupDate: Date | undefined = options.clock.now();
+
+  pruneOldDiagnosticLogs(options.repoLogsDirectory, startupDate);
+  pruneOldDiagnosticLogs(options.homeLogsDirectory, startupDate);
 
   const write = (level: LogLevel, msg: string, context: LogContext = {}) => {
-    const now = options.clock.now();
+    const now = startupDate ?? options.clock.now();
+    startupDate = undefined;
     const ref = level === "critical" ? createCorrelationRef() : undefined;
     const line = `${JSON.stringify(
       buildEntry({ level, msg, context, now, ref }),
@@ -161,4 +166,37 @@ function dailyLogFilename(date: Date): string {
 
 function createCorrelationRef(): string {
   return `err_${randomBytes(3).toString("hex")}`;
+}
+
+function pruneOldDiagnosticLogs(logsDirectory: string, now: Date) {
+  try {
+    const cutoffDay = localDayNumber(now) - 30;
+
+    for (const filename of readdirSync(logsDirectory)) {
+      const fileDay = diagnosticLogFilenameDay(filename);
+      if (fileDay !== undefined && fileDay < cutoffDay) {
+        unlinkSync(join(logsDirectory, filename));
+      }
+    }
+  } catch {
+    // Diagnostic logging must never surface filesystem failures to callers.
+  }
+}
+
+function diagnosticLogFilenameDay(filename: string): number | undefined {
+  const match = /^devflow-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(filename);
+  if (match === null) {
+    return undefined;
+  }
+
+  const [, year, month, day] = match;
+  return utcDayNumber(Number(year), Number(month) - 1, Number(day));
+}
+
+function localDayNumber(date: Date): number {
+  return utcDayNumber(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function utcDayNumber(year: number, monthIndex: number, day: number): number {
+  return Math.floor(Date.UTC(year, monthIndex, day) / 86_400_000);
 }
