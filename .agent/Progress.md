@@ -62,8 +62,11 @@ Hard limit: 100 lines.
   - the CLI exposes execution-iteration boundaries, maps cap/error stops to clear failures, and keeps upstream grill/PRD/issues artifacts intact after execute failures
 - MVP CLI UX is complete:
   - the pipeline stage list is `intent`, `bootstrap`, `grill`, `prd`, `issues`, and `execute`; the `validate` placeholder, runner, `validation.json` artifact mapping, and writer are removed
-  - the CLI prints plain stage-start one-liners, maps stage/artifact validation and retry exhaustion errors to user-facing messages, and keeps unexpected errors to one interim `(ErrorName: first line)` line until logging exists
+  - the CLI prints plain stage-start one-liners, maps stage/artifact validation and retry exhaustion errors to user-facing messages, and routes unexpected failures through redacted terminal errors with diagnostic correlation refs
   - successful and failed execute-stage stops render a Run summary from on-disk `execution.json`, including artifact paths, completed/remaining issue filenames, stop reason, next steps, and wrapped per-iteration final assistant messages with `(no summary available)` fallback
+- Diagnostic logging is active for unexpected CLI failures:
+  - DevFlow state exposes the repo-local `.devflow/logs/` path and shared clock to the CLI logger lifecycle
+  - unexpected CLI fall-throughs log `critical` JSONL entries with full error details and print only a generic message, correlation ref, and diagnostic log path
 - Maintainer documentation/tests now pin structured provider constraints, structured grill transcript policy, and provider-native boundary isolation.
 
 ## Current State
@@ -76,8 +79,9 @@ Hard limit: 100 lines.
 
 ## Remaining MVP Tasks
 1. Logging architecture:
-  - design a DevFlow logging architecture; route unexpected-error dumps (full message + stack) to a log file instead of the terminal
-  - once logging lands, remove the interim one-line `(ErrorName: first line)` parenthetical from the CLI unexpected-error message and point at the log file instead
+  - log anticipated typed CLI failures at `error`
+  - instrument orchestrator lifecycle milestones at `info`
+  - instrument recoverable orchestrator degradations at `warn`
 2. Future provider work:
   - keep PTY marker completion and transcript callbacks as fallback behavior
   - graduate Gemini and OpenCode from PTY fallback only when their structured sources can truthfully support the normalized event contract

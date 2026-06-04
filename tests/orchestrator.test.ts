@@ -7525,6 +7525,10 @@ test("orchestrator surfaces run creation failures before starting a stage or pro
   const stages: PipelineStage[] = [];
   let runSessionCallCount = 0;
   const devFlowState: DevFlowState = {
+    clock: { now: () => new Date("2026-05-24T10:11:12.000Z") },
+    paths: {
+      logsDirectory: join(projectRoot, ".devflow", "logs"),
+    },
     config: {
       async load() {
         return undefined;

@@ -1,4 +1,6 @@
 import { pathToFileURL } from "node:url";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { Command, CommanderError } from "commander";
 import fs from "fs-extra";
@@ -42,6 +44,7 @@ import {
   renderRunSummary,
   type RunSummaryPaths,
 } from "./runSummary.js";
+import { createLogger, NoopLogger, type Logger } from "./logger.js";
 
 const DEFAULT_VERSION = "0.1.0";
 const REQUIRED_TASK_ERROR = "A task is required.";
@@ -53,6 +56,7 @@ export interface CliWriter {
 export interface RunCliOptions {
   stdout?: CliWriter;
   stderr?: CliWriter;
+  logger?: Logger;
   version?: string;
   cwd?: string;
   providerId?: string;
@@ -159,15 +163,23 @@ export function formatMissingProviderIdError(
   return "Missing provider id for provider-backed orchestration. Re-run DevFlow to pick an installed provider.";
 }
 
-export function formatUnexpectedCliError(error: unknown): string {
-  const name = error instanceof Error ? error.name : "Error";
-  const message = getFirstMessageLine(error);
-
-  return `DevFlow hit an unexpected internal error. Re-run DevFlow or check Progress.md for the upcoming logging work. (${name}: ${message})`;
+export function formatUnexpectedCliError(options: {
+  ref: string;
+  logPath: string;
+}): string {
+  return `DevFlow hit an unexpected internal error. Correlation ref: ${options.ref}. Diagnostic log: ${options.logPath}.`;
 }
 
 function formatStageStartLine(stage: PipelineStage): string {
   return `Starting ${stage} stage...\n`;
+}
+
+function formatDiagnosticLogPath(logsDirectory: string, date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+
+  return join(logsDirectory, `devflow-${year}-${month}-${day}.log`);
 }
 
 interface CreatedRunSummaryContext {
@@ -278,6 +290,17 @@ export function createCli(options: RunCliOptions = {}): Command {
         : await resolveProjectRoot({ cwd });
       const devFlowState =
         options.devFlowState ?? createDevFlowState({ projectRoot });
+      const diagnosticLogPath = formatDiagnosticLogPath(
+        devFlowState.paths.logsDirectory,
+        devFlowState.clock.now(),
+      );
+      const logger =
+        options.logger ??
+        createLogger({
+          repoLogsDirectory: devFlowState.paths.logsDirectory,
+          homeLogsDirectory: join(homedir(), ".devflow", "logs"),
+          clock: devFlowState.clock,
+        });
       const config = await devFlowState.config.load();
       const executionRequestRunner =
         options.runExecutionRequest ?? runExecutionRequest;
@@ -302,6 +325,7 @@ export function createCli(options: RunCliOptions = {}): Command {
       try {
         await executionRequestRunner(request, {
           devFlowState,
+          logger,
           async onRunCreated(run) {
             createdRun = {
               id: run.id,
@@ -330,7 +354,13 @@ export function createCli(options: RunCliOptions = {}): Command {
           }
         }
       } catch (error) {
-        const message = formatCliError(error) ?? formatUnexpectedCliError(error);
+        const cliErrorMessage = formatCliError(error);
+        const message =
+          cliErrorMessage ??
+          formatUnexpectedCliError({
+            ref: logger.critical("unexpected cli error", { err: error }),
+            logPath: diagnosticLogPath,
+          });
         options.stderr?.write(`${message}\n`);
 
         if (createdRun !== undefined) {
@@ -388,7 +418,13 @@ export async function runCli(
       program.error(message);
     }
 
-    program.error(formatUnexpectedCliError(error));
+    const ref = NoopLogger.critical("unexpected cli error", { err: error });
+    program.error(
+      formatUnexpectedCliError({
+        ref,
+        logPath: "unknown",
+      }),
+    );
   }
 }
 

@@ -361,6 +361,10 @@ export interface DevFlowProviderSessionState {
 }
 
 export interface DevFlowState {
+  clock: DevFlowClock;
+  paths: {
+    logsDirectory: string;
+  };
   config: {
     load(): Promise<DevFlowConfig | undefined>;
     save(config: DevFlowConfig): Promise<void>;
@@ -1726,6 +1730,10 @@ export function createDevFlowState(
   const gitProbe = options.gitProbe ?? createDefaultGitProjectContextProbe();
 
   return {
+    clock,
+    paths: {
+      logsDirectory: join(options.projectRoot, DEVFLOW_STATE_DIRECTORY, "logs"),
+    },
     config: {
       load: () => loadConfig(options.projectRoot),
       save: (config) => saveConfig(options.projectRoot, config),

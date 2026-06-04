@@ -270,12 +270,14 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
       },
       options: {
         devFlowState,
+        logger: receivedCalls[0]?.options.logger,
         onRunCreated: receivedCalls[0]?.options.onRunCreated,
         onStageStart: receivedCalls[0]?.options.onStageStart,
         onExecutionIteration: receivedCalls[0]?.options.onExecutionIteration,
       },
     },
   ]);
+  assert.equal(typeof receivedCalls[0]?.options.logger?.critical, "function");
   assert.equal(typeof receivedCalls[0]?.options.onRunCreated, "function");
   assert.equal(typeof receivedCalls[0]?.options.onStageStart, "function");
   assert.equal(typeof receivedCalls[0]?.options.onExecutionIteration, "function");
@@ -862,30 +864,61 @@ test("cli maps missing provider errors to concise user-facing errors", async () 
   assert.match(result.stderr, /installed provider/);
 });
 
-test("cli maps unexpected errors to a single generic line without a stack", async () => {
+test("cli maps unexpected errors to a redacted line and matching critical log entry", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-unexpected-error-"));
+  const clock = { now: () => new Date("2026-05-24T10:11:12.000Z") };
+  const devFlowState = createDevFlowState({ projectRoot, clock });
+  const error = new TypeError("boom\n    at internal frame");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
+    devFlowState,
     providerId: "codex",
     runExecutionRequest: async () => {
-      throw new TypeError("boom\n    at internal frame");
+      throw error;
     },
   });
 
   assert.equal(result.commandError?.code, "commander.error");
   assert.equal(result.stdout, "");
-  assert.equal(
+  assert.match(
     result.stderr,
-    "DevFlow hit an unexpected internal error. Re-run DevFlow or check Progress.md for the upcoming logging work. (TypeError: boom)\n",
+    /^DevFlow hit an unexpected internal error\. Correlation ref: err_[0-9a-f]{6}\. Diagnostic log: .+\.devflow\/logs\/devflow-2026-05-24\.log\.\n$/,
   );
+  assert.doesNotMatch(result.stderr, /TypeError/);
+  assert.doesNotMatch(result.stderr, /boom/);
   assert.doesNotMatch(result.stderr, /\n\s+at /);
+
+  const ref = result.stderr.match(/err_[0-9a-f]{6}/)?.[0];
+  const entries = fs
+    .readFileSync(join(projectRoot, ".devflow", "logs", "devflow-2026-05-24.log"), "utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  assert.deepEqual(entries, [
+    {
+      ts: "2026-05-24T10:11:12.000Z",
+      level: "critical",
+      runId: null,
+      ref,
+      msg: "unexpected cli error",
+      err: {
+        name: "TypeError",
+        message: "boom\n    at internal frame",
+        stack: error.stack,
+      },
+    },
+  ]);
 });
 
 test("cli formats non-error unexpected failures as a one-line generic error", () => {
   assert.equal(
-    formatUnexpectedCliError("boom"),
-    "DevFlow hit an unexpected internal error. Re-run DevFlow or check Progress.md for the upcoming logging work. (Error: boom)",
+    formatUnexpectedCliError({
+      ref: "err_a1b2c3",
+      logPath: "/repo/.devflow/logs/devflow-2026-05-24.log",
+    }),
+    "DevFlow hit an unexpected internal error. Correlation ref: err_a1b2c3. Diagnostic log: /repo/.devflow/logs/devflow-2026-05-24.log.",
   );
 });
 

@@ -42,6 +42,7 @@ import {
   stripCompletionMarkers,
   type StructuredGrillTranscriptRecorder,
 } from "./grillTranscriptRecorder.js";
+import type { Logger } from "./logger.js";
 
 export interface ResolvedExecutionRequest {
   projectRoot: string;
@@ -63,6 +64,7 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
 export interface RunExecutionRequestOptions {
   devFlowState?: DevFlowState;
+  logger?: Logger;
   createManagedSessionAdapter?: (
     providerId: BuiltInProviderId,
   ) => ManagedSessionAdapter;
