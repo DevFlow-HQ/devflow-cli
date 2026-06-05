@@ -23,5 +23,10 @@ Behavior:
 - Do not write execution, validation, or alternate PRD artifacts.
 - Do not use external skills, GitHub commands, issue tracker publication, triage labels, or an interactive approval loop.
 
-After writing the issue file or files, reply with this completion marker and no other text:
+Completion marker discipline:
+- The completion marker is DevFlow's single done signal for this stage. Emitting it tells DevFlow this stage's work is finished; DevFlow will immediately move on, and you get no further turns for that work.
+- Emit it exactly once, alone, only after you have written, critiqued, and validated the required issue file or files.
+- Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.
+
+After writing, critiquing, and validating the issue file or files, reply with only this completion marker and no other text:
 {{COMPLETION_MARKER}}

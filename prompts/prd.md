@@ -28,5 +28,10 @@ Behavior:
 - Do not write issues, implementation plans, validation files, or alternate PRDs.
 - Keep the PRD specific enough for downstream MVP stages to use without reading the grill transcript.
 
-After writing the PRD artifact, reply with this completion marker and no other text:
+Completion marker discipline:
+- The completion marker is DevFlow's single done signal for this stage. Emitting it tells DevFlow this stage's work is finished; DevFlow will immediately move on, and you get no further turns for that work.
+- Emit it exactly once, alone, only after you have written and validated the required PRD artifact.
+- Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.
+
+After writing and validating the PRD artifact, reply with only this completion marker and no other text:
 {{COMPLETION_MARKER}}

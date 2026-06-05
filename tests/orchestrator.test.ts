@@ -34,7 +34,11 @@ import {
   PIPELINE_STAGES,
   ProviderStageRetryExhaustedError,
   isRetryableProviderBackedStageFailure,
+  renderBootstrapProjectContextPrompt,
   renderExecutePrompt,
+  renderIntentPrompt,
+  renderIssuesPrompt,
+  renderPrdPrompt,
   runExecutionRequest,
   runProviderBackedStageWithRetry,
   StageArtifactValidationError,
@@ -182,6 +186,22 @@ function extractIssuesDirectory(prompt: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function assertCriticalCompletionMarkerGuidance(
+  prompt: string,
+  completionMarker: string,
+): void {
+  assert.equal(prompt.includes(completionMarker), true);
+  assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}/);
+  assert.match(prompt, /completion marker/i);
+  assert.match(prompt, /tells DevFlow .*work is finished/i);
+  assert.match(prompt, /DevFlow will immediately move on/i);
+  assert.match(prompt, /no further turns for that work/i);
+  assert.match(prompt, /emit it exactly once/i);
+  assert.match(prompt, /never omit .*when .*done/i);
+  assert.match(prompt, /never emit .*prematurely/i);
+  assert.doesNotMatch(prompt, /session will exit/i);
 }
 
 async function completeIssuesSession(
@@ -457,6 +477,56 @@ test("validateExecutionArtifact accepts well-formed ledgers with a final block",
   });
 
   await validateExecutionArtifact(artifactPath);
+});
+
+test("non-specialized stage prompts render critical completion marker guidance", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-stage-prompts-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  const intentPrompt = await renderIntentPrompt({
+    rawTask: "Add a narrow feature.",
+    artifactPath: run.paths.intentArtifact,
+    completionMarker: "DEVFLOW_INTENT_COMPLETE_test",
+  });
+  const bootstrapPrompt = await renderBootstrapProjectContextPrompt({
+    candidatePath: run.paths.projectContextCandidate,
+    completionMarker: "DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE_test",
+    refreshReason: "manual",
+  });
+  const prdPrompt = await renderPrdPrompt({
+    request: {
+      projectRoot,
+      rawTask: "Add a narrow feature.",
+      providerId: "codex",
+    },
+    run,
+    completionMarker: "DEVFLOW_PRD_COMPLETE_test",
+    liveDiscussionAvailable: false,
+  });
+  const issuesPrompt = await renderIssuesPrompt({
+    prdArtifactPath: run.paths.prdArtifact,
+    projectContextPath: run.paths.projectContextArtifact,
+    issuesDirectory: run.paths.issuesDirectory,
+    completionMarker: "DEVFLOW_ISSUES_COMPLETE_test",
+  });
+
+  for (const [promptName, prompt, marker] of [
+    ["intent", intentPrompt, "DEVFLOW_INTENT_COMPLETE_test"],
+    [
+      "bootstrap-project-context",
+      bootstrapPrompt,
+      "DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE_test",
+    ],
+    ["prd", prdPrompt, "DEVFLOW_PRD_COMPLETE_test"],
+    ["issues", issuesPrompt, "DEVFLOW_ISSUES_COMPLETE_test"],
+  ] as const) {
+    assertCriticalCompletionMarkerGuidance(
+      prompt,
+      marker,
+    );
+    assert.match(prompt, new RegExp(escapeRegExp(marker)), promptName);
+  }
 });
 
 test("renderExecutePrompt injects manual-flow issue and commit context with artifact path references", async () => {

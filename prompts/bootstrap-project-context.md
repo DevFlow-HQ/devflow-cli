@@ -30,5 +30,10 @@ Required output:
 - Keep it factual and concise.
 - Do not include task or intent artifact details.
 
-After writing the candidate artifact, reply with this completion marker and no other text:
+Completion marker discipline:
+- The completion marker is DevFlow's single done signal for this stage. Emitting it tells DevFlow this stage's work is finished; DevFlow will immediately move on, and you get no further turns for that work.
+- Emit it exactly once, alone, only after you have written and validated the required candidate artifact.
+- Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.
+
+After writing and validating the candidate artifact, reply with only this completion marker and no other text:
 {{COMPLETION_MARKER}}

@@ -283,7 +283,7 @@ export class MissingProviderIdError extends Error {
   }
 }
 
-async function renderIntentPrompt(options: {
+export async function renderIntentPrompt(options: {
   rawTask: string;
   artifactPath: string;
   completionMarker: string;
@@ -296,7 +296,7 @@ async function renderIntentPrompt(options: {
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
 }
 
-async function renderBootstrapProjectContextPrompt(options: {
+export async function renderBootstrapProjectContextPrompt(options: {
   candidatePath: string;
   completionMarker: string;
   refreshReason: ProjectContextRefreshReason;
@@ -379,7 +379,7 @@ function renderInterruptedPrdResumePrompt(options: {
   ].join("\n");
 }
 
-async function renderPrdPrompt(options: {
+export async function renderPrdPrompt(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   completionMarker: string;
@@ -405,7 +405,7 @@ async function renderPrdPrompt(options: {
     .replaceAll("{{COMPLETION_MARKER}}", options.completionMarker);
 }
 
-async function renderIssuesPrompt(options: {
+export async function renderIssuesPrompt(options: {
   prdArtifactPath: string;
   projectContextPath: string;
   issuesDirectory: string;
