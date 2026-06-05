@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-06-04_
+_Last updated: 2026-06-05_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md` and `new_spec.md`.
 Hard limit: 100 lines.
@@ -11,8 +11,9 @@ Hard limit: 100 lines.
   - `src/cli.ts` handles free-form task parsing, help/version passthrough, Git-root resolution through `src/projectRoot.ts`, provider/model overrides, first-run provider setup, and concise provider/session error mapping
   - repo-local default-provider config is strictly validated, persisted through the state facade, and repaired with clear malformed-config guidance
 - `.devflow` state boundary is complete:
-  - `src/devflowState.ts` owns config, shared project context, run creation, canonical run paths, immutable intent/PRD/execution artifacts, normalized issue markdown writes, grill transcripts/checkpoints, and provider-session recovery metadata
+  - `src/devflowState.ts` owns config, shared project context, run creation, canonical run paths, immutable intent/PRD/execution artifacts, normalized issue markdown writes, grill transcripts/checkpoints, diagnostic log paths, and provider-session recovery metadata
   - duplicate writes, malformed config/context/metadata/session state, invalid issue slugs, and invalid run ids surface as typed domain errors
+  - repo-local state initialization appends `.devflow/` to target Git repositories' `.gitignore` idempotently, preserves existing content, and skips non-Git projects
 - Project-context freshness and bootstrap are complete:
   - `.devflow/project-context.md` is bounded and paired with metadata carrying `generatedAt`, baseline `gitHead`, `dirtyFingerprint`, `contextVersion`, and `refreshReason`
   - Git freshness compares committed changes since baseline plus streamed staged/unstaged/untracked dirty fingerprints, while hardcoded ignores are limited to DevFlow/agent/Git internal paths
@@ -64,9 +65,10 @@ Hard limit: 100 lines.
   - the pipeline stage list is `intent`, `bootstrap`, `grill`, `prd`, `issues`, and `execute`; the `validate` placeholder, runner, `validation.json` artifact mapping, and writer are removed
   - the CLI prints plain stage-start one-liners, maps stage/artifact validation and retry exhaustion errors to user-facing messages, and routes unexpected failures through redacted terminal errors with diagnostic correlation refs
   - successful and failed execute-stage stops render a Run summary from on-disk `execution.json`, including artifact paths, completed/remaining issue filenames, stop reason, next steps, and wrapped per-iteration final assistant messages with `(no summary available)` fallback
-- Diagnostic logging is active for unexpected CLI failures:
-  - DevFlow state exposes the repo-local `.devflow/logs/` path and shared clock to the CLI logger lifecycle
-  - unexpected CLI fall-throughs log `critical` JSONL entries with full error details and print only a generic message, correlation ref, and diagnostic log path
+- Diagnostic logging is complete:
+  - `src/logger.ts` provides injected JSONL logging with `debug`/`info`/`warn`/`error`/`critical`, append-only daily files, critical correlation refs, full serialized errors for `error`/`critical`, repo-local-to-home fallback, never-throw behavior, and 30-day startup pruning
+  - CLI failures are split cleanly: anticipated typed failures log at `error` while keeping tailored terminal messages; unexpected fall-throughs log at `critical` and print only a generic message, correlation ref, and diagnostic log path
+  - the orchestrator emits `info` lifecycle entries for run/stage/iteration/summary milestones and `warn` entries for retries, repairs, provider-session recovery, artifact fallback recovery, stale-context refreshes, and repaired config/metadata
 - Maintainer documentation/tests now pin structured provider constraints, structured grill transcript policy, and provider-native boundary isolation.
 
 ## Current State
@@ -74,15 +76,16 @@ Hard limit: 100 lines.
 - MVP no longer includes a `validate` stage; `execute` is the terminal provider-backed stage.
 - Gemini, OpenCode, and Claude PTY fallback sessions remain PTY-marker/transcript fallback providers without reliable provider session ids or resume support.
 - Codex hook/JSONL and Claude hook/JSONL structured paths use PTY as control transport and normalized provider events as the data plane.
-- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, or Claude JSONL workstreams from `.agent/task_progress.md`.
-- Latest task-progress entry: `013-iteration-narratives-gutter-layout` is complete.
+- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, or diagnostic logging workstreams from `.agent/task_progress.md`.
+- Latest task-progress entry: `07-target-repo-gitignore` is complete.
 
-## Remaining MVP Tasks
-1. Logging architecture:
-  - log anticipated typed CLI failures at `error`
-  - instrument orchestrator lifecycle milestones at `info`
-  - instrument recoverable orchestrator degradations at `warn`
-2. Future provider work:
+## Known Remaining Work
+1. Future provider work:
+  - Marker should be stated to the provider as a critical thing, as soon as it is emitted the run will be stopped so ask the 
+    provider not to emit until the job is really finished. Ask the provider (only in grill stage) to ask user if 
+    he/she had any questions or concerns or can it conclude the grilling session. If the user says yes, 
+    only then emit the marker of Grill complete. Other session doesn't need to ask anything but for now make
+    sure that the markers purpose are defined pretty well and it should not be emitted anytime before.
+  - add adapter-deep `debug` tracing for provider events, marker scans, and fallback-tier selection now that the injected `Logger` is available
   - keep PTY marker completion and transcript callbacks as fallback behavior
   - graduate Gemini and OpenCode from PTY fallback only when their structured sources can truthfully support the normalized event contract
-  - adapter-deep `debug` tracing (per provider event, marker scans, fallback-tier selection) once the logging architecture lands; the injected `Logger` lets adapters adopt it incrementally with zero call-site rework
