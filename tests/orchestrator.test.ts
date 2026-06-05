@@ -592,6 +592,17 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
   assert.match(prompt, new RegExp(escapeRegExp(tddGuidePath)));
   assert.match(prompt, /DEVFLOW_EXECUTION_ITERATION_COMPLETE_test/);
   assert.match(prompt, /DEVFLOW_EXECUTION_NO_MORE_TASKS_test/);
+  assert.match(prompt, /iteration-complete marker/i);
+  assert.match(prompt, /when the selected AFK issue is complete/i);
+  assert.match(prompt, /do not emit it early/i);
+  assert.match(prompt, /terminal no-more-tasks marker/i);
+  assert.match(prompt, /confirming from the supplied open issue files/i);
+  assert.match(prompt, /no AFK issue remains unworked/i);
+  assert.match(prompt, /blocked on one issue/i);
+  assert.match(prompt, /tired/i);
+  assert.match(prompt, /unsure/i);
+  assert.match(prompt, /silently abandons real work/i);
+  assert.match(prompt, /ends the execution stage/i);
   assert.doesNotMatch(prompt, /This is not an issue file/);
   assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}/);
   assert.match(prompt, /complete exactly one AFK issue/i);

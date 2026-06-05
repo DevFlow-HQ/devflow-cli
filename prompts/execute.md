@@ -31,8 +31,10 @@ Behavior:
 - Before the marker, state a brief summary of the changes made and functionality added in this session in the reply only. Do not write that summary as a new artifact.
 
 Completion:
-- If you completed one AFK issue, moved it to `issues/done/`, and committed when permitted, reply with the brief summary followed by this iteration marker:
+- Iteration-complete marker: if you completed one AFK issue, moved it to `issues/done/`, and committed when permitted, reply with the brief summary followed by this marker. Emit it when the selected AFK issue is complete. Do not emit it early.
 {{ITERATION_MARKER}}
-- If there are no AFK issues that can be completed without human input, reply with this terminal marker:
+- Terminal no-more-tasks marker: emit this marker only after confirming from the supplied open issue files that no AFK issue remains unworked.
 {{TERMINAL_MARKER}}
+- Being blocked on one issue, tired, or unsure is not grounds for the terminal no-more-tasks marker.
+- Premature terminal emission silently abandons real work and ends the execution stage.
 - Emit exactly one of those markers.
