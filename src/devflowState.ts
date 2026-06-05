@@ -750,6 +750,52 @@ function formatRecentCommitsForManualFlow(output: string): string {
     .join("\n---\n");
 }
 
+function removeDevFlowGitIgnoreEntries(content: string): string {
+  return content
+    .split(/(\r\n|\r|\n)/)
+    .reduce(
+      (accumulator, segment, index, segments) => {
+        if (index % 2 === 1) {
+          if (!accumulator.skipNextSeparator) {
+            accumulator.content += segment;
+          }
+          accumulator.skipNextSeparator = false;
+          return accumulator;
+        }
+
+        const isDevFlowEntry =
+          segment.trim() === ".devflow" || segment.trim() === ".devflow/";
+
+        if (isDevFlowEntry) {
+          accumulator.skipNextSeparator = segments[index + 1] !== undefined;
+          return accumulator;
+        }
+
+        accumulator.content += segment;
+        return accumulator;
+      },
+      { content: "", skipNextSeparator: false },
+    ).content;
+}
+
+async function isOnlyDevFlowGitIgnoreAppend(
+  projectRoot: string,
+): Promise<boolean> {
+  const gitIgnorePath = join(projectRoot, ".gitignore");
+  const currentContent = await fs.readFile(gitIgnorePath, "utf8");
+  const headContent = await runGit(projectRoot, ["show", "HEAD:.gitignore"]);
+
+  return removeDevFlowGitIgnoreEntries(currentContent) === `${headContent}\n`;
+}
+
+async function isDevFlowOnlyUntrackedGitIgnore(
+  projectRoot: string,
+): Promise<boolean> {
+  const currentContent = await fs.readFile(join(projectRoot, ".gitignore"), "utf8");
+
+  return removeDevFlowGitIgnoreEntries(currentContent).trim().length === 0;
+}
+
 async function mapWithConcurrency<Input, Output>(
   inputs: Input[],
   concurrency: number,
@@ -848,21 +894,46 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
       const unstaged = parseGitNameStatus(
         await runGit(projectRoot, ["diff", "--name-status", "-z"]),
       );
-      const unstagedDiff = await runGitBuffer(projectRoot, [
-        "diff",
-        "--binary",
-      ]);
+      const hasOnlyDevFlowGitIgnoreAppend =
+        unstaged.some(
+          (changedPath) =>
+            changedPath.path === ".gitignore" && changedPath.status === "modified",
+        ) && (await isOnlyDevFlowGitIgnoreAppend(projectRoot));
+      const relevantUnstaged = hasOnlyDevFlowGitIgnoreAppend
+        ? unstaged.filter((changedPath) => changedPath.path !== ".gitignore")
+        : unstaged;
+      const unstagedDiff =
+        relevantUnstaged.length === 0
+          ? Buffer.alloc(0)
+          : await runGitBuffer(
+              projectRoot,
+              hasOnlyDevFlowGitIgnoreAppend
+                ? ["diff", "--binary", "--", ".", ":(exclude).gitignore"]
+                : ["diff", "--binary"],
+            );
       const untrackedOutput = await runGit(projectRoot, [
         "ls-files",
         "--others",
         "--exclude-standard",
         "-z",
       ]);
-      const untrackedPaths = untrackedOutput
-        .split("\0")
-        .filter((path) => path.length > 0)
-        .map(normalizeGitPath)
-        .filter((path) => isRelevantChangedPath({ path, status: "untracked" }));
+      const untrackedPaths = (
+        await mapWithConcurrency(
+          untrackedOutput
+            .split("\0")
+            .filter((path) => path.length > 0)
+            .map(normalizeGitPath)
+            .filter((path) =>
+              isRelevantChangedPath({ path, status: "untracked" }),
+            ),
+          8,
+          async (path) =>
+            path === ".gitignore" &&
+            (await isDevFlowOnlyUntrackedGitIgnore(projectRoot))
+              ? undefined
+              : path,
+        )
+      ).filter((path): path is string => path !== undefined);
       const untracked = await mapWithConcurrency(
         untrackedPaths,
         8,
@@ -879,7 +950,13 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
         },
       );
 
-      return { staged, stagedDiff, unstaged, unstagedDiff, untracked };
+      return {
+        staged,
+        stagedDiff,
+        unstaged: relevantUnstaged,
+        unstagedDiff,
+        untracked,
+      };
     },
   };
 }
@@ -1026,12 +1103,50 @@ async function loadConfig(projectRoot: string): Promise<DevFlowConfig | undefine
   return result.data;
 }
 
-async function saveConfig(projectRoot: string, config: DevFlowConfig): Promise<void> {
+async function saveConfig(
+  projectRoot: string,
+  config: DevFlowConfig,
+  gitProbe: GitProjectContextProbe,
+): Promise<void> {
   const configPath = getConfigPath(projectRoot);
-  const stateDirectory = join(projectRoot, DEVFLOW_STATE_DIRECTORY);
 
-  await fs.ensureDir(stateDirectory);
+  await ensureStateDirectory(projectRoot, gitProbe);
   await fs.writeJson(configPath, config, { spaces: 2 });
+}
+
+async function ensureGitIgnoreExcludesDevFlowState(
+  projectRoot: string,
+  gitProbe: GitProjectContextProbe,
+): Promise<void> {
+  if (!(await gitProbe.isRepository(projectRoot))) {
+    return;
+  }
+
+  const gitIgnorePath = join(projectRoot, ".gitignore");
+  const gitIgnoreExists = await fs.pathExists(gitIgnorePath);
+  const content = gitIgnoreExists
+    ? await fs.readFile(gitIgnorePath, "utf8")
+    : "";
+  const hasDevFlowEntry = content
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.trim())
+    .some((line) => line === ".devflow" || line === ".devflow/");
+
+  if (hasDevFlowEntry) {
+    return;
+  }
+
+  const separator = content.length === 0 || content.endsWith("\n") ? "" : "\n";
+
+  await fs.outputFile(gitIgnorePath, `${content}${separator}.devflow/\n`);
+}
+
+async function ensureStateDirectory(
+  projectRoot: string,
+  gitProbe: GitProjectContextProbe,
+): Promise<void> {
+  await fs.ensureDir(join(projectRoot, DEVFLOW_STATE_DIRECTORY));
+  await ensureGitIgnoreExcludesDevFlowState(projectRoot, gitProbe);
 }
 
 async function readProjectContext(
@@ -1145,7 +1260,10 @@ async function writeProjectContext(
 ): Promise<void> {
   const projectContextPath = getProjectContextPath(projectRoot);
   const projectContextMetadataPath = getProjectContextMetadataPath(projectRoot);
-  const stateDirectory = join(projectRoot, DEVFLOW_STATE_DIRECTORY);
+
+  validateProjectContextContent(content);
+  await ensureStateDirectory(projectRoot, gitProbe);
+
   const metadata =
     metadataOrOptions === undefined
       ? undefined
@@ -1162,8 +1280,6 @@ async function writeProjectContext(
       ? undefined
       : validateProjectContextMetadata(projectContextMetadataPath, metadata);
 
-  validateProjectContextContent(content);
-  await fs.ensureDir(stateDirectory);
   await fs.writeFile(projectContextPath, content, "utf8");
 
   if (validatedMetadata !== undefined) {
@@ -1525,6 +1641,7 @@ async function writeProviderSessionState(
 async function createRun(
   projectRoot: string,
   clock: DevFlowClock,
+  gitProbe: GitProjectContextProbe,
 ): Promise<DevFlowRunHandle> {
   const runId = createOpaqueRunId();
   assertValidRunId(runId);
@@ -1539,6 +1656,7 @@ async function createRun(
     runId,
   );
 
+  await ensureStateDirectory(projectRoot, gitProbe);
   await fs.ensureDir(runDirectory);
   await fs.writeJson(
     runMetadataPath,
@@ -1736,7 +1854,7 @@ export function createDevFlowState(
     },
     config: {
       load: () => loadConfig(options.projectRoot),
-      save: (config) => saveConfig(options.projectRoot, config),
+      save: (config) => saveConfig(options.projectRoot, config, gitProbe),
     },
     projectContext: {
       read: () => readProjectContext(options.projectRoot),
@@ -1756,7 +1874,7 @@ export function createDevFlowState(
       getCurrentHead: () => gitProbe.getCurrentHead(options.projectRoot),
       getRecentCommits: () => gitProbe.getRecentCommits(options.projectRoot),
     },
-    createRun: () => createRun(options.projectRoot, clock),
+    createRun: () => createRun(options.projectRoot, clock, gitProbe),
   };
 }
 

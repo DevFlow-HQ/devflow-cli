@@ -658,6 +658,8 @@ test("project context freshness treats stored git head as a baseline when no rel
     refreshReason: "manual",
   });
 
+  calls.length = 0;
+
   assert.equal((await state.projectContext.checkFreshness()).status, "fresh");
   assert.deepEqual(calls, [
     "isRepository",

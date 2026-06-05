@@ -205,6 +205,44 @@ test("default git probe ignores untracked files excluded by git ignore rules", a
   });
 });
 
+test("devflow state writes append the state directory to a git repository gitignore", async () => {
+  const { projectRoot } = await createGitProject();
+  const state = createDevFlowState({ projectRoot });
+
+  await fs.outputFile(join(projectRoot, ".gitignore"), "dist/\n.env\n");
+
+  await state.config.save({ defaultProvider: "claude" });
+
+  assert.equal(
+    await fs.readFile(join(projectRoot, ".gitignore"), "utf8"),
+    "dist/\n.env\n.devflow/\n",
+  );
+});
+
+test("devflow state writes do not duplicate an existing gitignore state entry", async () => {
+  const { projectRoot } = await createGitProject();
+  const state = createDevFlowState({ projectRoot });
+
+  await fs.outputFile(join(projectRoot, ".gitignore"), "dist/\n.devflow/\n");
+
+  await state.config.save({ defaultProvider: "claude" });
+  await state.config.save({ defaultProvider: "codex" });
+
+  assert.equal(
+    await fs.readFile(join(projectRoot, ".gitignore"), "utf8"),
+    "dist/\n.devflow/\n",
+  );
+});
+
+test("devflow state writes do not create a gitignore outside git repositories", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-non-git-state-"));
+  const state = createDevFlowState({ projectRoot });
+
+  await state.config.save({ defaultProvider: "claude" });
+
+  assert.equal(await fs.pathExists(join(projectRoot, ".gitignore")), false);
+});
+
 test("default git probe filters agent-owned untracked files before reading content", async (t) => {
   const { projectRoot } = await createGitProject();
   const agentUntrackedPath = join(projectRoot, ".agent", "large-state.bin");
