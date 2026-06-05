@@ -624,9 +624,25 @@ async function readIntentArtifact(artifactPath: string): Promise<IntentArtifact>
 
 async function startStage(
   stage: PipelineStage,
+  run: DevFlowRunHandle,
   options: RunExecutionRequestOptions,
 ): Promise<void> {
+  options.logger?.info("stage started", {
+    runId: run.id,
+    stage,
+  });
   await options.onStageStart?.(stage);
+}
+
+function completeStage(
+  stage: PipelineStage,
+  run: DevFlowRunHandle,
+  options: RunExecutionRequestOptions,
+): void {
+  options.logger?.info("stage completed", {
+    runId: run.id,
+    stage,
+  });
 }
 
 export function isRetryableProviderBackedStageFailure(error: unknown): boolean {
@@ -1601,6 +1617,7 @@ async function runExecuteStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   onExecutionIteration?: RunExecutionRequestOptions["onExecutionIteration"];
 }): Promise<void> {
   const initialIssueFilenames = await listExecutionIssueFilenames(
@@ -1670,6 +1687,11 @@ async function runExecuteStage(options: {
     let finalAssistantMessage: string | undefined;
 
     try {
+      options.logger?.info("execution iteration", {
+        runId: options.run.id,
+        stage: "execute",
+        context: { iteration },
+      });
       await options.onExecutionIteration?.({ iteration });
       result = await runManagedSessionWithProviderState({
         run: options.run,
@@ -2040,6 +2062,10 @@ export async function runExecutionRequest(
   const adapter = createManagedSessionAdapter(providerId);
   const run = await devFlowState.createRun();
 
+  options.logger?.info("run created", {
+    runId: run.id,
+  });
+
   await options.onRunCreated?.({
     id: run.id,
     paths: {
@@ -2050,7 +2076,7 @@ export async function runExecutionRequest(
     },
   });
 
-  await startStage("intent", options);
+  await startStage("intent", run, options);
   const intent = await runProviderBackedStageWithRetry({
     stage: "intent",
     providerId,
@@ -2072,8 +2098,9 @@ export async function runExecutionRequest(
     },
   });
   const parsedIntent = await parseStageIntentArtifact(run.paths.intentArtifact);
+  completeStage("intent", run, options);
 
-  await startStage("bootstrap", options);
+  await startStage("bootstrap", run, options);
   const bootstrapProvenance = await runProviderBackedStageWithRetry({
     stage: "bootstrap",
     providerId,
@@ -2085,30 +2112,40 @@ export async function runExecutionRequest(
       await fs.remove(run.paths.projectContextCandidate);
     },
   });
+  completeStage("bootstrap", run, options);
 
-  await startStage("grill", options);
+  await startStage("grill", run, options);
   await runGrillStageWithRetry({
     request,
     run,
     adapter,
     parsedIntent,
-    onPrdStageStart: () => startStage("prd", options),
+    onPrdStageStart: () => startStage("prd", run, options),
   });
+  completeStage("prd", run, options);
+  completeStage("grill", run, options);
 
-  await startStage("issues", options);
+  await startStage("issues", run, options);
   await runIssuesStageWithRetry({
     request,
     run,
     adapter,
   });
+  completeStage("issues", run, options);
 
-  await startStage("execute", options);
+  await startStage("execute", run, options);
   await runExecuteStage({
     devFlowState,
     request,
     run,
     adapter,
+    logger: options.logger,
     onExecutionIteration: options.onExecutionIteration,
+  });
+  completeStage("execute", run, options);
+
+  options.logger?.info("run summary written", {
+    runId: run.id,
   });
 
   return { intent, parsedIntent, bootstrapProvenance };

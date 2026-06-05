@@ -42,6 +42,7 @@ import {
   validateIssueArtifacts,
   type PipelineStage,
 } from "../src/orchestrator.js";
+import type { LogContext, Logger } from "../src/logger.js";
 
 test("pipeline stages end at execute without a validate placeholder", () => {
   assert.deepEqual(PIPELINE_STAGES, [
@@ -117,6 +118,37 @@ function createPtyProviderEvent(
     source: "pty",
     structured: false,
   } as ManagedProviderSessionEvent;
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context?: LogContext;
+    ref?: string;
+  }> = [];
+
+  const logger: Logger = {
+    debug(msg, context) {
+      entries.push({ level: "debug", msg, context });
+    },
+    info(msg, context) {
+      entries.push({ level: "info", msg, context });
+    },
+    warn(msg, context) {
+      entries.push({ level: "warn", msg, context });
+    },
+    error(msg, context) {
+      entries.push({ level: "error", msg, context });
+    },
+    critical(msg, context) {
+      const ref = "err_captured";
+      entries.push({ level: "critical", msg, context, ref });
+      return ref;
+    },
+  };
+
+  return { entries, logger };
 }
 
 function extractPrdArtifactPath(prompt: string): string {
@@ -936,6 +968,103 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
         remainingIssueFilenames: [],
       },
     },
+  );
+});
+
+test("orchestrator logs run and stage lifecycle entries at info", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  await devFlowState.projectContext.write("# Project context\n", {
+    refreshReason: "manual",
+  });
+  const { entries, logger } = createCapturingLogger();
+
+  const adapter: ManagedSessionAdapter = {
+    provider: getBuiltInProviderIdentity("codex"),
+    async detect() {
+      return { isAvailable: true, executable: "codex" };
+    },
+    async runSession(input) {
+      if (isIssuesSessionInput(input)) {
+        return completeIssuesSession(input);
+      }
+
+      if (isExecuteSessionInput(input)) {
+        return completeExecuteSession(input);
+      }
+
+      if (isGrillSessionInput(input)) {
+        return completeGrillSession(input);
+      }
+
+      await fs.outputJson(
+        join(
+          projectRoot,
+          ".devflow",
+          "runs",
+          (await listRunDirectories(projectRoot))[0],
+          "intent.json",
+        ),
+        {
+          classification: "feature",
+          summary: "Resume the current workstream.",
+          rawTask: "resume work",
+          needsClarification: false,
+        },
+        { spaces: 2 },
+      );
+      await input.validate();
+      return { repairUsed: false, exitCode: 0, signal: null };
+    },
+  };
+
+  await runExecutionRequest(
+    {
+      projectRoot,
+      rawTask: "resume work",
+      providerId: "codex",
+    },
+    {
+      devFlowState,
+      logger,
+      createManagedSessionAdapter() {
+        return adapter;
+      },
+    },
+  );
+
+  const [runId] = await listRunDirectories(projectRoot);
+  assert.deepEqual(
+    entries.map((entry) => ({
+      level: entry.level,
+      msg: entry.msg,
+      runId: entry.context?.runId,
+      stage: entry.context?.stage,
+      context: entry.context?.context,
+    })),
+    [
+      { level: "info", msg: "run created", runId, stage: undefined, context: undefined },
+      { level: "info", msg: "stage started", runId, stage: "intent", context: undefined },
+      { level: "info", msg: "stage completed", runId, stage: "intent", context: undefined },
+      { level: "info", msg: "stage started", runId, stage: "bootstrap", context: undefined },
+      { level: "info", msg: "stage completed", runId, stage: "bootstrap", context: undefined },
+      { level: "info", msg: "stage started", runId, stage: "grill", context: undefined },
+      { level: "info", msg: "stage started", runId, stage: "prd", context: undefined },
+      { level: "info", msg: "stage completed", runId, stage: "prd", context: undefined },
+      { level: "info", msg: "stage completed", runId, stage: "grill", context: undefined },
+      { level: "info", msg: "stage started", runId, stage: "issues", context: undefined },
+      { level: "info", msg: "stage completed", runId, stage: "issues", context: undefined },
+      { level: "info", msg: "stage started", runId, stage: "execute", context: undefined },
+      {
+        level: "info",
+        msg: "execution iteration",
+        runId,
+        stage: "execute",
+        context: { iteration: 1 },
+      },
+      { level: "info", msg: "stage completed", runId, stage: "execute", context: undefined },
+      { level: "info", msg: "run summary written", runId, stage: undefined, context: undefined },
+    ],
   );
 });
 
