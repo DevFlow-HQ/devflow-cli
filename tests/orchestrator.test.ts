@@ -36,6 +36,7 @@ import {
   isRetryableProviderBackedStageFailure,
   renderBootstrapProjectContextPrompt,
   renderExecutePrompt,
+  renderGrillPrompt,
   renderIntentPrompt,
   renderIssuesPrompt,
   renderPrdPrompt,
@@ -527,6 +528,33 @@ test("non-specialized stage prompts render critical completion marker guidance",
     );
     assert.match(prompt, new RegExp(escapeRegExp(marker)), promptName);
   }
+});
+
+test("renderGrillPrompt requires marker-free conclusion approval before marker-only completion", async () => {
+  const prompt = await renderGrillPrompt({
+    rawTask: "Build a workflow planner.",
+    intentArtifact: {
+      classification: "feature",
+      summary: "Build a workflow planner.",
+      rawTask: "Build a workflow planner.",
+      needsClarification: true,
+    },
+    intentArtifactPath: "/tmp/run/intent.json",
+    projectContextPath: "/tmp/.devflow/project-context.md",
+    completionMarker: "DEVFLOW_GRILL_COMPLETE_test",
+  });
+
+  assert.equal(prompt.includes("DEVFLOW_GRILL_COMPLETE_test"), true);
+  assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}/);
+  assert.match(prompt, /before concluding/i);
+  assert.match(prompt, /remaining questions or concerns/i);
+  assert.match(prompt, /must not contain the completion marker/i);
+  assert.match(prompt, /only after explicit user approval to conclude/i);
+  assert.match(prompt, /next turn .*only .*completion marker/i);
+  assert.match(prompt, /raised concern .*continue/i);
+  assert.match(prompt, /ask the conclusion question again/i);
+  assert.match(prompt, /Example conclusion question:/i);
+  assert.doesNotMatch(prompt, /session will exit/i);
 });
 
 test("renderExecutePrompt injects manual-flow issue and commit context with artifact path references", async () => {

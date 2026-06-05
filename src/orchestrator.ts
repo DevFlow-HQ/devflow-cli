@@ -322,7 +322,7 @@ export async function renderBootstrapProjectContextPrompt(options: {
     );
 }
 
-async function renderGrillPrompt(options: {
+export async function renderGrillPrompt(options: {
   rawTask: string;
   intentArtifact: IntentArtifact;
   intentArtifactPath: string;
