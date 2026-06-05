@@ -151,6 +151,21 @@ function createCapturingLogger() {
   return { entries, logger };
 }
 
+function warningLogSummaries(
+  entries: ReturnType<typeof createCapturingLogger>["entries"],
+  messages?: string[],
+) {
+  return entries
+    .filter((entry) => entry.level === "warn")
+    .filter((entry) => messages === undefined || messages.includes(entry.msg))
+    .map((entry) => ({
+      msg: entry.msg,
+      runId: entry.context?.runId,
+      stage: entry.context?.stage,
+      context: entry.context?.context,
+    }));
+}
+
 function extractPrdArtifactPath(prompt: string): string {
   const match = prompt.match(/Canonical PRD artifact path:\n([^\n]+)/);
 
@@ -1822,6 +1837,7 @@ test("orchestrator retries a retryable intent provider-session failure inside th
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
+  const { entries, logger } = createCapturingLogger();
   const stages: PipelineStage[] = [];
   const artifactPaths: string[] = [];
   const initialCompletionMarkers: string[] = [];
@@ -1906,6 +1922,7 @@ test("orchestrator retries a retryable intent provider-session failure inside th
     },
     {
       devFlowState,
+      logger,
       createManagedSessionAdapter() {
         return adapter;
       },
@@ -1932,6 +1949,21 @@ test("orchestrator retries a retryable intent provider-session failure inside th
     rawTask: "resume work",
     needsClarification: false,
   });
+  const [runId] = await listRunDirectories(projectRoot);
+  assert.deepEqual(warningLogSummaries(entries, ["provider-backed stage retry"]), [
+    {
+      msg: "provider-backed stage retry",
+      runId,
+      stage: "intent",
+      context: {
+        attempt: 1,
+        nextAttempt: 2,
+        totalAttempts: 2,
+        providerId: "codex",
+        reason: "IncompleteProviderSessionError",
+      },
+    },
+  ]);
 });
 
 test("orchestrator retries intent after failed in-session repair and accepts a valid retry repair", async () => {
@@ -3410,6 +3442,7 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
+  const { entries, logger } = createCapturingLogger();
   const provider = getBuiltInProviderIdentity("codex");
   const runSessionInputs: ManagedProviderSessionInput[] = [];
   const resumeSessionInputs: ManagedProviderSessionResumeInput[] = [];
@@ -3508,6 +3541,7 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
     },
     {
       devFlowState,
+      logger,
       createManagedSessionAdapter() {
         return adapter;
       },
@@ -3527,6 +3561,37 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
     /Resolved/,
   );
   assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+  assert.deepEqual(
+    warningLogSummaries(entries, [
+      "provider-backed stage retry",
+      "provider session recovered",
+    ]),
+    [
+      {
+        msg: "provider-backed stage retry",
+        runId: (await listRunDirectories(projectRoot))[0],
+        stage: "grill",
+        context: {
+          attempt: 1,
+          nextAttempt: 2,
+          totalAttempts: 2,
+          providerId: "codex",
+          reason: "IncompleteProviderSessionError",
+        },
+      },
+      {
+        msg: "provider session recovered",
+        runId: (await listRunDirectories(projectRoot))[0],
+        stage: "grill",
+        context: {
+          providerId: "codex",
+          providerSessionId: "codex-grill-session-1",
+          phase: "grill",
+          attempt: 2,
+        },
+      },
+    ],
+  );
 });
 
 test("failed grill resume falls back once to a fresh partial-transcript grill attempt", async () => {
@@ -4768,6 +4833,7 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
+  const { entries, logger } = createCapturingLogger();
   const provider = getBuiltInProviderIdentity("codex");
   const stages: PipelineStage[] = [];
   let grillCallCount = 0;
@@ -4830,6 +4896,7 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
     },
     {
       devFlowState,
+      logger,
       createManagedSessionAdapter() {
         return adapter;
       },
@@ -4874,6 +4941,17 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
       prdArtifactPath: join(runDirectory, "prd.md"),
     },
   );
+  assert.deepEqual(warningLogSummaries(entries, ["artifact fallback recovery"]), [
+    {
+      msg: "artifact fallback recovery",
+      runId: (await listRunDirectories(projectRoot))[0],
+      stage: "grill",
+      context: {
+        artifact: "grill-checkpoint",
+        recovery: "recreated-from-completed-transcript",
+      },
+    },
+  ]);
 });
 
 test("orchestrator replaces a corrupt checkpoint from a completed grill transcript without repeating grill", async () => {
@@ -5639,6 +5717,7 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
+  const { entries, logger } = createCapturingLogger();
   const provider = getBuiltInProviderIdentity("codex");
   let prdOnlyCallCount = 0;
   let resumeCallCount = 0;
@@ -5720,6 +5799,7 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
     },
     {
       devFlowState,
+      logger,
       createManagedSessionAdapter() {
         return adapter;
       },
@@ -5735,6 +5815,19 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
     (await listRunDirectories(projectRoot))[0],
   );
   assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD fallback\n");
+  assert.deepEqual(
+    warningLogSummaries(entries, ["provider session metadata ignored"]),
+    [
+      {
+        msg: "provider session metadata ignored",
+        runId: (await listRunDirectories(projectRoot))[0],
+        stage: "prd",
+        context: {
+          reason: "InvalidProviderSessionStateError",
+        },
+      },
+    ],
+  );
 });
 
 test("completed grill checkpoint overrides stale active grill provider state during recovery", async () => {
@@ -6032,6 +6125,7 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const existingContext = "# Project context\n\nKeep this exact text.\n";
   await baseDevFlowState.projectContext.write(existingContext);
+  const { entries, logger } = createCapturingLogger();
   const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
   const stages: PipelineStage[] = [];
   const projectContextWrites: Array<{
@@ -6103,6 +6197,7 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
     },
     {
       devFlowState,
+      logger,
       createManagedSessionAdapter() {
         return adapter;
       },
@@ -6133,6 +6228,19 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
     "issues",
     "execute",
   ]);
+  assert.deepEqual(
+    warningLogSummaries(entries, ["project context metadata repaired"]),
+    [
+      {
+        msg: "project context metadata repaired",
+        runId: (await listRunDirectories(projectRoot))[0],
+        stage: "bootstrap",
+        context: {
+          refreshReason: "missing-metadata",
+        },
+      },
+    ],
+  );
 });
 
 test("orchestrator repairs invalid project-context metadata during bootstrap without provider work", async () => {
@@ -6398,6 +6506,7 @@ test("orchestrator refreshes semantically stale project context through the mana
       join(tmpdir(), `devflow-orchestrator-${refreshReason}-`),
     );
     const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
+    const { entries, logger } = createCapturingLogger();
     const priorContext = "# Project Context\n\nExisting orientation.\n";
     await baseDevFlowState.projectContext.write(priorContext, {
       refreshReason: "manual",
@@ -6546,6 +6655,7 @@ test("orchestrator refreshes semantically stale project context through the mana
       },
       {
         devFlowState,
+        logger,
         createManagedSessionAdapter() {
           return adapter;
         },
@@ -6566,6 +6676,17 @@ test("orchestrator refreshes semantically stale project context through the mana
       (await baseDevFlowState.projectContext.readMetadata())?.refreshReason,
       refreshReason,
     );
+    assert.deepEqual(warningLogSummaries(entries), [
+      {
+        msg: "stale project context refresh",
+        runId: (await listRunDirectories(projectRoot))[0],
+        stage: "bootstrap",
+        context: {
+          refreshReason,
+          changedPathCount: refreshReason === "relevant-changes" ? 3 : 0,
+        },
+      },
+    ]);
   }
 });
 
@@ -7113,6 +7234,7 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
+  const { entries, logger } = createCapturingLogger();
   let repairedCompletion: { repairUsed: boolean } | undefined;
   const repairPrompts: string[] = [];
   const validationFailures: Error[] = [];
@@ -7191,6 +7313,7 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
     },
     {
       devFlowState,
+      logger,
       createManagedSessionAdapter() {
         return adapter;
       },
@@ -7200,6 +7323,18 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
   assert.equal(validationFailures.length, 1);
   assert.equal(repairPrompts.length, 1);
   assert.deepEqual(repairedCompletion, { repairUsed: true });
+  const [runId] = await listRunDirectories(projectRoot);
+  assert.deepEqual(warningLogSummaries(entries, ["in-session repair used"]), [
+    {
+      msg: "in-session repair used",
+      runId,
+      stage: "intent",
+      context: {
+        phase: "intent",
+        attempt: 1,
+      },
+    },
+  ]);
 });
 
 test("orchestrator preserves the final failed repair validation error as the retry-exhausted cause", async () => {

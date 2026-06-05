@@ -664,8 +664,10 @@ export function isRetryableProviderBackedStageFailure(error: unknown): boolean {
 
 export async function runProviderBackedStageWithRetry<T>(options: {
   stage: PipelineStage;
+  runId?: string;
   providerId?: string;
   totalAttempts: number;
+  logger?: Logger;
   runAttempt(attempt: number): Promise<T>;
   cleanupBeforeRetry(): Promise<void>;
 }): Promise<T> {
@@ -691,6 +693,17 @@ export async function runProviderBackedStageWithRetry<T>(options: {
       }
 
       await options.cleanupBeforeRetry();
+      options.logger?.warn("provider-backed stage retry", {
+        runId: options.runId,
+        stage: options.stage,
+        context: {
+          attempt,
+          nextAttempt: attempt + 1,
+          totalAttempts: options.totalAttempts,
+          providerId: options.providerId,
+          reason: error instanceof Error ? error.name : "Error",
+        },
+      });
     }
   }
 
@@ -701,6 +714,7 @@ async function runIntentStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   attempt: number;
 }): Promise<ManagedProviderSessionResult> {
   const completionMarker = createCompletionMarker();
@@ -716,6 +730,8 @@ async function runIntentStage(options: {
   return runManagedSessionWithProviderState({
     run: options.run,
     adapter: options.adapter,
+    logger: options.logger,
+    stage: "intent",
     input: {
       workingDirectory: options.request.projectRoot,
       initialPrompt: prompt,
@@ -916,6 +932,7 @@ async function runBootstrapStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   attempt: number;
 }): Promise<BootstrapProvenance> {
   const freshness = await options.devFlowState.projectContext.checkFreshness();
@@ -932,10 +949,27 @@ async function runBootstrapStage(options: {
     await options.devFlowState.projectContext.write(freshness.context, {
       refreshReason: freshness.refreshReason,
     });
+    options.logger?.warn("project context metadata repaired", {
+      runId: options.run.id,
+      stage: "bootstrap",
+      context: {
+        refreshReason: freshness.refreshReason,
+      },
+    });
     return "metadata-updated";
   }
 
   if (requiresProviderBackedProjectContextRefresh(freshness)) {
+    if (freshness.refreshReason !== "missing-context") {
+      options.logger?.warn("stale project context refresh", {
+        runId: options.run.id,
+        stage: "bootstrap",
+        context: {
+          refreshReason: freshness.refreshReason,
+          changedPathCount: freshness.changedPaths?.length ?? 0,
+        },
+      });
+    }
     const completionMarker = createCompletionMarker(
       "DEVFLOW_BOOTSTRAP_PROJECT_CONTEXT_COMPLETE",
     );
@@ -953,6 +987,8 @@ async function runBootstrapStage(options: {
     await runManagedSessionWithProviderState({
       run: options.run,
       adapter: options.adapter,
+      logger: options.logger,
+      stage: "bootstrap",
       input: {
         workingDirectory: options.request.projectRoot,
         initialPrompt: prompt,
@@ -1106,11 +1142,13 @@ async function persistProviderSessionStateFromEvent(options: {
 async function runManagedSessionWithProviderState(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
+  stage: PipelineStage;
   input: ManagedProviderSessionInput;
 }): Promise<ManagedProviderSessionResult> {
   const existingOnProviderEvent = options.input.onProviderEvent;
 
-  return options.adapter.runSession({
+  const result = await options.adapter.runSession({
     ...options.input,
     async onProviderEvent(event) {
       await persistProviderSessionStateFromEvent({
@@ -1122,6 +1160,19 @@ async function runManagedSessionWithProviderState(options: {
       await existingOnProviderEvent?.(event);
     },
   });
+
+  if (result.repairUsed) {
+    options.logger?.warn("in-session repair used", {
+      runId: options.run.id,
+      stage: options.stage,
+      context: {
+        phase: options.input.phase?.kind,
+        attempt: options.input.phase?.attempt,
+      },
+    });
+  }
+
+  return result;
 }
 
 async function resumeManagedSessionWithProviderState(options: {
@@ -1131,11 +1182,13 @@ async function resumeManagedSessionWithProviderState(options: {
       input: ManagedProviderSessionResumeInput,
     ): Promise<ManagedProviderSessionResult>;
   };
+  logger?: Logger;
+  stage: PipelineStage;
   input: ManagedProviderSessionResumeInput;
 }): Promise<ManagedProviderSessionResult> {
   const existingOnProviderEvent = options.input.onProviderEvent;
 
-  return options.adapter.resumeSession({
+  const result = await options.adapter.resumeSession({
     ...options.input,
     async onProviderEvent(event) {
       await persistProviderSessionStateFromEvent({
@@ -1147,6 +1200,30 @@ async function resumeManagedSessionWithProviderState(options: {
       await existingOnProviderEvent?.(event);
     },
   });
+
+  options.logger?.warn("provider session recovered", {
+    runId: options.run.id,
+    stage: options.stage,
+    context: {
+      providerId: options.adapter.provider.id,
+      providerSessionId: options.input.providerSessionId,
+      phase: options.input.phase?.kind,
+      attempt: options.input.phase?.attempt,
+    },
+  });
+
+  if (result.repairUsed) {
+    options.logger?.warn("in-session repair used", {
+      runId: options.run.id,
+      stage: options.stage,
+      context: {
+        phase: options.input.phase?.kind,
+        attempt: options.input.phase?.attempt,
+      },
+    });
+  }
+
+  return result;
 }
 
 function createPrdRepairConfig(options: {
@@ -1270,6 +1347,7 @@ async function runGrillStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   parsedIntent: IntentArtifact;
   attempt: number;
   onPrdStageStart: () => void | Promise<void>;
@@ -1391,6 +1469,8 @@ async function runGrillStage(options: {
       await resumeManagedSessionWithProviderState({
         run: options.run,
         adapter: options.adapter,
+        logger: options.logger,
+        stage: "grill",
         input: {
           ...input,
           providerSessionId: options.resumeProviderSessionId,
@@ -1403,6 +1483,15 @@ async function runGrillStage(options: {
         (await options.run.getGrillTranscriptStatus()) === "complete" &&
         (await hasValidPrdArtifact(options.run.paths.prdArtifact))
       ) {
+        options.logger?.warn("artifact fallback recovery", {
+          runId: options.run.id,
+          stage: "grill",
+          context: {
+            artifact: "grill-transcript",
+            recovery: "completed-grill-and-prd",
+            reason: error instanceof Error ? error.name : "Error",
+          },
+        });
         return;
       }
 
@@ -1414,6 +1503,8 @@ async function runGrillStage(options: {
     await runManagedSessionWithProviderState({
       run: options.run,
       adapter: options.adapter,
+      logger: options.logger,
+      stage: "grill",
       input,
     });
   } catch (error) {
@@ -1422,6 +1513,15 @@ async function runGrillStage(options: {
       (await options.run.getGrillTranscriptStatus()) === "complete" &&
       (await hasValidPrdArtifact(options.run.paths.prdArtifact))
     ) {
+      options.logger?.warn("artifact fallback recovery", {
+        runId: options.run.id,
+        stage: "grill",
+        context: {
+          artifact: "grill-transcript",
+          recovery: "completed-grill-and-prd",
+          reason: error instanceof Error ? error.name : "Error",
+        },
+      });
       return;
     }
 
@@ -1433,6 +1533,7 @@ async function runPrdStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   liveDiscussionAvailable: boolean;
   attempt: number;
   resumeProviderSessionId?: string;
@@ -1481,6 +1582,8 @@ async function runPrdStage(options: {
       await resumeManagedSessionWithProviderState({
         run: options.run,
         adapter: options.adapter,
+        logger: options.logger,
+        stage: "prd",
         input: {
           ...input,
           providerSessionId: options.resumeProviderSessionId,
@@ -1491,6 +1594,15 @@ async function runPrdStage(options: {
         isRetryableProviderBackedStageFailure(error) &&
         (await hasValidPrdArtifact(options.run.paths.prdArtifact))
       ) {
+        options.logger?.warn("artifact fallback recovery", {
+          runId: options.run.id,
+          stage: "prd",
+          context: {
+            artifact: "prd",
+            recovery: "valid-prd-after-provider-failure",
+            reason: error instanceof Error ? error.name : "Error",
+          },
+        });
         return;
       }
 
@@ -1501,6 +1613,8 @@ async function runPrdStage(options: {
       await runManagedSessionWithProviderState({
         run: options.run,
         adapter: options.adapter,
+        logger: options.logger,
+        stage: "prd",
         input,
       });
     } catch (error) {
@@ -1508,6 +1622,15 @@ async function runPrdStage(options: {
         isRetryableProviderBackedStageFailure(error) &&
         (await hasValidPrdArtifact(options.run.paths.prdArtifact))
       ) {
+        options.logger?.warn("artifact fallback recovery", {
+          runId: options.run.id,
+          stage: "prd",
+          context: {
+            artifact: "prd",
+            recovery: "valid-prd-after-provider-failure",
+            reason: error instanceof Error ? error.name : "Error",
+          },
+        });
         return;
       }
 
@@ -1522,6 +1645,7 @@ async function runPrdStageWithRetry(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   liveDiscussionAvailable: boolean;
   resumeProviderSessionId?: string;
 }): Promise<void> {
@@ -1529,8 +1653,10 @@ async function runPrdStageWithRetry(options: {
 
   await runProviderBackedStageWithRetry({
     stage: "prd",
+    runId: options.run.id,
     providerId: options.request.providerId,
     totalAttempts: PRD_STAGE_TOTAL_ATTEMPTS,
+    logger: options.logger,
     async runAttempt(attempt) {
       await runPrdStage({
         ...options,
@@ -1550,6 +1676,7 @@ async function runIssuesStage(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   attempt: number;
 }): Promise<void> {
   const completionMarker = createCompletionMarker("DEVFLOW_ISSUES_COMPLETE");
@@ -1564,6 +1691,8 @@ async function runIssuesStage(options: {
   await runManagedSessionWithProviderState({
     run: options.run,
     adapter: options.adapter,
+    logger: options.logger,
+    stage: "issues",
     input: {
       workingDirectory: options.request.projectRoot,
       initialPrompt: prompt,
@@ -1590,11 +1719,14 @@ async function runIssuesStageWithRetry(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
 }): Promise<void> {
   await runProviderBackedStageWithRetry({
     stage: "issues",
+    runId: options.run.id,
     providerId: options.request.providerId,
     totalAttempts: ISSUES_STAGE_TOTAL_ATTEMPTS,
+    logger: options.logger,
     async runAttempt(attempt) {
       await runIssuesStage({ ...options, attempt });
     },
@@ -1696,6 +1828,8 @@ async function runExecuteStage(options: {
       result = await runManagedSessionWithProviderState({
         run: options.run,
         adapter: options.adapter,
+        logger: options.logger,
+        stage: "execute",
         input: {
           workingDirectory: options.request.projectRoot,
           initialPrompt: prompt,
@@ -1801,6 +1935,7 @@ async function appendGrillFailureNoteBestEffort(
 async function recoverCompletedGrillCheckpointIfNeeded(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
+  logger?: Logger;
 }): Promise<boolean> {
   if ((await options.run.getGrillTranscriptStatus()) !== "complete") {
     return false;
@@ -1821,16 +1956,33 @@ async function recoverCompletedGrillCheckpointIfNeeded(options: {
       run: options.run,
     }),
   );
+  options.logger?.warn("artifact fallback recovery", {
+    runId: options.run.id,
+    stage: "grill",
+    context: {
+      artifact: "grill-checkpoint",
+      recovery: "recreated-from-completed-transcript",
+    },
+  });
   return true;
 }
 
 async function readAdvisoryProviderSessionState(
   run: DevFlowRunHandle,
+  logger?: Logger,
+  stage?: PipelineStage,
 ): Promise<DevFlowProviderSessionState | undefined> {
   try {
     return await run.readProviderSessionState();
   } catch (error) {
     if (error instanceof InvalidProviderSessionStateError) {
+      logger?.warn("provider session metadata ignored", {
+        runId: run.id,
+        stage,
+        context: {
+          reason: error.name,
+        },
+      });
       return undefined;
     }
 
@@ -1841,12 +1993,17 @@ async function readAdvisoryProviderSessionState(
 async function readResumableGrillProviderSessionId(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
 }): Promise<string | undefined> {
   if (!canResumeManagedProviderSession(options.adapter)) {
     return undefined;
   }
 
-  const state = await readAdvisoryProviderSessionState(options.run);
+  const state = await readAdvisoryProviderSessionState(
+    options.run,
+    options.logger,
+    "grill",
+  );
 
   if (
     state?.providerSessionId === undefined ||
@@ -1863,12 +2020,17 @@ async function readResumableGrillProviderSessionId(options: {
 async function readResumablePrdProviderSessionId(options: {
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
 }): Promise<string | undefined> {
   if (!canResumeManagedProviderSession(options.adapter)) {
     return undefined;
   }
 
-  const state = await readAdvisoryProviderSessionState(options.run);
+  const state = await readAdvisoryProviderSessionState(
+    options.run,
+    options.logger,
+    "prd",
+  );
 
   if (
     state?.providerSessionId === undefined ||
@@ -1894,6 +2056,7 @@ async function runPrdRecoveryAfterCompletedGrill(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   onPrdStageStart: () => void | Promise<void>;
 }): Promise<void> {
   await options.onPrdStageStart();
@@ -1901,10 +2064,12 @@ async function runPrdRecoveryAfterCompletedGrill(options: {
     request: options.request,
     run: options.run,
     adapter: options.adapter,
+    logger: options.logger,
     liveDiscussionAvailable: false,
     resumeProviderSessionId: await readResumablePrdProviderSessionId({
       run: options.run,
       adapter: options.adapter,
+      logger: options.logger,
     }),
   });
 }
@@ -1913,6 +2078,7 @@ async function runGrillStageWithRetry(options: {
   request: ResolvedExecutionRequest;
   run: DevFlowRunHandle;
   adapter: ManagedSessionAdapter;
+  logger?: Logger;
   parsedIntent: IntentArtifact;
   onPrdStageStart: () => void | Promise<void>;
 }): Promise<void> {
@@ -1923,6 +2089,7 @@ async function runGrillStageWithRetry(options: {
           await readResumableGrillProviderSessionId({
             run: options.run,
             adapter: options.adapter,
+            logger: options.logger,
           });
 
         if (resumeProviderSessionId !== undefined) {
@@ -1950,6 +2117,7 @@ async function runGrillStageWithRetry(options: {
                 request: options.request,
                 run: options.run,
                 adapter: options.adapter,
+                logger: options.logger,
                 liveDiscussionAvailable: false,
               });
               return;
@@ -1984,6 +2152,7 @@ async function runGrillStageWithRetry(options: {
         await recoverCompletedGrillCheckpointIfNeeded({
           request: options.request,
           run: options.run,
+          logger: options.logger,
         });
 
         if ((await options.run.getGrillTranscriptStatus()) !== "complete") {
@@ -2004,6 +2173,7 @@ async function runGrillStageWithRetry(options: {
         await recoverCompletedGrillCheckpointIfNeeded({
           request: options.request,
           run: options.run,
+          logger: options.logger,
         })
       ) {
         await options.onPrdStageStart();
@@ -2011,6 +2181,7 @@ async function runGrillStageWithRetry(options: {
           request: options.request,
           run: options.run,
           adapter: options.adapter,
+          logger: options.logger,
           liveDiscussionAvailable: false,
         });
         return;
@@ -2035,6 +2206,18 @@ async function runGrillStageWithRetry(options: {
           cause: error,
         });
       }
+
+      options.logger?.warn("provider-backed stage retry", {
+        runId: options.run.id,
+        stage: "grill",
+        context: {
+          attempt,
+          nextAttempt: attempt + 1,
+          totalAttempts: GRILL_STAGE_TOTAL_ATTEMPTS,
+          providerId: options.request.providerId,
+          reason: error instanceof Error ? error.name : "Error",
+        },
+      });
     }
   }
 
@@ -2079,13 +2262,16 @@ export async function runExecutionRequest(
   await startStage("intent", run, options);
   const intent = await runProviderBackedStageWithRetry({
     stage: "intent",
+    runId: run.id,
     providerId,
     totalAttempts: INTENT_STAGE_TOTAL_ATTEMPTS,
+    logger: options.logger,
     async runAttempt(attempt) {
       const result = await runIntentStage({
         request,
         run,
         adapter,
+        logger: options.logger,
         attempt,
       });
 
@@ -2103,10 +2289,19 @@ export async function runExecutionRequest(
   await startStage("bootstrap", run, options);
   const bootstrapProvenance = await runProviderBackedStageWithRetry({
     stage: "bootstrap",
+    runId: run.id,
     providerId,
     totalAttempts: BOOTSTRAP_STAGE_TOTAL_ATTEMPTS,
+    logger: options.logger,
     async runAttempt(attempt) {
-      return runBootstrapStage({ devFlowState, request, run, adapter, attempt });
+      return runBootstrapStage({
+        devFlowState,
+        request,
+        run,
+        adapter,
+        logger: options.logger,
+        attempt,
+      });
     },
     async cleanupBeforeRetry() {
       await fs.remove(run.paths.projectContextCandidate);
@@ -2119,6 +2314,7 @@ export async function runExecutionRequest(
     request,
     run,
     adapter,
+    logger: options.logger,
     parsedIntent,
     onPrdStageStart: () => startStage("prd", run, options),
   });
@@ -2130,6 +2326,7 @@ export async function runExecutionRequest(
     request,
     run,
     adapter,
+    logger: options.logger,
   });
   completeStage("issues", run, options);
 
