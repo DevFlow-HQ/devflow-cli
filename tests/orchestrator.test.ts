@@ -2678,6 +2678,10 @@ test("orchestrator repairs missing issue files inside the same issues managed se
         assert.match(repairPrompt, /Repair only the issue decomposition artifacts/);
         assert.match(repairPrompt, /Issues directory:\n.+\/issues/);
         assert.match(repairPrompt, /at least one non-empty markdown file/i);
+        assertCriticalCompletionMarkerGuidance(
+          repairPrompt,
+          input.repair.completionMarker,
+        );
         assert.match(
           repairPrompt,
           /Write at least one non-empty issue markdown file directly to the issues directory\./,
@@ -3624,8 +3628,15 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
       resumeSessionInputs.push(input);
       assert.equal(input.providerSessionId, "codex-grill-session-1");
       assert.match(input.initialPrompt, /Continue the interrupted grill/);
-      assert.match(input.initialPrompt, /Ask the next unresolved question one at a time/);
+      assert.match(
+        input.initialPrompt,
+        /Ask the next unresolved question one at a time/,
+      );
       assert.match(input.initialPrompt, /print only/);
+      assertCriticalCompletionMarkerGuidance(
+        input.initialPrompt,
+        input.initialCompletionMarker,
+      );
       assert.doesNotMatch(input.initialPrompt, /Partial grill transcript path/);
       assert.ok(input.onProviderEvent);
       await input.onProviderEvent(
@@ -5209,6 +5220,10 @@ test("orchestrator repairs a missing PRD artifact inside the completed grill ses
         repairMarkers.push(continuation.repair.completionMarker);
         assert.match(repairPrompt, /Repair only the canonical PRD artifact/);
         assert.match(repairPrompt, /prd artifact missing/);
+        assertCriticalCompletionMarkerGuidance(
+          repairPrompt,
+          continuation.repair.completionMarker,
+        );
         assert.match(repairPrompt, new RegExp(continuation.repair.completionMarker));
 
         await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# Repaired PRD\n");
@@ -5546,6 +5561,10 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
       assert.match(input.initialPrompt, /Canonical PRD artifact path:/);
       assert.match(input.initialPrompt, /prd\.md/);
       assert.match(input.initialPrompt, /Do not interview the user/);
+      assertCriticalCompletionMarkerGuidance(
+        input.initialPrompt,
+        input.initialCompletionMarker,
+      );
       assert.doesNotMatch(input.initialPrompt, /Run the interactive grill stage/);
 
       await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD resumed\n");
@@ -6956,6 +6975,10 @@ test("orchestrator supplies bootstrap validation and one in-session repair attem
       repairPrompts.push(repairPrompt);
       assert.match(repairPrompt, /Repair only the project-context candidate artifact/);
       assert.match(repairPrompt, /project-context\.candidate\.md/);
+      assertCriticalCompletionMarkerGuidance(
+        repairPrompt,
+        input.repair.completionMarker,
+      );
       assert.doesNotMatch(repairPrompt, /resume work/);
       assert.doesNotMatch(repairPrompt, /classification/);
 
@@ -7387,6 +7410,10 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
         assert.match(repairPrompt, /Repair only the intent artifact/);
         assert.match(repairPrompt, /no such file or directory|ENOENT/);
         assert.match(repairPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/);
+        assertCriticalCompletionMarkerGuidance(
+          repairPrompt,
+          input.repair.completionMarker,
+        );
 
         await fs.outputJson(
           join(

@@ -358,6 +358,11 @@ function renderInterruptedGrillResumePrompt(options: {
     "Continue the interrupted grill session.",
     "Rely on the resumed provider context for prior answers instead of asking for a transcript dump.",
     "Ask the next unresolved question one at a time.",
+    "Before concluding, ask the user a marker-free question confirming that there are no remaining questions or concerns.",
+    "Only if the user's next response explicitly approves conclusion, emit the completion marker as the next and only response.",
+    "",
+    ...formatInlineCompletionMarkerDiscipline(options.completionMarker),
+    "",
     `When the grill is complete, print only: ${options.completionMarker}`,
   ].join("\n");
 }
@@ -375,6 +380,9 @@ function renderInterruptedPrdResumePrompt(options: {
     "Write or repair only the canonical PRD artifact at that path.",
     "Use the resumed provider context and the completed grill discussion already in this session.",
     "Do not interview the user, write issues, or create alternate PRD files.",
+    "",
+    ...formatInlineCompletionMarkerDiscipline(options.completionMarker),
+    "",
     `When the PRD artifact is valid, print exactly: ${options.completionMarker}`,
   ].join("\n");
 }
@@ -485,6 +493,9 @@ function renderIntentRepairPrompt(options: {
     options.validationError.message,
     "",
     "Replace the artifact with valid JSON matching the required intent schema.",
+    "",
+    ...formatInlineCompletionMarkerDiscipline(options.completionMarker),
+    "",
     `When the artifact is repaired, print exactly: ${options.completionMarker}`,
   ].join("\n");
 }
@@ -503,6 +514,9 @@ function renderBootstrapProjectContextRepairPrompt(options: {
     options.validationError.message,
     "",
     "Replace the candidate artifact with valid bounded project context Markdown.",
+    "",
+    ...formatInlineCompletionMarkerDiscipline(options.completionMarker),
+    "",
     `When the candidate is repaired, print exactly: ${options.completionMarker}`,
   ].join("\n");
 }
@@ -522,6 +536,9 @@ function renderPrdRepairPrompt(options: {
     "",
     "Replace the PRD artifact with non-empty Markdown synthesized from the existing task, intent, project context, and grill transcript.",
     "Do not interview the user, write issues, or create alternate PRD files.",
+    "",
+    ...formatInlineCompletionMarkerDiscipline(options.completionMarker),
+    "",
     `When the PRD artifact is repaired, print exactly: ${options.completionMarker}`,
   ].join("\n");
 }
@@ -542,8 +559,23 @@ function renderIssuesRepairPrompt(options: {
     "",
     "Write at least one non-empty issue markdown file directly to the issues directory.",
     "Do not interview the user, edit the PRD, or create execution/validation artifacts.",
+    "",
+    ...formatInlineCompletionMarkerDiscipline(options.completionMarker),
+    "",
     `When the issue artifacts are repaired, print exactly: ${options.completionMarker}`,
   ].join("\n");
+}
+
+function formatInlineCompletionMarkerDiscipline(
+  completionMarker: string,
+): string[] {
+  return [
+    "Completion marker discipline:",
+    "- The completion marker tells DevFlow this work is finished; DevFlow will immediately move on, and you get no further turns for that work.",
+    "- Emit it exactly once, alone, only after the requested work is complete and validated.",
+    `- The completion marker is: ${completionMarker}`,
+    "- Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.",
+  ];
 }
 
 function createCompletionMarker(prefix = "DEVFLOW_INTENT_COMPLETE"): string {
