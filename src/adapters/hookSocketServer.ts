@@ -1,6 +1,14 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 
+import {
+  buildHookSocketBoundTrace,
+  buildHookSocketMalformedPayloadTrace,
+  buildHookSocketPayloadReceivedTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
+import { NoopLogger, type Logger } from "../logger.js";
+
 export type HookSocketPayloadHandler = (
   payload: unknown,
 ) => void | Promise<void>;
@@ -9,6 +17,7 @@ export type HookSocketErrorHandler = (error: Error) => void | Promise<void>;
 
 export interface HookSocketServerOptions {
   onError?: HookSocketErrorHandler;
+  logger?: Logger;
 }
 
 export interface HookSocketServer {
@@ -73,6 +82,7 @@ export class HookSocketConnectionError extends Error {
 export function hookSocketServer(
   options: HookSocketServerOptions = {},
 ): HookSocketServer {
+  const logger = options.logger ?? NoopLogger;
   let server: net.Server | undefined;
   let currentSocketPath: string | undefined;
   let payloadHandler: HookSocketPayloadHandler | undefined;
@@ -133,16 +143,34 @@ export function hookSocketServer(
       try {
         parsed = JSON.parse(rawPayload);
       } catch (error) {
+        const reason = isTruncatedJsonParseError(error) ? "truncated" : "malformed";
+        emitAdapterTrace(
+          logger,
+          buildHookSocketMalformedPayloadTrace({
+            socketPath,
+            reason,
+            payloadLength: rawPayload.length,
+          }),
+        );
         await reportError(
           new HookSocketMalformedPayloadError({
             socketPath,
             payload: rawPayload,
-            reason: isTruncatedJsonParseError(error) ? "truncated" : "malformed",
+            reason,
             cause: error,
           }),
         );
         return;
       }
+
+      emitAdapterTrace(
+        logger,
+        buildHookSocketPayloadReceivedTrace({
+          socketPath,
+          type: hookPayloadType(parsed),
+          payloadLength: rawPayload.length,
+        }),
+      );
 
       try {
         await onPayload(parsed);
@@ -190,6 +218,12 @@ export function hookSocketServer(
         activeServer.once("error", reject);
         activeServer.listen(socketPath, () => {
           activeServer.off("error", reject);
+          emitAdapterTrace(
+            logger,
+            buildHookSocketBoundTrace({
+              socketPath,
+            }),
+          );
           resolve();
         });
       });
@@ -244,4 +278,20 @@ function isTruncatedJsonParseError(error: unknown): boolean {
     error instanceof SyntaxError &&
     /unexpected end/i.test(error.message)
   );
+}
+
+function hookPayloadType(payload: unknown): string {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    typeof (payload as { hook_event_name?: unknown }).hook_event_name === "string"
+  ) {
+    return (payload as { hook_event_name: string }).hook_event_name;
+  }
+
+  if (Array.isArray(payload)) {
+    return "array";
+  }
+
+  return payload === null ? "null" : typeof payload;
 }

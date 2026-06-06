@@ -77,6 +77,7 @@ export async function runClaudeHookDrivenSession(
     onError(error) {
       rejectEventCaptureFailure(error);
     },
+    logger: command.logger,
   });
   const firstEventTimeoutMs =
     dependencies.firstEventTimeoutMs ?? DEFAULT_FIRST_EVENT_TIMEOUT_MS;

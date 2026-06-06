@@ -162,6 +162,47 @@ export function buildCompletionMarkerMatchTrace(
   };
 }
 
+export function buildHookSocketBoundTrace(input: {
+  socketPath: string;
+}): AdapterTrace {
+  return {
+    msg: "adapter hook socket bound",
+    context: hookSocketLogContext({
+      socketPath: input.socketPath,
+    }),
+  };
+}
+
+export function buildHookSocketPayloadReceivedTrace(input: {
+  socketPath: string;
+  type: string;
+  payloadLength: number;
+}): AdapterTrace {
+  return {
+    msg: "adapter hook socket payload received",
+    context: hookSocketLogContext({
+      socketPath: input.socketPath,
+      type: input.type,
+      payloadLength: input.payloadLength,
+    }),
+  };
+}
+
+export function buildHookSocketMalformedPayloadTrace(input: {
+  socketPath: string;
+  reason: "truncated" | "malformed";
+  payloadLength: number;
+}): AdapterTrace {
+  return {
+    msg: "adapter hook socket malformed payload",
+    context: hookSocketLogContext({
+      socketPath: input.socketPath,
+      reason: input.reason,
+      payloadLength: input.payloadLength,
+    }),
+  };
+}
+
 export function buildTurnBoundaryMarkerMissTrace(
   input: AdapterProviderEventTraceBase,
 ): AdapterTrace {
@@ -212,6 +253,12 @@ function adapterLogContext(
       ...(input.phaseId !== undefined ? { phaseId: input.phaseId } : {}),
       ...metadata,
     },
+  };
+}
+
+function hookSocketLogContext(metadata: Record<string, unknown>): LogContext {
+  return {
+    context: metadata,
   };
 }
 

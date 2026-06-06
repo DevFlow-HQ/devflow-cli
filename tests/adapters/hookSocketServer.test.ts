@@ -11,6 +11,27 @@ import {
   HookSocketMalformedPayloadError,
   hookSocketServer,
 } from "../../src/adapters/hookSocketServer.js";
+import type { Logger } from "../../src/logger.js";
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context: Parameters<Logger["debug"]>[1];
+  }> = [];
+  const logger: Logger = {
+    debug: (msg, context) => entries.push({ level: "debug", msg, context }),
+    info: (msg, context) => entries.push({ level: "info", msg, context }),
+    warn: (msg, context) => entries.push({ level: "warn", msg, context }),
+    error: (msg, context) => entries.push({ level: "error", msg, context }),
+    critical: (msg, context) => {
+      entries.push({ level: "critical", msg, context });
+      return "err_test";
+    },
+  };
+
+  return { entries, logger };
+}
 
 function createSocketPath(testName: string): string {
   const safeName = testName.replace(/[^a-z0-9]+/gi, "-").slice(0, 40);
@@ -192,6 +213,67 @@ test("hook socket server cleans up its Unix socket file on stop", async (t) => {
   await server.stop({ drainMs: 0 });
 
   assert.equal(await fs.pathExists(socketPath), false);
+});
+
+test("hook socket server emits metadata-only lifecycle diagnostics", async (t) => {
+  const socketPath = createSocketPath(t.name);
+  const { entries, logger } = createCapturingLogger();
+  const server = hookSocketServer({ logger });
+  t.after(async () => {
+    await server.stop({ drainMs: 0 });
+  });
+
+  await server.start(socketPath, () => {});
+  await writePayload(
+    socketPath,
+    JSON.stringify({
+      hook_event_name: "SessionStart",
+      secret: "SECRET-hook-payload-body",
+    }),
+  );
+  await writePayload(socketPath, '{"hook_event_name":');
+
+  const debugEntries = entries.filter((entry) => entry.level === "debug");
+  const bound = debugEntries.find((entry) => /socket bound/i.test(entry.msg));
+  const received = debugEntries.find((entry) => /payload received/i.test(entry.msg));
+  const malformed = debugEntries.find((entry) =>
+    /malformed payload/i.test(entry.msg),
+  );
+  const serializedContexts = JSON.stringify(
+    debugEntries.map((entry) => entry.context),
+  );
+
+  assert.equal(bound?.context?.context?.socketPath, socketPath);
+  assert.equal(received?.context?.context?.type, "SessionStart");
+  assert.equal(
+    received?.context?.context?.payloadLength,
+    '{"hook_event_name":"SessionStart","secret":"SECRET-hook-payload-body"}'
+      .length,
+  );
+  assert.equal(malformed?.context?.context?.socketPath, socketPath);
+  assert.equal(malformed?.context?.context?.reason, "truncated");
+  assert.equal(malformed?.context?.context?.payloadLength, '{"hook_event_name":'.length);
+  assert.doesNotMatch(serializedContexts, /SECRET-hook-payload-body/);
+  assert.equal(serializedContexts.includes('{"hook_event_name":'), false);
+  assert.equal(bound?.context?.runId, undefined);
+  assert.equal(bound?.context?.stage, undefined);
+});
+
+test("hook socket server preserves behavior without an injected logger", async (t) => {
+  const socketPath = createSocketPath(t.name);
+  const received: unknown[] = [];
+  const server = hookSocketServer();
+  t.after(async () => {
+    await server.stop({ drainMs: 0 });
+  });
+
+  await server.start(socketPath, (payload) => {
+    received.push(payload);
+  });
+
+  await writePayload(socketPath, '{"event":"ready"}');
+
+  assert.deepEqual(received, [{ event: "ready" }]);
 });
 
 function assertPayloadWithId(payload: unknown): number {
