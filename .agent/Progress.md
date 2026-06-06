@@ -69,7 +69,6 @@ Hard limit: 100 lines.
   - `src/logger.ts` provides injected JSONL logging with `debug`/`info`/`warn`/`error`/`critical`, append-only daily files, critical correlation refs, full serialized errors for `error`/`critical`, repo-local-to-home fallback, never-throw behavior, and 30-day startup pruning
   - CLI failures are split cleanly: anticipated typed failures log at `error` while keeping tailored terminal messages; unexpected fall-throughs log at `critical` and print only a generic message, correlation ref, and diagnostic log path
   - the orchestrator emits `info` lifecycle entries for run/stage/iteration/summary milestones and `warn` entries for retries, repairs, provider-session recovery, artifact fallback recovery, stale-context refreshes, and repaired config/metadata
-  - adapter-deep `debug` traces now cover metadata-only data-plane resolution, structured events, marker matches/misses, phase transitions, PTY spawn/exit/events, hook socket lifecycle, malformed hook payloads, and Codex/Claude JSONL session-log locator resolution without copying prompt, payload, transcript, or log bodies
 - Completion-marker prompt discipline is complete:
   - `CONTEXT.md` defines completion markers as DevFlow's authoritative per-stage done signal and defines grill conclusion confirmation as the grill-only approval handshake before marker emission
   - `intent`, `bootstrap-project-context`, `prd`, `issues`, and execute prompts now explain exactly-once marker emission, immediate DevFlow advancement, no further turns for completed work, and omission/premature-emission failure modes
@@ -83,10 +82,11 @@ Hard limit: 100 lines.
 - Gemini, OpenCode, and Claude PTY fallback sessions remain PTY-marker/transcript fallback providers without reliable provider session ids or resume support.
 - Codex hook/JSONL and Claude hook/JSONL structured paths use PTY as control transport and normalized provider events as the data plane.
 - No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, diagnostic logging, or completion-marker prompt workstreams from `.agent/task_progress.md`.
-- Latest task-progress entry: `05-session-log-locator-resolution` is complete.
+- Latest task-progress entry: `005-extend-marker-criticality-to-resume-and-repair-prompts` is complete.
 
 ## Known Remaining Work
 1. Future provider work:
+  - add adapter-deep `debug` tracing for provider events, marker scans, and fallback-tier selection now that the injected `Logger` is available
   - keep PTY marker completion and transcript callbacks as fallback behavior
   - defer Gemini and OpenCode from supported MVP claims; keep them documented as PTY fallback/experimental until their structured sources can truthfully support the normalized event contract
 2. PTY duplication audit:
