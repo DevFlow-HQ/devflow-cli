@@ -203,6 +203,35 @@ export function buildHookSocketMalformedPayloadTrace(input: {
   };
 }
 
+export function buildSessionLogLocatorResolutionTrace(
+  input: AdapterTraceBase & {
+    resolvedPath?: string;
+    startOffset?: number;
+    chosenCandidate?: string;
+    candidateCount: number;
+    multipleCandidates: boolean;
+    resumeLookup: "not-requested" | "found" | "not-found";
+  },
+): AdapterTrace {
+  return {
+    msg: "adapter session log locator resolved",
+    context: adapterLogContext(input, {
+      ...(input.resolvedPath !== undefined
+        ? { resolvedPath: input.resolvedPath }
+        : {}),
+      ...(input.startOffset !== undefined
+        ? { startOffset: input.startOffset }
+        : {}),
+      ...(input.chosenCandidate !== undefined
+        ? { chosenCandidate: input.chosenCandidate }
+        : {}),
+      candidateCount: input.candidateCount,
+      multipleCandidates: input.multipleCandidates,
+      resumeLookup: input.resumeLookup,
+    }),
+  };
+}
+
 export function buildTurnBoundaryMarkerMissTrace(
   input: AdapterProviderEventTraceBase,
 ): AdapterTrace {

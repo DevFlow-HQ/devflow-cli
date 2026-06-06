@@ -14,6 +14,7 @@ import {
   type SessionLogWatchEvent,
   type SessionLogWatcher,
 } from "../../src/adapters/codexSessionLogLocator.js";
+import type { LogContext, Logger } from "../../src/logger.js";
 import {
   ProviderSessionEventCaptureError,
   type ManagedProviderSessionInput,
@@ -43,6 +44,21 @@ class FakeSessionLogWatcher implements SessionLogWatcher {
     for (const listener of this.listeners.get(event) ?? []) {
       listener(filePath);
     }
+  }
+}
+
+class SpyLogger implements Logger {
+  readonly debugEntries: Array<{ msg: string; context?: LogContext }> = [];
+
+  debug(msg: string, context?: LogContext): void {
+    this.debugEntries.push({ msg, context });
+  }
+
+  info(): void {}
+  warn(): void {}
+  error(): void {}
+  critical(): string {
+    return "err_spy";
   }
 }
 
@@ -242,6 +258,68 @@ test("Codex session log locator finds a resume rollout by provider session id an
   );
 });
 
+test("Codex session log locator traces resume resolution metadata", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
+  const logger = new SpyLogger();
+  const providerSessionId = "codex-session-123";
+  const matchingContent = '{"type":"session_meta"}\n';
+  const locator = createCodexSessionLogLocator({
+    codexHome,
+    logger,
+  });
+
+  const matchingLog = await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-2026-05-29T10-00-00-codex-session-123.jsonl",
+    matchingContent,
+  );
+
+  await locator.locateResumeLog(providerSessionId);
+
+  assert.equal(logger.debugEntries.length, 1);
+  const entry = logger.debugEntries[0];
+  assert.equal(entry.msg, "adapter session log locator resolved");
+  assert.deepEqual(entry.context?.context, {
+    providerId: "codex",
+    resolvedPath: matchingLog,
+    startOffset: Buffer.byteLength(matchingContent, "utf8"),
+    chosenCandidate: matchingLog,
+    candidateCount: 1,
+    multipleCandidates: false,
+    resumeLookup: "found",
+  });
+});
+
+test("Codex session log locator traces missing resume lookup metadata", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
+  const logger = new SpyLogger();
+  const locator = createCodexSessionLogLocator({
+    codexHome,
+    logger,
+  });
+
+  await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-other-session.jsonl",
+  );
+
+  await assert.rejects(
+    locator.locateResumeLog("codex-session-123"),
+    CodexSessionLogLocatorResumeNotFoundError,
+  );
+
+  assert.equal(logger.debugEntries.length, 1);
+  assert.equal(logger.debugEntries[0].msg, "adapter session log locator resolved");
+  assert.deepEqual(logger.debugEntries[0].context?.context, {
+    providerId: "codex",
+    candidateCount: 0,
+    multipleCandidates: false,
+    resumeLookup: "not-found",
+  });
+});
+
 test("Codex session log locator fails resume lookup with a typed error when no rollout matches the provider session id", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
@@ -355,4 +433,20 @@ test("Codex session log locator uses a short-lived scoped watcher for new rollou
   assert.equal(located.debug.emptyCandidateCount, 1);
   assert.deepEqual(Array.from(snapshot.filePaths), [existingLog]);
   assert.equal(watcher.closeCount, 1);
+});
+
+test("Codex session log locator preserves default behavior without an injected logger", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
+  const locator = createCodexSessionLogLocator({ codexHome });
+  const snapshot = await locator.snapshot();
+  const rolloutPath = await createRollout(
+    codexHome,
+    "sessions/2026/05/29/rollout-noop-default.jsonl",
+  );
+
+  const located = await locator.locateActiveLog(snapshot, { timeoutMs: 100 });
+
+  assert.equal(located.filePath, rolloutPath);
+  assert.equal(located.debug.searchedPattern, "sessions/**/rollout-*.jsonl");
 });

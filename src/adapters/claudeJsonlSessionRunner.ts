@@ -89,7 +89,7 @@ export async function runClaudeJsonlSession(
   const claudeHome = getScopedClaudeProviderHome(input);
   const locator =
     dependencies.sessionLogLocator ??
-    createClaudeSessionLogLocator({ claudeHome });
+    createClaudeSessionLogLocator({ claudeHome, logger: command.logger });
   const locatorTimeoutMs =
     dependencies.locatorTimeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
   const firstEventTimeoutMs =

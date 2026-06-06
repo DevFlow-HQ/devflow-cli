@@ -3,6 +3,10 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 import chokidar from "chokidar";
 
+import {
+  buildSessionLogLocatorResolutionTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
 import { ProviderSessionEventCaptureError } from "./managedSessionAdapter.js";
 export { getScopedClaudeProviderHome } from "./claudeProviderHome.js";
 import type { ProviderIdentity } from "./providers.js";
@@ -15,10 +19,12 @@ import type {
   SessionLogWatchEvent,
   SessionLogWatcher,
 } from "./codexSessionLogLocator.js";
+import { NoopLogger, type Logger } from "../logger.js";
 
 export interface ClaudeSessionLogLocatorOptions {
   claudeHome: string;
   watchProjectsTree?: ClaudeSessionLogWatchProjectsTree;
+  logger?: Logger;
 }
 
 export interface LocateClaudeSessionLogForProviderOptions {
@@ -34,6 +40,10 @@ export type ClaudeSessionLogWatchProjectsTree = (
 
 const CLAUDE_TRANSCRIPT_PATTERN = "projects/**/*.jsonl";
 const DEFAULT_LOCATOR_TIMEOUT_MS = 30_000;
+const CLAUDE_PROVIDER: ProviderIdentity = {
+  id: "claude",
+  displayName: "Claude",
+};
 
 export class ClaudeSessionLogLocatorTimeoutError extends Error {
   readonly scopedProviderHome: string;
@@ -85,6 +95,7 @@ export function createClaudeSessionLogLocator(
   const projectsRoot = join(scopedProviderHome, "projects");
   const watchProjectsTree =
     options.watchProjectsTree ?? watchClaudeProjectsTree;
+  const logger = options.logger ?? NoopLogger;
 
   return {
     async snapshot() {
@@ -122,6 +133,11 @@ export function createClaudeSessionLogLocator(
           });
 
           if (selected) {
+            emitSessionLogResolutionTrace({
+              logger,
+              location: selected,
+              resumeLookup: "not-requested",
+            });
             return selected;
           }
 
@@ -173,6 +189,11 @@ export function createClaudeSessionLogLocator(
           });
 
           if (selected) {
+            emitSessionLogResolutionTrace({
+              logger,
+              location: selected,
+              resumeLookup: "found",
+            });
             return selected;
           }
 
@@ -195,6 +216,16 @@ export function createClaudeSessionLogLocator(
         await watcher.close();
       }
 
+      emitAdapterTrace(
+        logger,
+        buildSessionLogLocatorResolutionTrace({
+          provider: CLAUDE_PROVIDER,
+          candidateCount: 0,
+          multipleCandidates: false,
+          resumeLookup: "not-found",
+        }),
+      );
+
       throw new ClaudeSessionLogLocatorResumeNotFoundError({
         scopedProviderHome,
         searchedPattern: CLAUDE_TRANSCRIPT_PATTERN,
@@ -203,6 +234,26 @@ export function createClaudeSessionLogLocator(
       });
     },
   };
+}
+
+function emitSessionLogResolutionTrace(options: {
+  logger: Logger;
+  location: SessionLogLocation | SessionLogResumeLocation;
+  resumeLookup: "not-requested" | "found";
+}): void {
+  emitAdapterTrace(
+    options.logger,
+    buildSessionLogLocatorResolutionTrace({
+      provider: CLAUDE_PROVIDER,
+      resolvedPath: options.location.filePath,
+      startOffset:
+        "startOffset" in options.location ? options.location.startOffset : 0,
+      chosenCandidate: options.location.debug.candidates[0]?.filePath,
+      candidateCount: options.location.debug.candidates.length,
+      multipleCandidates: options.location.debug.multipleCandidates,
+      resumeLookup: options.resumeLookup,
+    }),
+  );
 }
 
 export async function locateClaudeSessionLogForProvider(

@@ -4,10 +4,15 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import chokidar from "chokidar";
 
 import {
+  buildSessionLogLocatorResolutionTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
+import {
   ProviderSessionEventCaptureError,
   type ManagedProviderSessionInput,
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
+import { NoopLogger, type Logger } from "../logger.js";
 
 export interface SessionLogSnapshot {
   filePaths: Set<string>;
@@ -56,6 +61,7 @@ export interface SessionLogLocateOptions {
 export interface CodexSessionLogLocatorOptions {
   codexHome: string;
   watchSessionsTree?: SessionLogWatchSessionsTree;
+  logger?: Logger;
 }
 
 export interface LocateCodexSessionLogForProviderOptions {
@@ -67,6 +73,10 @@ export interface LocateCodexSessionLogForProviderOptions {
 
 const CODEX_ROLLOUT_PATTERN = "sessions/**/rollout-*.jsonl";
 const DEFAULT_LOCATOR_TIMEOUT_MS = 30_000;
+const CODEX_PROVIDER: ProviderIdentity = {
+  id: "codex",
+  displayName: "Codex",
+};
 
 export type SessionLogWatchEvent = "add" | "change";
 
@@ -137,6 +147,7 @@ export function createCodexSessionLogLocator(
   const sessionsRoot = join(scopedProviderHome, "sessions");
   const watchSessionsTree =
     options.watchSessionsTree ?? watchCodexSessionsTree;
+  const logger = options.logger ?? NoopLogger;
 
   return {
     async snapshot() {
@@ -174,6 +185,11 @@ export function createCodexSessionLogLocator(
           });
 
           if (selected) {
+            emitSessionLogResolutionTrace({
+              logger,
+              location: selected,
+              resumeLookup: "not-requested",
+            });
             return selected;
           }
 
@@ -211,8 +227,23 @@ export function createCodexSessionLogLocator(
       });
 
       if (selected) {
+        emitSessionLogResolutionTrace({
+          logger,
+          location: selected,
+          resumeLookup: "found",
+        });
         return selected;
       }
+
+      emitAdapterTrace(
+        logger,
+        buildSessionLogLocatorResolutionTrace({
+          provider: CODEX_PROVIDER,
+          candidateCount: 0,
+          multipleCandidates: false,
+          resumeLookup: "not-found",
+        }),
+      );
 
       throw new CodexSessionLogLocatorResumeNotFoundError({
         scopedProviderHome,
@@ -221,6 +252,26 @@ export function createCodexSessionLogLocator(
       });
     },
   };
+}
+
+function emitSessionLogResolutionTrace(options: {
+  logger: Logger;
+  location: SessionLogLocation | SessionLogResumeLocation;
+  resumeLookup: "not-requested" | "found";
+}): void {
+  emitAdapterTrace(
+    options.logger,
+    buildSessionLogLocatorResolutionTrace({
+      provider: CODEX_PROVIDER,
+      resolvedPath: options.location.filePath,
+      startOffset:
+        "startOffset" in options.location ? options.location.startOffset : 0,
+      chosenCandidate: options.location.debug.candidates[0]?.filePath,
+      candidateCount: options.location.debug.candidates.length,
+      multipleCandidates: options.location.debug.multipleCandidates,
+      resumeLookup: options.resumeLookup,
+    }),
+  );
 }
 
 async function findSelectableCandidate(options: {

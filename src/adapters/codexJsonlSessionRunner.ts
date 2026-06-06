@@ -79,7 +79,7 @@ export async function runCodexJsonlSession(
   const codexHome = getScopedCodexProviderHome(input);
   const locator =
     dependencies.sessionLogLocator ??
-    createCodexSessionLogLocator({ codexHome });
+    createCodexSessionLogLocator({ codexHome, logger: command.logger });
   const locatorTimeoutMs =
     dependencies.locatorTimeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
   const firstEventTimeoutMs =

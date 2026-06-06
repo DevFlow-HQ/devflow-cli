@@ -12,6 +12,22 @@ import {
   locateClaudeSessionLogForProvider,
 } from "../../src/adapters/claudeSessionLogLocator.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+import type { LogContext, Logger } from "../../src/logger.js";
+
+class SpyLogger implements Logger {
+  readonly debugEntries: Array<{ msg: string; context?: LogContext }> = [];
+
+  debug(msg: string, context?: LogContext): void {
+    this.debugEntries.push({ msg, context });
+  }
+
+  info(): void {}
+  warn(): void {}
+  error(): void {}
+  critical(): string {
+    return "err_spy";
+  }
+}
 
 test("Claude session log locator discovers a newly created scoped transcript", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-locator-"));
@@ -112,6 +128,51 @@ test("Claude session log locator finds a resume transcript by provider session i
   assert.equal(location.debug.scopedProviderHome, claudeHome);
   assert.equal(location.debug.searchedPattern, "projects/**/*.jsonl");
   assert.equal(location.debug.ignoredPreexistingCount, 0);
+});
+
+test("Claude session log locator traces resume resolution metadata", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-resume-locator-"));
+  const input = {
+    workingDirectory: projectRoot,
+    initialPrompt: "Start",
+    initialCompletionMarker: "DONE",
+    phase: {
+      id: "runabc123456:intent:attempt-1",
+      kind: "intent",
+      attempt: 1,
+    },
+    async validate() {},
+  };
+  const claudeHome = getScopedClaudeProviderHome(input);
+  const logger = new SpyLogger();
+  const locator = createClaudeSessionLogLocator({ claudeHome, logger });
+  const transcriptPath = join(
+    claudeHome,
+    "projects",
+    "-current-cwd",
+    "session-current.jsonl",
+  );
+  const transcriptContent = `${JSON.stringify({
+    type: "assistant",
+    sessionId: "claude-session-123",
+  })}\n`;
+
+  await fs.ensureDir(join(claudeHome, "projects", "-current-cwd"));
+  await fs.writeFile(transcriptPath, transcriptContent, "utf8");
+
+  await locator.locateResumeLog("claude-session-123");
+
+  assert.equal(logger.debugEntries.length, 1);
+  assert.equal(logger.debugEntries[0].msg, "adapter session log locator resolved");
+  assert.deepEqual(logger.debugEntries[0].context?.context, {
+    providerId: "claude",
+    resolvedPath: transcriptPath,
+    startOffset: Buffer.byteLength(transcriptContent, "utf8"),
+    chosenCandidate: transcriptPath,
+    candidateCount: 1,
+    multipleCandidates: false,
+    resumeLookup: "found",
+  });
 });
 
 test("Claude session log locator raises a typed error when resume transcript is missing", async () => {
