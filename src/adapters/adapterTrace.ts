@@ -110,6 +110,41 @@ export function buildProviderEventTrace(
   };
 }
 
+export function buildPtySpawnTrace(
+  input: AdapterTraceBase & {
+    executable: string;
+    argumentCount: number;
+    workingDirectory: string;
+    promptArgument?: string;
+  },
+): AdapterTrace {
+  void input.promptArgument;
+
+  return {
+    msg: "adapter pty process spawned",
+    context: adapterLogContext(input, {
+      executable: input.executable,
+      argumentCount: input.argumentCount,
+      workingDirectory: input.workingDirectory,
+    }),
+  };
+}
+
+export function buildPtyExitTrace(
+  input: AdapterTraceBase & {
+    exitCode: number;
+    signal: NodeJS.Signals | null;
+  },
+): AdapterTrace {
+  return {
+    msg: "adapter pty process exit",
+    context: adapterLogContext(input, {
+      exitCode: input.exitCode,
+      signal: input.signal,
+    }),
+  };
+}
+
 export function buildCompletionMarkerMatchTrace(
   input: AdapterProviderEventTraceBase & {
     matchedMarker: string;

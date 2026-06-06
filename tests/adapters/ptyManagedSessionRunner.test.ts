@@ -21,11 +21,32 @@ import {
   type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+import type { Logger } from "../../src/logger.js";
 
 function waitForAsyncHandlers(): Promise<void> {
   return new Promise((resolve) => {
     setImmediate(resolve);
   });
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context: Parameters<Logger["debug"]>[1];
+  }> = [];
+  const logger: Logger = {
+    debug: (msg, context) => entries.push({ level: "debug", msg, context }),
+    info: (msg, context) => entries.push({ level: "info", msg, context }),
+    warn: (msg, context) => entries.push({ level: "warn", msg, context }),
+    error: (msg, context) => entries.push({ level: "error", msg, context }),
+    critical: (msg, context) => {
+      entries.push({ level: "critical", msg, context });
+      return "err_test";
+    },
+  };
+
+  return { entries, logger };
 }
 
 class FakePtyProcess implements PtyProcess {
@@ -447,6 +468,103 @@ test("PTY managed-session runner emits turn and session completion events after 
       { type: "session-completed", phaseId: "initial-phase" },
     ],
   );
+});
+
+test("PTY managed-session runner traces spawn, forwarded events, marker matches, and process exit without prompt bodies", async () => {
+  const spawner = new FakePtySpawner();
+  const { entries, logger } = createCapturingLogger();
+  const promptArgument = "SECRET prompt argument must not be logged";
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: ["--prompt", promptArgument],
+      cleanupCommand: "/exit\n",
+      logger,
+    },
+    createInput({
+      initialPrompt: promptArgument,
+      initialCompletionMarker: "DEVFLOW_DONE",
+      initialTerminalCompletionMarker: "NO_MORE_TASKS",
+      onProviderEvent() {},
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: { columns: 100, rows: 30 },
+    },
+  );
+
+  spawner.process.emitData("working\n");
+  await waitForAsyncHandlers();
+  assert.equal(
+    entries.some((entry) => /marker matched/i.test(entry.msg)),
+    false,
+  );
+
+  spawner.process.emitData("all done NO_MORE_TASKS\n");
+  spawner.process.emitExit(0, null);
+  await runPromise;
+
+  const debugEntries = entries.filter((entry) => entry.level === "debug");
+  const spawn = debugEntries.find((entry) => /spawn/i.test(entry.msg));
+  const exit = debugEntries.find((entry) => /exit/i.test(entry.msg));
+  const markerMatch = debugEntries.find((entry) => /marker matched/i.test(entry.msg));
+  const providerEvents = debugEntries.filter((entry) =>
+    /provider event forwarded/i.test(entry.msg),
+  );
+  const serializedContexts = JSON.stringify(
+    debugEntries.map((entry) => entry.context),
+  );
+
+  assert.equal(spawn?.context?.context?.providerId, "codex");
+  assert.equal(spawn?.context?.context?.executable, "codex");
+  assert.equal(spawn?.context?.context?.argumentCount, 2);
+  assert.equal(spawn?.context?.context?.workingDirectory, "/tmp/devflow");
+  assert.equal(exit?.context?.context?.exitCode, 0);
+  assert.equal(exit?.context?.context?.signal, null);
+  assert.equal(markerMatch?.context?.context?.source, "pty");
+  assert.equal(markerMatch?.context?.context?.structured, false);
+  assert.equal(markerMatch?.context?.context?.matchedMarker, "NO_MORE_TASKS");
+  assert.equal(
+    markerMatch?.context?.context?.isTerminalCompletionMarker,
+    true,
+  );
+  assert.deepEqual(
+    providerEvents.map((entry) => entry.context?.context?.type),
+    ["session-start", "turn-completed", "session-completed"],
+  );
+  assert.doesNotMatch(serializedContexts, /SECRET prompt argument/);
+});
+
+test("PTY managed-session runner preserves default behavior when no logger is supplied", async () => {
+  const spawner = new FakePtySpawner();
+
+  const resultPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+    },
+  );
+
+  spawner.process.emitData("DEVFLOW_DONE\n");
+
+  assert.deepEqual(await resultPromise, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "DEVFLOW_DONE",
+  });
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
 });
 
 test("PTY managed-session runner submits generic continuations inside the same live session", async () => {

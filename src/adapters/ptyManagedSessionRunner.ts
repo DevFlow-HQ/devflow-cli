@@ -2,6 +2,13 @@ import stripAnsi from "strip-ansi";
 import pty from "node-pty";
 
 import {
+  buildCompletionMarkerMatchTrace,
+  buildProviderEventTrace,
+  buildPtyExitTrace,
+  buildPtySpawnTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
+import {
   findMatchedCompletionMarker,
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
@@ -14,7 +21,7 @@ import {
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
-import type { Logger } from "../logger.js";
+import { NoopLogger, type Logger } from "../logger.js";
 
 export interface PtySpawnOptions {
   cwd: string;
@@ -160,6 +167,7 @@ export async function runPtyManagedSession(
   const outputSink = dependencies.outputSink ?? process.stdout;
   const terminal = dependencies.terminal ?? process.stdout;
   const userInput = dependencies.userInput ?? process.stdin;
+  const logger = command.logger ?? NoopLogger;
   const markerBufferLimit =
     command.markerBufferLimit ?? DEFAULT_MARKER_BUFFER_LIMIT;
   let processHandle: PtyProcess;
@@ -170,6 +178,16 @@ export async function runPtyManagedSession(
       cols: terminal.columns ?? DEFAULT_COLUMNS,
       rows: terminal.rows ?? DEFAULT_ROWS,
     });
+    emitAdapterTrace(
+      logger,
+      buildPtySpawnTrace({
+        provider: command.provider,
+        executable: command.executable,
+        argumentCount: command.args.length,
+        workingDirectory: input.workingDirectory,
+        promptArgument: input.initialPrompt,
+      }),
+    );
   } catch (error) {
     throw new ProviderSessionLaunchError(command.provider, error);
   }
@@ -376,21 +394,31 @@ export async function runPtyManagedSession(
       phaseId: string | undefined,
     ): Promise<void> {
       const onProviderEvent = input.onProviderEvent;
+      const normalizedEvent = {
+        ...event,
+        provider: command.provider,
+        source: "pty",
+        structured: false,
+        phaseId,
+      } as ManagedProviderSessionEvent;
 
       if (!onProviderEvent) {
         return;
       }
 
+      emitAdapterTrace(
+        logger,
+        buildProviderEventTrace({
+          provider: command.provider,
+          phaseId,
+          source: "pty",
+          structured: false,
+          event: normalizedEvent,
+        }),
+      );
+
       try {
-        await Promise.resolve(
-          onProviderEvent({
-            ...event,
-            provider: command.provider,
-            source: "pty",
-            structured: false,
-            phaseId,
-          } as ManagedProviderSessionEvent),
-        );
+        await Promise.resolve(onProviderEvent(normalizedEvent));
       } catch (error) {
         rejectEventCaptureFailure(error);
       }
@@ -659,6 +687,18 @@ export async function runPtyManagedSession(
 
       phaseMarkerDetected = true;
       matchedCompletionMarker = completionMarker;
+      emitAdapterTrace(
+        logger,
+        buildCompletionMarkerMatchTrace({
+          provider: command.provider,
+          phaseId: getActivePhaseId(),
+          source: "pty",
+          structured: false,
+          matchedMarker: completionMarker,
+          isTerminalCompletionMarker:
+            completionMarker === getActiveCompletionMarkerSet()?.terminalCompletionMarker,
+        }),
+      );
 
       void (async () => {
         try {
@@ -753,6 +793,17 @@ export async function runPtyManagedSession(
           getActiveRepair() &&
           rollingOutput.includes(getActiveRepair()?.completionMarker ?? "")
         ) {
+          emitAdapterTrace(
+            logger,
+            buildCompletionMarkerMatchTrace({
+              provider: command.provider,
+              phaseId: getActivePhaseId(),
+              source: "pty",
+              structured: false,
+              matchedMarker: getActiveRepair()?.completionMarker ?? "",
+              isTerminalCompletionMarker: false,
+            }),
+          );
           handleRepairCompletion();
         }
         return;
@@ -771,6 +822,14 @@ export async function runPtyManagedSession(
     processHandle.onExit((event) => {
       exitCode = event.exitCode;
       signal = event.signal;
+      emitAdapterTrace(
+        logger,
+        buildPtyExitTrace({
+          provider: command.provider,
+          exitCode: event.exitCode,
+          signal: event.signal,
+        }),
+      );
 
       if (phaseMarkerDetected || settled) {
         return;
