@@ -14,7 +14,7 @@ import {
   ProviderSessionLaunchError,
 } from "../src/adapters/managedSessionAdapter.js";
 import {
-  BUILT_IN_PROVIDERS,
+  type BuiltInProviderId,
   getBuiltInProviderIdentity,
 } from "../src/adapters/providers.js";
 import {
@@ -25,7 +25,10 @@ import {
   formatUnexpectedCliError,
   runCli,
 } from "../src/cli.js";
-import type { ProviderDiscoveryResult } from "../src/adapters/providerDiscovery.js";
+import {
+  discoverBuiltInProviders,
+  type ProviderDiscoveryResult,
+} from "../src/adapters/providerDiscovery.js";
 import { createDevFlowState } from "../src/devflowState.js";
 import {
   ExecutionLoopCapError,
@@ -154,10 +157,13 @@ async function invokeCliWithOptions(
 }
 
 function createDiscoveryResult(
-  availableProviderIds: (typeof BUILT_IN_PROVIDERS)[number]["id"][],
+  availableProviderIds: BuiltInProviderId[],
 ): ProviderDiscoveryResult {
-  const providers = BUILT_IN_PROVIDERS.map((provider) =>
-    availableProviderIds.includes(provider.id)
+  const providerIds: BuiltInProviderId[] = ["claude", "codex"];
+  const providers = providerIds.map((providerId) => {
+    const provider = getBuiltInProviderIdentity(providerId);
+
+    return availableProviderIds.includes(provider.id)
       ? {
           provider,
           isAvailable: true as const,
@@ -167,8 +173,8 @@ function createDiscoveryResult(
           provider,
           isAvailable: false as const,
           reason: "Not installed",
-        },
-  );
+        };
+  });
 
   const installedProviders = providers.filter(
     (provider): provider is Extract<(typeof providers)[number], { isAvailable: true }> =>
@@ -192,6 +198,35 @@ function createDiscoveryResult(
               installedProviderCount: installedProviders.length,
             },
   };
+}
+
+function discoverWithDeferredProvidersInstalled(
+  supportedAvailableProviderIds: BuiltInProviderId[],
+): Promise<ProviderDiscoveryResult> {
+  return discoverBuiltInProviders({
+    createAdapter(providerId) {
+      return {
+        provider: getBuiltInProviderIdentity(providerId),
+        async detect() {
+          if (
+            supportedAvailableProviderIds.includes(providerId) ||
+            providerId === "gemini" ||
+            providerId === "opencode"
+          ) {
+            return {
+              isAvailable: true,
+              executable: providerId,
+            };
+          }
+
+          return {
+            isAvailable: false,
+            reason: "Not installed",
+          };
+        },
+      };
+    },
+  });
 }
 
 test("cli joins trailing positional arguments into a single raw task", async () => {
@@ -1256,6 +1291,40 @@ test("cli fails fast when a saved default provider is no longer available", asyn
   );
 });
 
+test("cli rejects a saved deferred default provider through discovery lookup", async () => {
+  const projectRoot = fs.mkdtempSync(
+    join(tmpdir(), "devflow-cli-deferred-saved-provider-"),
+  );
+  fs.outputFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "gemini" }, null, 2),
+  );
+
+  let promptCallCount = 0;
+  const receivedRequests: unknown[] = [];
+
+  const result = await invokeCliWithOptions(["resume", "work"], {
+    cwd: projectRoot,
+    discoverProviders: async () => discoverWithDeferredProvidersInstalled(["codex"]),
+    promptForProviderSelection: async () => {
+      promptCallCount += 1;
+      return "codex";
+    },
+    runExecutionRequest: async (request) => {
+      receivedRequests.push(request);
+    },
+  });
+
+  assert.equal(promptCallCount, 0);
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    /Saved default provider Gemini \(gemini\) is currently unavailable: Not installed\./,
+  );
+  assert.deepEqual(receivedRequests, []);
+});
+
 test("cli rejects invalid repo-local provider config with repair guidance", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-invalid-config-"));
   fs.outputFileSync(
@@ -1297,16 +1366,26 @@ test("cli does not create repo-local state when bootstrap already has an explici
 test("cli fails first-run setup with supported-provider guidance when no supported providers are installed", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-providers-"));
   let discoveryCallCount = 0;
+  let promptCallCount = 0;
+  const receivedRequests: unknown[] = [];
 
   const result = await invokeCliWithOptions(["bootstrap", "repo"], {
     cwd: projectRoot,
     discoverProviders: async () => {
       discoveryCallCount += 1;
-      return createDiscoveryResult([]);
+      return discoverWithDeferredProvidersInstalled([]);
+    },
+    promptForProviderSelection: async () => {
+      promptCallCount += 1;
+      return undefined;
+    },
+    runExecutionRequest: async (request) => {
+      receivedRequests.push(request);
     },
   });
 
   assert.equal(discoveryCallCount, 1);
+  assert.equal(promptCallCount, 0);
   assert.equal(result.commandError?.code, "commander.error");
   assert.equal(result.stdout, "");
   assert.match(
@@ -1317,6 +1396,7 @@ test("cli fails first-run setup with supported-provider guidance when no support
   assert.match(result.stderr, /Gemini \(gemini\)/);
   assert.match(result.stderr, /Codex \(codex\)/);
   assert.match(result.stderr, /OpenCode \(opencode\)/);
+  assert.deepEqual(receivedRequests, []);
   assert.equal(fs.pathExistsSync(join(projectRoot, ".devflow")), false);
 });
 
@@ -1327,7 +1407,7 @@ test("cli auto-selects and persists the only installed provider during first-run
 
   const result = await invokeCliWithOptions(["continue", "flow"], {
     cwd: projectRoot,
-    discoverProviders: async () => createDiscoveryResult(["codex"]),
+    discoverProviders: async () => discoverWithDeferredProvidersInstalled(["codex"]),
     promptForProviderSelection: async () => {
       promptCallCount += 1;
       return "claude";
@@ -1354,14 +1434,15 @@ test("cli auto-selects and persists the only installed provider during first-run
   );
 });
 
-test("cli prompts once with canonical provider choices and disabled unavailable entries during first-run setup", async () => {
+test("cli prompts once with supported provider choices during first-run setup", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-prompt-provider-"));
   const receivedRequests: unknown[] = [];
   const promptCalls: unknown[] = [];
 
   const result = await invokeCliWithOptions(["continue", "flow"], {
     cwd: projectRoot,
-    discoverProviders: async () => createDiscoveryResult(["claude", "codex"]),
+    discoverProviders: async () =>
+      discoverWithDeferredProvidersInstalled(["claude", "codex"]),
     promptForProviderSelection: async (options) => {
       promptCalls.push(options);
       return "codex";
@@ -1379,19 +1460,7 @@ test("cli prompts once with canonical provider choices and disabled unavailable 
       message: "Select a default provider",
       choices: [
         { value: "claude", label: "Claude (claude)", disabled: false },
-        {
-          value: "gemini",
-          label: "Gemini (gemini)",
-          disabled: true,
-          unavailableReason: "Not installed",
-        },
         { value: "codex", label: "Codex (codex)", disabled: false },
-        {
-          value: "opencode",
-          label: "OpenCode (opencode)",
-          disabled: true,
-          unavailableReason: "Not installed",
-        },
       ],
     },
   ]);

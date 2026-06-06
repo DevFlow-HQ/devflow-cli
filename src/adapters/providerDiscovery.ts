@@ -1,7 +1,8 @@
 import { createBuiltInManagedSessionAdapter } from "./builtInManagedSessionAdapter.js";
 import {
-  BUILT_IN_PROVIDERS,
+  SUPPORTED_PROVIDER_IDS,
   type BuiltInProviderId,
+  getBuiltInProviderIdentity,
   type ProviderIdentity,
 } from "./providers.js";
 import {
@@ -118,9 +119,11 @@ export async function discoverBuiltInProviders(
     options.createAdapter ?? createBuiltInManagedSessionAdapter;
 
   const providers = await Promise.all(
-    BUILT_IN_PROVIDERS.map(async (provider) => {
+    SUPPORTED_PROVIDER_IDS.map(async (providerId) => {
+      const provider = getBuiltInProviderIdentity(providerId);
+
       try {
-        const adapter = createAdapter(provider.id);
+        const adapter = createAdapter(providerId);
         const detection = await adapter.detect();
         return toDiscoveredProvider(adapter.provider, detection);
       } catch (error) {

@@ -21,7 +21,7 @@ function createDiscoveryAdapter(
   return options;
 }
 
-test("provider discovery preserves canonical order while summarizing a single installed provider", async () => {
+test("provider discovery ignores deferred providers while summarizing supported providers", async () => {
   const detections = new Map<
     ManagedSessionAdapter["provider"]["id"],
     Awaited<ReturnType<ManagedSessionAdapter["detect"]>>
@@ -32,8 +32,12 @@ test("provider discovery preserves canonical order while summarizing a single in
     ["opencode", { isAvailable: false, reason: "opencode missing" }],
   ]);
 
+  const detectedProviderIds: ManagedSessionAdapter["provider"]["id"][] = [];
+
   const result = await discoverBuiltInProviders({
     createAdapter(providerId) {
+      detectedProviderIds.push(providerId);
+
       return createDiscoveryAdapter({
         provider: getBuiltInProviderIdentity(providerId),
         async detect() {
@@ -49,6 +53,7 @@ test("provider discovery preserves canonical order while summarizing a single in
     },
   });
 
+  assert.deepEqual(detectedProviderIds, ["claude", "codex"]);
   assert.deepEqual(
     result.providers.map((provider) => ({
       id: provider.provider.id,
@@ -56,24 +61,19 @@ test("provider discovery preserves canonical order while summarizing a single in
     })),
     [
       { id: "claude", isAvailable: false },
-      { id: "gemini", isAvailable: true },
       { id: "codex", isAvailable: false },
-      { id: "opencode", isAvailable: false },
     ],
   );
 
   assert.deepEqual(
     result.installedProviders.map((provider) => provider.provider.id),
-    ["gemini"],
+    [],
   );
 
   assert.deepEqual(result.summary, {
-    availabilityStatus: "single",
-    installedProviderCount: 1,
-    recommendedProviderId: "gemini",
+    availabilityStatus: "none",
+    installedProviderCount: 0,
   });
-
-  assert.equal(result.installedProviders[0]?.executable, "/usr/local/bin/gemini");
 });
 
 test("provider discovery summarizes zero and multiple installed-provider cases without a recommendation", async () => {
@@ -102,7 +102,7 @@ test("provider discovery summarizes zero and multiple installed-provider cases w
       return createDiscoveryAdapter({
         provider: getBuiltInProviderIdentity(providerId),
         async detect() {
-          if (providerId === "claude" || providerId === "opencode") {
+          if (providerId === "claude" || providerId === "codex") {
             return {
               isAvailable: true,
               executable: `/opt/${providerId}`,
@@ -120,7 +120,7 @@ test("provider discovery summarizes zero and multiple installed-provider cases w
 
   assert.deepEqual(
     multipleResult.installedProviders.map((provider) => provider.provider.id),
-    ["claude", "opencode"],
+    ["claude", "codex"],
   );
   assert.deepEqual(multipleResult.summary, {
     availabilityStatus: "multiple",
@@ -162,10 +162,6 @@ test("provider discovery defaults to the production built-in adapter factory", a
 test("provider discovery degrades unsupported and failed providers into user-safe unavailable results", async () => {
   const result = await discoverBuiltInProviders({
     createAdapter(providerId) {
-      if (providerId === "gemini") {
-        throw new Error("Built-in provider 'gemini' is not wired yet.");
-      }
-
       return createDiscoveryAdapter({
         provider: getBuiltInProviderIdentity(providerId),
         async detect() {
@@ -180,11 +176,7 @@ test("provider discovery degrades unsupported and failed providers into user-saf
             throw new Error("spawn ENOENT while probing codex internals");
           }
 
-          return {
-            isAvailable: false,
-            reason: "This provider is not supported yet by DevFlow.",
-            debugReason: "OpenCode adapter is intentionally not implemented in this test.",
-          };
+          throw new Error(`Unexpected provider probed: ${providerId}`);
         },
       });
     },
@@ -197,22 +189,10 @@ test("provider discovery degrades unsupported and failed providers into user-saf
       executable: "/usr/local/bin/claude",
     },
     {
-      provider: getBuiltInProviderIdentity("gemini"),
-      isAvailable: false,
-      reason: "This provider is not supported yet by DevFlow.",
-      debugReason: "Built-in provider 'gemini' is not wired yet.",
-    },
-    {
       provider: getBuiltInProviderIdentity("codex"),
       isAvailable: false,
       reason: "This provider is currently unavailable.",
       debugReason: "spawn ENOENT while probing codex internals",
-    },
-    {
-      provider: getBuiltInProviderIdentity("opencode"),
-      isAvailable: false,
-      reason: "This provider is not supported yet by DevFlow.",
-      debugReason: "OpenCode adapter is intentionally not implemented in this test.",
     },
   ]);
 
