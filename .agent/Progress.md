@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-06-05_
+_Last updated: 2026-06-06_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md` and `new_spec.md`.
 Hard limit: 100 lines.
@@ -69,6 +69,11 @@ Hard limit: 100 lines.
   - `src/logger.ts` provides injected JSONL logging with `debug`/`info`/`warn`/`error`/`critical`, append-only daily files, critical correlation refs, full serialized errors for `error`/`critical`, repo-local-to-home fallback, never-throw behavior, and 30-day startup pruning
   - CLI failures are split cleanly: anticipated typed failures log at `error` while keeping tailored terminal messages; unexpected fall-throughs log at `critical` and print only a generic message, correlation ref, and diagnostic log path
   - the orchestrator emits `info` lifecycle entries for run/stage/iteration/summary milestones and `warn` entries for retries, repairs, provider-session recovery, artifact fallback recovery, stale-context refreshes, and repaired config/metadata
+- Completion-marker prompt discipline is complete:
+  - `CONTEXT.md` defines completion markers as DevFlow's authoritative per-stage done signal and defines grill conclusion confirmation as the grill-only approval handshake before marker emission
+  - `intent`, `bootstrap-project-context`, `prd`, `issues`, and execute prompts now explain exactly-once marker emission, immediate DevFlow advancement, no further turns for completed work, and omission/premature-emission failure modes
+  - grill prompts require a marker-free conclusion question, resolution of any remaining user concerns, and a marker-only completion turn after explicit approval to conclude
+  - interrupted grill/PRD resume prompts plus intent, bootstrap, PRD, and issues repair prompts carry the same critical marker guidance, with stable prompt-rendering/orchestrator coverage
 - Maintainer documentation/tests now pin structured provider constraints, structured grill transcript policy, and provider-native boundary isolation.
 
 ## Current State
@@ -76,16 +81,17 @@ Hard limit: 100 lines.
 - MVP no longer includes a `validate` stage; `execute` is the terminal provider-backed stage.
 - Gemini, OpenCode, and Claude PTY fallback sessions remain PTY-marker/transcript fallback providers without reliable provider session ids or resume support.
 - Codex hook/JSONL and Claude hook/JSONL structured paths use PTY as control transport and normalized provider events as the data plane.
-- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, or diagnostic logging workstreams from `.agent/task_progress.md`.
-- Latest task-progress entry: `07-target-repo-gitignore` is complete.
+- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, diagnostic logging, or completion-marker prompt workstreams from `.agent/task_progress.md`.
+- Latest task-progress entry: `005-extend-marker-criticality-to-resume-and-repair-prompts` is complete.
 
 ## Known Remaining Work
 1. Future provider work:
-  - Marker should be stated to the provider as a critical thing, as soon as it is emitted the run will be stopped so ask the 
-    provider not to emit until the job is really finished. Ask the provider (only in grill stage) to ask user if 
-    he/she had any questions or concerns or can it conclude the grilling session. If the user says yes, 
-    only then emit the marker of Grill complete. Other session doesn't need to ask anything but for now make
-    sure that the markers purpose are defined pretty well and it should not be emitted anytime before.
   - add adapter-deep `debug` tracing for provider events, marker scans, and fallback-tier selection now that the injected `Logger` is available
   - keep PTY marker completion and transcript callbacks as fallback behavior
-  - graduate Gemini and OpenCode from PTY fallback only when their structured sources can truthfully support the normalized event contract
+  - defer Gemini and OpenCode from supported MVP claims; keep them documented as PTY fallback/experimental until their structured sources can truthfully support the normalized event contract
+2. PTY duplication audit:
+  - review Codex hook/JSONL, Claude hook/JSONL, and fallback PTY control paths for duplicated runner/control logic before release
+3. Release/docs readiness:
+  - replace the current bad `README.md`, clean package metadata, and point `package.json` `main` at `dist/cli.js`
+4. End-to-end testing (HITL):
+  - run real provider smoke tests through tiny repositories for Codex/Claude happy paths, resume behavior, execute loop stops, and HITL/AFK issue handling
