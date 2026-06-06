@@ -136,6 +136,7 @@ export async function runCodexJsonlSession(
       provider: command.provider,
       source: "jsonl",
       structured: true,
+      logger: command.logger,
       input,
       submitPrompt(prompt) {
         return submitManagedPrompt(prompt);

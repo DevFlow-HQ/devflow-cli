@@ -1,4 +1,11 @@
 import {
+  buildCompletionMarkerMatchTrace,
+  buildPhaseTransitionTrace,
+  buildProviderEventTrace,
+  buildTurnBoundaryMarkerMissTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
+import {
   findMatchedCompletionMarker,
   type ManagedProviderSessionContinuation,
   type ManagedProviderSessionEvent,
@@ -7,6 +14,7 @@ import {
   type ManagedProviderSessionRepairConfig,
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
+import { NoopLogger, type Logger } from "../logger.js";
 
 type DistributiveOmit<T, K extends keyof any> = T extends unknown
   ? Omit<T, K>
@@ -45,6 +53,7 @@ export interface PhaseManagerOptions {
   provider: ProviderIdentity;
   source: ManagedProviderSessionEventSource;
   structured: boolean;
+  logger?: Logger;
   input: ManagedProviderSessionInput;
   submitPrompt(prompt: string): void | Promise<void>;
   finalize(): void | Promise<void>;
@@ -62,6 +71,7 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
   let state: PhaseManagerState = { type: "initial" };
   let usedRepair = false;
   let matchedCompletionMarker: string | undefined;
+  const logger = options.logger ?? NoopLogger;
 
   async function handleEvent(event: PhaseManagerEventInput): Promise<void> {
     if (state.type === "finalized") {
@@ -71,23 +81,44 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
     const phaseId = getActivePhaseId(state, options.input);
     await emitProviderEvent(event, phaseId);
 
-    if (
-      event.type !== "turn-completed" ||
-      event.assistantMessage === undefined
-    ) {
+    if (event.type !== "turn-completed") {
       return;
     }
 
+    const markerSet = getActiveCompletionMarkerSet(state, options.input);
     const completionMarker = findMatchedCompletionMarker(
-      event.assistantMessage,
-      getActiveCompletionMarkerSet(state, options.input),
+      event.assistantMessage ?? "",
+      markerSet,
     );
 
     if (completionMarker === undefined) {
+      if (options.structured && markerSet !== undefined) {
+        emitAdapterTrace(
+          logger,
+          buildTurnBoundaryMarkerMissTrace({
+            provider: options.provider,
+            source: options.source,
+            structured: options.structured,
+            phaseId,
+          }),
+        );
+      }
       return;
     }
 
     matchedCompletionMarker = completionMarker;
+    emitAdapterTrace(
+      logger,
+      buildCompletionMarkerMatchTrace({
+        provider: options.provider,
+        source: options.source,
+        structured: options.structured,
+        phaseId,
+        matchedMarker: completionMarker,
+        isTerminalCompletionMarker:
+          markerSet?.terminalCompletionMarker === completionMarker,
+      }),
+    );
 
     if (state.type === "repair") {
       await completeRepairPhase(state);
@@ -101,6 +132,16 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
     event: PhaseManagerEventInput,
     phaseId: string | undefined,
   ): Promise<void> {
+    emitAdapterTrace(
+      logger,
+      buildProviderEventTrace({
+        provider: options.provider,
+        source: options.source,
+        structured: options.structured,
+        phaseId,
+        event,
+      }),
+    );
     await options.input.onProviderEvent?.({
       ...event,
       provider: options.provider,
@@ -126,11 +167,11 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
           ? state.attempt + 1
           : 1;
 
-      state = {
+      transitionTo({
         type: "repair",
         base,
         attempt: nextAttempt,
-      };
+      });
       usedRepair = true;
 
       await options.submitPrompt(repair.renderPrompt(error));
@@ -155,7 +196,7 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
       throw repair.mapFailure(error as Error);
     }
 
-    state = repairState.base;
+    transitionTo(repairState.base);
     await advanceAfterSuccessfulValidation();
   }
 
@@ -165,19 +206,41 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
     const nextContinuation = options.input.continuations?.[nextContinuationIndex];
 
     if (!nextContinuation) {
-      state = {
+      transitionTo({
         type: "finalized",
-      };
+      });
       await options.finalize();
       return;
     }
 
-    state = {
+    transitionTo({
       type: "continuation",
       index: nextContinuationIndex,
-    };
+    });
     await nextContinuation.onStart?.();
     await options.submitPrompt(nextContinuation.prompt);
+  }
+
+  function transitionTo(nextState: PhaseManagerState): void {
+    const fromState = state;
+    const fromPhaseId = getActivePhaseId(fromState, options.input);
+    const toPhaseId = getActivePhaseId(nextState, options.input);
+
+    state = nextState;
+
+    emitAdapterTrace(
+      logger,
+      buildPhaseTransitionTrace({
+        provider: options.provider,
+        source: options.source,
+        structured: options.structured,
+        phaseId: toPhaseId,
+        from: describePhaseManagerState(fromState),
+        to: describePhaseManagerState(nextState),
+        fromPhaseId,
+        toPhaseId,
+      }),
+    );
   }
 
   return {
@@ -195,6 +258,18 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
       return matchedCompletionMarker;
     },
   };
+}
+
+function describePhaseManagerState(state: PhaseManagerState): string {
+  if (state.type === "continuation") {
+    return `continuation-${state.index + 1}`;
+  }
+
+  if (state.type === "repair") {
+    return `repair-${state.attempt}`;
+  }
+
+  return state.type;
 }
 
 function validatePhase(

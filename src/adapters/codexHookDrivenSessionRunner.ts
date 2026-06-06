@@ -115,6 +115,7 @@ export async function runCodexHookDrivenSession(
       provider: command.provider,
       source: "hooks",
       structured: true,
+      logger: command.logger,
       input,
       submitPrompt(prompt) {
         if (!processHandle) {

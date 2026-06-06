@@ -1,5 +1,6 @@
 import {
   type ManagedProviderSessionCapabilities,
+  type ManagedProviderSessionEventSource,
   type SubmittedUserMessageOrigin,
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
@@ -13,6 +14,11 @@ export interface AdapterTrace {
 interface AdapterTraceBase {
   provider: ProviderIdentity;
   phaseId?: string;
+}
+
+interface AdapterProviderEventTraceBase extends AdapterTraceBase {
+  source: ManagedProviderSessionEventSource;
+  structured: boolean;
 }
 
 export function buildTierResolutionTrace(
@@ -73,6 +79,87 @@ export function buildTurnCompletedTrace(
   };
 }
 
+export function buildProviderEventTrace(
+  input: AdapterProviderEventTraceBase & {
+    event:
+      | { type: "session-start" }
+      | {
+          type: "submitted-user-message";
+          message: string;
+          origin: SubmittedUserMessageOrigin;
+        }
+      | {
+          type: "turn-completed";
+          assistantMessage?: string;
+        }
+      | {
+          type: "session-completed";
+          exitCode: number | null;
+          signal: NodeJS.Signals | null;
+        };
+  },
+): AdapterTrace {
+  return {
+    msg: "adapter provider event forwarded",
+    context: adapterLogContext(input, {
+      type: input.event.type,
+      source: input.source,
+      structured: input.structured,
+      ...providerEventMetadata(input.event),
+    }),
+  };
+}
+
+export function buildCompletionMarkerMatchTrace(
+  input: AdapterProviderEventTraceBase & {
+    matchedMarker: string;
+    isTerminalCompletionMarker: boolean;
+  },
+): AdapterTrace {
+  return {
+    msg: "adapter completion marker matched",
+    context: adapterLogContext(input, {
+      source: input.source,
+      structured: input.structured,
+      matchedMarker: input.matchedMarker,
+      isTerminalCompletionMarker: input.isTerminalCompletionMarker,
+    }),
+  };
+}
+
+export function buildTurnBoundaryMarkerMissTrace(
+  input: AdapterProviderEventTraceBase,
+): AdapterTrace {
+  return {
+    msg: "adapter turn boundary marker miss",
+    context: adapterLogContext(input, {
+      source: input.source,
+      structured: input.structured,
+    }),
+  };
+}
+
+export function buildPhaseTransitionTrace(
+  input: AdapterProviderEventTraceBase & {
+    from: string;
+    to: string;
+    fromPhaseId?: string;
+    toPhaseId?: string;
+  },
+): AdapterTrace {
+  return {
+    msg: "adapter phase transition",
+    context: adapterLogContext(input, {
+      source: input.source,
+      structured: input.structured,
+      from: input.from,
+      to: input.to,
+      ...(input.fromPhaseId !== undefined ? { fromPhaseId: input.fromPhaseId } : {}),
+      ...(input.toPhaseId !== undefined ? { toPhaseId: input.toPhaseId } : {}),
+    }),
+  };
+}
+
 export function emitAdapterTrace(
   logger: Logger | undefined,
   trace: AdapterTrace,
@@ -91,4 +178,39 @@ function adapterLogContext(
       ...metadata,
     },
   };
+}
+
+function providerEventMetadata(
+  event:
+    | { type: "session-start" }
+    | {
+        type: "submitted-user-message";
+        message: string;
+        origin: SubmittedUserMessageOrigin;
+      }
+    | {
+        type: "turn-completed";
+        assistantMessage?: string;
+      }
+    | {
+        type: "session-completed";
+        exitCode: number | null;
+        signal: NodeJS.Signals | null;
+      },
+): Record<string, unknown> {
+  if (event.type === "submitted-user-message") {
+    return {
+      origin: event.origin,
+      messageLength: event.message.length,
+    };
+  }
+
+  if (event.type === "session-completed") {
+    return {
+      exitCode: event.exitCode,
+      signal: event.signal,
+    };
+  }
+
+  return {};
 }
