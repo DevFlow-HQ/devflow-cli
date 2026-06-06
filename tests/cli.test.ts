@@ -1205,7 +1205,7 @@ test("cli hands the orchestrator the exact resolved request when explicit provid
   );
 });
 
-test("cli rejects unknown --provider values before bootstrap fallback", async () => {
+test("cli rejects typoed --provider values before bootstrap fallback", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-unknown-provider-"));
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
@@ -1215,7 +1215,7 @@ test("cli rejects unknown --provider values before bootstrap fallback", async ()
   let discoveryCallCount = 0;
 
   const result = await invokeCliWithOptions(
-    ["--provider", "not-real", "resume", "work"],
+    ["--provider", "gpt4", "resume", "work"],
     {
       cwd: projectRoot,
       discoverProviders: async () => {
@@ -1228,9 +1228,46 @@ test("cli rejects unknown --provider values before bootstrap fallback", async ()
   assert.equal(discoveryCallCount, 0);
   assert.equal(result.commandError?.code, "commander.error");
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /Unsupported provider: not-real\./);
+  assert.match(result.stderr, /Unrecognized provider: gpt4\./);
   assert.match(result.stderr, /Supported providers:/);
   assert.match(result.stderr, /Claude \(claude\)/);
+  assert.match(result.stderr, /Codex \(codex\)/);
+  assert.doesNotMatch(result.stderr, /Gemini \(gemini\)/);
+  assert.doesNotMatch(result.stderr, /OpenCode \(opencode\)/);
+});
+
+test("cli rejects explicit deferred built-in providers as unsupported", async () => {
+  const projectRoot = fs.mkdtempSync(
+    join(tmpdir(), "devflow-cli-deferred-provider-override-"),
+  );
+  fs.outputFileSync(
+    join(projectRoot, ".devflow", "config.json"),
+    JSON.stringify({ defaultProvider: "codex" }, null, 2),
+  );
+
+  let discoveryCallCount = 0;
+
+  const result = await invokeCliWithOptions(
+    ["--provider", "gemini", "resume", "work"],
+    {
+      cwd: projectRoot,
+      discoverProviders: async () => {
+        discoveryCallCount += 1;
+        return discoverWithDeferredProvidersInstalled(["codex"]);
+      },
+    },
+  );
+
+  assert.equal(discoveryCallCount, 0);
+  assert.equal(result.commandError?.code, "commander.error");
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    /Provider Gemini \(gemini\) is not a supported provider\./,
+  );
+  assert.match(result.stderr, /Supported providers: Claude \(claude\), Codex \(codex\)\./);
+  assert.doesNotMatch(result.stderr, /currently unavailable/);
+  assert.doesNotMatch(result.stderr, /OpenCode \(opencode\)/);
 });
 
 test("cli rejects unavailable --provider overrides without mutating saved config", async () => {
@@ -1291,7 +1328,7 @@ test("cli fails fast when a saved default provider is no longer available", asyn
   );
 });
 
-test("cli rejects a saved deferred default provider through discovery lookup", async () => {
+test("cli rejects a saved deferred default provider as unsupported", async () => {
   const projectRoot = fs.mkdtempSync(
     join(tmpdir(), "devflow-cli-deferred-saved-provider-"),
   );
@@ -1320,8 +1357,15 @@ test("cli rejects a saved deferred default provider through discovery lookup", a
   assert.equal(result.stdout, "");
   assert.match(
     result.stderr,
-    /Saved default provider Gemini \(gemini\) is currently unavailable: Not installed\./,
+    /Saved default provider Gemini \(gemini\) is not a supported provider\./,
   );
+  assert.match(result.stderr, /Supported providers: Claude \(claude\), Codex \(codex\)\./);
+  assert.match(
+    result.stderr,
+    /Re-run DevFlow with --provider to choose a supported provider\./,
+  );
+  assert.doesNotMatch(result.stderr, /currently unavailable/);
+  assert.doesNotMatch(result.stderr, /OpenCode \(opencode\)/);
   assert.deepEqual(receivedRequests, []);
 });
 
@@ -1392,10 +1436,12 @@ test("cli fails first-run setup with supported-provider guidance when no support
     result.stderr,
     /No supported providers are currently installed\./,
   );
-  assert.match(result.stderr, /Claude \(claude\)/);
-  assert.match(result.stderr, /Gemini \(gemini\)/);
-  assert.match(result.stderr, /Codex \(codex\)/);
-  assert.match(result.stderr, /OpenCode \(opencode\)/);
+  assert.match(
+    result.stderr,
+    /Claude \(claude\), Codex \(codex\)/,
+  );
+  assert.doesNotMatch(result.stderr, /Gemini \(gemini\)/);
+  assert.doesNotMatch(result.stderr, /OpenCode \(opencode\)/);
   assert.deepEqual(receivedRequests, []);
   assert.equal(fs.pathExistsSync(join(projectRoot, ".devflow")), false);
 });

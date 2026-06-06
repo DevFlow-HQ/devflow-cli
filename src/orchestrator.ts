@@ -34,9 +34,13 @@ import {
 } from "./adapters/managedSessionAdapter.js";
 import {
   isBuiltInProviderId,
+  isSupportedProviderId,
   type BuiltInProviderId,
 } from "./adapters/providers.js";
-import { UnsupportedProviderError } from "./bootstrapProvider.js";
+import {
+  UnrecognizedProviderError,
+  UnsupportedProviderError,
+} from "./bootstrapProvider.js";
 import {
   createStructuredGrillTranscriptRecorder,
   stripCompletionMarkers,
@@ -2268,6 +2272,10 @@ export async function runExecutionRequest(
   }
 
   if (!isBuiltInProviderId(providerId)) {
+    throw new UnrecognizedProviderError(providerId);
+  }
+
+  if (!isSupportedProviderId(providerId)) {
     throw new UnsupportedProviderError(providerId);
   }
 

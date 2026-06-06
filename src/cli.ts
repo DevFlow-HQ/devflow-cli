@@ -11,6 +11,7 @@ import {
   ProviderUnavailableError,
   resolveBootstrapProvider,
   type PromptForProviderSelectionOptions,
+  UnrecognizedProviderError,
   UnsupportedProviderError,
 } from "./bootstrapProvider.js";
 import type { BuiltInProviderId } from "./adapters/providers.js";
@@ -260,6 +261,7 @@ function formatCliError(error: unknown): string | undefined {
   if (
     error instanceof NoSupportedProvidersInstalledError ||
     error instanceof ProviderSetupCancelledError ||
+    error instanceof UnrecognizedProviderError ||
     error instanceof UnsupportedProviderError ||
     error instanceof ProviderUnavailableError
   ) {

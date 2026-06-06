@@ -6,9 +6,10 @@ import {
   type ProviderDiscoveryResult,
 } from "./adapters/providerDiscovery.js";
 import {
-  BUILT_IN_PROVIDERS,
   getBuiltInProviderIdentity,
   isBuiltInProviderId,
+  isSupportedProviderId,
+  SUPPORTED_PROVIDER_IDS,
   type BuiltInProviderId,
 } from "./adapters/providers.js";
 import {
@@ -49,7 +50,7 @@ export interface ResolveBootstrapProviderOptions {
 export class NoSupportedProvidersInstalledError extends Error {
   constructor() {
     super(
-      `No supported providers are currently installed. Install one of the supported providers and run DevFlow again: ${BUILT_IN_PROVIDERS.map((provider) => formatProviderLabel(provider.id)).join(", ")}.`,
+      `No supported providers are currently installed. Install one of the supported providers and run DevFlow again: ${formatSupportedProviderLabels()}.`,
     );
     this.name = "NoSupportedProvidersInstalledError";
   }
@@ -63,11 +64,32 @@ export class ProviderSetupCancelledError extends Error {
 }
 
 export class UnsupportedProviderError extends Error {
-  constructor(providerId: string) {
+  constructor(
+    providerId: BuiltInProviderId,
+    source: "requested" | "saved" = "requested",
+  ) {
+    const sourceLabel =
+      source === "saved"
+        ? `Saved default provider ${formatProviderLabel(providerId)}`
+        : `Provider ${formatProviderLabel(providerId)}`;
+    const repairGuidance =
+      source === "saved"
+        ? " Re-run DevFlow with --provider to choose a supported provider."
+        : "";
+
     super(
-      `Unsupported provider: ${providerId}. Supported providers: ${BUILT_IN_PROVIDERS.map((provider) => formatProviderLabel(provider.id)).join(", ")}.`,
+      `${sourceLabel} is not a supported provider. Supported providers: ${formatSupportedProviderLabels()}.${repairGuidance}`,
     );
     this.name = "UnsupportedProviderError";
+  }
+}
+
+export class UnrecognizedProviderError extends Error {
+  constructor(providerId: string) {
+    super(
+      `Unrecognized provider: ${providerId}. Supported providers: ${formatSupportedProviderLabels()}.`,
+    );
+    this.name = "UnrecognizedProviderError";
   }
 }
 
@@ -90,6 +112,12 @@ export class ProviderUnavailableError extends Error {
 function formatProviderLabel(providerId: BuiltInProviderId): string {
   const provider = getBuiltInProviderIdentity(providerId);
   return `${provider.displayName} (${provider.id})`;
+}
+
+function formatSupportedProviderLabels(): string {
+  return SUPPORTED_PROVIDER_IDS.map((providerId) =>
+    formatProviderLabel(providerId),
+  ).join(", ");
 }
 
 function createProviderSelectionChoices(
@@ -176,6 +204,10 @@ export async function resolveBootstrapProvider(
 
   if (options.explicitProviderId) {
     if (!isBuiltInProviderId(options.explicitProviderId)) {
+      throw new UnrecognizedProviderError(options.explicitProviderId);
+    }
+
+    if (!isSupportedProviderId(options.explicitProviderId)) {
       throw new UnsupportedProviderError(options.explicitProviderId);
     }
 
@@ -188,6 +220,10 @@ export async function resolveBootstrapProvider(
   }
 
   if (options.savedProviderId) {
+    if (!isSupportedProviderId(options.savedProviderId)) {
+      throw new UnsupportedProviderError(options.savedProviderId, "saved");
+    }
+
     const discovery = await discoverProviders();
     return resolveAvailableDiscoveredProvider(
       discovery,

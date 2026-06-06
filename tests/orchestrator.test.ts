@@ -27,7 +27,10 @@ import {
   ProviderSessionTranscriptCaptureError,
 } from "../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
-import { UnsupportedProviderError } from "../src/bootstrapProvider.js";
+import {
+  UnrecognizedProviderError,
+  UnsupportedProviderError,
+} from "../src/bootstrapProvider.js";
 import {
   ExecutionLoopCapError,
   MissingProviderIdError,
@@ -7857,7 +7860,7 @@ test("orchestrator rejects provider-backed execution before creating a run when 
   assert.deepEqual(await listRunDirectories(projectRoot), []);
 });
 
-test("orchestrator rejects unsupported provider ids before creating a run", async () => {
+test("orchestrator rejects unrecognized provider ids before creating a run", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let adapterFactoryCallCount = 0;
@@ -7886,8 +7889,49 @@ test("orchestrator rejects unsupported provider ids before creating a run", asyn
       },
     ),
     (error: unknown) =>
+      error instanceof UnrecognizedProviderError &&
+      error.message.includes("Unrecognized provider: not-real"),
+  );
+
+  assert.equal(adapterFactoryCallCount, 0);
+  assert.deepEqual(await listRunDirectories(projectRoot), []);
+});
+
+test("orchestrator rejects deferred built-in provider ids before creating a run", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
+  let adapterFactoryCallCount = 0;
+
+  await assert.rejects(
+    runExecutionRequest(
+      {
+        projectRoot,
+        rawTask: "resume work",
+        providerId: "gemini",
+      },
+      {
+        devFlowState,
+        createManagedSessionAdapter() {
+          adapterFactoryCallCount += 1;
+          return {
+            provider: getBuiltInProviderIdentity("codex"),
+            async detect() {
+              return { isAvailable: true, executable: "codex" };
+            },
+            async runSession() {
+              return { repairUsed: false, exitCode: 0, signal: null };
+            },
+          };
+        },
+      },
+    ),
+    (error: unknown) =>
       error instanceof UnsupportedProviderError &&
-      error.message.includes("Unsupported provider: not-real"),
+      error.message.includes(
+        "Provider Gemini (gemini) is not a supported provider",
+      ) &&
+      error.message.includes("Claude (claude), Codex (codex)") &&
+      !error.message.includes("OpenCode (opencode)"),
   );
 
   assert.equal(adapterFactoryCallCount, 0);

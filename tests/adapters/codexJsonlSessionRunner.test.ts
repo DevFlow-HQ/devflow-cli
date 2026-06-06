@@ -259,6 +259,21 @@ async function waitForFile(path: string): Promise<void> {
   }
 }
 
+async function waitForProviderEvent(
+  events: ManagedProviderSessionEvent[],
+  predicate: (event: ManagedProviderSessionEvent) => boolean,
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+
+  while (!events.some(predicate)) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for provider event.");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 function createFixedSessionLogLocator(filePath: string): SessionLogLocator {
   return {
     async snapshot() {
@@ -633,6 +648,10 @@ test("Codex JSONL runner fresh launch snapshots before spawn and tails selected 
     await appendSessionMeta(codexHome, freshRollout);
     await appendTaskComplete(codexHome, freshRollout, "fresh turn INITIAL_DONE");
     await waitForPtyWrites(spawner.process, 1);
+    await waitForProviderEvent(
+      events,
+      (event) => event.type === "turn-completed",
+    );
     spawner.process.emitExit(0);
   });
   const originalSpawn = spawner.spawn.bind(spawner);
