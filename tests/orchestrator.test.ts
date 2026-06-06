@@ -1616,6 +1616,8 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const resolvedProviderIds: string[] = [];
+  const receivedLoggers: Array<Logger | undefined> = [];
+  const { logger } = createCapturingLogger();
   const runSessionInputs: ManagedProviderSessionInput[] = [];
   const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
@@ -1665,14 +1667,17 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
     },
     {
       devFlowState,
-      createManagedSessionAdapter(providerId) {
+      logger,
+      createManagedSessionAdapter(providerId, factoryLogger) {
         resolvedProviderIds.push(providerId);
+        receivedLoggers.push(factoryLogger);
         return adapter;
       },
     },
   );
 
   assert.deepEqual(resolvedProviderIds, ["codex"]);
+  assert.deepEqual(receivedLoggers, [logger]);
   assert.equal(runSessionInputs.length, 2);
   const runIds = await listRunDirectories(projectRoot);
   assert.equal(runIds.length, 1);

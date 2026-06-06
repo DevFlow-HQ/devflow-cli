@@ -36,6 +36,7 @@ import type { ClaudeHookDrivenSessionCommand } from "../../src/adapters/claudeHo
 import type { ClaudeJsonlSessionCommand } from "../../src/adapters/claudeJsonlSessionRunner.js";
 import type { CodexHookDrivenSessionCommand } from "../../src/adapters/codexHookDrivenSessionRunner.js";
 import type { CodexJsonlSessionCommand } from "../../src/adapters/codexJsonlSessionRunner.js";
+import type { LogContext, Logger } from "../../src/logger.js";
 
 interface AdapterContractHarness {
   providerId: BuiltInProviderId;
@@ -90,6 +91,26 @@ class CapturingPtyRunner {
       signal: null,
     };
   }
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context?: LogContext;
+  }> = [];
+  const logger: Logger = {
+    debug: (msg, context) => entries.push({ level: "debug", msg, context }),
+    info: (msg, context) => entries.push({ level: "info", msg, context }),
+    warn: (msg, context) => entries.push({ level: "warn", msg, context }),
+    error: (msg, context) => entries.push({ level: "error", msg, context }),
+    critical: (msg, context) => {
+      entries.push({ level: "critical", msg, context });
+      return "err_test";
+    },
+  };
+
+  return { entries, logger };
 }
 
 class CapturingCodexHookRunner {
@@ -643,6 +664,56 @@ test("Codex adapter exposes selected JSONL capabilities without changing automat
     }).capabilities,
     jsonlCapabilities,
   );
+});
+
+test("Codex adapter emits construction-time tier resolution when logger is injected", () => {
+  const { entries, logger } = createCapturingLogger();
+
+  createCodexAdapter({ eventSource: "jsonl", logger });
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.level, "debug");
+  assert.match(entries[0]?.msg ?? "", /data-plane/i);
+  assert.equal(entries[0]?.context?.runId, undefined);
+  assert.equal(entries[0]?.context?.stage, undefined);
+  assert.deepEqual(entries[0]?.context?.context, {
+    providerId: "codex",
+    tier: "jsonl",
+    eventSource: "jsonl",
+    capabilities: {
+      controlTransport: "pty",
+      eventSource: "jsonl",
+      supportsProviderSessionId: true,
+      supportsResume: true,
+      classifiesSubmittedUserMessageOrigin: true,
+    },
+  });
+});
+
+test("adapter factories preserve behavior when no logger is injected", () => {
+  const codex = createCodexAdapter({ eventSource: "jsonl" });
+  const claude = createClaudeAdapter({ eventSource: "hooks" });
+  const builtIn = createBuiltInManagedSessionAdapter("codex", {
+    codexEventSource: "jsonl",
+  });
+
+  assert.deepEqual(codex.capabilities, {
+    controlTransport: "pty",
+    eventSource: "jsonl",
+    supportsProviderSessionId: true,
+    supportsResume: true,
+    classifiesSubmittedUserMessageOrigin: true,
+  });
+  assert.equal(canResumeManagedProviderSession(codex), true);
+  assert.deepEqual(claude.capabilities, {
+    controlTransport: "pty",
+    eventSource: "hooks",
+    supportsProviderSessionId: true,
+    supportsResume: true,
+    classifiesSubmittedUserMessageOrigin: true,
+  });
+  assert.equal(canResumeManagedProviderSession(claude), true);
+  assert.deepEqual(builtIn.capabilities, codex.capabilities);
 });
 
 test("Claude adapter exposes hook-mode capabilities including resume support", () => {

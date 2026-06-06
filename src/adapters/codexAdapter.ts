@@ -1,6 +1,10 @@
 import which from "which";
 
 import {
+  buildTierResolutionTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
+import {
   type ManagedProviderSessionCapabilities,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResumeInput,
@@ -18,6 +22,7 @@ import {
   type CodexJsonlSessionCommand,
 } from "./codexJsonlSessionRunner.js";
 import { getBuiltInProviderIdentity } from "./providers.js";
+import { NoopLogger, type Logger } from "../logger.js";
 
 export type CodexHookDrivenRunner = (
   command: CodexHookDrivenSessionCommand,
@@ -32,6 +37,7 @@ export type CodexJsonlRunner = (
 export type CodexManagedSessionEventSource = "hooks" | "jsonl";
 
 export interface CodexAdapterOptions {
+  logger?: Logger;
   runCodexHookDrivenSession?: CodexHookDrivenRunner;
   runCodexJsonlSession?: CodexJsonlRunner;
   eventSource?: CodexManagedSessionEventSource;
@@ -44,6 +50,8 @@ export function createCodexAdapter(
   const eventSource = options.eventSource ?? "hooks";
   const hookRunner = options.runCodexHookDrivenSession ?? runCodexHookDrivenSession;
   const jsonlRunner = options.runCodexJsonlSession ?? runCodexJsonlSession;
+  const logger = options.logger ?? NoopLogger;
+  const hasInjectedLogger = options.logger !== undefined;
   const capabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource,
@@ -51,6 +59,15 @@ export function createCodexAdapter(
     supportsResume: true,
     classifiesSubmittedUserMessageOrigin: true,
   };
+
+  emitAdapterTrace(
+    logger,
+    buildTierResolutionTrace({
+      provider,
+      tier: eventSource,
+      capabilities,
+    }),
+  );
 
   async function resolveExecutable(): Promise<string> {
     return which("codex");
@@ -127,7 +144,7 @@ export function createCodexAdapter(
     return input.model ? ["--model", input.model] : [];
   }
 
-  async function runSelectedRunner(options: {
+  async function runSelectedRunner(runnerOptions: {
     executable: string;
     args: string[];
     input: ManagedProviderSessionInput;
@@ -135,15 +152,16 @@ export function createCodexAdapter(
   }): Promise<ManagedProviderSessionResult> {
     const command = {
       provider,
-      executable: options.executable,
-      args: options.args,
-      ...(options.resumeProviderSessionId
-        ? { resumeProviderSessionId: options.resumeProviderSessionId }
+      executable: runnerOptions.executable,
+      args: runnerOptions.args,
+      ...(hasInjectedLogger ? { logger } : {}),
+      ...(runnerOptions.resumeProviderSessionId
+        ? { resumeProviderSessionId: runnerOptions.resumeProviderSessionId }
         : {}),
     };
     const runner = eventSource === "jsonl" ? jsonlRunner : hookRunner;
 
-    return runner(command, options.input);
+    return runner(command, runnerOptions.input);
   }
 
   return {

@@ -67,6 +67,7 @@ export interface RunExecutionRequestOptions {
   logger?: Logger;
   createManagedSessionAdapter?: (
     providerId: BuiltInProviderId,
+    logger?: Logger,
   ) => ManagedSessionAdapter;
   onRunCreated?: (run: {
     id: string;
@@ -2272,9 +2273,12 @@ export async function runExecutionRequest(
 
   const devFlowState =
     options.devFlowState ?? createDevFlowState({ projectRoot: request.projectRoot });
-  const createManagedSessionAdapter =
-    options.createManagedSessionAdapter ?? createBuiltInManagedSessionAdapter;
-  const adapter = createManagedSessionAdapter(providerId);
+  const adapter =
+    options.createManagedSessionAdapter !== undefined
+      ? options.createManagedSessionAdapter(providerId, options.logger)
+      : createBuiltInManagedSessionAdapter(providerId, {
+          logger: options.logger,
+        });
   const run = await devFlowState.createRun();
 
   options.logger?.info("run created", {

@@ -14,6 +14,7 @@ import {
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
+import type { Logger } from "../logger.js";
 
 export interface PtySpawnOptions {
   cwd: string;
@@ -79,6 +80,7 @@ export interface PtyManagedSessionCommand {
   args: string[];
   cleanupCommand?: string;
   markerBufferLimit?: number;
+  logger?: Logger;
 }
 
 export interface PtyManagedSessionDependencies {

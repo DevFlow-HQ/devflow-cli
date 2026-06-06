@@ -42,12 +42,14 @@ import type {
   SessionLogLocator,
   SessionLogResumeLocation,
 } from "./codexSessionLogLocator.js";
+import type { Logger } from "../logger.js";
 
 export interface ClaudeJsonlSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
   resumeProviderSessionId?: string;
+  logger?: Logger;
 }
 
 export interface ClaudeJsonlSessionDependencies {

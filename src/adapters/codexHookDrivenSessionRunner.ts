@@ -34,11 +34,13 @@ import {
   type UserInterruptState,
 } from "./ptyManagedSessionRunner.js";
 import type { ProviderIdentity } from "./providers.js";
+import type { Logger } from "../logger.js";
 
 export interface CodexHookDrivenSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
+  logger?: Logger;
 }
 
 export interface CodexHookDrivenSessionDependencies {

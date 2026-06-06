@@ -37,12 +37,14 @@ import {
   type UserInterruptState,
 } from "./ptyManagedSessionRunner.js";
 import type { ProviderIdentity } from "./providers.js";
+import type { Logger } from "../logger.js";
 
 export interface CodexJsonlSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
   resumeProviderSessionId?: string;
+  logger?: Logger;
 }
 
 export interface CodexJsonlSessionDependencies {

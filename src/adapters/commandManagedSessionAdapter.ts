@@ -1,6 +1,10 @@
 import which from "which";
 
 import {
+  buildTierResolutionTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
+import {
   type ManagedProviderSessionCapabilities,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
@@ -16,6 +20,7 @@ import {
   getBuiltInProviderIdentity,
   type BuiltInProviderId,
 } from "./providers.js";
+import { NoopLogger, type Logger } from "../logger.js";
 
 export type ManagedSessionPtyRunner = (
   command: PtyManagedSessionCommand,
@@ -30,6 +35,7 @@ interface CommandManagedSessionConfig {
 }
 
 export interface CommandManagedSessionAdapterOptions {
+  logger?: Logger;
   runPtyManagedSession?: ManagedSessionPtyRunner;
 }
 
@@ -47,6 +53,16 @@ export function createCommandManagedSessionAdapter(
 ): ManagedSessionAdapter {
   const provider = getBuiltInProviderIdentity(config.providerId);
   const ptyRunner = options.runPtyManagedSession ?? runPtyManagedSession;
+  const logger = options.logger ?? NoopLogger;
+
+  emitAdapterTrace(
+    logger,
+    buildTierResolutionTrace({
+      provider,
+      tier: PTY_FALLBACK_CAPABILITIES.eventSource,
+      capabilities: PTY_FALLBACK_CAPABILITIES,
+    }),
+  );
 
   async function resolveExecutable(): Promise<string> {
     return which(config.command);
@@ -88,6 +104,7 @@ export function createCommandManagedSessionAdapter(
         executable,
         args: config.buildArgs(input),
         cleanupCommand: config.cleanupCommand,
+        ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
     );

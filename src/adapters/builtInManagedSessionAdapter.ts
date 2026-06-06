@@ -2,6 +2,10 @@ import {
   createClaudeAdapter,
   type ClaudeManagedSessionEventSource,
 } from "./claudeAdapter.js";
+import {
+  buildTierResolutionTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
 import type { CommandManagedSessionAdapterOptions } from "./commandManagedSessionAdapter.js";
 import {
   createCodexAdapter,
@@ -12,6 +16,7 @@ import { createGeminiAdapter } from "./geminiAdapter.js";
 import { createOpenCodeAdapter } from "./opencodeAdapter.js";
 import type { ManagedSessionAdapter } from "./managedSessionAdapter.js";
 import type { BuiltInProviderId } from "./providers.js";
+import { NoopLogger } from "../logger.js";
 
 export type BuiltInManagedSessionAdapterOptions =
   CommandManagedSessionAdapterOptions &
@@ -24,22 +29,42 @@ export function createBuiltInManagedSessionAdapter(
   providerId: BuiltInProviderId,
   options?: BuiltInManagedSessionAdapterOptions,
 ): ManagedSessionAdapter {
+  const logger = options?.logger ?? NoopLogger;
+  let adapter: ManagedSessionAdapter;
+
   switch (providerId) {
     case "claude":
-      return createClaudeAdapter({
+      adapter = createClaudeAdapter({
         ...options,
         eventSource: options?.claudeEventSource,
       });
+      break;
     case "gemini":
-      return createGeminiAdapter(options);
+      adapter = createGeminiAdapter(options);
+      break;
     case "codex":
-      return createCodexAdapter({
+      adapter = createCodexAdapter({
         ...options,
         eventSource: options?.codexEventSource,
       });
+      break;
     case "opencode":
-      return createOpenCodeAdapter(options);
+      adapter = createOpenCodeAdapter(options);
+      break;
     default:
       throw new Error(`Built-in provider '${providerId}' is not wired yet.`);
   }
+
+  if (adapter.capabilities !== undefined) {
+    emitAdapterTrace(
+      logger,
+      buildTierResolutionTrace({
+        provider: adapter.provider,
+        tier: adapter.capabilities.eventSource,
+        capabilities: adapter.capabilities,
+      }),
+    );
+  }
+
+  return adapter;
 }

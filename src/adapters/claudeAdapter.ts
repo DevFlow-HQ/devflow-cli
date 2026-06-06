@@ -1,6 +1,10 @@
 import which from "which";
 
 import {
+  buildTierResolutionTrace,
+  emitAdapterTrace,
+} from "./adapterTrace.js";
+import {
   createCommandManagedSessionAdapter,
   type CommandManagedSessionAdapterOptions,
 } from "./commandManagedSessionAdapter.js";
@@ -22,11 +26,13 @@ import type {
   ProviderDetectionResult,
 } from "./managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "./providers.js";
+import { NoopLogger, type Logger } from "../logger.js";
 
 export type ClaudeManagedSessionEventSource = "pty" | "hooks" | "jsonl";
 
 export interface ClaudeAdapterOptions
   extends CommandManagedSessionAdapterOptions {
+  logger?: Logger;
   eventSource?: ClaudeManagedSessionEventSource;
   runClaudeHookDrivenSession?: ClaudeHookDrivenRunner;
   runClaudeJsonlSession?: ClaudeJsonlRunner;
@@ -100,6 +106,16 @@ function createClaudeJsonlAdapter(
 ): ManagedSessionAdapter {
   const provider = getBuiltInProviderIdentity("claude");
   const jsonlRunner = options.runClaudeJsonlSession ?? runClaudeJsonlSession;
+  const logger = options.logger ?? NoopLogger;
+
+  emitAdapterTrace(
+    logger,
+    buildTierResolutionTrace({
+      provider,
+      tier: CLAUDE_JSONL_CAPABILITIES.eventSource,
+      capabilities: CLAUDE_JSONL_CAPABILITIES,
+    }),
+  );
 
   async function resolveExecutable(): Promise<string> {
     return which("claude");
@@ -140,6 +156,7 @@ function createClaudeJsonlAdapter(
         provider,
         executable,
         args: buildClaudeArgs(input),
+        ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
     );
@@ -162,6 +179,7 @@ function createClaudeJsonlAdapter(
         executable,
         args: buildClaudeResumeArgs(input),
         resumeProviderSessionId: input.providerSessionId,
+        ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
     );
@@ -182,6 +200,16 @@ function createClaudeHookAdapter(
   const provider = getBuiltInProviderIdentity("claude");
   const hookRunner =
     options.runClaudeHookDrivenSession ?? runClaudeHookDrivenSession;
+  const logger = options.logger ?? NoopLogger;
+
+  emitAdapterTrace(
+    logger,
+    buildTierResolutionTrace({
+      provider,
+      tier: CLAUDE_HOOK_CAPABILITIES.eventSource,
+      capabilities: CLAUDE_HOOK_CAPABILITIES,
+    }),
+  );
 
   async function resolveExecutable(): Promise<string> {
     return which("claude");
@@ -222,6 +250,7 @@ function createClaudeHookAdapter(
         provider,
         executable,
         args: buildClaudeArgs(input),
+        ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
     );
@@ -243,6 +272,7 @@ function createClaudeHookAdapter(
         provider,
         executable,
         args: buildClaudeResumeArgs(input),
+        ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
     );
