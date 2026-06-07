@@ -35,7 +35,6 @@ import {
   startPtyControlHarness,
 } from "./ptyControlHarness.js";
 import {
-  nodePtySpawner,
   submitPtyPrompt,
   type UserInterruptState,
 } from "./ptyManagedSessionRunner.js";
@@ -448,10 +447,10 @@ export async function runCodexJsonlSession(
           },
         },
         {
-          ptySpawner: dependencies.ptySpawner ?? nodePtySpawner,
-          outputSink: dependencies.outputSink ?? process.stdout,
-          terminal: dependencies.terminal ?? process.stdout,
-          userInput: dependencies.userInput ?? process.stdin,
+          ptySpawner: dependencies.ptySpawner,
+          outputSink: dependencies.outputSink,
+          terminal: dependencies.terminal,
+          userInput: dependencies.userInput,
         },
       );
     } catch (error) {
