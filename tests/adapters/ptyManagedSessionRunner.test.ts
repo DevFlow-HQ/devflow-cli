@@ -53,17 +53,33 @@ class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
   readonly resizes: Array<{ columns: number; rows: number }> = [];
   readonly emitter = new EventEmitter();
+  removedDataListeners = 0;
+  removedExitListeners = 0;
   killed = false;
   isAlive = true;
 
-  onData(listener: (data: string) => void): void {
+  onData(listener: (data: string) => void): { dispose(): void } {
     this.emitter.on("data", listener);
+
+    return {
+      dispose: () => {
+        this.removedDataListeners += 1;
+        this.emitter.off("data", listener);
+      },
+    };
   }
 
   onExit(
     listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
-  ): void {
+  ): { dispose(): void } {
     this.emitter.on("exit", listener);
+
+    return {
+      dispose: () => {
+        this.removedExitListeners += 1;
+        this.emitter.off("exit", listener);
+      },
+    };
   }
 
   write(data: string): void {
@@ -86,6 +102,10 @@ class FakePtyProcess implements PtyProcess {
   emitExit(exitCode: number, signal: NodeJS.Signals | null = null): void {
     this.isAlive = false;
     this.emitter.emit("exit", { exitCode, signal });
+  }
+
+  listenerCount(eventName: string): number {
+    return this.emitter.listenerCount(eventName);
   }
 }
 
@@ -474,6 +494,8 @@ test("PTY managed-session runner traces spawn, forwarded events, marker matches,
   const spawner = new FakePtySpawner();
   const { entries, logger } = createCapturingLogger();
   const promptArgument = "SECRET prompt argument must not be logged";
+  const runId = "run_secret_123";
+  const stageName = "execute-secret-stage";
 
   const runPromise = runPtyManagedSession(
     {
@@ -484,6 +506,7 @@ test("PTY managed-session runner traces spawn, forwarded events, marker matches,
       logger,
     },
     createInput({
+      workingDirectory: `/tmp/devflow/.devflow/runs/${runId}/${stageName}`,
       initialPrompt: promptArgument,
       initialCompletionMarker: "DEVFLOW_DONE",
       initialTerminalCompletionMarker: "NO_MORE_TASKS",
@@ -521,7 +544,10 @@ test("PTY managed-session runner traces spawn, forwarded events, marker matches,
   assert.equal(spawn?.context?.context?.providerId, "codex");
   assert.equal(spawn?.context?.context?.executable, "codex");
   assert.equal(spawn?.context?.context?.argumentCount, 2);
-  assert.equal(spawn?.context?.context?.workingDirectory, "/tmp/devflow");
+  assert.equal(
+    Object.hasOwn(spawn?.context?.context ?? {}, "workingDirectory"),
+    false,
+  );
   assert.equal(exit?.context?.context?.exitCode, 0);
   assert.equal(exit?.context?.context?.signal, null);
   assert.equal(markerMatch?.context?.context?.source, "pty");
@@ -536,6 +562,8 @@ test("PTY managed-session runner traces spawn, forwarded events, marker matches,
     ["session-start", "turn-completed", "session-completed"],
   );
   assert.doesNotMatch(serializedContexts, /SECRET prompt argument/);
+  assert.doesNotMatch(serializedContexts, new RegExp(runId));
+  assert.doesNotMatch(serializedContexts, new RegExp(stageName));
 });
 
 test("PTY managed-session runner preserves default behavior when no logger is supplied", async () => {
@@ -858,8 +886,7 @@ test("PTY managed-session runner captures raw terminal submissions without class
     "hel",
     "lo",
     "\r",
-    "second",
-    "\n",
+    "second\n",
     "\u0003",
     "/exit\n",
   ]);
@@ -1206,6 +1233,44 @@ test("PTY managed-session runner bridges TTY stdin to the provider and restores 
   assert.equal(userInput.pauseCount, 1);
   assert.equal(userInput.listenerCount("data"), 0);
   assert.equal(userInput.removedDataListeners.length, 1);
+  assert.equal(spawner.process.listenerCount("data"), 0);
+  assert.equal(spawner.process.listenerCount("exit"), 0);
+  assert.equal(spawner.process.removedDataListeners, 1);
+  assert.equal(spawner.process.removedExitListeners, 1);
+});
+
+test("PTY managed-session runner forwards Esc, Ctrl-C, and ordinary input bytes unchanged", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("\u001b");
+  userInput.emitData("abc");
+  userInput.emitData("\u0003");
+  spawner.process.emitData("DEVFLOW_DONE\n");
+
+  await runPromise;
+
+  assert.deepEqual(spawner.process.writes.slice(0, -1), [
+    "\u001b",
+    "abc",
+    "\u0003",
+  ]);
 });
 
 test("PTY managed-session runner does not bridge stdin when stdin is not a TTY", async () => {
@@ -1503,6 +1568,95 @@ test("PTY managed-session runner reports interrupted sessions when user interrup
   });
 });
 
+test("PTY managed-session runner preserves incomplete exit classification when later input clears Ctrl-C abort intent", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput(),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("\u0003");
+  userInput.emitData("keep working");
+  spawner.process.emitExit(1);
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof IncompleteProviderSessionError);
+    assert.equal(error.provider.id, "codex");
+    assert.equal(error.exitCode, 1);
+    return true;
+  });
+  assert.deepEqual(spawner.process.writes, ["\u0003", "keep working"]);
+});
+
+test("PTY managed-session runner clears Ctrl-C abort intent when DevFlow submits a managed prompt", async () => {
+  const spawner = new FakePtySpawner();
+  const userInput = new FakeUserInput(true);
+  let validationCount = 0;
+
+  const runPromise = runPtyManagedSession(
+    {
+      provider: getBuiltInProviderIdentity("codex"),
+      executable: "codex",
+      args: [],
+      cleanupCommand: "/exit\n",
+    },
+    createInput({
+      initialCompletionMarker: "INITIAL_DONE",
+      async validate() {
+        validationCount += 1;
+
+        if (validationCount === 1) {
+          throw new Error("invalid");
+        }
+      },
+      repair: {
+        completionMarker: "REPAIR_DONE",
+        renderPrompt() {
+          return "Repair it.";
+        },
+        mapFailure(error) {
+          return error;
+        },
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      terminal: {},
+      userInput,
+    },
+  );
+
+  userInput.emitData("\u0003");
+  spawner.process.emitData("INITIAL_DONE\n");
+  await waitForAsyncHandlers();
+  spawner.process.emitExit(1);
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof IncompleteProviderSessionError);
+    assert.equal(error.provider.id, "codex");
+    assert.equal(error.exitCode, 1);
+    return true;
+  });
+  assert.deepEqual(spawner.process.writes, [
+    "\u0003",
+    "\u001b[200~Repair it.\u001b[201~\r",
+  ]);
+});
+
 test("PTY managed-session runner forwards the first Ctrl-C and reports provider exit as interrupted", async () => {
   const spawner = new FakePtySpawner();
   const userInput = new FakeUserInput(true);
@@ -1568,7 +1722,7 @@ test("PTY managed-session runner kills the provider and reports interruption on 
   userInput.emitData("\u0003");
   userInput.emitData(Buffer.from("\u0003"));
 
-  assert.deepEqual(spawner.process.writes, ["\u0003"]);
+  assert.deepEqual(spawner.process.writes, ["\u0003", "\u0003"]);
   assert.equal(spawner.process.killed, true);
 
   await assert.rejects(runPromise, (error: unknown) => {

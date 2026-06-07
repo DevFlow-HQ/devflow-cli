@@ -1,18 +1,14 @@
 import stripAnsi from "strip-ansi";
-import pty from "node-pty";
 
 import {
   buildCompletionMarkerMatchTrace,
   buildProviderEventTrace,
-  buildPtyExitTrace,
-  buildPtySpawnTrace,
   emitAdapterTrace,
 } from "./adapterTrace.js";
 import {
   findMatchedCompletionMarker,
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
-  ProviderSessionLaunchError,
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   ProviderSessionTranscriptCaptureError,
@@ -20,65 +16,31 @@ import {
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";
+import {
+  startPtyControlHarness,
+  type OutputSink,
+  type PtyControlHarness,
+  type PtyProcess,
+  type PtySpawnOptions,
+  type PtySpawner,
+  type TerminalDimensions,
+  type UserInput,
+} from "./ptyControlHarness.js";
 import type { ProviderIdentity } from "./providers.js";
 import { NoopLogger, type Logger } from "../logger.js";
 
-export interface PtySpawnOptions {
-  cwd: string;
-  cols: number;
-  rows: number;
-  env?: NodeJS.ProcessEnv;
-}
-
-export interface PtyProcess {
-  onData(listener: (data: string) => void): void;
-  onExit(
-    listener: (event: {
-      exitCode: number;
-      signal: NodeJS.Signals | null;
-    }) => void,
-  ): void;
-  write(data: string): void;
-  kill(): void;
-  resize?(columns: number, rows: number): void;
-}
-
-export interface PtySpawner {
-  spawn(
-    executable: string,
-    args: string[],
-    options: PtySpawnOptions,
-  ): PtyProcess;
-}
-
-export interface OutputSink {
-  write(chunk: string): void;
-}
-
-export interface TerminalDimensions {
-  columns?: number;
-  rows?: number;
-  on?(event: "resize", listener: () => void): void;
-  off?(event: "resize", listener: () => void): void;
-  removeListener?(event: "resize", listener: () => void): void;
-}
+export { nodePtySpawner } from "./ptyControlHarness.js";
+export type {
+  OutputSink,
+  PtyProcess,
+  PtySpawnOptions,
+  PtySpawner,
+  TerminalDimensions,
+  UserInput,
+} from "./ptyControlHarness.js";
 
 export interface UserInterruptState {
   wasRequested(): boolean;
-}
-
-export interface UserInput {
-  isTTY?: boolean;
-  isRaw?: boolean;
-  setRawMode?(enabled: boolean): void;
-  on(event: "data", listener: (chunk: Buffer | string) => void): void;
-  off?(event: "data", listener: (chunk: Buffer | string) => void): void;
-  removeListener?(
-    event: "data",
-    listener: (chunk: Buffer | string) => void,
-  ): void;
-  resume?(): void;
-  pause?(): void;
 }
 
 export interface PtyManagedSessionCommand {
@@ -98,8 +60,6 @@ export interface PtyManagedSessionDependencies {
   userInterrupt?: UserInterruptState;
 }
 
-const DEFAULT_COLUMNS = 80;
-const DEFAULT_ROWS = 24;
 const DEFAULT_MARKER_BUFFER_LIMIT = 8192;
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
@@ -114,41 +74,6 @@ type PtyProviderEventInput = DistributiveOmit<
   ManagedProviderSessionEvent,
   "provider" | "source" | "structured" | "phaseId"
 >;
-export const nodePtySpawner: PtySpawner = {
-  spawn(executable, args, options) {
-    const process = pty.spawn(executable, args, {
-      cwd: options.cwd,
-      cols: options.cols,
-      rows: options.rows,
-      env: options.env,
-      name: "xterm-256color",
-    });
-
-    return {
-      onData(listener) {
-        process.onData(listener);
-      },
-      onExit(listener) {
-        process.onExit((event) => {
-          listener({
-            exitCode: event.exitCode,
-            signal: null,
-          });
-        });
-      },
-      write(data) {
-        process.write(data);
-      },
-      kill() {
-        process.kill();
-      },
-      resize(columns, rows) {
-        process.resize(columns, rows);
-      },
-    };
-  },
-};
-
 export function submitPtyPrompt(
   processHandle: Pick<PtyProcess, "write">,
   prompt: string,
@@ -163,36 +88,12 @@ export async function runPtyManagedSession(
   input: ManagedProviderSessionInput,
   dependencies: PtyManagedSessionDependencies = {},
 ): Promise<ManagedProviderSessionResult> {
-  const ptySpawner = dependencies.ptySpawner ?? nodePtySpawner;
-  const outputSink = dependencies.outputSink ?? process.stdout;
-  const terminal = dependencies.terminal ?? process.stdout;
-  const userInput = dependencies.userInput ?? process.stdin;
   const logger = command.logger ?? NoopLogger;
   const markerBufferLimit =
     command.markerBufferLimit ?? DEFAULT_MARKER_BUFFER_LIMIT;
-  let processHandle: PtyProcess;
-
-  try {
-    processHandle = ptySpawner.spawn(command.executable, command.args, {
-      cwd: input.workingDirectory,
-      cols: terminal.columns ?? DEFAULT_COLUMNS,
-      rows: terminal.rows ?? DEFAULT_ROWS,
-    });
-    emitAdapterTrace(
-      logger,
-      buildPtySpawnTrace({
-        provider: command.provider,
-        executable: command.executable,
-        argumentCount: command.args.length,
-        workingDirectory: input.workingDirectory,
-        promptArgument: input.initialPrompt,
-      }),
-    );
-  } catch (error) {
-    throw new ProviderSessionLaunchError(command.provider, error);
-  }
 
   return new Promise((resolve, reject) => {
+    let harness: PtyControlHarness;
     let rollingOutput = "";
     let phaseMarkerDetected = false;
     let waitingForRepair = false;
@@ -202,14 +103,11 @@ export async function runPtyManagedSession(
     let activeContinuationIndex: number | null = null;
     let repairUsed = false;
     let matchedCompletionMarker: string | undefined;
-    let interruptCount = 0;
-    let interruptRequested = false;
+    let abortIntentCurrent = false;
     let submittedUserMessageBuffer = "";
     let providerTranscriptStopped = false;
     let providerTranscriptRemainder = "";
     let cleanupPerformed = false;
-    let cleanupUserInputBridge = (): void => {};
-    let cleanupTerminalResize = (): void => {};
 
     function cleanup(): void {
       if (cleanupPerformed) {
@@ -217,9 +115,9 @@ export async function runPtyManagedSession(
       }
 
       if (command.cleanupCommand) {
-        processHandle.write(command.cleanupCommand);
+        harness.write(command.cleanupCommand);
       } else {
-        processHandle.kill();
+        harness.kill();
       }
 
       cleanupPerformed = true;
@@ -474,19 +372,8 @@ export async function runPtyManagedSession(
       };
     }
 
-    function cleanupInteractiveInput(): void {
-      cleanupUserInputBridge();
-      cleanupUserInputBridge = (): void => {};
-    }
-
-    function cleanupResizeListener(): void {
-      cleanupTerminalResize();
-      cleanupTerminalResize = (): void => {};
-    }
-
     function cleanupSessionListeners(): void {
-      cleanupInteractiveInput();
-      cleanupResizeListener();
+      harness?.dispose();
     }
 
     function resolveSession(result: ManagedProviderSessionResult): void {
@@ -531,107 +418,48 @@ export async function runPtyManagedSession(
       });
     }
 
-    function forwardInputChunk(chunk: string): void {
-      let pending = "";
+    function recordAbortIntent(): void {
+      abortIntentCurrent = true;
+    }
 
+    function clearAbortIntent(): void {
+      abortIntentCurrent = false;
+    }
+
+    function observeForwardedUserInput(chunk: string): void {
       for (const character of chunk) {
         if (character === "\r" || character === "\n") {
-          if (pending) {
-            processHandle.write(pending);
-            pending = "";
-          }
-
-          processHandle.write(character);
+          clearAbortIntent();
           captureSubmittedUserMessage(submittedUserMessageBuffer);
           submittedUserMessageBuffer = "";
           continue;
         }
 
-        if (character !== "\u0003") {
-          pending += character;
-          submittedUserMessageBuffer += character;
+        if (character === "\u0003") {
+          if (abortIntentCurrent) {
+            try {
+              harness.kill();
+            } finally {
+              settle(async () => {
+                throw createInterruptedError(null, "SIGINT");
+              });
+            }
+            continue;
+          }
+
+          recordAbortIntent();
           continue;
         }
 
-        if (pending) {
-          processHandle.write(pending);
-          pending = "";
-        }
-
-        interruptRequested = true;
-        interruptCount += 1;
-
-        if (interruptCount === 1) {
-          processHandle.write("\u0003");
-          continue;
-        }
-
-        try {
-          processHandle.kill();
-        } finally {
-          settle(async () => {
-            throw createInterruptedError(null, "SIGINT");
-          });
-        }
-      }
-
-      if (pending) {
-        processHandle.write(pending);
+        clearAbortIntent();
+        submittedUserMessageBuffer += character;
       }
     }
 
-    function setupUserInputBridge(): void {
-      if (!userInput.isTTY) {
-        return;
-      }
-
-      const wasRaw = userInput.isRaw === true;
-      const onData = (chunk: Buffer | string): void => {
-        forwardInputChunk(
-          typeof chunk === "string" ? chunk : chunk.toString("utf8"),
-        );
-      };
-
-      userInput.setRawMode?.(true);
-      userInput.resume?.();
-      userInput.on("data", onData);
-
-      cleanupUserInputBridge = () => {
-        if (userInput.off) {
-          userInput.off("data", onData);
-        } else {
-          userInput.removeListener?.("data", onData);
-        }
-
-        if (!wasRaw) {
-          userInput.setRawMode?.(false);
-        }
-
-        userInput.pause?.();
-      };
-    }
-
-    function setupTerminalResizeForwarding(): void {
-      if (!terminal.on) {
-        return;
-      }
-
-      const onResize = (): void => {
-        processHandle.resize?.(
-          terminal.columns ?? DEFAULT_COLUMNS,
-          terminal.rows ?? DEFAULT_ROWS,
-        );
-      };
-
-      terminal.on("resize", onResize);
-
-      cleanupTerminalResize = () => {
-        if (terminal.off) {
-          terminal.off("resize", onResize);
-        } else {
-          terminal.removeListener?.("resize", onResize);
-        }
-      };
+    function submitManagedPrompt(prompt: string): void {
+      clearAbortIntent();
+      submitPtyPrompt(harness, prompt);
+      emitManagedSubmittedUserMessage(prompt);
     }
 
     function startNextContinuationOrComplete(): void {
@@ -646,8 +474,7 @@ export async function runPtyManagedSession(
         rollingOutput = "";
         void Promise.resolve(nextContinuation.onStart?.())
           .then(() => {
-            submitPtyPrompt(processHandle, nextContinuation.prompt);
-            emitManagedSubmittedUserMessage(nextContinuation.prompt);
+            submitManagedPrompt(nextContinuation.prompt);
           })
           .catch((error) => {
             settled = true;
@@ -714,11 +541,11 @@ export async function runPtyManagedSession(
           }
 
           waitingForRepair = true;
+          phaseMarkerDetected = false;
           resumeProviderTranscriptCapture();
           rollingOutput = "";
           const repairPrompt = repair.renderPrompt(error);
-          submitPtyPrompt(processHandle, repairPrompt);
-          emitManagedSubmittedUserMessage(repairPrompt);
+          submitManagedPrompt(repairPrompt);
           return;
         }
 
@@ -732,6 +559,7 @@ export async function runPtyManagedSession(
     }
 
     function handleRepairCompletion(): void {
+      phaseMarkerDetected = true;
       const repair = getActiveRepair();
       const repairPhaseId = getActivePhaseId();
 
@@ -767,88 +595,90 @@ export async function runPtyManagedSession(
       })();
     }
 
-    setupUserInputBridge();
-    setupTerminalResizeForwarding();
-    void emitProviderEvent({ type: "session-start" });
-
-    processHandle.onData((chunk) => {
-      outputSink.write(chunk);
-
-      if (settled) {
-        return;
-      }
-
-      captureProviderTranscriptChunk(chunk);
-
-      if (settled) {
-        return;
-      }
-
-      rollingOutput = (rollingOutput + stripAnsi(chunk)).slice(
-        -markerBufferLimit,
-      );
-
-      if (waitingForRepair) {
-        if (
-          getActiveRepair() &&
-          rollingOutput.includes(getActiveRepair()?.completionMarker ?? "")
-        ) {
-          emitAdapterTrace(
-            logger,
-            buildCompletionMarkerMatchTrace({
-              provider: command.provider,
-              phaseId: getActivePhaseId(),
-              source: "pty",
-              structured: false,
-              matchedMarker: getActiveRepair()?.completionMarker ?? "",
-              isTerminalCompletionMarker: false,
-            }),
-          );
-          handleRepairCompletion();
-        }
-        return;
-      }
-
-      const activeCompletionMarker = findMatchedCompletionMarker(
-        rollingOutput,
-        getActiveCompletionMarkerSet(),
-      );
-
-      if (activeCompletionMarker !== undefined) {
-        handlePhaseCompletion(activeCompletionMarker);
-      }
-    });
-
-    processHandle.onExit((event) => {
-      exitCode = event.exitCode;
-      signal = event.signal;
-      emitAdapterTrace(
+    harness = startPtyControlHarness(
+      {
+        provider: command.provider,
+        executable: command.executable,
+        args: command.args,
+        cwd: input.workingDirectory,
         logger,
-        buildPtyExitTrace({
-          provider: command.provider,
-          exitCode: event.exitCode,
-          signal: event.signal,
-        }),
-      );
+      },
+      {
+        onUserInput: observeForwardedUserInput,
+        onOutput(chunk) {
+          if (settled) {
+            return;
+          }
 
-      if (phaseMarkerDetected || settled) {
-        return;
-      }
+          captureProviderTranscriptChunk(chunk);
 
-      settle(async () => {
-        if (interruptRequested || dependencies.userInterrupt?.wasRequested()) {
-          throw createInterruptedError(event.exitCode, event.signal);
-        }
+          if (settled) {
+            return;
+          }
 
-        throw new IncompleteProviderSessionError({
-          provider: command.provider,
-          completionMarker:
-            getActiveCompletionMarker() ?? input.initialCompletionMarker,
-          exitCode: event.exitCode,
-          signal: event.signal,
-        });
-      });
-    });
+          rollingOutput = (rollingOutput + stripAnsi(chunk)).slice(
+            -markerBufferLimit,
+          );
+
+          if (waitingForRepair) {
+            if (
+              getActiveRepair() &&
+              rollingOutput.includes(getActiveRepair()?.completionMarker ?? "")
+            ) {
+              emitAdapterTrace(
+                logger,
+                buildCompletionMarkerMatchTrace({
+                  provider: command.provider,
+                  phaseId: getActivePhaseId(),
+                  source: "pty",
+                  structured: false,
+                  matchedMarker: getActiveRepair()?.completionMarker ?? "",
+                  isTerminalCompletionMarker: false,
+                }),
+              );
+              handleRepairCompletion();
+            }
+            return;
+          }
+
+          const activeCompletionMarker = findMatchedCompletionMarker(
+            rollingOutput,
+            getActiveCompletionMarkerSet(),
+          );
+
+          if (activeCompletionMarker !== undefined) {
+            handlePhaseCompletion(activeCompletionMarker);
+          }
+        },
+        onExit(event) {
+          exitCode = event.exitCode;
+          signal = event.signal;
+
+          if (phaseMarkerDetected || settled) {
+            return;
+          }
+
+          settle(async () => {
+            if (
+              abortIntentCurrent ||
+              dependencies.userInterrupt?.wasRequested()
+            ) {
+              throw createInterruptedError(event.exitCode, event.signal);
+            }
+
+            throw new IncompleteProviderSessionError({
+              provider: command.provider,
+              completionMarker:
+                getActiveCompletionMarker() ?? input.initialCompletionMarker,
+              exitCode: event.exitCode,
+              signal: event.signal,
+            });
+          });
+        },
+      },
+      dependencies,
+    );
+    void emitProviderEvent({ type: "session-start" });
   });
 }
 

@@ -114,7 +114,6 @@ export function buildPtySpawnTrace(
   input: AdapterTraceBase & {
     executable: string;
     argumentCount: number;
-    workingDirectory: string;
     promptArgument?: string;
   },
 ): AdapterTrace {
@@ -125,7 +124,6 @@ export function buildPtySpawnTrace(
     context: adapterLogContext(input, {
       executable: input.executable,
       argumentCount: input.argumentCount,
-      workingDirectory: input.workingDirectory,
     }),
   };
 }
