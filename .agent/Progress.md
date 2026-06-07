@@ -25,9 +25,11 @@ Hard limit: 100 lines.
 - Provider selection deferral is complete:
   - `SUPPORTED_PROVIDER_IDS` and `isSupportedProviderId()` make Claude and Codex the only Supported MVP providers while leaving Gemini/OpenCode wired as Deferred adapters
   - discovery, first-run setup, saved defaults, explicit `--provider`, and supported-provider error enumerations now distinguish typoed ids, unsupported Deferred built-ins, and selectable Supported providers
-- PTY fallback transport is complete:
-  - `src/adapters/ptyManagedSessionRunner.ts` launches provider CLIs, mirrors output, scans ANSI-stripped bounded output for fallback markers, validates artifacts, sends cleanup, and supports same-session repair/continuations
-  - TTY stdin raw-mode bridging, first/second Ctrl-C behavior, terminal resize forwarding, launch failures, incomplete sessions, interruptions, cleanup failures, transcript callbacks, and event callback failures are typed and covered
+- PTY fallback transport and shared control harness are complete:
+  - `src/adapters/ptyControlHarness.ts` owns provider PTY spawn, output mirroring, raw stdin setup/restoration, byte-for-byte input forwarding, resize forwarding, listener cleanup, kill/write helpers, launch mapping, and metadata-only PTY spawn/exit tracing
+  - `src/adapters/ptyManagedSessionRunner.ts` remains the centralized PTY fallback wrapper for terminal-output marker scanning, fallback event synthesis, transcript callbacks, same-session repairs/continuations, cleanup commands, and typed fallback lifecycle failures
+  - Claude/Codex hook and JSONL runners delegate PTY process control to the harness while keeping provider-specific hook/JSONL discovery, normalization, prompt ordering, resume, phase finalization, cleanup timeout behavior, and structured marker observation local
+  - Deferred Gemini/OpenCode remain wired through the command-managed PTY fallback path but unselectable as Supported MVP providers
 - Provider event/capability architecture is complete:
   - normalized events are `session-start`, `submitted-user-message`, `turn-completed`, and `session-completed`
   - provider-specific hook/JSONL schemas stay inside adapters; orchestration sees provider-neutral events with source, structured/unstructured status, provider session ids, submitted-message origin, and phase metadata
@@ -84,16 +86,14 @@ Hard limit: 100 lines.
 - The working pipeline is active through `intent`, `bootstrap`, `grill`, `prd`, `issues`, and `execute`.
 - MVP no longer includes a `validate` stage; `execute` is the terminal provider-backed stage.
 - Only Claude and Codex are user-selectable Supported providers; Gemini/OpenCode remain wired Deferred adapters outside discovery, first-run selection, saved-default resolution, and explicit-provider selection.
-- Codex hook/JSONL and Claude hook/JSONL structured paths use PTY as control transport and normalized provider events as the data plane.
-- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, diagnostic logging, completion-marker prompt, or provider selection deferral workstreams from `.agent/task_progress.md`.
-- Latest task-progress entry: `07-explicit-flag-guard-and-supported-set-error-enumerations` is complete.
+- Codex hook/JSONL and Claude hook/JSONL structured paths use the shared PTY control harness for process control and normalized provider events as the data plane.
+- No AFK issues remain in the project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, diagnostic logging, completion-marker prompt, provider selection deferral, or PTY control harness workstreams from `.agent/task_progress.md`.
+- Latest task-progress entry: `007-audit-provider-pty-control-boundaries-and-deferred-fallbacks` is complete.
 
 ## Known Remaining Work
 1. Future provider work:
   - keep PTY marker completion and transcript callbacks as fallback behavior
-2. PTY duplication audit:
-  - review Codex hook/JSONL, Claude hook/JSONL, and fallback PTY control paths for duplicated runner/control logic before release
-3. Release/docs readiness:
+2. Release/docs readiness:
   - replace the current bad `README.md`, clean package metadata, and point `package.json` `main` at `dist/cli.js`
-4. End-to-end testing (HITL):
+3. End-to-end testing (HITL):
   - run real provider smoke tests through tiny repositories for Codex/Claude happy paths, resume behavior, execute loop stops, and HITL/AFK issue handling
