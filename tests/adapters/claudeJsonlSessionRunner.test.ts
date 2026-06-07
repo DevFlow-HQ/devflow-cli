@@ -24,21 +24,38 @@ import {
   type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+import type { Logger } from "../../src/logger.js";
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
   readonly resizes: Array<{ columns: number; rows: number }> = [];
   readonly emitter = new EventEmitter();
+  removedDataListeners = 0;
+  removedExitListeners = 0;
   killed = false;
 
-  onData(listener: (data: string) => void): void {
+  onData(listener: (data: string) => void): { dispose(): void } {
     this.emitter.on("data", listener);
+
+    return {
+      dispose: () => {
+        this.removedDataListeners += 1;
+        this.emitter.off("data", listener);
+      },
+    };
   }
 
   onExit(
     listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
-  ): void {
+  ): { dispose(): void } {
     this.emitter.on("exit", listener);
+
+    return {
+      dispose: () => {
+        this.removedExitListeners += 1;
+        this.emitter.off("exit", listener);
+      },
+    };
   }
 
   write(data: string): void {
@@ -148,6 +165,26 @@ class ScriptedClaudePtySpawner implements PtySpawner {
     });
     return this.process;
   }
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context: Parameters<Logger["debug"]>[1];
+  }> = [];
+  const logger: Logger = {
+    debug: (msg, context) => entries.push({ level: "debug", msg, context }),
+    info: (msg, context) => entries.push({ level: "info", msg, context }),
+    warn: (msg, context) => entries.push({ level: "warn", msg, context }),
+    error: (msg, context) => entries.push({ level: "error", msg, context }),
+    critical: (msg, context) => {
+      entries.push({ level: "critical", msg, context });
+      return "err_test";
+    },
+  };
+
+  return { entries, logger };
 }
 
 function createInput(
@@ -629,6 +666,7 @@ test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, 
   const events: ManagedProviderSessionEvent[] = [];
   const userInput = new FakeUserInput();
   const terminal = new FakeTerminal(90, 25);
+  const { entries, logger } = createCapturingLogger();
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
     await fs.ensureDir(dirname(transcriptPath));
@@ -636,7 +674,7 @@ test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, 
     spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
     userInput.emitData("hello\r");
     terminal.emitResize(120, 40);
-    await waitForPtyWrites(spawner.process, 6);
+    await waitForPtyWrites(spawner.process, 1);
     await appendTranscriptRecord(claudeHome, transcript, {
       type: "assistant",
       sessionId: "claude-session-1",
@@ -651,7 +689,7 @@ test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, 
   });
 
   await runClaudeJsonlSession(
-    createCommand(),
+    { ...createCommand(), logger },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -671,17 +709,48 @@ test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, 
   assert.deepEqual(output, [
     "terminal marker INITIAL_DONE should not validate\n",
   ]);
-  assert.deepEqual(spawner.process.writes, ["h", "e", "l", "l", "o", "\r"]);
+  assert.deepEqual(spawner.process.writes, ["hello\r"]);
   assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.deepEqual(userInput.rawModeChanges, [true, false]);
   assert.equal(userInput.resumeCount, 1);
   assert.equal(userInput.pauseCount, 1);
   assert.equal(userInput.listenerCount("data"), 0);
   assert.equal(terminal.listenerCount("resize"), 0);
+  assert.equal(spawner.process.removedDataListeners, 1);
+  assert.equal(spawner.process.removedExitListeners, 1);
   assert.deepEqual(
     events.map((event) => event.type),
     ["session-start", "turn-completed", "session-completed"],
   );
+
+  const ptyTraceEntries = entries.filter((entry) =>
+    entry.msg.startsWith("adapter pty process"),
+  );
+  assert.deepEqual(
+    ptyTraceEntries.map((entry) => ({
+      msg: entry.msg,
+      context: entry.context?.context,
+    })),
+    [
+      {
+        msg: "adapter pty process spawned",
+        context: {
+          providerId: "claude",
+          executable: "claude",
+          argumentCount: 3,
+        },
+      },
+      {
+        msg: "adapter pty process exit",
+        context: {
+          providerId: "claude",
+          exitCode: 0,
+          signal: null,
+        },
+      },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(ptyTraceEntries), new RegExp(projectRoot));
 });
 
 test("Claude JSONL runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
