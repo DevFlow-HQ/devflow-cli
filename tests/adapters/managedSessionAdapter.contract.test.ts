@@ -201,7 +201,8 @@ const providerHarnesses: AdapterContractHarness[] = [
     expectedArgsWithoutModel: ["Ship the contract"],
     expectedArgsWithModel: ["--model", "gpt-5.5", "Ship the contract"],
     cleanupCommand: "/exit\n",
-    createAdapter: createClaudeAdapter,
+    createAdapter: (options) =>
+      createClaudeAdapter({ ...options, eventSource: "pty" }),
   },
   {
     providerId: "gemini",
@@ -600,7 +601,7 @@ test("managed-session contract exposes normalized provider events, phases, callb
   assert.deepEqual(adapter.capabilities, capabilities);
 });
 
-test("built-in managed-session adapters expose effective PTY fallback and default Codex hook capabilities", () => {
+test("built-in managed-session adapters expose default structured hook capabilities and deferred PTY fallbacks", () => {
   const expectedPtyCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "pty",
@@ -608,7 +609,7 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
     supportsResume: false,
     classifiesSubmittedUserMessageOrigin: false,
   };
-  const expectedCodexCapabilities: ManagedProviderSessionCapabilities = {
+  const expectedHookCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "hooks",
     supportsProviderSessionId: true,
@@ -630,11 +631,11 @@ test("built-in managed-session adapters expose effective PTY fallback and defaul
     BUILT_IN_PROVIDER_IDS.map((providerId) => ({
       providerId,
       capabilities:
-        providerId === "codex"
-          ? expectedCodexCapabilities
+        providerId === "claude" || providerId === "codex"
+          ? expectedHookCapabilities
           : expectedPtyCapabilities,
-      canResume: providerId === "codex",
-      hasResumeSession: providerId === "codex",
+      canResume: providerId === "claude" || providerId === "codex",
+      hasResumeSession: providerId === "claude" || providerId === "codex",
     })),
   );
 });
@@ -733,10 +734,11 @@ test("Claude adapter exposes hook-mode capabilities including resume support", (
     canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "hooks" })),
     true,
   );
-  assert.equal(createClaudeAdapter().capabilities?.eventSource, "pty");
+  assert.deepEqual(createClaudeAdapter().capabilities, hookCapabilities);
+  assert.equal(canResumeManagedProviderSession(createClaudeAdapter()), true);
   assert.equal(
     createBuiltInManagedSessionAdapter("claude").capabilities?.eventSource,
-    "pty",
+    "hooks",
   );
   assert.deepEqual(
     createBuiltInManagedSessionAdapter("claude", {
@@ -746,7 +748,7 @@ test("Claude adapter exposes hook-mode capabilities including resume support", (
   );
 });
 
-test("Claude adapter exposes JSONL only when explicitly selected", () => {
+test("Claude adapter preserves explicit PTY fallback and exposes JSONL when selected", () => {
   const ptyCapabilities: ManagedProviderSessionCapabilities = {
     controlTransport: "pty",
     eventSource: "pty",
@@ -755,10 +757,10 @@ test("Claude adapter exposes JSONL only when explicitly selected", () => {
     classifiesSubmittedUserMessageOrigin: false,
   };
 
-  assert.deepEqual(createClaudeAdapter().capabilities, ptyCapabilities);
-  assert.equal(typeof createClaudeAdapter().resumeSession, "undefined");
+  assert.deepEqual(createClaudeAdapter({ eventSource: "pty" }).capabilities, ptyCapabilities);
+  assert.equal(typeof createClaudeAdapter({ eventSource: "pty" }).resumeSession, "undefined");
   assert.equal(
-    canResumeManagedProviderSession(createClaudeAdapter()),
+    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "pty" })),
     false,
   );
   assert.deepEqual(createClaudeAdapter({ eventSource: "jsonl" }).capabilities, {
@@ -1096,6 +1098,9 @@ for (const harness of providerHarnesses) {
     const runner = new CapturingPtyRunner();
     const adapter = createBuiltInManagedSessionAdapter(harness.providerId, {
       runPtyManagedSession: runner.runPtyManagedSession.bind(runner),
+      ...(harness.providerId === "claude"
+        ? { claudeEventSource: "pty" as const }
+        : {}),
     });
 
     assert.deepEqual(
@@ -1159,6 +1164,52 @@ test("Claude adapter delegates hook-mode sessions to the hook-driven runner", as
     signal: null,
   });
   assert.deepEqual(runner.calls, [
+    {
+      command: {
+        provider: getBuiltInProviderIdentity("claude"),
+        executable: executablePath,
+        args: ["--model", "gpt-5.5", "Ship the contract"],
+      },
+      input: validRunInputWithModel,
+    },
+  ]);
+});
+
+test("Claude adapter delegates default sessions to the hook-driven runner", async (t) => {
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+
+  const tempRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "devflow-claude-default-hooks-adapter-"),
+  );
+  const binDir = path.join(tempRoot, "bin");
+  const executablePath = path.join(binDir, "claude");
+
+  await fs.ensureDir(binDir);
+  await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executablePath, 0o755);
+
+  process.env.PATH = binDir;
+
+  const hookRunner = new CapturingClaudeHookRunner();
+  const ptyRunner = new CapturingPtyRunner();
+  const adapter = createClaudeAdapter({
+    runClaudeHookDrivenSession:
+      hookRunner.runClaudeHookDrivenSession.bind(hookRunner),
+    runPtyManagedSession: ptyRunner.runPtyManagedSession.bind(ptyRunner),
+  });
+
+  const result = await adapter.runSession(validRunInputWithModel);
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+  });
+  assert.deepEqual(ptyRunner.calls, []);
+  assert.deepEqual(hookRunner.calls, [
     {
       command: {
         provider: getBuiltInProviderIdentity("claude"),

@@ -75,11 +75,13 @@ const CLAUDE_JSONL_CAPABILITIES: ManagedProviderSessionCapabilities = {
 export function createClaudeAdapter(
   options: ClaudeAdapterOptions = {},
 ): ManagedSessionAdapter {
-  if (options.eventSource === "hooks") {
+  const eventSource = options.eventSource ?? "hooks";
+
+  if (eventSource === "hooks") {
     return createClaudeHookAdapter(options);
   }
 
-  if (options.eventSource === "jsonl") {
+  if (eventSource === "jsonl") {
     return createClaudeJsonlAdapter(options);
   }
 
