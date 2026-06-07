@@ -66,3 +66,23 @@ test("maintainer context defines completion marker and grill conclusion confirma
   assert.match(context, /DevFlow still observes only the marker/i);
   assert.match(context, /does not programmatically validate/i);
 });
+
+test("end-user README documents the current supported invocation honestly", async () => {
+  const readme = await readFile(join(repoRoot, "README.md"), "utf8");
+
+  assert.match(readme, /early/i);
+  assert.match(readme, /experimental/i);
+  assert.match(readme, /Claude/);
+  assert.match(readme, /Codex/);
+  assert.doesNotMatch(readme, /Gemini/);
+  assert.doesNotMatch(readme, /OpenCode/);
+  assert.match(readme, /git clone https:\/\/github\.com\/DevFlow-HQ\/devflow-cli\.git/);
+  assert.match(readme, /npm install/);
+  assert.match(readme, /npm run build/);
+  assert.match(readme, /npm link/);
+  assert.match(readme, /npm install -g devflow-cli/);
+  assert.match(readme, /not yet on npm/i);
+  assert.match(readme, /command.*`devflow`/i);
+  assert.match(readme, /devflow "add dark mode"/);
+  assert.match(readme, /\[CONTEXT\.md\]\(\.\/CONTEXT\.md\)/);
+});
