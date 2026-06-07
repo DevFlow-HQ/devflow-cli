@@ -26,28 +26,47 @@ import {
   type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+import type { Logger } from "../../src/logger.js";
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
   readonly resizes: Array<{ columns: number; rows: number }> = [];
   readonly emitter = new EventEmitter();
+  removedDataListeners = 0;
+  removedExitListeners = 0;
   killed = false;
 
-  onData(listener: (data: string) => void): void {
+  onData(listener: (data: string) => void): { dispose(): void } {
     this.emitter.on("data", listener);
+
+    return {
+      dispose: () => {
+        this.removedDataListeners += 1;
+        this.emitter.off("data", listener);
+      },
+    };
   }
 
   onExit(
     listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
-  ): void {
+  ): { dispose(): void } {
     this.emitter.on("exit", listener);
+
+    return {
+      dispose: () => {
+        this.removedExitListeners += 1;
+        this.emitter.off("exit", listener);
+      },
+    };
   }
 
   write(data: string): void {
     this.writes.push(data);
   }
 
-  kill(): void {}
+  kill(): void {
+    this.killed = true;
+  }
 
   resize(columns: number, rows: number): void {
     this.resizes.push({ columns, rows });
@@ -87,6 +106,26 @@ class ScriptedCodexPtySpawner implements PtySpawner {
     });
     return this.process;
   }
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context: Parameters<Logger["debug"]>[1];
+  }> = [];
+  const logger: Logger = {
+    debug: (msg, context) => entries.push({ level: "debug", msg, context }),
+    info: (msg, context) => entries.push({ level: "info", msg, context }),
+    warn: (msg, context) => entries.push({ level: "warn", msg, context }),
+    error: (msg, context) => entries.push({ level: "error", msg, context }),
+    critical: (msg, context) => {
+      entries.push({ level: "critical", msg, context });
+      return "err_test";
+    },
+  };
+
+  return { entries, logger };
 }
 
 class FakeUserInput extends EventEmitter implements UserInput {
@@ -703,19 +742,20 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
   const events: ManagedProviderSessionEvent[] = [];
   const userInput = new FakeUserInput();
   const terminal = new FakeTerminal(90, 25);
+  const { entries, logger } = createCapturingLogger();
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     assert.equal(options.env?.CODEX_HOME, codexHome);
     spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
     userInput.emitData("hello\r");
     terminal.emitResize(120, 40);
-    await waitForPtyWrites(spawner.process, 7);
+    await waitForPtyWrites(spawner.process, 2);
     await appendSessionMeta(codexHome, rollout);
     await appendTaskComplete(codexHome, rollout, "JSONL says INITIAL_DONE");
     spawner.process.emitExit(0);
   });
 
   await runCodexJsonlSession(
-    createCommand(),
+    { ...createCommand(), logger },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -737,17 +777,16 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
   ]);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "h",
-    "e",
-    "l",
-    "l",
-    "o",
-    "\r",
+    "hello\r",
   ]);
   assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.deepEqual(userInput.rawModeChanges, [true, false]);
   assert.equal(userInput.resumeCount, 1);
   assert.equal(userInput.pauseCount, 1);
+  assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(terminal.listenerCount("resize"), 0);
+  assert.equal(spawner.process.removedDataListeners, 1);
+  assert.equal(spawner.process.removedExitListeners, 1);
   assert.deepEqual(
     events.map((event) =>
       event.type === "submitted-user-message"
@@ -761,6 +800,35 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
       "session-completed",
     ],
   );
+
+  const ptyTraceEntries = entries.filter((entry) =>
+    entry.msg.startsWith("adapter pty process"),
+  );
+  assert.deepEqual(
+    ptyTraceEntries.map((entry) => ({
+      msg: entry.msg,
+      context: entry.context?.context,
+    })),
+    [
+      {
+        msg: "adapter pty process spawned",
+        context: {
+          providerId: "codex",
+          executable: "codex",
+          argumentCount: 2,
+        },
+      },
+      {
+        msg: "adapter pty process exit",
+        context: {
+          providerId: "codex",
+          exitCode: 0,
+          signal: null,
+        },
+      },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(ptyTraceEntries), new RegExp(projectRoot));
 });
 
 test("Codex JSONL runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
@@ -795,6 +863,8 @@ test("Codex JSONL runner forwards Ctrl-C and reports requested interruption on p
   );
 
   assert.equal(spawner.process.writes.includes("\u0003"), true);
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.listenerCount("data"), 0);
 });
 
 test("Codex JSONL runner submits continuation prompts through PTY and emits managed user events", async () => {

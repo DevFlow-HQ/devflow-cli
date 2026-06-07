@@ -27,13 +27,16 @@ import {
 } from "./managedSessionAdapter.js";
 import { createPhaseManager } from "./phaseManager.js";
 import {
-  nodePtySpawner,
-  submitPtyPrompt,
   type OutputSink,
-  type PtyProcess,
+  type PtyControlHarness,
   type PtySpawner,
   type TerminalDimensions,
   type UserInput,
+  startPtyControlHarness,
+} from "./ptyControlHarness.js";
+import {
+  nodePtySpawner,
+  submitPtyPrompt,
   type UserInterruptState,
 } from "./ptyManagedSessionRunner.js";
 import type { ProviderIdentity } from "./providers.js";
@@ -60,8 +63,6 @@ export interface CodexJsonlSessionDependencies {
   earlyExitDrainTimeoutMs?: number;
 }
 
-const DEFAULT_COLUMNS = 80;
-const DEFAULT_ROWS = 24;
 const DEFAULT_LOCATOR_TIMEOUT_MS = 30_000;
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
@@ -72,10 +73,6 @@ export async function runCodexJsonlSession(
   input: ManagedProviderSessionInput,
   dependencies: CodexJsonlSessionDependencies = {},
 ): Promise<ManagedProviderSessionResult> {
-  const ptySpawner = dependencies.ptySpawner ?? nodePtySpawner;
-  const outputSink = dependencies.outputSink ?? process.stdout;
-  const terminal = dependencies.terminal ?? process.stdout;
-  const userInput = dependencies.userInput ?? process.stdin;
   const codexHome = getScopedCodexProviderHome(input);
   const locator =
     dependencies.sessionLogLocator ??
@@ -100,29 +97,13 @@ export async function runCodexJsonlSession(
     }
   }
 
-  let processHandle: PtyProcess;
-  try {
-    processHandle = ptySpawner.spawn(command.executable, command.args, {
-      cwd: input.workingDirectory,
-      cols: terminal.columns ?? DEFAULT_COLUMNS,
-      rows: terminal.rows ?? DEFAULT_ROWS,
-      env: {
-        ...process.env,
-        CODEX_HOME: codexHome,
-      },
-    });
-  } catch (error) {
-    throw new ProviderSessionLaunchError(command.provider, error);
-  }
-
   return new Promise((resolve, reject) => {
+    let harness: PtyControlHarness | undefined;
     let settled = false;
     let phaseFinalized = false;
     let exitObserved = false;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
-    let cleanupUserInputBridge = (): void => {};
-    let cleanupTerminalResize = (): void => {};
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
     let earlyExitDrainTimer: NodeJS.Timeout | undefined;
@@ -149,7 +130,11 @@ export async function runCodexJsonlSession(
     });
 
     async function submitManagedPrompt(prompt: string): Promise<void> {
-      submitPtyPrompt(processHandle, prompt);
+      if (!harness) {
+        throw new Error("Codex PTY is not available for prompt submission.");
+      }
+
+      submitPtyPrompt(harness, prompt);
       pendingManagedPromptEchoes.push(prompt);
       await manager.handleEvent({
         type: "submitted-user-message",
@@ -175,16 +160,6 @@ export async function runCodexJsonlSession(
       }
     }
 
-    function cleanupInteractiveInput(): void {
-      cleanupUserInputBridge();
-      cleanupUserInputBridge = (): void => {};
-    }
-
-    function cleanupResizeListener(): void {
-      cleanupTerminalResize();
-      cleanupTerminalResize = (): void => {};
-    }
-
     function resolveSession(result: ManagedProviderSessionResult): void {
       if (settled) {
         return;
@@ -192,8 +167,7 @@ export async function runCodexJsonlSession(
 
       settled = true;
       clearTimers();
-      cleanupInteractiveInput();
-      cleanupResizeListener();
+      harness?.dispose();
       void activeEventSource?.close();
       resolve(result);
     }
@@ -205,14 +179,13 @@ export async function runCodexJsonlSession(
 
       settled = true;
       clearTimers();
-      cleanupInteractiveInput();
-      cleanupResizeListener();
       void activeEventSource?.close();
       try {
-        processHandle.kill();
+        harness?.kill();
       } catch {
         // Preserve the original failure.
       }
+      harness?.dispose();
       reject(error);
     }
 
@@ -316,66 +289,6 @@ export async function runCodexJsonlSession(
           ),
         );
       }, cleanupTimeoutMs);
-    }
-
-    function forwardInputChunk(chunk: string): void {
-      for (const character of chunk) {
-        processHandle.write(character);
-      }
-    }
-
-    function setupUserInputBridge(): void {
-      if (!userInput.isTTY) {
-        return;
-      }
-
-      const wasRaw = userInput.isRaw === true;
-      const onData = (chunk: Buffer | string): void => {
-        forwardInputChunk(
-          typeof chunk === "string" ? chunk : chunk.toString("utf8"),
-        );
-      };
-
-      userInput.setRawMode?.(true);
-      userInput.resume?.();
-      userInput.on("data", onData);
-
-      cleanupUserInputBridge = () => {
-        if (userInput.off) {
-          userInput.off("data", onData);
-        } else {
-          userInput.removeListener?.("data", onData);
-        }
-
-        if (!wasRaw) {
-          userInput.setRawMode?.(false);
-        }
-
-        userInput.pause?.();
-      };
-    }
-
-    function setupTerminalResizeForwarding(): void {
-      if (!terminal.on) {
-        return;
-      }
-
-      const onResize = (): void => {
-        processHandle.resize?.(
-          terminal.columns ?? DEFAULT_COLUMNS,
-          terminal.rows ?? DEFAULT_ROWS,
-        );
-      };
-
-      terminal.on("resize", onResize);
-
-      cleanupTerminalResize = () => {
-        if (terminal.off) {
-          terminal.off("resize", onResize);
-        } else {
-          terminal.removeListener?.("resize", onResize);
-        }
-      };
     }
 
     async function emitAttachedSessionStart(): Promise<void> {
@@ -482,50 +395,73 @@ export async function runCodexJsonlSession(
       }, earlyExitDrainTimeoutMs);
     }
 
-    setupUserInputBridge();
-    setupTerminalResizeForwarding();
+    try {
+      harness = startPtyControlHarness(
+        {
+          provider: command.provider,
+          executable: command.executable,
+          args: command.args,
+          cwd: input.workingDirectory,
+          env: {
+            ...process.env,
+            CODEX_HOME: codexHome,
+          },
+          logger: command.logger,
+        },
+        {
+          onExit(event) {
+            exitObserved = true;
+            exitCode = event.exitCode;
+            signal = event.signal;
 
-    processHandle.onData((chunk) => {
-      outputSink.write(chunk);
-    });
+            if (dependencies.userInterrupt?.wasRequested()) {
+              rejectSession(
+                new InterruptedProviderSessionError({
+                  provider: command.provider,
+                  exitCode,
+                  signal,
+                }),
+              );
+              return;
+            }
 
-    processHandle.onExit((event) => {
-      exitObserved = true;
-      exitCode = event.exitCode;
-      signal = event.signal;
+            if (!phaseFinalized) {
+              if (activeEventSource) {
+                void drainRecords(activeEventSource)
+                  .then(() => {
+                    if (phaseFinalized) {
+                      maybeResolve();
+                      return;
+                    }
 
-      if (dependencies.userInterrupt?.wasRequested()) {
-        rejectSession(
-          new InterruptedProviderSessionError({
-            provider: command.provider,
-            exitCode,
-            signal,
-          }),
-        );
-        return;
-      }
-
-      if (!phaseFinalized) {
-        if (activeEventSource) {
-          void drainRecords(activeEventSource)
-            .then(() => {
-              if (phaseFinalized) {
-                maybeResolve();
+                    scheduleEarlyExitDrain();
+                  })
+                  .catch(rejectEventCaptureFailure);
                 return;
               }
 
               scheduleEarlyExitDrain();
-            })
-            .catch(rejectEventCaptureFailure);
-          return;
-        }
+              return;
+            }
 
-        scheduleEarlyExitDrain();
-        return;
-      }
-
-      maybeResolve();
-    });
+            maybeResolve();
+          },
+        },
+        {
+          ptySpawner: dependencies.ptySpawner ?? nodePtySpawner,
+          outputSink: dependencies.outputSink ?? process.stdout,
+          terminal: dependencies.terminal ?? process.stdout,
+          userInput: dependencies.userInput ?? process.stdin,
+        },
+      );
+    } catch (error) {
+      rejectSession(
+        error instanceof ProviderSessionLaunchError
+          ? error
+          : new ProviderSessionLaunchError(command.provider, error),
+      );
+      return;
+    }
 
     firstEventTimer = setTimeout(() => {
       rejectEventCaptureFailure(
