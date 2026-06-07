@@ -1,9 +1,9 @@
 {
   "name": "devflow-cli",
   "version": "0.1.0",
-  "author": "Sandstorm831",
+  "author": "DevFlow-HQ",
   "type": "module",
-  "main": "src/cli.ts",
+  "main": "dist/cli.js",
   "bin": {
     "devflow": "./dist/cli.js"
   },
@@ -38,5 +38,30 @@
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
-  }
+  },
+  "description": "Claude and Codex orchestrator that turns development tasks into PR-ready changes.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DevFlow-HQ/devflow-cli.git"
+  },
+  "homepage": "https://github.com/DevFlow-HQ/devflow-cli#readme",
+  "bugs": {
+    "url": "https://github.com/DevFlow-HQ/devflow-cli/issues"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "coding-agent",
+    "claude",
+    "codex",
+    "orchestrator",
+    "devtools"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "contributors": [
+    "Rohan Garg <gargrohan831@gmail.com> (https://rgdev.xyz)"
+  ]
 }
