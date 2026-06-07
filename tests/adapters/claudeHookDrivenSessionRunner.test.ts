@@ -29,6 +29,7 @@ import {
   type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+import type { Logger } from "../../src/logger.js";
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
@@ -155,6 +156,26 @@ class FakeTerminal extends EventEmitter {
     this.rows = rows;
     this.emit("resize");
   }
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context: Parameters<Logger["debug"]>[1];
+  }> = [];
+  const logger: Logger = {
+    debug: (msg, context) => entries.push({ level: "debug", msg, context }),
+    info: (msg, context) => entries.push({ level: "info", msg, context }),
+    warn: (msg, context) => entries.push({ level: "warn", msg, context }),
+    error: (msg, context) => entries.push({ level: "error", msg, context }),
+    critical: (msg, context) => {
+      entries.push({ level: "critical", msg, context });
+      return "err_test";
+    },
+  };
+
+  return { entries, logger };
 }
 
 function createInput(
@@ -673,6 +694,7 @@ test("Claude hook-driven runner keeps PTY control-only while mirroring output, s
   const events: ManagedProviderSessionEvent[] = [];
   const userInput = new FakeUserInput();
   const terminal = new FakeTerminal(90, 25);
+  const { entries, logger } = createCapturingLogger();
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
@@ -693,7 +715,7 @@ test("Claude hook-driven runner keeps PTY control-only while mirroring output, s
   });
 
   await runClaudeHookDrivenSession(
-    createCommand(),
+    { ...createCommand(), logger },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -711,7 +733,7 @@ test("Claude hook-driven runner keeps PTY control-only while mirroring output, s
   assert.deepEqual(output, [
     "terminal marker INITIAL_DONE should not validate\n",
   ]);
-  assert.deepEqual(spawner.process.writes, ["h", "e", "l", "l", "o", "\r"]);
+  assert.deepEqual(spawner.process.writes, ["hello\r"]);
   assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.deepEqual(
     events.map((event) => event.type),
@@ -722,6 +744,35 @@ test("Claude hook-driven runner keeps PTY control-only while mirroring output, s
   assert.equal(userInput.pauseCount, 1);
   assert.equal(userInput.listenerCount("data"), 0);
   assert.equal(terminal.listenerCount("resize"), 0);
+
+  const ptyTraceEntries = entries.filter((entry) =>
+    entry.msg.startsWith("adapter pty process"),
+  );
+  assert.deepEqual(
+    ptyTraceEntries.map((entry) => ({
+      msg: entry.msg,
+      context: entry.context?.context,
+    })),
+    [
+      {
+        msg: "adapter pty process spawned",
+        context: {
+          providerId: "claude",
+          executable: "claude",
+          argumentCount: 3,
+        },
+      },
+      {
+        msg: "adapter pty process exit",
+        context: {
+          providerId: "claude",
+          exitCode: 0,
+          signal: null,
+        },
+      },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(ptyTraceEntries), new RegExp(projectRoot));
 });
 
 test("Claude hook-driven runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
