@@ -24,13 +24,16 @@ import {
   type HookSocketServer,
 } from "./hookSocketServer.js";
 import {
-  nodePtySpawner,
-  submitPtyPrompt,
+  startPtyControlHarness,
+  type PtyControlHarness,
   type OutputSink,
-  type PtyProcess,
   type PtySpawner,
   type TerminalDimensions,
   type UserInput,
+} from "./ptyControlHarness.js";
+import {
+  nodePtySpawner,
+  submitPtyPrompt,
   type UserInterruptState,
 } from "./ptyManagedSessionRunner.js";
 import type { ProviderIdentity } from "./providers.js";
@@ -55,8 +58,6 @@ export interface CodexHookDrivenSessionDependencies {
   socketDrainMs?: number;
 }
 
-const DEFAULT_COLUMNS = 80;
-const DEFAULT_ROWS = 24;
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
 const DEFAULT_SOCKET_DRAIN_MS = 250;
@@ -66,10 +67,6 @@ export async function runCodexHookDrivenSession(
   input: ManagedProviderSessionInput,
   dependencies: CodexHookDrivenSessionDependencies = {},
 ): Promise<ManagedProviderSessionResult> {
-  const ptySpawner = dependencies.ptySpawner ?? nodePtySpawner;
-  const outputSink = dependencies.outputSink ?? process.stdout;
-  const terminal = dependencies.terminal ?? process.stdout;
-  const userInput = dependencies.userInput ?? process.stdin;
   const server = (dependencies.hookSocketServer ?? hookSocketServer)({
     onError(error) {
       rejectEventCaptureFailure(error);
@@ -85,7 +82,7 @@ export async function runCodexHookDrivenSession(
   const hookScriptPath = join(codexHome, "hook.js");
   const socketPath = join(codexHome, "hook.sock");
 
-  let processHandle: PtyProcess | undefined;
+  let harness: PtyControlHarness | undefined;
   let rejectEventCaptureFailure: (error: unknown) => void = () => {};
 
   await fs.ensureDir(codexHome);
@@ -106,8 +103,6 @@ export async function runCodexHookDrivenSession(
     let exitObserved = false;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
-    let cleanupUserInputBridge = (): void => {};
-    let cleanupTerminalResize = (): void => {};
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
     const pendingManagedPrompts = [input.initialPrompt];
@@ -119,11 +114,11 @@ export async function runCodexHookDrivenSession(
       logger: command.logger,
       input,
       submitPrompt(prompt) {
-        if (!processHandle) {
+        if (!harness) {
           throw new Error("Codex PTY is not available for prompt submission.");
         }
 
-        submitPtyPrompt(processHandle, prompt);
+        submitPtyPrompt(harness, prompt);
         pendingManagedPrompts.push(prompt);
       },
       finalize() {
@@ -156,16 +151,6 @@ export async function runCodexHookDrivenSession(
       }
     }
 
-    function cleanupInteractiveInput(): void {
-      cleanupUserInputBridge();
-      cleanupUserInputBridge = (): void => {};
-    }
-
-    function cleanupResizeListener(): void {
-      cleanupTerminalResize();
-      cleanupTerminalResize = (): void => {};
-    }
-
     async function stopSocket(): Promise<void> {
       await server.stop({ drainMs: socketDrainMs });
     }
@@ -177,8 +162,7 @@ export async function runCodexHookDrivenSession(
 
       settled = true;
       clearTimers();
-      cleanupInteractiveInput();
-      cleanupResizeListener();
+      harness?.dispose();
       void stopSocket().then(() => resolve(result), reject);
     }
 
@@ -189,13 +173,12 @@ export async function runCodexHookDrivenSession(
 
       settled = true;
       clearTimers();
-      cleanupInteractiveInput();
-      cleanupResizeListener();
       try {
-        processHandle?.kill();
+        harness?.kill();
       } catch {
         // Preserve the original failure.
       }
+      harness?.dispose();
 
       void stopSocket().then(() => reject(error), reject);
     }
@@ -319,71 +302,6 @@ export async function runCodexHookDrivenSession(
       }
     }
 
-    function forwardInputChunk(chunk: string): void {
-      for (const character of chunk) {
-        if (character !== "\u0003") {
-          processHandle?.write(character);
-          continue;
-        }
-
-        processHandle?.write("\u0003");
-      }
-    }
-
-    function setupUserInputBridge(): void {
-      if (!userInput.isTTY) {
-        return;
-      }
-
-      const wasRaw = userInput.isRaw === true;
-      const onData = (chunk: Buffer | string): void => {
-        forwardInputChunk(
-          typeof chunk === "string" ? chunk : chunk.toString("utf8"),
-        );
-      };
-
-      userInput.setRawMode?.(true);
-      userInput.resume?.();
-      userInput.on("data", onData);
-
-      cleanupUserInputBridge = () => {
-        if (userInput.off) {
-          userInput.off("data", onData);
-        } else {
-          userInput.removeListener?.("data", onData);
-        }
-
-        if (!wasRaw) {
-          userInput.setRawMode?.(false);
-        }
-
-        userInput.pause?.();
-      };
-    }
-
-    function setupTerminalResizeForwarding(): void {
-      if (!terminal.on) {
-        return;
-      }
-
-      const onResize = (): void => {
-        processHandle?.resize?.(
-          terminal.columns ?? DEFAULT_COLUMNS,
-          terminal.rows ?? DEFAULT_ROWS,
-        );
-      };
-
-      terminal.on("resize", onResize);
-
-      cleanupTerminalResize = () => {
-        if (terminal.off) {
-          terminal.off("resize", onResize);
-        } else {
-          terminal.removeListener?.("resize", onResize);
-        }
-      };
-    }
-
     void (async () => {
       try {
         await server.start(socketPath, handlePayload);
@@ -406,72 +324,80 @@ export async function runCodexHookDrivenSession(
           );
         }, firstEventTimeoutMs);
 
-        processHandle = ptySpawner.spawn(command.executable, command.args, {
-          cwd: input.workingDirectory,
-          cols: terminal.columns ?? DEFAULT_COLUMNS,
-          rows: terminal.rows ?? DEFAULT_ROWS,
-          env: {
-            ...process.env,
-            CODEX_HOME: codexHome,
-            DEVFLOW_HOOK_IPC_PATH: socketPath,
+        harness = startPtyControlHarness(
+          {
+            provider: command.provider,
+            executable: command.executable,
+            args: command.args,
+            cwd: input.workingDirectory,
+            env: {
+              ...process.env,
+              CODEX_HOME: codexHome,
+              DEVFLOW_HOOK_IPC_PATH: socketPath,
+            },
+            logger: command.logger,
           },
-        });
+          {
+            onExit(event) {
+              exitObserved = true;
+              exitCode = event.exitCode;
+              signal = event.signal;
+
+              if (dependencies.userInterrupt?.wasRequested()) {
+                rejectSession(
+                  new InterruptedProviderSessionError({
+                    provider: command.provider,
+                    exitCode,
+                    signal,
+                  }),
+                );
+                return;
+              }
+
+              if (!sessionStarted) {
+                rejectSession(
+                  new IncompleteProviderSessionError({
+                    provider: command.provider,
+                    completionMarker: `${input.initialCompletionMarker} (Codex hook setup may have failed before SessionStart.)`,
+                    exitCode,
+                    signal,
+                  }),
+                );
+                return;
+              }
+
+              if (!manager.isFinalized()) {
+                setTimeout(() => {
+                  rejectSession(
+                    new IncompleteProviderSessionError({
+                      provider: command.provider,
+                      completionMarker: input.initialCompletionMarker,
+                      exitCode,
+                      signal,
+                    }),
+                  );
+                }, socketDrainMs);
+                return;
+              }
+
+              maybeResolve();
+            },
+          },
+          {
+            ptySpawner: dependencies.ptySpawner ?? nodePtySpawner,
+            outputSink: dependencies.outputSink ?? process.stdout,
+            terminal: dependencies.terminal ?? process.stdout,
+            userInput: dependencies.userInput ?? process.stdin,
+          },
+        );
       } catch (error) {
-        rejectSession(new ProviderSessionLaunchError(command.provider, error));
+        rejectSession(
+          error instanceof ProviderSessionLaunchError
+            ? error
+            : new ProviderSessionLaunchError(command.provider, error),
+        );
         return;
       }
-
-      setupUserInputBridge();
-      setupTerminalResizeForwarding();
-
-      processHandle.onData((chunk) => {
-        outputSink.write(chunk);
-      });
-
-      processHandle.onExit((event) => {
-        exitObserved = true;
-        exitCode = event.exitCode;
-        signal = event.signal;
-
-        if (dependencies.userInterrupt?.wasRequested()) {
-          rejectSession(
-            new InterruptedProviderSessionError({
-              provider: command.provider,
-              exitCode,
-              signal,
-            }),
-          );
-          return;
-        }
-
-        if (!sessionStarted) {
-          rejectSession(
-            new IncompleteProviderSessionError({
-              provider: command.provider,
-              completionMarker: `${input.initialCompletionMarker} (Codex hook setup may have failed before SessionStart.)`,
-              exitCode,
-              signal,
-            }),
-          );
-          return;
-        }
-
-        if (!manager.isFinalized()) {
-          setTimeout(() => {
-            rejectSession(
-              new IncompleteProviderSessionError({
-                provider: command.provider,
-                completionMarker: input.initialCompletionMarker,
-                exitCode,
-                signal,
-              }),
-            );
-          }, socketDrainMs);
-          return;
-        }
-
-        maybeResolve();
-      });
     })();
   });
 }

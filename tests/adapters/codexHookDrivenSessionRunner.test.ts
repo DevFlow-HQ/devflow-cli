@@ -5,9 +5,11 @@ import fs from "fs-extra";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   IncompleteProviderSessionError,
+  InterruptedProviderSessionError,
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
   type ManagedProviderSessionEvent,
@@ -24,6 +26,7 @@ import {
   type UserInput,
 } from "../../src/adapters/ptyManagedSessionRunner.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+import type { Logger } from "../../src/logger.js";
 
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
@@ -177,6 +180,26 @@ function createCommand(): CodexHookDrivenSessionCommand {
     executable: "codex",
     args: ["--model", "gpt-test", "Start"],
   };
+}
+
+function createCapturingLogger() {
+  const entries: Array<{
+    level: keyof Logger;
+    msg: string;
+    context: Parameters<Logger["debug"]>[1];
+  }> = [];
+  const logger: Logger = {
+    debug: (msg, context) => entries.push({ level: "debug", msg, context }),
+    info: (msg, context) => entries.push({ level: "info", msg, context }),
+    warn: (msg, context) => entries.push({ level: "warn", msg, context }),
+    error: (msg, context) => entries.push({ level: "error", msg, context }),
+    critical: (msg, context) => {
+      entries.push({ level: "critical", msg, context });
+      return "err_test";
+    },
+  };
+
+  return { entries, logger };
 }
 
 async function runHookScript(
@@ -409,6 +432,7 @@ test("Codex hook-driven runner keeps PTY control-only while mirroring output, st
   const events: ManagedProviderSessionEvent[] = [];
   const userInput = new FakeUserInput();
   const terminal = new FakeTerminal(90, 25);
+  const { entries, logger } = createCapturingLogger();
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
 
@@ -426,7 +450,7 @@ test("Codex hook-driven runner keeps PTY control-only while mirroring output, st
   });
 
   await runCodexHookDrivenSession(
-    createCommand(),
+    { ...createCommand(), logger },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -444,12 +468,77 @@ test("Codex hook-driven runner keeps PTY control-only while mirroring output, st
   assert.deepEqual(output, [
     "terminal marker INITIAL_DONE should not validate\n",
   ]);
-  assert.deepEqual(spawner.process.writes, ["h", "e", "l", "l", "o", "\r"]);
+  assert.deepEqual(spawner.process.writes, ["hello\r"]);
   assert.deepEqual(spawner.process.resizes, [{ columns: 120, rows: 40 }]);
   assert.deepEqual(
     events.map((event) => event.type),
     ["session-start", "turn-completed", "session-completed"],
   );
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.resumeCount, 1);
+  assert.equal(userInput.pauseCount, 1);
+  assert.equal(userInput.listenerCount("data"), 0);
+  assert.equal(terminal.listenerCount("resize"), 0);
+
+  const ptyTraceEntries = entries.filter((entry) =>
+    entry.msg.startsWith("adapter pty process"),
+  );
+  assert.deepEqual(
+    ptyTraceEntries.map((entry) => ({
+      msg: entry.msg,
+      context: entry.context?.context,
+    })),
+    [
+      {
+        msg: "adapter pty process spawned",
+        context: {
+          providerId: "codex",
+          executable: "codex",
+          argumentCount: 3,
+        },
+      },
+      {
+        msg: "adapter pty process exit",
+        context: {
+          providerId: "codex",
+          exitCode: 0,
+          signal: null,
+        },
+      },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(ptyTraceEntries), new RegExp(projectRoot));
+});
+
+test("Codex hook-driven runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const userInput = new FakeUserInput();
+  let interrupted = false;
+  const spawner = new ScriptedCodexPtySpawner(async () => {
+    await delay(20);
+    userInput.emitData("\u0003");
+    interrupted = true;
+    spawner.process.emitExit(130, "SIGINT");
+  });
+
+  await assert.rejects(
+    runCodexHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      userInput,
+      userInterrupt: {
+        wasRequested() {
+          return interrupted;
+        },
+      },
+      firstEventTimeoutMs: 1_000,
+    }),
+    InterruptedProviderSessionError,
+  );
+
+  assert.equal(spawner.process.writes.includes("\u0003"), true);
+  assert.deepEqual(userInput.rawModeChanges, [true, false]);
+  assert.equal(userInput.listenerCount("data"), 0);
 });
 
 test("Codex hook-driven runner submits repair prompts and reports repair usage", async () => {
