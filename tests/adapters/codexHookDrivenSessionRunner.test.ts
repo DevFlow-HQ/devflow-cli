@@ -19,6 +19,7 @@ import {
   runCodexHookDrivenSession,
   type CodexHookDrivenSessionCommand,
 } from "../../src/adapters/codexHookDrivenSessionRunner.js";
+import { resolveHookSocketPath } from "../../src/adapters/hookSocketPath.js";
 import {
   type PtyProcess,
   type PtySpawnOptions,
@@ -260,13 +261,14 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
     spawner.process.emitExit(0);
   });
 
+  const input = createInput(projectRoot, {
+    onProviderEvent(event) {
+      events.push(event);
+    },
+  });
   const result = await runCodexHookDrivenSession(
     createCommand(),
-    createInput(projectRoot, {
-      onProviderEvent(event) {
-        events.push(event);
-      },
-    }),
+    input,
     {
       ptySpawner: spawner,
       outputSink: { write: (chunk) => output.push(chunk) },
@@ -290,11 +292,15 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
         env: {
           ...process.env,
           CODEX_HOME: codexHome,
-          DEVFLOW_HOOK_IPC_PATH: join(codexHome, "hook.sock"),
+          DEVFLOW_HOOK_IPC_PATH: resolveHookSocketPath(input),
         },
       },
     },
   ]);
+  assert.ok(
+    Buffer.byteLength(resolveHookSocketPath(input)) <= 103,
+    "hook socket path must fit within the macOS sun_path budget",
+  );
   assert.deepEqual(
     events.map((event) => ({
       type: event.type,

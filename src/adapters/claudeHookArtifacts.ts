@@ -8,14 +8,12 @@ export interface ClaudeHookArtifactsOptions {
 export interface ClaudeHookArtifacts {
   hookDirectory: string;
   hookScriptPath: string;
-  socketPath: string;
 }
 
 export async function createClaudeHookArtifacts({
   hookDirectory,
 }: ClaudeHookArtifactsOptions): Promise<ClaudeHookArtifacts> {
   const hookScriptPath = join(hookDirectory, "hook.js");
-  const socketPath = join(hookDirectory, "hook.sock");
 
   await fs.ensureDir(hookDirectory);
   await fs.writeFile(hookScriptPath, claudeHookScript(), {
@@ -26,7 +24,6 @@ export async function createClaudeHookArtifacts({
   return {
     hookDirectory,
     hookScriptPath,
-    socketPath,
   };
 }
 

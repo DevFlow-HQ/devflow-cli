@@ -20,7 +20,6 @@ test("claude hook artifacts create a run-scoped executable forwarding script", a
   assert.deepEqual(artifacts, {
     hookDirectory,
     hookScriptPath: join(hookDirectory, "hook.js"),
-    socketPath: join(hookDirectory, "hook.sock"),
   });
   assert.equal(await fs.readFile(artifacts.hookScriptPath, "utf8"), claudeHookScript());
   assert.equal((await fs.stat(artifacts.hookScriptPath)).mode & 0o777, 0o755);

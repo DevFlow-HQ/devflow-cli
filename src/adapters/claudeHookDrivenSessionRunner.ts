@@ -1,5 +1,6 @@
 import { createClaudeHookArtifacts } from "./claudeHookArtifacts.js";
 import { normalizeClaudeHookPayload } from "./claudeHookEventSource.js";
+import { resolveHookSocketPath } from "./hookSocketPath.js";
 import { installClaudeHookSettings } from "./claudeHookSettings.js";
 import {
   getClaudeHookDirectory,
@@ -83,6 +84,7 @@ export async function runClaudeHookDrivenSession(
   const environment = dependencies.environment ?? process.env;
   const platform = dependencies.platform ?? process.platform;
   const claudeConfigDirectory = getScopedClaudeProviderHome(input);
+  const socketPath = resolveHookSocketPath(input);
   const artifacts = await createClaudeHookArtifacts({
     hookDirectory: getClaudeHookDirectory(claudeConfigDirectory),
   });
@@ -189,7 +191,9 @@ export async function runClaudeHookDrivenSession(
       }
       harness?.dispose();
 
-      void stopSocket().then(() => reject(error), reject);
+      void stopSocket()
+        .catch(() => {})
+        .finally(() => reject(error));
     }
 
     function createResult(): ManagedProviderSessionResult {
@@ -320,11 +324,9 @@ export async function runClaudeHookDrivenSession(
 
     void (async () => {
       try {
-        await server.start(artifacts.socketPath, handlePayload);
+        await server.start(socketPath, handlePayload);
       } catch (error) {
-        rejectSession(
-          new ProviderSessionEventCaptureError(command.provider, error),
-        );
+        rejectSession(new ProviderSessionLaunchError(command.provider, error));
         return;
       }
 
@@ -333,7 +335,12 @@ export async function runClaudeHookDrivenSession(
           rejectSession(
             new ProviderSessionEventCaptureError(
               command.provider,
-              new Error(formatMissingSessionStartDiagnostic(artifacts)),
+              new Error(
+                formatMissingSessionStartDiagnostic(
+                  artifacts.hookScriptPath,
+                  socketPath,
+                ),
+              ),
             ),
           );
         }, firstEventTimeoutMs);
@@ -347,7 +354,7 @@ export async function runClaudeHookDrivenSession(
             env: {
               ...environment,
               CLAUDE_CONFIG_DIR: claudeConfigDirectory,
-              DEVFLOW_HOOK_IPC_PATH: artifacts.socketPath,
+              DEVFLOW_HOOK_IPC_PATH: socketPath,
             },
             logger: command.logger,
           },
@@ -417,14 +424,15 @@ export async function runClaudeHookDrivenSession(
 }
 
 function formatMissingSessionStartDiagnostic(
-  artifacts: Awaited<ReturnType<typeof createClaudeHookArtifacts>>,
+  hookScriptPath: string,
+  socketPath: string,
 ): string {
   return [
     "Claude SessionStart hook did not arrive; hook setup may have failed.",
     "Check the run-scoped Claude settings.local.json for DevFlow hook entries,",
     "ensure Claude disabled hooks settings or managed policy are not blocking hooks,",
-    `verify the hook script exists and can run at ${artifacts.hookScriptPath},`,
-    `and confirm the hook socket is reachable at ${artifacts.socketPath}.`,
+    `verify the hook script exists and can run at ${hookScriptPath},`,
+    `and confirm the hook socket is reachable at ${socketPath}.`,
   ].join(" ");
 }
 

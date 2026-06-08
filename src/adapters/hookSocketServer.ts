@@ -18,6 +18,7 @@ export type HookSocketErrorHandler = (error: Error) => void | Promise<void>;
 export interface HookSocketServerOptions {
   onError?: HookSocketErrorHandler;
   logger?: Logger;
+  maxSocketPathBytes?: number;
 }
 
 export interface HookSocketServer {
@@ -26,6 +27,26 @@ export interface HookSocketServer {
     onPayload: HookSocketPayloadHandler,
   ): Promise<void>;
   stop(options: { drainMs: number }): Promise<void>;
+}
+
+export class HookSocketPathTooLongError extends Error {
+  readonly socketPath: string;
+  readonly byteLength: number;
+  readonly maxSocketPathBytes: number;
+
+  constructor(options: {
+    socketPath: string;
+    byteLength: number;
+    maxSocketPathBytes: number;
+  }) {
+    super(
+      `Hook socket path is ${options.byteLength} bytes, which exceeds the ${options.maxSocketPathBytes}-byte sun_path budget for this platform.`,
+    );
+    this.name = "HookSocketPathTooLongError";
+    this.socketPath = options.socketPath;
+    this.byteLength = options.byteLength;
+    this.maxSocketPathBytes = options.maxSocketPathBytes;
+  }
 }
 
 export class HookSocketMalformedPayloadError extends Error {
@@ -83,6 +104,8 @@ export function hookSocketServer(
   options: HookSocketServerOptions = {},
 ): HookSocketServer {
   const logger = options.logger ?? NoopLogger;
+  const maxSocketPathBytes =
+    options.maxSocketPathBytes ?? (process.platform === "darwin" ? 104 : 108);
   let server: net.Server | undefined;
   let currentSocketPath: string | undefined;
   let payloadHandler: HookSocketPayloadHandler | undefined;
@@ -188,6 +211,15 @@ export function hookSocketServer(
         throw new Error("Hook socket server is already started.");
       }
 
+      const byteLength = Buffer.byteLength(socketPath);
+      if (byteLength >= maxSocketPathBytes) {
+        throw new HookSocketPathTooLongError({
+          socketPath,
+          byteLength,
+          maxSocketPathBytes,
+        });
+      }
+
       await cleanupSocketFile(socketPath);
 
       currentSocketPath = socketPath;
@@ -207,26 +239,36 @@ export function hookSocketServer(
         trackInFlight(handleSocket(socket));
       });
 
-      await new Promise<void>((resolve, reject) => {
-        const activeServer = server;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const activeServer = server;
 
-        if (!activeServer) {
-          reject(new Error("Hook socket server was not initialized."));
-          return;
-        }
+          if (!activeServer) {
+            reject(new Error("Hook socket server was not initialized."));
+            return;
+          }
 
-        activeServer.once("error", reject);
-        activeServer.listen(socketPath, () => {
-          activeServer.off("error", reject);
-          emitAdapterTrace(
-            logger,
-            buildHookSocketBoundTrace({
-              socketPath,
-            }),
-          );
-          resolve();
+          activeServer.once("error", reject);
+          activeServer.listen(socketPath, () => {
+            activeServer.off("error", reject);
+            emitAdapterTrace(
+              logger,
+              buildHookSocketBoundTrace({
+                socketPath,
+              }),
+            );
+            resolve();
+          });
         });
-      });
+      } catch (error) {
+        // listen() never succeeded; reset state so a later stop() short-circuits
+        // on its `if (!server)` guard instead of calling close() on a server
+        // that was never listening (which rejects with ERR_SERVER_NOT_RUNNING).
+        server = undefined;
+        currentSocketPath = undefined;
+        payloadHandler = undefined;
+        throw error;
+      }
     },
 
     async stop({ drainMs }) {

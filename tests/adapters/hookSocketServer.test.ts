@@ -9,6 +9,7 @@ import fs from "fs-extra";
 
 import {
   HookSocketMalformedPayloadError,
+  HookSocketPathTooLongError,
   hookSocketServer,
 } from "../../src/adapters/hookSocketServer.js";
 import type { Logger } from "../../src/logger.js";
@@ -34,7 +35,9 @@ function createCapturingLogger() {
 }
 
 function createSocketPath(testName: string): string {
-  const safeName = testName.replace(/[^a-z0-9]+/gi, "-").slice(0, 40);
+  // Keep the path short so happy-path tests stay within the macOS 104-byte
+  // sun_path budget regardless of the temp-dir prefix length.
+  const safeName = testName.replace(/[^a-z0-9]+/gi, "-").slice(0, 16);
 
   if (process.platform === "win32") {
     return path.join("\\\\.\\pipe", `devflow-${process.pid}-${safeName}`);
@@ -184,6 +187,9 @@ test("hook socket server drains in-flight payload handling on stop", async (t) =
 test("hook socket server forces open connections closed after drain timeout", async (t) => {
   const socketPath = createSocketPath(t.name);
   const server = hookSocketServer();
+  t.after(async () => {
+    await server.stop({ drainMs: 0 });
+  });
   await server.start(socketPath, () => {});
 
   const socket = net.createConnection(socketPath);
@@ -206,6 +212,9 @@ test("hook socket server cleans up its Unix socket file on stop", async (t) => {
 
   const socketPath = createSocketPath(t.name);
   const server = hookSocketServer();
+  t.after(async () => {
+    await server.stop({ drainMs: 0 });
+  });
   await server.start(socketPath, () => {});
 
   assert.equal(await fs.pathExists(socketPath), true);
@@ -274,6 +283,46 @@ test("hook socket server preserves behavior without an injected logger", async (
   await writePayload(socketPath, '{"event":"ready"}');
 
   assert.deepEqual(received, [{ event: "ready" }]);
+});
+
+test("hook socket server rejects an over-budget socket path before listening", async () => {
+  const socketPath = path.join(os.tmpdir(), `${"a".repeat(110)}.sock`);
+  const server = hookSocketServer({ maxSocketPathBytes: 104 });
+
+  await assert.rejects(
+    server.start(socketPath, () => {}),
+    (error: unknown) => {
+      assert.ok(error instanceof HookSocketPathTooLongError);
+      assert.equal(error.maxSocketPathBytes, 104);
+      assert.ok(error.byteLength >= 104);
+      return true;
+    },
+  );
+
+  // The server never listened, so stop() must be a clean no-op.
+  await server.stop({ drainMs: 0 });
+});
+
+test("hook socket server surfaces the real listen failure and leaves stop a no-op", async () => {
+  // Binding inside a non-existent directory makes listen() fail with ENOENT.
+  const socketPath = path.join(
+    os.tmpdir(),
+    `devflow-missing-${process.pid}`,
+    "hook.sock",
+  );
+  const server = hookSocketServer();
+
+  await assert.rejects(server.start(socketPath, () => {}), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    // The original listen() cause is surfaced, not the masked close() error.
+    assert.doesNotMatch(error.message, /Server is not running/i);
+    assert.ok((error as NodeJS.ErrnoException).code);
+    return true;
+  });
+
+  // listen() never succeeded, so a follow-up stop() must not call close() on a
+  // never-listening server (which would reject with ERR_SERVER_NOT_RUNNING).
+  await server.stop({ drainMs: 0 });
 });
 
 function assertPayloadWithId(payload: unknown): number {

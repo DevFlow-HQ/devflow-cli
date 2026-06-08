@@ -281,7 +281,12 @@ test("cli preserves commander-owned version output", async () => {
 });
 
 test("cli resolves the git repository root before handing off the execution request", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-git-root-"));
+  // git rev-parse --show-toplevel returns the canonical (symlink-resolved) path,
+  // which on macOS differs from os.tmpdir() (/var -> /private/var). Canonicalize
+  // the fixture so the expected projectRoot matches what the product resolves.
+  const projectRoot = fs.realpathSync(
+    fs.mkdtempSync(join(tmpdir(), "devflow-cli-git-root-")),
+  );
   const nestedDirectory = join(projectRoot, "packages", "feature");
   fs.ensureDirSync(nestedDirectory);
   await execa("git", ["init"], { cwd: projectRoot });

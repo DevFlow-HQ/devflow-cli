@@ -6,6 +6,7 @@ import {
   codexHookScript,
 } from "./codexHookArtifacts.js";
 import { normalizeCodexHookPayload } from "./codexHookEventSource.js";
+import { resolveHookSocketPath } from "./hookSocketPath.js";
 import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
@@ -79,7 +80,7 @@ export async function runCodexHookDrivenSession(
   const socketDrainMs = dependencies.socketDrainMs ?? DEFAULT_SOCKET_DRAIN_MS;
   const codexHome = getCodexHome(input);
   const hookScriptPath = join(codexHome, "hook.js");
-  const socketPath = join(codexHome, "hook.sock");
+  const socketPath = resolveHookSocketPath(input);
 
   let harness: PtyControlHarness | undefined;
   let rejectEventCaptureFailure: (error: unknown) => void = () => {};
@@ -179,7 +180,9 @@ export async function runCodexHookDrivenSession(
       }
       harness?.dispose();
 
-      void stopSocket().then(() => reject(error), reject);
+      void stopSocket()
+        .catch(() => {})
+        .finally(() => reject(error));
     }
 
     function createResult(): ManagedProviderSessionResult {
@@ -305,9 +308,7 @@ export async function runCodexHookDrivenSession(
       try {
         await server.start(socketPath, handlePayload);
       } catch (error) {
-        rejectSession(
-          new ProviderSessionEventCaptureError(command.provider, error),
-        );
+        rejectSession(new ProviderSessionLaunchError(command.provider, error));
         return;
       }
 

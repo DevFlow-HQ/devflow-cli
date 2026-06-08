@@ -22,6 +22,7 @@ import {
   runClaudeHookDrivenSession,
   type ClaudeHookDrivenSessionCommand,
 } from "../../src/adapters/claudeHookDrivenSessionRunner.js";
+import { resolveHookSocketPath } from "../../src/adapters/hookSocketPath.js";
 import {
   type PtyProcess,
   type PtySpawnOptions,
@@ -279,23 +280,20 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
     spawner.process.emitExit(0);
   });
 
-  const result = await runClaudeHookDrivenSession(
-    createCommand(),
-    createInput(projectRoot, {
-      async validate() {
-        validateCount += 1;
-      },
-      onProviderEvent(event) {
-        events.push(event);
-      },
-    }),
-    {
-      ptySpawner: spawner,
-      outputSink: { write: (chunk) => output.push(chunk) },
-      terminal: { columns: 100, rows: 30 },
-      firstEventTimeoutMs: 1_000,
+  const input = createInput(projectRoot, {
+    async validate() {
+      validateCount += 1;
     },
-  );
+    onProviderEvent(event) {
+      events.push(event);
+    },
+  });
+  const result = await runClaudeHookDrivenSession(createCommand(), input, {
+    ptySpawner: spawner,
+    outputSink: { write: (chunk) => output.push(chunk) },
+    terminal: { columns: 100, rows: 30 },
+    firstEventTimeoutMs: 1_000,
+  });
 
   const hookDirectory = join(
     projectRoot,
@@ -341,11 +339,15 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
         env: {
           ...process.env,
           CLAUDE_CONFIG_DIR: claudeConfigDirectory,
-          DEVFLOW_HOOK_IPC_PATH: join(hookDirectory, "hook.sock"),
+          DEVFLOW_HOOK_IPC_PATH: resolveHookSocketPath(input),
         },
       },
     },
   ]);
+  assert.ok(
+    Buffer.byteLength(resolveHookSocketPath(input)) <= 103,
+    "hook socket path must fit within the macOS sun_path budget",
+  );
   assert.deepEqual(
     events.map((event) => ({
       type: event.type,
@@ -624,7 +626,7 @@ test("Claude hook-driven runner times out with Claude-specific diagnostics when 
       /disabled hooks/i.test(error.message) &&
       /managed policy/i.test(error.message) &&
       /hook\.js/.test(error.message) &&
-      /hook\.sock/.test(error.message),
+      /\.sock/.test(error.message),
   );
   assert.equal(spawner.process.killed, true);
 });
