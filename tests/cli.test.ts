@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { Command, CommanderError } from "commander";
@@ -23,6 +24,7 @@ import {
   formatProviderStageRetryExhaustedError,
   formatStageArtifactValidationError,
   formatUnexpectedCliError,
+  isCliEntrypoint,
   runCli,
 } from "../src/cli.js";
 import {
@@ -228,6 +230,18 @@ function discoverWithDeferredProvidersInstalled(
     },
   });
 }
+
+test("cli entrypoint detection accepts symlinked bin paths", () => {
+  const fixtureDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-cli-entrypoint-"));
+  const cliPath = join(fixtureDirectory, "dist", "cli.js");
+  const binPath = join(fixtureDirectory, "bin", "devflow");
+
+  fs.outputFileSync(cliPath, "");
+  fs.ensureSymlinkSync(cliPath, binPath);
+
+  assert.equal(isCliEntrypoint(pathToFileURL(cliPath).href, binPath), true);
+  assert.equal(isCliEntrypoint(pathToFileURL(cliPath).href, undefined), false);
+});
 
 test("cli joins trailing positional arguments into a single raw task", async () => {
   const result = await invokeCli(["add", "dark", "mode"]);

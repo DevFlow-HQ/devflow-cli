@@ -1,4 +1,4 @@
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -433,7 +433,25 @@ export async function runCli(
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function isCliEntrypoint(
+  importMetaUrl: string,
+  argvPath: string | undefined,
+): boolean {
+  if (!argvPath) {
+    return false;
+  }
+
+  try {
+    return (
+      fs.realpathSync(fileURLToPath(importMetaUrl)) ===
+      fs.realpathSync(argvPath)
+    );
+  } catch {
+    return importMetaUrl === pathToFileURL(argvPath).href;
+  }
+}
+
+if (isCliEntrypoint(import.meta.url, process.argv[1])) {
   await runCli(process.argv.slice(2), {
     stdout: process.stdout,
     stderr: process.stderr,
