@@ -14,6 +14,10 @@ import {
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
 } from "../../src/adapters/managedSessionAdapter.js";
+import type {
+  JsonlTailEventSource,
+  JsonlTailReadResult,
+} from "../../src/adapters/jsonlTailEventSource.js";
 import {
   runCodexJsonlSession,
   type CodexJsonlSessionCommand,
@@ -368,6 +372,72 @@ async function prepareFixedRollout(projectRoot: string): Promise<{
   };
 }
 
+function createPostExitRaceEventSource(recordsAfterBlockedRead: unknown[]): {
+  jsonlEventSourceFactory: () => JsonlTailEventSource;
+  waitForFirstRead: () => Promise<void>;
+  waitForReadInProgress: () => Promise<void>;
+  releaseFirstRead: () => void;
+  readInProgressCount: () => number;
+} {
+  let releaseFirstRead!: () => void;
+  let resolveFirstRead!: () => void;
+  let resolveReadInProgress!: () => void;
+  let reading = false;
+  let completedReadCount = 0;
+  let readInProgressCount = 0;
+  const firstRead = new Promise<void>((resolve) => {
+    resolveFirstRead = resolve;
+  });
+  const readInProgress = new Promise<void>((resolve) => {
+    resolveReadInProgress = resolve;
+  });
+  const firstReadReleased = new Promise<void>((resolve) => {
+    releaseFirstRead = resolve;
+  });
+  const emptyResult: JsonlTailReadResult = { records: [], diagnostics: [] };
+  const eventSource: JsonlTailEventSource = {
+    async readNewRecords() {
+      if (reading) {
+        readInProgressCount += 1;
+        resolveReadInProgress();
+        return {
+          records: [],
+          diagnostics: [{ type: "read-in-progress" }],
+        };
+      }
+
+      reading = true;
+      try {
+        completedReadCount += 1;
+
+        if (completedReadCount === 1) {
+          resolveFirstRead();
+          await firstReadReleased;
+          return emptyResult;
+        }
+
+        if (completedReadCount === 2) {
+          return { records: recordsAfterBlockedRead, diagnostics: [] };
+        }
+
+        return emptyResult;
+      } finally {
+        reading = false;
+      }
+    },
+    watch() {},
+    async close() {},
+  };
+
+  return {
+    jsonlEventSourceFactory: () => eventSource,
+    waitForFirstRead: () => firstRead,
+    waitForReadInProgress: () => readInProgress,
+    releaseFirstRead,
+    readInProgressCount: () => readInProgressCount,
+  };
+}
+
 test("Codex JSONL runner completes a single phase from rollout task completion without PTY capture", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
   const { codexHome, rollout, sessionLogLocator } =
@@ -550,6 +620,71 @@ test("Codex JSONL runner classifies native user messages and suppresses managed 
       .map((event) => event.assistantMessage),
     ["JSONL final INITIAL_DONE"],
   );
+});
+
+test("Codex JSONL runner keeps draining after PTY exit while a JSONL read is active", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, sessionLogLocator } = await prepareFixedRollout(projectRoot);
+  const events: ManagedProviderSessionEvent[] = [];
+  const race = createPostExitRaceEventSource([
+    {
+      timestamp: "2026-05-30T00:00:00.000Z",
+      type: "session_meta",
+      payload: {
+        id: "codex-session-1",
+      },
+    },
+    {
+      timestamp: "2026-05-30T00:00:01.000Z",
+      type: "event_msg",
+      payload: {
+        type: "task_complete",
+        last_agent_message: "assistant INITIAL_DONE",
+      },
+    },
+  ]);
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await race.waitForFirstRead();
+    spawner.process.emitExit(0);
+    await race.waitForReadInProgress();
+    race.releaseFirstRead();
+  });
+
+  const result = await runCodexJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator,
+      jsonlEventSourceFactory: race.jsonlEventSourceFactory,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      earlyExitDrainTimeoutMs: 100,
+    },
+  );
+
+  assert.equal(race.readInProgressCount() > 0, true);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    [
+      "session-start",
+      "submitted-user-message",
+      "turn-completed",
+      "session-completed",
+    ],
+  );
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
 });
 
 test("Codex JSONL runner resumes by tailing an existing rollout from the captured offset", async () => {

@@ -14,6 +14,8 @@ import {
 } from "./claudeProviderHome.js";
 import {
   createJsonlTailEventSource,
+  type JsonlTailEventSource,
+  type JsonlTailEventSourceOptions,
   type JsonlTailReadResult,
 } from "./jsonlTailEventSource.js";
 import {
@@ -68,6 +70,9 @@ export interface ClaudeJsonlSessionDependencies {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   homeDirectory?: string;
+  jsonlEventSourceFactory?: (
+    options: JsonlTailEventSourceOptions,
+  ) => JsonlTailEventSource;
 }
 
 const DEFAULT_LOCATOR_TIMEOUT_MS = 30_000;
@@ -94,6 +99,8 @@ export async function runClaudeJsonlSession(
     dependencies.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS;
   const earlyExitDrainTimeoutMs =
     dependencies.earlyExitDrainTimeoutMs ?? DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS;
+  const jsonlEventSourceFactory =
+    dependencies.jsonlEventSourceFactory ?? createJsonlTailEventSource;
 
   try {
     await seedClaudeCredentials({
@@ -136,9 +143,8 @@ export async function runClaudeJsonlSession(
     let firstEventTimer: NodeJS.Timeout | undefined;
     let cleanupTimer: NodeJS.Timeout | undefined;
     let earlyExitDrainTimer: NodeJS.Timeout | undefined;
-    let activeEventSource:
-      | ReturnType<typeof createJsonlTailEventSource>
-      | undefined;
+    let activeEventSource: JsonlTailEventSource | undefined;
+    let postExitDrainActive = false;
     const normalizer = createClaudeJsonlNormalizer();
     const pendingManagedPromptEchoes: string[] = [input.initialPrompt];
 
@@ -330,10 +336,13 @@ export async function runClaudeJsonlSession(
       }
     }
 
-    async function drainRecords(
-      eventSource: ReturnType<typeof createJsonlTailEventSource>,
-    ): Promise<void> {
+    async function drainRecords(eventSource: JsonlTailEventSource): Promise<void> {
       const result = await eventSource.readNewRecords();
+
+      if (settled) {
+        return;
+      }
+
       await handleReadResult(result);
     }
 
@@ -399,9 +408,7 @@ export async function runClaudeJsonlSession(
       };
     }
 
-    function startFileWatch(
-      eventSource: ReturnType<typeof createJsonlTailEventSource>,
-    ): void {
+    function startFileWatch(eventSource: JsonlTailEventSource): void {
       if (settled || manager.isFinalized()) {
         return;
       }
@@ -418,7 +425,7 @@ export async function runClaudeJsonlSession(
       );
     }
 
-    function scheduleEarlyExitDrain(): void {
+    function startPostExitDrainLoop(): void {
       if (phaseFinalized || settled || earlyExitDrainTimer) {
         return;
       }
@@ -430,6 +437,38 @@ export async function runClaudeJsonlSession(
 
         rejectIncompleteSession();
       }, earlyExitDrainTimeoutMs);
+
+      runPostExitDrainLoop();
+    }
+
+    function runPostExitDrainLoop(): void {
+      if (postExitDrainActive || settled || phaseFinalized) {
+        return;
+      }
+
+      postExitDrainActive = true;
+      void (async () => {
+        while (!settled && !phaseFinalized && earlyExitDrainTimer) {
+          if (activeEventSource) {
+            await drainRecords(activeEventSource);
+          }
+
+          if (phaseFinalized || settled) {
+            break;
+          }
+
+          await delay(5);
+        }
+      })()
+        .then(() => {
+          if (phaseFinalized) {
+            maybeResolve();
+          }
+        })
+        .catch(rejectEventCaptureFailure)
+        .finally(() => {
+          postExitDrainActive = false;
+        });
     }
 
     try {
@@ -464,20 +503,11 @@ export async function runClaudeJsonlSession(
 
             if (!phaseFinalized) {
               if (activeEventSource) {
-                void drainRecords(activeEventSource)
-                  .then(() => {
-                    if (phaseFinalized) {
-                      maybeResolve();
-                      return;
-                    }
-
-                    scheduleEarlyExitDrain();
-                  })
-                  .catch(rejectEventCaptureFailure);
+                startPostExitDrainLoop();
                 return;
               }
 
-              scheduleEarlyExitDrain();
+              startPostExitDrainLoop();
               return;
             }
 
@@ -517,7 +547,7 @@ export async function runClaudeJsonlSession(
           snapshot: snapshot!,
           timeoutMs: locatorTimeoutMs,
         }));
-      const eventSource = createJsonlTailEventSource({
+      const eventSource = jsonlEventSourceFactory({
         filePath: location.filePath,
         startOffset: isResumeLocation(location)
           ? location.startOffset
@@ -529,13 +559,17 @@ export async function runClaudeJsonlSession(
       await drainRecords(eventSource);
 
       if (exitObserved && !phaseFinalized) {
-        scheduleEarlyExitDrain();
+        startPostExitDrainLoop();
         return;
       }
 
       startFileWatch(eventSource);
     })().catch(rejectEventCaptureFailure);
   });
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function isResumeLocation(

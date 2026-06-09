@@ -12,6 +12,10 @@ import {
   type ManagedProviderSessionInput,
   ProviderSessionEventCaptureError,
 } from "../../src/adapters/managedSessionAdapter.js";
+import type {
+  JsonlTailEventSource,
+  JsonlTailReadResult,
+} from "../../src/adapters/jsonlTailEventSource.js";
 import {
   runClaudeJsonlSession,
   type ClaudeJsonlSessionCommand,
@@ -275,6 +279,72 @@ function createFixedResumeSessionLogLocator(
       assert.equal(providerSessionId, "claude-session-1");
       return location;
     },
+  };
+}
+
+function createPostExitRaceEventSource(recordsAfterBlockedRead: unknown[]): {
+  jsonlEventSourceFactory: () => JsonlTailEventSource;
+  waitForFirstRead: () => Promise<void>;
+  waitForReadInProgress: () => Promise<void>;
+  releaseFirstRead: () => void;
+  readInProgressCount: () => number;
+} {
+  let releaseFirstRead!: () => void;
+  let resolveFirstRead!: () => void;
+  let resolveReadInProgress!: () => void;
+  let reading = false;
+  let completedReadCount = 0;
+  let readInProgressCount = 0;
+  const firstRead = new Promise<void>((resolve) => {
+    resolveFirstRead = resolve;
+  });
+  const readInProgress = new Promise<void>((resolve) => {
+    resolveReadInProgress = resolve;
+  });
+  const firstReadReleased = new Promise<void>((resolve) => {
+    releaseFirstRead = resolve;
+  });
+  const emptyResult: JsonlTailReadResult = { records: [], diagnostics: [] };
+  const eventSource: JsonlTailEventSource = {
+    async readNewRecords() {
+      if (reading) {
+        readInProgressCount += 1;
+        resolveReadInProgress();
+        return {
+          records: [],
+          diagnostics: [{ type: "read-in-progress" }],
+        };
+      }
+
+      reading = true;
+      try {
+        completedReadCount += 1;
+
+        if (completedReadCount === 1) {
+          resolveFirstRead();
+          await firstReadReleased;
+          return emptyResult;
+        }
+
+        if (completedReadCount === 2) {
+          return { records: recordsAfterBlockedRead, diagnostics: [] };
+        }
+
+        return emptyResult;
+      } finally {
+        reading = false;
+      }
+    },
+    watch() {},
+    async close() {},
+  };
+
+  return {
+    jsonlEventSourceFactory: () => eventSource,
+    waitForFirstRead: () => firstRead,
+    waitForReadInProgress: () => readInProgress,
+    releaseFirstRead,
+    readInProgressCount: () => readInProgressCount,
   };
 }
 
@@ -545,6 +615,64 @@ test("Claude JSONL runner classifies human user records and suppresses managed p
       .map((event) => `${event.origin}:${event.message}`),
     ["human:human reply"],
   );
+});
+
+test("Claude JSONL runner keeps draining after PTY exit while a JSONL read is active", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const events: ManagedProviderSessionEvent[] = [];
+  const race = createPostExitRaceEventSource([
+    {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    },
+  ]);
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await fs.ensureFile(transcriptPath);
+    await race.waitForFirstRead();
+    spawner.process.emitExit(0);
+    await race.waitForReadInProgress();
+    race.releaseFirstRead();
+  });
+
+  const result = await runClaudeJsonlSession(
+    createCommand(),
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      jsonlEventSourceFactory: race.jsonlEventSourceFactory,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      earlyExitDrainTimeoutMs: 100,
+    },
+  );
+
+  assert.equal(race.readInProgressCount() > 0, true);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["session-start", "turn-completed", "session-completed"],
+  );
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
 });
 
 test("Claude JSONL runner resumes by tailing an existing transcript from the captured offset", async () => {
