@@ -154,7 +154,7 @@ export function createCodexAdapter(
       provider,
       executable: runnerOptions.executable,
       args: runnerOptions.args,
-      ...(eventSource === "hooks" ? { cleanupCommand: "/quit\r" } : {}),
+      cleanupCommand: "/quit\r",
       ...(hasInjectedLogger ? { logger } : {}),
       ...(runnerOptions.resumeProviderSessionId
         ? { resumeProviderSessionId: runnerOptions.resumeProviderSessionId }

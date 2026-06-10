@@ -39,6 +39,7 @@ class FakePtyProcess implements PtyProcess {
   removedDataListeners = 0;
   removedExitListeners = 0;
   killed = false;
+  killError: unknown;
 
   onData(listener: (data: string) => void): { dispose(): void } {
     this.emitter.on("data", listener);
@@ -69,6 +70,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   kill(): void {
+    if (this.killError) {
+      throw this.killError;
+    }
+
     this.killed = true;
   }
 
@@ -315,6 +320,37 @@ async function waitForProviderEvent(
 
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = 100,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for condition");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+function hasCause(error: unknown, expectedCause: unknown): boolean {
+  let current = error;
+
+  while (current instanceof Error) {
+    const cause = (current as Error & { cause?: unknown }).cause;
+
+    if (cause === expectedCause) {
+      return true;
+    }
+
+    current = cause;
+  }
+
+  return false;
 }
 
 function createFixedSessionLogLocator(filePath: string): SessionLogLocator {
@@ -1268,7 +1304,7 @@ test("Codex JSONL runner drains briefly after early PTY exit before incomplete-s
   );
 });
 
-test("Codex JSONL runner reports cleanup timeout after phase finalization", async () => {
+test("Codex JSONL runner force-kills after valid completion and still resolves success", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
@@ -1278,15 +1314,148 @@ test("Codex JSONL runner reports cleanup timeout after phase finalization", asyn
     assert.equal(options.env?.CODEX_HOME, codexHome);
   });
 
-  await assert.rejects(
-    runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+  const result = await runCodexJsonlSession(
+    { ...createCommand(), cleanupCommand: "/quit\r" },
+    createInput(projectRoot),
+    {
       ptySpawner: spawner,
       outputSink: { write() {} },
       sessionLogLocator,
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
-      cleanupTimeoutMs: 20,
-    }),
-    ProviderSessionCleanupError,
+      cleanupTimeoutMs: 5,
+    },
   );
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Start\u001b[201~\r",
+    "/quit\r",
+  ]);
+  assert.equal(spawner.process.killed, true);
+});
+
+test("Codex JSONL runner resolves success after graceful shutdown exits naturally", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
+  const events: ManagedProviderSessionEvent[] = [];
+  await appendSessionMeta(codexHome, rollout);
+  await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitUntil(() => spawner.process.writes.includes("/quit\r"));
+    spawner.process.emitExit(0);
+  });
+
+  const result = await runCodexJsonlSession(
+    { ...createCommand(), cleanupCommand: "/quit\r" },
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator,
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      cleanupTimeoutMs: 100,
+    },
+  );
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Start\u001b[201~\r",
+    "/quit\r",
+  ]);
+  assert.equal(spawner.process.killed, false);
+  assert.equal(events.at(-1)?.type, "session-completed");
+});
+
+test("Codex JSONL runner raises cleanup errors only when shutdown force-kill throws", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
+  const killError = new Error("kill failed");
+  await appendSessionMeta(codexHome, rollout);
+  await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    spawner.process.killError = killError;
+  });
+
+  await assert.rejects(
+    runCodexJsonlSession(
+      { ...createCommand(), cleanupCommand: "/quit\r" },
+      createInput(projectRoot),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        sessionLogLocator,
+        locatorTimeoutMs: 1_000,
+        firstEventTimeoutMs: 1_000,
+        cleanupTimeoutMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionCleanupError && error.cause === killError,
+  );
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Start\u001b[201~\r",
+    "/quit\r",
+  ]);
+});
+
+test("Codex JSONL runner rejects original failures while detached cleanup shuts down the PTY", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
+  const originalFailure = new Error("consumer failed");
+  await appendSessionMeta(codexHome, rollout);
+  await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+  });
+
+  await assert.rejects(
+    runCodexJsonlSession(
+      { ...createCommand(), cleanupCommand: "/quit\r" },
+      createInput(projectRoot, {
+        onProviderEvent(event) {
+          if (event.type === "turn-completed") {
+            throw originalFailure;
+          }
+        },
+      }),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        sessionLogLocator,
+        locatorTimeoutMs: 1_000,
+        firstEventTimeoutMs: 1_000,
+        cleanupTimeoutMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionEventCaptureError &&
+      hasCause(error, originalFailure),
+  );
+
+  await waitUntil(() => spawner.process.killed);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Start\u001b[201~\r",
+    "/quit\r",
+  ]);
 });
