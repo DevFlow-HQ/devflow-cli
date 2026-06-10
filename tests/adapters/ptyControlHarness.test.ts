@@ -16,6 +16,7 @@ class FakePtyProcess implements PtyProcess {
   readonly emitter = new EventEmitter();
   killed = false;
   killError: unknown;
+  writeError: unknown;
   removedExitListeners = 0;
 
   onData(): void {}
@@ -34,6 +35,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   write(data: string): void {
+    if (this.writeError) {
+      throw this.writeError;
+    }
+
     this.writes.push(data);
   }
 
@@ -136,6 +141,18 @@ test("PTY control harness shutdown force-kills when the graceful exit window exp
     forced: true,
   });
   assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.equal(spawner.process.killed, true);
+});
+
+test("PTY control harness shutdown force-kills when the graceful command write fails", async () => {
+  const spawner = new FakePtySpawner();
+  const harness = startHarness(spawner);
+  spawner.process.writeError = new Error("write failed");
+
+  assert.deepEqual(await harness.shutdown({ command: "/exit\n", timeoutMs: 1 }), {
+    forced: true,
+  });
+  assert.deepEqual(spawner.process.writes, []);
   assert.equal(spawner.process.killed, true);
 });
 

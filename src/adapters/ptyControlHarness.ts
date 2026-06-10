@@ -269,7 +269,11 @@ export function startPtyControlHarness(
       }
 
       if (command !== undefined) {
-        processHandle.write(command);
+        try {
+          processHandle.write(command);
+        } catch {
+          // Fall through to the force-kill backstop when graceful teardown cannot be submitted.
+        }
       }
 
       if (await waitForExit(exitWaiters, () => exitObserved, timeoutMs)) {
