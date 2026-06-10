@@ -89,9 +89,21 @@ export interface PtyControlHarnessHandlers {
   onExit?(event: { exitCode: number; signal: NodeJS.Signals | null }): void;
 }
 
+export interface PtyControlHarnessShutdownOptions {
+  command?: string;
+  timeoutMs: number;
+}
+
+export interface PtyControlHarnessShutdownResult {
+  forced: boolean;
+}
+
 export interface PtyControlHarness {
   write(data: string): void;
   kill(): void;
+  shutdown(
+    options: PtyControlHarnessShutdownOptions,
+  ): Promise<PtyControlHarnessShutdownResult>;
   dispose(): void;
 }
 
@@ -166,6 +178,18 @@ export function startPtyControlHarness(
 
   const disposers: Array<() => void> = [];
   let disposed = false;
+  let exitObserved = false;
+  const exitWaiters = new Set<() => void>();
+
+  processHandle.onExit(() => {
+    exitObserved = true;
+
+    for (const resolve of [...exitWaiters]) {
+      resolve();
+    }
+
+    exitWaiters.clear();
+  });
 
   const dataSubscription = processHandle.onData((chunk) => {
     outputSink.write(chunk);
@@ -239,6 +263,22 @@ export function startPtyControlHarness(
     kill() {
       processHandle.kill();
     },
+    async shutdown({ command, timeoutMs }) {
+      if (exitObserved) {
+        return { forced: false };
+      }
+
+      if (command !== undefined) {
+        processHandle.write(command);
+      }
+
+      if (await waitForExit(exitWaiters, () => exitObserved, timeoutMs)) {
+        return { forced: false };
+      }
+
+      processHandle.kill();
+      return { forced: true };
+    },
     dispose() {
       if (disposed) {
         return;
@@ -250,6 +290,41 @@ export function startPtyControlHarness(
       }
     },
   };
+}
+
+function waitForExit(
+  exitWaiters: Set<() => void>,
+  hasExited: () => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (hasExited()) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    let timeout: NodeJS.Timeout | undefined;
+
+    const resolveExited = (): void => {
+      exitWaiters.delete(resolveExited);
+
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+
+      resolve(true);
+    };
+
+    timeout = setTimeout(() => {
+      exitWaiters.delete(resolveExited);
+      resolve(false);
+    }, timeoutMs);
+
+    exitWaiters.add(resolveExited);
+
+    if (hasExited()) {
+      resolveExited();
+    }
+  });
 }
 
 function addDisposable(

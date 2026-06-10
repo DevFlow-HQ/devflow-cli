@@ -1234,7 +1234,7 @@ test("PTY managed-session runner bridges TTY stdin to the provider and restores 
   assert.equal(userInput.listenerCount("data"), 0);
   assert.equal(userInput.removedDataListeners.length, 1);
   assert.equal(spawner.process.listenerCount("data"), 0);
-  assert.equal(spawner.process.listenerCount("exit"), 0);
+  assert.equal(spawner.process.listenerCount("exit"), 1);
   assert.equal(spawner.process.removedDataListeners, 1);
   assert.equal(spawner.process.removedExitListeners, 1);
 });
