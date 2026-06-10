@@ -10,6 +10,7 @@ import {
   InterruptedProviderSessionError,
   type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
+  ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
 } from "../../src/adapters/managedSessionAdapter.js";
 import type {
@@ -37,6 +38,7 @@ class FakePtyProcess implements PtyProcess {
   removedDataListeners = 0;
   removedExitListeners = 0;
   killed = false;
+  killError: unknown;
 
   onData(listener: (data: string) => void): { dispose(): void } {
     this.emitter.on("data", listener);
@@ -67,6 +69,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   kill(): void {
+    if (this.killError) {
+      throw this.killError;
+    }
+
     this.killed = true;
   }
 
@@ -373,6 +379,37 @@ async function waitForPtyWrites(
 
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = 100,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for condition");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+function hasCause(error: unknown, expectedCause: unknown): boolean {
+  let current = error;
+
+  while (current instanceof Error) {
+    const cause = (current as Error & { cause?: unknown }).cause;
+
+    if (cause === expectedCause) {
+      return true;
+    }
+
+    current = cause;
+  }
+
+  return false;
 }
 
 test("Claude JSONL runner completes a fresh first turn from a scoped transcript", async () => {
@@ -879,6 +916,186 @@ test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, 
     ],
   );
   assert.doesNotMatch(JSON.stringify(ptyTraceEntries), new RegExp(projectRoot));
+});
+
+test("Claude JSONL runner resolves success after graceful shutdown exits naturally", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const events: ManagedProviderSessionEvent[] = [];
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    });
+    await waitUntil(() => spawner.process.writes.includes("/exit\n"));
+    spawner.process.emitExit(0);
+  });
+
+  const result = await runClaudeJsonlSession(
+    { ...createCommand(), cleanupCommand: "/exit\n" },
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      cleanupTimeoutMs: 100,
+    },
+  );
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.equal(spawner.process.killed, false);
+  assert.equal(events.at(-1)?.type, "session-completed");
+});
+
+test("Claude JSONL runner force-kills after valid completion and still resolves success", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    });
+  });
+
+  const result = await runClaudeJsonlSession(
+    { ...createCommand(), cleanupCommand: "/exit\n" },
+    createInput(projectRoot),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+      locatorTimeoutMs: 1_000,
+      firstEventTimeoutMs: 1_000,
+      cleanupTimeoutMs: 5,
+    },
+  );
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.equal(spawner.process.killed, true);
+});
+
+test("Claude JSONL runner raises cleanup errors only when shutdown force-kill throws", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const killError = new Error("kill failed");
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    spawner.process.killError = killError;
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    });
+  });
+
+  await assert.rejects(
+    runClaudeJsonlSession(
+      { ...createCommand(), cleanupCommand: "/exit\n" },
+      createInput(projectRoot),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+        locatorTimeoutMs: 1_000,
+        firstEventTimeoutMs: 1_000,
+        cleanupTimeoutMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionCleanupError && error.cause === killError,
+  );
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+});
+
+test("Claude JSONL runner rejects original failures while detached cleanup shuts down the PTY", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-jsonl-"));
+  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const transcript = "projects/-tmp-devflow/session-1.jsonl";
+  const transcriptPath = join(claudeHome, transcript);
+  const originalFailure = new Error("consumer failed");
+  const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    await appendTranscriptRecord(claudeHome, transcript, {
+      type: "assistant",
+      sessionId: "claude-session-1",
+      message: {
+        id: "msg_1",
+        role: "assistant",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "assistant INITIAL_DONE" }],
+      },
+    });
+  });
+
+  await assert.rejects(
+    runClaudeJsonlSession(
+      { ...createCommand(), cleanupCommand: "/exit\n" },
+      createInput(projectRoot, {
+        onProviderEvent(event) {
+          if (event.type === "turn-completed") {
+            throw originalFailure;
+          }
+        },
+      }),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+        locatorTimeoutMs: 1_000,
+        firstEventTimeoutMs: 1_000,
+        cleanupTimeoutMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionEventCaptureError &&
+      hasCause(error, originalFailure),
+  );
+
+  await waitUntil(() => spawner.process.killed);
+  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
 });
 
 test("Claude JSONL runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
