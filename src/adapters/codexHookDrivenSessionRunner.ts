@@ -43,6 +43,7 @@ export interface CodexHookDrivenSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
+  cleanupCommand?: string;
   logger?: Logger;
 }
 
@@ -101,10 +102,10 @@ export async function runCodexHookDrivenSession(
     let sessionStarted = false;
     let phaseFinalized = false;
     let exitObserved = false;
+    let successSettlementStarted = false;
     let exitCode: number | null = 0;
     let signal: NodeJS.Signals | null = null;
     let firstEventTimer: NodeJS.Timeout | undefined;
-    let cleanupTimer: NodeJS.Timeout | undefined;
     const pendingManagedPrompts = [input.initialPrompt];
 
     const manager = createPhaseManager({
@@ -123,8 +124,29 @@ export async function runCodexHookDrivenSession(
       },
       finalize() {
         phaseFinalized = true;
-        maybeResolve();
-        armCleanupTimer();
+
+        if (exitObserved) {
+          maybeResolve();
+          return;
+        }
+
+        settleSuccess(async () => {
+          if (!harness) {
+            throw new Error("Codex PTY is not available for cleanup.");
+          }
+
+          try {
+            await harness.shutdown({
+              command: command.cleanupCommand,
+              timeoutMs: cleanupTimeoutMs,
+            });
+          } catch (error) {
+            throw new ProviderSessionCleanupError(command.provider, error);
+          }
+
+          await emitSessionCompleted();
+          return createResult();
+        });
       },
     });
 
@@ -143,11 +165,6 @@ export async function runCodexHookDrivenSession(
       if (firstEventTimer) {
         clearTimeout(firstEventTimer);
         firstEventTimer = undefined;
-      }
-
-      if (cleanupTimer) {
-        clearTimeout(cleanupTimer);
-        cleanupTimer = undefined;
       }
     }
 
@@ -173,11 +190,15 @@ export async function runCodexHookDrivenSession(
 
       settled = true;
       clearTimers();
-      try {
-        harness?.kill();
-      } catch {
-        // Preserve the original failure.
+      if (harness && !exitObserved && !successSettlementStarted) {
+        void harness
+          .shutdown({
+            command: command.cleanupCommand,
+            timeoutMs: cleanupTimeoutMs,
+          })
+          .catch(() => {});
       }
+
       harness?.dispose();
 
       void stopSocket()
@@ -195,14 +216,25 @@ export async function runCodexHookDrivenSession(
     }
 
     function maybeResolve(): void {
-      if (!phaseFinalized || !exitObserved || settled) {
+      if (!phaseFinalized || !exitObserved) {
         return;
       }
 
-      void emitSessionCompleted().then(
-        () => resolveSession(createResult()),
-        rejectSession,
-      );
+      settleSuccess(async () => {
+        await emitSessionCompleted();
+        return createResult();
+      });
+    }
+
+    function settleSuccess(
+      callback: () => Promise<ManagedProviderSessionResult>,
+    ): void {
+      if (settled || successSettlementStarted) {
+        return;
+      }
+
+      successSettlementStarted = true;
+      void callback().then(resolveSession, rejectSession);
     }
 
     async function emitSessionCompleted(): Promise<void> {
@@ -218,23 +250,6 @@ export async function runCodexHookDrivenSession(
       } catch (error) {
         throw new ProviderSessionEventCaptureError(command.provider, error);
       }
-    }
-
-    function armCleanupTimer(): void {
-      if (exitObserved || cleanupTimer || settled) {
-        return;
-      }
-
-      cleanupTimer = setTimeout(() => {
-        rejectSession(
-          new ProviderSessionCleanupError(
-            command.provider,
-            new Error(
-              `Codex PTY did not exit within ${cleanupTimeoutMs}ms after hook finalization.`,
-            ),
-          ),
-        );
-      }, cleanupTimeoutMs);
     }
 
     async function handlePayload(payload: unknown): Promise<void> {

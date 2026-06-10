@@ -1503,6 +1503,7 @@ test("Codex adapter runSession delegates provider startup config to the hook-dri
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: codexHarness.expectedArgsWithoutModel,
+        cleanupCommand: "/quit\r",
       },
       input: validRunInput,
     },
@@ -1588,6 +1589,7 @@ test("Codex adapter passes opaque model overrides through provider-native flags"
     provider: getBuiltInProviderIdentity("codex"),
     executable: executablePath,
     args: codexHarness.expectedArgsWithModel,
+    cleanupCommand: "/quit\r",
   });
 });
 
@@ -1634,6 +1636,7 @@ test("Codex adapter resumeSession delegates hook resume with provider session id
           "codex-session-123",
           "Continue the interrupted work",
         ],
+        cleanupCommand: "/quit\r",
       },
       input: validResumeInputWithModel,
     },
@@ -1756,6 +1759,7 @@ test("built-in managed-session selection wires codex execution through the hook-
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: codexHarness.expectedArgsWithoutModel,
+        cleanupCommand: "/quit\r",
       },
       input: validRunInput,
     },

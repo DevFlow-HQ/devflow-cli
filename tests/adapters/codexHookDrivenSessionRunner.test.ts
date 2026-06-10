@@ -34,6 +34,7 @@ class FakePtyProcess implements PtyProcess {
   readonly resizes: Array<{ columns: number; rows: number }> = [];
   readonly emitter = new EventEmitter();
   killed = false;
+  killError: unknown;
 
   onData(listener: (data: string) => void): void {
     this.emitter.on("data", listener);
@@ -50,6 +51,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   kill(): void {
+    if (this.killError) {
+      throw this.killError;
+    }
+
     this.killed = true;
   }
 
@@ -181,6 +186,37 @@ function createCommand(): CodexHookDrivenSessionCommand {
     executable: "codex",
     args: ["--model", "gpt-test", "Start"],
   };
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = 100,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for condition");
+    }
+
+    await delay(1);
+  }
+}
+
+function hasCause(error: unknown, expectedCause: unknown): boolean {
+  let current = error;
+
+  while (current instanceof Error) {
+    const cause = (current as Error & { cause?: unknown }).cause;
+
+    if (cause === expectedCause) {
+      return true;
+    }
+
+    current = cause;
+  }
+
+  return false;
 }
 
 function createCapturingLogger() {
@@ -658,8 +694,52 @@ test("Codex hook-driven runner times out when no SessionStart hook arrives", asy
   );
 });
 
-test("Codex hook-driven runner raises cleanup errors when PTY does not exit after finalization", async () => {
+test("Codex hook-driven runner resolves success after graceful shutdown exits naturally", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const events: ManagedProviderSessionEvent[] = [];
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "INITIAL_DONE",
+    });
+    await waitUntil(() => spawner.process.writes.includes("/quit\r"));
+    spawner.process.emitExit(0);
+  });
+
+  const result = await runCodexHookDrivenSession(
+    { ...createCommand(), cleanupCommand: "/quit\r" },
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+      cleanupTimeoutMs: 100,
+    },
+  );
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
+  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
+  assert.equal(spawner.process.killed, false);
+  assert.equal(events.at(-1)?.type, "session-completed");
+});
+
+test("Codex hook-driven runner force-kills after valid completion and still resolves success", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
 
@@ -672,15 +752,107 @@ test("Codex hook-driven runner raises cleanup errors when PTY does not exit afte
     });
   });
 
-  await assert.rejects(
-    runCodexHookDrivenSession(createCommand(), createInput(projectRoot), {
+  const result = await runCodexHookDrivenSession(
+    { ...createCommand(), cleanupCommand: "/quit\r" },
+    createInput(projectRoot, {
+      onProviderEvent(event) {
+        events.push(event);
+      },
+    }),
+    {
       ptySpawner: spawner,
       outputSink: { write() {} },
       firstEventTimeoutMs: 1_000,
       cleanupTimeoutMs: 5,
-    }),
-    ProviderSessionCleanupError,
+    },
   );
+
+  assert.deepEqual(result, {
+    repairUsed: false,
+    exitCode: 0,
+    signal: null,
+    matchedCompletionMarker: "INITIAL_DONE",
+  });
+  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
+  assert.equal(spawner.process.killed, true);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["session-start", "turn-completed", "session-completed"],
+  );
+});
+
+test("Codex hook-driven runner raises cleanup errors only when shutdown force-kill throws", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const killError = new Error("kill failed");
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
+
+    spawner.process.killError = killError;
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "INITIAL_DONE",
+    });
+  });
+
+  await assert.rejects(
+    runCodexHookDrivenSession(
+      { ...createCommand(), cleanupCommand: "/quit\r" },
+      createInput(projectRoot),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        firstEventTimeoutMs: 1_000,
+        cleanupTimeoutMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionCleanupError && error.cause === killError,
+  );
+  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
+});
+
+test("Codex hook-driven runner rejects original failures while detached cleanup shuts down the PTY", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Start",
+    });
+  });
+  const originalFailure = new Error("consumer failed");
+
+  await assert.rejects(
+    runCodexHookDrivenSession(
+      { ...createCommand(), cleanupCommand: "/quit\r" },
+      createInput(projectRoot, {
+        onProviderEvent(event) {
+          if (event.type === "submitted-user-message") {
+            throw originalFailure;
+          }
+        },
+      }),
+      {
+        ptySpawner: spawner,
+        outputSink: { write() {} },
+        firstEventTimeoutMs: 1_000,
+        cleanupTimeoutMs: 5,
+      },
+    ),
+    (error) =>
+      error instanceof ProviderSessionEventCaptureError &&
+      hasCause(error, originalFailure),
+  );
+
+  await waitUntil(() => spawner.process.killed);
+  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
 });
 
 test("Codex hook-driven runner maps hook payload and provider event failures to event capture errors", async () => {
