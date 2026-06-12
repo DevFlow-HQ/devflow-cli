@@ -9,7 +9,7 @@ import {
 test("codex hook normalizer maps SessionStart to session-start", () => {
   const event = normalizeCodexHookPayload({
     hook_event_name: "SessionStart",
-    providerSessionId: "session-123",
+    session_id: "session-123",
   });
 
   assert.deepEqual(event, {
@@ -22,7 +22,7 @@ test("codex hook normalizer maps UserPromptSubmit prompt to submitted-user-messa
   const event = normalizeCodexHookPayload({
     hook_event_name: "UserPromptSubmit",
     prompt: "Write the PRD",
-    providerSessionId: "session-123",
+    session_id: "session-123",
   });
 
   assert.deepEqual(event, {
@@ -37,7 +37,7 @@ test("codex hook normalizer maps Stop assistant content to turn-completed", () =
   const event = normalizeCodexHookPayload({
     hook_event_name: "Stop",
     last_assistant_message: "Done MARKER",
-    providerSessionId: "session-123",
+    session_id: "session-123",
   });
 
   assert.deepEqual(event, {
@@ -50,7 +50,7 @@ test("codex hook normalizer maps Stop assistant content to turn-completed", () =
 test("codex hook normalizer omits assistantMessage when Stop has no assistant content", () => {
   const event = normalizeCodexHookPayload({
     hook_event_name: "Stop",
-    providerSessionId: "session-123",
+    session_id: "session-123",
   });
 
   assert.deepEqual(event, {
@@ -69,11 +69,46 @@ test("codex hook normalizer ignores unknown hook event types", () => {
   );
 });
 
+test("codex hook normalizer ignores unknown native payload fields", () => {
+  const event = normalizeCodexHookPayload({
+    hook_event_name: "Stop",
+    last_assistant_message: "Done MARKER",
+    session_id: "session-123",
+    transcript_path: "/tmp/codex-rollout.jsonl",
+    cwd: "/work/project",
+    model: "gpt-5",
+  });
+
+  assert.deepEqual(event, {
+    type: "turn-completed",
+    assistantMessage: "Done MARKER",
+    providerSessionId: "session-123",
+  });
+});
+
 test("codex hook normalizer rejects malformed payloads with a typed error", () => {
   assert.throws(
     () =>
       normalizeCodexHookPayload({
+        hook_event_name: "SessionStart",
+      }),
+    CodexHookPayloadMalformedError,
+  );
+
+  assert.throws(
+    () =>
+      normalizeCodexHookPayload({
+        hook_event_name: "SessionStart",
+        session_id: 123,
+      }),
+    CodexHookPayloadMalformedError,
+  );
+
+  assert.throws(
+    () =>
+      normalizeCodexHookPayload({
         hook_event_name: "UserPromptSubmit",
+        session_id: "session-123",
       }),
     CodexHookPayloadMalformedError,
   );
@@ -83,6 +118,7 @@ test("codex hook normalizer rejects malformed payloads with a typed error", () =
       normalizeCodexHookPayload({
         hook_event_name: "Stop",
         last_assistant_message: 42,
+        session_id: "session-123",
       }),
     CodexHookPayloadMalformedError,
   );

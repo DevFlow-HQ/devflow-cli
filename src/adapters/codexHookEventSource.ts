@@ -13,7 +13,7 @@ type CodexHookEventName = "SessionStart" | "UserPromptSubmit" | "Stop";
 
 interface CodexHookPayloadBase {
   hook_event_name: string;
-  providerSessionId?: string;
+  session_id: string;
 }
 
 interface CodexSessionStartHookPayload extends CodexHookPayloadBase {
@@ -56,32 +56,34 @@ export function normalizeCodexHookPayload(
     return undefined;
   }
 
-  const providerSessionId = hookPayload.providerSessionId;
+  const providerSessionId = hookPayload.session_id;
 
   switch (hookPayload.hook_event_name) {
     case "SessionStart":
-      return withProviderSessionId({ type: "session-start" }, providerSessionId);
+      return {
+        type: "session-start",
+        providerSessionId,
+      };
 
     case "UserPromptSubmit":
-      return withProviderSessionId(
-        {
-          type: "submitted-user-message",
-          message: hookPayload.prompt,
-          origin: "unknown",
-        },
+      return {
+        type: "submitted-user-message",
+        message: hookPayload.prompt,
+        origin: "unknown",
         providerSessionId,
-      );
+      };
 
     case "Stop":
-      return withProviderSessionId(
-        hookPayload.last_assistant_message === undefined
-          ? { type: "turn-completed" }
-          : {
-              type: "turn-completed",
-              assistantMessage: hookPayload.last_assistant_message,
-            },
-        providerSessionId,
-      );
+      return hookPayload.last_assistant_message === undefined
+        ? {
+            type: "turn-completed",
+            providerSessionId,
+          }
+        : {
+            type: "turn-completed",
+            assistantMessage: hookPayload.last_assistant_message,
+            providerSessionId,
+          };
   }
 }
 
@@ -101,13 +103,10 @@ function parseCodexHookPayload(payload: unknown): CodexHookPayload | undefined {
     return undefined;
   }
 
-  if (
-    payload.providerSessionId !== undefined &&
-    typeof payload.providerSessionId !== "string"
-  ) {
+  if (typeof payload.session_id !== "string") {
     throw new CodexHookPayloadMalformedError(
       payload,
-      "expected string providerSessionId",
+      "expected string session_id",
     );
   }
 
@@ -115,7 +114,7 @@ function parseCodexHookPayload(payload: unknown): CodexHookPayload | undefined {
     case "SessionStart":
       return {
         hook_event_name: payload.hook_event_name,
-        providerSessionId: payload.providerSessionId,
+        session_id: payload.session_id,
       };
 
     case "UserPromptSubmit":
@@ -129,7 +128,7 @@ function parseCodexHookPayload(payload: unknown): CodexHookPayload | undefined {
       return {
         hook_event_name: payload.hook_event_name,
         prompt: payload.prompt,
-        providerSessionId: payload.providerSessionId,
+        session_id: payload.session_id,
       };
 
     case "Stop":
@@ -146,23 +145,9 @@ function parseCodexHookPayload(payload: unknown): CodexHookPayload | undefined {
       return {
         hook_event_name: payload.hook_event_name,
         last_assistant_message: payload.last_assistant_message,
-        providerSessionId: payload.providerSessionId,
+        session_id: payload.session_id,
       };
   }
-}
-
-function withProviderSessionId<T extends NormalizedCodexHookEvent>(
-  event: T,
-  providerSessionId: string | undefined,
-): T {
-  if (providerSessionId === undefined) {
-    return event;
-  }
-
-  return {
-    ...event,
-    providerSessionId,
-  };
 }
 
 function isKnownCodexHookEventName(

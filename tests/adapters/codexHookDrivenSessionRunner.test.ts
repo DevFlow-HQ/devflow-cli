@@ -277,22 +277,22 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      providerSessionId: "codex-session-1",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "UserPromptSubmit",
       prompt: "Start",
-      providerSessionId: "codex-session-1",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "UserPromptSubmit",
       prompt: "Manual clarification",
-      providerSessionId: "codex-session-1",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
       last_assistant_message: "done INITIAL_DONE",
-      providerSessionId: "codex-session-1",
+      session_id: "codex-session-1",
     });
     spawner.process.emitExit(0);
   });
@@ -407,17 +407,21 @@ test("Codex hook-driven runner advances continuations and submits prompts throug
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "INITIAL_DONE",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "UserPromptSubmit",
+      session_id: "codex-session-1",
       prompt: "Continue",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "CONTINUATION_DONE",
     });
     spawner.process.emitExit(0);
@@ -483,9 +487,11 @@ test("Codex hook-driven runner keeps PTY control-only while mirroring output, st
     terminal.emitResize(120, 40);
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "INITIAL_DONE",
     });
     spawner.process.emitExit(0);
@@ -591,17 +597,21 @@ test("Codex hook-driven runner submits repair prompts and reports repair usage",
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "INITIAL_DONE",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "UserPromptSubmit",
+      session_id: "codex-session-1",
       prompt: "Repair",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "REPAIR_DONE",
     });
     spawner.process.emitExit(0);
@@ -663,6 +673,7 @@ test("Codex hook-driven runner treats PTY exit before final marker validation as
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     spawner.process.emitExit(1);
   });
@@ -702,9 +713,11 @@ test("Codex hook-driven runner resolves success after graceful shutdown exits na
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "INITIAL_DONE",
     });
     await waitUntil(() => spawner.process.writes.includes("/quit\r"));
@@ -745,9 +758,11 @@ test("Codex hook-driven runner force-kills after valid completion and still reso
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "INITIAL_DONE",
     });
   });
@@ -790,9 +805,11 @@ test("Codex hook-driven runner raises cleanup errors only when shutdown force-ki
     spawner.process.killError = killError;
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
+      session_id: "codex-session-1",
       last_assistant_message: "INITIAL_DONE",
     });
   });
@@ -821,9 +838,11 @@ test("Codex hook-driven runner rejects original failures while detached cleanup 
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "UserPromptSubmit",
+      session_id: "codex-session-1",
       prompt: "Start",
     });
   });
@@ -862,9 +881,11 @@ test("Codex hook-driven runner maps hook payload and provider event failures to 
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "UserPromptSubmit",
+      session_id: "codex-session-1",
       prompt: "Start",
     });
   });
