@@ -34,6 +34,7 @@ import {
   type PtySpawner,
   type TerminalDimensions,
   type UserInput,
+  type PtyGracefulExitCommand,
   startPtyControlHarness,
   type PtyControlHarness,
 } from "./ptyControlHarness.js";
@@ -53,7 +54,7 @@ export interface ClaudeJsonlSessionCommand {
   executable: string;
   args: string[];
   resumeProviderSessionId?: string;
-  cleanupCommand?: string;
+  gracefulExitCommand?: PtyGracefulExitCommand;
   logger?: Logger;
 }
 
@@ -173,7 +174,7 @@ export async function runClaudeJsonlSession(
 
           try {
             await harness.shutdown({
-              command: command.cleanupCommand,
+              command: command.gracefulExitCommand,
               timeoutMs: cleanupTimeoutMs,
             });
           } catch (error) {
@@ -237,7 +238,7 @@ export async function runClaudeJsonlSession(
       if (harness && !exitObserved && !successSettlementStarted) {
         void harness
           .shutdown({
-            command: command.cleanupCommand,
+            command: command.gracefulExitCommand,
             timeoutMs: cleanupTimeoutMs,
           })
           .catch(() => {});

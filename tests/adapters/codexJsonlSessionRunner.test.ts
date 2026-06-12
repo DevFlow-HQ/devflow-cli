@@ -1315,7 +1315,7 @@ test("Codex JSONL runner force-kills after valid completion and still resolves s
   });
 
   const result = await runCodexJsonlSession(
-    { ...createCommand(), cleanupCommand: "/quit\r" },
+    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
     createInput(projectRoot),
     {
       ptySpawner: spawner,
@@ -1335,7 +1335,7 @@ test("Codex JSONL runner force-kills after valid completion and still resolves s
   });
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit\r",
+    "/quit", "\r",
   ]);
   assert.equal(spawner.process.killed, true);
 });
@@ -1349,12 +1349,12 @@ test("Codex JSONL runner resolves success after graceful shutdown exits naturall
   await appendTaskComplete(codexHome, rollout, "INITIAL_DONE");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     assert.equal(options.env?.CODEX_HOME, codexHome);
-    await waitUntil(() => spawner.process.writes.includes("/quit\r"));
+    await waitUntil(() => spawner.process.writes.includes("\r"));
     spawner.process.emitExit(0);
   });
 
   const result = await runCodexJsonlSession(
-    { ...createCommand(), cleanupCommand: "/quit\r" },
+    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -1378,7 +1378,7 @@ test("Codex JSONL runner resolves success after graceful shutdown exits naturall
   });
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit\r",
+    "/quit", "\r",
   ]);
   assert.equal(spawner.process.killed, false);
   assert.equal(events.at(-1)?.type, "session-completed");
@@ -1398,7 +1398,7 @@ test("Codex JSONL runner raises cleanup errors only when shutdown force-kill thr
 
   await assert.rejects(
     runCodexJsonlSession(
-      { ...createCommand(), cleanupCommand: "/quit\r" },
+      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -1414,7 +1414,7 @@ test("Codex JSONL runner raises cleanup errors only when shutdown force-kill thr
   );
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit\r",
+    "/quit", "\r",
   ]);
 });
 
@@ -1431,7 +1431,7 @@ test("Codex JSONL runner rejects original failures while detached cleanup shuts 
 
   await assert.rejects(
     runCodexJsonlSession(
-      { ...createCommand(), cleanupCommand: "/quit\r" },
+      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "turn-completed") {
@@ -1456,6 +1456,6 @@ test("Codex JSONL runner rejects original failures while detached cleanup shuts 
   await waitUntil(() => spawner.process.killed);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit\r",
+    "/quit", "\r",
   ]);
 });

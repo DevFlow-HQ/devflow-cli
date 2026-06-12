@@ -720,12 +720,12 @@ test("Codex hook-driven runner resolves success after graceful shutdown exits na
       session_id: "codex-session-1",
       last_assistant_message: "INITIAL_DONE",
     });
-    await waitUntil(() => spawner.process.writes.includes("/quit\r"));
+    await waitUntil(() => spawner.process.writes.includes("\r"));
     spawner.process.emitExit(0);
   });
 
   const result = await runCodexHookDrivenSession(
-    { ...createCommand(), cleanupCommand: "/quit\r" },
+    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -745,7 +745,7 @@ test("Codex hook-driven runner resolves success after graceful shutdown exits na
     signal: null,
     matchedCompletionMarker: "INITIAL_DONE",
   });
-  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
+  assert.deepEqual(spawner.process.writes, ["/quit", "\r"]);
   assert.equal(spawner.process.killed, false);
   assert.equal(events.at(-1)?.type, "session-completed");
 });
@@ -768,7 +768,7 @@ test("Codex hook-driven runner force-kills after valid completion and still reso
   });
 
   const result = await runCodexHookDrivenSession(
-    { ...createCommand(), cleanupCommand: "/quit\r" },
+    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -788,7 +788,7 @@ test("Codex hook-driven runner force-kills after valid completion and still reso
     signal: null,
     matchedCompletionMarker: "INITIAL_DONE",
   });
-  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
+  assert.deepEqual(spawner.process.writes, ["/quit", "\r"]);
   assert.equal(spawner.process.killed, true);
   assert.deepEqual(
     events.map((event) => event.type),
@@ -816,7 +816,7 @@ test("Codex hook-driven runner raises cleanup errors only when shutdown force-ki
 
   await assert.rejects(
     runCodexHookDrivenSession(
-      { ...createCommand(), cleanupCommand: "/quit\r" },
+      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -828,7 +828,7 @@ test("Codex hook-driven runner raises cleanup errors only when shutdown force-ki
     (error) =>
       error instanceof ProviderSessionCleanupError && error.cause === killError,
   );
-  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
+  assert.deepEqual(spawner.process.writes, ["/quit", "\r"]);
 });
 
 test("Codex hook-driven runner rejects original failures while detached cleanup shuts down the PTY", async () => {
@@ -850,7 +850,7 @@ test("Codex hook-driven runner rejects original failures while detached cleanup 
 
   await assert.rejects(
     runCodexHookDrivenSession(
-      { ...createCommand(), cleanupCommand: "/quit\r" },
+      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "submitted-user-message") {
@@ -871,7 +871,7 @@ test("Codex hook-driven runner rejects original failures while detached cleanup 
   );
 
   await waitUntil(() => spawner.process.killed);
-  assert.deepEqual(spawner.process.writes, ["/quit\r"]);
+  assert.deepEqual(spawner.process.writes, ["/quit", "\r"]);
 });
 
 test("Codex hook-driven runner maps hook payload and provider event failures to event capture errors", async () => {

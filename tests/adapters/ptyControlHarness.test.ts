@@ -103,6 +103,12 @@ class FakeUserInput extends EventEmitter implements UserInput {
   pause(): void {}
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function startHarness(spawner: FakePtySpawner, userInput?: UserInput) {
   return startPtyControlHarness(
     {
@@ -121,15 +127,38 @@ function startHarness(spawner: FakePtySpawner, userInput?: UserInput) {
   );
 }
 
-test("PTY control harness shutdown writes a raw graceful command and resolves on natural exit", async () => {
+test("PTY control harness shutdown writes graceful command text and submit key separately", async () => {
   const spawner = new FakePtySpawner();
   const harness = startHarness(spawner);
 
-  const shutdown = harness.shutdown({ command: "/exit\n", timeoutMs: 100 });
+  const shutdown = harness.shutdown({
+    command: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+    timeoutMs: 100,
+  });
   spawner.process.emitExit(0);
 
   assert.deepEqual(await shutdown, { forced: false });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
+  assert.equal(spawner.process.killed, false);
+});
+
+test("PTY control harness shutdown uses a 100 ms submit delay by default", async () => {
+  const spawner = new FakePtySpawner();
+  const harness = startHarness(spawner);
+
+  const shutdown = harness.shutdown({
+    command: { text: "/exit", submitKey: "\n" },
+    timeoutMs: 250,
+  });
+
+  assert.deepEqual(spawner.process.writes, ["/exit"]);
+  await wait(50);
+  assert.deepEqual(spawner.process.writes, ["/exit"]);
+  await wait(75);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
+
+  spawner.process.emitExit(0);
+  assert.deepEqual(await shutdown, { forced: false });
   assert.equal(spawner.process.killed, false);
 });
 
@@ -137,10 +166,16 @@ test("PTY control harness shutdown force-kills when the graceful exit window exp
   const spawner = new FakePtySpawner();
   const harness = startHarness(spawner);
 
-  assert.deepEqual(await harness.shutdown({ command: "/exit\n", timeoutMs: 1 }), {
-    forced: true,
-  });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(
+    await harness.shutdown({
+      command: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+      timeoutMs: 1,
+    }),
+    {
+      forced: true,
+    },
+  );
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.equal(spawner.process.killed, true);
 });
 
@@ -149,9 +184,15 @@ test("PTY control harness shutdown force-kills when the graceful command write f
   const harness = startHarness(spawner);
   spawner.process.writeError = new Error("write failed");
 
-  assert.deepEqual(await harness.shutdown({ command: "/exit\n", timeoutMs: 1 }), {
-    forced: true,
-  });
+  assert.deepEqual(
+    await harness.shutdown({
+      command: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+      timeoutMs: 1,
+    }),
+    {
+      forced: true,
+    },
+  );
   assert.deepEqual(spawner.process.writes, []);
   assert.equal(spawner.process.killed, true);
 });
@@ -162,9 +203,15 @@ test("PTY control harness shutdown resolves immediately after the PTY already ex
 
   spawner.process.emitExit(0);
 
-  assert.deepEqual(await harness.shutdown({ command: "/exit\n", timeoutMs: 1 }), {
-    forced: false,
-  });
+  assert.deepEqual(
+    await harness.shutdown({
+      command: { text: "/exit", submitKey: "\n" },
+      timeoutMs: 1,
+    }),
+    {
+      forced: false,
+    },
+  );
   assert.deepEqual(spawner.process.writes, []);
   assert.equal(spawner.process.killed, false);
 });
@@ -175,7 +222,10 @@ test("PTY control harness shutdown still observes exit after dispose restores te
   const harness = startHarness(spawner, userInput);
 
   harness.dispose();
-  const shutdown = harness.shutdown({ command: "/exit\n", timeoutMs: 100 });
+  const shutdown = harness.shutdown({
+    command: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+    timeoutMs: 100,
+  });
   spawner.process.emitExit(0);
 
   assert.deepEqual(await shutdown, { forced: false });
@@ -192,7 +242,10 @@ test("PTY control harness shutdown surfaces kill errors", async () => {
   spawner.process.killError = killError;
 
   await assert.rejects(
-    harness.shutdown({ command: "/exit\n", timeoutMs: 1 }),
+    harness.shutdown({
+      command: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+      timeoutMs: 1,
+    }),
     (error: unknown) => error === killError,
   );
 });

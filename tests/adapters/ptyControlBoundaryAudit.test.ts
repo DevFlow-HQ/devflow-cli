@@ -35,7 +35,7 @@ test("structured PTY runners delegate completed-session cleanup to harness shutd
     const source = await readSource(runnerPath);
     const shutdownCalls =
       source.match(
-        /\.shutdown\(\{[\s\S]*?command: command\.cleanupCommand,[\s\S]*?timeoutMs: cleanupTimeoutMs,[\s\S]*?\}\)/g,
+        /\.shutdown\(\{[\s\S]*?command: command\.gracefulExitCommand,[\s\S]*?timeoutMs: cleanupTimeoutMs,[\s\S]*?\}\)/g,
       ) ?? [];
 
     assert.equal(
@@ -45,7 +45,7 @@ test("structured PTY runners delegate completed-session cleanup to harness shutd
     );
     assert.doesNotMatch(
       source,
-      /harness\.kill\(|harness\.write\(command\.cleanupCommand|\.kill\(\)|waitForExit/,
+      /harness\.kill\(|harness\.write\(command\.gracefulExitCommand|\.kill\(\)|waitForExit/,
       `${runnerPath} should not re-implement graceful-write/force-kill cleanup`,
     );
   }
@@ -54,9 +54,14 @@ test("structured PTY runners delegate completed-session cleanup to harness shutd
 test("graceful-then-force cleanup lives in the PTY control harness", async () => {
   const source = await readSource("src/adapters/ptyControlHarness.ts");
 
+  assert.match(source, /DEFAULT_GRACEFUL_EXIT_SUBMIT_DELAY_MS = 100/);
   assert.match(
     source,
-    /async shutdown\(\{ command, timeoutMs \}\) \{[\s\S]*processHandle\.write\(command\)[\s\S]*waitForExit[\s\S]*processHandle\.kill\(\)[\s\S]*return \{ forced: true \};/,
+    /writer\.write\(command\.text\)[\s\S]*delay\(command\.submitDelayMs \?\? DEFAULT_GRACEFUL_EXIT_SUBMIT_DELAY_MS\)[\s\S]*writer\.write\(command\.submitKey\)/,
+  );
+  assert.match(
+    source,
+    /async shutdown\(\{ command, timeoutMs \}\) \{[\s\S]*submitGracefulExitCommand\(processHandle, command\)[\s\S]*waitForExit[\s\S]*processHandle\.kill\(\)[\s\S]*return \{ forced: true \};/,
   );
 });
 
@@ -66,7 +71,7 @@ test("provider event data planes and marker finalization stay cleanup-policy fre
 
     assert.doesNotMatch(
       source,
-      /cleanupCommand|cleanupTimeoutMs|ProviderSessionCleanupError|harness\.shutdown|\/exit\\n|\/quit\\r|force-kill|force kill/i,
+      /gracefulExitCommand|cleanupTimeoutMs|ProviderSessionCleanupError|harness\.shutdown|\/exit\\n|\/quit\\r|force-kill|force kill/i,
       `${dataPlanePath} should not contain completed-session cleanup policy`,
     );
   }
@@ -78,8 +83,8 @@ test("ADR and glossary document graceful completed-session cleanup", async () =>
   );
   const context = await readSource("CONTEXT.md");
 
-  assert.match(adr, /Claude.*`\/exit\\n`/);
-  assert.match(adr, /Codex.*`\/quit\\r`/);
+  assert.match(adr, /Claude.*\/exit/);
+  assert.match(adr, /Codex.*\/quit/);
   assert.match(context, /\*\*Graceful exit command\*\*/);
   assert.match(context, /\*\*Completed-session cleanup\*\*/);
 });

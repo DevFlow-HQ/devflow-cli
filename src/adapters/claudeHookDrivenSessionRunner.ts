@@ -31,6 +31,7 @@ import {
   type PtySpawner,
   type TerminalDimensions,
   type UserInput,
+  type PtyGracefulExitCommand,
 } from "./ptyControlHarness.js";
 import {
   submitPtyPrompt,
@@ -43,7 +44,7 @@ export interface ClaudeHookDrivenSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
-  cleanupCommand?: string;
+  gracefulExitCommand?: PtyGracefulExitCommand;
   logger?: Logger;
 }
 
@@ -148,7 +149,7 @@ export async function runClaudeHookDrivenSession(
 
           try {
             await harness.shutdown({
-              command: command.cleanupCommand,
+              command: command.gracefulExitCommand,
               timeoutMs: cleanupTimeoutMs,
             });
           } catch (error) {
@@ -205,7 +206,7 @@ export async function runClaudeHookDrivenSession(
       if (harness && !exitObserved && !successSettlementStarted) {
         void harness
           .shutdown({
-            command: command.cleanupCommand,
+            command: command.gracefulExitCommand,
             timeoutMs: cleanupTimeoutMs,
           })
           .catch(() => {});

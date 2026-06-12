@@ -888,12 +888,12 @@ test("Claude hook-driven runner resolves success after graceful shutdown exits n
       last_assistant_message: "done INITIAL_DONE",
       session_id: "claude-session-1",
     });
-    await waitUntil(() => spawner.process.writes.includes("/exit\n"));
+    await waitUntil(() => spawner.process.writes.includes("\n"));
     spawner.process.emitExit(0);
   });
 
   const result = await runClaudeHookDrivenSession(
-    { ...createCommand(), cleanupCommand: "/exit\n" },
+    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -913,7 +913,7 @@ test("Claude hook-driven runner resolves success after graceful shutdown exits n
     signal: null,
     matchedCompletionMarker: "INITIAL_DONE",
   });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.equal(spawner.process.killed, false);
   assert.equal(events.at(-1)?.type, "session-completed");
 });
@@ -936,7 +936,7 @@ test("Claude hook-driven runner force-kills after valid completion and still res
   });
 
   const result = await runClaudeHookDrivenSession(
-    { ...createCommand(), cleanupCommand: "/exit\n" },
+    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
     createInput(projectRoot),
     {
       ptySpawner: spawner,
@@ -952,7 +952,7 @@ test("Claude hook-driven runner force-kills after valid completion and still res
     signal: null,
     matchedCompletionMarker: "INITIAL_DONE",
   });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.equal(spawner.process.killed, true);
 });
 
@@ -977,7 +977,7 @@ test("Claude hook-driven runner raises cleanup errors only when shutdown force-k
 
   await assert.rejects(
     runClaudeHookDrivenSession(
-      { ...createCommand(), cleanupCommand: "/exit\n" },
+      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -989,7 +989,7 @@ test("Claude hook-driven runner raises cleanup errors only when shutdown force-k
     (error) =>
       error instanceof ProviderSessionCleanupError && error.cause === killError,
   );
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });
 
 test("Claude hook-driven runner rejects original failures while detached cleanup shuts down the PTY", async () => {
@@ -1012,7 +1012,7 @@ test("Claude hook-driven runner rejects original failures while detached cleanup
 
   await assert.rejects(
     runClaudeHookDrivenSession(
-      { ...createCommand(), cleanupCommand: "/exit\n" },
+      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "submitted-user-message") {
@@ -1033,7 +1033,7 @@ test("Claude hook-driven runner rejects original failures while detached cleanup
   );
 
   await waitUntil(() => spawner.process.killed);
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });
 
 test("Claude hook-driven runner maps hook payload schema failures to event capture errors", async () => {

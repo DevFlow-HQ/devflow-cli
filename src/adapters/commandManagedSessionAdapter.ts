@@ -20,6 +20,7 @@ import {
   getBuiltInProviderIdentity,
   type BuiltInProviderId,
 } from "./providers.js";
+import type { PtyGracefulExitCommand } from "./ptyControlHarness.js";
 import { NoopLogger, type Logger } from "../logger.js";
 
 export type ManagedSessionPtyRunner = (
@@ -31,7 +32,7 @@ interface CommandManagedSessionConfig {
   providerId: BuiltInProviderId;
   command: string;
   buildArgs(input: ManagedProviderSessionInput): string[];
-  cleanupCommand: string;
+  gracefulExitCommand: PtyGracefulExitCommand;
 }
 
 export interface CommandManagedSessionAdapterOptions {
@@ -103,7 +104,7 @@ export function createCommandManagedSessionAdapter(
         provider,
         executable,
         args: config.buildArgs(input),
-        cleanupCommand: config.cleanupCommand,
+        gracefulExitCommand: config.gracefulExitCommand,
         ...(options.logger !== undefined ? { logger } : {}),
       },
       input,

@@ -154,7 +154,7 @@ export function createCodexAdapter(
       provider,
       executable: runnerOptions.executable,
       args: runnerOptions.args,
-      cleanupCommand: "/quit\r",
+      gracefulExitCommand: { text: "/quit", submitKey: "\r" },
       ...(hasInjectedLogger ? { logger } : {}),
       ...(runnerOptions.resumeProviderSessionId
         ? { resumeProviderSessionId: runnerOptions.resumeProviderSessionId }

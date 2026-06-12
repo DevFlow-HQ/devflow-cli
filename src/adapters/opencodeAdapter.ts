@@ -11,7 +11,7 @@ export function createOpenCodeAdapter(
     {
       providerId: "opencode",
       command: "opencode",
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       buildArgs(input) {
         return [
           ...(input.model ? ["--model", input.model] : []),

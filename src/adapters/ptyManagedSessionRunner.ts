@@ -18,6 +18,7 @@ import {
 } from "./managedSessionAdapter.js";
 import {
   startPtyControlHarness,
+  submitGracefulExitCommand,
   type OutputSink,
   type PtyControlHarness,
   type PtyProcess,
@@ -25,6 +26,7 @@ import {
   type PtySpawner,
   type TerminalDimensions,
   type UserInput,
+  type PtyGracefulExitCommand,
 } from "./ptyControlHarness.js";
 import type { ProviderIdentity } from "./providers.js";
 import { NoopLogger, type Logger } from "../logger.js";
@@ -47,7 +49,7 @@ export interface PtyManagedSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
-  cleanupCommand?: string;
+  gracefulExitCommand?: PtyGracefulExitCommand;
   markerBufferLimit?: number;
   logger?: Logger;
 }
@@ -109,26 +111,24 @@ export async function runPtyManagedSession(
     let providerTranscriptRemainder = "";
     let cleanupPerformed = false;
 
-    function cleanup(): void {
+    async function cleanup(): Promise<void> {
       if (cleanupPerformed) {
         return;
       }
 
-      if (command.cleanupCommand) {
-        harness.write(command.cleanupCommand);
+      cleanupPerformed = true;
+
+      if (command.gracefulExitCommand) {
+        await submitGracefulExitCommand(harness, command.gracefulExitCommand);
       } else {
         harness.kill();
       }
-
-      cleanupPerformed = true;
     }
 
     function cleanupAfterValidationFailure(): void {
-      try {
-        cleanup();
-      } catch {
+      void cleanup().catch(() => {
         // Preserve the validation failure as the actionable error.
-      }
+      });
     }
 
     function rejectTranscriptCaptureFailure(error: unknown): void {
@@ -386,9 +386,9 @@ export async function runPtyManagedSession(
       reject(error);
     }
 
-    function cleanupAfterValidOutput(): void {
+    async function cleanupAfterValidOutput(): Promise<void> {
       try {
-        cleanup();
+        await cleanup();
       } catch (error) {
         throw new ProviderSessionCleanupError(command.provider, error);
       }
@@ -484,15 +484,8 @@ export async function runPtyManagedSession(
         return;
       }
 
-      try {
-        cleanupAfterValidOutput();
-      } catch (error) {
-        settled = true;
-        rejectSession(error);
-        return;
-      }
-
       void (async () => {
+        await cleanupAfterValidOutput();
         await emitProviderEvent({
           type: "session-completed",
           exitCode,
@@ -504,7 +497,10 @@ export async function runPtyManagedSession(
 
         settled = true;
         resolveSession(createResult());
-      })();
+      })().catch((error) => {
+        settled = true;
+        rejectSession(error);
+      });
     }
 
     function handlePhaseCompletion(completionMarker: string): void {

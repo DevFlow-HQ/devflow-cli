@@ -36,6 +36,7 @@ import type { ClaudeHookDrivenSessionCommand } from "../../src/adapters/claudeHo
 import type { ClaudeJsonlSessionCommand } from "../../src/adapters/claudeJsonlSessionRunner.js";
 import type { CodexHookDrivenSessionCommand } from "../../src/adapters/codexHookDrivenSessionRunner.js";
 import type { CodexJsonlSessionCommand } from "../../src/adapters/codexJsonlSessionRunner.js";
+import type { PtyGracefulExitCommand } from "../../src/adapters/ptyControlHarness.js";
 import type { LogContext, Logger } from "../../src/logger.js";
 
 interface AdapterContractHarness {
@@ -44,7 +45,7 @@ interface AdapterContractHarness {
   displayName: string;
   expectedArgsWithoutModel: string[];
   expectedArgsWithModel: string[];
-  cleanupCommand: string;
+  gracefulExitCommand: PtyGracefulExitCommand;
   createAdapter: (options?: {
     runPtyManagedSession: CapturingPtyRunner["runPtyManagedSession"];
   }) => ManagedSessionAdapter;
@@ -69,7 +70,7 @@ class CapturingPtyRunner {
       provider: ReturnType<typeof getBuiltInProviderIdentity>;
       executable: string;
       args: string[];
-      cleanupCommand?: string;
+      gracefulExitCommand?: PtyGracefulExitCommand;
     };
     input: ManagedProviderSessionInput;
   }> = [];
@@ -79,7 +80,7 @@ class CapturingPtyRunner {
       provider: ReturnType<typeof getBuiltInProviderIdentity>;
       executable: string;
       args: string[];
-      cleanupCommand?: string;
+      gracefulExitCommand?: PtyGracefulExitCommand;
     },
     input: ManagedProviderSessionInput,
   ): Promise<ManagedProviderSessionResult> {
@@ -200,7 +201,7 @@ const providerHarnesses: AdapterContractHarness[] = [
     displayName: "Claude",
     expectedArgsWithoutModel: ["Ship the contract"],
     expectedArgsWithModel: ["--model", "gpt-5.5", "Ship the contract"],
-    cleanupCommand: "/exit\n",
+    gracefulExitCommand: { text: "/exit", submitKey: "\n" },
     createAdapter: (options) =>
       createClaudeAdapter({ ...options, eventSource: "pty" }),
   },
@@ -215,7 +216,7 @@ const providerHarnesses: AdapterContractHarness[] = [
       "--prompt-interactive",
       "Ship the contract",
     ],
-    cleanupCommand: "/quit\n",
+    gracefulExitCommand: { text: "/quit", submitKey: "\n" },
     createAdapter: createGeminiAdapter,
   },
   {
@@ -224,7 +225,7 @@ const providerHarnesses: AdapterContractHarness[] = [
     displayName: "OpenCode",
     expectedArgsWithoutModel: ["--prompt", "Ship the contract"],
     expectedArgsWithModel: ["--model", "gpt-5.5", "--prompt", "Ship the contract"],
-    cleanupCommand: "/exit\n",
+    gracefulExitCommand: { text: "/exit", submitKey: "\n" },
     createAdapter: createOpenCodeAdapter,
   },
 ];
@@ -1010,7 +1011,7 @@ for (const harness of providerHarnesses) {
           provider: getBuiltInProviderIdentity(harness.providerId),
           executable: executablePath,
           args: harness.expectedArgsWithoutModel,
-          cleanupCommand: harness.cleanupCommand,
+          gracefulExitCommand: harness.gracefulExitCommand,
         },
         input: validRunInput,
       },
@@ -1046,7 +1047,7 @@ for (const harness of providerHarnesses) {
       provider: getBuiltInProviderIdentity(harness.providerId),
       executable: executablePath,
       args: harness.expectedArgsWithModel,
-      cleanupCommand: harness.cleanupCommand,
+      gracefulExitCommand: harness.gracefulExitCommand,
     });
   });
 
@@ -1122,7 +1123,7 @@ for (const harness of providerHarnesses) {
           provider: getBuiltInProviderIdentity(harness.providerId),
           executable: executablePath,
           args: harness.expectedArgsWithoutModel,
-          cleanupCommand: harness.cleanupCommand,
+          gracefulExitCommand: harness.gracefulExitCommand,
         },
         input: validRunInput,
       },
@@ -1169,7 +1170,7 @@ test("Claude adapter delegates hook-mode sessions to the hook-driven runner", as
         provider: getBuiltInProviderIdentity("claude"),
         executable: executablePath,
         args: ["--model", "gpt-5.5", "Ship the contract"],
-        cleanupCommand: "/exit\n",
+        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       },
       input: validRunInputWithModel,
     },
@@ -1216,7 +1217,7 @@ test("Claude adapter delegates default sessions to the hook-driven runner", asyn
         provider: getBuiltInProviderIdentity("claude"),
         executable: executablePath,
         args: ["--model", "gpt-5.5", "Ship the contract"],
-        cleanupCommand: "/exit\n",
+        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       },
       input: validRunInputWithModel,
     },
@@ -1264,7 +1265,7 @@ test("Claude adapter does not relaunch hook-mode failures through JSONL", async 
       provider: getBuiltInProviderIdentity("claude"),
       executable: executablePath,
       args: ["Ship the contract"],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n" },
     },
   ]);
   assert.deepEqual(jsonlRunner.calls, []);
@@ -1312,7 +1313,7 @@ test("Claude adapter delegates fresh JSONL sessions to the JSONL runner", async 
         provider: getBuiltInProviderIdentity("claude"),
         executable: executablePath,
         args: ["--model", "gpt-5.5", "Ship the contract"],
-        cleanupCommand: "/exit\n",
+        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       },
       input: validRunInputWithModel,
     },
@@ -1363,7 +1364,7 @@ test("Claude adapter resumeSession delegates hook resume with native --resume fl
           "gpt-5.5",
           "Continue the interrupted work",
         ],
-        cleanupCommand: "/exit\n",
+        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       },
       input: validResumeInputWithModel,
     },
@@ -1403,7 +1404,7 @@ test("Claude adapter resumeSession delegates hook resume without a model flag", 
         provider: getBuiltInProviderIdentity("claude"),
         executable: executablePath,
         args: ["--resume", "codex-session-123", "Continue the interrupted work"],
-        cleanupCommand: "/exit\n",
+        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       },
       input: validResumeInput,
     },
@@ -1459,7 +1460,7 @@ test("Claude adapter resumeSession delegates JSONL resume with native --resume f
           "Continue the interrupted work",
         ],
         resumeProviderSessionId: "codex-session-123",
-        cleanupCommand: "/exit\n",
+        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       },
       input: validResumeInputWithModel,
     },
@@ -1503,7 +1504,7 @@ test("Codex adapter runSession delegates provider startup config to the hook-dri
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: codexHarness.expectedArgsWithoutModel,
-        cleanupCommand: "/quit\r",
+        gracefulExitCommand: { text: "/quit", submitKey: "\r" },
       },
       input: validRunInput,
     },
@@ -1553,7 +1554,7 @@ test("Codex adapter runSession delegates exclusively to JSONL runner when select
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: [],
-        cleanupCommand: "/quit\r",
+        gracefulExitCommand: { text: "/quit", submitKey: "\r" },
       },
       input: validRunInput,
     },
@@ -1590,7 +1591,7 @@ test("Codex adapter passes opaque model overrides through provider-native flags"
     provider: getBuiltInProviderIdentity("codex"),
     executable: executablePath,
     args: codexHarness.expectedArgsWithModel,
-    cleanupCommand: "/quit\r",
+    gracefulExitCommand: { text: "/quit", submitKey: "\r" },
   });
 });
 
@@ -1637,7 +1638,7 @@ test("Codex adapter resumeSession delegates hook resume with provider session id
           "codex-session-123",
           "Continue the interrupted work",
         ],
-        cleanupCommand: "/quit\r",
+        gracefulExitCommand: { text: "/quit", submitKey: "\r" },
       },
       input: validResumeInputWithModel,
     },
@@ -1685,7 +1686,7 @@ test("Codex adapter resumeSession delegates JSONL resume without putting prompt 
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: ["resume", "--model", "gpt-5.5", "codex-session-123"],
-        cleanupCommand: "/quit\r",
+        gracefulExitCommand: { text: "/quit", submitKey: "\r" },
         resumeProviderSessionId: "codex-session-123",
       },
       input: validResumeInputWithModel,
@@ -1761,7 +1762,7 @@ test("built-in managed-session selection wires codex execution through the hook-
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: codexHarness.expectedArgsWithoutModel,
-        cleanupCommand: "/quit\r",
+        gracefulExitCommand: { text: "/quit", submitKey: "\r" },
       },
       input: validRunInput,
     },
@@ -1807,7 +1808,7 @@ test("built-in managed-session selection wires codex JSONL mode before launch", 
         provider: getBuiltInProviderIdentity("codex"),
         executable: executablePath,
         args: [],
-        cleanupCommand: "/quit\r",
+        gracefulExitCommand: { text: "/quit", submitKey: "\r" },
       },
       input: validRunInput,
     },

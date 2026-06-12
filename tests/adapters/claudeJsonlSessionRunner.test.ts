@@ -936,12 +936,12 @@ test("Claude JSONL runner resolves success after graceful shutdown exits natural
         content: [{ type: "text", text: "assistant INITIAL_DONE" }],
       },
     });
-    await waitUntil(() => spawner.process.writes.includes("/exit\n"));
+    await waitUntil(() => spawner.process.writes.includes("\n"));
     spawner.process.emitExit(0);
   });
 
   const result = await runClaudeJsonlSession(
-    { ...createCommand(), cleanupCommand: "/exit\n" },
+    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -963,7 +963,7 @@ test("Claude JSONL runner resolves success after graceful shutdown exits natural
     signal: null,
     matchedCompletionMarker: "INITIAL_DONE",
   });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.equal(spawner.process.killed, false);
   assert.equal(events.at(-1)?.type, "session-completed");
 });
@@ -988,7 +988,7 @@ test("Claude JSONL runner force-kills after valid completion and still resolves 
   });
 
   const result = await runClaudeJsonlSession(
-    { ...createCommand(), cleanupCommand: "/exit\n" },
+    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
     createInput(projectRoot),
     {
       ptySpawner: spawner,
@@ -1006,7 +1006,7 @@ test("Claude JSONL runner force-kills after valid completion and still resolves 
     signal: null,
     matchedCompletionMarker: "INITIAL_DONE",
   });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.equal(spawner.process.killed, true);
 });
 
@@ -1033,7 +1033,7 @@ test("Claude JSONL runner raises cleanup errors only when shutdown force-kill th
 
   await assert.rejects(
     runClaudeJsonlSession(
-      { ...createCommand(), cleanupCommand: "/exit\n" },
+      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -1047,7 +1047,7 @@ test("Claude JSONL runner raises cleanup errors only when shutdown force-kill th
     (error) =>
       error instanceof ProviderSessionCleanupError && error.cause === killError,
   );
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });
 
 test("Claude JSONL runner rejects original failures while detached cleanup shuts down the PTY", async () => {
@@ -1072,7 +1072,7 @@ test("Claude JSONL runner rejects original failures while detached cleanup shuts
 
   await assert.rejects(
     runClaudeJsonlSession(
-      { ...createCommand(), cleanupCommand: "/exit\n" },
+      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "turn-completed") {
@@ -1095,7 +1095,7 @@ test("Claude JSONL runner rejects original failures while detached cleanup shuts
   );
 
   await waitUntil(() => spawner.process.killed);
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });
 
 test("Claude JSONL runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {

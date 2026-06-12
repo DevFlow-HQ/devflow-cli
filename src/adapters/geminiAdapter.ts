@@ -11,7 +11,7 @@ export function createGeminiAdapter(
     {
       providerId: "gemini",
       command: "gemini",
-      cleanupCommand: "/quit\n",
+      gracefulExitCommand: { text: "/quit", submitKey: "\n" },
       buildArgs(input) {
         return [
           ...(input.model ? ["--model", input.model] : []),

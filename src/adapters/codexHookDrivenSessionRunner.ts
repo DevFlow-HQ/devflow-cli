@@ -31,6 +31,7 @@ import {
   type PtySpawner,
   type TerminalDimensions,
   type UserInput,
+  type PtyGracefulExitCommand,
 } from "./ptyControlHarness.js";
 import {
   submitPtyPrompt,
@@ -43,7 +44,7 @@ export interface CodexHookDrivenSessionCommand {
   provider: ProviderIdentity;
   executable: string;
   args: string[];
-  cleanupCommand?: string;
+  gracefulExitCommand?: PtyGracefulExitCommand;
   logger?: Logger;
 }
 
@@ -137,7 +138,7 @@ export async function runCodexHookDrivenSession(
 
           try {
             await harness.shutdown({
-              command: command.cleanupCommand,
+              command: command.gracefulExitCommand,
               timeoutMs: cleanupTimeoutMs,
             });
           } catch (error) {
@@ -193,7 +194,7 @@ export async function runCodexHookDrivenSession(
       if (harness && !exitObserved && !successSettlementStarted) {
         void harness
           .shutdown({
-            command: command.cleanupCommand,
+            command: command.gracefulExitCommand,
             timeoutMs: cleanupTimeoutMs,
           })
           .catch(() => {});

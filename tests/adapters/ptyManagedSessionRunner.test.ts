@@ -29,6 +29,18 @@ function waitForAsyncHandlers(): Promise<void> {
   });
 }
 
+async function waitForWriteCount(writes: string[], count: number): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (writes.length >= count) {
+      return;
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
+}
+
 function createCapturingLogger() {
   const entries: Array<{
     level: keyof Logger;
@@ -240,7 +252,7 @@ test("PTY managed-session runner mirrors raw output and validates after an ANSI-
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: ["--ask-for-approval", "never"],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       async validate() {
@@ -275,7 +287,7 @@ test("PTY managed-session runner mirrors raw output and validates after an ANSI-
     "DEVFLOW_\u001b[31mDONE\u001b[0m\n",
   ]);
   assert.deepEqual(validationStates, [true]);
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.deepEqual(result, {
     repairUsed: false,
     exitCode: 0,
@@ -292,7 +304,7 @@ test("PTY managed-session runner completes with a terminal marker from raw outpu
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "ITERATION_DONE",
@@ -323,7 +335,7 @@ test("PTY managed-session runner gives terminal marker precedence when both raw 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "ITERATION_DONE",
@@ -355,7 +367,7 @@ test("PTY managed-session runner emits a fallback session-start event after succ
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       phase: {
@@ -393,7 +405,7 @@ test("PTY managed-session runner emits fallback phase ids when callers omit phas
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       onProviderEvent(event) {
@@ -433,7 +445,7 @@ test("PTY managed-session runner emits turn and session completion events after 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       phase: {
@@ -469,7 +481,7 @@ test("PTY managed-session runner emits turn and session completion events after 
     "turn-completed",
     "session-completed",
   ]);
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.deepEqual(
     events
       .filter(
@@ -502,7 +514,7 @@ test("PTY managed-session runner traces spawn, forwarded events, marker matches,
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: ["--prompt", promptArgument],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
       logger,
     },
     createInput({
@@ -574,7 +586,7 @@ test("PTY managed-session runner preserves default behavior when no logger is su
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -592,7 +604,7 @@ test("PTY managed-session runner preserves default behavior when no logger is su
     signal: null,
     matchedCompletionMarker: "DEVFLOW_DONE",
   });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });
 
 test("PTY managed-session runner submits generic continuations inside the same live session", async () => {
@@ -604,7 +616,7 @@ test("PTY managed-session runner submits generic continuations inside the same l
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "GRILL_DONE",
@@ -645,7 +657,7 @@ test("PTY managed-session runner submits generic continuations inside the same l
   assert.deepEqual(validationOrder, ["grill", "prd-start", "prd"]);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Synthesize the PRD.\u001b[201~\r",
-    "/exit\n",
+    "/exit", "\n",
   ]);
   assert.equal(result.repairUsed, false);
 });
@@ -660,7 +672,7 @@ test("PTY managed-session runner emits turn completion before submitting continu
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       phase: {
@@ -743,7 +755,7 @@ test("PTY managed-session runner captures normalized provider output without pro
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "DEVFLOW_GRILL_DONE",
@@ -780,7 +792,7 @@ test("PTY managed-session runner mirrors output and transcripts without chunk-le
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "DEVFLOW_DONE",
@@ -840,7 +852,7 @@ test("PTY managed-session runner captures raw terminal submissions without class
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       transcript: {
@@ -888,7 +900,7 @@ test("PTY managed-session runner captures raw terminal submissions without class
     "\r",
     "second\n",
     "\u0003",
-    "/exit\n",
+    "/exit", "\n",
   ]);
 });
 
@@ -904,7 +916,7 @@ test("PTY managed-session runner observes completion markers only from provider 
       provider: getBuiltInProviderIdentity("claude"),
       executable: "claude",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       async validate() {
@@ -973,7 +985,7 @@ test("PTY managed-session runner excludes repair markers from provider transcrip
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "INITIAL_DONE",
@@ -1025,7 +1037,7 @@ test("PTY managed-session runner emits repair turn completion with repair phase 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       phase: {
@@ -1096,7 +1108,7 @@ test("PTY managed-session runner maps pre-completion transcript callback failure
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       transcript: {
@@ -1120,7 +1132,8 @@ test("PTY managed-session runner maps pre-completion transcript callback failure
     assert.equal(error.cause, captureFailure);
     return true;
   });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  await waitForWriteCount(spawner.process.writes, 2);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });
 
 test("PTY managed-session runner maps normal provider event callback failures to retryable capture errors", async () => {
@@ -1132,7 +1145,7 @@ test("PTY managed-session runner maps normal provider event callback failures to
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       onProviderEvent(event) {
@@ -1157,7 +1170,8 @@ test("PTY managed-session runner maps normal provider event callback failures to
     assert.equal(error.cause, captureFailure);
     return true;
   });
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  await waitForWriteCount(spawner.process.writes, 2);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });
 
 test("PTY managed-session runner does not emit failure-context events on launch failures", async () => {
@@ -1204,7 +1218,7 @@ test("PTY managed-session runner bridges TTY stdin to the provider and restores 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       async validate() {
@@ -1227,7 +1241,7 @@ test("PTY managed-session runner bridges TTY stdin to the provider and restores 
 
   assert.equal(validated, true);
   assert.equal(result.repairUsed, false);
-  assert.deepEqual(spawner.process.writes, ["typed input", "/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["typed input", "/exit", "\n"]);
   assert.deepEqual(userInput.rawModeChanges, [true, false]);
   assert.equal(userInput.resumeCount, 1);
   assert.equal(userInput.pauseCount, 1);
@@ -1248,7 +1262,7 @@ test("PTY managed-session runner forwards Esc, Ctrl-C, and ordinary input bytes 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1266,7 +1280,7 @@ test("PTY managed-session runner forwards Esc, Ctrl-C, and ordinary input bytes 
 
   await runPromise;
 
-  assert.deepEqual(spawner.process.writes.slice(0, -1), [
+  assert.deepEqual(spawner.process.writes.slice(0, -2), [
     "\u001b",
     "abc",
     "\u0003",
@@ -1282,7 +1296,7 @@ test("PTY managed-session runner does not bridge stdin when stdin is not a TTY",
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1297,7 +1311,7 @@ test("PTY managed-session runner does not bridge stdin when stdin is not a TTY",
   spawner.process.emitData("DEVFLOW_DONE\n");
   await runPromise;
 
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
   assert.deepEqual(userInput.rawModeChanges, []);
   assert.equal(userInput.resumeCount, 0);
   assert.equal(userInput.listenerCount("data"), 0);
@@ -1313,7 +1327,7 @@ test("PTY managed-session runner forwards terminal resizes while active without 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1360,7 +1374,7 @@ test("PTY managed-session runner ignores terminal resizes when the PTY does not 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1389,7 +1403,7 @@ test("PTY managed-session runner restores bridged stdin after validation failure
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       async validate() {
@@ -1425,7 +1439,7 @@ test("PTY managed-session runner detects markers inside the bounded rolling buff
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
       markerBufferLimit: 16,
     },
     createInput({
@@ -1466,7 +1480,7 @@ test("PTY managed-session runner reports incomplete sessions before marker detec
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       phase: {
@@ -1514,7 +1528,7 @@ test("PTY managed-session runner maps PTY spawn failures to typed launch errors"
         provider: getBuiltInProviderIdentity("codex"),
         executable: "codex",
         args: [],
-        cleanupCommand: "/exit\n",
+        gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
       },
       createInput(),
       {
@@ -1541,7 +1555,7 @@ test("PTY managed-session runner reports interrupted sessions when user interrup
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1577,7 +1591,7 @@ test("PTY managed-session runner preserves incomplete exit classification when l
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1611,7 +1625,7 @@ test("PTY managed-session runner clears Ctrl-C abort intent when DevFlow submits
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "INITIAL_DONE",
@@ -1667,7 +1681,7 @@ test("PTY managed-session runner forwards the first Ctrl-C and reports provider 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1708,7 +1722,7 @@ test("PTY managed-session runner kills the provider and reports interruption on 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput(),
     {
@@ -1750,7 +1764,7 @@ test("PTY managed-session runner surfaces cleanup failures after valid output", 
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       onProviderEvent(event) {
@@ -1788,7 +1802,7 @@ test("PTY managed-session runner repairs invalid artifacts inside the same sessi
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "INITIAL_DONE",
@@ -1832,7 +1846,7 @@ test("PTY managed-session runner repairs invalid artifacts inside the same sessi
   assert.deepEqual(validationStates, [true, true]);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Repair the artifact.\nKeep the provider session open.\u001b[201~\r",
-    "/exit\n",
+    "/exit", "\n",
   ]);
   assert.deepEqual(result, {
     repairUsed: true,
@@ -1854,7 +1868,7 @@ test("PTY managed-session runner maps repair validation failures", async () => {
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       initialCompletionMarker: "INITIAL_DONE",
@@ -1891,10 +1905,11 @@ test("PTY managed-session runner maps repair validation failures", async () => {
   spawner.process.emitData("REPAIR_DONE\n");
 
   await assert.rejects(runPromise, mappedFailure);
+  await waitForWriteCount(spawner.process.writes, 3);
   assert.equal(validationCount, 2);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Repair the artifact.\u001b[201~\r",
-    "/exit\n",
+    "/exit", "\n",
   ]);
 });
 
@@ -1907,7 +1922,7 @@ test("PTY managed-session runner propagates initial validation failures when rep
       provider: getBuiltInProviderIdentity("codex"),
       executable: "codex",
       args: [],
-      cleanupCommand: "/exit\n",
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
     },
     createInput({
       async validate() {
@@ -1924,5 +1939,6 @@ test("PTY managed-session runner propagates initial validation failures when rep
   spawner.process.emitData("DEVFLOW_DONE\n");
 
   await assert.rejects(runPromise, validationFailure);
-  assert.deepEqual(spawner.process.writes, ["/exit\n"]);
+  await waitForWriteCount(spawner.process.writes, 2);
+  assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
 });

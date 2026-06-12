@@ -89,8 +89,14 @@ export interface PtyControlHarnessHandlers {
   onExit?(event: { exitCode: number; signal: NodeJS.Signals | null }): void;
 }
 
+export interface PtyGracefulExitCommand {
+  text: string;
+  submitKey: string;
+  submitDelayMs?: number;
+}
+
 export interface PtyControlHarnessShutdownOptions {
-  command?: string;
+  command?: PtyGracefulExitCommand;
   timeoutMs: number;
 }
 
@@ -109,6 +115,16 @@ export interface PtyControlHarness {
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
+export const DEFAULT_GRACEFUL_EXIT_SUBMIT_DELAY_MS = 100;
+
+export async function submitGracefulExitCommand(
+  writer: Pick<PtyProcess, "write">,
+  command: PtyGracefulExitCommand,
+): Promise<void> {
+  writer.write(command.text);
+  await delay(command.submitDelayMs ?? DEFAULT_GRACEFUL_EXIT_SUBMIT_DELAY_MS);
+  writer.write(command.submitKey);
+}
 
 export const nodePtySpawner: PtySpawner = {
   spawn(executable, args, options) {
@@ -270,7 +286,7 @@ export function startPtyControlHarness(
 
       if (command !== undefined) {
         try {
-          processHandle.write(command);
+          await submitGracefulExitCommand(processHandle, command);
         } catch {
           // Fall through to the force-kill backstop when graceful teardown cannot be submitted.
         }
@@ -294,6 +310,12 @@ export function startPtyControlHarness(
       }
     },
   };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function waitForExit(
