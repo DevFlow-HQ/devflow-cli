@@ -7,12 +7,12 @@ import {
   buildSessionLogLocatorResolutionTrace,
   emitAdapterTrace,
 } from "./adapterTrace.js";
-import {
-  ProviderSessionEventCaptureError,
-  type ManagedProviderSessionInput,
-} from "./managedSessionAdapter.js";
+import { ProviderSessionEventCaptureError } from "./managedSessionAdapter.js";
+import { getScopedCodexProviderHome } from "./codexProviderHome.js";
 import type { ProviderIdentity } from "./providers.js";
 import { NoopLogger, type Logger } from "../logger.js";
+
+export { getScopedCodexProviderHome } from "./codexProviderHome.js";
 
 export interface SessionLogSnapshot {
   filePaths: Set<string>;
@@ -130,14 +130,6 @@ export class CodexSessionLogLocatorResumeNotFoundError extends Error {
     this.searchedPattern = options.searchedPattern;
     this.providerSessionId = options.providerSessionId;
   }
-}
-
-export function getScopedCodexProviderHome(
-  input: ManagedProviderSessionInput,
-): string {
-  const runId = input.phase?.id.split(":")[0] ?? "unscoped-codex-session";
-
-  return join(input.workingDirectory, ".devflow", "runs", runId, ".codex");
 }
 
 export function createCodexSessionLogLocator(

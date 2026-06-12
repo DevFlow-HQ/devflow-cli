@@ -6,11 +6,14 @@ import {
 } from "./codexJsonlEventSource.js";
 import {
   createCodexSessionLogLocator,
-  getScopedCodexProviderHome,
   locateCodexSessionLogForProvider,
   type SessionLogLocator,
   type SessionLogResumeLocation,
 } from "./codexSessionLogLocator.js";
+import {
+  getScopedCodexProviderHome,
+  seedCodexCredentials,
+} from "./codexProviderHome.js";
 import {
   createJsonlTailEventSource,
   type JsonlTailEventSource,
@@ -64,6 +67,8 @@ export interface CodexJsonlSessionDependencies {
   firstEventTimeoutMs?: number;
   cleanupTimeoutMs?: number;
   earlyExitDrainTimeoutMs?: number;
+  environment?: NodeJS.ProcessEnv;
+  homeDirectory?: string;
   jsonlEventSourceFactory?: (
     options: JsonlTailEventSourceOptions,
   ) => JsonlTailEventSource;
@@ -79,6 +84,7 @@ export async function runCodexJsonlSession(
   input: ManagedProviderSessionInput,
   dependencies: CodexJsonlSessionDependencies = {},
 ): Promise<ManagedProviderSessionResult> {
+  const environment = dependencies.environment ?? process.env;
   const codexHome = getScopedCodexProviderHome(input);
   const locator =
     dependencies.sessionLogLocator ??
@@ -93,7 +99,17 @@ export async function runCodexJsonlSession(
     dependencies.earlyExitDrainTimeoutMs ?? DEFAULT_EARLY_EXIT_DRAIN_TIMEOUT_MS;
   const jsonlEventSourceFactory =
     dependencies.jsonlEventSourceFactory ?? createJsonlTailEventSource;
-  await fs.ensureDir(codexHome);
+
+  try {
+    await seedCodexCredentials({
+      codexHome,
+      environment,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    await fs.ensureDir(codexHome);
+  } catch (error) {
+    throw new ProviderSessionLaunchError(command.provider, error);
+  }
 
   const resumeProviderSessionId = command.resumeProviderSessionId;
   let snapshot;

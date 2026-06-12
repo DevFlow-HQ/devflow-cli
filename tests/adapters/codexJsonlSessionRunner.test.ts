@@ -602,6 +602,51 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
   });
 });
 
+test("Codex JSONL runner seeds auth.json from active source home before launch", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const sourceCodexHome = await fs.mkdtemp(
+    join(tmpdir(), "devflow-codex-source-"),
+  );
+  await fs.writeJson(join(sourceCodexHome, "auth.json"), {
+    refresh_token: "source-refresh-token",
+  });
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitForPtyWrites(spawner.process, 1);
+    await appendRolloutRecord(codexHome, rollout, {
+      timestamp: "2026-05-30T00:00:00.000Z",
+      type: "session_meta",
+      payload: {
+        id: "codex-session-1",
+      },
+    });
+    await appendRolloutRecord(codexHome, rollout, {
+      timestamp: "2026-05-30T00:00:01.000Z",
+      type: "event_msg",
+      payload: {
+        type: "task_complete",
+        last_agent_message: "done INITIAL_DONE",
+      },
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    sessionLogLocator,
+    locatorTimeoutMs: 1_000,
+    firstEventTimeoutMs: 1_000,
+    environment: { ...process.env, CODEX_HOME: sourceCodexHome },
+  });
+
+  assert.deepEqual(await fs.readJson(join(codexHome, "auth.json")), {
+    refresh_token: "source-refresh-token",
+  });
+});
+
 test("Codex JSONL runner classifies native user messages and suppresses managed prompt echoes", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
   const { codexHome, rollout, sessionLogLocator } =

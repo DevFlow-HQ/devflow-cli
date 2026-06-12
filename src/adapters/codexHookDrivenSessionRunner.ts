@@ -6,6 +6,10 @@ import {
   codexHookScript,
 } from "./codexHookArtifacts.js";
 import { normalizeCodexHookPayload } from "./codexHookEventSource.js";
+import {
+  getScopedCodexProviderHome,
+  seedCodexCredentials,
+} from "./codexProviderHome.js";
 import { resolveHookSocketPath } from "./hookSocketPath.js";
 import {
   IncompleteProviderSessionError,
@@ -58,6 +62,8 @@ export interface CodexHookDrivenSessionDependencies {
   firstEventTimeoutMs?: number;
   cleanupTimeoutMs?: number;
   socketDrainMs?: number;
+  environment?: NodeJS.ProcessEnv;
+  homeDirectory?: string;
 }
 
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 30_000;
@@ -80,23 +86,33 @@ export async function runCodexHookDrivenSession(
   const cleanupTimeoutMs =
     dependencies.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS;
   const socketDrainMs = dependencies.socketDrainMs ?? DEFAULT_SOCKET_DRAIN_MS;
-  const codexHome = getCodexHome(input);
+  const environment = dependencies.environment ?? process.env;
+  const codexHome = getScopedCodexProviderHome(input);
   const hookScriptPath = join(codexHome, "hook.js");
   const socketPath = resolveHookSocketPath(input);
 
   let harness: PtyControlHarness | undefined;
   let rejectEventCaptureFailure: (error: unknown) => void = () => {};
 
-  await fs.ensureDir(codexHome);
-  await fs.writeFile(
-    join(codexHome, "config.toml"),
-    codexHookConfigToml({ hookScriptPath }),
-    "utf8",
-  );
-  await fs.writeFile(hookScriptPath, codexHookScript(), {
-    encoding: "utf8",
-    mode: 0o755,
-  });
+  try {
+    await seedCodexCredentials({
+      codexHome,
+      environment,
+      homeDirectory: dependencies.homeDirectory,
+    });
+    await fs.ensureDir(codexHome);
+    await fs.writeFile(
+      join(codexHome, "config.toml"),
+      codexHookConfigToml({ hookScriptPath }),
+      "utf8",
+    );
+    await fs.writeFile(hookScriptPath, codexHookScript(), {
+      encoding: "utf8",
+      mode: 0o755,
+    });
+  } catch (error) {
+    throw new ProviderSessionLaunchError(command.provider, error);
+  }
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -416,10 +432,4 @@ export async function runCodexHookDrivenSession(
       }
     })();
   });
-}
-
-function getCodexHome(input: ManagedProviderSessionInput): string {
-  const runId = input.phase?.id.split(":")[0] ?? "unscoped-codex-session";
-
-  return join(input.workingDirectory, ".devflow", "runs", runId, ".codex");
 }

@@ -399,6 +399,50 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
   });
 });
 
+test("Codex hook-driven runner seeds auth.json from active source home before launch", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const sourceCodexHome = await fs.mkdtemp(
+    join(tmpdir(), "devflow-codex-source-"),
+  );
+  await fs.writeJson(join(sourceCodexHome, "auth.json"), {
+    refresh_token: "source-refresh-token",
+  });
+
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
+
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "SessionStart",
+      session_id: "codex-session-1",
+    });
+    await runHookScript(hookScriptPath, options.env ?? {}, {
+      hook_event_name: "Stop",
+      last_assistant_message: "done INITIAL_DONE",
+      session_id: "codex-session-1",
+    });
+    spawner.process.emitExit(0);
+  });
+
+  await runCodexHookDrivenSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    firstEventTimeoutMs: 1_000,
+    environment: { ...process.env, CODEX_HOME: sourceCodexHome },
+  });
+
+  const scopedCodexHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".codex",
+  );
+  assert.deepEqual(await fs.readJson(join(scopedCodexHome, "auth.json")), {
+    refresh_token: "source-refresh-token",
+  });
+  assert.equal(spawner.calls[0]?.options.env?.CODEX_HOME, scopedCodexHome);
+});
+
 test("Codex hook-driven runner advances continuations and submits prompts through PTY control", async () => {
   const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
   const events: ManagedProviderSessionEvent[] = [];
