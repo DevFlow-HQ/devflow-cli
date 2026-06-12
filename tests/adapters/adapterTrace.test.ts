@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildHookSocketPayloadReceivedTrace,
   buildSubmittedUserMessageTrace,
   buildTierResolutionTrace,
   buildTurnCompletedTrace,
@@ -100,6 +101,24 @@ test("adapter trace event builders expose lengths but never event bodies or prom
   assert.doesNotMatch(serialized, /human pasted/);
   assert.doesNotMatch(serialized, /assistant copied/);
   assert.doesNotMatch(serialized, /do the work/);
+});
+
+test("adapter trace hook payload builder records raw hook payload verbatim", () => {
+  const rawPayload =
+    '{"hook_event_name":"SessionStart","secret":"SECRET-hook-payload-body"}';
+
+  const trace = buildHookSocketPayloadReceivedTrace({
+    socketPath: "/tmp/devflow-hook.sock",
+    type: "SessionStart",
+    rawPayload,
+  });
+
+  assert.equal(trace.context.context?.socketPath, "/tmp/devflow-hook.sock");
+  assert.equal(trace.context.context?.type, "SessionStart");
+  assert.equal(trace.context.context?.rawPayload, rawPayload);
+  assert.equal("payloadLength" in (trace.context.context ?? {}), false);
+  assert.equal(trace.context.runId, undefined);
+  assert.equal(trace.context.stage, undefined);
 });
 
 test("emitAdapterTrace writes debug through the injected logger", () => {

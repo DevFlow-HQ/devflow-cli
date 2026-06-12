@@ -224,7 +224,7 @@ test("hook socket server cleans up its Unix socket file on stop", async (t) => {
   assert.equal(await fs.pathExists(socketPath), false);
 });
 
-test("hook socket server emits metadata-only lifecycle diagnostics", async (t) => {
+test("hook socket server logs received hook payloads verbatim while keeping other lifecycle diagnostics metadata-only", async (t) => {
   const socketPath = createSocketPath(t.name);
   const { entries, logger } = createCapturingLogger();
   const server = hookSocketServer({ logger });
@@ -255,15 +255,15 @@ test("hook socket server emits metadata-only lifecycle diagnostics", async (t) =
   assert.equal(bound?.context?.context?.socketPath, socketPath);
   assert.equal(received?.context?.context?.type, "SessionStart");
   assert.equal(
-    received?.context?.context?.payloadLength,
-    '{"hook_event_name":"SessionStart","secret":"SECRET-hook-payload-body"}'
-      .length,
+    received?.context?.context?.rawPayload,
+    "{\"hook_event_name\":\"SessionStart\",\"secret\":\"SECRET-hook-payload-body\"}",
   );
+  assert.equal("payloadLength" in (received?.context?.context ?? {}), false);
   assert.equal(malformed?.context?.context?.socketPath, socketPath);
   assert.equal(malformed?.context?.context?.reason, "truncated");
   assert.equal(malformed?.context?.context?.payloadLength, '{"hook_event_name":'.length);
-  assert.doesNotMatch(serializedContexts, /SECRET-hook-payload-body/);
-  assert.equal(serializedContexts.includes('{"hook_event_name":'), false);
+  assert.equal("rawPayload" in (malformed?.context?.context ?? {}), false);
+  assert.match(serializedContexts, /SECRET-hook-payload-body/);
   assert.equal(bound?.context?.runId, undefined);
   assert.equal(bound?.context?.stage, undefined);
 });

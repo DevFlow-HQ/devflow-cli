@@ -67,6 +67,32 @@ test("maintainer context defines completion marker and grill conclusion confirma
   assert.match(context, /does not programmatically validate/i);
 });
 
+test("maintainer context documents the hook payload diagnostic exception", async () => {
+  const context = await readFile(join(repoRoot, "CONTEXT.md"), "utf8");
+  const adr = await readFile(
+    join(
+      repoRoot,
+      "docs",
+      "adr",
+      "0011-adapter-diagnostic-tracing-is-metadata-only.md",
+    ),
+    "utf8",
+  );
+
+  assert.match(adr, /metadata-only by default/i);
+  assert.match(adr, /entire raw payload is logged verbatim/i);
+  assert.match(adr, /hook-only and narrow/i);
+  assert.match(adr, /JSONL content is .*not.*additionally logged/i);
+  assert.match(adr, /PTY output is not logged/i);
+  assert.equal(adr.includes("provider + phaseId only"), true);
+  assert.equal(adr.includes(".devflow/"), true);
+  assert.match(adr, /thirty-day prune/i);
+
+  assert.match(context, /Provider hook/);
+  assert.match(context, /Hook IPC endpoint/);
+  assert.match(context, /Diagnostic log/);
+});
+
 test("end-user README documents the current supported invocation honestly", async () => {
   const readme = await readFile(join(repoRoot, "README.md"), "utf8");
 

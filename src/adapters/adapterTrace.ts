@@ -174,14 +174,14 @@ export function buildHookSocketBoundTrace(input: {
 export function buildHookSocketPayloadReceivedTrace(input: {
   socketPath: string;
   type: string;
-  payloadLength: number;
+  rawPayload: string;
 }): AdapterTrace {
   return {
     msg: "adapter hook socket payload received",
     context: hookSocketLogContext({
       socketPath: input.socketPath,
       type: input.type,
-      payloadLength: input.payloadLength,
+      rawPayload: input.rawPayload,
     }),
   };
 }

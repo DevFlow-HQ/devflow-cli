@@ -191,7 +191,7 @@ export function hookSocketServer(
         buildHookSocketPayloadReceivedTrace({
           socketPath,
           type: hookPayloadType(parsed),
-          payloadLength: rawPayload.length,
+          rawPayload,
         }),
       );
 
