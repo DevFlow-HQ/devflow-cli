@@ -4,6 +4,73 @@ import test from "node:test";
 
 import fs from "fs-extra";
 
+import { buildCodexLaunchArgs } from "../../src/adapters/codexAdapter.js";
+
+test("Codex launch args keep unattended globals before resume and hook trust scoped to hooks", () => {
+  const freshHookArgs = buildCodexLaunchArgs({
+    eventSource: "hooks",
+    model: "gpt-5.5",
+    initialPrompt: "Ship the contract",
+  });
+  const freshJsonlArgs = buildCodexLaunchArgs({
+    eventSource: "jsonl",
+    model: "gpt-5.5",
+    initialPrompt: "Ship the contract",
+  });
+  const resumeHookArgs = buildCodexLaunchArgs({
+    eventSource: "hooks",
+    model: "gpt-5.5",
+    initialPrompt: "Continue the interrupted work",
+    resumeProviderSessionId: "codex-session-123",
+  });
+  const resumeJsonlArgs = buildCodexLaunchArgs({
+    eventSource: "jsonl",
+    model: "gpt-5.5",
+    initialPrompt: "Continue the interrupted work",
+    resumeProviderSessionId: "codex-session-123",
+  });
+
+  assert.deepEqual(freshHookArgs, [
+    "-a",
+    "never",
+    "--dangerously-bypass-hook-trust",
+    "--model",
+    "gpt-5.5",
+    "Ship the contract",
+  ]);
+  assert.deepEqual(freshJsonlArgs, [
+    "-a",
+    "never",
+    "--model",
+    "gpt-5.5",
+  ]);
+  assert.deepEqual(resumeHookArgs, [
+    "-a",
+    "never",
+    "--dangerously-bypass-hook-trust",
+    "--model",
+    "gpt-5.5",
+    "resume",
+    "codex-session-123",
+    "Continue the interrupted work",
+  ]);
+  assert.deepEqual(resumeJsonlArgs, [
+    "-a",
+    "never",
+    "--model",
+    "gpt-5.5",
+    "resume",
+    "codex-session-123",
+  ]);
+
+  for (const args of [freshHookArgs, freshJsonlArgs, resumeHookArgs, resumeJsonlArgs]) {
+    assert.equal(args.includes("--sandbox"), false);
+    assert.equal(args.includes("--dangerously-bypass-approvals-and-sandbox"), false);
+  }
+  assert.equal(freshJsonlArgs.includes("--dangerously-bypass-hook-trust"), false);
+  assert.equal(resumeJsonlArgs.includes("--dangerously-bypass-hook-trust"), false);
+});
+
 type JsonRecord = {
   type?: unknown;
   payload?: unknown;

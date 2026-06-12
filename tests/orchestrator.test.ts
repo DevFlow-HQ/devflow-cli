@@ -1777,8 +1777,14 @@ test("orchestrator can complete the active intent stage through a built-in Codex
   assert.equal(result.bootstrapProvenance, "reused");
   assert.equal(sessionCalls.length, 4);
   assert.equal(sessionCalls[0]?.executable, executablePath);
-  assert.equal(sessionCalls[0]?.args[0], "--model");
-  assert.equal(sessionCalls[0]?.args[1], "gpt-5.5/fast beta");
+  assert.deepEqual(sessionCalls[0]?.args, [
+    "-a",
+    "never",
+    "--dangerously-bypass-hook-trust",
+    "--model",
+    "gpt-5.5/fast beta",
+    sessionCalls[0]?.input.initialPrompt,
+  ]);
 
   const runIds = await listRunDirectories(projectRoot);
   assert.deepEqual(

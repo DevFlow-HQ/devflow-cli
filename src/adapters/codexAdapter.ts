@@ -36,6 +36,41 @@ export type CodexJsonlRunner = (
 
 export type CodexManagedSessionEventSource = "hooks" | "jsonl";
 
+export interface CodexLaunchArgsInput {
+  eventSource: CodexManagedSessionEventSource;
+  model?: string;
+  initialPrompt: string;
+  resumeProviderSessionId?: string;
+}
+
+export function buildCodexLaunchArgs(input: CodexLaunchArgsInput): string[] {
+  const args = ["-a", "never"];
+
+  if (input.eventSource === "hooks") {
+    args.push("--dangerously-bypass-hook-trust");
+  }
+
+  if (input.model) {
+    args.push("--model", input.model);
+  }
+
+  if (input.resumeProviderSessionId) {
+    args.push("resume", input.resumeProviderSessionId);
+
+    if (input.eventSource === "hooks") {
+      args.push(input.initialPrompt);
+    }
+
+    return args;
+  }
+
+  if (input.eventSource === "hooks") {
+    args.push(input.initialPrompt);
+  }
+
+  return args;
+}
+
 export interface CodexAdapterOptions {
   logger?: Logger;
   runCodexHookDrivenSession?: CodexHookDrivenRunner;
@@ -106,10 +141,11 @@ export function createCodexAdapter(
     return runSelectedRunner({
       executable,
       input,
-      args:
-        eventSource === "jsonl"
-          ? modelArgs(input)
-          : [...modelArgs(input), input.initialPrompt],
+      args: buildCodexLaunchArgs({
+        eventSource,
+        model: input.model,
+        initialPrompt: input.initialPrompt,
+      }),
     });
   }
 
@@ -124,25 +160,20 @@ export function createCodexAdapter(
       throw new ProviderSessionLaunchError(provider, error);
     }
 
-    const resumePrefix = ["resume", ...modelArgs(input), input.providerSessionId];
-
     return runSelectedRunner({
       executable,
       input,
-      args:
-        eventSource === "jsonl"
-          ? resumePrefix
-          : [...resumePrefix, input.initialPrompt],
+      args: buildCodexLaunchArgs({
+        eventSource,
+        model: input.model,
+        initialPrompt: input.initialPrompt,
+        resumeProviderSessionId: input.providerSessionId,
+      }),
       resumeProviderSessionId:
         eventSource === "jsonl" ? input.providerSessionId : undefined,
     });
   }
 
-  function modelArgs(
-    input: Pick<ManagedProviderSessionInput, "model">,
-  ): string[] {
-    return input.model ? ["--model", input.model] : [];
-  }
 
   async function runSelectedRunner(runnerOptions: {
     executable: string;
