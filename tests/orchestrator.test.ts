@@ -563,6 +563,7 @@ test("renderGrillPrompt requires marker-free conclusion approval before marker-o
 test("renderExecutePrompt injects manual-flow issue and commit context with artifact path references", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-execute-prompt-"));
   const issuesDirectory = join(projectRoot, ".devflow", "runs", "run123", "issues");
+  const doneDirectory = join(issuesDirectory, "done");
   const prdArtifactPath = join(projectRoot, ".devflow", "runs", "run123", "prd.md");
   const projectContextPath = join(projectRoot, ".devflow", "project-context.md");
   const tddGuidePath = join(projectRoot, "prompts", "tdd.md");
@@ -572,12 +573,17 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
     "## Type\n\nAFK\n\n## What to build\n\nImplement first slice.\n",
   );
   await fs.outputFile(
+    join(doneDirectory, "002-completed-afk.md"),
+    "## Type\n\nAFK\n\n## What to build\n\nAlready completed.\n",
+  );
+  await fs.outputFile(
     join(issuesDirectory, "notes.txt"),
     "This is not an issue file.\n",
   );
 
   const prompt = await renderExecutePrompt({
     issuesDirectory,
+    doneDirectory,
     recentCommits:
       "b13431b Extend managed session completion markers\n8e95fc2 Enhance documentation",
     prdArtifactPath,
@@ -587,9 +593,13 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
     terminalMarker: "DEVFLOW_EXECUTION_NO_MORE_TASKS_test",
   });
 
-  assert.match(prompt, /001-first-afk\.md/);
+  const issuePath = join(issuesDirectory, "001-first-afk.md");
+  assert.match(prompt, new RegExp(`--- BEGIN ISSUE ${escapeRegExp(issuePath)} ---`));
   assert.match(prompt, /Implement first slice/);
+  assert.doesNotMatch(prompt, /002-completed-afk\.md/);
+  assert.doesNotMatch(prompt, /Already completed/);
   assert.match(prompt, /b13431b Extend managed session completion markers/);
+  assert.match(prompt, new RegExp(escapeRegExp(doneDirectory)));
   assert.match(prompt, new RegExp(escapeRegExp(prdArtifactPath)));
   assert.match(prompt, new RegExp(escapeRegExp(projectContextPath)));
   assert.match(prompt, new RegExp(escapeRegExp(tddGuidePath)));
@@ -609,7 +619,8 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
   assert.doesNotMatch(prompt, /This is not an issue file/);
   assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}/);
   assert.match(prompt, /complete exactly one AFK issue/i);
-  assert.match(prompt, /move the issue file to `issues\/done\/` before committing/i);
+  assert.match(prompt, /move .*do not copy or recreate/i);
+  assert.match(prompt, /directory already exists/i);
   assert.match(prompt, /leave HITL issues untouched/i);
   assert.match(prompt, /discover the project-owned test, typecheck, and build commands/i);
   assert.match(
@@ -984,6 +995,7 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const executeInputs: ManagedProviderSessionInput[] = [];
+  const executePrompts: string[] = [];
 
   const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
@@ -1001,6 +1013,7 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
 
       if (isExecuteSessionInput(input)) {
         executeInputs.push(input);
+        executePrompts.push(input.initialPrompt);
         await input.onProviderEvent?.(
           createStructuredProviderEvent({
             type: "session-start",
@@ -1016,6 +1029,10 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
         );
         const issueFilename =
           executeInputs.length === 1 ? "001-first.md" : "002-second.md";
+        assert.equal(
+          await fs.pathExists(join(runDirectory, "issues", "done")),
+          true,
+        );
         await fs.move(
           join(runDirectory, "issues", issueFilename),
           join(runDirectory, "issues", "done", issueFilename),
@@ -1069,6 +1086,10 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
   );
 
   assert.equal(executeInputs.length, 2);
+  assert.match(executePrompts[0], /001-first\.md/);
+  assert.match(executePrompts[0], /002-second\.md/);
+  assert.doesNotMatch(executePrompts[1], /001-first\.md/);
+  assert.match(executePrompts[1], /002-second\.md/);
   assert.notEqual(executeInputs[0].phase?.id, executeInputs[1].phase?.id);
   const [runId] = await listRunDirectories(projectRoot);
   assert.deepEqual(
@@ -2646,11 +2667,14 @@ test("orchestrator leaves provider-authored issues untouched after execute", asy
     "execute",
   ]);
   assert.deepEqual(issueAccessesAfterIssuesStage, []);
-  assert.deepEqual((await fs.readdir(issuesDirectory)).sort(), issueDirectoryEntriesBeforeDownstream);
+  assert.deepEqual((await fs.readdir(issuesDirectory)).sort(), [
+    ...issueDirectoryEntriesBeforeDownstream,
+    "done",
+  ].sort());
   assert.equal(await fs.readFile(issueFilePath, "utf8"), issueContentBeforeDownstream);
   assert.equal((await fs.stat(issueFilePath)).mtimeMs, issueMtimeBeforeDownstream);
   assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
-  assert.equal(await fs.pathExists(join(issuesDirectory, "done")), false);
+  assert.equal(await fs.pathExists(join(issuesDirectory, "done")), true);
 });
 
 test("orchestrator repairs missing issue files inside the same issues managed session", async () => {

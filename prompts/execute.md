@@ -17,6 +17,9 @@ Project context path:
 TDD guide path:
 {{TDD_GUIDE_PATH}}
 
+Completed issue directory:
+{{DONE_DIRECTORY}}
+
 Behavior:
 - Select and complete exactly one AFK issue from the open issue context above.
 - Leave HITL issues untouched.
@@ -26,12 +29,12 @@ Behavior:
 - Follow the bundled TDD guidance: write a focused failing test first, make it pass with minimal production code, then refactor only while green.
 - Discover the project-owned test, typecheck, and build commands from repository scripts, documentation, or existing workflow files. Do not assume a specific language, package manager, or hardcoded command.
 - Run the relevant discovered feedback loops before finishing.
-- Move the issue file to `issues/done/` before committing.
+- Move the issue file to the completed issue directory above before committing. Move it to that absolute path; do not copy or recreate it. The directory already exists.
 - Commit the completed work if repository policy and available credentials permit it.
 - Before the marker, state a brief summary of the changes made and functionality added in this session in the reply only. Do not write that summary as a new artifact.
 
 Completion:
-- Iteration-complete marker: if you completed one AFK issue, moved it to `issues/done/`, and committed when permitted, reply with the brief summary followed by this marker. Emit it when the selected AFK issue is complete. Do not emit it early.
+- Iteration-complete marker: if you completed one AFK issue, moved it to the completed issue directory, and committed when permitted, reply with the brief summary followed by this marker. Emit it when the selected AFK issue is complete. Do not emit it early.
 {{ITERATION_MARKER}}
 - Terminal no-more-tasks marker: emit this marker only after confirming from the supplied open issue files that no AFK issue remains unworked.
 {{TERMINAL_MARKER}}

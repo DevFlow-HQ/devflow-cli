@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import fs from "fs-extra";
@@ -435,6 +435,7 @@ export async function renderIssuesPrompt(options: {
 
 export async function renderExecutePrompt(options: {
   issuesDirectory: string;
+  doneDirectory: string;
   recentCommits: string;
   prdArtifactPath: string;
   projectContextPath: string;
@@ -449,6 +450,7 @@ export async function renderExecutePrompt(options: {
       "{{OPEN_ISSUES}}",
       await readOpenIssuesForExecutePrompt(options.issuesDirectory),
     )
+    .replaceAll("{{DONE_DIRECTORY}}", options.doneDirectory)
     .replaceAll("{{RECENT_COMMITS}}", options.recentCommits)
     .replaceAll("{{PRD_ARTIFACT_PATH}}", options.prdArtifactPath)
     .replaceAll("{{PROJECT_CONTEXT_PATH}}", options.projectContextPath)
@@ -470,13 +472,13 @@ async function readOpenIssuesForExecutePrompt(
 
   const issueBlocks = await Promise.all(
     issueFilenames.map(async (issueFilename) => {
-      const issuePath = join(issuesDirectory, issueFilename);
+      const issuePath = resolve(issuesDirectory, issueFilename);
       const issueContent = await fs.readFile(issuePath, "utf8");
 
       return [
-        `--- BEGIN ISSUE ${basename(issueFilename)} ---`,
+        `--- BEGIN ISSUE ${issuePath} ---`,
         issueContent.trimEnd(),
-        `--- END ISSUE ${basename(issueFilename)} ---`,
+        `--- END ISSUE ${issuePath} ---`,
       ].join("\n");
     }),
   );
@@ -1789,6 +1791,9 @@ async function runExecuteStage(options: {
   logger?: Logger;
   onExecutionIteration?: RunExecutionRequestOptions["onExecutionIteration"];
 }): Promise<void> {
+  const doneDirectory = join(options.run.paths.issuesDirectory, "done");
+  await fs.ensureDir(doneDirectory);
+
   const initialIssueFilenames = await listExecutionIssueFilenames(
     options.run.paths.issuesDirectory,
   );
@@ -1844,6 +1849,7 @@ async function runExecuteStage(options: {
     const gitHeadBefore = await options.devFlowState.git.getCurrentHead();
     const prompt = await renderExecutePrompt({
       issuesDirectory: options.run.paths.issuesDirectory,
+      doneDirectory,
       recentCommits: await options.devFlowState.git.getRecentCommits(),
       prdArtifactPath: options.run.paths.prdArtifact,
       projectContextPath: options.run.paths.projectContextArtifact,
