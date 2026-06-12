@@ -47,6 +47,8 @@ import {
   type StructuredGrillTranscriptRecorder,
 } from "./grillTranscriptRecorder.js";
 import type { Logger } from "./logger.js";
+import { assemble, type ExecutionLedger } from "./executionLedger.js";
+export type { ExecutionLedger } from "./executionLedger.js";
 
 export interface ResolvedExecutionRequest {
   projectRoot: string;
@@ -156,58 +158,6 @@ const intentArtifactSchema = z
   .strict();
 
 export type IntentArtifact = z.infer<typeof intentArtifactSchema>;
-
-const gitExecutionHeadSchema = z
-  .string()
-  .regex(/^[0-9a-f]{40}$/)
-  .nullable();
-
-const executionStopReasonSchema = z.enum([
-  "terminal",
-  "no-file",
-  "cap",
-  "error",
-]);
-
-const executionLedgerSchema = z
-  .object({
-    stage: z.literal("execute"),
-    iterations: z
-      .array(
-        z
-          .object({
-            iteration: z.number().int().positive(),
-            marker: z.string().refine((value) => value.trim().length > 0, {
-              message: "Must be a non-empty string.",
-            }),
-            providerSessionId: z
-              .string()
-              .refine((value) => value.trim().length > 0, {
-                message: "Must be a non-empty string.",
-              })
-              .optional(),
-            gitHeadBefore: gitExecutionHeadSchema,
-            gitHeadAfter: gitExecutionHeadSchema,
-            finalAssistantMessage: z
-              .string()
-              .refine((value) => value.trim().length > 0, {
-                message: "Must be a non-empty string.",
-              })
-              .optional(),
-          })
-          .strict(),
-      ),
-    final: z
-      .object({
-        stopReason: executionStopReasonSchema,
-        completedIssueFilenames: z.array(z.string()),
-        remainingIssueFilenames: z.array(z.string()),
-      })
-      .strict(),
-  })
-  .strict();
-
-export type ExecutionLedger = z.infer<typeof executionLedgerSchema>;
 
 export type BootstrapProvenance =
   | "reused"
@@ -926,10 +876,9 @@ export async function validateExecutionArtifact(
 export async function readExecutionLedger(
   artifactPath: string,
 ): Promise<ExecutionLedger> {
-  let parsedArtifact: unknown;
-
   try {
-    parsedArtifact = await fs.readJson(artifactPath);
+    const content = await fs.readFile(artifactPath, "utf8");
+    return assemble(content.split(/\r?\n/));
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
 
@@ -939,18 +888,6 @@ export async function readExecutionLedger(
       details,
     });
   }
-
-  const result = executionLedgerSchema.safeParse(parsedArtifact);
-
-  if (!result.success) {
-    throw new StageArtifactValidationError({
-      stage: "execute",
-      artifactPath,
-      details: result.error.message,
-    });
-  }
-
-  return result.data;
 }
 
 async function hasValidPrdArtifact(artifactPath: string): Promise<boolean> {
@@ -1798,35 +1735,30 @@ async function runExecuteStage(options: {
     options.run.paths.issuesDirectory,
   );
   const maxIterations = initialIssueFilenames.length * 2 + 5;
-  const iterations: ExecutionLedger["iterations"] = [];
 
-  async function buildLedger(
+  await options.run.appendExecutionRecord({
+    type: "start",
+    stage: "execute",
+    initialIssueFilenames,
+    maxIterations,
+  });
+
+  async function appendFinalRecord(
     stopReason: ExecutionLedger["final"]["stopReason"],
-  ): Promise<ExecutionLedger> {
+  ): Promise<void> {
     const remainingIssueFilenames = await listExecutionIssueFilenames(
       options.run.paths.issuesDirectory,
     );
     const remainingIssueFilenameSet = new Set(remainingIssueFilenames);
 
-    return {
-      stage: "execute",
-      iterations,
-      final: {
-        stopReason,
-        completedIssueFilenames: initialIssueFilenames.filter(
-          (issueFilename) => !remainingIssueFilenameSet.has(issueFilename),
-        ),
-        remainingIssueFilenames,
-      },
-    };
-  }
-
-  async function writeLedger(
-    stopReason: ExecutionLedger["final"]["stopReason"],
-  ): Promise<void> {
-    await options.run.writeExecution(
-      JSON.stringify(await buildLedger(stopReason), null, 2),
-    );
+    await options.run.appendExecutionRecord({
+      type: "final",
+      stopReason,
+      completedIssueFilenames: initialIssueFilenames.filter(
+        (issueFilename) => !remainingIssueFilenameSet.has(issueFilename),
+      ),
+      remainingIssueFilenames,
+    });
     await validateExecutionArtifact(options.run.paths.executionArtifact);
   }
 
@@ -1836,7 +1768,7 @@ async function runExecuteStage(options: {
     );
 
     if (currentIssueFilenames.length === 0) {
-      await writeLedger("no-file");
+      await appendFinalRecord("no-file");
       return;
     }
 
@@ -1901,13 +1833,14 @@ async function runExecuteStage(options: {
       });
     } catch (error) {
       if (error instanceof IncompleteProviderSessionError) {
-        iterations.push({
+        await options.run.appendExecutionRecord({
+          type: "iteration",
           iteration,
           marker: error.completionMarker,
           gitHeadBefore,
           gitHeadAfter: await options.devFlowState.git.getCurrentHead(),
         });
-        await writeLedger("error");
+        await appendFinalRecord("error");
       }
 
       throw error;
@@ -1921,7 +1854,8 @@ async function runExecuteStage(options: {
       [iterationMarker, terminalMarker],
     );
 
-    iterations.push({
+    await options.run.appendExecutionRecord({
+      type: "iteration",
       iteration,
       marker: matchedCompletionMarker ?? iterationMarker,
       ...(providerSessionState?.providerSessionId
@@ -1935,7 +1869,7 @@ async function runExecuteStage(options: {
     });
 
     if (matchedCompletionMarker === terminalMarker) {
-      await writeLedger("terminal");
+      await appendFinalRecord("terminal");
       return;
     }
 
@@ -1946,12 +1880,12 @@ async function runExecuteStage(options: {
         exitCode: result.exitCode,
         signal: result.signal,
       });
-      await writeLedger("error");
+      await appendFinalRecord("error");
       throw error;
     }
 
-    if (iterations.length >= maxIterations) {
-      await writeLedger("cap");
+    if (iteration >= maxIterations) {
+      await appendFinalRecord("cap");
       throw new ExecutionLoopCapError(maxIterations);
     }
   }

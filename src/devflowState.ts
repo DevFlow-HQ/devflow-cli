@@ -14,6 +14,10 @@ import {
   type ProviderIdentity,
 } from "./adapters/providers.js";
 import type { ManagedProviderSessionPhase } from "./adapters/managedSessionAdapter.js";
+import {
+  serialize,
+  type ExecutionLedgerRecord,
+} from "./executionLedger.js";
 
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";
@@ -28,7 +32,7 @@ const DEVFLOW_RUN_GRILL_TRANSCRIPT_FILENAME = "grill-transcript.md";
 const DEVFLOW_RUN_GRILL_CHECKPOINT_FILENAME = "grill-checkpoint.json";
 const DEVFLOW_RUN_PROVIDER_SESSION_FILENAME = "provider-session.json";
 const DEVFLOW_RUN_PRD_FILENAME = "prd.md";
-const DEVFLOW_RUN_EXECUTION_FILENAME = "execution.json";
+const DEVFLOW_RUN_EXECUTION_FILENAME = "execution.jsonl";
 const DEVFLOW_RUN_ISSUES_DIRECTORY = "issues";
 const DEVFLOW_RUN_ID_LENGTH = 12;
 const devFlowRunIdPattern = /^[a-z0-9]{12}$/;
@@ -331,7 +335,7 @@ export interface DevFlowRunHandle {
   writeProviderSessionState(state: DevFlowProviderSessionState): Promise<void>;
   writeIssue(slug: string, content: string): Promise<void>;
   writePrd(content: string): Promise<void>;
-  writeExecution(content: string): Promise<void>;
+  appendExecutionRecord(record: ExecutionLedgerRecord): Promise<void>;
   paths: {
     runDirectory: string;
     intentArtifact: string;
@@ -1817,12 +1821,17 @@ async function createRun(
     },
     writePrd: (content) =>
       writeArtifact("prd", getRunArtifactPath(projectRoot, runId, "prd"), content),
-    writeExecution: (content) =>
-      writeArtifact(
-        "execution",
-        getRunArtifactPath(projectRoot, runId, "execution"),
-        content,
-      ),
+    appendExecutionRecord: async (record) => {
+      const content = serialize(record);
+      const artifactPath = getRunArtifactPath(projectRoot, runId, "execution");
+
+      if (record.type === "start") {
+        await writeArtifact("execution", artifactPath, content);
+        return;
+      }
+
+      await fs.appendFile(artifactPath, content, "utf8");
+    },
     paths: {
       runDirectory,
       intentArtifact: getRunArtifactPath(projectRoot, runId, "intent"),

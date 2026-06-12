@@ -19,6 +19,7 @@ import {
   InvalidDevFlowRunIdError,
   InvalidProviderSessionStateError,
 } from "../src/devflowState.js";
+import { assemble } from "../src/executionLedger.js";
 
 function createFreshnessProbe(
   overrides: Partial<GitProjectContextProbe> = {},
@@ -997,7 +998,7 @@ test("createRun returns isolated run handles with opaque ids and persisted creat
   assert.equal(firstRun.paths.prdArtifact, join(firstRun.paths.runDirectory, "prd.md"));
   assert.equal(
     firstRun.paths.executionArtifact,
-    join(firstRun.paths.runDirectory, "execution.json"),
+    join(firstRun.paths.runDirectory, "execution.jsonl"),
   );
   assert.equal(await fs.pathExists(firstRun.paths.runDirectory), true);
   assert.equal(await fs.pathExists(secondRun.paths.runDirectory), true);
@@ -1025,14 +1026,19 @@ test("createRun surfaces invalid generated run ids as domain errors", async () =
   randomUuidMock.mock.restore();
 });
 
-test("run handles write canonical immutable artifacts without exposing filenames to callers", async () => {
+test("run handles write canonical artifacts without exposing filenames to callers", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
   await run.writeIntent('{"goal":"ship it"}');
   await run.writePrd("# PRD\n");
-  await run.writeExecution('{"stage":"execute"}');
+  await run.appendExecutionRecord({
+    type: "start",
+    stage: "execute",
+    initialIssueFilenames: [],
+    maxIterations: 5,
+  });
 
   assert.equal(
     await fs.readFile(join(run.paths.runDirectory, "intent.json"), "utf8"),
@@ -1043,8 +1049,8 @@ test("run handles write canonical immutable artifacts without exposing filenames
     "# PRD\n",
   );
   assert.equal(
-    await fs.readFile(join(run.paths.runDirectory, "execution.json"), "utf8"),
-    '{"stage":"execute"}',
+    await fs.readFile(join(run.paths.runDirectory, "execution.jsonl"), "utf8"),
+    `{\"type\":\"start\",\"stage\":\"execute\",\"initialIssueFilenames\":[],\"maxIterations\":5}\n`,
   );
   assert.equal(
     await fs.pathExists(join(run.paths.runDirectory, "validation.json")),
@@ -1418,13 +1424,75 @@ test("run artifact writes reject duplicates with a domain-specific error", async
   );
 });
 
-test("run handles reject duplicate PRD, execution, and normalized issue artifact writes while retaining the first artifact", async () => {
+test("run handles append execution records after an exclusive start header", async () => {
+  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const state = createDevFlowState({ projectRoot });
+  const run = await state.createRun();
+
+  await run.appendExecutionRecord({
+    type: "start",
+    stage: "execute",
+    initialIssueFilenames: ["001-build.md"],
+    maxIterations: 7,
+  });
+
+  await assert.rejects(
+    run.appendExecutionRecord({
+      type: "start",
+      stage: "execute",
+      initialIssueFilenames: ["001-build.md"],
+      maxIterations: 7,
+    }),
+    (error: unknown) =>
+      error instanceof DuplicateDevFlowRunArtifactError &&
+      error.runId === run.id &&
+      error.artifactName === "execution" &&
+      error.artifactPath.endsWith("/execution.jsonl"),
+  );
+
+  await run.appendExecutionRecord({
+    type: "iteration",
+    iteration: 1,
+    marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+    gitHeadBefore: null,
+    gitHeadAfter: null,
+  });
+
+  await run.appendExecutionRecord({
+    type: "final",
+    stopReason: "terminal",
+    completedIssueFilenames: ["001-build.md"],
+    remainingIssueFilenames: [],
+  });
+
+  const lines = (await fs.readFile(run.paths.executionArtifact, "utf8"))
+    .trimEnd()
+    .split("\n");
+
+  assert.deepEqual(assemble(lines), {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        gitHeadBefore: null,
+        gitHeadAfter: null,
+      },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: ["001-build.md"],
+      remainingIssueFilenames: [],
+    },
+  });
+});
+
+test("run handles reject duplicate PRD and normalized issue artifact writes while retaining the first artifact", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
   await run.writePrd("# First PRD\n");
-  await run.writeExecution('{"stage":"first"}');
   await run.writeIssue("Release Prep", "# First issue\n");
 
   await assert.rejects(
@@ -1443,22 +1511,10 @@ test("run handles reject duplicate PRD, execution, and normalized issue artifact
       error.artifactName === "issue" &&
       error.artifactPath.endsWith("/issues/release-prep.md"),
   );
-  await assert.rejects(
-    run.writeExecution('{"stage":"second"}'),
-    (error: unknown) =>
-      error instanceof DuplicateDevFlowRunArtifactError &&
-      error.runId === run.id &&
-      error.artifactName === "execution" &&
-      error.artifactPath.endsWith("/execution.json"),
-  );
 
   assert.equal(
     await fs.readFile(join(run.paths.runDirectory, "prd.md"), "utf8"),
     "# First PRD\n",
-  );
-  assert.equal(
-    await fs.readFile(join(run.paths.runDirectory, "execution.json"), "utf8"),
-    '{"stage":"first"}',
   );
   assert.equal(
     await fs.pathExists(join(run.paths.runDirectory, "validation.json")),

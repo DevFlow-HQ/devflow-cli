@@ -43,6 +43,31 @@ import {
   StageArtifactValidationError,
 } from "../src/orchestrator.js";
 import type { LogContext, Logger } from "../src/logger.js";
+import { serialize } from "../src/executionLedger.js";
+
+async function outputExecutionLedger(
+  executionArtifact: string,
+  ledger: ExecutionLedger,
+): Promise<void> {
+  const initialIssueFilenames = [
+    ...ledger.final.completedIssueFilenames,
+    ...ledger.final.remainingIssueFilenames,
+  ].sort();
+  const content = [
+    serialize({
+      type: "start",
+      stage: ledger.stage,
+      initialIssueFilenames,
+      maxIterations: initialIssueFilenames.length * 2 + 5,
+    }),
+    ...ledger.iterations.map((iteration) =>
+      serialize({ type: "iteration", ...iteration }),
+    ),
+    serialize({ type: "final", ...ledger.final }),
+  ].join("");
+
+  await fs.outputFile(executionArtifact, content, "utf8");
+}
 
 function createWritableBuffer() {
   let output = "";
@@ -452,7 +477,7 @@ test("cli prints a thin separator before each execution iteration starts", async
 test("cli prints a run summary from the on-disk execution ledger after a successful run", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-run-summary-"));
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-summary");
-  const executionArtifact = join(runDirectory, "execution.json");
+  const executionArtifact = join(runDirectory, "execution.jsonl");
   const ledger: ExecutionLedger = {
     stage: "execute",
     iterations: [
@@ -483,7 +508,7 @@ test("cli prints a run summary from the on-disk execution ledger after a success
           executionArtifact,
         },
       });
-      await fs.outputJson(executionArtifact, ledger, { spaces: 2 });
+      await outputExecutionLedger(executionArtifact, ledger);
     },
   });
 
@@ -493,7 +518,7 @@ test("cli prints a run summary from the on-disk execution ledger after a success
   assert.match(result.stdout, / 1 │ \(no summary available\)/);
   assert.match(result.stdout, /001-done\.md/);
   assert.match(result.stdout, /002-hitl\.md/);
-  assert.match(result.stdout, /Execution ledger: .+execution\.json/);
+  assert.match(result.stdout, /Execution ledger: .+execution\.jsonl/);
   assert.equal(result.stderr, "");
 });
 
@@ -642,7 +667,7 @@ test("cli maps execution cap stops to a clear failure", async () => {
 test("cli prints a run summary after an execution cap failure with the error first", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-cap-summary-"));
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-cap-summary");
-  const executionArtifact = join(runDirectory, "execution.json");
+  const executionArtifact = join(runDirectory, "execution.jsonl");
   const writes: Array<{ stream: "stdout" | "stderr"; chunk: string }> = [];
   let commandError: CommanderError | undefined;
 
@@ -687,7 +712,7 @@ test("cli prints a run summary after an execution cap failure with the error fir
             executionArtifact,
           },
         });
-        await fs.outputJson(executionArtifact, ledger, { spaces: 2 });
+        await outputExecutionLedger(executionArtifact, ledger);
         throw new ExecutionLoopCapError(7);
       },
       configureProgram(program) {
@@ -738,7 +763,7 @@ test("cli maps execution error stops to a clear failure", async () => {
 test("cli prints a run summary after an execution error failure", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-error-summary-"));
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-error-summary");
-  const executionArtifact = join(runDirectory, "execution.json");
+  const executionArtifact = join(runDirectory, "execution.jsonl");
   const ledger: ExecutionLedger = {
     stage: "execute",
     iterations: [
@@ -769,7 +794,7 @@ test("cli prints a run summary after an execution error failure", async () => {
           executionArtifact,
         },
       });
-      await fs.outputJson(executionArtifact, ledger, { spaces: 2 });
+      await outputExecutionLedger(executionArtifact, ledger);
       throw new IncompleteProviderSessionError({
         provider: getBuiltInProviderIdentity("codex"),
         completionMarker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
@@ -800,7 +825,7 @@ test("cli skips failure summary when no execution ledger exists", async () => {
           runDirectory,
           prdArtifact: join(runDirectory, "prd.md"),
           issuesDirectory: join(runDirectory, "issues"),
-          executionArtifact: join(runDirectory, "execution.json"),
+          executionArtifact: join(runDirectory, "execution.jsonl"),
         },
       });
       throw new StageArtifactValidationError({
@@ -819,7 +844,7 @@ test("cli skips failure summary when no execution ledger exists", async () => {
 test("cli reports summary unavailable for a corrupt execution ledger without masking success", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-corrupt-summary-"));
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-corrupt-summary");
-  const executionArtifact = join(runDirectory, "execution.json");
+  const executionArtifact = join(runDirectory, "execution.jsonl");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,

@@ -47,10 +47,12 @@ import {
   runProviderBackedStageWithRetry,
   StageArtifactValidationError,
   validateExecutionArtifact,
+  readExecutionLedger,
   validateIssueArtifacts,
   type PipelineStage,
 } from "../src/orchestrator.js";
 import type { LogContext, Logger } from "../src/logger.js";
+import { serialize, type ExecutionLedger } from "../src/executionLedger.js";
 
 test("pipeline stages end at execute without a validate placeholder", () => {
   assert.deepEqual(PIPELINE_STAGES, [
@@ -73,6 +75,30 @@ async function listRunDirectories(
   }
 
   return (await fs.readdir(runsDirectory)).sort();
+}
+
+async function writeExecutionLedger(
+  artifactPath: string,
+  ledger: ExecutionLedger,
+): Promise<void> {
+  const initialIssueFilenames = [
+    ...ledger.final.completedIssueFilenames,
+    ...ledger.final.remainingIssueFilenames,
+  ].sort();
+  const content = [
+    serialize({
+      type: "start",
+      stage: ledger.stage,
+      initialIssueFilenames,
+      maxIterations: initialIssueFilenames.length * 2 + 5,
+    }),
+    ...ledger.iterations.map((iteration) =>
+      serialize({ type: "iteration", ...iteration }),
+    ),
+    serialize({ type: "final", ...ledger.final }),
+  ].join("");
+
+  await fs.outputFile(artifactPath, content, "utf8");
 }
 
 function isGrillSessionInput(input: ManagedProviderSessionInput): boolean {
@@ -424,7 +450,7 @@ test("validateIssueArtifacts accepts a mixed issues directory when one markdown 
 test("validateExecutionArtifact rejects malformed JSON ledgers", async () => {
   const artifactPath = join(
     fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
-    "execution.json",
+    "execution.jsonl",
   );
   await fs.writeFile(artifactPath, '{"stage":"execute"');
 
@@ -434,20 +460,20 @@ test("validateExecutionArtifact rejects malformed JSON ledgers", async () => {
       error instanceof StageArtifactValidationError &&
       error.stage === "execute" &&
       error.artifactPath === artifactPath &&
-      error.message.includes("execution.json"),
+      error.message.includes("execution.jsonl"),
   );
 });
 
 test("validateExecutionArtifact accepts zero-iteration no-file ledgers", async () => {
   const artifactPath = join(
     fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
-    "execution.json",
+    "execution.jsonl",
   );
-  await fs.writeJson(artifactPath, {
+  await writeExecutionLedger(artifactPath, {
     stage: "execute",
     iterations: [],
     final: {
-      stopReason: "terminal",
+      stopReason: "no-file",
       completedIssueFilenames: [],
       remainingIssueFilenames: [],
     },
@@ -459,9 +485,9 @@ test("validateExecutionArtifact accepts zero-iteration no-file ledgers", async (
 test("validateExecutionArtifact accepts well-formed ledgers with a final block", async () => {
   const artifactPath = join(
     fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
-    "execution.json",
+    "execution.jsonl",
   );
-  await fs.writeJson(artifactPath, {
+  await writeExecutionLedger(artifactPath, {
     stage: "execute",
     iterations: [
       {
@@ -765,7 +791,24 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
 
   const [runId] = await listRunDirectories(projectRoot);
   const runDirectory = join(projectRoot, ".devflow", "runs", runId);
-  const executionLedger = await fs.readJson(join(runDirectory, "execution.json"));
+  const executionArtifact = join(runDirectory, "execution.jsonl");
+  const rawRecords = (await fs.readFile(executionArtifact, "utf8"))
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+  assert.deepEqual(
+    rawRecords.map((record) => record.type),
+    ["start", "iteration", "final"],
+  );
+  assert.deepEqual(rawRecords[0], {
+    type: "start",
+    stage: "execute",
+    initialIssueFilenames: ["004-run-one.md"],
+    maxIterations: 7,
+  });
+
+  const executionLedger = await readExecutionLedger(executionArtifact);
   assert.deepEqual(executionLedger, {
     stage: "execute",
     iterations: [
@@ -784,7 +827,7 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
       remainingIssueFilenames: ["004-run-one.md"],
     },
   });
-  await validateExecutionArtifact(join(runDirectory, "execution.json"));
+  await validateExecutionArtifact(join(runDirectory, "execution.jsonl"));
 
   const providerSessionState = await fs.readJson(
     join(runDirectory, "provider-session.json"),
@@ -884,7 +927,7 @@ test("orchestrator surfaces the run id and canonical run paths when the run is c
           ".devflow",
           "runs",
           runId,
-          "execution.json",
+          "execution.jsonl",
         ),
       },
     },
@@ -977,7 +1020,7 @@ test("orchestrator stops execute with no-file before opening a provider session"
   assert.equal(runSessionInputs.filter(isExecuteSessionInput).length, 0);
   const [runId] = await listRunDirectories(projectRoot);
   assert.deepEqual(
-    await fs.readJson(join(projectRoot, ".devflow", "runs", runId, "execution.json")),
+    await readExecutionLedger(join(projectRoot, ".devflow", "runs", runId, "execution.jsonl")),
     {
       stage: "execute",
       iterations: [],
@@ -1093,7 +1136,7 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
   assert.notEqual(executeInputs[0].phase?.id, executeInputs[1].phase?.id);
   const [runId] = await listRunDirectories(projectRoot);
   assert.deepEqual(
-    await fs.readJson(join(projectRoot, ".devflow", "runs", runId, "execution.json")),
+    await readExecutionLedger(join(projectRoot, ".devflow", "runs", runId, "execution.jsonl")),
     {
       stage: "execute",
       iterations: [
@@ -1318,8 +1361,8 @@ test("orchestrator records marker-stripped final assistant messages for structur
 
   assert.equal(executeInputs.length, 1);
   const [runId] = await listRunDirectories(projectRoot);
-  const ledger = await fs.readJson(
-    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  const ledger = await readExecutionLedger(
+    join(projectRoot, ".devflow", "runs", runId, "execution.jsonl"),
   );
   assert.equal(
     ledger.iterations[0].finalAssistantMessage,
@@ -1330,7 +1373,7 @@ test("orchestrator records marker-stripped final assistant messages for structur
     /DEVFLOW_EXECUTION_ITERATION_COMPLETE/,
   );
   await validateExecutionArtifact(
-    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+    join(projectRoot, ".devflow", "runs", runId, "execution.jsonl"),
   );
 });
 
@@ -1427,12 +1470,12 @@ test("orchestrator omits final assistant messages for PTY fallback execute itera
   );
 
   const [runId] = await listRunDirectories(projectRoot);
-  const ledger = await fs.readJson(
-    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+  const ledger = await readExecutionLedger(
+    join(projectRoot, ".devflow", "runs", runId, "execution.jsonl"),
   );
   assert.equal("finalAssistantMessage" in ledger.iterations[0], false);
   await validateExecutionArtifact(
-    join(projectRoot, ".devflow", "runs", runId, "execution.json"),
+    join(projectRoot, ".devflow", "runs", runId, "execution.jsonl"),
   );
 });
 
@@ -1526,8 +1569,8 @@ test("orchestrator stops execute with cap failure and writes the cap ledger", as
   ]);
   const [runId] = await listRunDirectories(projectRoot);
   const runDirectory = join(projectRoot, ".devflow", "runs", runId);
-  const ledger = await fs.readJson(
-    join(runDirectory, "execution.json"),
+  const ledger = await readExecutionLedger(
+    join(runDirectory, "execution.jsonl"),
   );
   assert.equal(ledger.final.stopReason, "cap");
   assert.equal(ledger.iterations.length, 7);
@@ -1623,8 +1666,8 @@ test("orchestrator writes an error ledger before surfacing incomplete execute se
   ]);
   const [runId] = await listRunDirectories(projectRoot);
   const runDirectory = join(projectRoot, ".devflow", "runs", runId);
-  const ledger = await fs.readJson(
-    join(runDirectory, "execution.json"),
+  const ledger = await readExecutionLedger(
+    join(runDirectory, "execution.jsonl"),
   );
   assert.equal(ledger.final.stopReason, "error");
   assert.equal(ledger.iterations.length, 1);

@@ -7,7 +7,7 @@ import type { ExecutionLedger } from "../src/orchestrator.js";
 const runPaths = {
   prdArtifact: "/repo/.devflow/runs/run-123/prd.md",
   issuesDirectory: "/repo/.devflow/runs/run-123/issues",
-  executionArtifact: "/repo/.devflow/runs/run-123/execution.json",
+  executionArtifact: "/repo/.devflow/runs/run-123/execution.jsonl",
 };
 
 test("run summary renders successful terminal ledgers with issue filenames and artifacts", () => {
