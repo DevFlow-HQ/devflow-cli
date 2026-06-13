@@ -44,11 +44,7 @@ export interface CodexLaunchArgsInput {
 }
 
 export function buildCodexLaunchArgs(input: CodexLaunchArgsInput): string[] {
-  const args = ["-a", "never"];
-
-  if (input.eventSource === "hooks") {
-    args.push("--dangerously-bypass-hook-trust");
-  }
+  const args = ["-c", "approvals_reviewer=auto_review"];
 
   if (input.model) {
     args.push("--model", input.model);

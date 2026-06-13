@@ -6,7 +6,7 @@ import fs from "fs-extra";
 
 import { buildCodexLaunchArgs } from "../../src/adapters/codexAdapter.js";
 
-test("Codex launch args keep unattended globals before resume and hook trust scoped to hooks", () => {
+test("Codex launch args use auto-review without disabling approval or sandbox gates", () => {
   const freshHookArgs = buildCodexLaunchArgs({
     eventSource: "hooks",
     model: "gpt-5.5",
@@ -31,23 +31,21 @@ test("Codex launch args keep unattended globals before resume and hook trust sco
   });
 
   assert.deepEqual(freshHookArgs, [
-    "-a",
-    "never",
-    "--dangerously-bypass-hook-trust",
+    "-c",
+    "approvals_reviewer=auto_review",
     "--model",
     "gpt-5.5",
     "Ship the contract",
   ]);
   assert.deepEqual(freshJsonlArgs, [
-    "-a",
-    "never",
+    "-c",
+    "approvals_reviewer=auto_review",
     "--model",
     "gpt-5.5",
   ]);
   assert.deepEqual(resumeHookArgs, [
-    "-a",
-    "never",
-    "--dangerously-bypass-hook-trust",
+    "-c",
+    "approvals_reviewer=auto_review",
     "--model",
     "gpt-5.5",
     "resume",
@@ -55,8 +53,8 @@ test("Codex launch args keep unattended globals before resume and hook trust sco
     "Continue the interrupted work",
   ]);
   assert.deepEqual(resumeJsonlArgs, [
-    "-a",
-    "never",
+    "-c",
+    "approvals_reviewer=auto_review",
     "--model",
     "gpt-5.5",
     "resume",
@@ -64,11 +62,13 @@ test("Codex launch args keep unattended globals before resume and hook trust sco
   ]);
 
   for (const args of [freshHookArgs, freshJsonlArgs, resumeHookArgs, resumeJsonlArgs]) {
+    assert.equal(args.includes("-a"), false);
+    assert.equal(args.includes("--ask-for-approval"), false);
     assert.equal(args.includes("--sandbox"), false);
+    assert.equal(args.includes("-s"), false);
+    assert.equal(args.includes("--dangerously-bypass-hook-trust"), false);
     assert.equal(args.includes("--dangerously-bypass-approvals-and-sandbox"), false);
   }
-  assert.equal(freshJsonlArgs.includes("--dangerously-bypass-hook-trust"), false);
-  assert.equal(resumeJsonlArgs.includes("--dangerously-bypass-hook-trust"), false);
 });
 
 type JsonRecord = {
