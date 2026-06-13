@@ -22,6 +22,7 @@ import {
   runCodexJsonlSession,
   type CodexJsonlSessionCommand,
 } from "../../src/adapters/codexJsonlSessionRunner.js";
+import { codexTrustedProjectToml } from "../../src/adapters/codexHookArtifacts.js";
 import type { SessionLogLocator } from "../../src/adapters/codexSessionLogLocator.js";
 import {
   type PtyProcess,
@@ -645,6 +646,42 @@ test("Codex JSONL runner seeds auth.json from active source home before launch",
   assert.deepEqual(await fs.readJson(join(codexHome, "auth.json")), {
     refresh_token: "source-refresh-token",
   });
+});
+
+test("Codex JSONL runner writes trust-only scoped config without touching source config", async () => {
+  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const sourceCodexHome = await fs.mkdtemp(
+    join(tmpdir(), "devflow-codex-source-"),
+  );
+  const sourceConfigPath = join(sourceCodexHome, "config.toml");
+  const sourceConfigToml = 'model = "gpt-existing"\n';
+
+  await fs.writeFile(sourceConfigPath, sourceConfigToml, "utf8");
+
+  const { codexHome, rollout, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
+  const spawner = new ScriptedCodexPtySpawner(async (options) => {
+    assert.equal(options.env?.CODEX_HOME, codexHome);
+    await waitForPtyWrites(spawner.process, 1);
+    await appendSessionMeta(codexHome, rollout);
+    await appendTaskComplete(codexHome, rollout, "done INITIAL_DONE");
+    spawner.process.emitExit(0);
+  });
+
+  await runCodexJsonlSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    sessionLogLocator,
+    locatorTimeoutMs: 1_000,
+    firstEventTimeoutMs: 1_000,
+    environment: { ...process.env, CODEX_HOME: sourceCodexHome },
+  });
+
+  assert.equal(
+    await fs.readFile(join(codexHome, "config.toml"), "utf8"),
+    codexTrustedProjectToml(projectRoot),
+  );
+  assert.equal(await fs.readFile(sourceConfigPath, "utf8"), sourceConfigToml);
 });
 
 test("Codex JSONL runner classifies native user messages and suppresses managed prompt echoes", async () => {

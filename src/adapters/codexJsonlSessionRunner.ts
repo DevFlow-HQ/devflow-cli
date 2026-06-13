@@ -1,5 +1,8 @@
+import { join } from "node:path";
+
 import fs from "fs-extra";
 
+import { codexTrustedProjectToml } from "./codexHookArtifacts.js";
 import {
   createCodexJsonlNormalizer,
   normalizeCodexJsonlRecordForProvider,
@@ -107,6 +110,11 @@ export async function runCodexJsonlSession(
       homeDirectory: dependencies.homeDirectory,
     });
     await fs.ensureDir(codexHome);
+    await fs.writeFile(
+      join(codexHome, "config.toml"),
+      codexTrustedProjectToml(input.workingDirectory),
+      "utf8",
+    );
   } catch (error) {
     throw new ProviderSessionLaunchError(command.provider, error);
   }
