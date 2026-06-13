@@ -18,6 +18,8 @@ function formatStopReason(stopReason: ExecutionLedger["final"]["stopReason"]): s
       return "Execution stopped after reaching the iteration cap.";
     case "error":
       return "Execution stopped after an execution error.";
+    case "incomplete":
+      return "Execution stopped before a final execution record was written.";
   }
 }
 

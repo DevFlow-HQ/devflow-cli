@@ -116,6 +116,11 @@ test("run summary renders a distinct friendly line for every execute stop reason
       stopReason: "error",
       expectedLine: "Execution stopped after an execution error.",
     },
+    {
+      stopReason: "incomplete",
+      expectedLine:
+        "Execution stopped before a final execution record was written.",
+    },
   ];
 
   for (const { stopReason, expectedLine } of stopReasons) {
@@ -131,6 +136,30 @@ test("run summary renders a distinct friendly line for every execute stop reason
 
     assert.match(renderRunSummary(ledger, runPaths), new RegExp(expectedLine));
   }
+});
+
+test("run summary renders incomplete ledgers with reconstructed issue sets", () => {
+  const ledger: ExecutionLedger = {
+    stage: "execute",
+    iterations: [],
+    final: {
+      stopReason: "incomplete",
+      completedIssueFilenames: ["001-done.md"],
+      remainingIssueFilenames: ["002-left.md"],
+    },
+  };
+
+  const summary = renderRunSummary(ledger, runPaths);
+
+  assert.match(
+    summary,
+    /Execution stopped before a final execution record was written\./,
+  );
+  assert.match(summary, /Completed issues:\n- 001-done\.md/);
+  assert.match(
+    summary,
+    /Remaining issues likely need human attention \(HITL\):\n- 002-left\.md/,
+  );
 });
 
 test("run summary renders full iteration final messages under a gutter", () => {

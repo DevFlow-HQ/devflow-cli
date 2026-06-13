@@ -52,7 +52,15 @@ import {
   type PipelineStage,
 } from "../src/orchestrator.js";
 import type { LogContext, Logger } from "../src/logger.js";
-import { serialize, type ExecutionLedger } from "../src/executionLedger.js";
+import {
+  serialize,
+  type ExecutionFinalRecord,
+  type ExecutionLedger,
+} from "../src/executionLedger.js";
+
+type SerializableExecutionLedger = Omit<ExecutionLedger, "final"> & {
+  final: Omit<ExecutionFinalRecord, "type">;
+};
 
 test("pipeline stages end at execute without a validate placeholder", () => {
   assert.deepEqual(PIPELINE_STAGES, [
@@ -79,7 +87,7 @@ async function listRunDirectories(
 
 async function writeExecutionLedger(
   artifactPath: string,
-  ledger: ExecutionLedger,
+  ledger: SerializableExecutionLedger,
 ): Promise<void> {
   const initialIssueFilenames = [
     ...ledger.final.completedIssueFilenames,
@@ -507,6 +515,35 @@ test("validateExecutionArtifact accepts well-formed ledgers with a final block",
   });
 
   await validateExecutionArtifact(artifactPath);
+});
+
+test("readExecutionLedger reconstructs incomplete issue sets from the live active issues directory", async () => {
+  const runDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-"));
+  const artifactPath = join(runDirectory, "execution.jsonl");
+  const issuesDirectory = join(runDirectory, "issues");
+
+  await fs.outputFile(join(issuesDirectory, "002-left.md"), "# Left\n");
+  await fs.outputFile(join(issuesDirectory, "done", "001-done.md"), "# Done\n");
+  await fs.outputFile(
+    artifactPath,
+    serialize({
+      type: "start",
+      stage: "execute",
+      initialIssueFilenames: ["001-done.md", "002-left.md"],
+      maxIterations: 9,
+    }),
+    "utf8",
+  );
+
+  assert.deepEqual(await readExecutionLedger(artifactPath), {
+    stage: "execute",
+    iterations: [],
+    final: {
+      stopReason: "incomplete",
+      completedIssueFilenames: ["001-done.md"],
+      remainingIssueFilenames: ["002-left.md"],
+    },
+  });
 });
 
 test("non-specialized stage prompts render critical completion marker guidance", async () => {

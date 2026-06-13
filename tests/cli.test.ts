@@ -43,11 +43,15 @@ import {
   StageArtifactValidationError,
 } from "../src/orchestrator.js";
 import type { LogContext, Logger } from "../src/logger.js";
-import { serialize } from "../src/executionLedger.js";
+import { serialize, type ExecutionFinalRecord } from "../src/executionLedger.js";
+
+type SerializableExecutionLedger = Omit<ExecutionLedger, "final"> & {
+  final: Omit<ExecutionFinalRecord, "type">;
+};
 
 async function outputExecutionLedger(
   executionArtifact: string,
-  ledger: ExecutionLedger,
+  ledger: SerializableExecutionLedger,
 ): Promise<void> {
   const initialIssueFilenames = [
     ...ledger.final.completedIssueFilenames,
@@ -478,7 +482,7 @@ test("cli prints a run summary from the on-disk execution ledger after a success
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-run-summary-"));
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-summary");
   const executionArtifact = join(runDirectory, "execution.jsonl");
-  const ledger: ExecutionLedger = {
+  const ledger: SerializableExecutionLedger = {
     stage: "execute",
     iterations: [
       {
@@ -671,7 +675,7 @@ test("cli prints a run summary after an execution cap failure with the error fir
   const writes: Array<{ stream: "stdout" | "stderr"; chunk: string }> = [];
   let commandError: CommanderError | undefined;
 
-  const ledger: ExecutionLedger = {
+  const ledger: SerializableExecutionLedger = {
     stage: "execute",
     iterations: [
       {
@@ -764,7 +768,7 @@ test("cli prints a run summary after an execution error failure", async () => {
   const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-error-summary-"));
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-error-summary");
   const executionArtifact = join(runDirectory, "execution.jsonl");
-  const ledger: ExecutionLedger = {
+  const ledger: SerializableExecutionLedger = {
     stage: "execute",
     iterations: [
       {

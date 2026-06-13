@@ -47,7 +47,11 @@ import {
   type StructuredGrillTranscriptRecorder,
 } from "./grillTranscriptRecorder.js";
 import type { Logger } from "./logger.js";
-import { assemble, type ExecutionLedger } from "./executionLedger.js";
+import {
+  assemble,
+  type ExecutionFinalRecord,
+  type ExecutionLedger,
+} from "./executionLedger.js";
 export type { ExecutionLedger } from "./executionLedger.js";
 
 export interface ResolvedExecutionRequest {
@@ -878,7 +882,11 @@ export async function readExecutionLedger(
 ): Promise<ExecutionLedger> {
   try {
     const content = await fs.readFile(artifactPath, "utf8");
-    return assemble(content.split(/\r?\n/));
+    const activeIssueFilenames = await listExecutionIssueFilenames(
+      join(dirname(artifactPath), "issues"),
+    ).catch(() => []);
+
+    return assemble(content.split(/\r?\n/), { activeIssueFilenames });
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
 
@@ -1744,7 +1752,7 @@ async function runExecuteStage(options: {
   });
 
   async function appendFinalRecord(
-    stopReason: ExecutionLedger["final"]["stopReason"],
+    stopReason: ExecutionFinalRecord["stopReason"],
   ): Promise<void> {
     const remainingIssueFilenames = await listExecutionIssueFilenames(
       options.run.paths.issuesDirectory,
