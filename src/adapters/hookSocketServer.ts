@@ -1,3 +1,4 @@
+import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 
@@ -110,11 +111,24 @@ export function hookSocketServer(
   let currentSocketPath: string | undefined;
   let payloadHandler: HookSocketPayloadHandler | undefined;
   let stopping = false;
+  let unregisterProcessCleanup: (() => void) | undefined;
   const sockets = new Set<net.Socket>();
   const inFlight = new Set<Promise<void>>();
 
   async function reportError(error: Error): Promise<void> {
     await options.onError?.(error);
+  }
+
+  function cleanupSocketFileSync(socketPath: string): void {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    try {
+      unlinkSync(socketPath);
+    } catch {
+      // Exit and signal handlers must never mask the real shutdown reason.
+    }
   }
 
   async function cleanupSocketFile(socketPath: string): Promise<void> {
@@ -129,6 +143,40 @@ export function hookSocketServer(
         throw error;
       }
     }
+  }
+
+  function registerProcessCleanup(socketPath: string): () => void {
+    if (process.platform === "win32") {
+      return () => {};
+    }
+
+    let cleaned = false;
+    const cleanupOnce = () => {
+      if (cleaned) {
+        return;
+      }
+
+      cleaned = true;
+      cleanupSocketFileSync(socketPath);
+    };
+    const handleSigint = () => {
+      cleanupOnce();
+      unregister();
+      try {
+        process.kill(process.pid, "SIGINT");
+      } catch {
+        process.exit(130);
+      }
+    };
+    function unregister() {
+      process.off("exit", cleanupOnce);
+      process.off("SIGINT", handleSigint);
+    }
+
+    process.once("exit", cleanupOnce);
+    process.once("SIGINT", handleSigint);
+
+    return unregister;
   }
 
   function trackInFlight(promise: Promise<void>): void {
@@ -251,6 +299,7 @@ export function hookSocketServer(
           activeServer.once("error", reject);
           activeServer.listen(socketPath, () => {
             activeServer.off("error", reject);
+            unregisterProcessCleanup = registerProcessCleanup(socketPath);
             emitAdapterTrace(
               logger,
               buildHookSocketBoundTrace({
@@ -267,6 +316,8 @@ export function hookSocketServer(
         server = undefined;
         currentSocketPath = undefined;
         payloadHandler = undefined;
+        unregisterProcessCleanup?.();
+        unregisterProcessCleanup = undefined;
         throw error;
       }
     },
@@ -282,6 +333,8 @@ export function hookSocketServer(
       server = undefined;
       currentSocketPath = undefined;
       payloadHandler = undefined;
+      unregisterProcessCleanup?.();
+      unregisterProcessCleanup = undefined;
 
       const closePromise = new Promise<void>((resolve, reject) => {
         activeServer.close((error) => {

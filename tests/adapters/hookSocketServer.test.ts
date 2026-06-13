@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import fs from "fs-extra";
 
@@ -13,6 +15,7 @@ import {
   hookSocketServer,
 } from "../../src/adapters/hookSocketServer.js";
 import type { Logger } from "../../src/logger.js";
+import { makeTempDir } from "../helpers/tempDir.js";
 
 function createCapturingLogger() {
   const entries: Array<{
@@ -224,6 +227,43 @@ test("hook socket server cleans up its Unix socket file on stop", async (t) => {
   assert.equal(await fs.pathExists(socketPath), false);
 });
 
+test("hook socket server cleans up its Unix socket file when the process exits without stop", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const tempDirectory = makeTempDir("devflow-hook-exit-");
+  const socketPath = path.join(tempDirectory, "hook.sock");
+  const childScriptPath = path.join(tempDirectory, "start-hook-server.mjs");
+  const hookSocketServerUrl = pathToFileURL(
+    path.join(process.cwd(), "src/adapters/hookSocketServer.ts"),
+  ).href;
+  const tsxCliPath = path.join(process.cwd(), "node_modules/tsx/dist/cli.mjs");
+
+  await fs.outputFile(
+    childScriptPath,
+    [
+      'import fs from "node:fs";',
+      `import { hookSocketServer } from ${JSON.stringify(hookSocketServerUrl)};`,
+      "",
+      "const socketPath = process.argv[2];",
+      "const server = hookSocketServer();",
+      "await server.start(socketPath, () => {});",
+      "if (!fs.existsSync(socketPath)) {",
+      '  console.error("socket missing after bind");',
+      "  process.exit(2);",
+      "}",
+      "process.exit(0);",
+      "",
+    ].join("\n"),
+  );
+
+  const result = await runNode([tsxCliPath, childScriptPath, socketPath]);
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(await fs.pathExists(socketPath), false);
+});
+
 test("hook socket server logs received hook payloads verbatim while keeping other lifecycle diagnostics metadata-only", async (t) => {
   const socketPath = createSocketPath(t.name);
   const { entries, logger } = createCapturingLogger();
@@ -331,4 +371,34 @@ function assertPayloadWithId(payload: unknown): number {
   assert.equal(typeof (payload as { id?: unknown }).id, "number");
 
   return (payload as { id: number }).id;
+}
+
+async function runNode(args: string[]): Promise<{
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = spawn(process.execPath, args, {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+
+  return await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (exitCode, signal) => {
+      resolve({ exitCode, signal, stdout, stderr });
+    });
+  });
 }
