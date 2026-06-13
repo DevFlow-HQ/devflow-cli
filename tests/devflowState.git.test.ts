@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -8,6 +7,7 @@ import fs from "fs-extra";
 
 import { createDevFlowState } from "../src/devflowState.js";
 
+import { makeTempDir } from "./helpers/tempDir.js";
 async function git(projectRoot: string, args: string[]): Promise<string> {
   const result = await execa("git", args, { cwd: projectRoot });
 
@@ -18,7 +18,7 @@ async function createGitProject(): Promise<{
   projectRoot: string;
   initialHead: string;
 }> {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-git-state-"));
+  const projectRoot = makeTempDir("devflow-git-state-");
 
   await git(projectRoot, ["init"]);
   await git(projectRoot, ["config", "user.email", "devflow@example.test"]);
@@ -109,7 +109,7 @@ test("default git probe formats fewer than five recent commits for execution con
 });
 
 test("default git probe returns a stable placeholder when a repository has no commits", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-git-empty-"));
+  const projectRoot = makeTempDir("devflow-git-empty-");
   await git(projectRoot, ["init"]);
 
   const state = createDevFlowState({ projectRoot });
@@ -235,7 +235,7 @@ test("devflow state writes do not duplicate an existing gitignore state entry", 
 });
 
 test("devflow state writes do not create a gitignore outside git repositories", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-non-git-state-"));
+  const projectRoot = makeTempDir("devflow-non-git-state-");
   const state = createDevFlowState({ projectRoot });
 
   await state.config.save({ defaultProvider: "claude" });

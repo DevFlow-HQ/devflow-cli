@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 import test from "node:test";
 
 import fs from "fs-extra";
@@ -21,6 +20,7 @@ import {
 } from "../../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 class FakeSessionLogWatcher implements SessionLogWatcher {
   readonly listeners = new Map<
     SessionLogWatchEvent,
@@ -99,7 +99,7 @@ async function createRollout(
 }
 
 test("Codex session log locator discovers new rollout logs only inside the scoped provider home", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const input = createInput(projectRoot);
   const codexHome = getScopedCodexProviderHome(input);
   const globalCodexHome = join(projectRoot, ".codex");
@@ -129,7 +129,7 @@ test("Codex session log locator discovers new rollout logs only inside the scope
 });
 
 test("Codex session log locator ignores rollout files that existed before spawn", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const existingLog = await createRollout(
     codexHome,
@@ -153,7 +153,7 @@ test("Codex session log locator ignores rollout files that existed before spawn"
 });
 
 test("Codex session log locator waits for empty candidates to receive append data", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
@@ -177,7 +177,7 @@ test("Codex session log locator waits for empty candidates to receive append dat
 });
 
 test("Codex session log locator searches nested session trees without date assumptions", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
@@ -195,7 +195,7 @@ test("Codex session log locator searches nested session trees without date assum
 });
 
 test("Codex session log locator deterministically selects the most recent non-empty candidate", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
@@ -226,7 +226,7 @@ test("Codex session log locator deterministically selects the most recent non-em
 });
 
 test("Codex session log locator finds a resume rollout by provider session id and captures its end offset", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const providerSessionId = "codex-session-123";
   const matchingContent = '{"type":"session_meta"}\n{"type":"task_complete"}\n';
@@ -259,7 +259,7 @@ test("Codex session log locator finds a resume rollout by provider session id an
 });
 
 test("Codex session log locator traces resume resolution metadata", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const logger = new SpyLogger();
   const providerSessionId = "codex-session-123";
@@ -292,7 +292,7 @@ test("Codex session log locator traces resume resolution metadata", async () => 
 });
 
 test("Codex session log locator traces missing resume lookup metadata", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const logger = new SpyLogger();
   const locator = createCodexSessionLogLocator({
@@ -321,7 +321,7 @@ test("Codex session log locator traces missing resume lookup metadata", async ()
 });
 
 test("Codex session log locator fails resume lookup with a typed error when no rollout matches the provider session id", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
@@ -346,7 +346,7 @@ test("Codex session log locator fails resume lookup with a typed error when no r
 });
 
 test("Codex session log locator timeout includes scoped home and rollout pattern", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
@@ -371,7 +371,7 @@ test("Codex session log locator timeout includes scoped home and rollout pattern
 });
 
 test("Codex session log locator provider wrapper classifies timeout as event capture failure", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({
     codexHome,
@@ -394,7 +394,7 @@ test("Codex session log locator provider wrapper classifies timeout as event cap
 });
 
 test("Codex session log locator uses a short-lived scoped watcher for new rollout discovery", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const watcher = new FakeSessionLogWatcher();
   const watchedRoots: string[] = [];
@@ -436,7 +436,7 @@ test("Codex session log locator uses a short-lived scoped watcher for new rollou
 });
 
 test("Codex session log locator preserves default behavior without an injected logger", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-log-"));
+  const projectRoot = makeTempDir("devflow-codex-log-");
   const codexHome = getScopedCodexProviderHome(createInput(projectRoot));
   const locator = createCodexSessionLogLocator({ codexHome });
   const snapshot = await locator.snapshot();

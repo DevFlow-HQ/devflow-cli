@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -58,6 +57,7 @@ import {
   type ExecutionLedger,
 } from "../src/executionLedger.js";
 
+import { makeTempDir } from "./helpers/tempDir.js";
 type SerializableExecutionLedger = Omit<ExecutionLedger, "final"> & {
   final: Omit<ExecutionFinalRecord, "type">;
 };
@@ -374,9 +374,7 @@ async function createExecutableOnPath(
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    join(tmpdir(), `devflow-orchestrator-${command}-`),
-  );
+  const tempRoot = makeTempDir(`devflow-orchestrator-${command}-`);
   const binDir = join(tempRoot, "bin");
   const executablePath = join(binDir, command);
 
@@ -389,7 +387,7 @@ async function createExecutableOnPath(
 }
 
 test("validateIssueArtifacts accepts at least one non-empty markdown issue file", async () => {
-  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  const issuesDirectory = makeTempDir("devflow-issues-");
   await fs.writeFile(
     join(issuesDirectory, "Not a Provider Slug.md"),
     "plain issue body without required headings or blocked-by references\n",
@@ -399,7 +397,7 @@ test("validateIssueArtifacts accepts at least one non-empty markdown issue file"
 });
 
 test("validateIssueArtifacts rejects a missing issues directory", async () => {
-  const tempRoot = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  const tempRoot = makeTempDir("devflow-issues-");
   const issuesDirectory = join(tempRoot, "missing");
 
   await assert.rejects(
@@ -414,7 +412,7 @@ test("validateIssueArtifacts rejects a missing issues directory", async () => {
 });
 
 test("validateIssueArtifacts rejects directories with no markdown issue files", async () => {
-  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  const issuesDirectory = makeTempDir("devflow-issues-");
   await fs.writeFile(join(issuesDirectory, "notes.txt"), "not an issue\n");
 
   await assert.rejects(
@@ -430,7 +428,7 @@ test("validateIssueArtifacts rejects directories with no markdown issue files", 
 });
 
 test("validateIssueArtifacts rejects directories where all markdown issue files are whitespace-only", async () => {
-  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  const issuesDirectory = makeTempDir("devflow-issues-");
   await fs.writeFile(join(issuesDirectory, "first.md"), " \n\t\n");
   await fs.writeFile(join(issuesDirectory, "second.md"), "\n\n");
 
@@ -447,7 +445,7 @@ test("validateIssueArtifacts rejects directories where all markdown issue files 
 });
 
 test("validateIssueArtifacts accepts a mixed issues directory when one markdown file is non-empty", async () => {
-  const issuesDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-issues-"));
+  const issuesDirectory = makeTempDir("devflow-issues-");
   await fs.writeFile(join(issuesDirectory, "empty.md"), "\n");
   await fs.writeFile(join(issuesDirectory, "valid.md"), "# Issue\n");
   await fs.writeFile(join(issuesDirectory, "also-empty.md"), "   ");
@@ -457,7 +455,7 @@ test("validateIssueArtifacts accepts a mixed issues directory when one markdown 
 
 test("validateExecutionArtifact rejects malformed JSON ledgers", async () => {
   const artifactPath = join(
-    fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
+    makeTempDir("devflow-execution-artifact-"),
     "execution.jsonl",
   );
   await fs.writeFile(artifactPath, '{"stage":"execute"');
@@ -474,7 +472,7 @@ test("validateExecutionArtifact rejects malformed JSON ledgers", async () => {
 
 test("validateExecutionArtifact accepts zero-iteration no-file ledgers", async () => {
   const artifactPath = join(
-    fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
+    makeTempDir("devflow-execution-artifact-"),
     "execution.jsonl",
   );
   await writeExecutionLedger(artifactPath, {
@@ -492,7 +490,7 @@ test("validateExecutionArtifact accepts zero-iteration no-file ledgers", async (
 
 test("validateExecutionArtifact accepts well-formed ledgers with a final block", async () => {
   const artifactPath = join(
-    fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-")),
+    makeTempDir("devflow-execution-artifact-"),
     "execution.jsonl",
   );
   await writeExecutionLedger(artifactPath, {
@@ -518,7 +516,7 @@ test("validateExecutionArtifact accepts well-formed ledgers with a final block",
 });
 
 test("readExecutionLedger reconstructs incomplete issue sets from the live active issues directory", async () => {
-  const runDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-execution-artifact-"));
+  const runDirectory = makeTempDir("devflow-execution-artifact-");
   const artifactPath = join(runDirectory, "execution.jsonl");
   const issuesDirectory = join(runDirectory, "issues");
 
@@ -547,7 +545,7 @@ test("readExecutionLedger reconstructs incomplete issue sets from the live activ
 });
 
 test("non-specialized stage prompts render critical completion marker guidance", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-stage-prompts-"));
+  const projectRoot = makeTempDir("devflow-stage-prompts-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -624,7 +622,7 @@ test("renderGrillPrompt requires marker-free conclusion approval before marker-o
 });
 
 test("renderExecutePrompt injects manual-flow issue and commit context with artifact path references", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-execute-prompt-"));
+  const projectRoot = makeTempDir("devflow-execute-prompt-");
   const issuesDirectory = join(projectRoot, ".devflow", "runs", "run123", "issues");
   const doneDirectory = join(issuesDirectory, "done");
   const prdArtifactPath = join(projectRoot, ".devflow", "runs", "run123", "prd.md");
@@ -695,7 +693,7 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
 });
 
 test("orchestrator runs one fresh execute iteration with rendered context and records the session result", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await baseDevFlowState.projectContext.write("# Project context\n", {
     refreshReason: "manual",
@@ -875,7 +873,7 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
 });
 
 test("orchestrator surfaces the run id and canonical run paths when the run is created", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-run-created-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-run-created-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const createdRuns: unknown[] = [];
@@ -972,7 +970,7 @@ test("orchestrator surfaces the run id and canonical run paths when the run is c
 });
 
 test("orchestrator stops execute with no-file before opening a provider session", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const runSessionInputs: ManagedProviderSessionInput[] = [];
@@ -1071,7 +1069,7 @@ test("orchestrator stops execute with no-file before opening a provider session"
 });
 
 test("orchestrator loops fresh execute sessions until active issues are gone", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const executeInputs: ManagedProviderSessionInput[] = [];
@@ -1200,7 +1198,7 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
 });
 
 test("orchestrator logs run and stage lifecycle entries at info", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n", {
     refreshReason: "manual",
@@ -1297,7 +1295,7 @@ test("orchestrator logs run and stage lifecycle entries at info", async () => {
 });
 
 test("orchestrator records marker-stripped final assistant messages for structured execute iterations", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const executeInputs: ManagedProviderSessionInput[] = [];
@@ -1415,7 +1413,7 @@ test("orchestrator records marker-stripped final assistant messages for structur
 });
 
 test("orchestrator omits final assistant messages for PTY fallback execute iterations", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
 
@@ -1517,7 +1515,7 @@ test("orchestrator omits final assistant messages for PTY fallback execute itera
 });
 
 test("orchestrator stops execute with cap failure and writes the cap ledger", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
@@ -1618,7 +1616,7 @@ test("orchestrator stops execute with cap failure and writes the cap ledger", as
 });
 
 test("orchestrator writes an error ledger before surfacing incomplete execute sessions", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
@@ -1716,7 +1714,7 @@ test("orchestrator writes an error ledger before surfacing incomplete execute se
 });
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const resolvedProviderIds: string[] = [];
@@ -1788,7 +1786,7 @@ test("orchestrator resolves the selected built-in provider through a managed-ses
 });
 
 test("orchestrator can complete the active intent stage through a built-in Codex hook adapter", async (t) => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n", {
     refreshReason: "manual",
@@ -1901,7 +1899,7 @@ test("orchestrator can complete the active intent stage through a built-in Codex
 });
 
 test("orchestrator leaves Codex event-source selection behind the managed-session adapter boundary", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const capabilitiesSeen: Array<string | undefined> = [];
@@ -1981,7 +1979,7 @@ test("orchestrator leaves Codex event-source selection behind the managed-sessio
 });
 
 test("orchestrator reports intent repair metadata from a built-in provider adapter", async (t) => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   await createExecutableOnPath(t, "codex");
@@ -2057,7 +2055,7 @@ test("orchestrator reports intent repair metadata from a built-in provider adapt
 });
 
 test("orchestrator retries a retryable intent provider-session failure inside the same run", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const { entries, logger } = createCapturingLogger();
@@ -2190,7 +2188,7 @@ test("orchestrator retries a retryable intent provider-session failure inside th
 });
 
 test("orchestrator retries intent after failed in-session repair and accepts a valid retry repair", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const artifactPaths: string[] = [];
@@ -2314,7 +2312,7 @@ test("orchestrator retries intent after failed in-session repair and accepts a v
 });
 
 test("orchestrator raises a typed retry-exhausted error and preserves the final failed intent artifact", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const artifactPaths: string[] = [];
   const artifactExistedAtAttemptStart: boolean[] = [];
@@ -2413,7 +2411,7 @@ test("orchestrator raises a typed retry-exhausted error and preserves the final 
 });
 
 test("orchestrator passes intent and grill stage inputs to managed provider sessions", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
@@ -2587,7 +2585,7 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
 });
 
 test("orchestrator leaves provider-authored issues untouched after execute", async (t) => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
@@ -2757,7 +2755,7 @@ test("orchestrator leaves provider-authored issues untouched after execute", asy
 });
 
 test("orchestrator repairs missing issue files inside the same issues managed session", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   let issuesRunSessionCount = 0;
@@ -2872,7 +2870,7 @@ test("orchestrator repairs missing issue files inside the same issues managed se
 });
 
 test("orchestrator surfaces issues validation failure after failed in-session repair", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   let issuesRunSessionCount = 0;
@@ -2955,7 +2953,7 @@ test("orchestrator surfaces issues validation failure after failed in-session re
 });
 
 test("orchestrator retries issues with a clean issues directory without repeating grill or PRD", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
@@ -3085,7 +3083,7 @@ test("orchestrator retries issues with a clean issues directory without repeatin
 });
 
 test("orchestrator persists provider session metadata for the dedicated issues session", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -3210,7 +3208,7 @@ test("orchestrator persists provider session metadata for the dedicated issues s
 });
 
 test("orchestrator retries issues in fresh sessions without resuming prior issues metadata", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -3335,7 +3333,7 @@ test("orchestrator retries issues in fresh sessions without resuming prior issue
 });
 
 test("structured-provider grill orchestration records normalized events instead of raw transcript callbacks", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const adapter: ManagedSessionAdapter = {
@@ -3449,7 +3447,7 @@ test("structured-provider grill orchestration records normalized events instead 
 });
 
 test("orchestrator persists reliable provider session ids from normalized session-start events", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const adapter: ManagedSessionAdapter = {
@@ -3560,7 +3558,7 @@ test("orchestrator persists reliable provider session ids from normalized sessio
 });
 
 test("orchestrator refreshes provider session state from later normalized turn events", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   let prdPhaseId = "";
@@ -3669,7 +3667,7 @@ test("orchestrator refreshes provider session state from later normalized turn e
 });
 
 test("interrupted incomplete grill recovery resumes a reliable provider session before partial-transcript fallback", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const { entries, logger } = createCapturingLogger();
@@ -3832,7 +3830,7 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
 });
 
 test("failed grill resume falls back once to a fresh partial-transcript grill attempt", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -3943,7 +3941,7 @@ test("failed grill resume falls back once to a fresh partial-transcript grill at
 });
 
 test("unsupported grill resume keeps the partial-transcript new attempt path", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -4041,7 +4039,7 @@ test("unsupported grill resume keeps the partial-transcript new attempt path", a
 });
 
 test("grill resume does not accept session-completed without marker observation", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -4158,7 +4156,7 @@ test("grill resume does not accept session-completed without marker observation"
 });
 
 test("orchestrator leaves fallback providers without reliable session ids on existing transcript behavior", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const adapter: ManagedSessionAdapter = {
@@ -4255,7 +4253,7 @@ test("orchestrator leaves fallback providers without reliable session ids on exi
 });
 
 test("structured Codex JSONL grill orchestration records transcripts from normalized events", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const adapter: ManagedSessionAdapter = {
@@ -4389,7 +4387,7 @@ test("structured Codex JSONL grill orchestration records transcripts from normal
 });
 
 test("structured Claude hook grill orchestration records normalized events and provider session ids", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("claude");
@@ -4558,7 +4556,7 @@ test("structured Claude hook grill orchestration records normalized events and p
 });
 
 test("structured-provider grill orchestration keeps repair discussion before accepted completion", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const adapter: ManagedSessionAdapter = {
@@ -4663,7 +4661,7 @@ test("structured-provider grill orchestration keeps repair discussion before acc
 });
 
 test("structured-provider grill transcript persistence failures retry without writing a checkpoint", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await baseDevFlowState.projectContext.write("# Project context\n");
   const devFlowState: DevFlowState = {
@@ -4769,7 +4767,7 @@ test("structured-provider grill transcript persistence failures retry without wr
 });
 
 test("orchestrator retries a partial grill attempt from the same transcript", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -4889,7 +4887,7 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
 });
 
 test("orchestrator exhausts grill retries after two pre-completion attempts", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -4982,7 +4980,7 @@ test("orchestrator exhausts grill retries after two pre-completion attempts", as
 });
 
 test("orchestrator does not retry interactive grill after transcript completion", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -5067,7 +5065,7 @@ test("orchestrator does not retry interactive grill after transcript completion"
 });
 
 test("orchestrator recreates a missing checkpoint from a completed grill transcript without repeating grill", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const { entries, logger } = createCapturingLogger();
@@ -5192,7 +5190,7 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
 });
 
 test("orchestrator replaces a corrupt checkpoint from a completed grill transcript without repeating grill", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -5275,7 +5273,7 @@ test("orchestrator replaces a corrupt checkpoint from a completed grill transcri
 });
 
 test("orchestrator repairs a missing PRD artifact inside the completed grill session", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const repairPrompts: string[] = [];
@@ -5380,7 +5378,7 @@ test("orchestrator repairs a missing PRD artifact inside the completed grill ses
 });
 
 test("orchestrator repairs an empty PRD artifact with the same non-empty validation", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const repairFailures: string[] = [];
@@ -5473,7 +5471,7 @@ test("orchestrator repairs an empty PRD artifact with the same non-empty validat
 });
 
 test("orchestrator retries only PRD synthesis from transcript after completed-grill PRD repair fails", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   let grillCallCount = 0;
@@ -5578,7 +5576,7 @@ test("orchestrator retries only PRD synthesis from transcript after completed-gr
 });
 
 test("interrupted PRD synthesis resumes the completed grill provider session before transcript fallback", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -5716,7 +5714,7 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
 });
 
 test("failed PRD resume falls back once to PRD-only synthesis from the completed grill transcript", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -5840,7 +5838,7 @@ test("failed PRD resume falls back once to PRD-only synthesis from the completed
 });
 
 test("completed PRD artifact prevents PRD resume or fallback from running again", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -5959,7 +5957,7 @@ test("completed PRD artifact prevents PRD resume or fallback from running again"
 });
 
 test("malformed provider state degrades to PRD-only recovery from completed grill artifacts", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const { entries, logger } = createCapturingLogger();
@@ -6076,7 +6074,7 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
 });
 
 test("completed grill checkpoint overrides stale active grill provider state during recovery", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const provider = getBuiltInProviderIdentity("codex");
@@ -6193,7 +6191,7 @@ test("completed grill checkpoint overrides stale active grill provider state dur
 });
 
 test("orchestrator surfaces pre-completion grill transcript persistence failures as retryable grill-stage failures", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await baseDevFlowState.projectContext.write("# Project context\n");
   const devFlowState: DevFlowState = {
@@ -6271,7 +6269,7 @@ test("orchestrator surfaces pre-completion grill transcript persistence failures
 });
 
 test("orchestrator reuses fresh project context during bootstrap without provider work", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await baseDevFlowState.projectContext.write("# Project context\n", {
     refreshReason: "manual",
@@ -6366,7 +6364,7 @@ test("orchestrator reuses fresh project context during bootstrap without provide
 });
 
 test("orchestrator repairs missing project-context metadata during bootstrap without provider work", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const existingContext = "# Project context\n\nKeep this exact text.\n";
   await baseDevFlowState.projectContext.write(existingContext);
@@ -6489,7 +6487,7 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
 });
 
 test("orchestrator repairs invalid project-context metadata during bootstrap without provider work", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const existingContext = "# Project context\n\nPreserve invalid metadata content.\n";
   const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
@@ -6589,7 +6587,7 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
 });
 
 test("orchestrator generates missing project context through the managed provider during bootstrap", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const projectContextWrites: Array<{
     content: string;
@@ -6747,9 +6745,7 @@ test("orchestrator refreshes semantically stale project context through the mana
     "baseline-unavailable",
     "relevant-changes",
   ] as const) {
-    const projectRoot = fs.mkdtempSync(
-      join(tmpdir(), `devflow-orchestrator-${refreshReason}-`),
-    );
+    const projectRoot = makeTempDir(`devflow-orchestrator-${refreshReason}-`);
     const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
     const { entries, logger } = createCapturingLogger();
     const priorContext = "# Project Context\n\nExisting orientation.\n";
@@ -6946,9 +6942,7 @@ test("orchestrator rejects invalid generated project-context candidates during b
       /Project context content must be no more than 150 lines/,
     ],
   ] as const) {
-    const projectRoot = fs.mkdtempSync(
-      join(tmpdir(), `devflow-orchestrator-${name}-`),
-    );
+    const projectRoot = makeTempDir(`devflow-orchestrator-${name}-`);
     const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
     let runSessionCallCount = 0;
     const adapter: ManagedSessionAdapter = {
@@ -7013,7 +7007,7 @@ test("orchestrator rejects invalid generated project-context candidates during b
 });
 
 test("orchestrator supplies bootstrap validation and one in-session repair attempt to the managed provider session", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const repairedContext = [
     "# Project Context",
@@ -7126,7 +7120,7 @@ test("orchestrator supplies bootstrap validation and one in-session repair attem
 });
 
 test("orchestrator retries bootstrap after repair failure and removes the failed candidate before retry", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const validContext = [
     "# Project Context",
@@ -7228,7 +7222,7 @@ test("orchestrator retries bootstrap after repair failure and removes the failed
 });
 
 test("orchestrator preserves the final failed bootstrap candidate after retry exhaustion", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let runSessionCallCount = 0;
   const adapter: ManagedSessionAdapter = {
@@ -7328,7 +7322,7 @@ test("orchestrator preserves the final failed bootstrap candidate after retry ex
 });
 
 test("orchestrator treats bootstrap candidate cleanup failure after persistence as non-fatal", async (t) => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const validContext = [
     "# Project Context",
@@ -7428,7 +7422,7 @@ test("orchestrator treats bootstrap candidate cleanup failure after persistence 
 });
 
 test("orchestrator validates parsed intent before starting bootstrap", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
   let runSessionCallCount = 0;
@@ -7480,7 +7474,7 @@ test("orchestrator validates parsed intent before starting bootstrap", async () 
 });
 
 test("orchestrator supplies intent validation and one in-session repair attempt to the managed provider session", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const { entries, logger } = createCapturingLogger();
@@ -7591,7 +7585,7 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
 });
 
 test("orchestrator preserves the final failed repair validation error as the retry-exhausted cause", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let repairPromptCount = 0;
   const adapter: ManagedSessionAdapter = {
@@ -7775,7 +7769,7 @@ test("resume-aware orchestration keeps provider-native event and CLI details out
 });
 
 test("orchestrator surfaces interrupted provider sessions without retrying the intent stage", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
   let runSessionCallCount = 0;
@@ -7821,7 +7815,7 @@ test("orchestrator surfaces interrupted provider sessions without retrying the i
 });
 
 test("orchestrator surfaces provider cleanup failures without retrying the intent stage", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
   let runSessionCallCount = 0;
@@ -7866,7 +7860,7 @@ test("orchestrator surfaces provider cleanup failures without retrying the inten
 });
 
 test("orchestrator stops after cleanup failure even when the intent artifact is valid", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
   const provider = getBuiltInProviderIdentity("codex");
@@ -7933,7 +7927,7 @@ test("orchestrator stops after cleanup failure even when the intent artifact is 
 });
 
 test("orchestrator rejects provider-backed execution before creating a run when provider id is missing", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let runnerCallCount = 0;
   const adapter: ManagedSessionAdapter = {
@@ -7970,7 +7964,7 @@ test("orchestrator rejects provider-backed execution before creating a run when 
 });
 
 test("orchestrator rejects unrecognized provider ids before creating a run", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let adapterFactoryCallCount = 0;
 
@@ -8007,7 +8001,7 @@ test("orchestrator rejects unrecognized provider ids before creating a run", asy
 });
 
 test("orchestrator rejects deferred built-in provider ids before creating a run", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   let adapterFactoryCallCount = 0;
 
@@ -8048,7 +8042,7 @@ test("orchestrator rejects deferred built-in provider ids before creating a run"
 });
 
 test("orchestrator surfaces adapter factory failures before creating a run or starting a stage", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   const stages: PipelineStage[] = [];
   const adapterFailure = new Error("adapter resolution failed");
@@ -8078,7 +8072,7 @@ test("orchestrator surfaces adapter factory failures before creating a run or st
 });
 
 test("orchestrator surfaces run creation failures before starting a stage or provider attempt", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-orchestrator-"));
+  const projectRoot = makeTempDir("devflow-orchestrator-");
   const runCreationFailure = new Error("run creation failed");
   const stages: PipelineStage[] = [];
   let runSessionCallCount = 0;

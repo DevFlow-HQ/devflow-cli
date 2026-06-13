@@ -9,8 +9,8 @@ import {
   createClaudeHookArtifacts,
 } from "../../src/adapters/claudeHookArtifacts.js";
 import { installClaudeHookSettings } from "../../src/adapters/claudeHookSettings.js";
-import { makeTempDir } from "../helpers/tempDir.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 test("claude hook artifacts create a run-scoped executable forwarding script", async () => {
   const runDirectory = makeTempDir("devflow-claude-run-");
   const hookDirectory = join(runDirectory, ".claude-hooks");

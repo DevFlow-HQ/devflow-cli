@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import test from "node:test";
 
 import fs from "fs-extra";
@@ -12,6 +11,7 @@ import {
   type JsonlTailWatcher,
 } from "../../src/adapters/jsonlTailEventSource.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 class FakeJsonlTailWatcher implements JsonlTailWatcher {
   readonly listeners = new Map<
     JsonlTailWatchEvent,
@@ -51,7 +51,7 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 test("JSONL tailer reads only newly appended records across repeated reads", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   await fs.writeFile(logPath, '{"id":1}\n{"id":2}\n', "utf8");
   const tailer = createJsonlTailEventSource({ filePath: logPath });
@@ -74,7 +74,7 @@ test("JSONL tailer reads only newly appended records across repeated reads", asy
 });
 
 test("JSONL tailer starts from an explicit offset on the first read", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   const completedTurn = '{"id":"completed"}\n';
   await fs.writeFile(logPath, `${completedTurn}{"id":"resumed"}\n`, "utf8");
@@ -90,7 +90,7 @@ test("JSONL tailer starts from an explicit offset on the first read", async () =
 });
 
 test("JSONL tailer watches later appends after starting from an explicit offset", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   const staleRecord = '{"id":"stale"}\n';
   const watcher = new FakeJsonlTailWatcher();
@@ -141,7 +141,7 @@ test("JSONL tailer starts from offset zero when no offset is provided", async ()
 });
 
 test("JSONL tailer buffers an incomplete trailing line until it is terminated", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   await fs.writeFile(logPath, '{"id":1}\n{"id"', "utf8");
   const tailer = createJsonlTailEventSource({ filePath: logPath });
@@ -160,7 +160,7 @@ test("JSONL tailer buffers an incomplete trailing line until it is terminated", 
 });
 
 test("JSONL tailer skips newline-terminated malformed lines with debug metadata", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   await fs.writeFile(logPath, '{"id":1}\n{nope}\n{"id":2}\n', "utf8");
   const tailer = createJsonlTailEventSource({ filePath: logPath });
@@ -175,7 +175,7 @@ test("JSONL tailer skips newline-terminated malformed lines with debug metadata"
 });
 
 test("JSONL tailer resets safely after truncation without emitting corrupt partial records", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   await fs.writeFile(logPath, '{"id":1}\n{"id":2}', "utf8");
   const tailer = createJsonlTailEventSource({ filePath: logPath });
@@ -194,7 +194,7 @@ test("JSONL tailer resets safely after truncation without emitting corrupt parti
 });
 
 test("JSONL tailer passes through unknown valid records", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   const nativeRecord = {
     type: "future-provider-record",
@@ -244,7 +244,7 @@ test("JSONL tailer isolates slow reads so overlapping polls stay responsive", as
 });
 
 test("JSONL tailer consumes add and change wakeups for only the selected rollout file", async () => {
-  const directory = await fs.mkdtemp(join(tmpdir(), "devflow-jsonl-tail-"));
+  const directory = makeTempDir("devflow-jsonl-tail-");
   const logPath = join(directory, "session.jsonl");
   const otherPath = join(directory, "other.jsonl");
   const watcher = new FakeJsonlTailWatcher();

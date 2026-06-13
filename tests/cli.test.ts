@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
@@ -45,6 +44,7 @@ import {
 import type { LogContext, Logger } from "../src/logger.js";
 import { serialize, type ExecutionFinalRecord } from "../src/executionLedger.js";
 
+import { makeTempDir } from "./helpers/tempDir.js";
 type SerializableExecutionLedger = Omit<ExecutionLedger, "final"> & {
   final: Omit<ExecutionFinalRecord, "type">;
 };
@@ -261,7 +261,7 @@ function discoverWithDeferredProvidersInstalled(
 }
 
 test("cli entrypoint detection accepts symlinked bin paths", () => {
-  const fixtureDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-cli-entrypoint-"));
+  const fixtureDirectory = makeTempDir("devflow-cli-entrypoint-");
   const cliPath = join(fixtureDirectory, "dist", "cli.js");
   const binPath = join(fixtureDirectory, "bin", "devflow");
 
@@ -328,7 +328,7 @@ test("cli resolves the git repository root before handing off the execution requ
   // which on macOS differs from os.tmpdir() (/var -> /private/var). Canonicalize
   // the fixture so the expected projectRoot matches what the product resolves.
   const projectRoot = fs.realpathSync(
-    fs.mkdtempSync(join(tmpdir(), "devflow-cli-git-root-")),
+    makeTempDir("devflow-cli-git-root-"),
   );
   const nestedDirectory = join(projectRoot, "packages", "feature");
   fs.ensureDirSync(nestedDirectory);
@@ -357,7 +357,7 @@ test("cli resolves the git repository root before handing off the execution requ
 });
 
 test("cli passes the resolved state facade through to the orchestrator runner", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-state-pass-through-"));
+  const projectRoot = makeTempDir("devflow-cli-state-pass-through-");
   const devFlowState = createDevFlowState({ projectRoot });
   const receivedCalls: Array<{
     request: unknown;
@@ -399,7 +399,7 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
 });
 
 test("cli prints stage start one-liners in pipeline order", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-stage-start-"));
+  const projectRoot = makeTempDir("devflow-cli-stage-start-");
   const stdout = createWritableBuffer();
   const stderr = createWritableBuffer();
   const observedStdoutBeforeRun: string[] = [];
@@ -445,7 +445,7 @@ test("cli prints stage start one-liners in pipeline order", async () => {
 });
 
 test("cli prints a thin separator before each execution iteration starts", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-execute-iteration-"));
+  const projectRoot = makeTempDir("devflow-cli-execute-iteration-");
   const stdout = createWritableBuffer();
   const stderr = createWritableBuffer();
   const observedStdoutBeforeRun: string[] = [];
@@ -479,7 +479,7 @@ test("cli prints a thin separator before each execution iteration starts", async
 });
 
 test("cli prints a run summary from the on-disk execution ledger after a successful run", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-run-summary-"));
+  const projectRoot = makeTempDir("devflow-cli-run-summary-");
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-summary");
   const executionArtifact = join(runDirectory, "execution.jsonl");
   const ledger: SerializableExecutionLedger = {
@@ -527,7 +527,7 @@ test("cli prints a run summary from the on-disk execution ledger after a success
 });
 
 test("cli falls back to the current directory outside git before running the request", async () => {
-  const currentDirectory = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-git-"));
+  const currentDirectory = makeTempDir("devflow-cli-no-git-");
   const receivedRequests: unknown[] = [];
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
@@ -551,7 +551,7 @@ test("cli falls back to the current directory outside git before running the req
 });
 
 test("cli maps adapter-layer managed-session not-implemented errors to the expected-limitation message", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-adapter-error-"));
+  const projectRoot = makeTempDir("devflow-cli-adapter-error-");
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: projectRoot,
@@ -572,7 +572,7 @@ test("cli maps adapter-layer managed-session not-implemented errors to the expec
 });
 
 test("cli maps provider launch failures to concise user-facing errors", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-launch-error-"));
+  const projectRoot = makeTempDir("devflow-cli-launch-error-");
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: projectRoot,
@@ -594,7 +594,7 @@ test("cli maps provider launch failures to concise user-facing errors", async ()
 });
 
 test("cli logs anticipated typed failures at error without printing a correlation ref", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-typed-error-log-"));
+  const projectRoot = makeTempDir("devflow-cli-typed-error-log-");
   const { entries, logger } = createCapturingLogger();
   const error = new ProviderSessionLaunchError(
     getBuiltInProviderIdentity("codex"),
@@ -628,9 +628,7 @@ test("cli logs anticipated typed failures at error without printing a correlatio
 });
 
 test("cli maps interrupted provider sessions to concise user-facing errors", async () => {
-  const projectRoot = fs.mkdtempSync(
-    join(tmpdir(), "devflow-cli-interrupted-error-"),
-  );
+  const projectRoot = makeTempDir("devflow-cli-interrupted-error-");
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: projectRoot,
@@ -650,7 +648,7 @@ test("cli maps interrupted provider sessions to concise user-facing errors", asy
 });
 
 test("cli maps execution cap stops to a clear failure", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-cap-error-"));
+  const projectRoot = makeTempDir("devflow-cli-cap-error-");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
@@ -669,7 +667,7 @@ test("cli maps execution cap stops to a clear failure", async () => {
 });
 
 test("cli prints a run summary after an execution cap failure with the error first", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-cap-summary-"));
+  const projectRoot = makeTempDir("devflow-cli-cap-summary-");
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-cap-summary");
   const executionArtifact = join(runDirectory, "execution.jsonl");
   const writes: Array<{ stream: "stdout" | "stderr"; chunk: string }> = [];
@@ -741,7 +739,7 @@ test("cli prints a run summary after an execution cap failure with the error fir
 });
 
 test("cli maps execution error stops to a clear failure", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-execute-error-"));
+  const projectRoot = makeTempDir("devflow-cli-execute-error-");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
@@ -765,7 +763,7 @@ test("cli maps execution error stops to a clear failure", async () => {
 });
 
 test("cli prints a run summary after an execution error failure", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-error-summary-"));
+  const projectRoot = makeTempDir("devflow-cli-error-summary-");
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-error-summary");
   const executionArtifact = join(runDirectory, "execution.jsonl");
   const ledger: SerializableExecutionLedger = {
@@ -816,7 +814,7 @@ test("cli prints a run summary after an execution error failure", async () => {
 });
 
 test("cli skips failure summary when no execution ledger exists", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-ledger-summary-"));
+  const projectRoot = makeTempDir("devflow-cli-no-ledger-summary-");
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-no-ledger");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
@@ -846,7 +844,7 @@ test("cli skips failure summary when no execution ledger exists", async () => {
 });
 
 test("cli reports summary unavailable for a corrupt execution ledger without masking success", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-corrupt-summary-"));
+  const projectRoot = makeTempDir("devflow-cli-corrupt-summary-");
   const runDirectory = join(projectRoot, ".devflow", "runs", "run-corrupt-summary");
   const executionArtifact = join(runDirectory, "execution.jsonl");
 
@@ -927,7 +925,7 @@ test("cli formats missing providers with provider guidance", () => {
 });
 
 test("cli maps stage artifact validation failures to concise user-facing errors", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-stage-artifact-"));
+  const projectRoot = makeTempDir("devflow-cli-stage-artifact-");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
@@ -949,7 +947,7 @@ test("cli maps stage artifact validation failures to concise user-facing errors"
 });
 
 test("cli maps provider stage retry exhaustion to concise user-facing errors", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-retry-exhausted-"));
+  const projectRoot = makeTempDir("devflow-cli-retry-exhausted-");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
@@ -975,7 +973,7 @@ test("cli maps provider stage retry exhaustion to concise user-facing errors", a
 });
 
 test("cli maps invalid intent artifacts to concise user-facing errors", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-invalid-intent-"));
+  const projectRoot = makeTempDir("devflow-cli-invalid-intent-");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
@@ -996,7 +994,7 @@ test("cli maps invalid intent artifacts to concise user-facing errors", async ()
 });
 
 test("cli maps missing provider errors to concise user-facing errors", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-missing-provider-"));
+  const projectRoot = makeTempDir("devflow-cli-missing-provider-");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
@@ -1014,7 +1012,7 @@ test("cli maps missing provider errors to concise user-facing errors", async () 
 });
 
 test("cli maps unexpected errors to a redacted line and matching critical log entry", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-unexpected-error-"));
+  const projectRoot = makeTempDir("devflow-cli-unexpected-error-");
   const clock = { now: () => new Date("2026-05-24T10:11:12.000Z") };
   const devFlowState = createDevFlowState({ projectRoot, clock });
   const error = new TypeError("boom\n    at internal frame");
@@ -1072,7 +1070,7 @@ test("cli formats non-error unexpected failures as a one-line generic error", ()
 });
 
 test("cli reuses a valid repo-local default provider config when no override is supplied", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-config-root-"));
+  const projectRoot = makeTempDir("devflow-cli-config-root-");
   const devFlowState = createDevFlowState({ projectRoot });
   await devFlowState.config.save({ defaultProvider: "codex" });
 
@@ -1098,7 +1096,7 @@ test("cli reuses a valid repo-local default provider config when no override is 
 });
 
 test("cli gives --provider precedence over saved config for the current invocation only", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-provider-override-"));
+  const projectRoot = makeTempDir("devflow-cli-provider-override-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
@@ -1140,7 +1138,7 @@ test("cli gives --provider precedence over saved config for the current invocati
 });
 
 test("cli passes through --model unchanged alongside a saved provider without persisting model state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-model-saved-provider-"));
+  const projectRoot = makeTempDir("devflow-cli-model-saved-provider-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
@@ -1176,9 +1174,7 @@ test("cli passes through --model unchanged alongside a saved provider without pe
 });
 
 test("cli passes through --model unchanged with an explicit provider override without mutating saved config", async () => {
-  const projectRoot = fs.mkdtempSync(
-    join(tmpdir(), "devflow-cli-model-explicit-provider-"),
-  );
+  const projectRoot = makeTempDir("devflow-cli-model-explicit-provider-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
@@ -1215,9 +1211,7 @@ test("cli passes through --model unchanged with an explicit provider override wi
 });
 
 test("cli hands the orchestrator the exact resolved request when explicit provider and model overrides are supplied", async () => {
-  const projectRoot = fs.mkdtempSync(
-    join(tmpdir(), "devflow-cli-exact-resolved-request-"),
-  );
+  const projectRoot = makeTempDir("devflow-cli-exact-resolved-request-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
@@ -1254,7 +1248,7 @@ test("cli hands the orchestrator the exact resolved request when explicit provid
 });
 
 test("cli rejects typoed --provider values before bootstrap fallback", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-unknown-provider-"));
+  const projectRoot = makeTempDir("devflow-cli-unknown-provider-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
@@ -1285,9 +1279,7 @@ test("cli rejects typoed --provider values before bootstrap fallback", async () 
 });
 
 test("cli rejects explicit deferred built-in providers as unsupported", async () => {
-  const projectRoot = fs.mkdtempSync(
-    join(tmpdir(), "devflow-cli-deferred-provider-override-"),
-  );
+  const projectRoot = makeTempDir("devflow-cli-deferred-provider-override-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
@@ -1319,9 +1311,7 @@ test("cli rejects explicit deferred built-in providers as unsupported", async ()
 });
 
 test("cli rejects unavailable --provider overrides without mutating saved config", async () => {
-  const projectRoot = fs.mkdtempSync(
-    join(tmpdir(), "devflow-cli-unavailable-provider-override-"),
-  );
+  const projectRoot = makeTempDir("devflow-cli-unavailable-provider-override-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "codex" }, null, 2),
@@ -1348,9 +1338,7 @@ test("cli rejects unavailable --provider overrides without mutating saved config
 });
 
 test("cli fails fast when a saved default provider is no longer available", async () => {
-  const projectRoot = fs.mkdtempSync(
-    join(tmpdir(), "devflow-cli-unavailable-saved-provider-"),
-  );
+  const projectRoot = makeTempDir("devflow-cli-unavailable-saved-provider-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "claude" }, null, 2),
@@ -1377,9 +1365,7 @@ test("cli fails fast when a saved default provider is no longer available", asyn
 });
 
 test("cli rejects a saved deferred default provider as unsupported", async () => {
-  const projectRoot = fs.mkdtempSync(
-    join(tmpdir(), "devflow-cli-deferred-saved-provider-"),
-  );
+  const projectRoot = makeTempDir("devflow-cli-deferred-saved-provider-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "gemini" }, null, 2),
@@ -1418,7 +1404,7 @@ test("cli rejects a saved deferred default provider as unsupported", async () =>
 });
 
 test("cli rejects invalid repo-local provider config with repair guidance", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-invalid-config-"));
+  const projectRoot = makeTempDir("devflow-cli-invalid-config-");
   fs.outputFileSync(
     join(projectRoot, ".devflow", "config.json"),
     JSON.stringify({ defaultProvider: "not-real" }, null, 2),
@@ -1442,7 +1428,7 @@ test("cli rejects invalid repo-local provider config with repair guidance", asyn
 });
 
 test("cli does not create repo-local state when bootstrap already has an explicit provider", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-lazy-state-"));
+  const projectRoot = makeTempDir("devflow-cli-lazy-state-");
 
   const result = await invokeCliWithOptions(["draft", "plan"], {
     cwd: projectRoot,
@@ -1456,7 +1442,7 @@ test("cli does not create repo-local state when bootstrap already has an explici
 });
 
 test("cli fails first-run setup with supported-provider guidance when no supported providers are installed", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-no-providers-"));
+  const projectRoot = makeTempDir("devflow-cli-no-providers-");
   let discoveryCallCount = 0;
   let promptCallCount = 0;
   const receivedRequests: unknown[] = [];
@@ -1495,7 +1481,7 @@ test("cli fails first-run setup with supported-provider guidance when no support
 });
 
 test("cli auto-selects and persists the only installed provider during first-run setup", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-auto-provider-"));
+  const projectRoot = makeTempDir("devflow-cli-auto-provider-");
   const receivedRequests: unknown[] = [];
   let promptCallCount = 0;
 
@@ -1529,7 +1515,7 @@ test("cli auto-selects and persists the only installed provider during first-run
 });
 
 test("cli prompts once with supported provider choices during first-run setup", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-prompt-provider-"));
+  const projectRoot = makeTempDir("devflow-cli-prompt-provider-");
   const receivedRequests: unknown[] = [];
   const promptCalls: unknown[] = [];
 
@@ -1568,7 +1554,7 @@ test("cli prompts once with supported provider choices during first-run setup", 
 });
 
 test("cli aborts first-run setup without writing config when provider selection is cancelled", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-cli-cancel-provider-"));
+  const projectRoot = makeTempDir("devflow-cli-cancel-provider-");
   const receivedRequests: unknown[] = [];
 
   const result = await invokeCliWithOptions(["continue", "flow"], {

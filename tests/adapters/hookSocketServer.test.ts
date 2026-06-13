@@ -15,8 +15,8 @@ import {
   hookSocketServer,
 } from "../../src/adapters/hookSocketServer.js";
 import type { Logger } from "../../src/logger.js";
-import { makeTempDir } from "../helpers/tempDir.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 function createCapturingLogger() {
   const entries: Array<{
     level: keyof Logger;

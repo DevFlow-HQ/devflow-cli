@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,6 +31,7 @@ import {
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 import type { Logger } from "../../src/logger.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
   readonly resizes: Array<{ columns: number; rows: number }> = [];
@@ -283,7 +283,7 @@ async function runHookScript(
 }
 
 test("Claude hook-driven runner installs hook settings, launches through PTY, and completes from hook events plus PTY exit", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const output: string[] = [];
   const events: ManagedProviderSessionEvent[] = [];
   let validateCount = 0;
@@ -460,10 +460,8 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
 });
 
 test("Claude hook-driven runner seeds credentials from active source profile on linux", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
-  const sourceConfigDirectory = await fs.mkdtemp(
-    join(tmpdir(), "devflow-claude-source-"),
-  );
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
+  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
   await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
     token: "source-token",
   });
@@ -508,8 +506,8 @@ test("Claude hook-driven runner seeds credentials from active source profile on 
 });
 
 test("Claude hook-driven runner allows missing source credentials on Windows", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
-  const homeDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-home-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
+  const homeDirectory = makeTempDir("devflow-claude-home-");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
@@ -551,10 +549,8 @@ test("Claude hook-driven runner allows missing source credentials on Windows", a
 });
 
 test("Claude hook-driven runner does not seed credentials on macOS", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
-  const sourceConfigDirectory = await fs.mkdtemp(
-    join(tmpdir(), "devflow-claude-source-"),
-  );
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
+  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
   await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
     token: "source-token",
   });
@@ -597,10 +593,8 @@ test("Claude hook-driven runner does not seed credentials on macOS", async () =>
 });
 
 test("Claude hook-driven runner fails before launch when existing credentials cannot be copied", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
-  const sourceConfigDirectory = await fs.mkdtemp(
-    join(tmpdir(), "devflow-claude-source-"),
-  );
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
+  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
   await fs.ensureDir(join(sourceConfigDirectory, ".credentials.json"));
   const spawner = new ScriptedClaudePtySpawner(async () => {});
 
@@ -618,7 +612,7 @@ test("Claude hook-driven runner fails before launch when existing credentials ca
 });
 
 test("Claude hook-driven runner rejects when the first structured event is not SessionStart", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
@@ -647,7 +641,7 @@ test("Claude hook-driven runner rejects when the first structured event is not S
 });
 
 test("Claude hook-driven runner times out with Claude-specific diagnostics when SessionStart never arrives", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async () => {});
 
   await assert.rejects(
@@ -670,7 +664,7 @@ test("Claude hook-driven runner times out with Claude-specific diagnostics when 
 });
 
 test("Claude hook-driven runner treats PTY exit before SessionStart as incomplete hook setup", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async () => {
     spawner.process.emitExit(1);
   });
@@ -690,7 +684,7 @@ test("Claude hook-driven runner treats PTY exit before SessionStart as incomplet
 });
 
 test("Claude hook-driven runner drains briefly after early PTY exit before deciding incomplete", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   let validateCount = 0;
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
@@ -729,7 +723,7 @@ test("Claude hook-driven runner drains briefly after early PTY exit before decid
 });
 
 test("Claude hook-driven runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const output: string[] = [];
   const events: ManagedProviderSessionEvent[] = [];
   const userInput = new FakeUserInput();
@@ -816,7 +810,7 @@ test("Claude hook-driven runner keeps PTY control-only while mirroring output, s
 });
 
 test("Claude hook-driven runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const userInput = new FakeUserInput();
   let interrupted = false;
   const spawner = new ScriptedClaudePtySpawner(async () => {
@@ -847,7 +841,7 @@ test("Claude hook-driven runner forwards Ctrl-C and reports requested interrupti
 });
 
 test("Claude hook-driven runner treats PTY exit after SessionStart but before finalization as incomplete after drain", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
@@ -873,7 +867,7 @@ test("Claude hook-driven runner treats PTY exit after SessionStart but before fi
 });
 
 test("Claude hook-driven runner resolves success after graceful shutdown exits naturally", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
@@ -919,7 +913,7 @@ test("Claude hook-driven runner resolves success after graceful shutdown exits n
 });
 
 test("Claude hook-driven runner force-kills after valid completion and still resolves success", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
@@ -957,7 +951,7 @@ test("Claude hook-driven runner force-kills after valid completion and still res
 });
 
 test("Claude hook-driven runner raises cleanup errors only when shutdown force-kill throws", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const killError = new Error("kill failed");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
@@ -993,7 +987,7 @@ test("Claude hook-driven runner raises cleanup errors only when shutdown force-k
 });
 
 test("Claude hook-driven runner rejects original failures while detached cleanup shuts down the PTY", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
@@ -1037,7 +1031,7 @@ test("Claude hook-driven runner rejects original failures while detached cleanup
 });
 
 test("Claude hook-driven runner maps hook payload schema failures to event capture errors", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
@@ -1060,7 +1054,7 @@ test("Claude hook-driven runner maps hook payload schema failures to event captu
 });
 
 test("Claude hook-driven runner maps provider event callback failures to event capture errors", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
@@ -1099,7 +1093,7 @@ test("Claude hook-driven runner maps provider event callback failures to event c
 });
 
 test("Claude hook-driven runner ignores Stop events without assistant content for marker validation", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   let validateCount = 0;
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
@@ -1139,7 +1133,7 @@ test("Claude hook-driven runner ignores Stop events without assistant content fo
 });
 
 test("Claude hook-driven runner advances continuations from assistant markers and submits continuation prompts through PTY", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const events: ManagedProviderSessionEvent[] = [];
   const validationOrder: string[] = [];
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
@@ -1211,7 +1205,7 @@ test("Claude hook-driven runner advances continuations from assistant markers an
 });
 
 test("Claude hook-driven runner submits repair prompts through PTY and reports repair usage", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   let validateCalls = 0;
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
@@ -1267,7 +1261,7 @@ test("Claude hook-driven runner submits repair prompts through PTY and reports r
 });
 
 test("Claude hook-driven runner captures structured transcript events and preserves transcript failures", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-hooks-"));
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
   const transcript: Array<{ type: "provider" | "user"; content: string }> = [];
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);

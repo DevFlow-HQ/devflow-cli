@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import test from "node:test";
 
 import fs from "fs-extra";
@@ -14,6 +13,7 @@ import {
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 import type { LogContext, Logger } from "../../src/logger.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 class SpyLogger implements Logger {
   readonly debugEntries: Array<{ msg: string; context?: LogContext }> = [];
 
@@ -30,7 +30,7 @@ class SpyLogger implements Logger {
 }
 
 test("Claude session log locator discovers a newly created scoped transcript", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-locator-"));
+  const projectRoot = makeTempDir("devflow-claude-locator-");
   const input = {
     workingDirectory: projectRoot,
     initialPrompt: "Start",
@@ -75,7 +75,7 @@ test("Claude session log locator discovers a newly created scoped transcript", a
 });
 
 test("Claude session log locator finds a resume transcript by provider session id and captures its end offset", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-resume-locator-"));
+  const projectRoot = makeTempDir("devflow-claude-resume-locator-");
   const input = {
     workingDirectory: projectRoot,
     initialPrompt: "Start",
@@ -131,7 +131,7 @@ test("Claude session log locator finds a resume transcript by provider session i
 });
 
 test("Claude session log locator traces resume resolution metadata", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-resume-locator-"));
+  const projectRoot = makeTempDir("devflow-claude-resume-locator-");
   const input = {
     workingDirectory: projectRoot,
     initialPrompt: "Start",
@@ -176,7 +176,7 @@ test("Claude session log locator traces resume resolution metadata", async () =>
 });
 
 test("Claude session log locator raises a typed error when resume transcript is missing", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-claude-resume-missing-"));
+  const projectRoot = makeTempDir("devflow-claude-resume-missing-");
   const input = {
     workingDirectory: projectRoot,
     initialPrompt: "Start",

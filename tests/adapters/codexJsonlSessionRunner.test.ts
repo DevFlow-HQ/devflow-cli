@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 import test from "node:test";
 
 import fs from "fs-extra";
@@ -33,6 +32,7 @@ import {
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 import type { Logger } from "../../src/logger.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
   readonly resizes: Array<{ columns: number; rows: number }> = [];
@@ -476,7 +476,7 @@ function createPostExitRaceEventSource(recordsAfterBlockedRead: unknown[]): {
 }
 
 test("Codex JSONL runner completes a single phase from rollout task completion without PTY capture", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
@@ -604,10 +604,8 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
 });
 
 test("Codex JSONL runner seeds auth.json from active source home before launch", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
-  const sourceCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-source-"),
-  );
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
+  const sourceCodexHome = makeTempDir("devflow-codex-source-");
   await fs.writeJson(join(sourceCodexHome, "auth.json"), {
     refresh_token: "source-refresh-token",
   });
@@ -649,10 +647,8 @@ test("Codex JSONL runner seeds auth.json from active source home before launch",
 });
 
 test("Codex JSONL runner writes trust-only scoped config without touching source config", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
-  const sourceCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-source-"),
-  );
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
+  const sourceCodexHome = makeTempDir("devflow-codex-source-");
   const sourceConfigPath = join(sourceCodexHome, "config.toml");
   const sourceConfigToml = 'model = "gpt-existing"\n';
 
@@ -685,7 +681,7 @@ test("Codex JSONL runner writes trust-only scoped config without touching source
 });
 
 test("Codex JSONL runner classifies native user messages and suppresses managed prompt echoes", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
@@ -741,7 +737,7 @@ test("Codex JSONL runner classifies native user messages and suppresses managed 
 });
 
 test("Codex JSONL runner keeps draining after PTY exit while a JSONL read is active", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, sessionLogLocator } = await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
   const race = createPostExitRaceEventSource([
@@ -806,7 +802,7 @@ test("Codex JSONL runner keeps draining after PTY exit while a JSONL read is act
 });
 
 test("Codex JSONL runner resumes by tailing an existing rollout from the captured offset", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
   const rollout =
     "sessions/2026/05/30/rollout-2026-05-30T00-00-00-codex-session-1.jsonl";
@@ -888,7 +884,7 @@ test("Codex JSONL runner resumes by tailing an existing rollout from the capture
 });
 
 test("Codex JSONL runner fresh launch snapshots before spawn and tails selected rollouts from offset zero", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
   const existingRollout = "sessions/2026/05/30/rollout-existing.jsonl";
   const freshRollout = "sessions/2026/05/30/rollout-fresh.jsonl";
@@ -988,7 +984,7 @@ test("Codex JSONL runner fresh launch snapshots before spawn and tails selected 
 });
 
 test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const output: string[] = [];
@@ -1085,7 +1081,7 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
 });
 
 test("Codex JSONL runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const userInput = new FakeUserInput();
   let interrupted = false;
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
@@ -1121,7 +1117,7 @@ test("Codex JSONL runner forwards Ctrl-C and reports requested interruption on p
 });
 
 test("Codex JSONL runner submits continuation prompts through PTY and emits managed user events", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
@@ -1184,7 +1180,7 @@ test("Codex JSONL runner submits continuation prompts through PTY and emits mana
 });
 
 test("Codex JSONL runner submits repair prompts through PTY and reports repair usage", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   let validateCalls = 0;
@@ -1247,7 +1243,7 @@ test("Codex JSONL runner submits repair prompts through PTY and reports repair u
 });
 
 test("Codex JSONL runner fails with event capture when no rollout file appears", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const spawner = new ScriptedCodexPtySpawner(async () => {});
 
   await assert.rejects(
@@ -1262,7 +1258,7 @@ test("Codex JSONL runner fails with event capture when no rollout file appears",
 });
 
 test("Codex JSONL runner fails when rollout has no usable structured event before timeout", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     await appendRolloutRecord(
       String(options.env?.CODEX_HOME),
@@ -1290,7 +1286,7 @@ test("Codex JSONL runner fails when rollout has no usable structured event befor
 });
 
 test("Codex JSONL runner classifies malformed load-bearing records as event capture failures", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     await appendRolloutRecord(
       String(options.env?.CODEX_HOME),
@@ -1317,7 +1313,7 @@ test("Codex JSONL runner classifies malformed load-bearing records as event capt
 });
 
 test("Codex JSONL runner skips malformed unrelated completed lines", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, rolloutPath, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
@@ -1360,7 +1356,7 @@ test("Codex JSONL runner skips malformed unrelated completed lines", async () =>
 });
 
 test("Codex JSONL runner drains briefly after early PTY exit before incomplete-session failure", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const codexHome = String(options.env?.CODEX_HOME);
     const rollout = "sessions/2026/05/30/rollout-session.jsonl";
@@ -1387,7 +1383,7 @@ test("Codex JSONL runner drains briefly after early PTY exit before incomplete-s
 });
 
 test("Codex JSONL runner force-kills after valid completion and still resolves success", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   await appendSessionMeta(codexHome, rollout);
@@ -1423,7 +1419,7 @@ test("Codex JSONL runner force-kills after valid completion and still resolves s
 });
 
 test("Codex JSONL runner resolves success after graceful shutdown exits naturally", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
@@ -1467,7 +1463,7 @@ test("Codex JSONL runner resolves success after graceful shutdown exits naturall
 });
 
 test("Codex JSONL runner raises cleanup errors only when shutdown force-kill throws", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const killError = new Error("kill failed");
@@ -1501,7 +1497,7 @@ test("Codex JSONL runner raises cleanup errors only when shutdown force-kill thr
 });
 
 test("Codex JSONL runner rejects original failures while detached cleanup shuts down the PTY", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-jsonl-"));
+  const projectRoot = makeTempDir("devflow-codex-jsonl-");
   const { codexHome, rollout, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const originalFailure = new Error("consumer failed");

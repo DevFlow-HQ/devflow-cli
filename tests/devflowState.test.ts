@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock } from "node:test";
 import fs from "fs-extra";
@@ -21,6 +20,7 @@ import {
 } from "../src/devflowState.js";
 import { assemble } from "../src/executionLedger.js";
 
+import { makeTempDir } from "./helpers/tempDir.js";
 function createFreshnessProbe(
   overrides: Partial<GitProjectContextProbe> = {},
 ): GitProjectContextProbe {
@@ -90,7 +90,7 @@ function expectedDirtyFingerprint(input: {
 }
 
 test("devflow config is absent until explicitly saved through the state facade", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-config-"));
+  const projectRoot = makeTempDir("devflow-state-config-");
   const state = createDevFlowState({ projectRoot });
 
   assert.equal(await fs.pathExists(join(projectRoot, ".devflow")), false);
@@ -99,7 +99,7 @@ test("devflow config is absent until explicitly saved through the state facade",
 });
 
 test("devflow config save lazily creates state and supports later reads", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-config-"));
+  const projectRoot = makeTempDir("devflow-state-config-");
   const state = createDevFlowState({ projectRoot });
 
   await state.config.save({ defaultProvider: "claude" });
@@ -111,7 +111,7 @@ test("devflow config save lazily creates state and supports later reads", async 
 });
 
 test("devflow config validation rejects malformed persisted provider ids", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-config-"));
+  const projectRoot = makeTempDir("devflow-state-config-");
   const state = createDevFlowState({ projectRoot });
 
   await state.config.save({ defaultProvider: "gemini" });
@@ -128,7 +128,7 @@ test("devflow config validation rejects malformed persisted provider ids", async
 });
 
 test("devflow config validation rejects malformed persisted json", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-config-"));
+  const projectRoot = makeTempDir("devflow-state-config-");
   const state = createDevFlowState({ projectRoot });
 
   await fs.outputFile(
@@ -146,7 +146,7 @@ test("devflow config validation rejects malformed persisted json", async () => {
 });
 
 test("project context is absent until written and then readable from its canonical state location", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   assert.equal(await state.projectContext.read(), undefined);
@@ -161,7 +161,7 @@ test("project context is absent until written and then readable from its canonic
 });
 
 test("project context writes overwrite the existing shared artifact in place", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await state.projectContext.write("first snapshot");
@@ -175,7 +175,7 @@ test("project context writes overwrite the existing shared artifact in place", a
 });
 
 test("project context writes reject empty content before updating state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await state.projectContext.write("existing context");
@@ -191,7 +191,7 @@ test("project context writes reject empty content before updating state", async 
 });
 
 test("project context writes reject content over the line cap before updating state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await state.projectContext.write("existing context");
@@ -209,7 +209,7 @@ test("project context writes reject content over the line cap before updating st
 });
 
 test("state exposes execution git ground truth through the injected git probe", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-git-"));
+  const projectRoot = makeTempDir("devflow-state-git-");
   const calls: string[] = [];
   const state = createDevFlowState({
     projectRoot,
@@ -241,7 +241,7 @@ test("state exposes execution git ground truth through the injected git probe", 
 });
 
 test("project context metadata is written beside the shared context and strictly read back", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await state.projectContext.write("context snapshot", {
@@ -272,7 +272,7 @@ test("project context metadata is written beside the shared context and strictly
 });
 
 test("project context metadata validation rejects malformed writes before updating state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await state.projectContext.write("context snapshot", {
@@ -307,7 +307,7 @@ test("project context metadata validation rejects malformed writes before updati
 });
 
 test("project context refresh writes create metadata from the current git state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const dirtyState = {
     staged: [{ path: "src/changed.ts", status: "modified" as const }],
     stagedDiff: Buffer.from("staged diff"),
@@ -338,7 +338,7 @@ test("project context refresh writes create metadata from the current git state"
 });
 
 test("project context refresh writes update metadata when replacing existing metadata", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-24T11:00:00.000Z") },
@@ -369,7 +369,7 @@ test("project context refresh writes update metadata when replacing existing met
 });
 
 test("project context refresh writes advance metadata when context content is unchanged", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   let currentHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   let currentTime = "2026-05-24T10:00:00.000Z";
   const state = createDevFlowState({
@@ -402,7 +402,7 @@ test("project context refresh writes advance metadata when context content is un
 });
 
 test("project context refresh writes store clean git metadata with a null dirty fingerprint", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-24T12:00:00.000Z") },
@@ -432,7 +432,7 @@ test("project context refresh writes store clean git metadata with a null dirty 
 });
 
 test("project context refresh writes store non-git metadata without git state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-24T13:00:00.000Z") },
@@ -455,7 +455,7 @@ test("project context refresh writes store non-git metadata without git state", 
 });
 
 test("project context freshness treats missing context as stale", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   assert.deepEqual(await state.projectContext.checkFreshness(), {
@@ -465,7 +465,7 @@ test("project context freshness treats missing context as stale", async () => {
 });
 
 test("project context freshness treats missing metadata as stale with readable context", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await state.projectContext.write("context snapshot");
@@ -478,7 +478,7 @@ test("project context freshness treats missing metadata as stale with readable c
 });
 
 test("project context freshness treats malformed metadata as repairable stale cache state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await fs.outputFile(
@@ -499,7 +499,7 @@ test("project context freshness treats malformed metadata as repairable stale ca
 });
 
 test("project context freshness treats context version changes as stale repairable state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({ projectRoot });
 
   await fs.outputFile(
@@ -526,7 +526,7 @@ test("project context freshness treats context version changes as stale repairab
 });
 
 test("project context freshness treats non-git metadata older than three days as stale", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
@@ -555,7 +555,7 @@ test("project context freshness treats non-git metadata older than three days as
 });
 
 test("project context freshness returns fresh non-git metadata within max age", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
@@ -583,7 +583,7 @@ test("project context freshness returns fresh non-git metadata within max age", 
 });
 
 test("project context freshness uses the injected git probe for unavailable baselines", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-23T10:00:00.000Z") },
@@ -617,7 +617,7 @@ test("project context freshness uses the injected git probe for unavailable base
 });
 
 test("project context freshness treats stored git head as a baseline when no relevant changes exist", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const calls: string[] = [];
   const state = createDevFlowState({
     projectRoot,
@@ -671,7 +671,7 @@ test("project context freshness treats stored git head as a baseline when no rel
 });
 
 test("project context freshness reports relevant committed changes since the stored baseline", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const metadata = {
     generatedAt: "2026-05-23T10:00:00.000Z",
     gitHead: "0123456789abcdef0123456789abcdef01234567",
@@ -717,7 +717,7 @@ test("project context freshness reports relevant committed changes since the sto
 });
 
 test("project context freshness treats repeated dirty git fingerprints as fresh", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const dirtyState = {
     staged: [{ path: "staged.ts", status: "modified" as const }],
     stagedDiff: Buffer.from("staged diff"),
@@ -762,7 +762,7 @@ test("project context freshness treats repeated dirty git fingerprints as fresh"
 });
 
 test("project context freshness treats changed dirty tracked content as stale", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const baselineDirtyState = {
     staged: [{ path: "staged.ts", status: "modified" as const }],
     stagedDiff: Buffer.from("old staged diff"),
@@ -808,7 +808,7 @@ test("project context freshness treats changed dirty tracked content as stale", 
 });
 
 test("project context freshness includes untracked path and content in dirty fingerprints", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const baselineDirtyState = {
     staged: [],
     stagedDiff: Buffer.alloc(0),
@@ -868,7 +868,7 @@ test("project context freshness includes untracked path and content in dirty fin
 });
 
 test("project context freshness ignores DevFlow and agent-owned path changes", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const metadata = {
     generatedAt: "2026-05-23T10:00:00.000Z",
     gitHead: "0123456789abcdef0123456789abcdef01234567",
@@ -915,7 +915,7 @@ test("project context freshness ignores DevFlow and agent-owned path changes", a
 });
 
 test("project context freshness treats project-owned build and dependency paths as relevant", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-context-"));
+  const projectRoot = makeTempDir("devflow-state-context-");
   const metadata = {
     generatedAt: "2026-05-23T10:00:00.000Z",
     gitHead: "0123456789abcdef0123456789abcdef01234567",
@@ -961,7 +961,7 @@ test("project context freshness treats project-owned build and dependency paths 
 });
 
 test("createRun returns isolated run handles with opaque ids and persisted creation metadata", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
 
   const firstRun = await state.createRun();
@@ -1011,7 +1011,7 @@ test("createRun returns isolated run handles with opaque ids and persisted creat
 });
 
 test("createRun surfaces invalid generated run ids as domain errors", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const randomUuidMock = mock.method(crypto, "randomUUID", () => "INVALID-ID");
 
@@ -1027,7 +1027,7 @@ test("createRun surfaces invalid generated run ids as domain errors", async () =
 });
 
 test("run handles write canonical artifacts without exposing filenames to callers", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1059,7 +1059,7 @@ test("run handles write canonical artifacts without exposing filenames to caller
 });
 
 test("run handles write and read provider session state before grill checkpoint creation", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1092,7 +1092,7 @@ test("run handles write and read provider session state before grill checkpoint 
 });
 
 test("run handles reject malformed provider session state before writing state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1121,7 +1121,7 @@ test("run handles reject malformed provider session state before writing state",
 });
 
 test("run handles reject malformed persisted provider session json with a typed error", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1137,7 +1137,7 @@ test("run handles reject malformed persisted provider session json with a typed 
 });
 
 test("run handles record readable grill transcript message blocks and immutable completion", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1174,7 +1174,7 @@ test("run handles record readable grill transcript message blocks and immutable 
 });
 
 test("run handles validate and write grill checkpoint only after transcript completion", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
@@ -1206,7 +1206,7 @@ test("run handles validate and write grill checkpoint only after transcript comp
 });
 
 test("completed grill checkpoints can include associated provider session metadata", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
@@ -1236,7 +1236,7 @@ test("completed grill checkpoints can include associated provider session metada
 });
 
 test("provider session metadata does not make incomplete grill checkpoints trusted", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({
     projectRoot,
     clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
@@ -1271,7 +1271,7 @@ test("provider session metadata does not make incomplete grill checkpoints trust
 });
 
 test("run handles distinguish missing partial and completed grill transcripts", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1288,7 +1288,7 @@ test("run handles distinguish missing partial and completed grill transcripts", 
 });
 
 test("run handles recover missing or corrupt grill checkpoints from completed transcripts", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
   const checkpoint = {
@@ -1328,7 +1328,7 @@ test("run handles recover missing or corrupt grill checkpoints from completed tr
 });
 
 test("malformed provider session state does not prevent reading completed grill checkpoints", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
   const checkpoint = {
@@ -1355,7 +1355,7 @@ test("malformed provider session state does not prevent reading completed grill 
 });
 
 test("run handles reject checkpoint recovery from partial grill transcripts", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1380,7 +1380,7 @@ test("run handles reject checkpoint recovery from partial grill transcripts", as
 });
 
 test("run handles reject malformed grill checkpoints before writing state", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1408,7 +1408,7 @@ test("run handles reject malformed grill checkpoints before writing state", asyn
 });
 
 test("run artifact writes reject duplicates with a domain-specific error", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1425,7 +1425,7 @@ test("run artifact writes reject duplicates with a domain-specific error", async
 });
 
 test("run handles append execution records after an exclusive start header", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1488,7 +1488,7 @@ test("run handles append execution records after an exclusive start header", asy
 });
 
 test("run handles reject duplicate PRD and normalized issue artifact writes while retaining the first artifact", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1530,7 +1530,7 @@ test("run handles reject duplicate PRD and normalized issue artifact writes whil
 });
 
 test("run handles write issue artifacts through canonical normalized filenames", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1551,7 +1551,7 @@ test("run handles write issue artifacts through canonical normalized filenames",
 });
 
 test("run issue artifact writes reject invalid slugs before creating issue files", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 
@@ -1570,7 +1570,7 @@ test("run issue artifact writes reject invalid slugs before creating issue files
 });
 
 test("run issue artifact writes reject duplicates after slug normalization", async () => {
-  const projectRoot = fs.mkdtempSync(join(tmpdir(), "devflow-state-runs-"));
+  const projectRoot = makeTempDir("devflow-state-runs-");
   const state = createDevFlowState({ projectRoot });
   const run = await state.createRun();
 

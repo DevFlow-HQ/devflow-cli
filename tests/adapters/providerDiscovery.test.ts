@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
 import path from "node:path";
 import fs from "fs-extra";
 
@@ -15,6 +14,7 @@ import {
   type ProviderDiscoveryAdapter,
 } from "../../src/adapters/providerDiscovery.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 function createDiscoveryAdapter(
   options: ProviderDiscoveryAdapter,
 ): ProviderDiscoveryAdapter {
@@ -135,7 +135,7 @@ test("provider discovery defaults to the production built-in adapter factory", a
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "devflow-discovery-"));
+  const tempRoot = makeTempDir("devflow-discovery-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "codex");
 

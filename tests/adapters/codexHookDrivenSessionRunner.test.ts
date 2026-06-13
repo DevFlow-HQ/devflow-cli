@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "fs-extra";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -29,6 +28,7 @@ import {
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 import type { Logger } from "../../src/logger.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 class FakePtyProcess implements PtyProcess {
   readonly writes: string[] = [];
   readonly resizes: Array<{ columns: number; rows: number }> = [];
@@ -269,7 +269,7 @@ async function runHookScript(
 }
 
 test("Codex hook-driven runner writes per-run hook artifacts and completes a single phase from hook events", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const output: string[] = [];
   const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
@@ -407,10 +407,8 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
 });
 
 test("Codex hook-driven runner seeds auth.json from active source home before launch", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
-  const sourceCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-source-"),
-  );
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
+  const sourceCodexHome = makeTempDir("devflow-codex-source-");
   await fs.writeJson(join(sourceCodexHome, "auth.json"), {
     refresh_token: "source-refresh-token",
   });
@@ -460,7 +458,7 @@ test("Codex hook-driven runner seeds auth.json from active source home before la
 });
 
 test("Codex hook-driven runner advances continuations and submits prompts through PTY control", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
@@ -533,7 +531,7 @@ test("Codex hook-driven runner advances continuations and submits prompts throug
 });
 
 test("Codex hook-driven runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const output: string[] = [];
   const events: ManagedProviderSessionEvent[] = [];
   const userInput = new FakeUserInput();
@@ -619,7 +617,7 @@ test("Codex hook-driven runner keeps PTY control-only while mirroring output, st
 });
 
 test("Codex hook-driven runner forwards Ctrl-C and reports requested interruption on provider exit", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const userInput = new FakeUserInput();
   let interrupted = false;
   const spawner = new ScriptedCodexPtySpawner(async () => {
@@ -650,7 +648,7 @@ test("Codex hook-driven runner forwards Ctrl-C and reports requested interruptio
 });
 
 test("Codex hook-driven runner submits repair prompts and reports repair usage", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   let validateCalls = 0;
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
@@ -709,7 +707,7 @@ test("Codex hook-driven runner submits repair prompts and reports repair usage",
 });
 
 test("Codex hook-driven runner treats PTY exit before SessionStart as incomplete hook setup", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const spawner = new ScriptedCodexPtySpawner(async () => {
     spawner.process.emitExit(1);
   });
@@ -727,7 +725,7 @@ test("Codex hook-driven runner treats PTY exit before SessionStart as incomplete
 });
 
 test("Codex hook-driven runner treats PTY exit before final marker validation as incomplete", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
 
@@ -749,7 +747,7 @@ test("Codex hook-driven runner treats PTY exit before final marker validation as
 });
 
 test("Codex hook-driven runner times out when no SessionStart hook arrives", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const spawner = new ScriptedCodexPtySpawner(async () => {});
 
   await assert.rejects(
@@ -766,7 +764,7 @@ test("Codex hook-driven runner times out when no SessionStart hook arrives", asy
 });
 
 test("Codex hook-driven runner resolves success after graceful shutdown exits naturally", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
@@ -811,7 +809,7 @@ test("Codex hook-driven runner resolves success after graceful shutdown exits na
 });
 
 test("Codex hook-driven runner force-kills after valid completion and still resolves success", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const events: ManagedProviderSessionEvent[] = [];
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
@@ -857,7 +855,7 @@ test("Codex hook-driven runner force-kills after valid completion and still reso
 });
 
 test("Codex hook-driven runner raises cleanup errors only when shutdown force-kill throws", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const killError = new Error("kill failed");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
@@ -892,7 +890,7 @@ test("Codex hook-driven runner raises cleanup errors only when shutdown force-ki
 });
 
 test("Codex hook-driven runner rejects original failures while detached cleanup shuts down the PTY", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
 
@@ -935,7 +933,7 @@ test("Codex hook-driven runner rejects original failures while detached cleanup 
 });
 
 test("Codex hook-driven runner maps hook payload and provider event failures to event capture errors", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-hooks-"));
+  const projectRoot = makeTempDir("devflow-codex-hooks-");
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
 

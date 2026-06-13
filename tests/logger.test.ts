@@ -4,8 +4,8 @@ import test from "node:test";
 import fs from "fs-extra";
 
 import { createLogger } from "../src/logger.js";
-import { makeTempDir } from "./helpers/tempDir.js";
 
+import { makeTempDir } from "./helpers/tempDir.js";
 function createTempLogsDirectories() {
   return {
     repoLogsDirectory: makeTempDir("devflow-logs-repo-"),

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -11,6 +10,7 @@ import {
 } from "../../src/adapters/codexProviderHome.js";
 import type { ManagedProviderSessionInput } from "../../src/adapters/managedSessionAdapter.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 function createInput(
   projectRoot: string,
   overrides: Partial<ManagedProviderSessionInput> = {},
@@ -30,7 +30,7 @@ function createInput(
 }
 
 test("Codex provider home resolves to a run-scoped CODEX_HOME", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-codex-home-"));
+  const projectRoot = makeTempDir("devflow-codex-home-");
 
   assert.equal(
     getScopedCodexProviderHome(createInput(projectRoot)),
@@ -39,12 +39,8 @@ test("Codex provider home resolves to a run-scoped CODEX_HOME", async () => {
 });
 
 test("Codex credential seeding copies auth.json from explicit CODEX_HOME", async () => {
-  const sourceCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-source-"),
-  );
-  const scopedCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-scoped-"),
-  );
+  const sourceCodexHome = makeTempDir("devflow-codex-source-");
+  const scopedCodexHome = makeTempDir("devflow-codex-scoped-");
   await fs.writeJson(join(sourceCodexHome, "auth.json"), {
     refresh_token: "source-refresh-token",
   });
@@ -60,10 +56,8 @@ test("Codex credential seeding copies auth.json from explicit CODEX_HOME", async
 });
 
 test("Codex credential seeding falls back to home .codex", async () => {
-  const homeDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-codex-home-"));
-  const scopedCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-scoped-"),
-  );
+  const homeDirectory = makeTempDir("devflow-codex-home-");
+  const scopedCodexHome = makeTempDir("devflow-codex-scoped-");
   await fs.ensureDir(join(homeDirectory, ".codex"));
   await fs.writeJson(join(homeDirectory, ".codex", "auth.json"), {
     refresh_token: "home-refresh-token",
@@ -81,10 +75,8 @@ test("Codex credential seeding falls back to home .codex", async () => {
 });
 
 test("Codex credential seeding safely no-ops when source auth is missing", async () => {
-  const homeDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-codex-home-"));
-  const scopedCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-scoped-"),
-  );
+  const homeDirectory = makeTempDir("devflow-codex-home-");
+  const scopedCodexHome = makeTempDir("devflow-codex-scoped-");
 
   await seedCodexCredentials({
     codexHome: scopedCodexHome,
@@ -96,9 +88,7 @@ test("Codex credential seeding safely no-ops when source auth is missing", async
 });
 
 test("Codex credential seeding no-ops when source and scoped homes match", async () => {
-  const scopedCodexHome = await fs.mkdtemp(
-    join(tmpdir(), "devflow-codex-scoped-"),
-  );
+  const scopedCodexHome = makeTempDir("devflow-codex-scoped-");
   await fs.writeJson(join(scopedCodexHome, "auth.json"), {
     refresh_token: "already-scoped-refresh-token",
   });

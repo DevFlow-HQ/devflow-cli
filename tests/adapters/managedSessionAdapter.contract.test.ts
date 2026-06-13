@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
 import path from "node:path";
 import fs from "fs-extra";
 
@@ -39,6 +38,7 @@ import type { CodexJsonlSessionCommand } from "../../src/adapters/codexJsonlSess
 import type { PtyGracefulExitCommand } from "../../src/adapters/ptyControlHarness.js";
 import type { LogContext, Logger } from "../../src/logger.js";
 
+import { makeTempDir } from "../helpers/tempDir.js";
 interface AdapterContractHarness {
   providerId: BuiltInProviderId;
   command: string;
@@ -903,9 +903,7 @@ for (const harness of allProviderHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-${harness.command}-`),
-    );
+    const tempRoot = makeTempDir(`devflow-${harness.command}-`);
     const availableBinDir = path.join(tempRoot, "available-bin");
     const missingBinDir = path.join(tempRoot, "missing-bin");
 
@@ -991,9 +989,7 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-${harness.command}-pty-`),
-    );
+    const tempRoot = makeTempDir(`devflow-${harness.command}-pty-`);
     const binDir = path.join(tempRoot, "bin");
     const executablePath = path.join(binDir, harness.command);
 
@@ -1034,9 +1030,7 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-${harness.command}-model-`),
-    );
+    const tempRoot = makeTempDir(`devflow-${harness.command}-model-`);
     const binDir = path.join(tempRoot, "bin");
     const executablePath = path.join(binDir, harness.command);
 
@@ -1067,9 +1061,7 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const missingBinDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-${harness.command}-missing-run-`),
-    );
+    const missingBinDir = makeTempDir(`devflow-${harness.command}-missing-run-`);
 
     process.env.PATH = missingBinDir;
 
@@ -1094,9 +1086,7 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), `devflow-${harness.command}-run-`),
-    );
+    const tempRoot = makeTempDir(`devflow-${harness.command}-run-`);
     const binDir = path.join(tempRoot, "bin");
     const executablePath = path.join(binDir, harness.command);
 
@@ -1148,9 +1138,7 @@ test("Claude adapter delegates hook-mode sessions to the hook-driven runner", as
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-claude-hooks-adapter-"),
-  );
+  const tempRoot = makeTempDir("devflow-claude-hooks-adapter-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "claude");
 
@@ -1193,9 +1181,7 @@ test("Claude adapter delegates default sessions to the hook-driven runner", asyn
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-claude-default-hooks-adapter-"),
-  );
+  const tempRoot = makeTempDir("devflow-claude-default-hooks-adapter-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "claude");
 
@@ -1240,9 +1226,7 @@ test("Claude adapter does not relaunch hook-mode failures through JSONL", async 
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-claude-hooks-no-jsonl-fallback-"),
-  );
+  const tempRoot = makeTempDir("devflow-claude-hooks-no-jsonl-fallback-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "claude");
 
@@ -1287,9 +1271,7 @@ test("Claude adapter delegates fresh JSONL sessions to the JSONL runner", async 
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-claude-jsonl-adapter-"),
-  );
+  const tempRoot = makeTempDir("devflow-claude-jsonl-adapter-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "claude");
 
@@ -1336,9 +1318,7 @@ test("Claude adapter resumeSession delegates hook resume with native --resume fl
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-claude-hooks-resume-"),
-  );
+  const tempRoot = makeTempDir("devflow-claude-hooks-resume-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "claude");
 
@@ -1387,9 +1367,7 @@ test("Claude adapter resumeSession delegates hook resume without a model flag", 
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-claude-hooks-resume-no-model-"),
-  );
+  const tempRoot = makeTempDir("devflow-claude-hooks-resume-no-model-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "claude");
 
@@ -1427,9 +1405,7 @@ test("Claude adapter resumeSession delegates JSONL resume with native --resume f
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-claude-jsonl-resume-"),
-  );
+  const tempRoot = makeTempDir("devflow-claude-jsonl-resume-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, "claude");
 
@@ -1483,9 +1459,7 @@ test("Codex adapter runSession delegates provider startup config to the hook-dri
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-hooks-adapter-"),
-  );
+  const tempRoot = makeTempDir("devflow-codex-hooks-adapter-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, codexHarness.command);
 
@@ -1527,9 +1501,7 @@ test("Codex adapter runSession delegates exclusively to JSONL runner when select
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-jsonl-adapter-"),
-  );
+  const tempRoot = makeTempDir("devflow-codex-jsonl-adapter-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, codexHarness.command);
 
@@ -1577,9 +1549,7 @@ test("Codex adapter passes opaque model overrides through provider-native flags"
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-hooks-model-"),
-  );
+  const tempRoot = makeTempDir("devflow-codex-hooks-model-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, codexHarness.command);
 
@@ -1611,9 +1581,7 @@ test("Codex adapter resumeSession delegates hook resume with provider session id
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-hooks-resume-"),
-  );
+  const tempRoot = makeTempDir("devflow-codex-hooks-resume-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, codexHarness.command);
 
@@ -1663,9 +1631,7 @@ test("Codex adapter resumeSession delegates JSONL resume without putting prompt 
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-jsonl-resume-"),
-  );
+  const tempRoot = makeTempDir("devflow-codex-jsonl-resume-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, codexHarness.command);
 
@@ -1719,9 +1685,7 @@ test("Codex adapter maps launch-time executable resolution failures before hook 
     process.env.PATH = originalPath;
   });
 
-  const missingBinDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-hooks-missing-run-"),
-  );
+  const missingBinDir = makeTempDir("devflow-codex-hooks-missing-run-");
 
   process.env.PATH = missingBinDir;
 
@@ -1747,9 +1711,7 @@ test("built-in managed-session selection wires codex execution through the hook-
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-hooks-run-"),
-  );
+  const tempRoot = makeTempDir("devflow-codex-hooks-run-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, codexHarness.command);
 
@@ -1795,9 +1757,7 @@ test("built-in managed-session selection wires codex JSONL mode before launch", 
     process.env.PATH = originalPath;
   });
 
-  const tempRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "devflow-codex-jsonl-run-"),
-  );
+  const tempRoot = makeTempDir("devflow-codex-jsonl-run-");
   const binDir = path.join(tempRoot, "bin");
   const executablePath = path.join(binDir, codexHarness.command);
 
