@@ -103,7 +103,10 @@ export async function runCodexHookDrivenSession(
     await fs.ensureDir(codexHome);
     await fs.writeFile(
       join(codexHome, "config.toml"),
-      codexHookConfigToml({ hookScriptPath }),
+      codexHookConfigToml({
+        hookScriptPath,
+        workingDirectory: input.workingDirectory,
+      }),
       "utf8",
     );
     await fs.writeFile(hookScriptPath, codexHookScript(), {

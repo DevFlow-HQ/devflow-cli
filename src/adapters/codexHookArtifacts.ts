@@ -1,14 +1,25 @@
 export interface CodexHookConfigTomlInput {
   hookScriptPath: string;
+  workingDirectory: string;
+}
+
+export function codexTrustedProjectToml(workingDirectory: string): string {
+  return [
+    `[projects.${tomlString(workingDirectory)}]`,
+    `trust_level = "trusted"`,
+    "",
+  ].join("\n");
 }
 
 export function codexHookConfigToml({
   hookScriptPath,
+  workingDirectory,
 }: CodexHookConfigTomlInput): string {
   const command = `node ${shellQuote(hookScriptPath)}`;
   const handler = `{ hooks = [{ type = "command", command = ${tomlString(command)} }] }`;
 
   return [
+    codexTrustedProjectToml(workingDirectory),
     "[hooks]",
     `SessionStart = [${handler}]`,
     `UserPromptSubmit = [${handler}]`,

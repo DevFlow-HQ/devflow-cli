@@ -316,6 +316,13 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
   const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
 
   assert.equal(await fs.pathExists(join(codexHome, "config.toml")), true);
+  const configToml = await fs.readFile(join(codexHome, "config.toml"), "utf8");
+  assert.ok(configToml.includes(`[projects.${JSON.stringify(projectRoot)}]`));
+  assert.match(configToml, /^trust_level = "trusted"$/m);
+  assert.match(configToml, /^\[hooks\]$/m);
+  assert.match(configToml, /SessionStart = \[/);
+  assert.match(configToml, /UserPromptSubmit = \[/);
+  assert.match(configToml, /Stop = \[/);
   assert.equal(await fs.pathExists(join(codexHome, "hook.js")), true);
   assert.deepEqual(spawner.calls, [
     {
@@ -407,6 +414,11 @@ test("Codex hook-driven runner seeds auth.json from active source home before la
   await fs.writeJson(join(sourceCodexHome, "auth.json"), {
     refresh_token: "source-refresh-token",
   });
+  await fs.writeFile(
+    join(sourceCodexHome, "config.toml"),
+    "# user codex config\n",
+    "utf8",
+  );
 
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
@@ -440,6 +452,10 @@ test("Codex hook-driven runner seeds auth.json from active source home before la
   assert.deepEqual(await fs.readJson(join(scopedCodexHome, "auth.json")), {
     refresh_token: "source-refresh-token",
   });
+  assert.equal(
+    await fs.readFile(join(sourceCodexHome, "config.toml"), "utf8"),
+    "# user codex config\n",
+  );
   assert.equal(spawner.calls[0]?.options.env?.CODEX_HOME, scopedCodexHome);
 });
 
