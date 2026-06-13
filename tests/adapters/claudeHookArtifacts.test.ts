@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -10,9 +9,10 @@ import {
   createClaudeHookArtifacts,
 } from "../../src/adapters/claudeHookArtifacts.js";
 import { installClaudeHookSettings } from "../../src/adapters/claudeHookSettings.js";
+import { makeTempDir } from "../helpers/tempDir.js";
 
 test("claude hook artifacts create a run-scoped executable forwarding script", async () => {
-  const runDirectory = await fs.mkdtemp(join(tmpdir(), "devflow-claude-run-"));
+  const runDirectory = makeTempDir("devflow-claude-run-");
   const hookDirectory = join(runDirectory, ".claude-hooks");
 
   const artifacts = await createClaudeHookArtifacts({ hookDirectory });
@@ -26,7 +26,7 @@ test("claude hook artifacts create a run-scoped executable forwarding script", a
 });
 
 test("claude hook artifacts are compatible with scoped config settings entries", async () => {
-  const projectRoot = await fs.mkdtemp(join(tmpdir(), "devflow-project-"));
+  const projectRoot = makeTempDir("devflow-project-");
   const configDirectory = join(projectRoot, ".devflow", "runs", "run-1", ".claude");
   const artifacts = await createClaudeHookArtifacts({
     hookDirectory: join(configDirectory, "devflow-hooks"),

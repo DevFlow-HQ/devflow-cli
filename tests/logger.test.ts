@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import fs from "fs-extra";
 
 import { createLogger } from "../src/logger.js";
+import { makeTempDir } from "./helpers/tempDir.js";
 
 function createTempLogsDirectories() {
   return {
-    repoLogsDirectory: fs.mkdtempSync(join(tmpdir(), "devflow-logs-repo-")),
-    homeLogsDirectory: fs.mkdtempSync(join(tmpdir(), "devflow-logs-home-")),
+    repoLogsDirectory: makeTempDir("devflow-logs-repo-"),
+    homeLogsDirectory: makeTempDir("devflow-logs-home-"),
   };
 }
 
@@ -133,7 +133,7 @@ test("logger serializes errors and critical refs only on critical entries", () =
 });
 
 test("logger falls back to home logs and never throws when writes fail", () => {
-  const root = fs.mkdtempSync(join(tmpdir(), "devflow-logs-fallback-"));
+  const root = makeTempDir("devflow-logs-fallback-");
   const repoLogsDirectory = join(root, "repo-logs-file");
   const homeLogsDirectory = join(root, "home-logs");
   fs.writeFileSync(repoLogsDirectory, "not a directory");
