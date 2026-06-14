@@ -507,11 +507,24 @@ test("Claude JSONL runner seeds credentials for launch and deletes them after co
   await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
     token: "source-token",
   });
+  await fs.writeJson(join(sourceConfigDirectory, ".claude.json"), {
+    userID: "jsonl-user",
+    oauthAccount: { emailAddress: "jsonl@example.com" },
+  });
 
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
     assert.deepEqual(await fs.readJson(join(claudeHome, ".credentials.json")), {
       token: "source-token",
+    });
+    assert.deepEqual(await fs.readJson(join(claudeHome, ".claude.json")), {
+      hasCompletedOnboarding: true,
+      shiftEnterKeyBindingInstalled: true,
+      userID: "jsonl-user",
+      oauthAccount: { emailAddress: "jsonl@example.com" },
+      projects: {
+        [projectRoot]: { hasTrustDialogAccepted: true },
+      },
     });
     await appendTranscriptRecord(claudeHome, transcript, {
       type: "assistant",
@@ -612,6 +625,25 @@ test("Claude JSONL runner wraps macOS credential seeding failures as launch erro
     (error) =>
       error instanceof ProviderSessionLaunchError &&
       (error as Error & { cause?: unknown }).cause === failure,
+  );
+  assert.deepEqual(spawner.calls, []);
+});
+
+test("Claude JSONL runner wraps config state seeding failures as launch errors", async () => {
+  const projectRoot = makeTempDir("devflow-claude-jsonl-");
+  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
+  const spawner = new ScriptedClaudePtySpawner(async () => {});
+
+  await fs.ensureDir(join(sourceConfigDirectory, ".claude.json"));
+
+  await assert.rejects(
+    runClaudeJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      platform: "linux",
+      environment: { CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    }),
+    ProviderSessionLaunchError,
   );
   assert.deepEqual(spawner.calls, []);
 });

@@ -11,6 +11,7 @@ import {
 import {
   deleteClaudeCredentials,
   getScopedClaudeProviderHome,
+  seedClaudeConfigState,
   seedClaudeCredentials,
 } from "./claudeProviderHome.js";
 import type { readMacosKeychainCredential } from "./readMacosKeychainCredential.js";
@@ -114,6 +115,12 @@ export async function runClaudeJsonlSession(
       platform,
       homeDirectory: dependencies.homeDirectory,
       readMacosKeychainCredential: dependencies.readMacosKeychainCredential,
+    });
+    await seedClaudeConfigState({
+      claudeConfigDirectory: claudeHome,
+      environment,
+      homeDirectory: dependencies.homeDirectory,
+      workingDirectory: input.workingDirectory,
     });
     await fs.ensureDir(claudeHome);
   } catch (error) {

@@ -465,6 +465,10 @@ test("Claude hook-driven runner seeds credentials for launch and deletes them af
   await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
     token: "source-token",
   });
+  await fs.writeJson(join(sourceConfigDirectory, ".claude.json"), {
+    userID: "hooks-user",
+    oauthAccount: { emailAddress: "hooks@example.com" },
+  });
 
   const scopedConfigDirectory = join(
     projectRoot,
@@ -477,6 +481,15 @@ test("Claude hook-driven runner seeds credentials for launch and deletes them af
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     assert.deepEqual(await fs.readJson(join(scopedConfigDirectory, ".credentials.json")), {
       token: "source-token",
+    });
+    assert.deepEqual(await fs.readJson(join(scopedConfigDirectory, ".claude.json")), {
+      hasCompletedOnboarding: true,
+      shiftEnterKeyBindingInstalled: true,
+      userID: "hooks-user",
+      oauthAccount: { emailAddress: "hooks@example.com" },
+      projects: {
+        [projectRoot]: { hasTrustDialogAccepted: true },
+      },
     });
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
@@ -610,6 +623,26 @@ test("Claude hook-driven runner fails before launch when existing credentials ca
       firstEventTimeoutMs: 1_000,
       platform: "linux",
       environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    }),
+    ProviderSessionLaunchError,
+  );
+  assert.deepEqual(spawner.calls, []);
+});
+
+test("Claude hook-driven runner wraps config state seeding failures as launch errors", async () => {
+  const projectRoot = makeTempDir("devflow-claude-hooks-");
+  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
+  const spawner = new ScriptedClaudePtySpawner(async () => {});
+
+  await fs.ensureDir(join(sourceConfigDirectory, ".claude.json"));
+
+  await assert.rejects(
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      firstEventTimeoutMs: 1_000,
+      platform: "linux",
+      environment: { CLAUDE_CONFIG_DIR: sourceConfigDirectory },
     }),
     ProviderSessionLaunchError,
   );

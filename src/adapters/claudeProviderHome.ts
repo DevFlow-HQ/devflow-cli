@@ -18,6 +18,13 @@ export interface DeleteClaudeCredentialsOptions {
   claudeConfigDirectory: string;
 }
 
+export interface SeedClaudeConfigStateOptions {
+  claudeConfigDirectory: string;
+  environment: NodeJS.ProcessEnv;
+  workingDirectory: string;
+  homeDirectory?: string;
+}
+
 export function getScopedClaudeProviderHome(
   input: ManagedProviderSessionInput,
 ): string {
@@ -70,6 +77,43 @@ export async function seedClaudeCredentials({
 
   await fs.ensureDir(claudeConfigDirectory);
   await fs.copyFile(sourceCredentialsPath, targetCredentialsPath);
+}
+
+export async function seedClaudeConfigState({
+  claudeConfigDirectory,
+  environment,
+  workingDirectory,
+  homeDirectory,
+}: SeedClaudeConfigStateOptions): Promise<void> {
+  const targetConfigPath = join(claudeConfigDirectory, ".claude.json");
+
+  if (await fs.pathExists(targetConfigPath)) {
+    return;
+  }
+
+  const sourceConfigPath = environment.CLAUDE_CONFIG_DIR
+    ? join(environment.CLAUDE_CONFIG_DIR, ".claude.json")
+    : join(homeDirectory ?? homedir(), ".claude.json");
+  const sourceConfig = (await fs.pathExists(sourceConfigPath))
+    ? await fs.readJson(sourceConfigPath)
+    : {};
+
+  await fs.ensureDir(claudeConfigDirectory);
+  await fs.writeJson(
+    targetConfigPath,
+    {
+      hasCompletedOnboarding: true,
+      shiftEnterKeyBindingInstalled: true,
+      userID: sourceConfig.userID,
+      oauthAccount: sourceConfig.oauthAccount,
+      projects: {
+        [workingDirectory]: {
+          hasTrustDialogAccepted: true,
+        },
+      },
+    },
+    { spaces: 2 },
+  );
 }
 
 export async function deleteClaudeCredentials({

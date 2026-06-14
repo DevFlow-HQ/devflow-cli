@@ -6,6 +6,7 @@ import fs from "fs-extra";
 
 import {
   deleteClaudeCredentials,
+  seedClaudeConfigState,
   seedClaudeCredentials,
 } from "../../src/adapters/claudeProviderHome.js";
 
@@ -75,4 +76,94 @@ test("Claude credential deletion removes scoped credentials and tolerates absenc
   await deleteClaudeCredentials({ claudeConfigDirectory: scopedHome });
 
   assert.equal(await fs.pathExists(target), false);
+});
+
+test("Claude config state seeding creates scoped onboarding and trust state from configured source", async () => {
+  const scopedHome = makeTempDir("devflow-claude-scoped-");
+  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
+  const projectRoot = makeTempDir("devflow-project-");
+
+  await fs.writeJson(join(sourceConfigDirectory, ".claude.json"), {
+    userID: "user_123",
+    oauthAccount: {
+      emailAddress: "user@example.com",
+      organizationRole: "admin",
+    },
+  });
+
+  await seedClaudeConfigState({
+    claudeConfigDirectory: scopedHome,
+    environment: { CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    workingDirectory: projectRoot,
+  });
+
+  assert.deepEqual(await fs.readJson(join(scopedHome, ".claude.json")), {
+    hasCompletedOnboarding: true,
+    shiftEnterKeyBindingInstalled: true,
+    userID: "user_123",
+    oauthAccount: {
+      emailAddress: "user@example.com",
+      organizationRole: "admin",
+    },
+    projects: {
+      [projectRoot]: {
+        hasTrustDialogAccepted: true,
+      },
+    },
+  });
+});
+
+test("Claude config state seeding falls back to home .claude.json without CLAUDE_CONFIG_DIR", async () => {
+  const scopedHome = makeTempDir("devflow-claude-scoped-");
+  const sourceHome = makeTempDir("devflow-claude-home-");
+  const projectRoot = makeTempDir("devflow-project-");
+
+  await fs.writeJson(join(sourceHome, ".claude.json"), {
+    userID: "home-user",
+    oauthAccount: { accountUuid: "account-from-home" },
+  });
+
+  await seedClaudeConfigState({
+    claudeConfigDirectory: scopedHome,
+    environment: {},
+    homeDirectory: sourceHome,
+    workingDirectory: projectRoot,
+  });
+
+  assert.deepEqual(await fs.readJson(join(scopedHome, ".claude.json")), {
+    hasCompletedOnboarding: true,
+    shiftEnterKeyBindingInstalled: true,
+    userID: "home-user",
+    oauthAccount: { accountUuid: "account-from-home" },
+    projects: {
+      [projectRoot]: {
+        hasTrustDialogAccepted: true,
+      },
+    },
+  });
+});
+
+test("Claude config state seeding never overwrites existing scoped state", async () => {
+  const scopedHome = makeTempDir("devflow-claude-scoped-");
+  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
+  const existingState = {
+    hasCompletedOnboarding: false,
+    projects: {
+      "/previous/project": { hasTrustDialogAccepted: true },
+    },
+  };
+
+  await fs.writeJson(join(scopedHome, ".claude.json"), existingState);
+  await fs.writeJson(join(sourceConfigDirectory, ".claude.json"), {
+    userID: "new-user",
+    oauthAccount: { emailAddress: "new@example.com" },
+  });
+
+  await seedClaudeConfigState({
+    claudeConfigDirectory: scopedHome,
+    environment: { CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    workingDirectory: "/new/project",
+  });
+
+  assert.deepEqual(await fs.readJson(join(scopedHome, ".claude.json")), existingState);
 });

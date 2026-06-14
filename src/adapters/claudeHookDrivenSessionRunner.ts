@@ -6,6 +6,7 @@ import {
   deleteClaudeCredentials,
   getClaudeHookDirectory,
   getScopedClaudeProviderHome,
+  seedClaudeConfigState,
   seedClaudeCredentials,
 } from "./claudeProviderHome.js";
 import type { readMacosKeychainCredential } from "./readMacosKeychainCredential.js";
@@ -104,6 +105,12 @@ export async function runClaudeHookDrivenSession(
       platform,
       homeDirectory: dependencies.homeDirectory,
       readMacosKeychainCredential: dependencies.readMacosKeychainCredential,
+    });
+    await seedClaudeConfigState({
+      claudeConfigDirectory,
+      environment,
+      homeDirectory: dependencies.homeDirectory,
+      workingDirectory: input.workingDirectory,
     });
     await installClaudeHookSettings({
       configDirectory: claudeConfigDirectory,
