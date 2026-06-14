@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-06-09_
+_Last updated: 2026-06-14_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md` and `new_spec.md`.
 Hard limit: 100 lines.
@@ -31,6 +31,7 @@ Hard limit: 100 lines.
   - `README.md` now presents DevFlow as an early experimental CLI, documents only Claude and Codex as supported providers, leads with working from-source install steps, marks `npm install -g devflow-cli` as not yet on npm, states that the command is `devflow`, includes a first-run example, and links deeper architecture to `CONTEXT.md`.
 - Claude and Codex JSONL post-exit drain race is fixed: both runners keep serialized structured-log drains alive after PTY exit until marker finalization or the existing early-exit timeout, with deterministic `read-in-progress` regression coverage and 100-run Claude JSONL stress verification.
 - Global linked CLI entrypoint is fixed: `src/cli.ts` now resolves symlinked bin paths before deciding whether to run, with regression coverage for npm/Volta-style symlink execution.
+- Claude scoped credential lifetime is bounded to completed structured sessions: JSONL and hook-driven runners delete scoped `.credentials.json` during successful cleanup, tolerate absent credentials, and keep launch-time credential seeding available to Claude.
 
 ## Current State
 - The working pipeline is active through `intent`, `bootstrap`, `grill`, `prd`, `issues`, and `execute`.
@@ -39,7 +40,7 @@ Hard limit: 100 lines.
 - Codex hook/JSONL and Claude hook/JSONL structured paths use the shared PTY control harness for process control and normalized provider events as the data plane.
 - End-user release-facing files now exist and align with the supported-provider boundary: `README.md`, `LICENSE`, and publish metadata in `package.json`.
 - No AFK issues remain in `.agent/task_progress.md` or `.agent/issues/done` for the current release/docs, project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, diagnostic logging, completion-marker prompt, provider selection deferral, or PTY control harness workstreams.
-- Latest completed maintenance entry: global linked CLI entrypoint fix is complete and verified through the Volta `devflow` shim.
+- Latest completed maintenance entry: Claude completed-session cleanup now deletes scoped materialized credentials and is verified with `npm run test` and `npm run typecheck`.
 
 ## Known Remaining Work
 1. Future provider work:
