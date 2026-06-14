@@ -548,12 +548,9 @@ test("Claude hook-driven runner allows missing source credentials on Windows", a
   );
 });
 
-test("Claude hook-driven runner does not seed credentials on macOS", async () => {
+test("Claude hook-driven runner materializes macOS Keychain credentials into scoped home", async () => {
   const projectRoot = makeTempDir("devflow-claude-hooks-");
-  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
-  await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
-    token: "source-token",
-  });
+  const credential = '{"claudeAiOauth":{"accessToken":"keychain-token"}}';
 
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
@@ -574,11 +571,12 @@ test("Claude hook-driven runner does not seed credentials on macOS", async () =>
     outputSink: { write() {} },
     firstEventTimeoutMs: 1_000,
     platform: "darwin",
-    environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+    environment: {},
+    readMacosKeychainCredential: async () => credential,
   });
 
   assert.equal(
-    await fs.pathExists(
+    await fs.readFile(
       join(
         projectRoot,
         ".devflow",
@@ -587,8 +585,9 @@ test("Claude hook-driven runner does not seed credentials on macOS", async () =>
         ".claude",
         ".credentials.json",
       ),
+      "utf8",
     ),
-    false,
+    credential,
   );
 });
 

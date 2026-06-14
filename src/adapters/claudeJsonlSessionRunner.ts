@@ -12,6 +12,7 @@ import {
   getScopedClaudeProviderHome,
   seedClaudeCredentials,
 } from "./claudeProviderHome.js";
+import type { readMacosKeychainCredential } from "./readMacosKeychainCredential.js";
 import {
   createJsonlTailEventSource,
   type JsonlTailEventSource,
@@ -72,6 +73,7 @@ export interface ClaudeJsonlSessionDependencies {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   homeDirectory?: string;
+  readMacosKeychainCredential?: typeof readMacosKeychainCredential;
   jsonlEventSourceFactory?: (
     options: JsonlTailEventSourceOptions,
   ) => JsonlTailEventSource;
@@ -110,6 +112,7 @@ export async function runClaudeJsonlSession(
       environment,
       platform,
       homeDirectory: dependencies.homeDirectory,
+      readMacosKeychainCredential: dependencies.readMacosKeychainCredential,
     });
     await fs.ensureDir(claudeHome);
   } catch (error) {

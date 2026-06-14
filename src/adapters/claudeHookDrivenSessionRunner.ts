@@ -7,6 +7,7 @@ import {
   getScopedClaudeProviderHome,
   seedClaudeCredentials,
 } from "./claudeProviderHome.js";
+import type { readMacosKeychainCredential } from "./readMacosKeychainCredential.js";
 import {
   IncompleteProviderSessionError,
   InterruptedProviderSessionError,
@@ -61,6 +62,7 @@ export interface ClaudeHookDrivenSessionDependencies {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   homeDirectory?: string;
+  readMacosKeychainCredential?: typeof readMacosKeychainCredential;
 }
 
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 30_000;
@@ -100,6 +102,7 @@ export async function runClaudeHookDrivenSession(
       environment,
       platform,
       homeDirectory: dependencies.homeDirectory,
+      readMacosKeychainCredential: dependencies.readMacosKeychainCredential,
     });
     await installClaudeHookSettings({
       configDirectory: claudeConfigDirectory,

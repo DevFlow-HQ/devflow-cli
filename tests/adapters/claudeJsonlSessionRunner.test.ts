@@ -11,6 +11,7 @@ import {
   type ManagedProviderSessionInput,
   ProviderSessionCleanupError,
   ProviderSessionEventCaptureError,
+  ProviderSessionLaunchError,
 } from "../../src/adapters/managedSessionAdapter.js";
 import type {
   JsonlTailEventSource,
@@ -543,16 +544,12 @@ test("Claude JSONL runner seeds scoped credentials without installing hook setti
   assert.equal(await fs.pathExists(join(claudeHome, "devflow-hooks")), false);
 });
 
-test("Claude JSONL runner preserves macOS credential seeding skip", async () => {
+test("Claude JSONL runner materializes macOS Keychain credentials into scoped home", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
   const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
-
-  await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
-    token: "source-token",
-  });
+  const credential = '{"claudeAiOauth":{"accessToken":"keychain-token"}}';
 
   const spawner = new ScriptedClaudePtySpawner(async () => {
     await appendTranscriptRecord(claudeHome, transcript, {
@@ -578,11 +575,37 @@ test("Claude JSONL runner preserves macOS credential seeding skip", async () => 
       locatorTimeoutMs: 1_000,
       firstEventTimeoutMs: 1_000,
       platform: "darwin",
-      environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+      environment: {},
+      readMacosKeychainCredential: async () => credential,
     },
   );
 
-  assert.equal(await fs.pathExists(join(claudeHome, ".credentials.json")), false);
+  assert.equal(
+    await fs.readFile(join(claudeHome, ".credentials.json"), "utf8"),
+    credential,
+  );
+});
+
+test("Claude JSONL runner wraps macOS credential seeding failures as launch errors", async () => {
+  const projectRoot = makeTempDir("devflow-claude-jsonl-");
+  const failure = new Error("Keychain unavailable");
+  const spawner = new ScriptedClaudePtySpawner(async () => {});
+
+  await assert.rejects(
+    runClaudeJsonlSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      outputSink: { write() {} },
+      platform: "darwin",
+      environment: {},
+      readMacosKeychainCredential: async () => {
+        throw failure;
+      },
+    }),
+    (error) =>
+      error instanceof ProviderSessionLaunchError &&
+      (error as Error & { cause?: unknown }).cause === failure,
+  );
+  assert.deepEqual(spawner.calls, []);
 });
 
 test("Claude JSONL runner classifies human user records and suppresses managed prompt echoes", async () => {
