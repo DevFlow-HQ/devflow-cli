@@ -9,6 +9,7 @@ import {
   locateClaudeSessionLogForProvider,
 } from "./claudeSessionLogLocator.js";
 import {
+  deleteClaudeCredentials,
   getScopedClaudeProviderHome,
   seedClaudeCredentials,
 } from "./claudeProviderHome.js";
@@ -180,6 +181,7 @@ export async function runClaudeJsonlSession(
               command: command.gracefulExitCommand,
               timeoutMs: cleanupTimeoutMs,
             });
+            await deleteClaudeCredentials({ claudeConfigDirectory: claudeHome });
           } catch (error) {
             throw new ProviderSessionCleanupError(command.provider, error);
           }
@@ -312,6 +314,12 @@ export async function runClaudeJsonlSession(
       }
 
       settleSuccess(async () => {
+        try {
+          await deleteClaudeCredentials({ claudeConfigDirectory: claudeHome });
+        } catch (error) {
+          throw new ProviderSessionCleanupError(command.provider, error);
+        }
+
         await emitSessionCompleted();
         return createResult();
       });

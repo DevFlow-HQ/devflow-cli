@@ -497,7 +497,7 @@ test("Claude JSONL runner completes a fresh first turn from a scoped transcript"
   });
 });
 
-test("Claude JSONL runner seeds scoped credentials without installing hook settings", async () => {
+test("Claude JSONL runner seeds credentials for launch and deletes them after completion without installing hook settings", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
   const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
   const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
@@ -510,6 +510,9 @@ test("Claude JSONL runner seeds scoped credentials without installing hook setti
 
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
+    assert.deepEqual(await fs.readJson(join(claudeHome, ".credentials.json")), {
+      token: "source-token",
+    });
     await appendTranscriptRecord(claudeHome, transcript, {
       type: "assistant",
       sessionId: "claude-session-1",
@@ -537,14 +540,15 @@ test("Claude JSONL runner seeds scoped credentials without installing hook setti
     },
   );
 
-  assert.deepEqual(await fs.readJson(join(claudeHome, ".credentials.json")), {
-    token: "source-token",
-  });
+  assert.equal(
+    await fs.pathExists(join(claudeHome, ".credentials.json")),
+    false,
+  );
   assert.equal(await fs.pathExists(join(claudeHome, "settings.local.json")), false);
   assert.equal(await fs.pathExists(join(claudeHome, "devflow-hooks")), false);
 });
 
-test("Claude JSONL runner materializes macOS Keychain credentials into scoped home", async () => {
+test("Claude JSONL runner deletes materialized macOS credentials after completion", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
   const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
@@ -552,6 +556,10 @@ test("Claude JSONL runner materializes macOS Keychain credentials into scoped ho
   const credential = '{"claudeAiOauth":{"accessToken":"keychain-token"}}';
 
   const spawner = new ScriptedClaudePtySpawner(async () => {
+    assert.equal(
+      await fs.readFile(join(claudeHome, ".credentials.json"), "utf8"),
+      credential,
+    );
     await appendTranscriptRecord(claudeHome, transcript, {
       type: "assistant",
       sessionId: "claude-session-1",
@@ -581,8 +589,8 @@ test("Claude JSONL runner materializes macOS Keychain credentials into scoped ho
   );
 
   assert.equal(
-    await fs.readFile(join(claudeHome, ".credentials.json"), "utf8"),
-    credential,
+    await fs.pathExists(join(claudeHome, ".credentials.json")),
+    false,
   );
 });
 

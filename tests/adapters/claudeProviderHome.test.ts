@@ -4,7 +4,10 @@ import test from "node:test";
 
 import fs from "fs-extra";
 
-import { seedClaudeCredentials } from "../../src/adapters/claudeProviderHome.js";
+import {
+  deleteClaudeCredentials,
+  seedClaudeCredentials,
+} from "../../src/adapters/claudeProviderHome.js";
 
 import { makeTempDir } from "../helpers/tempDir.js";
 
@@ -57,4 +60,19 @@ test("Claude credential seeding still copies source credentials off macOS", asyn
   assert.deepEqual(await fs.readJson(join(scopedHome, ".credentials.json")), {
     token: "source-token",
   });
+});
+
+test("Claude credential deletion removes scoped credentials and tolerates absence", async () => {
+  const scopedHome = makeTempDir("devflow-claude-scoped-");
+  const target = join(scopedHome, ".credentials.json");
+
+  await fs.writeJson(target, { token: "scoped-token" });
+
+  await deleteClaudeCredentials({ claudeConfigDirectory: scopedHome });
+
+  assert.equal(await fs.pathExists(target), false);
+
+  await deleteClaudeCredentials({ claudeConfigDirectory: scopedHome });
+
+  assert.equal(await fs.pathExists(target), false);
 });

@@ -3,6 +3,7 @@ import { normalizeClaudeHookPayload } from "./claudeHookEventSource.js";
 import { resolveHookSocketPath } from "./hookSocketPath.js";
 import { installClaudeHookSettings } from "./claudeHookSettings.js";
 import {
+  deleteClaudeCredentials,
   getClaudeHookDirectory,
   getScopedClaudeProviderHome,
   seedClaudeCredentials,
@@ -155,6 +156,9 @@ export async function runClaudeHookDrivenSession(
               command: command.gracefulExitCommand,
               timeoutMs: cleanupTimeoutMs,
             });
+            await deleteClaudeCredentials({
+              claudeConfigDirectory,
+            });
           } catch (error) {
             throw new ProviderSessionCleanupError(command.provider, error);
           }
@@ -237,6 +241,14 @@ export async function runClaudeHookDrivenSession(
       }
 
       settleSuccess(async () => {
+        try {
+          await deleteClaudeCredentials({
+            claudeConfigDirectory,
+          });
+        } catch (error) {
+          throw new ProviderSessionCleanupError(command.provider, error);
+        }
+
         await emitSessionCompleted();
         return createResult();
       });

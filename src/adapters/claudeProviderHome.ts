@@ -14,6 +14,10 @@ export interface SeedClaudeCredentialsOptions {
   readMacosKeychainCredential?: () => Promise<string | null>;
 }
 
+export interface DeleteClaudeCredentialsOptions {
+  claudeConfigDirectory: string;
+}
+
 export function getScopedClaudeProviderHome(
   input: ManagedProviderSessionInput,
 ): string {
@@ -66,4 +70,10 @@ export async function seedClaudeCredentials({
 
   await fs.ensureDir(claudeConfigDirectory);
   await fs.copyFile(sourceCredentialsPath, targetCredentialsPath);
+}
+
+export async function deleteClaudeCredentials({
+  claudeConfigDirectory,
+}: DeleteClaudeCredentialsOptions): Promise<void> {
+  await fs.remove(join(claudeConfigDirectory, ".credentials.json"));
 }

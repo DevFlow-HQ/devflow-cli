@@ -459,14 +459,25 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
   assert.equal(validateCount, 1);
 });
 
-test("Claude hook-driven runner seeds credentials from active source profile on linux", async () => {
+test("Claude hook-driven runner seeds credentials for launch and deletes them after completion on linux", async () => {
   const projectRoot = makeTempDir("devflow-claude-hooks-");
   const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
   await fs.writeJson(join(sourceConfigDirectory, ".credentials.json"), {
     token: "source-token",
   });
 
+  const scopedConfigDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
+
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.deepEqual(await fs.readJson(join(scopedConfigDirectory, ".credentials.json")), {
+      token: "source-token",
+    });
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
       matcher: "startup",
@@ -488,16 +499,9 @@ test("Claude hook-driven runner seeds credentials from active source profile on 
     environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
   });
 
-  const scopedConfigDirectory = join(
-    projectRoot,
-    ".devflow",
-    "runs",
-    "runabc123456",
-    ".claude",
-  );
-  assert.deepEqual(
-    await fs.readJson(join(scopedConfigDirectory, ".credentials.json")),
-    { token: "source-token" },
+  assert.equal(
+    await fs.pathExists(join(scopedConfigDirectory, ".credentials.json")),
+    false,
   );
   assert.equal(
     await fs.pathExists(join(scopedConfigDirectory, "settings.local.json")),
@@ -548,11 +552,23 @@ test("Claude hook-driven runner allows missing source credentials on Windows", a
   );
 });
 
-test("Claude hook-driven runner materializes macOS Keychain credentials into scoped home", async () => {
+test("Claude hook-driven runner deletes materialized macOS credentials after completion", async () => {
   const projectRoot = makeTempDir("devflow-claude-hooks-");
   const credential = '{"claudeAiOauth":{"accessToken":"keychain-token"}}';
 
+  const scopedConfigDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
+
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
+    assert.equal(
+      await fs.readFile(join(scopedConfigDirectory, ".credentials.json"), "utf8"),
+      credential,
+    );
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
       matcher: "startup",
@@ -576,18 +592,8 @@ test("Claude hook-driven runner materializes macOS Keychain credentials into sco
   });
 
   assert.equal(
-    await fs.readFile(
-      join(
-        projectRoot,
-        ".devflow",
-        "runs",
-        "runabc123456",
-        ".claude",
-        ".credentials.json",
-      ),
-      "utf8",
-    ),
-    credential,
+    await fs.pathExists(join(scopedConfigDirectory, ".credentials.json")),
+    false,
   );
 });
 
