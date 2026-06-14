@@ -1,7 +1,10 @@
 import { createClaudeHookArtifacts } from "./claudeHookArtifacts.js";
 import { normalizeClaudeHookPayload } from "./claudeHookEventSource.js";
 import { resolveHookSocketPath } from "./hookSocketPath.js";
-import { installClaudeHookSettings } from "./claudeHookSettings.js";
+import {
+  cleanupClaudeHookSettings,
+  installClaudeHookSettings,
+} from "./claudeHookSettings.js";
 import {
   deleteClaudeCredentials,
   getClaudeHookDirectory,
@@ -166,6 +169,11 @@ export async function runClaudeHookDrivenSession(
             await deleteClaudeCredentials({
               claudeConfigDirectory,
             });
+            await cleanupClaudeHookSettings({
+              configDirectory: claudeConfigDirectory,
+              hookScriptPath: artifacts.hookScriptPath,
+              deleteIfEmptyAndCreatedByDevFlow: true,
+            });
           } catch (error) {
             throw new ProviderSessionCleanupError(command.provider, error);
           }
@@ -251,6 +259,11 @@ export async function runClaudeHookDrivenSession(
         try {
           await deleteClaudeCredentials({
             claudeConfigDirectory,
+          });
+          await cleanupClaudeHookSettings({
+            configDirectory: claudeConfigDirectory,
+            hookScriptPath: artifacts.hookScriptPath,
+            deleteIfEmptyAndCreatedByDevFlow: true,
           });
         } catch (error) {
           throw new ProviderSessionCleanupError(command.provider, error);
@@ -469,7 +482,7 @@ function formatMissingSessionStartDiagnostic(
 ): string {
   return [
     "Claude SessionStart hook did not arrive; hook setup may have failed.",
-    "Check the run-scoped Claude settings.local.json for DevFlow hook entries,",
+    "Check the run-scoped Claude settings.json for DevFlow hook entries,",
     "ensure Claude disabled hooks settings or managed policy are not blocking hooks,",
     `verify the hook script exists and can run at ${hookScriptPath},`,
     `and confirm the hook socket is reachable at ${socketPath}.`,

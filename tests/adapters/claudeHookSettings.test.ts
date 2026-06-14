@@ -11,19 +11,22 @@ import {
 } from "../../src/adapters/claudeHookSettings.js";
 
 import { makeTempDir } from "../helpers/tempDir.js";
-test("claude hook settings setup writes only scoped local settings", async () => {
+test("claude hook settings setup writes only scoped user settings", async () => {
   const configDirectory = makeTempDir("devflow-claude-settings-");
   const hookScriptPath = join(configDirectory, "devflow-hooks", "hook.js");
 
   await installClaudeHookSettings({ configDirectory, hookScriptPath });
 
-  assert.equal(await fs.pathExists(join(configDirectory, "settings.local.json")), true);
-  assert.equal(await fs.pathExists(join(configDirectory, "settings.json")), false);
+  assert.equal(await fs.pathExists(join(configDirectory, "settings.json")), true);
+  assert.equal(
+    await fs.pathExists(join(configDirectory, "settings.local.json")),
+    false,
+  );
 });
 
 test("claude hook settings setup preserves settings and appends DevFlow hooks", async () => {
   const configDirectory = makeTempDir("devflow-claude-settings-");
-  const settingsPath = join(configDirectory, "settings.local.json");
+  const settingsPath = join(configDirectory, "settings.json");
   const userStopHook = {
     hooks: [{ type: "command", command: "node user-stop.js" }],
   };
@@ -46,12 +49,31 @@ test("claude hook settings setup preserves settings and appends DevFlow hooks", 
 
   const settings = await fs.readJson(settingsPath);
   assert.deepEqual(settings.permissions, { allow: ["Bash(npm test)"] });
-  assert.equal(settings.hooks.SessionStart.length, 1);
+  assert.equal(settings.hooks.SessionStart.length, 2);
   assert.equal(settings.hooks.UserPromptSubmit.length, 1);
   assert.equal(settings.hooks.Stop.length, 2);
   assert.deepEqual(settings.hooks.Stop[0], userStopHook);
-  assert.deepEqual(settings.hooks.SessionStart[0], {
-    matcher: "startup",
+  assert.deepEqual(settings.hooks.SessionStart, [
+    {
+      matcher: "startup",
+      hooks: [
+        {
+          type: "command",
+          command: "node '/tmp/devflow run/.claude/hook.js'",
+        },
+      ],
+    },
+    {
+      matcher: "resume",
+      hooks: [
+        {
+          type: "command",
+          command: "node '/tmp/devflow run/.claude/hook.js'",
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(settings.hooks.UserPromptSubmit[0], {
     hooks: [
       {
         type: "command",
@@ -61,9 +83,27 @@ test("claude hook settings setup preserves settings and appends DevFlow hooks", 
   });
 });
 
+test("claude hook settings setup is idempotent per event matcher and command", async () => {
+  const configDirectory = makeTempDir("devflow-claude-settings-");
+  const settingsPath = join(configDirectory, "settings.json");
+  const hookScriptPath = "/tmp/devflow/.claude/hook.js";
+
+  await installClaudeHookSettings({ configDirectory, hookScriptPath });
+  await installClaudeHookSettings({ configDirectory, hookScriptPath });
+
+  const settings = await fs.readJson(settingsPath);
+  assert.equal(settings.hooks.SessionStart.length, 2);
+  assert.equal(settings.hooks.UserPromptSubmit.length, 1);
+  assert.equal(settings.hooks.Stop.length, 1);
+  assert.deepEqual(
+    settings.hooks.SessionStart.map((entry: { matcher?: string }) => entry.matcher),
+    ["startup", "resume"],
+  );
+});
+
 test("claude hook settings cleanup removes only matching DevFlow command hooks", async () => {
   const configDirectory = makeTempDir("devflow-claude-settings-");
-  const settingsPath = join(configDirectory, "settings.local.json");
+  const settingsPath = join(configDirectory, "settings.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
   const otherDevFlowScriptPath = "/tmp/devflow-other/.claude/hook.js";
 
@@ -87,7 +127,7 @@ test("claude hook settings cleanup removes only matching DevFlow command hooks",
   });
 
   const cleaned = await fs.readJson(settingsPath);
-  assert.equal(cleaned.hooks.SessionStart.length, 1);
+  assert.equal(cleaned.hooks.SessionStart.length, 2);
   assert.equal(cleaned.hooks.UserPromptSubmit.length, 1);
   assert.equal(cleaned.hooks.Stop.length, 2);
   assert.deepEqual(cleaned.hooks.Stop[0], userHook);
@@ -99,7 +139,7 @@ test("claude hook settings cleanup removes only matching DevFlow command hooks",
 
 test("claude hook settings cleanup preserves user commands sharing a matcher entry", async () => {
   const configDirectory = makeTempDir("devflow-claude-settings-");
-  const settingsPath = join(configDirectory, "settings.local.json");
+  const settingsPath = join(configDirectory, "settings.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
 
   await fs.outputJson(
@@ -144,9 +184,9 @@ test("claude hook settings cleanup preserves user commands sharing a matcher ent
   ]);
 });
 
-test("claude hook settings cleanup deletes empty DevFlow-created local settings file", async () => {
+test("claude hook settings cleanup deletes empty DevFlow-created settings file", async () => {
   const configDirectory = makeTempDir("devflow-claude-settings-");
-  const settingsPath = join(configDirectory, "settings.local.json");
+  const settingsPath = join(configDirectory, "settings.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
 
   await installClaudeHookSettings({ configDirectory, hookScriptPath });
@@ -161,7 +201,7 @@ test("claude hook settings cleanup deletes empty DevFlow-created local settings 
 
 test("claude hook settings cleanup preserves non-empty user settings", async () => {
   const configDirectory = makeTempDir("devflow-claude-settings-");
-  const settingsPath = join(configDirectory, "settings.local.json");
+  const settingsPath = join(configDirectory, "settings.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
 
   await fs.outputJson(settingsPath, { env: { NODE_ENV: "test" } }, { spaces: 2 });
@@ -175,9 +215,9 @@ test("claude hook settings cleanup preserves non-empty user settings", async () 
   assert.deepEqual(await fs.readJson(settingsPath), { env: { NODE_ENV: "test" } });
 });
 
-test("claude hook settings setup fails clearly on malformed local settings JSON", async () => {
+test("claude hook settings setup fails clearly on malformed settings JSON", async () => {
   const configDirectory = makeTempDir("devflow-claude-settings-");
-  const settingsPath = join(configDirectory, "settings.local.json");
+  const settingsPath = join(configDirectory, "settings.json");
 
   await fs.outputFile(settingsPath, '{"hooks":');
 
@@ -188,8 +228,8 @@ test("claude hook settings setup fails clearly on malformed local settings JSON"
     }),
     (error: unknown) => {
       assert.ok(error instanceof ClaudeHookSettingsError);
-      assert.match(error.message, /Could not read Claude local settings/);
-      assert.match(error.message, /settings\.local\.json/);
+      assert.match(error.message, /Could not read Claude settings/);
+      assert.match(error.message, /settings\.json/);
       return true;
     },
   );

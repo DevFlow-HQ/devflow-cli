@@ -1,9 +1,15 @@
 import fs from "fs-extra";
 import { join } from "node:path";
 
-const DEVFLOW_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop"] as const;
+const DEVFLOW_HOOK_ENTRY_SPECS = [
+  { eventName: "SessionStart", matcher: "startup" },
+  { eventName: "SessionStart", matcher: "resume" },
+  { eventName: "UserPromptSubmit" },
+  { eventName: "Stop" },
+] as const;
 
-type ClaudeHookEventName = (typeof DEVFLOW_HOOK_EVENTS)[number];
+type ClaudeHookEntrySpec = (typeof DEVFLOW_HOOK_ENTRY_SPECS)[number];
+type ClaudeHookEventName = ClaudeHookEntrySpec["eventName"];
 
 interface ClaudeHookSettingsOptions {
   configDirectory: string;
@@ -36,7 +42,7 @@ export class ClaudeHookSettingsError extends Error {
       cause instanceof Error ? cause.message : "Unknown settings failure";
 
     super(
-      `Could not read Claude local settings at ${settingsPath}: ${causeMessage}.`,
+      `Could not read Claude settings at ${settingsPath}: ${causeMessage}.`,
     );
     this.name = "ClaudeHookSettingsError";
     this.settingsPath = settingsPath;
@@ -47,13 +53,19 @@ export class ClaudeHookSettingsError extends Error {
 export async function installClaudeHookSettings(
   options: ClaudeHookSettingsOptions,
 ): Promise<void> {
-  const settingsPath = claudeLocalSettingsPath(options.configDirectory);
-  const settings = await readClaudeLocalSettings(settingsPath);
+  const settingsPath = claudeUserSettingsPath(options.configDirectory);
+  const settings = await readClaudeSettings(settingsPath);
   const hooks = ensureObjectProperty(settings, "hooks");
+  const command = claudeHookCommand(options.hookScriptPath);
 
-  for (const eventName of DEVFLOW_HOOK_EVENTS) {
-    const entries = ensureArrayProperty(hooks, eventName);
-    entries.push(claudeHookMatcherEntry(eventName, options.hookScriptPath));
+  for (const spec of DEVFLOW_HOOK_ENTRY_SPECS) {
+    const entries = ensureArrayProperty(hooks, spec.eventName);
+
+    if (hasHookMatcherEntry(entries, spec, command)) {
+      continue;
+    }
+
+    entries.push(claudeHookMatcherEntry(spec, command));
   }
 
   await fs.ensureDir(options.configDirectory);
@@ -63,17 +75,17 @@ export async function installClaudeHookSettings(
 export async function cleanupClaudeHookSettings(
   options: CleanupClaudeHookSettingsOptions,
 ): Promise<void> {
-  const settingsPath = claudeLocalSettingsPath(options.configDirectory);
+  const settingsPath = claudeUserSettingsPath(options.configDirectory);
 
   if (!(await fs.pathExists(settingsPath))) {
     return;
   }
 
-  const settings = await readClaudeLocalSettings(settingsPath);
+  const settings = await readClaudeSettings(settingsPath);
   const hooks = getObjectProperty(settings, "hooks");
 
   if (hooks) {
-    for (const eventName of DEVFLOW_HOOK_EVENTS) {
+    for (const eventName of devflowHookEventNames()) {
       removeDevFlowHookEntries(hooks, eventName, options.hookScriptPath);
     }
 
@@ -92,11 +104,11 @@ export function claudeHookCommand(hookScriptPath: string): string {
   return `node ${shellQuote(hookScriptPath)}`;
 }
 
-function claudeLocalSettingsPath(configDirectory: string): string {
-  return join(configDirectory, "settings.local.json");
+function claudeUserSettingsPath(configDirectory: string): string {
+  return join(configDirectory, "settings.json");
 }
 
-async function readClaudeLocalSettings(settingsPath: string): Promise<JsonObject> {
+async function readClaudeSettings(settingsPath: string): Promise<JsonObject> {
   if (!(await fs.pathExists(settingsPath))) {
     return {};
   }
@@ -115,23 +127,53 @@ async function readClaudeLocalSettings(settingsPath: string): Promise<JsonObject
 }
 
 function claudeHookMatcherEntry(
-  eventName: ClaudeHookEventName,
-  hookScriptPath: string,
+  spec: ClaudeHookEntrySpec,
+  command: string,
 ): ClaudeHookMatcherEntry {
   const entry: ClaudeHookMatcherEntry = {
     hooks: [
       {
         type: "command",
-        command: claudeHookCommand(hookScriptPath),
+        command,
       } satisfies ClaudeHookCommand,
     ],
   };
 
-  if (eventName === "SessionStart") {
-    entry.matcher = "startup";
+  if ("matcher" in spec) {
+    entry.matcher = spec.matcher;
   }
 
   return entry;
+}
+
+function hasHookMatcherEntry(
+  entries: unknown[],
+  spec: ClaudeHookEntrySpec,
+  command: string,
+): boolean {
+  return entries.some(
+    (entry) =>
+      isObject(entry) &&
+      matcherMatchesSpec(entry.matcher, spec) &&
+      Array.isArray(entry.hooks) &&
+      entry.hooks.some(
+        (hook) =>
+          isObject(hook) && hook.type === "command" && hook.command === command,
+      ),
+  );
+}
+
+function matcherMatchesSpec(
+  matcher: unknown,
+  spec: ClaudeHookEntrySpec,
+): boolean {
+  return "matcher" in spec ? matcher === spec.matcher : matcher === undefined;
+}
+
+function devflowHookEventNames(): ClaudeHookEventName[] {
+  return Array.from(
+    new Set(DEVFLOW_HOOK_ENTRY_SPECS.map((spec) => spec.eventName)),
+  );
 }
 
 function removeDevFlowHookEntries(
@@ -156,7 +198,6 @@ function removeDevFlowHookEntries(
   }
 
   delete hooks[eventName];
-  pruneEmptyObjectProperty(hooks, eventName);
 }
 
 function removeDevFlowCommandsFromMatcherEntry(

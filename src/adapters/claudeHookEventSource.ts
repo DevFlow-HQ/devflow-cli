@@ -22,7 +22,6 @@ interface ClaudeHookPayloadBase {
 
 interface ClaudeSessionStartHookPayload extends ClaudeHookPayloadBase {
   hook_event_name: "SessionStart";
-  matcher: "startup";
 }
 
 interface ClaudeUserPromptSubmitHookPayload extends ClaudeHookPayloadBase {
@@ -132,16 +131,8 @@ function parseClaudeHookPayload(payload: unknown): ClaudeHookPayload | undefined
 
   switch (payload.hook_event_name) {
     case "SessionStart":
-      if (payload.matcher !== "startup") {
-        throw new ClaudeHookPayloadMalformedError(
-          payload,
-          'expected matcher "startup" for SessionStart',
-        );
-      }
-
       return {
         hook_event_name: payload.hook_event_name,
-        matcher: payload.matcher,
         session_id: payload.session_id,
       };
 

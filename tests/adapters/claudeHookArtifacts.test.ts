@@ -37,18 +37,27 @@ test("claude hook artifacts are compatible with scoped config settings entries",
     hookScriptPath: artifacts.hookScriptPath,
   });
 
-  const settings = await fs.readJson(
-    join(configDirectory, "settings.local.json"),
-  );
-  assert.deepEqual(settings.hooks.SessionStart[0], {
-    matcher: "startup",
-    hooks: [
-      {
-        type: "command",
-        command: `node '${artifacts.hookScriptPath}'`,
-      },
-    ],
-  });
+  const settings = await fs.readJson(join(configDirectory, "settings.json"));
+  assert.deepEqual(settings.hooks.SessionStart, [
+    {
+      matcher: "startup",
+      hooks: [
+        {
+          type: "command",
+          command: `node '${artifacts.hookScriptPath}'`,
+        },
+      ],
+    },
+    {
+      matcher: "resume",
+      hooks: [
+        {
+          type: "command",
+          command: `node '${artifacts.hookScriptPath}'`,
+        },
+      ],
+    },
+  ]);
   assert.deepEqual(settings.hooks.UserPromptSubmit[0], {
     hooks: [
       {

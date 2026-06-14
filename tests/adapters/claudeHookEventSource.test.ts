@@ -9,10 +9,22 @@ import {
 import { ProviderSessionEventCaptureError } from "../../src/adapters/managedSessionAdapter.js";
 import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
 
-test("claude hook normalizer maps startup SessionStart to session-start", () => {
+test("claude hook normalizer maps SessionStart with source to session-start", () => {
   const event = normalizeClaudeHookPayload({
     hook_event_name: "SessionStart",
-    matcher: "startup",
+    source: "startup",
+    session_id: "claude-session-123",
+  });
+
+  assert.deepEqual(event, {
+    type: "session-start",
+    providerSessionId: "claude-session-123",
+  });
+});
+
+test("claude hook normalizer maps SessionStart without source to session-start", () => {
+  const event = normalizeClaudeHookPayload({
+    hook_event_name: "SessionStart",
     session_id: "claude-session-123",
   });
 
@@ -90,7 +102,6 @@ test("claude hook normalizer rejects malformed supported payloads with a typed e
     () =>
       normalizeClaudeHookPayload({
         hook_event_name: "SessionStart",
-        matcher: "startup",
         session_id: 123,
       }),
     ClaudeHookPayloadMalformedError,

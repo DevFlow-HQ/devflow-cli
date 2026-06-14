@@ -293,9 +293,40 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
     spawner.process.emitData("terminal marker INITIAL_DONE");
     assert.equal(validateCount, 0);
 
+    const claudeConfigDirectory = join(
+      projectRoot,
+      ".devflow",
+      "runs",
+      "runabc123456",
+      ".claude",
+    );
+    const settings = await fs.readJson(
+      join(claudeConfigDirectory, "settings.json"),
+    );
+    assert.deepEqual(settings.hooks.SessionStart, [
+      {
+        matcher: "startup",
+        hooks: [
+          {
+            type: "command",
+            command: `node '${hookScriptPath}'`,
+          },
+        ],
+      },
+      {
+        matcher: "resume",
+        hooks: [
+          {
+            type: "command",
+            command: `node '${hookScriptPath}'`,
+          },
+        ],
+      },
+    ]);
+
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -346,24 +377,15 @@ test("Claude hook-driven runner installs hook settings, launches through PTY, an
     "runabc123456",
     ".claude",
   );
-  const settings = await fs.readJson(
-    join(claudeConfigDirectory, "settings.local.json"),
-  );
-
   assert.equal(await fs.pathExists(join(hookDirectory, "hook.js")), true);
   assert.equal(
     await fs.pathExists(join(projectRoot, ".claude", "settings.local.json")),
     false,
   );
-  assert.deepEqual(settings.hooks.SessionStart[0], {
-    matcher: "startup",
-    hooks: [
-      {
-        type: "command",
-        command: `node '${join(hookDirectory, "hook.js")}'`,
-      },
-    ],
-  });
+  assert.equal(
+    await fs.pathExists(join(claudeConfigDirectory, "settings.json")),
+    false,
+  );
   assert.deepEqual(spawner.calls, [
     {
       executable: "claude",
@@ -493,7 +515,7 @@ test("Claude hook-driven runner seeds credentials for launch and deletes them af
     });
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
@@ -517,8 +539,8 @@ test("Claude hook-driven runner seeds credentials for launch and deletes them af
     false,
   );
   assert.equal(
-    await fs.pathExists(join(scopedConfigDirectory, "settings.local.json")),
-    true,
+    await fs.pathExists(join(scopedConfigDirectory, "settings.json")),
+    false,
   );
 });
 
@@ -528,7 +550,7 @@ test("Claude hook-driven runner allows missing source credentials on Windows", a
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
@@ -584,7 +606,7 @@ test("Claude hook-driven runner deletes materialized macOS credentials after com
     );
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
@@ -692,7 +714,7 @@ test("Claude hook-driven runner times out with Claude-specific diagnostics when 
     (error) =>
       error instanceof ProviderSessionEventCaptureError &&
       /SessionStart/.test(error.message) &&
-      /settings\.local\.json/.test(error.message) &&
+      /settings\.json/.test(error.message) &&
       /disabled hooks/i.test(error.message) &&
       /managed policy/i.test(error.message) &&
       /hook\.js/.test(error.message) &&
@@ -729,7 +751,7 @@ test("Claude hook-driven runner drains briefly after early PTY exit before decid
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     spawner.process.emitExit(0);
@@ -756,8 +778,20 @@ test("Claude hook-driven runner drains briefly after early PTY exit before decid
     },
   );
 
+  const scopedConfigDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
+
   assert.equal(validateCount, 1);
   assert.equal(result.exitCode, 0);
+  assert.equal(
+    await fs.pathExists(join(scopedConfigDirectory, "settings.json")),
+    false,
+  );
 });
 
 test("Claude hook-driven runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
@@ -775,7 +809,7 @@ test("Claude hook-driven runner keeps PTY control-only while mirroring output, s
     terminal.emitResize(120, 40);
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -885,7 +919,7 @@ test("Claude hook-driven runner treats PTY exit after SessionStart but before fi
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     spawner.process.emitExit(1);
@@ -912,7 +946,7 @@ test("Claude hook-driven runner resolves success after graceful shutdown exits n
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -957,7 +991,7 @@ test("Claude hook-driven runner force-kills after valid completion and still res
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -997,7 +1031,7 @@ test("Claude hook-driven runner raises cleanup errors only when shutdown force-k
     spawner.process.killError = killError;
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -1031,7 +1065,7 @@ test("Claude hook-driven runner rejects original failures while detached cleanup
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -1066,6 +1100,18 @@ test("Claude hook-driven runner rejects original failures while detached cleanup
 
   await waitUntil(() => spawner.process.killed);
   assert.deepEqual(spawner.process.writes, ["/exit", "\n"]);
+
+  const scopedConfigDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
+  assert.equal(
+    await fs.pathExists(join(scopedConfigDirectory, "settings.json")),
+    true,
+  );
 });
 
 test("Claude hook-driven runner maps hook payload schema failures to event capture errors", async () => {
@@ -1075,7 +1121,7 @@ test("Claude hook-driven runner maps hook payload schema failures to event captu
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
     });
   });
 
@@ -1098,7 +1144,7 @@ test("Claude hook-driven runner maps provider event callback failures to event c
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -1138,7 +1184,7 @@ test("Claude hook-driven runner ignores Stop events without assistant content fo
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -1180,7 +1226,7 @@ test("Claude hook-driven runner advances continuations from assistant markers an
     spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -1250,7 +1296,7 @@ test("Claude hook-driven runner submits repair prompts through PTY and reports r
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -1306,7 +1352,7 @@ test("Claude hook-driven runner captures structured transcript events and preser
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-1",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -1360,7 +1406,7 @@ test("Claude hook-driven runner captures structured transcript events and preser
 
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
-      matcher: "startup",
+      source: "startup",
       session_id: "claude-session-2",
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
