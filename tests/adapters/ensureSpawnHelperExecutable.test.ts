@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { stat } from "node:fs/promises";
 import test from "node:test";
 
-import { ensureSpawnHelperExecutable } from "../../src/adapters/ensureSpawnHelperExecutable.js";
+import {
+  ensureSpawnHelperExecutable,
+  resolveSpawnHelperPath,
+} from "../../src/adapters/ensureSpawnHelperExecutable.js";
 
 test("spawn-helper heal is a no-op outside macOS", () => {
   let resolveCalls = 0;
@@ -131,4 +135,28 @@ test("spawn-helper heal silently skips absent macOS helper files", () => {
   });
 
   assert.equal(chmodCalls, 0);
+});
+
+test("installed node-pty contains the macOS spawn-helper paths used by the heal", async () => {
+  for (const arch of ["arm64", "x64"] as const) {
+    const helperPath = resolveSpawnHelperPath({ platform: "darwin", arch });
+
+    try {
+      const helperStats = await stat(helperPath);
+
+      assert.ok(
+        helperStats.isFile(),
+        `node-pty's macOS spawn-helper path should be a file: ${helperPath}`,
+      );
+    } catch (error) {
+      throw new Error(
+        [
+          "node-pty's macOS spawn-helper was relocated or renamed;",
+          `expected ${helperPath} to exist.`,
+          "Update resolveSpawnHelperPath() before changing node-pty's package layout.",
+        ].join(" "),
+        { cause: error },
+      );
+    }
+  }
 });
