@@ -5,6 +5,7 @@ import {
   buildPtySpawnTrace,
   emitAdapterTrace,
 } from "./adapterTrace.js";
+import { ensureSpawnHelperExecutable } from "./ensureSpawnHelperExecutable.js";
 import { ProviderSessionLaunchError } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
 import { NoopLogger, type Logger } from "../logger.js";
@@ -128,6 +129,8 @@ export async function submitGracefulExitCommand(
 
 export const nodePtySpawner: PtySpawner = {
   spawn(executable, args, options) {
+    ensureSpawnHelperExecutable();
+
     const process = pty.spawn(executable, args, {
       cwd: options.cwd,
       cols: options.cols,

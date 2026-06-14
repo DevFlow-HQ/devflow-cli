@@ -92,3 +92,24 @@ test("ADR and glossary document graceful completed-session cleanup", async () =>
 async function readSource(path: string): Promise<string> {
   return readFile(join(process.cwd(), path), "utf8");
 }
+
+test("node-pty spawn-helper heal stays inside the concrete PTY spawner boundary", async () => {
+  const source = await readSource("src/adapters/ptyControlHarness.ts");
+  const healIndex = source.indexOf("ensureSpawnHelperExecutable();");
+  const ptySpawnIndex = source.indexOf("const process = pty.spawn");
+  const harnessIndex = source.indexOf("export function startPtyControlHarness");
+  const delayIndex = source.indexOf("function delay");
+
+  assert.notEqual(healIndex, -1);
+  assert.notEqual(ptySpawnIndex, -1);
+  assert.ok(
+    healIndex < ptySpawnIndex,
+    "nodePtySpawner.spawn should heal before calling pty.spawn",
+  );
+
+  const harnessSource = source.slice(harnessIndex, delayIndex);
+  assert.doesNotMatch(
+    harnessSource,
+    /ensureSpawnHelperExecutable|prebuilds|spawn-helper|node-pty/,
+  );
+});

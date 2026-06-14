@@ -127,6 +127,16 @@ function startHarness(spawner: FakePtySpawner, userInput?: UserInput) {
   );
 }
 
+test("PTY control harness with an injected spawner skips the node-pty spawn-helper heal", () => {
+  const spawner = new FakePtySpawner();
+  const harness = startHarness(spawner);
+
+  assert.equal(spawner.calls.length, 1);
+  assert.equal(spawner.calls[0]?.executable, "claude");
+
+  harness.dispose();
+});
+
 test("PTY control harness shutdown writes graceful command text and submit key separately", async () => {
   const spawner = new FakePtySpawner();
   const harness = startHarness(spawner);
