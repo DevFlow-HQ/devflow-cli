@@ -1879,6 +1879,7 @@ test("orchestrator can complete the active intent stage through a built-in Codex
   assert.deepEqual(sessionCalls[0]?.args, [
     "-c",
     "approvals_reviewer=auto_review",
+    "--dangerously-bypass-hook-trust",
     "--model",
     "gpt-5.5/fast beta",
     sessionCalls[0]?.input.initialPrompt,
