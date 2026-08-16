@@ -1,6 +1,6 @@
 import type { ManagedProviderSessionEvent } from "./managedSessionAdapter.js";
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
@@ -150,13 +150,9 @@ function parseCodexHookPayload(payload: unknown): CodexHookPayload | undefined {
   }
 }
 
-function isKnownCodexHookEventName(
-  value: string,
-): value is CodexHookEventName {
+function isKnownCodexHookEventName(value: string): value is CodexHookEventName {
   return (
-    value === "SessionStart" ||
-    value === "UserPromptSubmit" ||
-    value === "Stop"
+    value === "SessionStart" || value === "UserPromptSubmit" || value === "Stop"
   );
 }
 

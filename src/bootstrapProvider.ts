@@ -12,10 +12,7 @@ import {
   SUPPORTED_PROVIDER_IDS,
   type BuiltInProviderId,
 } from "./adapters/providers.js";
-import {
-  createDevFlowState,
-  type DevFlowState,
-} from "./devflowState.js";
+import { createDevFlowState, type DevFlowState } from "./devflowState.js";
 
 const PROVIDER_SELECTION_MESSAGE = "Select a default provider";
 
@@ -127,9 +124,7 @@ function createProviderSelectionChoices(
     value: provider.provider.id,
     label: formatProviderLabel(provider.provider.id),
     disabled: !provider.isAvailable,
-    ...(provider.isAvailable
-      ? {}
-      : { unavailableReason: provider.reason }),
+    ...(provider.isAvailable ? {} : { unavailableReason: provider.reason }),
   }));
 }
 
@@ -160,7 +155,9 @@ async function saveDefaultProvider(
 ): Promise<void> {
   await devFlowState.config.save({ defaultProvider: providerId });
 
-  stdout?.write(`Saved default provider: ${formatProviderLabel(providerId)}.\n`);
+  stdout?.write(
+    `Saved default provider: ${formatProviderLabel(providerId)}.\n`,
+  );
 }
 
 async function defaultPromptForProviderSelection(
@@ -200,7 +197,8 @@ export async function resolveBootstrapProvider(
   const promptForProviderSelection =
     options.promptForProviderSelection ?? defaultPromptForProviderSelection;
   const devFlowState =
-    options.devFlowState ?? createDevFlowState({ projectRoot: options.projectRoot });
+    options.devFlowState ??
+    createDevFlowState({ projectRoot: options.projectRoot });
 
   if (options.explicitProviderId) {
     if (!isBuiltInProviderId(options.explicitProviderId)) {
@@ -259,11 +257,7 @@ export async function resolveBootstrapProvider(
     throw new ProviderSetupCancelledError();
   }
 
-  await saveDefaultProvider(
-    devFlowState,
-    selectedProviderId,
-    options.stdout,
-  );
+  await saveDefaultProvider(devFlowState, selectedProviderId, options.stdout);
 
   return selectedProviderId;
 }

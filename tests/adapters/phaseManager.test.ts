@@ -229,7 +229,9 @@ test("phase manager traces phase transitions across continuations, repair, and f
     assistantMessage: "REPAIR_DONE",
   });
 
-  const transitions = entries.filter((entry) => /phase transition/i.test(entry.msg));
+  const transitions = entries.filter((entry) =>
+    /phase transition/i.test(entry.msg),
+  );
 
   assert.deepEqual(
     transitions.map((entry) => ({
@@ -536,11 +538,7 @@ test("phase manager advances to a continuation after successful validation", asy
     assistantMessage: "PRD_DONE",
   });
 
-  assert.deepEqual(ordering, [
-    "grill-validate",
-    "prd-start",
-    "prd-validate",
-  ]);
+  assert.deepEqual(ordering, ["grill-validate", "prd-start", "prd-validate"]);
   assert.deepEqual(prompts, ["Write the PRD."]);
   assert.deepEqual(
     events.map((event) => `${event.type}:${event.phaseId}`),

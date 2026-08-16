@@ -87,7 +87,10 @@ test("adapter trace event builders expose lengths but never event bodies or prom
     },
     promptArgument,
   });
-  const serialized = JSON.stringify([submittedTrace.context, turnTrace.context]);
+  const serialized = JSON.stringify([
+    submittedTrace.context,
+    turnTrace.context,
+  ]);
 
   assert.equal(
     submittedTrace.context.context?.messageLength,

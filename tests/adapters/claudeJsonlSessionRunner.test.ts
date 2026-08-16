@@ -53,7 +53,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   onExit(
-    listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
+    listener: (event: {
+      exitCode: number;
+      signal: NodeJS.Signals | null;
+    }) => void,
   ): { dispose(): void } {
     this.emitter.on("exit", listener);
 
@@ -95,7 +98,10 @@ class FakeUserInput extends EventEmitter implements UserInput {
   resumeCount = 0;
   pauseCount = 0;
 
-  constructor(readonly isTTY = true, readonly isRaw = false) {
+  constructor(
+    readonly isTTY = true,
+    readonly isRaw = false,
+  ) {
     super();
   }
 
@@ -103,10 +109,7 @@ class FakeUserInput extends EventEmitter implements UserInput {
     this.rawModeChanges.push(enabled);
   }
 
-  override on(
-    event: "data",
-    listener: (chunk: Buffer | string) => void,
-  ): this {
+  override on(event: "data", listener: (chunk: Buffer | string) => void): this {
     return super.on(event, listener);
   }
 
@@ -415,7 +418,13 @@ function hasCause(error: unknown, expectedCause: unknown): boolean {
 
 test("Claude JSONL runner completes a fresh first turn from a scoped transcript", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const events: ManagedProviderSessionEvent[] = [];
@@ -500,7 +509,13 @@ test("Claude JSONL runner completes a fresh first turn from a scoped transcript"
 test("Claude JSONL runner seeds credentials for launch and deletes them after completion without installing hook settings", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
   const sourceConfigDirectory = makeTempDir("devflow-claude-source-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
 
@@ -539,31 +554,36 @@ test("Claude JSONL runner seeds credentials for launch and deletes them after co
     spawner.process.emitExit(0);
   });
 
-  await runClaudeJsonlSession(
-    createCommand(),
-    createInput(projectRoot),
-    {
-      ptySpawner: spawner,
-      outputSink: { write() {} },
-      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
-      locatorTimeoutMs: 1_000,
-      firstEventTimeoutMs: 1_000,
-      platform: "linux",
-      environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
-    },
-  );
+  await runClaudeJsonlSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+    locatorTimeoutMs: 1_000,
+    firstEventTimeoutMs: 1_000,
+    platform: "linux",
+    environment: { ...process.env, CLAUDE_CONFIG_DIR: sourceConfigDirectory },
+  });
 
   assert.equal(
     await fs.pathExists(join(claudeHome, ".credentials.json")),
     false,
   );
-  assert.equal(await fs.pathExists(join(claudeHome, "settings.local.json")), false);
+  assert.equal(
+    await fs.pathExists(join(claudeHome, "settings.local.json")),
+    false,
+  );
   assert.equal(await fs.pathExists(join(claudeHome, "devflow-hooks")), false);
 });
 
 test("Claude JSONL runner deletes materialized macOS credentials after completion", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const credential = '{"claudeAiOauth":{"accessToken":"keychain-token"}}';
@@ -586,20 +606,16 @@ test("Claude JSONL runner deletes materialized macOS credentials after completio
     spawner.process.emitExit(0);
   });
 
-  await runClaudeJsonlSession(
-    createCommand(),
-    createInput(projectRoot),
-    {
-      ptySpawner: spawner,
-      outputSink: { write() {} },
-      sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
-      locatorTimeoutMs: 1_000,
-      firstEventTimeoutMs: 1_000,
-      platform: "darwin",
-      environment: {},
-      readMacosKeychainCredential: async () => credential,
-    },
-  );
+  await runClaudeJsonlSession(createCommand(), createInput(projectRoot), {
+    ptySpawner: spawner,
+    outputSink: { write() {} },
+    sessionLogLocator: createFixedSessionLogLocator(transcriptPath),
+    locatorTimeoutMs: 1_000,
+    firstEventTimeoutMs: 1_000,
+    platform: "darwin",
+    environment: {},
+    readMacosKeychainCredential: async () => credential,
+  });
 
   assert.equal(
     await fs.pathExists(join(claudeHome, ".credentials.json")),
@@ -650,7 +666,13 @@ test("Claude JSONL runner wraps config state seeding failures as launch errors",
 
 test("Claude JSONL runner classifies human user records and suppresses managed prompt echoes", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const events: ManagedProviderSessionEvent[] = [];
@@ -671,7 +693,10 @@ test("Claude JSONL runner classifies human user records and suppresses managed p
         role: "user",
         content: [
           { type: "text", text: "human " },
-          { type: "image", source: { type: "base64", media_type: "image/png" } },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png" },
+          },
           { type: "text", text: "reply" },
         ],
       },
@@ -715,7 +740,13 @@ test("Claude JSONL runner classifies human user records and suppresses managed p
 
 test("Claude JSONL runner keeps draining after PTY exit while a JSONL read is active", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const events: ManagedProviderSessionEvent[] = [];
@@ -773,7 +804,13 @@ test("Claude JSONL runner keeps draining after PTY exit while a JSONL read is ac
 
 test("Claude JSONL runner resumes by tailing an existing transcript from the captured offset", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-resume-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const events: ManagedProviderSessionEvent[] = [];
@@ -855,9 +892,10 @@ test("Claude JSONL runner resumes by tailing an existing transcript from the cap
   );
 
   assert.equal(snapshotCalled, false);
-  assert.deepEqual(spawner.calls.map((call) => call.args), [
-    ["--resume", "claude-session-1", "--model", "sonnet", "Resume"],
-  ]);
+  assert.deepEqual(
+    spawner.calls.map((call) => call.args),
+    [["--resume", "claude-session-1", "--model", "sonnet", "Resume"]],
+  );
   assert.deepEqual(validationOrder, ["validate"]);
   assert.deepEqual(
     events.map((event) =>
@@ -883,7 +921,13 @@ test("Claude JSONL runner resumes by tailing an existing transcript from the cap
 
 test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, and resize", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const output: string[] = [];
@@ -895,7 +939,9 @@ test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, 
     assert.equal(options.env?.CLAUDE_CONFIG_DIR, claudeHome);
     await fs.ensureDir(dirname(transcriptPath));
     await fs.writeFile(transcriptPath, "", "utf8");
-    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    spawner.process.emitData(
+      "terminal marker INITIAL_DONE should not validate\n",
+    );
     userInput.emitData("hello\r");
     terminal.emitResize(120, 40);
     await waitForPtyWrites(spawner.process, 1);
@@ -979,7 +1025,13 @@ test("Claude JSONL runner keeps PTY control-only while mirroring output, stdin, 
 
 test("Claude JSONL runner resolves success after graceful shutdown exits naturally", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const events: ManagedProviderSessionEvent[] = [];
@@ -1000,7 +1052,10 @@ test("Claude JSONL runner resolves success after graceful shutdown exits natural
   });
 
   const result = await runClaudeJsonlSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+    },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -1029,7 +1084,13 @@ test("Claude JSONL runner resolves success after graceful shutdown exits natural
 
 test("Claude JSONL runner force-kills after valid completion and still resolves success", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
@@ -1047,7 +1108,10 @@ test("Claude JSONL runner force-kills after valid completion and still resolves 
   });
 
   const result = await runClaudeJsonlSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+    },
     createInput(projectRoot),
     {
       ptySpawner: spawner,
@@ -1071,7 +1135,13 @@ test("Claude JSONL runner force-kills after valid completion and still resolves 
 
 test("Claude JSONL runner raises cleanup errors only when shutdown force-kill throws", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const killError = new Error("kill failed");
@@ -1092,7 +1162,14 @@ test("Claude JSONL runner raises cleanup errors only when shutdown force-kill th
 
   await assert.rejects(
     runClaudeJsonlSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/exit",
+          submitKey: "\n",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -1111,7 +1188,13 @@ test("Claude JSONL runner raises cleanup errors only when shutdown force-kill th
 
 test("Claude JSONL runner rejects original failures while detached cleanup shuts down the PTY", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const originalFailure = new Error("consumer failed");
@@ -1131,7 +1214,14 @@ test("Claude JSONL runner rejects original failures while detached cleanup shuts
 
   await assert.rejects(
     runClaudeJsonlSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/exit",
+          submitKey: "\n",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "turn-completed") {
@@ -1191,7 +1281,13 @@ test("Claude JSONL runner forwards Ctrl-C and reports requested interruption on 
 
 test("Claude JSONL runner submits continuation prompts through PTY and emits managed user events", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   const events: ManagedProviderSessionEvent[] = [];
@@ -1249,7 +1345,9 @@ test("Claude JSONL runner submits continuation prompts through PTY and emits man
     },
   );
 
-  assert.deepEqual(spawner.process.writes, ["\u001b[200~Continue\u001b[201~\r"]);
+  assert.deepEqual(spawner.process.writes, [
+    "\u001b[200~Continue\u001b[201~\r",
+  ]);
   assert.deepEqual(
     events.map((event) =>
       event.type === "submitted-user-message"
@@ -1268,7 +1366,13 @@ test("Claude JSONL runner submits continuation prompts through PTY and emits man
 
 test("Claude JSONL runner submits repair prompts through PTY and reports repair usage", async () => {
   const projectRoot = makeTempDir("devflow-claude-jsonl-");
-  const claudeHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".claude");
+  const claudeHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".claude",
+  );
   const transcript = "projects/-tmp-devflow/session-1.jsonl";
   const transcriptPath = join(claudeHome, transcript);
   let validateCalls = 0;

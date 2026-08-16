@@ -41,7 +41,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   onExit(
-    listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
+    listener: (event: {
+      exitCode: number;
+      signal: NodeJS.Signals | null;
+    }) => void,
   ): void {
     this.emitter.on("exit", listener);
   }
@@ -104,7 +107,10 @@ class FakeUserInput extends EventEmitter implements UserInput {
   resumeCount = 0;
   pauseCount = 0;
 
-  constructor(readonly isTTY = true, readonly isRaw = false) {
+  constructor(
+    readonly isTTY = true,
+    readonly isRaw = false,
+  ) {
     super();
   }
 
@@ -112,10 +118,7 @@ class FakeUserInput extends EventEmitter implements UserInput {
     this.rawModeChanges.push(enabled);
   }
 
-  override on(
-    event: "data",
-    listener: (chunk: Buffer | string) => void,
-  ): this {
+  override on(event: "data", listener: (chunk: Buffer | string) => void): this {
     return super.on(event, listener);
   }
 
@@ -302,18 +305,20 @@ test("Codex hook-driven runner writes per-run hook artifacts and completes a sin
       events.push(event);
     },
   });
-  const result = await runCodexHookDrivenSession(
-    createCommand(),
-    input,
-    {
-      ptySpawner: spawner,
-      outputSink: { write: (chunk) => output.push(chunk) },
-      terminal: { columns: 100, rows: 30 },
-      firstEventTimeoutMs: 1_000,
-    },
-  );
+  const result = await runCodexHookDrivenSession(createCommand(), input, {
+    ptySpawner: spawner,
+    outputSink: { write: (chunk) => output.push(chunk) },
+    terminal: { columns: 100, rows: 30 },
+    firstEventTimeoutMs: 1_000,
+  });
 
-  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
+  const codexHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".codex",
+  );
 
   assert.equal(await fs.pathExists(join(codexHome, "config.toml")), true);
   const configToml = await fs.readFile(join(codexHome, "config.toml"), "utf8");
@@ -540,7 +545,9 @@ test("Codex hook-driven runner keeps PTY control-only while mirroring output, st
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     const hookScriptPath = join(String(options.env?.CODEX_HOME), "hook.js");
 
-    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    spawner.process.emitData(
+      "terminal marker INITIAL_DONE should not validate\n",
+    );
     userInput.emitData("hello\r");
     terminal.emitResize(120, 40);
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -783,7 +790,10 @@ test("Codex hook-driven runner resolves success after graceful shutdown exits na
   });
 
   const result = await runCodexHookDrivenSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 },
+    },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -826,7 +836,10 @@ test("Codex hook-driven runner force-kills after valid completion and still reso
   });
 
   const result = await runCodexHookDrivenSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 },
+    },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -874,7 +887,14 @@ test("Codex hook-driven runner raises cleanup errors only when shutdown force-ki
 
   await assert.rejects(
     runCodexHookDrivenSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/quit",
+          submitKey: "\r",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -908,7 +928,14 @@ test("Codex hook-driven runner rejects original failures while detached cleanup 
 
   await assert.rejects(
     runCodexHookDrivenSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/quit",
+          submitKey: "\r",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "submitted-user-message") {

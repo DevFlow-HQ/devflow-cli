@@ -47,7 +47,10 @@ test("codex hook config wires lifecycle events to the hook script", () => {
   assert.match(config, /UserPromptSubmit = \[/);
   assert.match(config, /Stop = \[/);
   assert.match(config, /type = "command"/);
-  assert.match(config, /command = "node '\/tmp\/devflow run\/\.codex\/hook\.js'"/);
+  assert.match(
+    config,
+    /command = "node '\/tmp\/devflow run\/\.codex\/hook\.js'"/,
+  );
 });
 
 test("codex hook config is deterministic for the same inputs", () => {

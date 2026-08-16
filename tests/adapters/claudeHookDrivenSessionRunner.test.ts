@@ -44,7 +44,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   onExit(
-    listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
+    listener: (event: {
+      exitCode: number;
+      signal: NodeJS.Signals | null;
+    }) => void,
   ): void {
     this.emitter.on("exit", listener);
   }
@@ -106,7 +109,10 @@ class FakeUserInput extends EventEmitter implements UserInput {
   resumeCount = 0;
   pauseCount = 0;
 
-  constructor(readonly isTTY = true, readonly isRaw = false) {
+  constructor(
+    readonly isTTY = true,
+    readonly isRaw = false,
+  ) {
     super();
   }
 
@@ -114,10 +120,7 @@ class FakeUserInput extends EventEmitter implements UserInput {
     this.rawModeChanges.push(enabled);
   }
 
-  override on(
-    event: "data",
-    listener: (chunk: Buffer | string) => void,
-  ): this {
+  override on(event: "data", listener: (chunk: Buffer | string) => void): this {
     return super.on(event, listener);
   }
 
@@ -501,18 +504,24 @@ test("Claude hook-driven runner seeds credentials for launch and deletes them af
   );
 
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
-    assert.deepEqual(await fs.readJson(join(scopedConfigDirectory, ".credentials.json")), {
-      token: "source-token",
-    });
-    assert.deepEqual(await fs.readJson(join(scopedConfigDirectory, ".claude.json")), {
-      hasCompletedOnboarding: true,
-      shiftEnterKeyBindingInstalled: true,
-      userID: "hooks-user",
-      oauthAccount: { emailAddress: "hooks@example.com" },
-      projects: {
-        [projectRoot]: { hasTrustDialogAccepted: true },
+    assert.deepEqual(
+      await fs.readJson(join(scopedConfigDirectory, ".credentials.json")),
+      {
+        token: "source-token",
       },
-    });
+    );
+    assert.deepEqual(
+      await fs.readJson(join(scopedConfigDirectory, ".claude.json")),
+      {
+        hasCompletedOnboarding: true,
+        shiftEnterKeyBindingInstalled: true,
+        userID: "hooks-user",
+        oauthAccount: { emailAddress: "hooks@example.com" },
+        projects: {
+          [projectRoot]: { hasTrustDialogAccepted: true },
+        },
+      },
+    );
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
       hook_event_name: "SessionStart",
       source: "startup",
@@ -601,7 +610,10 @@ test("Claude hook-driven runner deletes materialized macOS credentials after com
 
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     assert.equal(
-      await fs.readFile(join(scopedConfigDirectory, ".credentials.json"), "utf8"),
+      await fs.readFile(
+        join(scopedConfigDirectory, ".credentials.json"),
+        "utf8",
+      ),
       credential,
     );
     await runHookScript(getHookScriptPath(projectRoot), options.env ?? {}, {
@@ -684,15 +696,11 @@ test("Claude hook-driven runner rejects when the first structured event is not S
   });
 
   await assert.rejects(
-    runClaudeHookDrivenSession(
-      createCommand(),
-      createInput(projectRoot),
-      {
-        ptySpawner: spawner,
-        firstEventTimeoutMs: 1_000,
-        cleanupTimeoutMs: 5,
-      },
-    ),
+    runClaudeHookDrivenSession(createCommand(), createInput(projectRoot), {
+      ptySpawner: spawner,
+      firstEventTimeoutMs: 1_000,
+      cleanupTimeoutMs: 5,
+    }),
     (error) =>
       error instanceof ProviderSessionEventCaptureError &&
       /before SessionStart/.test(error.message),
@@ -804,7 +812,9 @@ test("Claude hook-driven runner keeps PTY control-only while mirroring output, s
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
-    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    spawner.process.emitData(
+      "terminal marker INITIAL_DONE should not validate\n",
+    );
     userInput.emitData("hello\r");
     terminal.emitResize(120, 40);
     await runHookScript(hookScriptPath, options.env ?? {}, {
@@ -959,7 +969,10 @@ test("Claude hook-driven runner resolves success after graceful shutdown exits n
   });
 
   const result = await runClaudeHookDrivenSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+    },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -1002,7 +1015,10 @@ test("Claude hook-driven runner force-kills after valid completion and still res
   });
 
   const result = await runClaudeHookDrivenSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+    },
     createInput(projectRoot),
     {
       ptySpawner: spawner,
@@ -1043,7 +1059,14 @@ test("Claude hook-driven runner raises cleanup errors only when shutdown force-k
 
   await assert.rejects(
     runClaudeHookDrivenSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/exit",
+          submitKey: "\n",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -1078,7 +1101,14 @@ test("Claude hook-driven runner rejects original failures while detached cleanup
 
   await assert.rejects(
     runClaudeHookDrivenSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/exit",
+          submitKey: "\n",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "submitted-user-message") {
@@ -1223,7 +1253,9 @@ test("Claude hook-driven runner advances continuations from assistant markers an
   const spawner = new ScriptedClaudePtySpawner(async (options) => {
     const hookScriptPath = getHookScriptPath(projectRoot);
 
-    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    spawner.process.emitData(
+      "terminal marker INITIAL_DONE should not validate\n",
+    );
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "SessionStart",
       source: "startup",
@@ -1367,7 +1399,8 @@ test("Claude hook-driven runner captures structured transcript events and preser
     });
     await runHookScript(hookScriptPath, options.env ?? {}, {
       hook_event_name: "Stop",
-      last_assistant_message: "Question before marker INITIAL_DONE protocol tail",
+      last_assistant_message:
+        "Question before marker INITIAL_DONE protocol tail",
       session_id: "claude-session-1",
     });
     spawner.process.emitExit(0);

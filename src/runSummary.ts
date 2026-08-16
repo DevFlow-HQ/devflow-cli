@@ -8,7 +8,9 @@ export interface RunSummaryPaths {
 
 const ITERATION_MESSAGE_WIDTH = 82;
 
-function formatStopReason(stopReason: ExecutionLedger["final"]["stopReason"]): string {
+function formatStopReason(
+  stopReason: ExecutionLedger["final"]["stopReason"],
+): string {
   switch (stopReason) {
     case "terminal":
       return "Execution stopped because the provider reported that no more AFK tasks remain.";

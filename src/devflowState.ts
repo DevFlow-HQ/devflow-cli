@@ -14,10 +14,7 @@ import {
   type ProviderIdentity,
 } from "./adapters/providers.js";
 import type { ManagedProviderSessionPhase } from "./adapters/managedSessionAdapter.js";
-import {
-  serialize,
-  type ExecutionLedgerRecord,
-} from "./executionLedger.js";
+import { serialize, type ExecutionLedgerRecord } from "./executionLedger.js";
 
 const DEVFLOW_STATE_DIRECTORY = ".devflow";
 const DEVFLOW_CONFIG_FILENAME = "config.json";
@@ -44,8 +41,7 @@ const devFlowRunArtifactFilenames = {
 } as const;
 const DEVFLOW_PROJECT_CONTEXT_VERSION = 1;
 const projectContextLineCap = 150;
-const isoDateTimePattern =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const isoDateTimePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const gitHeadPattern = /^[0-9a-f]{40}$/;
 const dirtyFingerprintPattern = /^dirty-[0-9a-f]{16}$/;
 const projectContextMaxAgeMilliseconds = 3 * 24 * 60 * 60 * 1000;
@@ -83,10 +79,7 @@ export const DEVFLOW_GRILL_TRANSCRIPT_COMPLETE =
 const devFlowConfigSchema = z
   .object({
     defaultProvider: z.enum(
-      BUILT_IN_PROVIDER_IDS as [
-        BuiltInProviderId,
-        ...BuiltInProviderId[],
-      ],
+      BUILT_IN_PROVIDER_IDS as [BuiltInProviderId, ...BuiltInProviderId[]],
     ),
   })
   .strict();
@@ -114,9 +107,10 @@ const projectContextMetadataSchema = z
   })
   .strict();
 
-const projectContextFreshnessMetadataSchema = projectContextMetadataSchema.extend({
-  contextVersion: z.number().int(),
-});
+const projectContextFreshnessMetadataSchema =
+  projectContextMetadataSchema.extend({
+    contextVersion: z.number().int(),
+  });
 
 const providerIdentitySchema = z
   .object({
@@ -243,12 +237,7 @@ export interface DevFlowClock {
 }
 
 export type GitChangedPathStatus =
-  | "added"
-  | "modified"
-  | "deleted"
-  | "renamed"
-  | "copied"
-  | "untracked";
+  "added" | "modified" | "deleted" | "renamed" | "copied" | "untracked";
 
 export interface GitChangedPath {
   path: string;
@@ -705,10 +694,7 @@ function parseGitNameStatus(output: string): GitChangedPath[] {
   return changedPaths;
 }
 
-async function runGit(
-  projectRoot: string,
-  args: string[],
-): Promise<string> {
+async function runGit(projectRoot: string, args: string[]): Promise<string> {
   const result = await execa("git", args, {
     cwd: projectRoot,
     reject: true,
@@ -742,7 +728,8 @@ function formatRecentCommitsForManualFlow(output: string): string {
 
   return commits
     .map((entry) => {
-      const [hash = "", date = "", subject = "", body = ""] = entry.split("\x1f");
+      const [hash = "", date = "", subject = "", body = ""] =
+        entry.split("\x1f");
       const lines = [hash, date, subject];
 
       if (body.trim().length > 0) {
@@ -755,31 +742,29 @@ function formatRecentCommitsForManualFlow(output: string): string {
 }
 
 function removeDevFlowGitIgnoreEntries(content: string): string {
-  return content
-    .split(/(\r\n|\r|\n)/)
-    .reduce(
-      (accumulator, segment, index, segments) => {
-        if (index % 2 === 1) {
-          if (!accumulator.skipNextSeparator) {
-            accumulator.content += segment;
-          }
-          accumulator.skipNextSeparator = false;
-          return accumulator;
+  return content.split(/(\r\n|\r|\n)/).reduce(
+    (accumulator, segment, index, segments) => {
+      if (index % 2 === 1) {
+        if (!accumulator.skipNextSeparator) {
+          accumulator.content += segment;
         }
-
-        const isDevFlowEntry =
-          segment.trim() === ".devflow" || segment.trim() === ".devflow/";
-
-        if (isDevFlowEntry) {
-          accumulator.skipNextSeparator = segments[index + 1] !== undefined;
-          return accumulator;
-        }
-
-        accumulator.content += segment;
+        accumulator.skipNextSeparator = false;
         return accumulator;
-      },
-      { content: "", skipNextSeparator: false },
-    ).content;
+      }
+
+      const isDevFlowEntry =
+        segment.trim() === ".devflow" || segment.trim() === ".devflow/";
+
+      if (isDevFlowEntry) {
+        accumulator.skipNextSeparator = segments[index + 1] !== undefined;
+        return accumulator;
+      }
+
+      accumulator.content += segment;
+      return accumulator;
+    },
+    { content: "", skipNextSeparator: false },
+  ).content;
 }
 
 async function isOnlyDevFlowGitIgnoreAppend(
@@ -795,7 +780,10 @@ async function isOnlyDevFlowGitIgnoreAppend(
 async function isDevFlowOnlyUntrackedGitIgnore(
   projectRoot: string,
 ): Promise<boolean> {
-  const currentContent = await fs.readFile(join(projectRoot, ".gitignore"), "utf8");
+  const currentContent = await fs.readFile(
+    join(projectRoot, ".gitignore"),
+    "utf8",
+  );
 
   return removeDevFlowGitIgnoreEntries(currentContent).trim().length === 0;
 }
@@ -822,9 +810,8 @@ async function mapWithConcurrency<Input, Output>(
   }
 
   await Promise.all(
-    Array.from(
-      { length: Math.min(concurrency, inputs.length) },
-      async () => worker(),
+    Array.from({ length: Math.min(concurrency, inputs.length) }, async () =>
+      worker(),
     ),
   );
 
@@ -883,12 +870,7 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
     },
     async getDirtyState(projectRoot) {
       const staged = parseGitNameStatus(
-        await runGit(projectRoot, [
-          "diff",
-          "--cached",
-          "--name-status",
-          "-z",
-        ]),
+        await runGit(projectRoot, ["diff", "--cached", "--name-status", "-z"]),
       );
       const stagedDiff = await runGitBuffer(projectRoot, [
         "diff",
@@ -901,7 +883,8 @@ export function createDefaultGitProjectContextProbe(): GitProjectContextProbe {
       const hasOnlyDevFlowGitIgnoreAppend =
         unstaged.some(
           (changedPath) =>
-            changedPath.path === ".gitignore" && changedPath.status === "modified",
+            changedPath.path === ".gitignore" &&
+            changedPath.status === "modified",
         ) && (await isOnlyDevFlowGitIgnoreAppend(projectRoot));
       const relevantUnstaged = hasOnlyDevFlowGitIgnoreAppend
         ? unstaged.filter((changedPath) => changedPath.path !== ".gitignore")
@@ -1032,7 +1015,11 @@ async function computeGitDirtyFingerprint(
     }
   }
 
-  updateHashWithLengthPrefixedBuffer(hash, "staged-diff", dirtyState.stagedDiff);
+  updateHashWithLengthPrefixedBuffer(
+    hash,
+    "staged-diff",
+    dirtyState.stagedDiff,
+  );
   updateHashWithLengthPrefixedBuffer(
     hash,
     "unstaged-diff",
@@ -1077,7 +1064,9 @@ function formatValidationDetails(error: z.ZodError): string {
     .join("; ");
 }
 
-async function loadConfig(projectRoot: string): Promise<DevFlowConfig | undefined> {
+async function loadConfig(
+  projectRoot: string,
+): Promise<DevFlowConfig | undefined> {
   const configPath = getConfigPath(projectRoot);
   const configExists = await fs.pathExists(configPath);
 
@@ -1214,7 +1203,9 @@ async function readProjectContextMetadata(
     parsedMetadata = await fs.readJson(metadataPath);
   } catch (error) {
     const details =
-      error instanceof Error ? error.message : "Metadata file is not valid JSON.";
+      error instanceof Error
+        ? error.message
+        : "Metadata file is not valid JSON.";
     throw new InvalidProjectContextMetadataError(metadataPath, details);
   }
 
@@ -1237,11 +1228,14 @@ async function readProjectContextMetadataForFreshness(
     parsedMetadata = await fs.readJson(metadataPath);
   } catch (error) {
     const details =
-      error instanceof Error ? error.message : "Metadata file is not valid JSON.";
+      error instanceof Error
+        ? error.message
+        : "Metadata file is not valid JSON.";
     throw new InvalidProjectContextMetadataError(metadataPath, details);
   }
 
-  const result = projectContextFreshnessMetadataSchema.safeParse(parsedMetadata);
+  const result =
+    projectContextFreshnessMetadataSchema.safeParse(parsedMetadata);
 
   if (!result.success) {
     throw new InvalidProjectContextMetadataError(
@@ -1258,7 +1252,8 @@ async function readProjectContextMetadataForFreshness(
 async function writeProjectContext(
   projectRoot: string,
   content: string,
-  metadataOrOptions: ProjectContextMetadata | ProjectContextWriteOptions | undefined,
+  metadataOrOptions:
+    ProjectContextMetadata | ProjectContextWriteOptions | undefined,
   clock: DevFlowClock,
   gitProbe: GitProjectContextProbe,
 ): Promise<void> {
@@ -1458,7 +1453,10 @@ async function checkProjectContextFreshness(
 }
 
 function createOpaqueRunId(): string {
-  return crypto.randomUUID().replaceAll("-", "").slice(0, DEVFLOW_RUN_ID_LENGTH);
+  return crypto
+    .randomUUID()
+    .replaceAll("-", "")
+    .slice(0, DEVFLOW_RUN_ID_LENGTH);
 }
 
 function assertValidRunId(runId: string): void {
@@ -1492,12 +1490,23 @@ function normalizeIssueSlug(slug: string): string {
 function normalizeTranscriptContent(content: string): string {
   return content
     .replace(/\r\n?/g, "\n")
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(
+      // eslint-disable-next-line no-control-regex -- Transcript sanitization intentionally strips ANSI escapes.
+      /\u001b\[[0-9;?]*[ -/]*[@-~]/g,
+      "",
+    )
+    .replace(
+      // eslint-disable-next-line no-control-regex -- Transcript sanitization intentionally strips C0 controls.
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
+      "",
+    )
     .trim();
 }
 
-function formatTranscriptBlock(role: "Provider" | "User", content: string): string {
+function formatTranscriptBlock(
+  role: "Provider" | "User",
+  content: string,
+): string {
   const normalizedContent = normalizeTranscriptContent(content);
 
   return [
@@ -1518,7 +1527,9 @@ function formatGrillAttemptFailure(message: string): string {
 
   return [
     "Attempt failed before completion:",
-    normalizedMessage.length === 0 ? "Unknown provider failure." : normalizedMessage,
+    normalizedMessage.length === 0
+      ? "Unknown provider failure."
+      : normalizedMessage,
     "",
     "",
   ].join("\n");
@@ -1605,7 +1616,9 @@ async function readGrillCheckpoint(
     checkpoint = await fs.readJson(checkpointPath);
   } catch (error) {
     const details =
-      error instanceof Error ? error.message : "Checkpoint file is not valid JSON.";
+      error instanceof Error
+        ? error.message
+        : "Checkpoint file is not valid JSON.";
     throw new InvalidGrillCheckpointError(checkpointPath, details);
   }
 
@@ -1678,7 +1691,10 @@ async function createRun(
   ): Promise<void> {
     try {
       await fs.ensureDir(dirname(artifactPath));
-      await fs.writeFile(artifactPath, content, { encoding: "utf8", flag: "wx" });
+      await fs.writeFile(artifactPath, content, {
+        encoding: "utf8",
+        flag: "wx",
+      });
     } catch (error) {
       // TODO : this manual type guard can collapse to
       // `(error as NodeJS.ErrnoException)?.code === "EEXIST"`.
@@ -1754,7 +1770,8 @@ async function createRun(
         "utf8",
       );
     },
-    getGrillTranscriptStatus: () => getGrillTranscriptStatus(grillTranscriptPath),
+    getGrillTranscriptStatus: () =>
+      getGrillTranscriptStatus(grillTranscriptPath),
     readGrillCheckpoint: () => readGrillCheckpoint(grillCheckpointPath),
     readProviderSessionState: () =>
       readProviderSessionState(providerSessionStatePath),
@@ -1801,7 +1818,8 @@ async function createRun(
         );
       }
 
-      const transcriptStatus = await getGrillTranscriptStatus(grillTranscriptPath);
+      const transcriptStatus =
+        await getGrillTranscriptStatus(grillTranscriptPath);
 
       if (transcriptStatus !== "complete") {
         throw new InvalidGrillCheckpointError(
@@ -1810,7 +1828,9 @@ async function createRun(
         );
       }
 
-      await fs.writeJson(grillCheckpointPath, validatedCheckpoint, { spaces: 2 });
+      await fs.writeJson(grillCheckpointPath, validatedCheckpoint, {
+        spaces: 2,
+      });
     },
     writeIssue: async (slug, content) => {
       const normalizedSlug = normalizeIssueSlug(slug);
@@ -1822,7 +1842,11 @@ async function createRun(
       );
     },
     writePrd: (content) =>
-      writeArtifact("prd", getRunArtifactPath(projectRoot, runId, "prd"), content),
+      writeArtifact(
+        "prd",
+        getRunArtifactPath(projectRoot, runId, "prd"),
+        content,
+      ),
     appendExecutionRecord: async (record) => {
       const content = serialize(record);
       const artifactPath = getRunArtifactPath(projectRoot, runId, "execution");

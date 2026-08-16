@@ -57,13 +57,14 @@ export function createLogger(options: CreateLoggerOptions): Logger {
       buildEntry({ level, msg, context, now, ref }),
     )}\n`;
 
-    writeLine(
-      options.repoLogsDirectory,
-      line,
-      now,
-      ensuredDirectories,
-      () =>
-        writeLine(options.homeLogsDirectory, line, now, ensuredDirectories, () => {}),
+    writeLine(options.repoLogsDirectory, line, now, ensuredDirectories, () =>
+      writeLine(
+        options.homeLogsDirectory,
+        line,
+        now,
+        ensuredDirectories,
+        () => {},
+      ),
     );
 
     return ref;
@@ -82,7 +83,8 @@ export function createLogger(options: CreateLoggerOptions): Logger {
     error: (msg, context) => {
       write("error", msg, context);
     },
-    critical: (msg, context) => write("critical", msg, context) ?? "err_unknown",
+    critical: (msg, context) =>
+      write("critical", msg, context) ?? "err_unknown",
   };
 }
 

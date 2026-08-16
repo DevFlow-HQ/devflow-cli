@@ -63,12 +63,20 @@ test("Codex launch args use auto-review without disabling approval or sandbox ga
     "codex-session-123",
   ]);
 
-  for (const args of [freshHookArgs, freshJsonlArgs, resumeHookArgs, resumeJsonlArgs]) {
+  for (const args of [
+    freshHookArgs,
+    freshJsonlArgs,
+    resumeHookArgs,
+    resumeJsonlArgs,
+  ]) {
     assert.equal(args.includes("-a"), false);
     assert.equal(args.includes("--ask-for-approval"), false);
     assert.equal(args.includes("--sandbox"), false);
     assert.equal(args.includes("-s"), false);
-    assert.equal(args.includes("--dangerously-bypass-approvals-and-sandbox"), false);
+    assert.equal(
+      args.includes("--dangerously-bypass-approvals-and-sandbox"),
+      false,
+    );
   }
 
   for (const args of [freshHookArgs, resumeHookArgs]) {
@@ -98,9 +106,7 @@ test("Codex resume appends to the same rollout whose filename carries session_me
 
   assert.deepEqual(
     rolloutFiles,
-    [
-      "rollout-2026-05-31T19-31-13-019e7e56-baeb-7142-b6a7-c3a7a5ee4d13.jsonl",
-    ],
+    ["rollout-2026-05-31T19-31-13-019e7e56-baeb-7142-b6a7-c3a7a5ee4d13.jsonl"],
     "fixture must contain exactly the original rollout; if Codex starts forking resume rollouts, update the resume architecture or this explicit regression pin",
   );
 

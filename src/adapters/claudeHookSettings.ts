@@ -16,8 +16,7 @@ interface ClaudeHookSettingsOptions {
   hookScriptPath: string;
 }
 
-export interface CleanupClaudeHookSettingsOptions
-  extends ClaudeHookSettingsOptions {
+export interface CleanupClaudeHookSettingsOptions extends ClaudeHookSettingsOptions {
   deleteIfEmptyAndCreatedByDevFlow: boolean;
 }
 
@@ -210,11 +209,7 @@ function removeDevFlowCommandsFromMatcherEntry(
 
   const remainingHooks = entry.hooks.filter(
     (hook) =>
-      !(
-        isObject(hook) &&
-        hook.type === "command" &&
-        hook.command === command
-      ),
+      !(isObject(hook) && hook.type === "command" && hook.command === command),
   );
 
   if (remainingHooks.length === 0) {
@@ -239,7 +234,10 @@ function ensureObjectProperty(parent: JsonObject, key: string): JsonObject {
   return nextValue;
 }
 
-function getObjectProperty(parent: JsonObject, key: string): JsonObject | undefined {
+function getObjectProperty(
+  parent: JsonObject,
+  key: string,
+): JsonObject | undefined {
   const value = parent[key];
 
   return isObject(value) && !Array.isArray(value) ? value : undefined;

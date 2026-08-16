@@ -54,7 +54,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   onExit(
-    listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
+    listener: (event: {
+      exitCode: number;
+      signal: NodeJS.Signals | null;
+    }) => void,
   ): { dispose(): void } {
     this.emitter.on("exit", listener);
 
@@ -143,7 +146,10 @@ class FakeUserInput extends EventEmitter implements UserInput {
   resumeCount = 0;
   pauseCount = 0;
 
-  constructor(readonly isTTY = true, readonly isRaw = false) {
+  constructor(
+    readonly isTTY = true,
+    readonly isRaw = false,
+  ) {
     super();
   }
 
@@ -151,10 +157,7 @@ class FakeUserInput extends EventEmitter implements UserInput {
     this.rawModeChanges.push(enabled);
   }
 
-  override on(
-    event: "data",
-    listener: (chunk: Buffer | string) => void,
-  ): this {
+  override on(event: "data", listener: (chunk: Buffer | string) => void): this {
     return super.on(event, listener);
   }
 
@@ -395,7 +398,13 @@ async function prepareFixedRollout(projectRoot: string): Promise<{
   rolloutPath: string;
   sessionLogLocator: SessionLogLocator;
 }> {
-  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
+  const codexHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".codex",
+  );
   const rollout = "sessions/2026/05/30/rollout-session.jsonl";
   const rolloutPath = join(codexHome, rollout);
 
@@ -546,7 +555,8 @@ test("Codex JSONL runner completes a single phase from rollout task completion w
       providerSessionId: event.providerSessionId,
       source: event.source,
       structured: event.structured,
-      message: event.type === "submitted-user-message" ? event.message : undefined,
+      message:
+        event.type === "submitted-user-message" ? event.message : undefined,
       origin:
         event.type === "submitted-user-message" ? event.origin : undefined,
       assistantMessage:
@@ -738,7 +748,8 @@ test("Codex JSONL runner classifies native user messages and suppresses managed 
 
 test("Codex JSONL runner keeps draining after PTY exit while a JSONL read is active", async () => {
   const projectRoot = makeTempDir("devflow-codex-jsonl-");
-  const { codexHome, sessionLogLocator } = await prepareFixedRollout(projectRoot);
+  const { codexHome, sessionLogLocator } =
+    await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
   const race = createPostExitRaceEventSource([
     {
@@ -803,7 +814,13 @@ test("Codex JSONL runner keeps draining after PTY exit while a JSONL read is act
 
 test("Codex JSONL runner resumes by tailing an existing rollout from the captured offset", async () => {
   const projectRoot = makeTempDir("devflow-codex-jsonl-");
-  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
+  const codexHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".codex",
+  );
   const rollout =
     "sessions/2026/05/30/rollout-2026-05-30T00-00-00-codex-session-1.jsonl";
   const rolloutPath = join(codexHome, rollout);
@@ -831,7 +848,9 @@ test("Codex JSONL runner resumes by tailing an existing rollout from the capture
         debug: {
           scopedProviderHome: codexHome,
           searchedPattern: "sessions/**/rollout-*.jsonl",
-          candidates: [{ filePath: rolloutPath, size: startOffset, mtimeMs: 0 }],
+          candidates: [
+            { filePath: rolloutPath, size: startOffset, mtimeMs: 0 },
+          ],
           ignoredPreexistingCount: 0,
           emptyCandidateCount: 0,
           multipleCandidates: false,
@@ -885,7 +904,13 @@ test("Codex JSONL runner resumes by tailing an existing rollout from the capture
 
 test("Codex JSONL runner fresh launch snapshots before spawn and tails selected rollouts from offset zero", async () => {
   const projectRoot = makeTempDir("devflow-codex-jsonl-");
-  const codexHome = join(projectRoot, ".devflow", "runs", "runabc123456", ".codex");
+  const codexHome = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "runabc123456",
+    ".codex",
+  );
   const existingRollout = "sessions/2026/05/30/rollout-existing.jsonl";
   const freshRollout = "sessions/2026/05/30/rollout-fresh.jsonl";
   const existingRolloutPath = join(codexHome, existingRollout);
@@ -934,7 +959,11 @@ test("Codex JSONL runner fresh launch snapshots before spawn and tails selected 
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     assert.equal(options.env?.CODEX_HOME, codexHome);
     await appendSessionMeta(codexHome, freshRollout);
-    await appendTaskComplete(codexHome, freshRollout, "fresh turn INITIAL_DONE");
+    await appendTaskComplete(
+      codexHome,
+      freshRollout,
+      "fresh turn INITIAL_DONE",
+    );
     await waitForPtyWrites(spawner.process, 1);
     await waitForProviderEvent(
       events,
@@ -965,9 +994,10 @@ test("Codex JSONL runner fresh launch snapshots before spawn and tails selected 
   );
 
   assert.deepEqual(calls, ["snapshot", "spawn", "locateActiveLog"]);
-  assert.deepEqual(spawner.calls.map((call) => call.args), [
-    ["--model", "gpt-test"],
-  ]);
+  assert.deepEqual(
+    spawner.calls.map((call) => call.args),
+    [["--model", "gpt-test"]],
+  );
   assert.deepEqual(
     events.map((event) =>
       event.type === "turn-completed"
@@ -994,7 +1024,9 @@ test("Codex JSONL runner keeps PTY control-only while mirroring output, stdin, a
   const { entries, logger } = createCapturingLogger();
   const spawner = new ScriptedCodexPtySpawner(async (options) => {
     assert.equal(options.env?.CODEX_HOME, codexHome);
-    spawner.process.emitData("terminal marker INITIAL_DONE should not validate\n");
+    spawner.process.emitData(
+      "terminal marker INITIAL_DONE should not validate\n",
+    );
     userInput.emitData("hello\r");
     terminal.emitResize(120, 40);
     await waitForPtyWrites(spawner.process, 2);
@@ -1314,7 +1346,7 @@ test("Codex JSONL runner classifies malformed load-bearing records as event capt
 
 test("Codex JSONL runner skips malformed unrelated completed lines", async () => {
   const projectRoot = makeTempDir("devflow-codex-jsonl-");
-  const { codexHome, rollout, rolloutPath, sessionLogLocator } =
+  const { codexHome, rolloutPath, sessionLogLocator } =
     await prepareFixedRollout(projectRoot);
   const events: ManagedProviderSessionEvent[] = [];
   await fs.appendFile(rolloutPath, "{unrelated}\n", "utf8");
@@ -1393,7 +1425,10 @@ test("Codex JSONL runner force-kills after valid completion and still resolves s
   });
 
   const result = await runCodexJsonlSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 },
+    },
     createInput(projectRoot),
     {
       ptySpawner: spawner,
@@ -1413,7 +1448,8 @@ test("Codex JSONL runner force-kills after valid completion and still resolves s
   });
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit", "\r",
+    "/quit",
+    "\r",
   ]);
   assert.equal(spawner.process.killed, true);
 });
@@ -1432,7 +1468,10 @@ test("Codex JSONL runner resolves success after graceful shutdown exits naturall
   });
 
   const result = await runCodexJsonlSession(
-    { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+    {
+      ...createCommand(),
+      gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 },
+    },
     createInput(projectRoot, {
       onProviderEvent(event) {
         events.push(event);
@@ -1456,7 +1495,8 @@ test("Codex JSONL runner resolves success after graceful shutdown exits naturall
   });
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit", "\r",
+    "/quit",
+    "\r",
   ]);
   assert.equal(spawner.process.killed, false);
   assert.equal(events.at(-1)?.type, "session-completed");
@@ -1476,7 +1516,14 @@ test("Codex JSONL runner raises cleanup errors only when shutdown force-kill thr
 
   await assert.rejects(
     runCodexJsonlSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/quit",
+          submitKey: "\r",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot),
       {
         ptySpawner: spawner,
@@ -1492,7 +1539,8 @@ test("Codex JSONL runner raises cleanup errors only when shutdown force-kill thr
   );
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit", "\r",
+    "/quit",
+    "\r",
   ]);
 });
 
@@ -1509,7 +1557,14 @@ test("Codex JSONL runner rejects original failures while detached cleanup shuts 
 
   await assert.rejects(
     runCodexJsonlSession(
-      { ...createCommand(), gracefulExitCommand: { text: "/quit", submitKey: "\r", submitDelayMs: 1 } },
+      {
+        ...createCommand(),
+        gracefulExitCommand: {
+          text: "/quit",
+          submitKey: "\r",
+          submitDelayMs: 1,
+        },
+      },
       createInput(projectRoot, {
         onProviderEvent(event) {
           if (event.type === "turn-completed") {
@@ -1534,6 +1589,7 @@ test("Codex JSONL runner rejects original failures while detached cleanup shuts 
   await waitUntil(() => spawner.process.killed);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Start\u001b[201~\r",
-    "/quit", "\r",
+    "/quit",
+    "\r",
   ]);
 });

@@ -30,7 +30,9 @@ export function createStructuredGrillTranscriptRecorder(
   let closed = false;
   let completionMarkerObserved = false;
 
-  async function recordEvent(event: ManagedProviderSessionEvent): Promise<void> {
+  async function recordEvent(
+    event: ManagedProviderSessionEvent,
+  ): Promise<void> {
     if (closed) {
       return;
     }
@@ -46,10 +48,9 @@ export function createStructuredGrillTranscriptRecorder(
         completionMarkerObserved ||
         (activeCompletionMarker !== undefined &&
           event.assistantMessage.includes(activeCompletionMarker));
-      const transcriptContent = stripCompletionMarkers(
-        event.assistantMessage,
-        [activeCompletionMarker],
-      );
+      const transcriptContent = stripCompletionMarkers(event.assistantMessage, [
+        activeCompletionMarker,
+      ]);
 
       if (isEmptyTranscriptBlock(transcriptContent)) {
         return;
@@ -111,7 +112,9 @@ export function stripCompletionMarkers(
   markers: Array<string | undefined>,
 ): string {
   const markerIndexes = markers
-    .filter((marker): marker is string => marker !== undefined && marker.length > 0)
+    .filter(
+      (marker): marker is string => marker !== undefined && marker.length > 0,
+    )
     .map((marker) => content.indexOf(marker))
     .filter((markerIndex) => markerIndex !== -1);
 
@@ -123,8 +126,14 @@ export function stripCompletionMarkers(
 }
 
 function isEmptyTranscriptBlock(content: string): boolean {
-  return stripAnsi(content)
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    .trim().length === 0;
+  return (
+    stripAnsi(content)
+      .replace(/\r\n?/g, "\n")
+      .replace(
+        // eslint-disable-next-line no-control-regex -- Transcript sanitization intentionally strips C0 controls.
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
+        "",
+      )
+      .trim().length === 0
+  );
 }

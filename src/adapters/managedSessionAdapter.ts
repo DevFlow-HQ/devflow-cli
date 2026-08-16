@@ -13,11 +13,7 @@ export type ProviderDetectionResult =
 
 export type ManagedProviderSessionControlTransport = "pty" | "api";
 export type ManagedProviderSessionEventSource =
-  | "pty"
-  | "hooks"
-  | "jsonl"
-  | "api"
-  | "logs";
+  "pty" | "hooks" | "jsonl" | "api" | "logs";
 
 export interface ManagedProviderSessionCapabilities {
   controlTransport: ManagedProviderSessionControlTransport;
@@ -87,8 +83,7 @@ export interface ManagedProviderSessionInput {
   onProviderEvent?: ManagedProviderSessionEventCallback;
 }
 
-export interface ManagedProviderSessionResumeInput
-  extends ManagedProviderSessionInput {
+export interface ManagedProviderSessionResumeInput extends ManagedProviderSessionInput {
   providerSessionId: string;
 }
 
@@ -181,7 +176,9 @@ export class ProviderSessionLaunchError extends Error {
     const causeMessage =
       cause instanceof Error ? cause.message : "Unknown launch failure";
 
-    super(`Provider session for "${provider.id}" could not be launched: ${causeMessage}.`);
+    super(
+      `Provider session for "${provider.id}" could not be launched: ${causeMessage}.`,
+    );
     this.name = "ProviderSessionLaunchError";
     this.provider = provider;
     this.cause = cause;
@@ -226,7 +223,9 @@ export class ProviderSessionTranscriptCaptureError extends Error {
 
   constructor(provider: ProviderIdentity, cause: unknown) {
     const causeMessage =
-      cause instanceof Error ? cause.message : "Unknown transcript capture failure";
+      cause instanceof Error
+        ? cause.message
+        : "Unknown transcript capture failure";
 
     super(
       `Provider session for "${provider.id}" could not capture transcript content: ${causeMessage}.`,

@@ -94,10 +94,10 @@ test("logger derives daily filenames from the injected clock local date", () => 
   logger.info("first day");
   logger.info("second day");
 
-  assert.deepEqual(
-    fs.readdirSync(repoLogsDirectory).sort(),
-    ["devflow-2026-05-24.log", "devflow-2026-05-25.log"],
-  );
+  assert.deepEqual(fs.readdirSync(repoLogsDirectory).sort(), [
+    "devflow-2026-05-24.log",
+    "devflow-2026-05-25.log",
+  ]);
 });
 
 test("logger serializes errors and critical refs only on critical entries", () => {
@@ -143,15 +143,20 @@ test("logger falls back to home logs and never throws when writes fail", () => {
     clock: { now: () => new Date("2026-05-24T10:11:12.000Z") },
   });
 
-  assert.doesNotThrow(() => logger.info("fallback write", { runId: "run-123" }));
-  assert.deepEqual(readJsonl(join(homeLogsDirectory, "devflow-2026-05-24.log")), [
-    {
-      ts: "2026-05-24T10:11:12.000Z",
-      level: "info",
-      runId: "run-123",
-      msg: "fallback write",
-    },
-  ]);
+  assert.doesNotThrow(() =>
+    logger.info("fallback write", { runId: "run-123" }),
+  );
+  assert.deepEqual(
+    readJsonl(join(homeLogsDirectory, "devflow-2026-05-24.log")),
+    [
+      {
+        ts: "2026-05-24T10:11:12.000Z",
+        level: "info",
+        runId: "run-123",
+        msg: "fallback write",
+      },
+    ],
+  );
 
   const brokenHomeLogsDirectory = join(root, "home-logs-file");
   fs.writeFileSync(brokenHomeLogsDirectory, "not a directory");
@@ -167,8 +172,14 @@ test("logger falls back to home logs and never throws when writes fail", () => {
 test("logger prunes diagnostic log files older than thirty days on startup", () => {
   const { repoLogsDirectory, homeLogsDirectory } = createTempLogsDirectories();
   fs.writeFileSync(join(repoLogsDirectory, "devflow-2026-04-23.log"), "old\n");
-  fs.writeFileSync(join(repoLogsDirectory, "devflow-2026-04-24.log"), "boundary\n");
-  fs.writeFileSync(join(repoLogsDirectory, "devflow-2026-05-04.log"), "newer\n");
+  fs.writeFileSync(
+    join(repoLogsDirectory, "devflow-2026-04-24.log"),
+    "boundary\n",
+  );
+  fs.writeFileSync(
+    join(repoLogsDirectory, "devflow-2026-05-04.log"),
+    "newer\n",
+  );
   fs.writeFileSync(join(repoLogsDirectory, "notes.txt"), "unrelated\n");
 
   createLogger({

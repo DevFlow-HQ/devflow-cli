@@ -33,7 +33,9 @@ function assistantRecord(
       id: overrides.id ?? "msg_1",
       role: "assistant",
       stop_reason: stopReason,
-      content: overrides.content ?? [{ type: "text", text: overrides.text ?? "Done " }],
+      content: overrides.content ?? [
+        { type: "text", text: overrides.text ?? "Done " },
+      ],
     },
   };
 }
@@ -134,7 +136,10 @@ test("Claude JSONL normalizer fails capture for abnormal assistant stop reasons"
       (error) => {
         assert.ok(error instanceof ProviderSessionEventCaptureError);
         assert.ok(error.cause instanceof ClaudeJsonlRecordMalformedError);
-        assert.equal(error.cause.reason, `unexpected assistant stop_reason ${stopReason}`);
+        assert.equal(
+          error.cause.reason,
+          `unexpected assistant stop_reason ${stopReason}`,
+        );
         return true;
       },
     );
@@ -164,7 +169,10 @@ test("Claude JSONL normalizer ignores mid-turn and sidechain records", () => {
     normalizeClaudeJsonlRecordForProvider({
       provider: claudeProvider,
       normalizer,
-      record: assistantRecord({ isSidechain: true, text: "sub-agent INITIAL_DONE" }),
+      record: assistantRecord({
+        isSidechain: true,
+        text: "sub-agent INITIAL_DONE",
+      }),
     }),
     undefined,
   );
@@ -172,7 +180,11 @@ test("Claude JSONL normalizer ignores mid-turn and sidechain records", () => {
     normalizeClaudeJsonlRecordForProvider({
       provider: claudeProvider,
       normalizer,
-      record: { type: "user", isSidechain: true, message: { content: "ignored" } },
+      record: {
+        type: "user",
+        isSidechain: true,
+        message: { content: "ignored" },
+      },
     }),
     undefined,
   );

@@ -27,7 +27,8 @@ function createFreshnessProbe(
   return {
     isRepository: async () => true,
     getCurrentHead: async () => "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
-    getRecentCommits: async () => "abcdefabcdefabcdefabcdefabcdefabcdefabcd\n2026-06-02\nShip test fixture",
+    getRecentCommits: async () =>
+      "abcdefabcdefabcdefabcdefabcdefabcdefabcd\n2026-06-02\nShip test fixture",
     getCommittedChangesSince: async () => ({
       status: "available",
       changedPaths: [],
@@ -154,7 +155,10 @@ test("project context is absent until written and then readable from its canonic
   await state.projectContext.write("# Project context\n");
 
   assert.equal(
-    await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
+    await fs.readFile(
+      join(projectRoot, ".devflow", "project-context.md"),
+      "utf8",
+    ),
     "# Project context\n",
   );
   assert.equal(await state.projectContext.read(), "# Project context\n");
@@ -169,7 +173,10 @@ test("project context writes overwrite the existing shared artifact in place", a
 
   assert.equal(await state.projectContext.read(), "refreshed snapshot");
   assert.equal(
-    await fs.readFile(join(projectRoot, ".devflow", "project-context.md"), "utf8"),
+    await fs.readFile(
+      join(projectRoot, ".devflow", "project-context.md"),
+      "utf8",
+    ),
     "refreshed snapshot",
   );
 });
@@ -253,7 +260,9 @@ test("project context metadata is written beside the shared context and strictly
   });
 
   assert.deepEqual(
-    await fs.readJson(join(projectRoot, ".devflow", "project-context.meta.json")),
+    await fs.readJson(
+      join(projectRoot, ".devflow", "project-context.meta.json"),
+    ),
     {
       generatedAt: "2026-05-23T10:00:00.000Z",
       gitHead: "0123456789abcdef0123456789abcdef01234567",
@@ -981,7 +990,13 @@ test("createRun returns isolated run handles with opaque ids and persisted creat
   );
   assert.equal(
     firstRun.paths.projectContextCandidate,
-    join(projectRoot, ".devflow", "runs", firstRun.id, "project-context.candidate.md"),
+    join(
+      projectRoot,
+      ".devflow",
+      "runs",
+      firstRun.id,
+      "project-context.candidate.md",
+    ),
   );
   assert.equal(
     firstRun.paths.projectContextArtifact,
@@ -995,7 +1010,10 @@ test("createRun returns isolated run handles with opaque ids and persisted creat
     firstRun.paths.grillCheckpoint,
     join(firstRun.paths.runDirectory, "grill-checkpoint.json"),
   );
-  assert.equal(firstRun.paths.prdArtifact, join(firstRun.paths.runDirectory, "prd.md"));
+  assert.equal(
+    firstRun.paths.prdArtifact,
+    join(firstRun.paths.runDirectory, "prd.md"),
+  );
   assert.equal(
     firstRun.paths.executionArtifact,
     join(firstRun.paths.runDirectory, "execution.jsonl"),
@@ -1050,7 +1068,7 @@ test("run handles write canonical artifacts without exposing filenames to caller
   );
   assert.equal(
     await fs.readFile(join(run.paths.runDirectory, "execution.jsonl"), "utf8"),
-    `{\"type\":\"start\",\"stage\":\"execute\",\"initialIssueFilenames\":[],\"maxIterations\":5}\n`,
+    '{"type":"start","stage":"execute","initialIssueFilenames":[],"maxIterations":5}\n',
   );
   assert.equal(
     await fs.pathExists(join(run.paths.runDirectory, "validation.json")),

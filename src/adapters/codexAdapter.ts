@@ -1,9 +1,6 @@
 import which from "which";
 
-import {
-  buildTierResolutionTrace,
-  emitAdapterTrace,
-} from "./adapterTrace.js";
+import { buildTierResolutionTrace, emitAdapterTrace } from "./adapterTrace.js";
 import {
   type ManagedProviderSessionCapabilities,
   type ManagedProviderSessionInput,
@@ -85,7 +82,8 @@ export function createCodexAdapter(
   // work very similarly. They should be refactored to have a common architecture.
   const provider = getBuiltInProviderIdentity("codex");
   const eventSource = options.eventSource ?? "hooks";
-  const hookRunner = options.runCodexHookDrivenSession ?? runCodexHookDrivenSession;
+  const hookRunner =
+    options.runCodexHookDrivenSession ?? runCodexHookDrivenSession;
   const jsonlRunner = options.runCodexJsonlSession ?? runCodexJsonlSession;
   const logger = options.logger ?? NoopLogger;
   const hasInjectedLogger = options.logger !== undefined;
@@ -175,7 +173,6 @@ export function createCodexAdapter(
         eventSource === "jsonl" ? input.providerSessionId : undefined,
     });
   }
-
 
   async function runSelectedRunner(runnerOptions: {
     executable: string;

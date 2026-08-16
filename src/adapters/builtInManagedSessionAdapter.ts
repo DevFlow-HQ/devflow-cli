@@ -2,10 +2,7 @@ import {
   createClaudeAdapter,
   type ClaudeManagedSessionEventSource,
 } from "./claudeAdapter.js";
-import {
-  buildTierResolutionTrace,
-  emitAdapterTrace,
-} from "./adapterTrace.js";
+import { buildTierResolutionTrace, emitAdapterTrace } from "./adapterTrace.js";
 import type { CommandManagedSessionAdapterOptions } from "./commandManagedSessionAdapter.js";
 import {
   createCodexAdapter,

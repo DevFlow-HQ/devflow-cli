@@ -9,6 +9,7 @@ Write a strict JSON object to this absolute artifact path:
 {{ARTIFACT_PATH}}
 
 Schema requirements:
+
 - The artifact must be valid JSON.
 - The root value must be an object with no extra keys.
 - Required keys:
@@ -18,6 +19,7 @@ Schema requirements:
   - "needsClarification": boolean
 
 Completion marker discipline:
+
 - The completion marker is DevFlow's single done signal for this stage. Emitting it tells DevFlow this stage's work is finished; DevFlow will immediately move on, and you get no further turns for that work.
 - Emit it exactly once, alone, only after you have written and validated the required artifact.
 - Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.

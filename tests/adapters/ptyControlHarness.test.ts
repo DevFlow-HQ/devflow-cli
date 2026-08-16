@@ -22,7 +22,10 @@ class FakePtyProcess implements PtyProcess {
   onData(): void {}
 
   onExit(
-    listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
+    listener: (event: {
+      exitCode: number;
+      signal: NodeJS.Signals | null;
+    }) => void,
   ): { dispose(): void } {
     this.emitter.on("exit", listener);
 
@@ -76,7 +79,10 @@ class FakePtySpawner implements PtySpawner {
 class FakeUserInput extends EventEmitter implements UserInput {
   readonly rawModeChanges: boolean[] = [];
 
-  constructor(readonly isTTY = true, readonly isRaw = false) {
+  constructor(
+    readonly isTTY = true,
+    readonly isRaw = false,
+  ) {
     super();
   }
 
@@ -84,10 +90,7 @@ class FakeUserInput extends EventEmitter implements UserInput {
     this.rawModeChanges.push(enabled);
   }
 
-  override on(
-    event: "data",
-    listener: (chunk: Buffer | string) => void,
-  ): this {
+  override on(event: "data", listener: (chunk: Buffer | string) => void): this {
     return super.on(event, listener);
   }
 

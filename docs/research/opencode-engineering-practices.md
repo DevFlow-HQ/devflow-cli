@@ -108,27 +108,27 @@ This answers [issue 10](https://github.com/DevFlow-HQ/devflow-cli/issues/10) as 
 
 ## Explicit Rejections
 
-| OpenCode shape | Crucible classification | Reason |
-| --- | --- | --- |
-| Monorepo/package count and Turbo workspace graph | **Reject** | Crucible has one deployable CLI and no demonstrated ownership/runtime seams requiring packages. |
-| Effect service/layer graph | **Reject** | Deep Interfaces and dependency injection are transferable; OpenCode's chosen framework is not. |
-| Bun APIs/toolchain and workspace catalog | **Reject** | Crucible's supported runtime is Node/npm. Changing it must be justified by product/runtime evidence, not imitation. |
-| Wildcard package subpath exports | **Reject as default** | OpenCode itself uses narrow entrypoints where isolation matters; Crucible should expose only current consumers' needs. |
-| A local `AGENTS.md` in every folder | **Reject** | Empty/generic hierarchy adds context and authority ambiguity without reducing discovery. |
-| Full design history in baseline agent context | **Reject** | Context should carry current constraints and routes to need-triggered detail, not every historical decision. |
+| OpenCode shape                                   | Crucible classification | Reason                                                                                                                 |
+| ------------------------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Monorepo/package count and Turbo workspace graph | **Reject**              | Crucible has one deployable CLI and no demonstrated ownership/runtime seams requiring packages.                        |
+| Effect service/layer graph                       | **Reject**              | Deep Interfaces and dependency injection are transferable; OpenCode's chosen framework is not.                         |
+| Bun APIs/toolchain and workspace catalog         | **Reject**              | Crucible's supported runtime is Node/npm. Changing it must be justified by product/runtime evidence, not imitation.    |
+| Wildcard package subpath exports                 | **Reject as default**   | OpenCode itself uses narrow entrypoints where isolation matters; Crucible should expose only current consumers' needs. |
+| A local `AGENTS.md` in every folder              | **Reject**              | Empty/generic hierarchy adds context and authority ambiguity without reducing discovery.                               |
+| Full design history in baseline agent context    | **Reject**              | Context should carry current constraints and routes to need-triggered detail, not every historical decision.           |
 
 ## Mechanical Checks Versus Guidance
 
-| Concern | Mechanical now or when its seam exists | Documentation/review only |
-| --- | --- | --- |
-| Dependency direction | Focused forbidden-import tests for presentation/provider/runtime violations | Decide ownership and allowed direction from Crucible's glossary |
-| Public surface | Explicit `exports`, package smoke test, bundle/import-boundary test | Justify each new external entrypoint |
-| Runtime discipline | Lockfile, engine/type/build/CI alignment, typecheck, test, packaged startup | Explain dependency and patch purpose |
-| Generated artifacts | Regenerate-and-diff CI gate | Decide what is generated and authoritative |
-| Tests/fixtures | Default deterministic suite, cleanup assertions, secret scan, opt-in live smoke suite | Choose the right test layer and representative fixture cases |
-| Refactoring/deletion | Reference search, no dead exports, focused/full tests | Preserve named invariants and justify compatibility |
-| Module Interface | Type-level exports and black-box Interface tests | Judge Depth, cohesion, and seam placement |
-| Agent guidance | Link/index validation and deterministic scope lookup | Decide what is non-obvious, current, and correctly scoped |
+| Concern              | Mechanical now or when its seam exists                                                | Documentation/review only                                       |
+| -------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Dependency direction | Focused forbidden-import tests for presentation/provider/runtime violations           | Decide ownership and allowed direction from Crucible's glossary |
+| Public surface       | Explicit `exports`, package smoke test, bundle/import-boundary test                   | Justify each new external entrypoint                            |
+| Runtime discipline   | Lockfile, engine/type/build/CI alignment, typecheck, test, packaged startup           | Explain dependency and patch purpose                            |
+| Generated artifacts  | Regenerate-and-diff CI gate                                                           | Decide what is generated and authoritative                      |
+| Tests/fixtures       | Default deterministic suite, cleanup assertions, secret scan, opt-in live smoke suite | Choose the right test layer and representative fixture cases    |
+| Refactoring/deletion | Reference search, no dead exports, focused/full tests                                 | Preserve named invariants and justify compatibility             |
+| Module Interface     | Type-level exports and black-box Interface tests                                      | Judge Depth, cohesion, and seam placement                       |
+| Agent guidance       | Link/index validation and deterministic scope lookup                                  | Decide what is non-obvious, current, and correctly scoped       |
 
 Do not add a general architecture linter merely because one is possible. Start with the few rules whose violation would silently couple providers, workflow policy, persistence, or presentation.
 

@@ -89,9 +89,7 @@ export interface RunExecutionRequestOptions {
     };
   }) => void | Promise<void>;
   onStageStart?: (stage: PipelineStage) => void | Promise<void>;
-  onExecutionIteration?: (event: {
-    iteration: number;
-  }) => void | Promise<void>;
+  onExecutionIteration?: (event: { iteration: number }) => void | Promise<void>;
 }
 
 export interface RunExecutionRequestResult {
@@ -164,10 +162,7 @@ const intentArtifactSchema = z
 export type IntentArtifact = z.infer<typeof intentArtifactSchema>;
 
 export type BootstrapProvenance =
-  | "reused"
-  | "generated"
-  | "refreshed"
-  | "metadata-updated";
+  "reused" | "generated" | "refreshed" | "metadata-updated";
 
 export class InvalidIntentArtifactError extends Error {
   readonly artifactPath: string;
@@ -543,7 +538,9 @@ function createCompletionMarker(prefix = "DEVFLOW_INTENT_COMPLETE"): string {
   return `${prefix}_${crypto.randomBytes(16).toString("hex")}`;
 }
 
-function formatChangedPathsForPrompt(changedPaths: GitChangedPath[] | undefined): string {
+function formatChangedPathsForPrompt(
+  changedPaths: GitChangedPath[] | undefined,
+): string {
   if (changedPaths === undefined || changedPaths.length === 0) {
     return "No changed path metadata was provided by freshness.";
   }
@@ -585,17 +582,20 @@ function requiresProviderBackedProjectContextRefresh(
 ): freshness is Extract<ProjectContextFreshness, { status: "stale" }> {
   return (
     freshness.status === "stale" &&
-    [ // TODO : We can define the refresh reasons that require provider-backed refresh in a more structured and centralised way
+    [
+      // TODO : We can define the refresh reasons that require provider-backed refresh in a more structured and centralised way
       "missing-context",
       "context-version-changed",
       "max-age-exceeded",
-      "baLoggerseline-unavailable",
+      "baseline-unavailable",
       "relevant-changes",
     ].includes(freshness.refreshReason)
   );
 }
 
-async function readIntentArtifact(artifactPath: string): Promise<IntentArtifact> {
+async function readIntentArtifact(
+  artifactPath: string,
+): Promise<IntentArtifact> {
   let parsedArtifact: unknown;
 
   try {
@@ -867,7 +867,8 @@ export async function validateIssueArtifacts(
   throw new StageArtifactValidationError({
     stage: "issues",
     artifactPath: issuesDirectory,
-    details: "Issues directory must contain at least one non-empty markdown file.",
+    details:
+      "Issues directory must contain at least one non-empty markdown file.",
   });
 }
 
@@ -1069,7 +1070,9 @@ function listManagedSessionPhases(
       continuation.phase,
       continuation.repair?.phase,
     ]),
-  ].filter((phase): phase is ManagedProviderSessionPhase => phase !== undefined);
+  ].filter(
+    (phase): phase is ManagedProviderSessionPhase => phase !== undefined,
+  );
 }
 
 function findProviderEventPhase(options: {
@@ -1348,7 +1351,9 @@ async function runGrillStage(options: {
           intentArtifactPath: options.run.paths.intentArtifact,
           projectContextPath: options.run.paths.projectContextArtifact,
           partialTranscriptPath:
-            options.attempt === 1 ? undefined : options.run.paths.grillTranscript,
+            options.attempt === 1
+              ? undefined
+              : options.run.paths.grillTranscript,
           completionMarker,
         })
       : renderInterruptedGrillResumePrompt({ completionMarker });
@@ -1855,7 +1860,9 @@ async function runExecuteStage(options: {
     }
 
     const gitHeadAfter = await options.devFlowState.git.getCurrentHead();
-    const providerSessionState = await readAdvisoryProviderSessionState(options.run);
+    const providerSessionState = await readAdvisoryProviderSessionState(
+      options.run,
+    );
     const matchedCompletionMarker = result.matchedCompletionMarker;
     const markerStrippedFinalAssistantMessage = stripCompletionMarkers(
       finalAssistantMessage ?? "",
@@ -2229,7 +2236,8 @@ export async function runExecutionRequest(
   }
 
   const devFlowState =
-    options.devFlowState ?? createDevFlowState({ projectRoot: request.projectRoot });
+    options.devFlowState ??
+    createDevFlowState({ projectRoot: request.projectRoot });
   const adapter =
     options.createManagedSessionAdapter !== undefined
       ? options.createManagedSessionAdapter(providerId, options.logger)

@@ -1,10 +1,7 @@
 import fs from "fs-extra";
 import { join } from "node:path";
 
-import {
-  codexHookConfigToml,
-  codexHookScript,
-} from "./codexHookArtifacts.js";
+import { codexHookConfigToml, codexHookScript } from "./codexHookArtifacts.js";
 import { normalizeCodexHookPayload } from "./codexHookEventSource.js";
 import {
   getScopedCodexProviderHome,
@@ -18,7 +15,6 @@ import {
   ProviderSessionEventCaptureError,
   ProviderSessionLaunchError,
   ProviderSessionTranscriptCaptureError,
-  type ManagedProviderSessionEvent,
   type ManagedProviderSessionInput,
   type ManagedProviderSessionResult,
 } from "./managedSessionAdapter.js";

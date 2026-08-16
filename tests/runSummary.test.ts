@@ -187,7 +187,7 @@ test("run summary renders full iteration final messages under a gutter", () => {
 
   assert.match(
     summary,
-    / 1 │ Implemented the execution summary renderer and added a regression test that keeps\n   │ this long narrative visible without truncating any words from the provider's final\n   │ message\./,
+    / 1 │ Implemented the execution summary renderer and added a regression test that keeps\n {3}│ this long narrative visible without truncating any words from the provider's final\n {3}│ message\./,
   );
   assert.match(summary, /without truncating any words/);
 });

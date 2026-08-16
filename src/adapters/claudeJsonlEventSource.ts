@@ -4,7 +4,7 @@ import {
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
@@ -14,7 +14,9 @@ export type NormalizedClaudeJsonlEvent = DistributiveOmit<
 >;
 
 export interface ClaudeJsonlNormalizer {
-  synthesizeSessionStart(providerSessionId?: string): NormalizedClaudeJsonlEvent | undefined;
+  synthesizeSessionStart(
+    providerSessionId?: string,
+  ): NormalizedClaudeJsonlEvent | undefined;
   normalizeRecord(record: unknown): NormalizedClaudeJsonlEvent | undefined;
 }
 
@@ -254,7 +256,10 @@ function isSyntheticInterruptedRequestText(message: string): boolean {
   );
 }
 
-function parseTextContent(record: Record<string, unknown>, content: unknown): string {
+function parseTextContent(
+  record: Record<string, unknown>,
+  content: unknown,
+): string {
   if (!Array.isArray(content)) {
     throw new ClaudeJsonlRecordMalformedError(
       record,

@@ -151,7 +151,7 @@ test("JSONL tailer buffers an incomplete trailing line until it is terminated", 
     diagnostics: [],
   });
 
-  await fs.appendFile(logPath, ':2}\n', "utf8");
+  await fs.appendFile(logPath, ":2}\n", "utf8");
 
   assert.deepEqual(await tailer.readNewRecords(), {
     records: [{ id: 2 }],

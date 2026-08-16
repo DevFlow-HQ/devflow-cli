@@ -224,7 +224,12 @@ const providerHarnesses: AdapterContractHarness[] = [
     command: "opencode",
     displayName: "OpenCode",
     expectedArgsWithoutModel: ["--prompt", "Ship the contract"],
-    expectedArgsWithModel: ["--model", "gpt-5.5", "--prompt", "Ship the contract"],
+    expectedArgsWithModel: [
+      "--model",
+      "gpt-5.5",
+      "--prompt",
+      "Ship the contract",
+    ],
     gracefulExitCommand: { text: "/exit", submitKey: "\n" },
     createAdapter: createOpenCodeAdapter,
   },
@@ -251,10 +256,7 @@ const codexHarness: CodexAdapterContractHarness = {
   createAdapter: createCodexAdapter,
 };
 
-const allProviderHarnesses = [
-  ...providerHarnesses,
-  codexHarness,
-].sort(
+const allProviderHarnesses = [...providerHarnesses, codexHarness].sort(
   (left, right) =>
     BUILT_IN_PROVIDER_IDS.indexOf(left.providerId) -
     BUILT_IN_PROVIDER_IDS.indexOf(right.providerId),
@@ -371,7 +373,9 @@ test("managed-session contract exposes a distinct resume entry point gated by tr
       return { isAvailable: true, executable: "codex" };
     },
     async runSession() {
-      throw new Error("fresh runSession should stay distinct from resumeSession");
+      throw new Error(
+        "fresh runSession should stay distinct from resumeSession",
+      );
     },
     async resumeSession(input) {
       resumeInputs.push(input);
@@ -409,15 +413,16 @@ test("managed-session resume guard requires provider session ids, resume capabil
     },
   };
 
-  const resumeSession: NonNullable<ManagedSessionAdapter["resumeSession"]> =
-    async (input) => {
-      await input.validate();
-      return {
-        repairUsed: false,
-        exitCode: 0,
-        signal: null,
-      };
+  const resumeSession: NonNullable<
+    ManagedSessionAdapter["resumeSession"]
+  > = async (input) => {
+    await input.validate();
+    return {
+      repairUsed: false,
+      exitCode: 0,
+      signal: null,
     };
+  };
 
   assert.equal(
     canResumeManagedProviderSession({
@@ -510,11 +515,11 @@ test("managed-session input exposes validation and repair lifecycle configuratio
     input.repair?.renderPrompt(new Error("invalid")),
     "repair: invalid",
   );
-  assert.equal(input.continuations?.[0]?.prompt, "Continue with the next phase");
   assert.equal(
-    input.continuations?.[0]?.completionMarker,
-    "DEVFLOW_NEXT_DONE",
+    input.continuations?.[0]?.prompt,
+    "Continue with the next phase",
   );
+  assert.equal(input.continuations?.[0]?.completionMarker, "DEVFLOW_NEXT_DONE");
   input.transcript?.onProviderOutput?.("provider text");
   input.transcript?.onSubmittedUserMessage?.("user text");
 });
@@ -608,7 +613,11 @@ test("managed-session contract exposes normalized provider events, phases, callb
 
   assert.equal(input.phase?.kind, "prd");
   assert.equal(input.phase?.attempt, 1);
-  assert.deepEqual(submittedUserMessageOrigins, ["managed", "human", "unknown"]);
+  assert.deepEqual(submittedUserMessageOrigins, [
+    "managed",
+    "human",
+    "unknown",
+  ]);
   await adapter.runSession(input);
   assert.deepEqual(capturedEvents, events);
   assert.deepEqual(adapter.capabilities, capabilities);
@@ -744,7 +753,9 @@ test("Claude adapter exposes hook-mode capabilities including resume support", (
     hookCapabilities,
   );
   assert.equal(
-    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "hooks" })),
+    canResumeManagedProviderSession(
+      createClaudeAdapter({ eventSource: "hooks" }),
+    ),
     true,
   );
   assert.deepEqual(createClaudeAdapter().capabilities, hookCapabilities);
@@ -770,10 +781,18 @@ test("Claude adapter preserves explicit PTY fallback and exposes JSONL when sele
     classifiesSubmittedUserMessageOrigin: false,
   };
 
-  assert.deepEqual(createClaudeAdapter({ eventSource: "pty" }).capabilities, ptyCapabilities);
-  assert.equal(typeof createClaudeAdapter({ eventSource: "pty" }).resumeSession, "undefined");
+  assert.deepEqual(
+    createClaudeAdapter({ eventSource: "pty" }).capabilities,
+    ptyCapabilities,
+  );
   assert.equal(
-    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "pty" })),
+    typeof createClaudeAdapter({ eventSource: "pty" }).resumeSession,
+    "undefined",
+  );
+  assert.equal(
+    canResumeManagedProviderSession(
+      createClaudeAdapter({ eventSource: "pty" }),
+    ),
     false,
   );
   assert.deepEqual(createClaudeAdapter({ eventSource: "jsonl" }).capabilities, {
@@ -784,7 +803,9 @@ test("Claude adapter preserves explicit PTY fallback and exposes JSONL when sele
     classifiesSubmittedUserMessageOrigin: true,
   });
   assert.equal(
-    canResumeManagedProviderSession(createClaudeAdapter({ eventSource: "jsonl" })),
+    canResumeManagedProviderSession(
+      createClaudeAdapter({ eventSource: "jsonl" }),
+    ),
     true,
   );
   assert.deepEqual(
@@ -932,14 +953,13 @@ for (const harness of allProviderHarnesses) {
     assert.equal(missingResult.isAvailable, false);
 
     if (missingResult.isAvailable) {
-      assert.fail("expected missing executable detection to report unavailable");
+      assert.fail(
+        "expected missing executable detection to report unavailable",
+      );
     }
 
     assert.match(missingResult.reason, new RegExp(harness.command, "i"));
-    assert.doesNotMatch(
-      missingResult.reason,
-      new RegExp(harness.displayName),
-    );
+    assert.doesNotMatch(missingResult.reason, new RegExp(harness.displayName));
   });
 }
 
@@ -1063,7 +1083,9 @@ for (const harness of providerHarnesses) {
       process.env.PATH = originalPath;
     });
 
-    const missingBinDir = makeTempDir(`devflow-${harness.command}-missing-run-`);
+    const missingBinDir = makeTempDir(
+      `devflow-${harness.command}-missing-run-`,
+    );
 
     process.env.PATH = missingBinDir;
 
@@ -1072,13 +1094,19 @@ for (const harness of providerHarnesses) {
       runPtyManagedSession: runner.runPtyManagedSession.bind(runner),
     });
 
-    await assert.rejects(adapter.runSession(validRunInput), (error: unknown) => {
-      assert.ok(error instanceof ProviderSessionLaunchError);
-      assert.equal(error.provider, getBuiltInProviderIdentity(harness.providerId));
-      assert.ok(error.cause instanceof Error);
-      assert.match(error.cause.message, new RegExp(harness.command, "i"));
-      return true;
-    });
+    await assert.rejects(
+      adapter.runSession(validRunInput),
+      (error: unknown) => {
+        assert.ok(error instanceof ProviderSessionLaunchError);
+        assert.equal(
+          error.provider,
+          getBuiltInProviderIdentity(harness.providerId),
+        );
+        assert.ok(error.cause instanceof Error);
+        assert.match(error.cause.message, new RegExp(harness.command, "i"));
+        return true;
+      },
+    );
     assert.deepEqual(runner.calls, []);
   });
 
@@ -1153,8 +1181,7 @@ test("Claude adapter delegates hook-mode sessions to the hook-driven runner", as
   const runner = new CapturingClaudeHookRunner();
   const adapter = createClaudeAdapter({
     eventSource: "hooks",
-    runClaudeHookDrivenSession:
-      runner.runClaudeHookDrivenSession.bind(runner),
+    runClaudeHookDrivenSession: runner.runClaudeHookDrivenSession.bind(runner),
   });
 
   const result = await adapter.runSession(validRunInputWithModel);
@@ -1247,8 +1274,7 @@ test("Claude adapter does not relaunch hook-mode failures through JSONL", async 
       hookCalls.push(command);
       throw hookFailure;
     },
-    runClaudeJsonlSession:
-      jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
+    runClaudeJsonlSession: jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
   });
 
   await assert.rejects(
@@ -1289,8 +1315,7 @@ test("Claude adapter delegates fresh JSONL sessions to the JSONL runner", async 
     eventSource: "jsonl",
     runClaudeHookDrivenSession:
       hookRunner.runClaudeHookDrivenSession.bind(hookRunner),
-    runClaudeJsonlSession:
-      jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
+    runClaudeJsonlSession: jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
   });
 
   const result = await adapter.runSession(validRunInputWithModel);
@@ -1333,8 +1358,7 @@ test("Claude adapter resumeSession delegates hook resume with native --resume fl
   const runner = new CapturingClaudeHookRunner();
   const adapter = createClaudeAdapter({
     eventSource: "hooks",
-    runClaudeHookDrivenSession:
-      runner.runClaudeHookDrivenSession.bind(runner),
+    runClaudeHookDrivenSession: runner.runClaudeHookDrivenSession.bind(runner),
   });
 
   assert.equal(canResumeManagedProviderSession(adapter), true);
@@ -1382,8 +1406,7 @@ test("Claude adapter resumeSession delegates hook resume without a model flag", 
   const runner = new CapturingClaudeHookRunner();
   const adapter = createClaudeAdapter({
     eventSource: "hooks",
-    runClaudeHookDrivenSession:
-      runner.runClaudeHookDrivenSession.bind(runner),
+    runClaudeHookDrivenSession: runner.runClaudeHookDrivenSession.bind(runner),
   });
 
   await adapter.resumeSession?.(validResumeInput);
@@ -1393,7 +1416,11 @@ test("Claude adapter resumeSession delegates hook resume without a model flag", 
       command: {
         provider: getBuiltInProviderIdentity("claude"),
         executable: executablePath,
-        args: ["--resume", "codex-session-123", "Continue the interrupted work"],
+        args: [
+          "--resume",
+          "codex-session-123",
+          "Continue the interrupted work",
+        ],
         gracefulExitCommand: { text: "/exit", submitKey: "\n" },
       },
       input: validResumeInput,
@@ -1423,8 +1450,7 @@ test("Claude adapter resumeSession delegates JSONL resume with native --resume f
     eventSource: "jsonl",
     runClaudeHookDrivenSession:
       hookRunner.runClaudeHookDrivenSession.bind(hookRunner),
-    runClaudeJsonlSession:
-      jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
+    runClaudeJsonlSession: jsonlRunner.runClaudeJsonlSession.bind(jsonlRunner),
   });
 
   assert.equal(canResumeManagedProviderSession(adapter), true);
@@ -1473,8 +1499,7 @@ test("Codex adapter runSession delegates provider startup config to the hook-dri
 
   const runner = new CapturingCodexHookRunner();
   const adapter = codexHarness.createAdapter({
-    runCodexHookDrivenSession:
-      runner.runCodexHookDrivenSession.bind(runner),
+    runCodexHookDrivenSession: runner.runCodexHookDrivenSession.bind(runner),
   });
 
   const result = await adapter.runSession(validRunInput);
@@ -1563,8 +1588,7 @@ test("Codex adapter passes opaque model overrides through provider-native flags"
 
   const runner = new CapturingCodexHookRunner();
   const adapter = codexHarness.createAdapter({
-    runCodexHookDrivenSession:
-      runner.runCodexHookDrivenSession.bind(runner),
+    runCodexHookDrivenSession: runner.runCodexHookDrivenSession.bind(runner),
   });
 
   await adapter.runSession(validRunInputWithModel);
@@ -1595,8 +1619,7 @@ test("Codex adapter resumeSession delegates hook resume with provider session id
 
   const runner = new CapturingCodexHookRunner();
   const adapter = codexHarness.createAdapter({
-    runCodexHookDrivenSession:
-      runner.runCodexHookDrivenSession.bind(runner),
+    runCodexHookDrivenSession: runner.runCodexHookDrivenSession.bind(runner),
   });
 
   assert.equal(canResumeManagedProviderSession(adapter), true);
@@ -1694,8 +1717,7 @@ test("Codex adapter maps launch-time executable resolution failures before hook 
 
   const runner = new CapturingCodexHookRunner();
   const adapter = codexHarness.createAdapter({
-    runCodexHookDrivenSession:
-      runner.runCodexHookDrivenSession.bind(runner),
+    runCodexHookDrivenSession: runner.runCodexHookDrivenSession.bind(runner),
   });
 
   await assert.rejects(adapter.runSession(validRunInput), (error: unknown) => {
@@ -1726,8 +1748,7 @@ test("built-in managed-session selection wires codex execution through the hook-
 
   const runner = new CapturingCodexHookRunner();
   const adapter = createBuiltInManagedSessionAdapter("codex", {
-    runCodexHookDrivenSession:
-      runner.runCodexHookDrivenSession.bind(runner),
+    runCodexHookDrivenSession: runner.runCodexHookDrivenSession.bind(runner),
   });
 
   assert.deepEqual(adapter.provider, getBuiltInProviderIdentity("codex"));

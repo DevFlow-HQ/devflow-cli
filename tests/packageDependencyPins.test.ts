@@ -12,10 +12,16 @@ test("node-pty stays pinned to the spawn-helper layout version", async () => {
   const packageLock = JSON.parse(
     await readFile(join(process.cwd(), "package-lock.json"), "utf8"),
   ) as {
-    packages?: Record<string, { dependencies?: Record<string, string>; version?: string }>;
+    packages?: Record<
+      string,
+      { dependencies?: Record<string, string>; version?: string }
+    >;
   };
 
   assert.equal(packageJson.dependencies?.["node-pty"], "1.1.0");
   assert.equal(packageLock.packages?.[""]?.dependencies?.["node-pty"], "1.1.0");
-  assert.equal(packageLock.packages?.["node_modules/node-pty"]?.version, "1.1.0");
+  assert.equal(
+    packageLock.packages?.["node_modules/node-pty"]?.version,
+    "1.1.0",
+  );
 });

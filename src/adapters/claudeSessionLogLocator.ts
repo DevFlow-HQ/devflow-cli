@@ -16,7 +16,6 @@ import type {
   SessionLogResumeLocation,
   SessionLogLocator,
   SessionLogSnapshot,
-  SessionLogWatchEvent,
   SessionLogWatcher,
 } from "./codexSessionLogLocator.js";
 import { NoopLogger, type Logger } from "../logger.js";
@@ -111,8 +110,7 @@ export function createClaudeSessionLogLocator(
     },
 
     async locateActiveLog(snapshot, locateOptions = {}) {
-      const timeoutMs =
-        locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
+      const timeoutMs = locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
       const deadline = Date.now() + timeoutMs;
       const emptyCandidatesSeen = new Set<string>();
       const watcher = watchProjectsTree(projectsRoot);
@@ -169,8 +167,7 @@ export function createClaudeSessionLogLocator(
     },
 
     async locateResumeLog(providerSessionId, locateOptions = {}) {
-      const timeoutMs =
-        locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
+      const timeoutMs = locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
       const deadline = Date.now() + timeoutMs;
       const watcher = watchProjectsTree(projectsRoot);
       let wakeup: (() => void) | undefined;
@@ -322,7 +319,12 @@ async function findResumeCandidate(options: {
   const matchingCandidates: SessionLogCandidateDebug[] = [];
 
   for (const file of files) {
-    if (await transcriptContainsSessionId(file.filePath, options.providerSessionId)) {
+    if (
+      await transcriptContainsSessionId(
+        file.filePath,
+        options.providerSessionId,
+      )
+    ) {
       matchingCandidates.push(file);
     }
   }

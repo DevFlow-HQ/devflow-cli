@@ -1,9 +1,6 @@
 import which from "which";
 
-import {
-  buildTierResolutionTrace,
-  emitAdapterTrace,
-} from "./adapterTrace.js";
+import { buildTierResolutionTrace, emitAdapterTrace } from "./adapterTrace.js";
 import {
   type ManagedProviderSessionCapabilities,
   type ManagedProviderSessionInput,

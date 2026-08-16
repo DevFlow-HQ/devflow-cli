@@ -15,9 +15,11 @@ const executionStopReasonSchema = z.enum([
 export type ExecutionStopReason = z.infer<typeof executionStopReasonSchema>;
 export type ExecutionAssembledStopReason = ExecutionStopReason | "incomplete";
 
-const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 0, {
-  message: "Must be a non-empty string.",
-});
+const nonEmptyStringSchema = z
+  .string()
+  .refine((value) => value.trim().length > 0, {
+    message: "Must be a non-empty string.",
+  });
 
 const executionStartRecordSchema = z
   .object({
@@ -117,7 +119,9 @@ export function assemble(
   }
 
   if (finalRecord === undefined) {
-    const remainingIssueFilenames = [...(options.activeIssueFilenames ?? [])].sort();
+    const remainingIssueFilenames = [
+      ...(options.activeIssueFilenames ?? []),
+    ].sort();
     const remainingIssueFilenameSet = new Set(remainingIssueFilenames);
 
     return {
@@ -158,7 +162,9 @@ function parseRecords(lines: string[]): ExecutionLedgerRecord[] {
       }
 
       const details = error instanceof Error ? error.message : String(error);
-      throw new Error(`Invalid execution ledger JSONL line. ${details}`);
+      throw new Error(`Invalid execution ledger JSONL line. ${details}`, {
+        cause: error,
+      });
     }
 
     const result = executionLedgerRecordSchema.safeParse(parsed);
@@ -168,7 +174,9 @@ function parseRecords(lines: string[]): ExecutionLedgerRecord[] {
         continue;
       }
 
-      throw new Error(`Invalid execution ledger record. ${result.error.message}`);
+      throw new Error(
+        `Invalid execution ledger record. ${result.error.message}`,
+      );
     }
 
     records.push(result.data);

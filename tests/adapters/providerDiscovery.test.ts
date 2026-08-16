@@ -3,12 +3,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "fs-extra";
 
-import {
-  getBuiltInProviderIdentity,
-} from "../../src/adapters/providers.js";
-import {
-  type ManagedSessionAdapter,
-} from "../../src/adapters/managedSessionAdapter.js";
+import { getBuiltInProviderIdentity } from "../../src/adapters/providers.js";
+import { type ManagedSessionAdapter } from "../../src/adapters/managedSessionAdapter.js";
 import {
   discoverBuiltInProviders,
   type ProviderDiscoveryAdapter,

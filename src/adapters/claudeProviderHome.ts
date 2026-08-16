@@ -42,7 +42,8 @@ export async function seedClaudeCredentials({
   environment,
   platform,
   homeDirectory,
-  readMacosKeychainCredential: readKeychainCredential = readMacosKeychainCredential,
+  readMacosKeychainCredential:
+    readKeychainCredential = readMacosKeychainCredential,
 }: SeedClaudeCredentialsOptions): Promise<void> {
   if (platform === "darwin") {
     const credential = await readKeychainCredential();
@@ -51,7 +52,10 @@ export async function seedClaudeCredentials({
       return;
     }
 
-    const targetCredentialsPath = join(claudeConfigDirectory, ".credentials.json");
+    const targetCredentialsPath = join(
+      claudeConfigDirectory,
+      ".credentials.json",
+    );
 
     await fs.ensureDir(claudeConfigDirectory);
     await fs.writeFile(targetCredentialsPath, credential, { mode: 0o600 });
@@ -60,8 +64,12 @@ export async function seedClaudeCredentials({
   }
 
   const sourceConfigDirectory =
-    environment.CLAUDE_CONFIG_DIR ?? join(homeDirectory ?? homedir(), ".claude");
-  const sourceCredentialsPath = join(sourceConfigDirectory, ".credentials.json");
+    environment.CLAUDE_CONFIG_DIR ??
+    join(homeDirectory ?? homedir(), ".claude");
+  const sourceCredentialsPath = join(
+    sourceConfigDirectory,
+    ".credentials.json",
+  );
   const targetCredentialsPath = join(
     claudeConfigDirectory,
     ".credentials.json",
@@ -85,7 +93,7 @@ export async function seedClaudeConfigState({
   workingDirectory,
   homeDirectory,
 }: SeedClaudeConfigStateOptions): Promise<void> {
-  // TODO : both the source and target config paths are representd by 
+  // TODO : both the source and target config paths are representd by
   // similar variable name. Better naming helps to distinguish between the two.
   const targetConfigPath = join(claudeConfigDirectory, ".claude.json");
 

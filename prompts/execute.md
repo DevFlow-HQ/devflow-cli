@@ -21,6 +21,7 @@ Completed issue directory:
 {{DONE_DIRECTORY}}
 
 Behavior:
+
 - Select and complete exactly one AFK issue from the open issue context above.
 - Leave HITL issues untouched.
 - You may optionally read the PRD, project context, and TDD guide from the paths above when more context is needed.
@@ -34,10 +35,11 @@ Behavior:
 - Before the marker, state a brief summary of the changes made and functionality added in this session in the reply only. Do not write that summary as a new artifact.
 
 Completion:
+
 - Iteration-complete marker: if you completed one AFK issue, moved it to the completed issue directory, and committed when permitted, reply with the brief summary followed by this marker. Emit it when the selected AFK issue is complete. Do not emit it early.
-{{ITERATION_MARKER}}
+  {{ITERATION_MARKER}}
 - Terminal no-more-tasks marker: emit this marker only after confirming from the supplied open issue files that no AFK issue remains unworked.
-{{TERMINAL_MARKER}}
+  {{TERMINAL_MARKER}}
 - Being blocked on one issue, tired, or unsure is not grounds for the terminal no-more-tasks marker.
 - Premature terminal emission silently abandons real work and ends the execution stage.
 - Emit exactly one of those markers.

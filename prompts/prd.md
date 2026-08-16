@@ -21,6 +21,7 @@ Canonical PRD artifact path:
 {{PRD_ARTIFACT_PATH}}
 
 Behavior:
+
 - Use the just-completed live discussion when present.
 - Treat the persisted grill transcript as the durable source of decisions.
 - Synthesize from known context only.
@@ -29,6 +30,7 @@ Behavior:
 - Keep the PRD specific enough for downstream MVP stages to use without reading the grill transcript.
 
 Completion marker discipline:
+
 - The completion marker is DevFlow's single done signal for this stage. Emitting it tells DevFlow this stage's work is finished; DevFlow will immediately move on, and you get no further turns for that work.
 - Emit it exactly once, alone, only after you have written and validated the required PRD artifact.
 - Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.

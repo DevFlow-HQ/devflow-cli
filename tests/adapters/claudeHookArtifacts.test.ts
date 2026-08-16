@@ -21,13 +21,22 @@ test("claude hook artifacts create a run-scoped executable forwarding script", a
     hookDirectory,
     hookScriptPath: join(hookDirectory, "hook.js"),
   });
-  assert.equal(await fs.readFile(artifacts.hookScriptPath, "utf8"), claudeHookScript());
+  assert.equal(
+    await fs.readFile(artifacts.hookScriptPath, "utf8"),
+    claudeHookScript(),
+  );
   assert.equal((await fs.stat(artifacts.hookScriptPath)).mode & 0o777, 0o755);
 });
 
 test("claude hook artifacts are compatible with scoped config settings entries", async () => {
   const projectRoot = makeTempDir("devflow-project-");
-  const configDirectory = join(projectRoot, ".devflow", "runs", "run-1", ".claude");
+  const configDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "run-1",
+    ".claude",
+  );
   const artifacts = await createClaudeHookArtifacts({
     hookDirectory: join(configDirectory, "devflow-hooks"),
   });

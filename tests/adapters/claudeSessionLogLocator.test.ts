@@ -163,7 +163,10 @@ test("Claude session log locator traces resume resolution metadata", async () =>
   await locator.locateResumeLog("claude-session-123");
 
   assert.equal(logger.debugEntries.length, 1);
-  assert.equal(logger.debugEntries[0].msg, "adapter session log locator resolved");
+  assert.equal(
+    logger.debugEntries[0].msg,
+    "adapter session log locator resolved",
+  );
   assert.deepEqual(logger.debugEntries[0].context?.context, {
     providerId: "claude",
     resolvedPath: transcriptPath,

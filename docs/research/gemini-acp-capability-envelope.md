@@ -26,24 +26,24 @@ The official CLI targets Windows, macOS, and Linux, and the ACP code is included
 
 ## Capability Matrix
 
-| Area | Gemini ACP envelope | Evidence status |
-| --- | --- | --- |
-| Launch | `gemini --acp`; long-lived agent subprocess over stdin/stdout | Documented |
-| Framing | UTF-8, one JSON-RPC object per newline; protocol traffic only on stdout, logs allowed on stderr | Documented and source-observed |
-| Protocol | ACP major version `1`; Gemini returns SDK constant `1` | Source-observed |
-| Initialization | Advertises implementation info, four auth methods, `loadSession`, image/audio/embedded-context prompts, and HTTP/SSE MCP | Source-observed |
-| New sessions | `session/new` returns a UUID and mode/model state | Source-observed |
-| Recovery | `session/load` restores stored conversation and replays history; no `session/resume` | Source-observed |
-| Model selection | Launch `--model`, session model metadata, and legacy `session/set_model`; no current stable config-option implementation | Source-observed |
-| Streaming | Agent text chunks, thought chunks, tool updates, available-command updates; prompt response is turn end | Source-observed |
-| Approvals | Client-facing `session/request_permission`; modes `default`, `auto_edit`, `yolo`, optionally `plan` | Source-observed |
-| Questions | No structured conversational question/elicitation path; ordinary question text can end a turn and receive a later prompt | Source-observed and inferred |
-| Cancellation | `session/cancel` aborts the active prompt and should return `stopReason: cancelled`; session remains reusable | Documented and source-observed |
-| Errors | JSON-RPC errors plus Gemini/API codes; some model-stream anomalies become successful `end_turn` | Source-observed |
-| Session shutdown | No session-close method; close stdin or signal/terminate process | Source-observed |
-| Authentication | Gemini agent owns auth; client selects an advertised method; Gemini-specific `_meta` can carry API-key/gateway details | Source-observed |
-| Platforms | CLI supported on Windows 11 24H2+, macOS 15+, Ubuntu 20.04+; ACP-specific parity not independently certified | Documented, inferred, and unknown |
-| Deterministic tests | Hidden ordered fake-response/recording flags plus unit mocks and one ACP subprocess telemetry test | Source-observed |
+| Area                | Gemini ACP envelope                                                                                                      | Evidence status                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| Launch              | `gemini --acp`; long-lived agent subprocess over stdin/stdout                                                            | Documented                        |
+| Framing             | UTF-8, one JSON-RPC object per newline; protocol traffic only on stdout, logs allowed on stderr                          | Documented and source-observed    |
+| Protocol            | ACP major version `1`; Gemini returns SDK constant `1`                                                                   | Source-observed                   |
+| Initialization      | Advertises implementation info, four auth methods, `loadSession`, image/audio/embedded-context prompts, and HTTP/SSE MCP | Source-observed                   |
+| New sessions        | `session/new` returns a UUID and mode/model state                                                                        | Source-observed                   |
+| Recovery            | `session/load` restores stored conversation and replays history; no `session/resume`                                     | Source-observed                   |
+| Model selection     | Launch `--model`, session model metadata, and legacy `session/set_model`; no current stable config-option implementation | Source-observed                   |
+| Streaming           | Agent text chunks, thought chunks, tool updates, available-command updates; prompt response is turn end                  | Source-observed                   |
+| Approvals           | Client-facing `session/request_permission`; modes `default`, `auto_edit`, `yolo`, optionally `plan`                      | Source-observed                   |
+| Questions           | No structured conversational question/elicitation path; ordinary question text can end a turn and receive a later prompt | Source-observed and inferred      |
+| Cancellation        | `session/cancel` aborts the active prompt and should return `stopReason: cancelled`; session remains reusable            | Documented and source-observed    |
+| Errors              | JSON-RPC errors plus Gemini/API codes; some model-stream anomalies become successful `end_turn`                          | Source-observed                   |
+| Session shutdown    | No session-close method; close stdin or signal/terminate process                                                         | Source-observed                   |
+| Authentication      | Gemini agent owns auth; client selects an advertised method; Gemini-specific `_meta` can carry API-key/gateway details   | Source-observed                   |
+| Platforms           | CLI supported on Windows 11 24H2+, macOS 15+, Ubuntu 20.04+; ACP-specific parity not independently certified             | Documented, inferred, and unknown |
+| Deterministic tests | Hidden ordered fake-response/recording flags plus unit mocks and one ACP subprocess telemetry test                       | Source-observed                   |
 
 ## Launch, Initialization, And Negotiation
 

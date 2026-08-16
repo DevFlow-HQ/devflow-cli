@@ -8,7 +8,6 @@ import {
   emitAdapterTrace,
 } from "./adapterTrace.js";
 import { ProviderSessionEventCaptureError } from "./managedSessionAdapter.js";
-import { getScopedCodexProviderHome } from "./codexProviderHome.js";
 import type { ProviderIdentity } from "./providers.js";
 import { NoopLogger, type Logger } from "../logger.js";
 
@@ -138,8 +137,7 @@ export function createCodexSessionLogLocator(
   const scopedProviderHome = resolve(options.codexHome);
   // TODO : sessionsRoot is confusing name and can be changed for better clarity
   const sessionsRoot = join(scopedProviderHome, "sessions");
-  const watchSessionsTree =
-    options.watchSessionsTree ?? watchCodexSessionsTree;
+  const watchSessionsTree = options.watchSessionsTree ?? watchCodexSessionsTree;
   const logger = options.logger ?? NoopLogger;
 
   return {
@@ -155,8 +153,7 @@ export function createCodexSessionLogLocator(
     },
 
     async locateActiveLog(snapshot, locateOptions = {}) {
-      const timeoutMs =
-        locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
+      const timeoutMs = locateOptions.timeoutMs ?? DEFAULT_LOCATOR_TIMEOUT_MS;
       const deadline = Date.now() + timeoutMs;
       const emptyCandidatesSeen = new Set<string>();
       const watcher = watchSessionsTree(sessionsRoot);

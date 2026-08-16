@@ -16,7 +16,7 @@ import {
 import type { ProviderIdentity } from "./providers.js";
 import { NoopLogger, type Logger } from "../logger.js";
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
@@ -203,7 +203,8 @@ export function createPhaseManager(options: PhaseManagerOptions): PhaseManager {
   async function advanceAfterSuccessfulValidation(): Promise<void> {
     const nextContinuationIndex =
       state.type === "continuation" ? state.index + 1 : 0;
-    const nextContinuation = options.input.continuations?.[nextContinuationIndex];
+    const nextContinuation =
+      options.input.continuations?.[nextContinuationIndex];
 
     if (!nextContinuation) {
       transitionTo({

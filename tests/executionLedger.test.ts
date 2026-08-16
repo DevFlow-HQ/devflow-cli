@@ -32,27 +32,24 @@ test("execution ledger JSONL codec assembles a clean stream into the legacy ledg
     },
   ];
 
-  assert.deepEqual(
-    assemble(records.map((record) => serialize(record))),
-    {
-      stage: "execute",
-      iterations: [
-        {
-          iteration: 1,
-          marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
-          providerSessionId: "session-1",
-          gitHeadBefore: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          gitHeadAfter: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          finalAssistantMessage: "Finished the first issue.",
-        },
-      ],
-      final: {
-        stopReason: "terminal",
-        completedIssueFilenames: ["001-build.md"],
-        remainingIssueFilenames: ["002-hitl.md"],
+  assert.deepEqual(assemble(records.map((record) => serialize(record))), {
+    stage: "execute",
+    iterations: [
+      {
+        iteration: 1,
+        marker: "DEVFLOW_EXECUTION_ITERATION_COMPLETE_test",
+        providerSessionId: "session-1",
+        gitHeadBefore: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        gitHeadAfter: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        finalAssistantMessage: "Finished the first issue.",
       },
+    ],
+    final: {
+      stopReason: "terminal",
+      completedIssueFilenames: ["001-build.md"],
+      remainingIssueFilenames: ["002-hitl.md"],
     },
-  );
+  });
 });
 
 test("execution ledger JSONL codec rejects invalid records before serialization", () => {

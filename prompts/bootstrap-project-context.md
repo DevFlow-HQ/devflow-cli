@@ -12,6 +12,7 @@ Changed path metadata:
 {{CHANGED_PATHS}}
 
 Inspect only enough repository files to understand:
+
 - Purpose: what this project appears to do.
 - Architecture: the main modules, runtime boundaries, and data or control flow.
 - Key paths: source, tests, configuration, docs, scripts, and generated/state directories that matter.
@@ -24,6 +25,7 @@ Write light Markdown structure to this absolute candidate path:
 {{CANDIDATE_PATH}}
 
 Required output:
+
 - Non-empty Markdown.
 - No more than 150 lines.
 - Include sections for purpose, architecture, key paths, commands, and conventions.
@@ -31,6 +33,7 @@ Required output:
 - Do not include task or intent artifact details.
 
 Completion marker discipline:
+
 - The completion marker is DevFlow's single done signal for this stage. Emitting it tells DevFlow this stage's work is finished; DevFlow will immediately move on, and you get no further turns for that work.
 - Emit it exactly once, alone, only after you have written and validated the required candidate artifact.
 - Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.

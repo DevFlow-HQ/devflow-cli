@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { Command, CommanderError } from "commander";
+import { CommanderError } from "commander";
 import { execa } from "execa";
 import fs from "fs-extra";
 
@@ -42,7 +42,10 @@ import {
   StageArtifactValidationError,
 } from "../src/orchestrator.js";
 import type { LogContext, Logger } from "../src/logger.js";
-import { serialize, type ExecutionFinalRecord } from "../src/executionLedger.js";
+import {
+  serialize,
+  type ExecutionFinalRecord,
+} from "../src/executionLedger.js";
 
 import { makeTempDir } from "./helpers/tempDir.js";
 type SerializableExecutionLedger = Omit<ExecutionLedger, "final"> & {
@@ -208,7 +211,9 @@ function createDiscoveryResult(
   });
 
   const installedProviders = providers.filter(
-    (provider): provider is Extract<(typeof providers)[number], { isAvailable: true }> =>
+    (
+      provider,
+    ): provider is Extract<(typeof providers)[number], { isAvailable: true }> =>
       provider.isAvailable,
   );
 
@@ -327,9 +332,7 @@ test("cli resolves the git repository root before handing off the execution requ
   // git rev-parse --show-toplevel returns the canonical (symlink-resolved) path,
   // which on macOS differs from os.tmpdir() (/var -> /private/var). Canonicalize
   // the fixture so the expected projectRoot matches what the product resolves.
-  const projectRoot = fs.realpathSync(
-    makeTempDir("devflow-cli-git-root-"),
-  );
+  const projectRoot = fs.realpathSync(makeTempDir("devflow-cli-git-root-"));
   const nestedDirectory = join(projectRoot, "packages", "feature");
   fs.ensureDirSync(nestedDirectory);
   await execa("git", ["init"], { cwd: projectRoot });
@@ -395,7 +398,10 @@ test("cli passes the resolved state facade through to the orchestrator runner", 
   assert.equal(typeof receivedCalls[0]?.options.logger?.critical, "function");
   assert.equal(typeof receivedCalls[0]?.options.onRunCreated, "function");
   assert.equal(typeof receivedCalls[0]?.options.onStageStart, "function");
-  assert.equal(typeof receivedCalls[0]?.options.onExecutionIteration, "function");
+  assert.equal(
+    typeof receivedCalls[0]?.options.onExecutionIteration,
+    "function",
+  );
 });
 
 test("cli prints stage start one-liners in pipeline order", async () => {
@@ -440,6 +446,7 @@ test("cli prints stage start one-liners in pipeline order", async () => {
       "Starting execute stage...\n",
     ].join(""),
   ]);
+  // eslint-disable-next-line no-control-regex -- The assertion detects leaked ANSI escapes.
   assert.doesNotMatch(stdout.read(), /\x1B\[[0-?]*[ -/]*[@-~]/);
   assert.equal(stderr.read(), "");
 });
@@ -474,7 +481,9 @@ test("cli prints a thin separator before each execution iteration starts", async
   }
 
   assert.equal(commandError, undefined);
-  assert.deepEqual(observedStdoutBeforeRun, ["\n----- execution iteration 1 -----\n"]);
+  assert.deepEqual(observedStdoutBeforeRun, [
+    "\n----- execution iteration 1 -----\n",
+  ]);
   assert.equal(stderr.read(), "");
 });
 
@@ -644,7 +653,10 @@ test("cli maps interrupted provider sessions to concise user-facing errors", asy
 
   assert.equal(result.commandError?.code, "commander.error");
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "Provider session for Codex (codex) was interrupted.\n");
+  assert.equal(
+    result.stderr,
+    "Provider session for Codex (codex) was interrupted.\n",
+  );
 });
 
 test("cli maps execution cap stops to a clear failure", async () => {
@@ -764,7 +776,12 @@ test("cli maps execution error stops to a clear failure", async () => {
 
 test("cli prints a run summary after an execution error failure", async () => {
   const projectRoot = makeTempDir("devflow-cli-error-summary-");
-  const runDirectory = join(projectRoot, ".devflow", "runs", "run-error-summary");
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "run-error-summary",
+  );
   const executionArtifact = join(runDirectory, "execution.jsonl");
   const ledger: SerializableExecutionLedger = {
     stage: "execute",
@@ -845,7 +862,12 @@ test("cli skips failure summary when no execution ledger exists", async () => {
 
 test("cli reports summary unavailable for a corrupt execution ledger without masking success", async () => {
   const projectRoot = makeTempDir("devflow-cli-corrupt-summary-");
-  const runDirectory = join(projectRoot, ".devflow", "runs", "run-corrupt-summary");
+  const runDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "run-corrupt-summary",
+  );
   const executionArtifact = join(runDirectory, "execution.jsonl");
 
   const result = await invokeCliWithOptions(["resume", "work"], {
@@ -866,7 +888,10 @@ test("cli reports summary unavailable for a corrupt execution ledger without mas
   });
 
   assert.equal(result.commandError, undefined);
-  assert.match(result.stdout, /Run summary unavailable: execution ledger could not be read\./);
+  assert.match(
+    result.stdout,
+    /Run summary unavailable: execution ledger could not be read\./,
+  );
   assert.doesNotMatch(result.stdout, /Run summary\n/);
   assert.equal(result.stderr, "");
 });
@@ -1038,7 +1063,10 @@ test("cli maps unexpected errors to a redacted line and matching critical log en
 
   const ref = result.stderr.match(/err_[0-9a-f]{6}/)?.[0];
   const entries = fs
-    .readFileSync(join(projectRoot, ".devflow", "logs", "devflow-2026-05-24.log"), "utf8")
+    .readFileSync(
+      join(projectRoot, ".devflow", "logs", "devflow-2026-05-24.log"),
+      "utf8",
+    )
     .trimEnd()
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -1305,7 +1333,10 @@ test("cli rejects explicit deferred built-in providers as unsupported", async ()
     result.stderr,
     /Provider Gemini \(gemini\) is not a supported provider\./,
   );
-  assert.match(result.stderr, /Supported providers: Claude \(claude\), Codex \(codex\)\./);
+  assert.match(
+    result.stderr,
+    /Supported providers: Claude \(claude\), Codex \(codex\)\./,
+  );
   assert.doesNotMatch(result.stderr, /currently unavailable/);
   assert.doesNotMatch(result.stderr, /OpenCode \(opencode\)/);
 });
@@ -1376,7 +1407,8 @@ test("cli rejects a saved deferred default provider as unsupported", async () =>
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
-    discoverProviders: async () => discoverWithDeferredProvidersInstalled(["codex"]),
+    discoverProviders: async () =>
+      discoverWithDeferredProvidersInstalled(["codex"]),
     promptForProviderSelection: async () => {
       promptCallCount += 1;
       return "codex";
@@ -1393,7 +1425,10 @@ test("cli rejects a saved deferred default provider as unsupported", async () =>
     result.stderr,
     /Saved default provider Gemini \(gemini\) is not a supported provider\./,
   );
-  assert.match(result.stderr, /Supported providers: Claude \(claude\), Codex \(codex\)\./);
+  assert.match(
+    result.stderr,
+    /Supported providers: Claude \(claude\), Codex \(codex\)\./,
+  );
   assert.match(
     result.stderr,
     /Re-run DevFlow with --provider to choose a supported provider\./,
@@ -1470,10 +1505,7 @@ test("cli fails first-run setup with supported-provider guidance when no support
     result.stderr,
     /No supported providers are currently installed\./,
   );
-  assert.match(
-    result.stderr,
-    /Claude \(claude\), Codex \(codex\)/,
-  );
+  assert.match(result.stderr, /Claude \(claude\), Codex \(codex\)/);
   assert.doesNotMatch(result.stderr, /Gemini \(gemini\)/);
   assert.doesNotMatch(result.stderr, /OpenCode \(opencode\)/);
   assert.deepEqual(receivedRequests, []);
@@ -1487,7 +1519,8 @@ test("cli auto-selects and persists the only installed provider during first-run
 
   const result = await invokeCliWithOptions(["continue", "flow"], {
     cwd: projectRoot,
-    discoverProviders: async () => discoverWithDeferredProvidersInstalled(["codex"]),
+    discoverProviders: async () =>
+      discoverWithDeferredProvidersInstalled(["codex"]),
     promptForProviderSelection: async () => {
       promptCallCount += 1;
       return "claude";

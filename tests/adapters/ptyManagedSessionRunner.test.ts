@@ -29,7 +29,10 @@ function waitForAsyncHandlers(): Promise<void> {
   });
 }
 
-async function waitForWriteCount(writes: string[], count: number): Promise<void> {
+async function waitForWriteCount(
+  writes: string[],
+  count: number,
+): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (writes.length >= count) {
       return;
@@ -82,7 +85,10 @@ class FakePtyProcess implements PtyProcess {
   }
 
   onExit(
-    listener: (event: { exitCode: number; signal: NodeJS.Signals | null }) => void,
+    listener: (event: {
+      exitCode: number;
+      signal: NodeJS.Signals | null;
+    }) => void,
   ): { dispose(): void } {
     this.emitter.on("exit", listener);
 
@@ -187,10 +193,7 @@ class FakeUserInput extends EventEmitter implements UserInput {
     this.rawModeChanges.push(enabled);
   }
 
-  override on(
-    event: "data",
-    listener: (chunk: Buffer | string) => void,
-  ): this {
+  override on(event: "data", listener: (chunk: Buffer | string) => void): this {
     return super.on(event, listener);
   }
 
@@ -348,7 +351,9 @@ test("PTY managed-session runner gives terminal marker precedence when both raw 
     },
   );
 
-  spawner.process.emitData("finished ITERATION_DONE and terminal NO_MORE_TASKS\n");
+  spawner.process.emitData(
+    "finished ITERATION_DONE and terminal NO_MORE_TASKS\n",
+  );
 
   assert.deepEqual(await runPromise, {
     repairUsed: false,
@@ -545,7 +550,9 @@ test("PTY managed-session runner traces spawn, forwarded events, marker matches,
   const debugEntries = entries.filter((entry) => entry.level === "debug");
   const spawn = debugEntries.find((entry) => /spawn/i.test(entry.msg));
   const exit = debugEntries.find((entry) => /exit/i.test(entry.msg));
-  const markerMatch = debugEntries.find((entry) => /marker matched/i.test(entry.msg));
+  const markerMatch = debugEntries.find((entry) =>
+    /marker matched/i.test(entry.msg),
+  );
   const providerEvents = debugEntries.filter((entry) =>
     /provider event forwarded/i.test(entry.msg),
   );
@@ -565,10 +572,7 @@ test("PTY managed-session runner traces spawn, forwarded events, marker matches,
   assert.equal(markerMatch?.context?.context?.source, "pty");
   assert.equal(markerMatch?.context?.context?.structured, false);
   assert.equal(markerMatch?.context?.context?.matchedMarker, "NO_MORE_TASKS");
-  assert.equal(
-    markerMatch?.context?.context?.isTerminalCompletionMarker,
-    true,
-  );
+  assert.equal(markerMatch?.context?.context?.isTerminalCompletionMarker, true);
   assert.deepEqual(
     providerEvents.map((entry) => entry.context?.context?.type),
     ["session-start", "turn-completed", "session-completed"],
@@ -657,7 +661,8 @@ test("PTY managed-session runner submits generic continuations inside the same l
   assert.deepEqual(validationOrder, ["grill", "prd-start", "prd"]);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Synthesize the PRD.\u001b[201~\r",
-    "/exit", "\n",
+    "/exit",
+    "\n",
   ]);
   assert.equal(result.repairUsed, false);
 });
@@ -900,7 +905,8 @@ test("PTY managed-session runner captures raw terminal submissions without class
     "\r",
     "second\n",
     "\u0003",
-    "/exit", "\n",
+    "/exit",
+    "\n",
   ]);
 });
 
@@ -1528,7 +1534,11 @@ test("PTY managed-session runner maps PTY spawn failures to typed launch errors"
         provider: getBuiltInProviderIdentity("codex"),
         executable: "codex",
         args: [],
-        gracefulExitCommand: { text: "/exit", submitKey: "\n", submitDelayMs: 1 },
+        gracefulExitCommand: {
+          text: "/exit",
+          submitKey: "\n",
+          submitDelayMs: 1,
+        },
       },
       createInput(),
       {
@@ -1846,7 +1856,8 @@ test("PTY managed-session runner repairs invalid artifacts inside the same sessi
   assert.deepEqual(validationStates, [true, true]);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Repair the artifact.\nKeep the provider session open.\u001b[201~\r",
-    "/exit", "\n",
+    "/exit",
+    "\n",
   ]);
   assert.deepEqual(result, {
     repairUsed: true,
@@ -1909,7 +1920,8 @@ test("PTY managed-session runner maps repair validation failures", async () => {
   assert.equal(validationCount, 2);
   assert.deepEqual(spawner.process.writes, [
     "\u001b[200~Repair the artifact.\u001b[201~\r",
-    "/exit", "\n",
+    "/exit",
+    "\n",
   ]);
 });
 

@@ -23,18 +23,18 @@ The USPTO itself says a comprehensive search includes similar marks, related goo
 
 ## Conflict And Availability Matrix
 
-| Surface | Status when checked | Meaning for a later decision |
-| --- | --- | --- |
-| Product name | **Material exact conflict** | Atlassian's live exact software mark and product are in adjacent developer tooling; Chase AI's exact-name workflow is directly adjacent to DevFlow's Claude/Codex orchestration. |
-| GitHub organization | **Exact name occupied** | `github.com/crucible` and `github.com/cruciblehq` are existing organizations.[^gh-crucible-org][^gh-cruciblehq-org] |
-| GitHub repository | **Owner-qualified exact names apparently unused** | The public API returned 404 for `DevFlow-HQ/crucible` and `DevFlow-HQ/crucible-cli`; repository names are owner-scoped, but creation/rename is the only conclusive availability test. |
-| npm package `crucible` | **No installable release; publishability uncertain** | The registry retains an unpublished record and `npm view crucible` returns 404 stating it was unpublished on 2025-11-20. Do not call it available without an authenticated publishability check and npm-scope/ownership decision.[^npm-crucible] |
-| npm package `crucible-cli` | **Occupied** | Active package, latest 0.1.3 when checked; installs the exact `crucible` executable.[^npm-crucible-cli] |
-| Scoped npm variants | **No public package found** | Registry 404 for both `@devflow-hq/crucible` and `@devflow-hq/crucible-cli`; usable only if the matching npm scope is controlled. |
-| Executable `crucible` | **Multiple exact collisions** | Existing npm, Rust, and standalone binary distributions already put this name on `PATH`; exact command ownership is not practical. |
-| Homebrew exact formula/cask | **No current core listing found** | Both official Formulae API endpoints returned 404, but a future tap/formula would still collide at the installed binary name.[^brew-formula][^brew-cask] |
-| Web identity | **Exact primary names occupied** | All six exact TLDs checked are registered; several obvious modifiers are also occupied. |
-| Search/discoverability | **Crowded and ambiguous** | Software search is led by Atlassian; CLI and AI-coding searches return several unrelated Crucible products, including direct workflow and executable overlaps. |
+| Surface                     | Status when checked                                  | Meaning for a later decision                                                                                                                                                                                                                     |
+| --------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Product name                | **Material exact conflict**                          | Atlassian's live exact software mark and product are in adjacent developer tooling; Chase AI's exact-name workflow is directly adjacent to DevFlow's Claude/Codex orchestration.                                                                 |
+| GitHub organization         | **Exact name occupied**                              | `github.com/crucible` and `github.com/cruciblehq` are existing organizations.[^gh-crucible-org][^gh-cruciblehq-org]                                                                                                                              |
+| GitHub repository           | **Owner-qualified exact names apparently unused**    | The public API returned 404 for `DevFlow-HQ/crucible` and `DevFlow-HQ/crucible-cli`; repository names are owner-scoped, but creation/rename is the only conclusive availability test.                                                            |
+| npm package `crucible`      | **No installable release; publishability uncertain** | The registry retains an unpublished record and `npm view crucible` returns 404 stating it was unpublished on 2025-11-20. Do not call it available without an authenticated publishability check and npm-scope/ownership decision.[^npm-crucible] |
+| npm package `crucible-cli`  | **Occupied**                                         | Active package, latest 0.1.3 when checked; installs the exact `crucible` executable.[^npm-crucible-cli]                                                                                                                                          |
+| Scoped npm variants         | **No public package found**                          | Registry 404 for both `@devflow-hq/crucible` and `@devflow-hq/crucible-cli`; usable only if the matching npm scope is controlled.                                                                                                                |
+| Executable `crucible`       | **Multiple exact collisions**                        | Existing npm, Rust, and standalone binary distributions already put this name on `PATH`; exact command ownership is not practical.                                                                                                               |
+| Homebrew exact formula/cask | **No current core listing found**                    | Both official Formulae API endpoints returned 404, but a future tap/formula would still collide at the installed binary name.[^brew-formula][^brew-cask]                                                                                         |
+| Web identity                | **Exact primary names occupied**                     | All six exact TLDs checked are registered; several obvious modifiers are also occupied.                                                                                                                                                          |
+| Search/discoverability      | **Crowded and ambiguous**                            | Software search is led by Atlassian; CLI and AI-coding searches return several unrelated Crucible products, including direct workflow and executable overlaps.                                                                                   |
 
 ## Product And Trademark Evidence
 
@@ -91,14 +91,14 @@ Homebrew's official formula and cask APIs had no exact `crucible` listing. A qua
 
 Registry RDAP records confirmed these exact domains as registered:
 
-| Domain | Registration evidence |
-| --- | --- |
+| Domain         | Registration evidence                                           |
+| -------------- | --------------------------------------------------------------- |
 | `crucible.com` | Registered since 1997; current expiry shown as 2028.[^rdap-com] |
 | `crucible.dev` | Registered since 2022; current expiry shown as 2027.[^rdap-dev] |
-| `crucible.ai` | Registered since 2019; current expiry shown as 2027.[^rdap-ai] |
-| `crucible.io` | Registered since 2019; current expiry shown as 2028.[^rdap-io] |
+| `crucible.ai`  | Registered since 2019; current expiry shown as 2027.[^rdap-ai]  |
+| `crucible.io`  | Registered since 2019; current expiry shown as 2028.[^rdap-io]  |
 | `crucible.app` | Registered since 2018; current expiry shown as 2028.[^rdap-app] |
-| `crucible.sh` | Registered since 2024; current expiry shown as 2026.[^rdap-sh] |
+| `crucible.sh`  | Registered since 2024; current expiry shown as 2026.[^rdap-sh]  |
 
 Obvious modifiers are also constrained: `getcrucible.com` and `usecrucible.com` are registered, `cruciblehq.dev` is registered and actively used by the AI-coding-agent sandbox, and `trycrucible.io` is registered and used by an AI engineering challenge product.[^rdap-get][^rdap-use][^rdap-hq][^rdap-try]
 
@@ -111,7 +111,7 @@ Point-in-time web searches are observations, not ownership evidence:
 - `Crucible software` prominently returned Atlassian's code-review product and documentation.[^search-software]
 - `Crucible CLI` returned multiple existing command-line products, including exact `crucible` commands and `crucible-cli` repositories.[^search-cli]
 - `Crucible AI coding` returned the Chase AI workflow, the AI-agent security product, smart-contract testing, `usecrucible.ai`, and Atlassian.[^search-ai]
-- The unqualified word is also a common English noun and strongly associated with Arthur Miller's *The Crucible*, making unqualified organic discovery intrinsically expensive even outside software.
+- The unqualified word is also a common English noun and strongly associated with Arthur Miller's _The Crucible_, making unqualified organic discovery intrinsically expensive even outside software.
 
 A qualifier such as `Crucible by DevFlow` may help attribution in prose but does not provide a clean exact command, package, organization, or domain, and this research does not assess whether a qualifier is legally sufficient.
 
@@ -136,47 +136,91 @@ Questions for the downstream naming decision:
 ## Sources
 
 [^uspto-crucible]: [USPTO TSDR, serial 87830814](https://tsdr.uspto.gov/statusview/sn87830814)
+
 [^atlassian-product]: [Atlassian, Crucible product page](https://www.atlassian.com/software/crucible)
+
 [^atlassian-trademarks]: [Atlassian Trademark Guidelines](https://www.atlassian.com/legal/trademark)
+
 [^uspto-clearance]: [USPTO, Comprehensive clearance search for similar trademarks](https://www.uspto.gov/trademarks/search/comprehensive-clearance-search-similar-trademarks)
+
 [^chase-crucible]: [chaseai-yt/crucible](https://github.com/chaseai-yt/crucible)
+
 [^cruciblehq]: [Crucible sandbox documentation](https://cruciblehq.dev/docs)
+
 [^cruciblehq-install]: [Crucible sandbox installation documentation](https://cruciblehq.dev/docs/install)
+
 [^usecrucible]: [Crucible Solutions, Inc. product site](https://usecrucible.ai/)
+
 [^galois]: [GaloisInc/crucible](https://github.com/GaloisInc/crucible)
+
 [^oxide]: [oxidecomputer/crucible](https://github.com/oxidecomputer/crucible)
+
 [^gh-crucible-org]: [GitHub API: crucible organization](https://api.github.com/users/crucible)
+
 [^gh-cruciblehq-org]: [GitHub API: cruciblehq organization](https://api.github.com/users/cruciblehq)
+
 [^gh-devflow-crucible]: [GitHub API probe: DevFlow-HQ/crucible](https://api.github.com/repos/DevFlow-HQ/crucible)
+
 [^gh-devflow-crucible-cli]: [GitHub API probe: DevFlow-HQ/crucible-cli](https://api.github.com/repos/DevFlow-HQ/crucible-cli)
+
 [^gh-search]: [GitHub repository search for Crucible](https://github.com/search?q=crucible+in%3Aname&type=repositories&s=stars&o=desc)
+
 [^npm-crucible]: [npm registry metadata: crucible](https://registry.npmjs.org/crucible)
+
 [^npm-crucible-cli]: [npm registry metadata: crucible-cli](https://registry.npmjs.org/crucible-cli)
+
 [^npm-scoped-crucible]: [npm registry probe: @devflow-hq/crucible](https://registry.npmjs.org/%40devflow-hq%2Fcrucible)
+
 [^npm-scoped-cli]: [npm registry probe: @devflow-hq/crucible-cli](https://registry.npmjs.org/%40devflow-hq%2Fcrucible-cli)
+
 [^npm-air]: [npm registry metadata: @air-bizapps/crucible-cli](https://registry.npmjs.org/%40air-bizapps%2Fcrucible-cli/latest)
+
 [^npm-cruciblelab]: [npm registry metadata: @cruciblelab/crucible](https://registry.npmjs.org/%40cruciblelab%2Fcrucible/latest)
+
 [^npm-cruciblemcp]: [npm registry metadata: @cruciblemcp/cli](https://registry.npmjs.org/%40cruciblemcp%2Fcli/latest)
+
 [^npm-unpublish]: [npm Unpublish Policy](https://docs.npmjs.com/policies/unpublish)
+
 [^npm-scopes]: [npm documentation: Scope](https://docs.npmjs.com/cli/v11/using-npm/scope)
+
 [^npm-bin]: [npm package.json documentation: bin](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#bin)
+
 [^pypi-crucible]: [PyPI JSON API: crucible](https://pypi.org/pypi/crucible/json)
+
 [^crates-crucible]: [crates.io API: crucible](https://crates.io/api/v1/crates/crucible)
+
 [^nuget-crucible]: [NuGet flat-container index: Crucible](https://api.nuget.org/v3-flatcontainer/crucible/index.json)
+
 [^nuget-cli]: [NuGet flat-container index: Crucible.Cli](https://api.nuget.org/v3-flatcontainer/crucible.cli/index.json)
+
 [^brew-formula]: [Homebrew Formulae API probe: crucible formula](https://formulae.brew.sh/api/formula/crucible.json)
+
 [^brew-cask]: [Homebrew Formulae API probe: crucible cask](https://formulae.brew.sh/api/cask/crucible.json)
+
 [^rdap-com]: [Verisign RDAP: crucible.com](https://rdap.verisign.com/com/v1/domain/crucible.com)
+
 [^rdap-dev]: [Google Registry RDAP: crucible.dev](https://pubapi.registry.google/rdap/domain/crucible.dev)
+
 [^rdap-ai]: [Identity Digital RDAP: crucible.ai](https://rdap.identitydigital.services/rdap/domain/crucible.ai)
+
 [^rdap-io]: [Identity Digital RDAP: crucible.io](https://rdap.identitydigital.services/rdap/domain/crucible.io)
+
 [^rdap-app]: [Google Registry RDAP: crucible.app](https://pubapi.registry.google/rdap/domain/crucible.app)
+
 [^rdap-sh]: [Identity Digital RDAP: crucible.sh](https://rdap.identitydigital.services/rdap/domain/crucible.sh)
+
 [^rdap-get]: [Verisign RDAP: getcrucible.com](https://rdap.verisign.com/com/v1/domain/getcrucible.com)
+
 [^rdap-use]: [Verisign RDAP: usecrucible.com](https://rdap.verisign.com/com/v1/domain/usecrucible.com)
+
 [^rdap-hq]: [Google Registry RDAP: cruciblehq.dev](https://pubapi.registry.google/rdap/domain/cruciblehq.dev)
+
 [^rdap-try]: [Identity Digital RDAP: trycrucible.io](https://rdap.identitydigital.services/rdap/domain/trycrucible.io)
+
 [^rdap-cruciblecli]: [Verisign RDAP probe: cruciblecli.com](https://rdap.verisign.com/com/v1/domain/cruciblecli.com)
+
 [^search-software]: [DuckDuckGo query: Crucible software](https://html.duckduckgo.com/html/?q=Crucible+software)
+
 [^search-cli]: [DuckDuckGo query: Crucible CLI](https://html.duckduckgo.com/html/?q=Crucible+CLI)
+
 [^search-ai]: [DuckDuckGo query: Crucible AI coding](https://html.duckduckgo.com/html/?q=Crucible+AI+coding)

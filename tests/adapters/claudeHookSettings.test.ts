@@ -17,7 +17,10 @@ test("claude hook settings setup writes only scoped user settings", async () => 
 
   await installClaudeHookSettings({ configDirectory, hookScriptPath });
 
-  assert.equal(await fs.pathExists(join(configDirectory, "settings.json")), true);
+  assert.equal(
+    await fs.pathExists(join(configDirectory, "settings.json")),
+    true,
+  );
   assert.equal(
     await fs.pathExists(join(configDirectory, "settings.local.json")),
     false,
@@ -96,7 +99,9 @@ test("claude hook settings setup is idempotent per event matcher and command", a
   assert.equal(settings.hooks.UserPromptSubmit.length, 1);
   assert.equal(settings.hooks.Stop.length, 1);
   assert.deepEqual(
-    settings.hooks.SessionStart.map((entry: { matcher?: string }) => entry.matcher),
+    settings.hooks.SessionStart.map(
+      (entry: { matcher?: string }) => entry.matcher,
+    ),
     ["startup", "resume"],
   );
 });
@@ -204,7 +209,11 @@ test("claude hook settings cleanup preserves non-empty user settings", async () 
   const settingsPath = join(configDirectory, "settings.json");
   const hookScriptPath = "/tmp/devflow/.claude/hook.js";
 
-  await fs.outputJson(settingsPath, { env: { NODE_ENV: "test" } }, { spaces: 2 });
+  await fs.outputJson(
+    settingsPath,
+    { env: { NODE_ENV: "test" } },
+    { spaces: 2 },
+  );
   await installClaudeHookSettings({ configDirectory, hookScriptPath });
   await cleanupClaudeHookSettings({
     configDirectory,
@@ -212,7 +221,9 @@ test("claude hook settings cleanup preserves non-empty user settings", async () 
     deleteIfEmptyAndCreatedByDevFlow: false,
   });
 
-  assert.deepEqual(await fs.readJson(settingsPath), { env: { NODE_ENV: "test" } });
+  assert.deepEqual(await fs.readJson(settingsPath), {
+    env: { NODE_ENV: "test" },
+  });
 });
 
 test("claude hook settings setup fails clearly on malformed settings JSON", async () => {

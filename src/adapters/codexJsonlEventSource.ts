@@ -4,7 +4,7 @@ import {
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 

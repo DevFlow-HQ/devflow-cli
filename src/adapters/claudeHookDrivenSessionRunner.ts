@@ -192,7 +192,9 @@ export async function runClaudeHookDrivenSession(
         return;
       }
 
-      rejectSession(new ProviderSessionEventCaptureError(command.provider, error));
+      rejectSession(
+        new ProviderSessionEventCaptureError(command.provider, error),
+      );
     };
 
     function clearTimers(): void {
@@ -200,7 +202,6 @@ export async function runClaudeHookDrivenSession(
         clearTimeout(firstEventTimer);
         firstEventTimer = undefined;
       }
-
     }
 
     async function stopSocket(): Promise<void> {
@@ -299,7 +300,6 @@ export async function runClaudeHookDrivenSession(
         throw new ProviderSessionEventCaptureError(command.provider, error);
       }
     }
-
 
     async function handlePayload(payload: unknown): Promise<void> {
       let event = normalizeClaudeHookPayload(payload);

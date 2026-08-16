@@ -26,6 +26,6 @@ so attaching after the turn began loses nothing).
   it globs `projects/**/<providerSessionId>.jsonl` under the scoped config dir and tails
   from the file's **current end offset** (not 0), to avoid replaying stale `end_turn`
   records. `jsonlTailEventSource` gains an optional `startOffset` for this.
-- The Codex JSONL runner still assumes resume yields a *new* file (snapshot-diff); if Codex
+- The Codex JSONL runner still assumes resume yields a _new_ file (snapshot-diff); if Codex
   also appends on resume, that path is buggy for same-run recovery — tracked in
   `.agent/follow_up.md`.

@@ -41,10 +41,7 @@ import {
   readExecutionLedger,
 } from "./orchestrator.js";
 import { resolveProjectRoot } from "./projectRoot.js";
-import {
-  renderRunSummary,
-  type RunSummaryPaths,
-} from "./runSummary.js";
+import { renderRunSummary, type RunSummaryPaths } from "./runSummary.js";
 import { createLogger, NoopLogger, type Logger } from "./logger.js";
 
 const DEFAULT_VERSION = "0.1.0";
@@ -100,7 +97,10 @@ function createExecutionRequest(
   };
 }
 
-function formatProviderLabel(provider: { displayName: string; id: string }): string {
+function formatProviderLabel(provider: {
+  displayName: string;
+  id: string;
+}): string {
   return `${provider.displayName} (${provider.id})`;
 }
 
@@ -108,7 +108,9 @@ function formatProviderSessionLaunchError(
   error: ProviderSessionLaunchError,
 ): string {
   const causeMessage =
-    error.cause instanceof Error ? error.cause.message : "Unknown launch failure";
+    error.cause instanceof Error
+      ? error.cause.message
+      : "Unknown launch failure";
 
   return `Unable to launch ${formatProviderLabel(error.provider)}: ${causeMessage}.`;
 }
@@ -284,7 +286,10 @@ export function createCli(options: RunCliOptions = {}): Command {
     .action(async (taskParts: string[]) => {
       const rawTask = resolveRawTask(taskParts);
       await options.onResolvedTask?.(rawTask);
-      const commandOptions = program.opts<{ provider?: string; model?: string }>();
+      const commandOptions = program.opts<{
+        provider?: string;
+        model?: string;
+      }>();
 
       const cwd = options.cwd ?? process.cwd();
       const projectRoot = options.resolveProjectRoot
@@ -342,7 +347,9 @@ export function createCli(options: RunCliOptions = {}): Command {
             options.stdout?.write(formatStageStartLine(stage));
           },
           onExecutionIteration({ iteration }) {
-            options.stdout?.write(`\n----- execution iteration ${iteration} -----\n`);
+            options.stdout?.write(
+              `\n----- execution iteration ${iteration} -----\n`,
+            );
           },
         });
 
@@ -357,10 +364,12 @@ export function createCli(options: RunCliOptions = {}): Command {
         }
       } catch (error) {
         const cliErrorMessage = formatCliError(error);
-        const message = cliErrorMessage ?? formatUnexpectedCliError({
-          ref: logger.critical("unexpected cli error", { err: error }),
-          logPath: diagnosticLogPath,
-        });
+        const message =
+          cliErrorMessage ??
+          formatUnexpectedCliError({
+            ref: logger.critical("unexpected cli error", { err: error }),
+            logPath: diagnosticLogPath,
+          });
 
         if (cliErrorMessage !== undefined) {
           logger.error("anticipated cli error", { err: error });

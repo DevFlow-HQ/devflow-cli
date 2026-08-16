@@ -24,7 +24,10 @@ async function createGitProject(): Promise<{
   await git(projectRoot, ["config", "user.email", "devflow@example.test"]);
   await git(projectRoot, ["config", "user.name", "DevFlow Test"]);
   await git(projectRoot, ["config", "commit.gpgsign", "false"]);
-  await fs.outputFile(join(projectRoot, "src", "index.ts"), "export const value = 1;\n");
+  await fs.outputFile(
+    join(projectRoot, "src", "index.ts"),
+    "export const value = 1;\n",
+  );
   await git(projectRoot, ["add", "src/index.ts"]);
   await git(projectRoot, ["commit", "-m", "Initial commit"]);
 
@@ -79,7 +82,10 @@ test("default git probe reports committed changes since the stored baseline", as
     contextVersion: 1,
     refreshReason: "manual",
   });
-  await fs.outputFile(join(projectRoot, "src", "feature.ts"), "export const feature = true;\n");
+  await fs.outputFile(
+    join(projectRoot, "src", "feature.ts"),
+    "export const feature = true;\n",
+  );
   await git(projectRoot, ["add", "src/feature.ts"]);
   await git(projectRoot, ["commit", "-m", "Add feature"]);
 
@@ -125,13 +131,19 @@ test("default git probe includes untracked file content in dirty fingerprints", 
     clock: { now: () => new Date("2026-05-24T10:00:00.000Z") },
   });
 
-  await fs.outputFile(join(projectRoot, "notes", "scratch.md"), "first draft\n");
+  await fs.outputFile(
+    join(projectRoot, "notes", "scratch.md"),
+    "first draft\n",
+  );
   await state.projectContext.write("context snapshot", {
     refreshReason: "manual",
   });
   const metadata = await state.projectContext.readMetadata();
 
-  await fs.outputFile(join(projectRoot, "notes", "scratch.md"), "second draft\n");
+  await fs.outputFile(
+    join(projectRoot, "notes", "scratch.md"),
+    "second draft\n",
+  );
 
   assert.match(metadata?.dirtyFingerprint ?? "", /^dirty-[0-9a-f]{16}$/);
   assert.deepEqual(await state.projectContext.checkFreshness(), {
@@ -290,8 +302,14 @@ test("default git probe treats unignored project-shape paths as relevant", async
   });
   const metadata = await state.projectContext.readMetadata();
 
-  await fs.outputFile(join(projectRoot, "dist", "ignored.js"), "ignored by git\n");
-  await fs.outputFile(join(projectRoot, "dist", "index.js"), "unignored dist content\n");
+  await fs.outputFile(
+    join(projectRoot, "dist", "ignored.js"),
+    "ignored by git\n",
+  );
+  await fs.outputFile(
+    join(projectRoot, "dist", "index.js"),
+    "unignored dist content\n",
+  );
 
   assert.deepEqual(await state.projectContext.checkFreshness(), {
     status: "stale",

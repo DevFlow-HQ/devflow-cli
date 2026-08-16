@@ -311,7 +311,10 @@ test("Codex session log locator traces missing resume lookup metadata", async ()
   );
 
   assert.equal(logger.debugEntries.length, 1);
-  assert.equal(logger.debugEntries[0].msg, "adapter session log locator resolved");
+  assert.equal(
+    logger.debugEntries[0].msg,
+    "adapter session log locator resolved",
+  );
   assert.deepEqual(logger.debugEntries[0].context?.context, {
     providerId: "codex",
     candidateCount: 0,

@@ -14,7 +14,7 @@ import { getBuiltInProviderIdentity } from "../src/adapters/providers.js";
 
 const provider = getBuiltInProviderIdentity("codex");
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
@@ -145,7 +145,10 @@ test("structured grill transcript recorder captures only human submitted user me
     }),
   );
 
-  assert.deepEqual(artifact.writes, ["provider:Question?", "user:human answer"]);
+  assert.deepEqual(artifact.writes, [
+    "provider:Question?",
+    "user:human answer",
+  ]);
 });
 
 test("structured grill transcript recorder strips active marker, excludes post-marker text, and skips empty provider blocks", async () => {

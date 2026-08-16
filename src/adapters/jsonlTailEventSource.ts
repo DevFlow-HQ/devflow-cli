@@ -77,54 +77,54 @@ export function createJsonlTailEventSource(
   let watchReadPending = false;
 
   async function readNewRecords(): Promise<JsonlTailReadResult> {
-      if (reading) {
+    if (reading) {
+      return {
+        records: [],
+        diagnostics: [{ type: "read-in-progress" }],
+      };
+    }
+
+    reading = true;
+
+    try {
+      const diagnostics: JsonlTailDiagnostic[] = [];
+      let readOffset = offset;
+      let segment = await readSegment(options.filePath, readOffset);
+
+      if (segment.size < offset) {
+        diagnostics.push({
+          type: "truncated",
+          previousOffset: offset,
+          nextOffset: 0,
+        });
+        offset = 0;
+        bufferedLine = "";
+        readOffset = 0;
+        segment = await readSegment(options.filePath, readOffset);
+      }
+
+      if (segment.content.length === 0) {
         return {
           records: [],
-          diagnostics: [{ type: "read-in-progress" }],
+          diagnostics,
         };
       }
 
-      reading = true;
+      offset = readOffset + Buffer.byteLength(segment.content, "utf8");
 
-      try {
-        const diagnostics: JsonlTailDiagnostic[] = [];
-        let readOffset = offset;
-        let segment = await readSegment(options.filePath, readOffset);
+      const parsed = parseCompletedLines({
+        content: bufferedLine + segment.content,
+        baseOffset: readOffset - Buffer.byteLength(bufferedLine, "utf8"),
+      });
+      bufferedLine = parsed.bufferedLine;
 
-        if (segment.size < offset) {
-          diagnostics.push({
-            type: "truncated",
-            previousOffset: offset,
-            nextOffset: 0,
-          });
-          offset = 0;
-          bufferedLine = "";
-          readOffset = 0;
-          segment = await readSegment(options.filePath, readOffset);
-        }
-
-        if (segment.content.length === 0) {
-          return {
-            records: [],
-            diagnostics,
-          };
-        }
-
-        offset = readOffset + Buffer.byteLength(segment.content, "utf8");
-
-        const parsed = parseCompletedLines({
-          content: bufferedLine + segment.content,
-          baseOffset: readOffset - Buffer.byteLength(bufferedLine, "utf8"),
-        });
-        bufferedLine = parsed.bufferedLine;
-
-        return {
-          records: parsed.records,
-          diagnostics: [...diagnostics, ...parsed.diagnostics],
-        };
-      } finally {
-        reading = false;
-      }
+      return {
+        records: parsed.records,
+        diagnostics: [...diagnostics, ...parsed.diagnostics],
+      };
+    } finally {
+      reading = false;
+    }
   }
 
   return {
@@ -216,7 +216,9 @@ function parseCompletedLines(options: {
   const records: unknown[] = [];
   const diagnostics: JsonlTailDiagnostic[] = [];
   const lines = options.content.split("\n");
-  const bufferedLine = options.content.endsWith("\n") ? "" : (lines.pop() ?? "");
+  const bufferedLine = options.content.endsWith("\n")
+    ? ""
+    : (lines.pop() ?? "");
 
   if (options.content.endsWith("\n")) {
     lines.pop();

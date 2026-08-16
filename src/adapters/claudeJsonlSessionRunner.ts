@@ -188,7 +188,9 @@ export async function runClaudeJsonlSession(
               command: command.gracefulExitCommand,
               timeoutMs: cleanupTimeoutMs,
             });
-            await deleteClaudeCredentials({ claudeConfigDirectory: claudeHome });
+            await deleteClaudeCredentials({
+              claudeConfigDirectory: claudeHome,
+            });
           } catch (error) {
             throw new ProviderSessionCleanupError(command.provider, error);
           }
@@ -369,7 +371,9 @@ export async function runClaudeJsonlSession(
       }
     }
 
-    async function drainRecords(eventSource: JsonlTailEventSource): Promise<void> {
+    async function drainRecords(
+      eventSource: JsonlTailEventSource,
+    ): Promise<void> {
       const result = await eventSource.readNewRecords();
 
       if (settled) {
@@ -446,16 +450,13 @@ export async function runClaudeJsonlSession(
         return;
       }
 
-      eventSource.watch(
-        async (result) => {
-          if (settled || manager.isFinalized()) {
-            return;
-          }
+      eventSource.watch(async (result) => {
+        if (settled || manager.isFinalized()) {
+          return;
+        }
 
-          await handleReadResult(result);
-        },
-        rejectEventCaptureFailure,
-      );
+        await handleReadResult(result);
+      }, rejectEventCaptureFailure);
     }
 
     function startPostExitDrainLoop(): void {

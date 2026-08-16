@@ -12,6 +12,7 @@ Issues directory:
 {{ISSUES_DIRECTORY}}
 
 Behavior:
+
 - Read the PRD and project context from the paths above.
 - Write markdown files directly into the supplied issues directory. Produce at least one non-empty Markdown issue file.
 - Break the PRD into vertical-slice issues: each issue should move through the relevant layers needed to make one narrow behavior demoable and verifiable.
@@ -24,6 +25,7 @@ Behavior:
 - Do not use external skills, GitHub commands, issue tracker publication, triage labels, or an interactive approval loop.
 
 Completion marker discipline:
+
 - The completion marker is DevFlow's single done signal for this stage. Emitting it tells DevFlow this stage's work is finished; DevFlow will immediately move on, and you get no further turns for that work.
 - Emit it exactly once, alone, only after you have written, critiqued, and validated the required issue file or files.
 - Treat omission and premature emission as equal failures: never omit the marker when the work is done, and never emit it prematurely.

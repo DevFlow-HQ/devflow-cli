@@ -4,7 +4,7 @@ import {
 } from "./managedSessionAdapter.js";
 import type { ProviderIdentity } from "./providers.js";
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
@@ -106,7 +106,9 @@ export function normalizeClaudeHookPayloadForProvider(
   }
 }
 
-function parseClaudeHookPayload(payload: unknown): ClaudeHookPayload | undefined {
+function parseClaudeHookPayload(
+  payload: unknown,
+): ClaudeHookPayload | undefined {
   if (!isRecord(payload)) {
     throw new ClaudeHookPayloadMalformedError(payload, "expected an object");
   }
@@ -173,9 +175,7 @@ function isKnownClaudeHookEventName(
   value: string,
 ): value is ClaudeHookEventName {
   return (
-    value === "SessionStart" ||
-    value === "UserPromptSubmit" ||
-    value === "Stop"
+    value === "SessionStart" || value === "UserPromptSubmit" || value === "Stop"
   );
 }
 

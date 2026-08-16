@@ -383,13 +383,13 @@ and asset inclusion require the project's normal legal/release review.
 
 ### Options
 
-| Option | Advantages | Costs and constraints |
-| --- | --- | --- |
-| Consume `@opencode-ai/tui` | Hypothetically least code ownership | Rejected today: private, source-exported, workspace/catalog dependencies, Core coupling, no stable external contract |
-| Compatibility facade over OpenCode SDK | Retains the most upstream code | Requires Crucible to emulate a large OpenCode domain and operation surface; appropriate only for OpenCode-compatible harnesses |
-| Vendor a pinned extraction | Smallest controllable product surface; easy to delete OpenCode-only features | Crucible owns provenance, patches, dependency updates, and manual upstream comparisons |
-| Maintain a fork with upstream remote | Preserves history and makes merges/cherry-picks auditable | Larger repository surface and recurring conflict resolution around rapidly changing state/event code |
-| Rebuild presentation from patterns | Lowest long-term OpenCode domain coupling | Highest initial UI work and weakest direct upstream update path |
+| Option                                 | Advantages                                                                   | Costs and constraints                                                                                                          |
+| -------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Consume `@opencode-ai/tui`             | Hypothetically least code ownership                                          | Rejected today: private, source-exported, workspace/catalog dependencies, Core coupling, no stable external contract           |
+| Compatibility facade over OpenCode SDK | Retains the most upstream code                                               | Requires Crucible to emulate a large OpenCode domain and operation surface; appropriate only for OpenCode-compatible harnesses |
+| Vendor a pinned extraction             | Smallest controllable product surface; easy to delete OpenCode-only features | Crucible owns provenance, patches, dependency updates, and manual upstream comparisons                                         |
+| Maintain a fork with upstream remote   | Preserves history and makes merges/cherry-picks auditable                    | Larger repository surface and recurring conflict resolution around rapidly changing state/event code                           |
+| Rebuild presentation from patterns     | Lowest long-term OpenCode domain coupling                                    | Highest initial UI work and weakest direct upstream update path                                                                |
 
 ### Recommendation
 

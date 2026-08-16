@@ -23,7 +23,10 @@ export type DiscoveredProvider =
       debugReason?: string;
     };
 
-export type InstalledProvider = Extract<DiscoveredProvider, { isAvailable: true }>;
+export type InstalledProvider = Extract<
+  DiscoveredProvider,
+  { isAvailable: true }
+>;
 
 export interface ProviderDiscoverySummary {
   availabilityStatus: "none" | "single" | "multiple";
@@ -90,7 +93,9 @@ function toUnavailableProviderFromFailure(
   };
 }
 
-function buildSummary(installedProviders: InstalledProvider[]): ProviderDiscoverySummary {
+function buildSummary(
+  installedProviders: InstalledProvider[],
+): ProviderDiscoverySummary {
   if (installedProviders.length === 0) {
     return {
       availabilityStatus: "none",

@@ -45,8 +45,14 @@ test("maintainer context documents the structured grill transcript contract", as
 
   assert.match(context, /glossary\/grill-and-stage-flow\.md/);
   assert.match(glossary, /structured grill transcript contract/i);
-  assert.match(adr, /Adapters should own provider-specific event normalization/i);
-  assert.match(adr, /orchestration owns the durable grill transcript artifact policy/i);
+  assert.match(
+    adr,
+    /Adapters should own provider-specific event normalization/i,
+  );
+  assert.match(
+    adr,
+    /orchestration owns the durable grill transcript artifact policy/i,
+  );
   assert.match(adr, /turn-completed\.assistantMessage/);
   assert.match(adr, /submitted-user-message/);
   assert.match(adr, /origin-bearing/);
@@ -117,7 +123,10 @@ test("end-user README documents the current supported invocation honestly", asyn
   assert.match(readme, /Codex/);
   assert.doesNotMatch(readme, /Gemini/);
   assert.doesNotMatch(readme, /OpenCode/);
-  assert.match(readme, /git clone https:\/\/github\.com\/DevFlow-HQ\/devflow-cli\.git/);
+  assert.match(
+    readme,
+    /git clone https:\/\/github\.com\/DevFlow-HQ\/devflow-cli\.git/,
+  );
   assert.match(readme, /npm install/);
   assert.match(readme, /npm run build/);
   assert.match(readme, /npm link/);

@@ -1,5 +1,5 @@
 # DevFlow Progress
-_Last updated: 2026-06-14_
+_Last updated: 2026-08-16_
 
 Use this file for completed work only. Keep destination/architecture details in `HANDOFF_2.md` and `new_spec.md`.
 Hard limit: 100 lines.
@@ -27,11 +27,12 @@ Hard limit: 100 lines.
 - Maintainer documentation/tests pin structured provider constraints, structured grill transcript policy, provider-native boundary isolation, Codex hook/JSONL behavior, Claude hook/JSONL behavior, PTY fallback/control boundaries, diagnostic logging, execution ledgers, and prompt marker contracts.
 - Release/docs readiness is complete:
   - `LICENSE` contains the standard MIT license with `Copyright (c) 2026 DevFlow-HQ`.
-  - `package.json` is publish-ready without publishing: `main` points at `dist/cli.js`, package name remains `devflow-cli`, bin remains `devflow`, metadata points at `github.com/DevFlow-HQ/devflow-cli`, `license` is MIT, `engines.node` is `>=18`, and keywords/author/contributors are filled in.
+  - `package.json` is publish-ready without publishing: `main` points at `dist/cli.js`, package name remains `devflow-cli`, bin remains `devflow`, metadata points at `github.com/DevFlow-HQ/devflow-cli`, `license` is MIT, `engines.node` matches the Node 20.19 runtime floor, and keywords/author/contributors are filled in.
   - `README.md` now presents DevFlow as an early experimental CLI, documents only Claude and Codex as supported providers, leads with working from-source install steps, marks `npm install -g devflow-cli` as not yet on npm, states that the command is `devflow`, includes a first-run example, and links deeper architecture to `CONTEXT.md`.
 - Claude and Codex JSONL post-exit drain race is fixed: both runners keep serialized structured-log drains alive after PTY exit until marker finalization or the existing early-exit timeout, with deterministic `read-in-progress` regression coverage and 100-run Claude JSONL stress verification.
 - Global linked CLI entrypoint is fixed: `src/cli.ts` now resolves symlinked bin paths before deciding whether to run, with regression coverage for npm/Volta-style symlink execution.
 - Claude scoped credential lifetime is bounded to completed structured sessions: JSONL and hook-driven runners delete scoped `.credentials.json` during successful cleanup, tolerate absent credentials, and keep launch-time credential seeding available to Claude.
+- The authoritative engineering gate is enabled through `npm run check`: Node 20-aligned types/build/runtime metadata, Prettier verification, zero-warning ESLint, recursive deterministic test discovery, production build, installed-tarball help/version smoke, and clean-install GitHub Actions CI all pass; the stale project-context baseline refresh typo is fixed.
 
 ## Current State
 - The working pipeline is active through `intent`, `bootstrap`, `grill`, `prd`, `issues`, and `execute`.
@@ -39,6 +40,7 @@ Hard limit: 100 lines.
 - Only Claude and Codex are user-selectable Supported providers; Gemini/OpenCode remain wired Deferred adapters outside discovery, first-run selection, saved-default resolution, and explicit-provider selection.
 - Codex hook/JSONL and Claude hook/JSONL structured paths use the shared PTY control harness for process control and normalized provider events as the data plane.
 - End-user release-facing files now exist and align with the supported-provider boundary: `README.md`, `LICENSE`, and publish metadata in `package.json`.
+- The canonical clean-install verification path is `npm ci` followed by `npm run check`; its latest isolated run passed all 539 tests and the installed-package smoke.
 - No AFK issues remain in `.agent/task_progress.md` or `.agent/issues/done` for the current release/docs, project-context freshness, managed-session/retry, bootstrap, grill/PRD, issue decomposition, execution, MVP CLI UX, structured transcript, provider-session recovery, Codex JSONL resume, Claude hook-mode, Claude JSONL, diagnostic logging, completion-marker prompt, provider selection deferral, or PTY control harness workstreams.
 - Latest completed maintenance entry: Claude completed-session cleanup now deletes scoped materialized credentials and is verified with `npm run test` and `npm run typecheck`.
 

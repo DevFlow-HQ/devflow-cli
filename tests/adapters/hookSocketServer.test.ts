@@ -49,7 +49,10 @@ function createSocketPath(testName: string): string {
   return path.join(os.tmpdir(), `devflow-${process.pid}-${safeName}.sock`);
 }
 
-async function writePayload(socketPath: string, payload: string): Promise<void> {
+async function writePayload(
+  socketPath: string,
+  payload: string,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     socket.once("error", reject);
@@ -284,7 +287,9 @@ test("hook socket server logs received hook payloads verbatim while keeping othe
 
   const debugEntries = entries.filter((entry) => entry.level === "debug");
   const bound = debugEntries.find((entry) => /socket bound/i.test(entry.msg));
-  const received = debugEntries.find((entry) => /payload received/i.test(entry.msg));
+  const received = debugEntries.find((entry) =>
+    /payload received/i.test(entry.msg),
+  );
   const malformed = debugEntries.find((entry) =>
     /malformed payload/i.test(entry.msg),
   );
@@ -296,12 +301,15 @@ test("hook socket server logs received hook payloads verbatim while keeping othe
   assert.equal(received?.context?.context?.type, "SessionStart");
   assert.equal(
     received?.context?.context?.rawPayload,
-    "{\"hook_event_name\":\"SessionStart\",\"secret\":\"SECRET-hook-payload-body\"}",
+    '{"hook_event_name":"SessionStart","secret":"SECRET-hook-payload-body"}',
   );
   assert.equal("payloadLength" in (received?.context?.context ?? {}), false);
   assert.equal(malformed?.context?.context?.socketPath, socketPath);
   assert.equal(malformed?.context?.context?.reason, "truncated");
-  assert.equal(malformed?.context?.context?.payloadLength, '{"hook_event_name":'.length);
+  assert.equal(
+    malformed?.context?.context?.payloadLength,
+    '{"hook_event_name":'.length,
+  );
   assert.equal("rawPayload" in (malformed?.context?.context ?? {}), false);
   assert.match(serializedContexts, /SECRET-hook-payload-body/);
   assert.equal(bound?.context?.runId, undefined);
@@ -352,13 +360,16 @@ test("hook socket server surfaces the real listen failure and leaves stop a no-o
   );
   const server = hookSocketServer();
 
-  await assert.rejects(server.start(socketPath, () => {}), (error: unknown) => {
-    assert.ok(error instanceof Error);
-    // The original listen() cause is surfaced, not the masked close() error.
-    assert.doesNotMatch(error.message, /Server is not running/i);
-    assert.ok((error as NodeJS.ErrnoException).code);
-    return true;
-  });
+  await assert.rejects(
+    server.start(socketPath, () => {}),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      // The original listen() cause is surfaced, not the masked close() error.
+      assert.doesNotMatch(error.message, /Server is not running/i);
+      assert.ok((error as NodeJS.ErrnoException).code);
+      return true;
+    },
+  );
 
   // listen() never succeeded, so a follow-up stop() must not call close() on a
   // never-listening server (which would reject with ERR_SERVER_NOT_RUNNING).

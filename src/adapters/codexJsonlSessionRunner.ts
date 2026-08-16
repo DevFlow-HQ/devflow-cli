@@ -343,7 +343,9 @@ export async function runCodexJsonlSession(
       }
     }
 
-    async function drainRecords(eventSource: JsonlTailEventSource): Promise<void> {
+    async function drainRecords(
+      eventSource: JsonlTailEventSource,
+    ): Promise<void> {
       const result = await eventSource.readNewRecords();
 
       if (settled) {
@@ -414,16 +416,13 @@ export async function runCodexJsonlSession(
         return;
       }
 
-      eventSource.watch(
-        async (result) => {
-          if (settled || manager.isFinalized()) {
-            return;
-          }
+      eventSource.watch(async (result) => {
+        if (settled || manager.isFinalized()) {
+          return;
+        }
 
-          await handleReadResult(result);
-        },
-        rejectEventCaptureFailure,
-      );
+        await handleReadResult(result);
+      }, rejectEventCaptureFailure);
     }
 
     function startPostExitDrainLoop(): void {

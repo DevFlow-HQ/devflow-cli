@@ -22,7 +22,6 @@ import {
   type OutputSink,
   type PtyControlHarness,
   type PtyProcess,
-  type PtySpawnOptions,
   type PtySpawner,
   type TerminalDimensions,
   type UserInput,
@@ -67,9 +66,10 @@ const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
 const SUBMIT = "\r";
 const CONTROL_CHARACTERS_EXCEPT_TRANSCRIPT_WHITESPACE =
+  // eslint-disable-next-line no-control-regex -- Terminal sanitization intentionally matches C0/C1 controls.
   /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 type PtyProviderEventInput = DistributiveOmit<
@@ -264,10 +264,7 @@ export async function runPtyManagedSession(
         getFallbackActivePhaseId();
 
       if (waitingForRepair) {
-        return (
-          getActiveRepair()?.phase?.id ??
-          `${activePhaseId}:repair`
-        );
+        return getActiveRepair()?.phase?.id ?? `${activePhaseId}:repair`;
       }
 
       return activePhaseId;
@@ -519,7 +516,8 @@ export async function runPtyManagedSession(
           structured: false,
           matchedMarker: completionMarker,
           isTerminalCompletionMarker:
-            completionMarker === getActiveCompletionMarkerSet()?.terminalCompletionMarker,
+            completionMarker ===
+            getActiveCompletionMarkerSet()?.terminalCompletionMarker,
         }),
       );
 

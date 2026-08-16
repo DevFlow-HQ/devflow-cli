@@ -165,5 +165,8 @@ test("Claude config state seeding never overwrites existing scoped state", async
     workingDirectory: "/new/project",
   });
 
-  assert.deepEqual(await fs.readJson(join(scopedHome, ".claude.json")), existingState);
+  assert.deepEqual(
+    await fs.readJson(join(scopedHome, ".claude.json")),
+    existingState,
+  );
 });

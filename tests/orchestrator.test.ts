@@ -73,9 +73,7 @@ test("pipeline stages end at execute without a validate placeholder", () => {
   ]);
 });
 
-async function listRunDirectories(
-  projectRoot: string,
-): Promise<string[]> {
+async function listRunDirectories(projectRoot: string): Promise<string[]> {
   const runsDirectory = join(projectRoot, ".devflow", "runs");
 
   if (!(await fs.pathExists(runsDirectory))) {
@@ -127,7 +125,7 @@ function isExecuteSessionInput(input: ManagedProviderSessionInput): boolean {
   );
 }
 
-type DistributiveOmit<T, K extends keyof any> = T extends unknown
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never;
 
@@ -245,12 +243,18 @@ function assertCriticalCompletionMarkerGuidance(
 async function completeIssuesSession(
   input: ManagedProviderSessionInput,
 ): Promise<ManagedProviderSessionResult> {
-  assert.match(input.initialCompletionMarker, /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(
+    input.initialCompletionMarker,
+    /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/,
+  );
   assert.match(input.initialPrompt, /Decompose the accepted PRD/);
   assert.match(input.initialPrompt, /Canonical PRD artifact path:/);
   assert.match(input.initialPrompt, /Project context path:/);
   assert.match(input.initialPrompt, /Issues directory:/);
-  assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+  assert.equal(
+    input.initialPrompt.includes(input.initialCompletionMarker),
+    true,
+  );
 
   await fs.outputFile(
     join(extractIssuesDirectory(input.initialPrompt), "first-issue.md"),
@@ -273,8 +277,14 @@ async function completeExecuteSession(
     /^DEVFLOW_EXECUTION_NO_MORE_TASKS_[a-f0-9]{32}$/,
   );
   assert.match(input.initialPrompt, /running one DevFlow execution iteration/i);
-  assert.match(input.initialPrompt, /Select and complete exactly one AFK issue/i);
-  assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+  assert.match(
+    input.initialPrompt,
+    /Select and complete exactly one AFK issue/i,
+  );
+  assert.equal(
+    input.initialPrompt.includes(input.initialCompletionMarker),
+    true,
+  );
   assert.equal(
     input.initialPrompt.includes(input.initialTerminalCompletionMarker ?? ""),
     true,
@@ -291,16 +301,31 @@ async function completeExecuteSession(
 }
 
 function assertIssuesPromptContract(input: ManagedProviderSessionInput): void {
-  assert.match(input.initialCompletionMarker, /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(
+    input.initialCompletionMarker,
+    /^DEVFLOW_ISSUES_COMPLETE_[a-f0-9]{32}$/,
+  );
   assert.match(input.initialPrompt, /Canonical PRD artifact path:\n.+prd\.md/);
-  assert.match(input.initialPrompt, /Project context path:\n.+project-context\.md/);
+  assert.match(
+    input.initialPrompt,
+    /Project context path:\n.+project-context\.md/,
+  );
   assert.match(input.initialPrompt, /Issues directory:\n.+\/issues/);
-  assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+  assert.equal(
+    input.initialPrompt.includes(input.initialCompletionMarker),
+    true,
+  );
   assert.doesNotMatch(input.initialPrompt, /\{\{[A-Z_]+\}\}/);
 
-  assert.match(input.initialPrompt, /write markdown files directly into the supplied issues directory/i);
+  assert.match(
+    input.initialPrompt,
+    /write markdown files directly into the supplied issues directory/i,
+  );
   assert.match(input.initialPrompt, /vertical-slice/i);
-  assert.match(input.initialPrompt, /demoable\/verifiable acceptance criteria/i);
+  assert.match(
+    input.initialPrompt,
+    /demoable\/verifiable acceptance criteria/i,
+  );
   assert.match(input.initialPrompt, /blocked-by sibling slugs/i);
   assert.match(input.initialPrompt, /HITL\/AFK/i);
   assert.match(input.initialPrompt, /single headless self-critique/i);
@@ -317,7 +342,10 @@ async function completeSessionContinuations(
   for (const continuation of input.continuations ?? []) {
     assert.ok(continuation.phase?.id, "expected continuation phase id");
     assert.equal(continuation.phase.kind, "prd");
-    assert.match(continuation.completionMarker, /^DEVFLOW_PRD_COMPLETE_[a-f0-9]{32}$/);
+    assert.match(
+      continuation.completionMarker,
+      /^DEVFLOW_PRD_COMPLETE_[a-f0-9]{32}$/,
+    );
     assert.match(continuation.prompt, /Synthesize the canonical PRD/);
     assert.match(continuation.prompt, /Do not interview the user/);
     assert.match(continuation.prompt, /just-completed live grill discussion/);
@@ -325,7 +353,10 @@ async function completeSessionContinuations(
     assert.match(continuation.prompt, /grill-transcript\.md/);
     assert.match(continuation.prompt, /Canonical PRD artifact path:/);
     assert.match(continuation.prompt, /prd\.md/);
-    assert.equal(continuation.prompt.includes(continuation.completionMarker), true);
+    assert.equal(
+      continuation.prompt.includes(continuation.completionMarker),
+      true,
+    );
 
     await continuation.onStart?.();
     await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# PRD\n");
@@ -336,7 +367,10 @@ async function completeSessionContinuations(
 async function completeGrillSession(
   input: ManagedProviderSessionInput,
 ): Promise<ManagedProviderSessionResult> {
-  assert.match(input.initialCompletionMarker, /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(
+    input.initialCompletionMarker,
+    /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/,
+  );
   assert.match(input.initialPrompt, /Run the interactive grill stage/);
   await input.onProviderEvent?.(
     createStructuredProviderEvent({
@@ -353,7 +387,10 @@ async function completeGrillSession(
 async function completePrdSession(
   input: ManagedProviderSessionInput,
 ): Promise<ManagedProviderSessionResult> {
-  assert.match(input.initialCompletionMarker, /^DEVFLOW_PRD_COMPLETE_[a-f0-9]{32}$/);
+  assert.match(
+    input.initialCompletionMarker,
+    /^DEVFLOW_PRD_COMPLETE_[a-f0-9]{32}$/,
+  );
   assert.match(input.initialPrompt, /Synthesize the canonical PRD/);
   assert.match(input.initialPrompt, /No live provider discussion is available/);
   assert.match(input.initialPrompt, /Persisted grill transcript path:/);
@@ -586,10 +623,7 @@ test("non-specialized stage prompts render critical completion marker guidance",
     ["prd", prdPrompt, "DEVFLOW_PRD_COMPLETE_test"],
     ["issues", issuesPrompt, "DEVFLOW_ISSUES_COMPLETE_test"],
   ] as const) {
-    assertCriticalCompletionMarkerGuidance(
-      prompt,
-      marker,
-    );
+    assertCriticalCompletionMarkerGuidance(prompt, marker);
     assert.match(prompt, new RegExp(escapeRegExp(marker)), promptName);
   }
 });
@@ -623,10 +657,26 @@ test("renderGrillPrompt requires marker-free conclusion approval before marker-o
 
 test("renderExecutePrompt injects manual-flow issue and commit context with artifact path references", async () => {
   const projectRoot = makeTempDir("devflow-execute-prompt-");
-  const issuesDirectory = join(projectRoot, ".devflow", "runs", "run123", "issues");
+  const issuesDirectory = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "run123",
+    "issues",
+  );
   const doneDirectory = join(issuesDirectory, "done");
-  const prdArtifactPath = join(projectRoot, ".devflow", "runs", "run123", "prd.md");
-  const projectContextPath = join(projectRoot, ".devflow", "project-context.md");
+  const prdArtifactPath = join(
+    projectRoot,
+    ".devflow",
+    "runs",
+    "run123",
+    "prd.md",
+  );
+  const projectContextPath = join(
+    projectRoot,
+    ".devflow",
+    "project-context.md",
+  );
   const tddGuidePath = join(projectRoot, "prompts", "tdd.md");
 
   await fs.outputFile(
@@ -655,7 +705,10 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
   });
 
   const issuePath = join(issuesDirectory, "001-first-afk.md");
-  assert.match(prompt, new RegExp(`--- BEGIN ISSUE ${escapeRegExp(issuePath)} ---`));
+  assert.match(
+    prompt,
+    new RegExp(`--- BEGIN ISSUE ${escapeRegExp(issuePath)} ---`),
+  );
   assert.match(prompt, /Implement first slice/);
   assert.doesNotMatch(prompt, /002-completed-afk\.md/);
   assert.doesNotMatch(prompt, /Already completed/);
@@ -683,7 +736,10 @@ test("renderExecutePrompt injects manual-flow issue and commit context with arti
   assert.match(prompt, /move .*do not copy or recreate/i);
   assert.match(prompt, /directory already exists/i);
   assert.match(prompt, /leave HITL issues untouched/i);
-  assert.match(prompt, /discover the project-owned test, typecheck, and build commands/i);
+  assert.match(
+    prompt,
+    /discover the project-owned test, typecheck, and build commands/i,
+  );
   assert.match(
     prompt,
     /before the marker, state a brief summary of the changes made and functionality added in this session/i,
@@ -760,9 +816,14 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
         assert.match(input.initialPrompt, /prd\.md/);
         assert.match(input.initialPrompt, /project-context\.md/);
         assert.match(input.initialPrompt, /prompts\/tdd\.md/);
-        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
         assert.equal(
-          input.initialPrompt.includes(input.initialTerminalCompletionMarker ?? ""),
+          input.initialPrompt.includes(input.initialCompletionMarker),
+          true,
+        );
+        assert.equal(
+          input.initialPrompt.includes(
+            input.initialTerminalCompletionMarker ?? "",
+          ),
           true,
         );
 
@@ -867,7 +928,10 @@ test("orchestrator runs one fresh execute iteration with rendered context and re
   const providerSessionState = await fs.readJson(
     join(runDirectory, "provider-session.json"),
   );
-  assert.equal(providerSessionState.providerSessionId, "execute-provider-session-1");
+  assert.equal(
+    providerSessionState.providerSessionId,
+    "execute-provider-session-1",
+  );
   assert.equal(providerSessionState.phase.kind, "execute");
   assert.equal(providerSessionState.status, "active");
 });
@@ -1000,7 +1064,9 @@ test("orchestrator stops execute with no-file before opening a provider session"
       }
 
       if (isExecuteSessionInput(input)) {
-        throw new Error("Execute session should not start when no files remain.");
+        throw new Error(
+          "Execute session should not start when no files remain.",
+        );
       }
 
       if (isGrillSessionInput(input)) {
@@ -1046,7 +1112,14 @@ test("orchestrator stops execute with no-file before opening a provider session"
 
         const [runId] = await listRunDirectories(projectRoot);
         await fs.remove(
-          join(projectRoot, ".devflow", "runs", runId, "issues", "001-first.md"),
+          join(
+            projectRoot,
+            ".devflow",
+            "runs",
+            runId,
+            "issues",
+            "001-first.md",
+          ),
         );
       },
     },
@@ -1055,7 +1128,9 @@ test("orchestrator stops execute with no-file before opening a provider session"
   assert.equal(runSessionInputs.filter(isExecuteSessionInput).length, 0);
   const [runId] = await listRunDirectories(projectRoot);
   assert.deepEqual(
-    await readExecutionLedger(join(projectRoot, ".devflow", "runs", runId, "execution.jsonl")),
+    await readExecutionLedger(
+      join(projectRoot, ".devflow", "runs", runId, "execution.jsonl"),
+    ),
     {
       stage: "execute",
       iterations: [],
@@ -1084,7 +1159,10 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
       if (isIssuesSessionInput(input)) {
         const issuesDirectory = extractIssuesDirectory(input.initialPrompt);
         await fs.outputFile(join(issuesDirectory, "001-first.md"), "# First\n");
-        await fs.outputFile(join(issuesDirectory, "002-second.md"), "# Second\n");
+        await fs.outputFile(
+          join(issuesDirectory, "002-second.md"),
+          "# Second\n",
+        );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
@@ -1171,7 +1249,9 @@ test("orchestrator loops fresh execute sessions until active issues are gone", a
   assert.notEqual(executeInputs[0].phase?.id, executeInputs[1].phase?.id);
   const [runId] = await listRunDirectories(projectRoot);
   assert.deepEqual(
-    await readExecutionLedger(join(projectRoot, ".devflow", "runs", runId, "execution.jsonl")),
+    await readExecutionLedger(
+      join(projectRoot, ".devflow", "runs", runId, "execution.jsonl"),
+    ),
     {
       stage: "execute",
       iterations: [
@@ -1269,18 +1349,90 @@ test("orchestrator logs run and stage lifecycle entries at info", async () => {
       context: entry.context?.context,
     })),
     [
-      { level: "info", msg: "run created", runId, stage: undefined, context: undefined },
-      { level: "info", msg: "stage started", runId, stage: "intent", context: undefined },
-      { level: "info", msg: "stage completed", runId, stage: "intent", context: undefined },
-      { level: "info", msg: "stage started", runId, stage: "bootstrap", context: undefined },
-      { level: "info", msg: "stage completed", runId, stage: "bootstrap", context: undefined },
-      { level: "info", msg: "stage started", runId, stage: "grill", context: undefined },
-      { level: "info", msg: "stage started", runId, stage: "prd", context: undefined },
-      { level: "info", msg: "stage completed", runId, stage: "prd", context: undefined },
-      { level: "info", msg: "stage completed", runId, stage: "grill", context: undefined },
-      { level: "info", msg: "stage started", runId, stage: "issues", context: undefined },
-      { level: "info", msg: "stage completed", runId, stage: "issues", context: undefined },
-      { level: "info", msg: "stage started", runId, stage: "execute", context: undefined },
+      {
+        level: "info",
+        msg: "run created",
+        runId,
+        stage: undefined,
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage started",
+        runId,
+        stage: "intent",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage completed",
+        runId,
+        stage: "intent",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage started",
+        runId,
+        stage: "bootstrap",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage completed",
+        runId,
+        stage: "bootstrap",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage started",
+        runId,
+        stage: "grill",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage started",
+        runId,
+        stage: "prd",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage completed",
+        runId,
+        stage: "prd",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage completed",
+        runId,
+        stage: "grill",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage started",
+        runId,
+        stage: "issues",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage completed",
+        runId,
+        stage: "issues",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "stage started",
+        runId,
+        stage: "execute",
+        context: undefined,
+      },
       {
         level: "info",
         msg: "execution iteration",
@@ -1288,8 +1440,20 @@ test("orchestrator logs run and stage lifecycle entries at info", async () => {
         stage: "execute",
         context: { iteration: 1 },
       },
-      { level: "info", msg: "stage completed", runId, stage: "execute", context: undefined },
-      { level: "info", msg: "run summary written", runId, stage: undefined, context: undefined },
+      {
+        level: "info",
+        msg: "stage completed",
+        runId,
+        stage: "execute",
+        context: undefined,
+      },
+      {
+        level: "info",
+        msg: "run summary written",
+        runId,
+        stage: undefined,
+        context: undefined,
+      },
     ],
   );
 });
@@ -1612,7 +1776,10 @@ test("orchestrator stops execute with cap failure and writes the cap ledger", as
   assert.deepEqual(ledger.final.completedIssueFilenames, []);
   assert.deepEqual(ledger.final.remainingIssueFilenames, ["001-first.md"]);
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), true);
-  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "validation.json")),
+    false,
+  );
 });
 
 test("orchestrator writes an error ledger before surfacing incomplete execute sessions", async () => {
@@ -1710,7 +1877,10 @@ test("orchestrator writes an error ledger before surfacing incomplete execute se
   assert.deepEqual(ledger.final.completedIssueFilenames, []);
   assert.deepEqual(ledger.final.remainingIssueFilenames, ["001-first.md"]);
   assert.equal(await fs.pathExists(join(runDirectory, "prd.md")), true);
-  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "validation.json")),
+    false,
+  );
 });
 
 test("orchestrator resolves the selected built-in provider through a managed-session adapter factory", async () => {
@@ -2172,20 +2342,23 @@ test("orchestrator retries a retryable intent provider-session failure inside th
     needsClarification: false,
   });
   const [runId] = await listRunDirectories(projectRoot);
-  assert.deepEqual(warningLogSummaries(entries, ["provider-backed stage retry"]), [
-    {
-      msg: "provider-backed stage retry",
-      runId,
-      stage: "intent",
-      context: {
-        attempt: 1,
-        nextAttempt: 2,
-        totalAttempts: 2,
-        providerId: "codex",
-        reason: "IncompleteProviderSessionError",
+  assert.deepEqual(
+    warningLogSummaries(entries, ["provider-backed stage retry"]),
+    [
+      {
+        msg: "provider-backed stage retry",
+        runId,
+        stage: "intent",
+        context: {
+          attempt: 1,
+          nextAttempt: 2,
+          totalAttempts: 2,
+          providerId: "codex",
+          reason: "IncompleteProviderSessionError",
+        },
       },
-    },
-  ]);
+    ],
+  );
 });
 
 test("orchestrator retries intent after failed in-session repair and accepts a valid retry repair", async () => {
@@ -2374,7 +2547,9 @@ test("orchestrator raises a typed retry-exhausted error and preserves the final 
         throw failure;
       }
 
-      throw new Error("Invalid intent artifact unexpectedly passed validation.");
+      throw new Error(
+        "Invalid intent artifact unexpectedly passed validation.",
+      );
     },
   };
 
@@ -2437,16 +2612,27 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
         (await listRunDirectories(projectRoot))[0],
       );
 
-      if (input.initialCompletionMarker.startsWith("DEVFLOW_INTENT_COMPLETE_")) {
+      if (
+        input.initialCompletionMarker.startsWith("DEVFLOW_INTENT_COMPLETE_")
+      ) {
         assert.ok(input.phase?.id, "expected intent phase id");
         assert.equal(input.phase.kind, "intent");
         assert.equal(input.phase.attempt, 1);
-        assert.match(input.initialCompletionMarker, /^DEVFLOW_INTENT_COMPLETE_[a-f0-9]{32}$/);
+        assert.match(
+          input.initialCompletionMarker,
+          /^DEVFLOW_INTENT_COMPLETE_[a-f0-9]{32}$/,
+        );
         assert.match(input.initialPrompt, /Classify only the raw task/);
         assert.match(input.initialPrompt, /Raw task:\nresume work/);
         assert.doesNotMatch(input.initialPrompt, /Project context/);
-        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
-        assert.match(input.initialPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/);
+        assert.equal(
+          input.initialPrompt.includes(input.initialCompletionMarker),
+          true,
+        );
+        assert.match(
+          input.initialPrompt,
+          /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/,
+        );
 
         await fs.outputJson(
           join(runDirectory, "intent.json"),
@@ -2477,7 +2663,10 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
         assert.ok(input.phase?.id, "expected grill phase id");
         assert.equal(input.phase.kind, "grill");
         assert.equal(input.phase.attempt, 1);
-        assert.match(input.initialCompletionMarker, /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/);
+        assert.match(
+          input.initialCompletionMarker,
+          /^DEVFLOW_GRILL_COMPLETE_[a-f0-9]{32}$/,
+        );
         assert.match(input.initialPrompt, /Run the interactive grill stage/);
         assert.match(input.initialPrompt, /Raw task:\nresume work/);
         assert.match(input.initialPrompt, /Intent artifact:/);
@@ -2486,11 +2675,16 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
         assert.match(input.initialPrompt, /Ask one question at a time/);
         assert.match(input.initialPrompt, /recommended answers/);
         assert.match(input.initialPrompt, /Inspect the repository/);
-        assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
+        assert.equal(
+          input.initialPrompt.includes(input.initialCompletionMarker),
+          true,
+        );
         assert.ok(input.transcript);
 
         await input.transcript.onProviderOutput?.("What tradeoff matters?\n");
-        await input.transcript.onSubmittedUserMessage?.("Prefer simple contracts.\n");
+        await input.transcript.onSubmittedUserMessage?.(
+          "Prefer simple contracts.\n",
+        );
       }
 
       await input.validate();
@@ -2538,7 +2732,10 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     rawTask: "resume work",
     needsClarification: false,
   });
-  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD\n");
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# PRD\n",
+  );
   assert.equal(
     await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
     [
@@ -2582,71 +2779,23 @@ test("orchestrator passes intent and grill stage inputs to managed provider sess
     await fs.readFile(join(runDirectory, "issues", "first-issue.md"), "utf8"),
     "# First issue\n",
   );
-  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "validation.json")),
+    false,
+  );
 });
 
-test("orchestrator leaves provider-authored issues untouched after execute", async (t) => {
+test("orchestrator leaves provider-authored issues untouched after execute", async () => {
   const projectRoot = makeTempDir("devflow-orchestrator-");
   const devFlowState: DevFlowState = createDevFlowState({ projectRoot });
   await devFlowState.projectContext.write("# Project context\n");
   const stages: PipelineStage[] = [];
-  const issueAccessesAfterIssuesStage: string[] = [];
   let runDirectory = "";
   let issuesDirectory = "";
   let issueFilePath = "";
   let issueContentBeforeDownstream = "";
   let issueMtimeBeforeDownstream = 0;
   let issueDirectoryEntriesBeforeDownstream: string[] = [];
-  let restoreIssuesAccessGuard = () => {};
-
-  function isIssuePath(value: unknown): boolean {
-    return (
-      typeof value === "string" &&
-      issuesDirectory.length > 0 &&
-      (value === issuesDirectory || value.startsWith(`${issuesDirectory}/`))
-    );
-  }
-
-  function installIssuesAccessGuard(): void {
-    const guardedMethods = [
-      "readdir",
-      "readFile",
-      "writeFile",
-      "outputFile",
-      "remove",
-      "unlink",
-      "move",
-    ] as const;
-    const originals = new Map<string, unknown>();
-
-    for (const method of guardedMethods) {
-      const original = fs[method];
-      originals.set(method, original);
-      (fs as Record<string, unknown>)[method] = async (
-        pathOrSource: unknown,
-        ...args: unknown[]
-      ) => {
-        if (isIssuePath(pathOrSource) || isIssuePath(args[0])) {
-          issueAccessesAfterIssuesStage.push(`${method}:${String(pathOrSource)}`);
-          throw new Error(
-            `Downstream stages must not access issue artifacts after issues validation: ${method} ${String(pathOrSource)}`,
-          );
-        }
-
-        return (original as (...methodArgs: unknown[]) => unknown)(
-          pathOrSource,
-          ...args,
-        );
-      };
-    }
-
-    restoreIssuesAccessGuard = () => {
-      for (const [method, original] of originals) {
-        (fs as Record<string, unknown>)[method] = original;
-      }
-    };
-    t.after(restoreIssuesAccessGuard);
-  }
 
   const adapter: ManagedSessionAdapter = {
     provider: getBuiltInProviderIdentity("codex"),
@@ -2734,8 +2883,6 @@ test("orchestrator leaves provider-authored issues untouched after execute", asy
       },
     },
   );
-  restoreIssuesAccessGuard();
-
   assert.deepEqual(stages, [
     "intent",
     "bootstrap",
@@ -2744,14 +2891,22 @@ test("orchestrator leaves provider-authored issues untouched after execute", asy
     "issues",
     "execute",
   ]);
-  assert.deepEqual(issueAccessesAfterIssuesStage, []);
-  assert.deepEqual((await fs.readdir(issuesDirectory)).sort(), [
-    ...issueDirectoryEntriesBeforeDownstream,
-    "done",
-  ].sort());
-  assert.equal(await fs.readFile(issueFilePath, "utf8"), issueContentBeforeDownstream);
-  assert.equal((await fs.stat(issueFilePath)).mtimeMs, issueMtimeBeforeDownstream);
-  assert.equal(await fs.pathExists(join(runDirectory, "validation.json")), false);
+  assert.deepEqual(
+    (await fs.readdir(issuesDirectory)).sort(),
+    [...issueDirectoryEntriesBeforeDownstream, "done"].sort(),
+  );
+  assert.equal(
+    await fs.readFile(issueFilePath, "utf8"),
+    issueContentBeforeDownstream,
+  );
+  assert.equal(
+    (await fs.stat(issueFilePath)).mtimeMs,
+    issueMtimeBeforeDownstream,
+  );
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "validation.json")),
+    false,
+  );
   assert.equal(await fs.pathExists(join(issuesDirectory, "done")), true);
 });
 
@@ -2791,7 +2946,10 @@ test("orchestrator repairs missing issue files inside the same issues managed se
 
         const repairPrompt = input.repair.renderPrompt(initialValidationError);
         repairPrompts.push(repairPrompt);
-        assert.match(repairPrompt, /Repair only the issue decomposition artifacts/);
+        assert.match(
+          repairPrompt,
+          /Repair only the issue decomposition artifacts/,
+        );
         assert.match(repairPrompt, /Issues directory:\n.+\/issues/);
         assert.match(repairPrompt, /at least one non-empty markdown file/i);
         assertCriticalCompletionMarkerGuidance(
@@ -2805,7 +2963,10 @@ test("orchestrator repairs missing issue files inside the same issues managed se
         assert.match(repairPrompt, new RegExp(input.repair.completionMarker));
 
         await fs.outputFile(
-          join(extractIssuesDirectory(input.initialPrompt), "repaired-issue.md"),
+          join(
+            extractIssuesDirectory(input.initialPrompt),
+            "repaired-issue.md",
+          ),
           "# Repaired issue\n",
         );
         await input.validate();
@@ -2865,7 +3026,10 @@ test("orchestrator repairs missing issue files inside the same issues managed se
     (await listRunDirectories(projectRoot))[0],
   );
   assert.equal(
-    await fs.readFile(join(runDirectory, "issues", "repaired-issue.md"), "utf8"),
+    await fs.readFile(
+      join(runDirectory, "issues", "repaired-issue.md"),
+      "utf8",
+    ),
     "# Repaired issue\n",
   );
 });
@@ -3123,7 +3287,10 @@ test("orchestrator persists provider session metadata for the dedicated issues s
           ),
         );
         await fs.outputFile(
-          join(extractIssuesDirectory(input.initialPrompt), "provider-backed.md"),
+          join(
+            extractIssuesDirectory(input.initialPrompt),
+            "provider-backed.md",
+          ),
           "# Provider-backed issue\n",
         );
         await input.validate();
@@ -3172,7 +3339,9 @@ test("orchestrator persists provider session metadata for the dedicated issues s
       return { repairUsed: false, exitCode: 0, signal: null };
     },
     async resumeSession() {
-      throw new Error("issues orchestration should not resume provider sessions");
+      throw new Error(
+        "issues orchestration should not resume provider sessions",
+      );
     },
   };
 
@@ -3443,8 +3612,14 @@ test("structured-provider grill orchestration records normalized events instead 
   assert.match(transcript, /Prefer simple contracts\./);
   assert.doesNotMatch(transcript, /Provider protocol text/);
   assert.doesNotMatch(transcript, /managed PRD continuation prompt/);
-  assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
-  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+  assert.match(
+    transcript,
+    new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
+  );
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "grill-checkpoint.json")),
+    true,
+  );
 });
 
 test("orchestrator persists reliable provider session ids from normalized session-start events", async () => {
@@ -3621,7 +3796,10 @@ test("orchestrator refreshes provider session state from later normalized turn e
       assert.ok(continuation.phase?.id);
       prdPhaseId = continuation.phase.id;
       await continuation.onStart?.();
-      await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# PRD\n");
+      await fs.outputFile(
+        extractPrdArtifactPath(continuation.prompt),
+        "# PRD\n",
+      );
       await input.onProviderEvent(
         createStructuredProviderEvent({
           type: "turn-completed",
@@ -3796,7 +3974,10 @@ test("interrupted incomplete grill recovery resumes a reliable provider session 
     await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
     /Resolved/,
   );
-  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "grill-checkpoint.json")),
+    true,
+  );
   assert.deepEqual(
     warningLogSummaries(entries, [
       "provider-backed stage retry",
@@ -3905,7 +4086,10 @@ test("failed grill resume falls back once to a fresh partial-transcript grill at
       }
 
       assert.match(input.initialPrompt, /Partial grill transcript path/);
-      assert.doesNotMatch(input.initialPrompt, /Continue the interrupted grill/);
+      assert.doesNotMatch(
+        input.initialPrompt,
+        /Continue the interrupted grill/,
+      );
       await input.onProviderEvent?.(
         createStructuredProviderEvent({
           type: "turn-completed",
@@ -3919,7 +4103,10 @@ test("failed grill resume falls back once to a fresh partial-transcript grill at
     },
     async resumeSession(input) {
       resumeCallCount += 1;
-      throw new ProviderSessionLaunchError(provider, new Error(input.providerSessionId));
+      throw new ProviderSessionLaunchError(
+        provider,
+        new Error(input.providerSessionId),
+      );
     },
   };
 
@@ -4204,16 +4391,16 @@ test("orchestrator leaves fallback providers without reliable session ids on exi
       }
 
       assert.ok(input.transcript);
-      await input.onProviderEvent?.(
-        {
-          type: "session-start",
-          provider: getBuiltInProviderIdentity("claude"),
-          source: "pty",
-          structured: false,
-          providerSessionId: "unreliable-pty-id",
-        },
+      await input.onProviderEvent?.({
+        type: "session-start",
+        provider: getBuiltInProviderIdentity("claude"),
+        source: "pty",
+        structured: false,
+        providerSessionId: "unreliable-pty-id",
+      });
+      await input.transcript.onProviderOutput?.(
+        "Fallback transcript content.\n",
       );
-      await input.transcript.onProviderOutput?.("Fallback transcript content.\n");
       await input.transcript.onSubmittedUserMessage?.("Fallback user reply.\n");
       await input.validate();
       await completeSessionContinuations(input);
@@ -4383,8 +4570,14 @@ test("structured Codex JSONL grill orchestration records transcripts from normal
   assert.doesNotMatch(transcript, /Codex protocol text/);
   assert.doesNotMatch(transcript, /managed JSONL continuation prompt/);
   assert.doesNotMatch(transcript, /unknown JSONL echo/);
-  assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
-  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+  assert.match(
+    transcript,
+    new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
+  );
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "grill-checkpoint.json")),
+    true,
+  );
 });
 
 test("structured Claude hook grill orchestration records normalized events and provider session ids", async () => {
@@ -4473,7 +4666,8 @@ test("structured Claude hook grill orchestration records normalized events and p
         createStructuredProviderEvent(
           {
             type: "turn-completed",
-            assistantMessage: "Claude question from normalized assistant content.",
+            assistantMessage:
+              "Claude question from normalized assistant content.",
             providerSessionId: "claude-grill-session",
           },
           "hooks",
@@ -4544,7 +4738,10 @@ test("structured Claude hook grill orchestration records normalized events and p
   );
 
   assert.match(transcript, /Use normalized Claude hook events\./);
-  assert.match(transcript, /Claude question from normalized assistant content\./);
+  assert.match(
+    transcript,
+    /Claude question from normalized assistant content\./,
+  );
   assert.match(transcript, /Accepted Claude hook answer\./);
   assert.doesNotMatch(transcript, /Start/);
   assert.doesNotMatch(transcript, /hook_event_name/);
@@ -4764,7 +4961,10 @@ test("structured-provider grill transcript persistence failures retry without wr
     "runs",
     (await listRunDirectories(projectRoot))[0],
   );
-  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), false);
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "grill-checkpoint.json")),
+    false,
+  );
 });
 
 test("orchestrator retries a partial grill attempt from the same transcript", async () => {
@@ -4818,8 +5018,12 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
       grillPrompts.push(input.initialPrompt);
 
       if (grillCallCount === 1) {
-        await input.transcript?.onProviderOutput?.("Which state should survive?\n");
-        await input.transcript?.onSubmittedUserMessage?.("Keep answered decisions.\n");
+        await input.transcript?.onProviderOutput?.(
+          "Which state should survive?\n",
+        );
+        await input.transcript?.onSubmittedUserMessage?.(
+          "Keep answered decisions.\n",
+        );
         throw new IncompleteProviderSessionError({
           provider,
           completionMarker: input.initialCompletionMarker,
@@ -4835,7 +5039,9 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
         /Do not repeat resolved questions unless necessary/,
       );
       await input.transcript?.onProviderOutput?.("Any retry constraint?\n");
-      await input.transcript?.onSubmittedUserMessage?.("Use the same transcript.\n");
+      await input.transcript?.onSubmittedUserMessage?.(
+        "Use the same transcript.\n",
+      );
       await input.validate();
       await completeSessionContinuations(input);
 
@@ -4880,7 +5086,10 @@ test("orchestrator retries a partial grill attempt from the same transcript", as
   assert.match(transcript, /## Attempt 2/);
   assert.match(transcript, /Any retry constraint\?/);
   assert.match(transcript, /Use the same transcript\./);
-  assert.match(transcript, new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`));
+  assert.match(
+    transcript,
+    new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
+  );
   assert.ok(
     transcript.indexOf("Which state should survive?") <
       transcript.indexOf("Any retry constraint?"),
@@ -4930,7 +5139,9 @@ test("orchestrator exhausts grill retries after two pre-completion attempts", as
       }
 
       grillCallCount += 1;
-      await input.transcript?.onProviderOutput?.(`Attempt ${grillCallCount} question\n`);
+      await input.transcript?.onProviderOutput?.(
+        `Attempt ${grillCallCount} question\n`,
+      );
       throw new IncompleteProviderSessionError({
         provider,
         completionMarker: input.initialCompletionMarker,
@@ -4977,7 +5188,10 @@ test("orchestrator exhausts grill retries after two pre-completion attempts", as
   assert.match(transcript, /Attempt 1 question/);
   assert.match(transcript, /## Attempt 2/);
   assert.match(transcript, /Attempt 2 question/);
-  assert.doesNotMatch(transcript, new RegExp(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE));
+  assert.doesNotMatch(
+    transcript,
+    new RegExp(DEVFLOW_GRILL_TRANSCRIPT_COMPLETE),
+  );
 });
 
 test("orchestrator does not retry interactive grill after transcript completion", async () => {
@@ -5062,7 +5276,10 @@ test("orchestrator does not retry interactive grill after transcript completion"
     await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
     new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
   );
-  assert.equal(await fs.pathExists(join(runDirectory, "grill-checkpoint.json")), true);
+  assert.equal(
+    await fs.pathExists(join(runDirectory, "grill-checkpoint.json")),
+    true,
+  );
 });
 
 test("orchestrator recreates a missing checkpoint from a completed grill transcript without repeating grill", async () => {
@@ -5177,17 +5394,20 @@ test("orchestrator recreates a missing checkpoint from a completed grill transcr
       prdArtifactPath: join(runDirectory, "prd.md"),
     },
   );
-  assert.deepEqual(warningLogSummaries(entries, ["artifact fallback recovery"]), [
-    {
-      msg: "artifact fallback recovery",
-      runId: (await listRunDirectories(projectRoot))[0],
-      stage: "grill",
-      context: {
-        artifact: "grill-checkpoint",
-        recovery: "recreated-from-completed-transcript",
+  assert.deepEqual(
+    warningLogSummaries(entries, ["artifact fallback recovery"]),
+    [
+      {
+        msg: "artifact fallback recovery",
+        runId: (await listRunDirectories(projectRoot))[0],
+        stage: "grill",
+        context: {
+          artifact: "grill-checkpoint",
+          recovery: "recreated-from-completed-transcript",
+        },
       },
-    },
-  ]);
+    ],
+  );
 });
 
 test("orchestrator replaces a corrupt checkpoint from a completed grill transcript without repeating grill", async () => {
@@ -5238,7 +5458,11 @@ test("orchestrator replaces a corrupt checkpoint from a completed grill transcri
 
       grillCallCount += 1;
       await input.validate();
-      await fs.writeFile(join(runDirectory, "grill-checkpoint.json"), "{broken", "utf8");
+      await fs.writeFile(
+        join(runDirectory, "grill-checkpoint.json"),
+        "{broken",
+        "utf8",
+      );
       throw new ProviderSessionTranscriptCaptureError(
         provider,
         new Error("checkpoint corrupt after completion"),
@@ -5340,9 +5564,15 @@ test("orchestrator repairs a missing PRD artifact inside the completed grill ses
           repairPrompt,
           continuation.repair.completionMarker,
         );
-        assert.match(repairPrompt, new RegExp(continuation.repair.completionMarker));
+        assert.match(
+          repairPrompt,
+          new RegExp(continuation.repair.completionMarker),
+        );
 
-        await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# Repaired PRD\n");
+        await fs.outputFile(
+          extractPrdArtifactPath(continuation.prompt),
+          "# Repaired PRD\n",
+        );
         await continuation.validate();
       }
 
@@ -5426,14 +5656,11 @@ test("orchestrator repairs an empty PRD artifact with the same non-empty validat
         const prdPath = extractPrdArtifactPath(continuation.prompt);
         await fs.outputFile(prdPath, "   \n");
 
-        await assert.rejects(
-          continuation.validate(),
-          (error: unknown) => {
-            assert.ok(error instanceof StageArtifactValidationError);
-            repairFailures.push(error.message);
-            return error.message.includes("non-whitespace content");
-          },
-        );
+        await assert.rejects(continuation.validate(), (error: unknown) => {
+          assert.ok(error instanceof StageArtifactValidationError);
+          repairFailures.push(error.message);
+          return error.message.includes("non-whitespace content");
+        });
         assert.ok(continuation.repair);
 
         await fs.outputFile(prdPath, "# Repaired PRD\n");
@@ -5500,12 +5727,18 @@ test("orchestrator retries only PRD synthesis from transcript after completed-gr
 
       if (isPrdSessionInput(input)) {
         prdOnlyCallCount += 1;
-        assert.match(input.initialPrompt, /No live provider discussion is available/);
+        assert.match(
+          input.initialPrompt,
+          /No live provider discussion is available/,
+        );
         assert.match(input.initialPrompt, /Persisted grill transcript path:/);
         assert.doesNotMatch(input.initialPrompt, /Ask one question at a time/);
         assert.ok(input.repair);
 
-        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD retry\n");
+        await fs.outputFile(
+          extractPrdArtifactPath(input.initialPrompt),
+          "# PRD retry\n",
+        );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
@@ -5573,7 +5806,10 @@ test("orchestrator retries only PRD synthesis from transcript after completed-gr
     await fs.readFile(join(runDirectory, "grill-transcript.md"), "utf8"),
     new RegExp(`${DEVFLOW_GRILL_TRANSCRIPT_COMPLETE}\n$`),
   );
-  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD retry\n");
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# PRD retry\n",
+  );
 });
 
 test("interrupted PRD synthesis resumes the completed grill provider session before transcript fallback", async () => {
@@ -5613,7 +5849,10 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
 
       if (isPrdSessionInput(input)) {
         prdOnlyCallCount += 1;
-        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD fallback\n");
+        await fs.outputFile(
+          extractPrdArtifactPath(input.initialPrompt),
+          "# PRD fallback\n",
+        );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
@@ -5673,7 +5912,10 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
     async resumeSession(input) {
       resumeSessionInputs.push(input);
       assert.equal(input.providerSessionId, "codex-live-session-prd");
-      assert.match(input.initialPrompt, /Continue the interrupted PRD synthesis/);
+      assert.match(
+        input.initialPrompt,
+        /Continue the interrupted PRD synthesis/,
+      );
       assert.match(input.initialPrompt, /Canonical PRD artifact path:/);
       assert.match(input.initialPrompt, /prd\.md/);
       assert.match(input.initialPrompt, /Do not interview the user/);
@@ -5681,9 +5923,15 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
         input.initialPrompt,
         input.initialCompletionMarker,
       );
-      assert.doesNotMatch(input.initialPrompt, /Run the interactive grill stage/);
+      assert.doesNotMatch(
+        input.initialPrompt,
+        /Run the interactive grill stage/,
+      );
 
-      await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD resumed\n");
+      await fs.outputFile(
+        extractPrdArtifactPath(input.initialPrompt),
+        "# PRD resumed\n",
+      );
       await input.validate();
       return { repairUsed: false, exitCode: 0, signal: null };
     },
@@ -5711,7 +5959,10 @@ test("interrupted PRD synthesis resumes the completed grill provider session bef
     "runs",
     (await listRunDirectories(projectRoot))[0],
   );
-  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD resumed\n");
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# PRD resumed\n",
+  );
 });
 
 test("failed PRD resume falls back once to PRD-only synthesis from the completed grill transcript", async () => {
@@ -5751,12 +6002,21 @@ test("failed PRD resume falls back once to PRD-only synthesis from the completed
 
       if (isPrdSessionInput(input)) {
         prdOnlyCallCount += 1;
-        assert.match(input.initialPrompt, /No live provider discussion is available/);
+        assert.match(
+          input.initialPrompt,
+          /No live provider discussion is available/,
+        );
         assert.match(input.initialPrompt, /Persisted grill transcript path:/);
         assert.match(input.initialPrompt, /grill-transcript\.md/);
-        assert.doesNotMatch(input.initialPrompt, /Continue the interrupted PRD synthesis/);
+        assert.doesNotMatch(
+          input.initialPrompt,
+          /Continue the interrupted PRD synthesis/,
+        );
 
-        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD fallback\n");
+        await fs.outputFile(
+          extractPrdArtifactPath(input.initialPrompt),
+          "# PRD fallback\n",
+        );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
@@ -5809,7 +6069,10 @@ test("failed PRD resume falls back once to PRD-only synthesis from the completed
     async resumeSession(input) {
       resumeCallCount += 1;
       assert.equal(input.providerSessionId, "codex-prd-resume-reject");
-      throw new ProviderSessionLaunchError(provider, new Error("resume rejected"));
+      throw new ProviderSessionLaunchError(
+        provider,
+        new Error("resume rejected"),
+      );
     },
   };
 
@@ -5835,7 +6098,10 @@ test("failed PRD resume falls back once to PRD-only synthesis from the completed
     "runs",
     (await listRunDirectories(projectRoot))[0],
   );
-  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD fallback\n");
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# PRD fallback\n",
+  );
 });
 
 test("completed PRD artifact prevents PRD resume or fallback from running again", async () => {
@@ -5875,7 +6141,10 @@ test("completed PRD artifact prevents PRD resume or fallback from running again"
 
       if (isPrdSessionInput(input)) {
         prdOnlyCallCount += 1;
-        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD fallback\n");
+        await fs.outputFile(
+          extractPrdArtifactPath(input.initialPrompt),
+          "# PRD fallback\n",
+        );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
@@ -5914,10 +6183,14 @@ test("completed PRD artifact prevents PRD resume or fallback from running again"
           type: "turn-completed",
           phaseId: continuation.phase?.id,
           providerSessionId: "codex-stale-prd-session",
-          assistantMessage: "PRD is complete but the provider exits before marker.",
+          assistantMessage:
+            "PRD is complete but the provider exits before marker.",
         }),
       );
-      await fs.outputFile(extractPrdArtifactPath(continuation.prompt), "# PRD complete\n");
+      await fs.outputFile(
+        extractPrdArtifactPath(continuation.prompt),
+        "# PRD complete\n",
+      );
 
       throw new IncompleteProviderSessionError({
         provider,
@@ -5954,7 +6227,10 @@ test("completed PRD artifact prevents PRD resume or fallback from running again"
     "runs",
     (await listRunDirectories(projectRoot))[0],
   );
-  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD complete\n");
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# PRD complete\n",
+  );
 });
 
 test("malformed provider state degrades to PRD-only recovery from completed grill artifacts", async () => {
@@ -5995,7 +6271,10 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
 
       if (isPrdSessionInput(input)) {
         prdOnlyCallCount += 1;
-        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD fallback\n");
+        await fs.outputFile(
+          extractPrdArtifactPath(input.initialPrompt),
+          "# PRD fallback\n",
+        );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
@@ -6016,7 +6295,11 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
       }
 
       await input.validate();
-      await fs.writeFile(join(runDirectory, "provider-session.json"), "{broken", "utf8");
+      await fs.writeFile(
+        join(runDirectory, "provider-session.json"),
+        "{broken",
+        "utf8",
+      );
 
       const continuation = input.continuations?.[0];
       assert.ok(continuation);
@@ -6058,7 +6341,10 @@ test("malformed provider state degrades to PRD-only recovery from completed gril
     "runs",
     (await listRunDirectories(projectRoot))[0],
   );
-  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD fallback\n");
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# PRD fallback\n",
+  );
   assert.deepEqual(
     warningLogSummaries(entries, ["provider session metadata ignored"]),
     [
@@ -6111,7 +6397,10 @@ test("completed grill checkpoint overrides stale active grill provider state dur
 
       if (isPrdSessionInput(input)) {
         prdOnlyCallCount += 1;
-        await fs.outputFile(extractPrdArtifactPath(input.initialPrompt), "# PRD fallback\n");
+        await fs.outputFile(
+          extractPrdArtifactPath(input.initialPrompt),
+          "# PRD fallback\n",
+        );
         await input.validate();
         return { repairUsed: false, exitCode: 0, signal: null };
       }
@@ -6188,7 +6477,10 @@ test("completed grill checkpoint overrides stale active grill provider state dur
     "runs",
     (await listRunDirectories(projectRoot))[0],
   );
-  assert.equal(await fs.readFile(join(runDirectory, "prd.md"), "utf8"), "# PRD fallback\n");
+  assert.equal(
+    await fs.readFile(join(runDirectory, "prd.md"), "utf8"),
+    "# PRD fallback\n",
+  );
 });
 
 test("orchestrator surfaces pre-completion grill transcript persistence failures as retryable grill-stage failures", async () => {
@@ -6275,7 +6567,11 @@ test("orchestrator reuses fresh project context during bootstrap without provide
   await baseDevFlowState.projectContext.write("# Project context\n", {
     refreshReason: "manual",
   });
-  const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
+  const metadataPath = join(
+    projectRoot,
+    ".devflow",
+    "project-context.meta.json",
+  );
   const metadataBefore = await fs.readFile(metadataPath, "utf8");
   const stages: PipelineStage[] = [];
   let checkFreshnessCallCount = 0;
@@ -6370,7 +6666,11 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
   const existingContext = "# Project context\n\nKeep this exact text.\n";
   await baseDevFlowState.projectContext.write(existingContext);
   const { entries, logger } = createCapturingLogger();
-  const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
+  const metadataPath = join(
+    projectRoot,
+    ".devflow",
+    "project-context.meta.json",
+  );
   const stages: PipelineStage[] = [];
   const projectContextWrites: Array<{
     content: string;
@@ -6388,7 +6688,10 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
               ? metadataOrOptions.refreshReason
               : undefined,
         });
-        return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+        return baseDevFlowState.projectContext.write(
+          content,
+          metadataOrOptions,
+        );
       },
     },
   };
@@ -6490,13 +6793,22 @@ test("orchestrator repairs missing project-context metadata during bootstrap wit
 test("orchestrator repairs invalid project-context metadata during bootstrap without provider work", async () => {
   const projectRoot = makeTempDir("devflow-orchestrator-");
   const baseDevFlowState: DevFlowState = createDevFlowState({ projectRoot });
-  const existingContext = "# Project context\n\nPreserve invalid metadata content.\n";
-  const metadataPath = join(projectRoot, ".devflow", "project-context.meta.json");
+  const existingContext =
+    "# Project context\n\nPreserve invalid metadata content.\n";
+  const metadataPath = join(
+    projectRoot,
+    ".devflow",
+    "project-context.meta.json",
+  );
   await fs.outputFile(
     join(projectRoot, ".devflow", "project-context.md"),
     existingContext,
   );
-  await fs.outputJson(metadataPath, { generatedAt: "not-a-date" }, { spaces: 2 });
+  await fs.outputJson(
+    metadataPath,
+    { generatedAt: "not-a-date" },
+    { spaces: 2 },
+  );
   const projectContextWrites: Array<{
     content: string;
     refreshReason: string | undefined;
@@ -6513,7 +6825,10 @@ test("orchestrator repairs invalid project-context metadata during bootstrap wit
               ? metadataOrOptions.refreshReason
               : undefined,
         });
-        return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+        return baseDevFlowState.projectContext.write(
+          content,
+          metadataOrOptions,
+        );
       },
     },
   };
@@ -6606,7 +6921,10 @@ test("orchestrator generates missing project context through the managed provide
               ? metadataOrOptions.refreshReason
               : undefined,
         });
-        return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+        return baseDevFlowState.projectContext.write(
+          content,
+          metadataOrOptions,
+        );
       },
     },
   };
@@ -6682,11 +7000,11 @@ test("orchestrator generates missing project context through the managed provide
       assert.match(input.initialPrompt, /key paths/i);
       assert.match(input.initialPrompt, /commands/i);
       assert.match(input.initialPrompt, /conventions/i);
-      assert.match(
-        input.initialPrompt,
-        /project-context\.candidate\.md/,
+      assert.match(input.initialPrompt, /project-context\.candidate\.md/);
+      assert.equal(
+        input.initialPrompt.includes(input.initialCompletionMarker),
+        true,
       );
-      assert.equal(input.initialPrompt.includes(input.initialCompletionMarker), true);
 
       const candidatePath = join(runDirectory, "project-context.candidate.md");
       await fs.outputFile(candidatePath, generatedContext);
@@ -6811,7 +7129,10 @@ test("orchestrator refreshes semantically stale project context through the mana
                 ? metadataOrOptions.refreshReason
                 : undefined,
           });
-          return baseDevFlowState.projectContext.write(content, metadataOrOptions);
+          return baseDevFlowState.projectContext.write(
+            content,
+            metadataOrOptions,
+          );
         },
       },
     };
@@ -6865,15 +7186,24 @@ test("orchestrator refreshes semantically stale project context through the mana
         assert.match(input.initialPrompt, /Existing project context:/);
         assert.match(input.initialPrompt, /Existing orientation/);
         assert.match(input.initialPrompt, /focused inspection/i);
-        assert.match(input.initialPrompt, /changed, renamed, new, deleted-related, nearby, or referenced files/i);
+        assert.match(
+          input.initialPrompt,
+          /changed, renamed, new, deleted-related, nearby, or referenced files/i,
+        );
         assert.doesNotMatch(input.initialPrompt, /whole-repo rescan/i);
         assert.doesNotMatch(input.initialPrompt, /SECRET RAW TASK/);
-        assert.doesNotMatch(input.initialPrompt, /Refresh context from raw task details/);
+        assert.doesNotMatch(
+          input.initialPrompt,
+          /Refresh context from raw task details/,
+        );
         assert.doesNotMatch(input.initialPrompt, /needsClarification/);
         assert.doesNotMatch(input.initialPrompt, /classification/);
 
         if (refreshReason === "relevant-changes") {
-          assert.match(input.initialPrompt, /src\/orchestrator\.ts \(modified\)/);
+          assert.match(
+            input.initialPrompt,
+            /src\/orchestrator\.ts \(modified\)/,
+          );
           assert.match(
             input.initialPrompt,
             /docs\/context\.md \(renamed from docs\/old-context\.md\)/,
@@ -6881,7 +7211,10 @@ test("orchestrator refreshes semantically stale project context through the mana
           assert.match(input.initialPrompt, /src\/obsolete\.ts \(deleted\)/);
         }
 
-        const candidatePath = join(runDirectory, "project-context.candidate.md");
+        const candidatePath = join(
+          runDirectory,
+          "project-context.candidate.md",
+        );
         await fs.outputFile(candidatePath, candidateContext);
         await input.validate();
 
@@ -6913,7 +7246,10 @@ test("orchestrator refreshes semantically stale project context through the mana
         refreshReason,
       },
     ]);
-    assert.equal(await baseDevFlowState.projectContext.read(), candidateContext);
+    assert.equal(
+      await baseDevFlowState.projectContext.read(),
+      candidateContext,
+    );
     assert.equal(
       (await baseDevFlowState.projectContext.readMetadata())?.refreshReason,
       refreshReason,
@@ -7085,7 +7421,10 @@ test("orchestrator supplies bootstrap validation and one in-session repair attem
       assert.notEqual(input.repair.phase.id, input.phase.id);
       const repairPrompt = input.repair.renderPrompt(validationError);
       repairPrompts.push(repairPrompt);
-      assert.match(repairPrompt, /Repair only the project-context candidate artifact/);
+      assert.match(
+        repairPrompt,
+        /Repair only the project-context candidate artifact/,
+      );
       assert.match(repairPrompt, /project-context\.candidate\.md/);
       assertCriticalCompletionMarkerGuidance(
         repairPrompt,
@@ -7521,7 +7860,10 @@ test("orchestrator supplies intent validation and one in-session repair attempt 
         repairPrompts.push(repairPrompt);
         assert.match(repairPrompt, /Repair only the intent artifact/);
         assert.match(repairPrompt, /no such file or directory|ENOENT/);
-        assert.match(repairPrompt, /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/);
+        assert.match(
+          repairPrompt,
+          /\/\.devflow\/runs\/[a-z0-9]{12}\/intent\.json/,
+        );
         assertCriticalCompletionMarkerGuidance(
           repairPrompt,
           input.repair.completionMarker,
@@ -7749,7 +8091,10 @@ test("provider-backed stage retry classification keeps lifecycle failures non-re
     ),
     false,
   );
-  assert.equal(isRetryableProviderBackedStageFailure(new Error("setup failed")), false);
+  assert.equal(
+    isRetryableProviderBackedStageFailure(new Error("setup failed")),
+    false,
+  );
 });
 
 test("resume-aware orchestration keeps provider-native event and CLI details out of core recovery", async () => {
@@ -7957,7 +8302,9 @@ test("orchestrator rejects provider-backed execution before creating a run when 
     ),
     (error: unknown) =>
       error instanceof MissingProviderIdError &&
-      error.message.includes("Provider-backed orchestration requires a provider id"),
+      error.message.includes(
+        "Provider-backed orchestration requires a provider id",
+      ),
   );
 
   assert.equal(runnerCallCount, 0);
