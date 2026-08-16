@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+// TODO: Replace node:fs usage with the fs-extra library.
 import { appendFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 

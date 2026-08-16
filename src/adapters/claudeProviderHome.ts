@@ -85,6 +85,8 @@ export async function seedClaudeConfigState({
   workingDirectory,
   homeDirectory,
 }: SeedClaudeConfigStateOptions): Promise<void> {
+  // TODO : both the source and target config paths are representd by 
+  // similar variable name. Better naming helps to distinguish between the two.
   const targetConfigPath = join(claudeConfigDirectory, ".claude.json");
 
   if (await fs.pathExists(targetConfigPath)) {

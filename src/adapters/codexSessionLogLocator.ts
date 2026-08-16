@@ -136,6 +136,7 @@ export function createCodexSessionLogLocator(
   options: CodexSessionLogLocatorOptions,
 ): SessionLogLocator {
   const scopedProviderHome = resolve(options.codexHome);
+  // TODO : sessionsRoot is confusing name and can be changed for better clarity
   const sessionsRoot = join(scopedProviderHome, "sessions");
   const watchSessionsTree =
     options.watchSessionsTree ?? watchCodexSessionsTree;

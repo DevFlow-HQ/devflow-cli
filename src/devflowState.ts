@@ -1680,6 +1680,8 @@ async function createRun(
       await fs.ensureDir(dirname(artifactPath));
       await fs.writeFile(artifactPath, content, { encoding: "utf8", flag: "wx" });
     } catch (error) {
+      // TODO : this manual type guard can collapse to
+      // `(error as NodeJS.ErrnoException)?.code === "EEXIST"`.
       if (
         typeof error === "object" &&
         error !== null &&

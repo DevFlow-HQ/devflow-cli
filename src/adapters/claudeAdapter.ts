@@ -1,9 +1,6 @@
 import which from "which";
 
-import {
-  buildTierResolutionTrace,
-  emitAdapterTrace,
-} from "./adapterTrace.js";
+import { buildTierResolutionTrace, emitAdapterTrace } from "./adapterTrace.js";
 import {
   createCommandManagedSessionAdapter,
   type CommandManagedSessionAdapterOptions,
@@ -17,6 +14,7 @@ import {
   type ClaudeJsonlSessionCommand,
 } from "./claudeJsonlSessionRunner.js";
 import { ProviderSessionLaunchError } from "./managedSessionAdapter.js";
+import type { PtyGracefulExitCommand } from "./ptyControlHarness.js";
 import type {
   ManagedProviderSessionCapabilities,
   ManagedProviderSessionInput,
@@ -30,8 +28,8 @@ import { NoopLogger, type Logger } from "../logger.js";
 
 export type ClaudeManagedSessionEventSource = "pty" | "hooks" | "jsonl";
 
-export interface ClaudeAdapterOptions
-  extends CommandManagedSessionAdapterOptions {
+export interface ClaudeAdapterOptions extends CommandManagedSessionAdapterOptions {
+  // TODO: logger is inherited from CommandManagedSessionAdapterOptions.
   logger?: Logger;
   eventSource?: ClaudeManagedSessionEventSource;
   runClaudeHookDrivenSession?: ClaudeHookDrivenRunner;
@@ -72,6 +70,12 @@ const CLAUDE_JSONL_CAPABILITIES: ManagedProviderSessionCapabilities = {
   classifiesSubmittedUserMessageOrigin: true,
 };
 
+// TODO: Keep Claude graceful-exit behavior centralized as CLI semantics evolve.
+const CLAUDE_GRACEFUL_EXIT_COMMAND: PtyGracefulExitCommand = {
+  text: "/exit",
+  submitKey: "\n",
+};
+
 export function createClaudeAdapter(
   options: ClaudeAdapterOptions = {},
 ): ManagedSessionAdapter {
@@ -89,9 +93,12 @@ export function createClaudeAdapter(
     {
       providerId: "claude",
       command: "claude",
-      gracefulExitCommand: { text: "/exit", submitKey: "\n" },
+      gracefulExitCommand: CLAUDE_GRACEFUL_EXIT_COMMAND,
       buildArgs(input) {
-        return [...(input.model ? ["--model", input.model] : []), input.initialPrompt];
+        return [
+          ...(input.model ? ["--model", input.model] : []),
+          input.initialPrompt,
+        ];
       },
     },
     options,
@@ -158,7 +165,7 @@ function createClaudeJsonlAdapter(
         provider,
         executable,
         args: buildClaudeArgs(input),
-        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
+        gracefulExitCommand: CLAUDE_GRACEFUL_EXIT_COMMAND,
         ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
@@ -182,7 +189,7 @@ function createClaudeJsonlAdapter(
         executable,
         args: buildClaudeResumeArgs(input),
         resumeProviderSessionId: input.providerSessionId,
-        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
+        gracefulExitCommand: CLAUDE_GRACEFUL_EXIT_COMMAND,
         ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
@@ -254,7 +261,7 @@ function createClaudeHookAdapter(
         provider,
         executable,
         args: buildClaudeArgs(input),
-        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
+        gracefulExitCommand: CLAUDE_GRACEFUL_EXIT_COMMAND,
         ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
@@ -277,7 +284,7 @@ function createClaudeHookAdapter(
         provider,
         executable,
         args: buildClaudeResumeArgs(input),
-        gracefulExitCommand: { text: "/exit", submitKey: "\n" },
+        gracefulExitCommand: CLAUDE_GRACEFUL_EXIT_COMMAND,
         ...(options.logger !== undefined ? { logger } : {}),
       },
       input,
@@ -296,7 +303,10 @@ function createClaudeHookAdapter(
 function buildClaudeArgs(
   input: Pick<ManagedProviderSessionInput, "model" | "initialPrompt">,
 ): string[] {
-  return [...(input.model ? ["--model", input.model] : []), input.initialPrompt];
+  return [
+    ...(input.model ? ["--model", input.model] : []),
+    input.initialPrompt,
+  ];
 }
 
 function buildClaudeResumeArgs(

@@ -1,3 +1,4 @@
+// TODO: Replace node:fs usage with the fs-extra library.
 import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -23,10 +24,7 @@ export interface HookSocketServerOptions {
 }
 
 export interface HookSocketServer {
-  start(
-    socketPath: string,
-    onPayload: HookSocketPayloadHandler,
-  ): Promise<void>;
+  start(socketPath: string, onPayload: HookSocketPayloadHandler): Promise<void>;
   stop(options: { drainMs: number }): Promise<void>;
 }
 
@@ -77,7 +75,9 @@ export class HookSocketPayloadHandlerError extends Error {
 
   constructor(socketPath: string, cause: unknown) {
     const causeMessage =
-      cause instanceof Error ? cause.message : "Unknown payload handler failure";
+      cause instanceof Error
+        ? cause.message
+        : "Unknown payload handler failure";
 
     super(`Hook socket payload handler failed: ${causeMessage}.`);
     this.name = "HookSocketPayloadHandlerError";
@@ -92,7 +92,9 @@ export class HookSocketConnectionError extends Error {
 
   constructor(socketPath: string, cause: unknown) {
     const causeMessage =
-      cause instanceof Error ? cause.message : "Unknown socket connection failure";
+      cause instanceof Error
+        ? cause.message
+        : "Unknown socket connection failure";
 
     super(`Hook socket connection failed: ${causeMessage}.`);
     this.name = "HookSocketConnectionError";
@@ -214,7 +216,9 @@ export function hookSocketServer(
       try {
         parsed = JSON.parse(rawPayload);
       } catch (error) {
-        const reason = isTruncatedJsonParseError(error) ? "truncated" : "malformed";
+        const reason = isTruncatedJsonParseError(error)
+          ? "truncated"
+          : "malformed";
         emitAdapterTrace(
           logger,
           buildHookSocketMalformedPayloadTrace({
@@ -369,17 +373,15 @@ export function hookSocketServer(
 }
 
 function isTruncatedJsonParseError(error: unknown): boolean {
-  return (
-    error instanceof SyntaxError &&
-    /unexpected end/i.test(error.message)
-  );
+  return error instanceof SyntaxError && /unexpected end/i.test(error.message);
 }
 
 function hookPayloadType(payload: unknown): string {
   if (
     typeof payload === "object" &&
     payload !== null &&
-    typeof (payload as { hook_event_name?: unknown }).hook_event_name === "string"
+    typeof (payload as { hook_event_name?: unknown }).hook_event_name ===
+      "string"
   ) {
     return (payload as { hook_event_name: string }).hook_event_name;
   }

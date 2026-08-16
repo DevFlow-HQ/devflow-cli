@@ -92,6 +92,7 @@ export function createClaudeSessionLogLocator(
   options: ClaudeSessionLogLocatorOptions,
 ): SessionLogLocator {
   const scopedProviderHome = resolve(options.claudeHome);
+  // TODO : projectsRoot is confusing, we should rename it to something like "scopedProviderProjectsRoot" or "scopedProviderHomeProjectsRoot"
   const projectsRoot = join(scopedProviderHome, "projects");
   const watchProjectsTree =
     options.watchProjectsTree ?? watchClaudeProjectsTree;
@@ -393,6 +394,7 @@ async function waitForWatcherWakeup(options: {
 
 async function findTranscriptFiles(options: {
   scopedProviderHome: string;
+  // TODO : projectsRoot is confusing, we should rename it to something like "scopedProviderProjectsRoot" or "scopedProviderHomeProjectsRoot"
   projectsRoot: string;
 }): Promise<SessionLogCandidateDebug[]> {
   const files: SessionLogCandidateDebug[] = [];

@@ -257,7 +257,9 @@ export function buildPhaseTransitionTrace(
       structured: input.structured,
       from: input.from,
       to: input.to,
-      ...(input.fromPhaseId !== undefined ? { fromPhaseId: input.fromPhaseId } : {}),
+      ...(input.fromPhaseId !== undefined
+        ? { fromPhaseId: input.fromPhaseId }
+        : {}),
       ...(input.toPhaseId !== undefined ? { toPhaseId: input.toPhaseId } : {}),
     }),
   };

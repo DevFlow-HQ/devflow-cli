@@ -81,6 +81,8 @@ export interface CodexAdapterOptions {
 export function createCodexAdapter(
   options: CodexAdapterOptions = {},
 ): ManagedSessionAdapter {
+  // TODO : architecture of creating codexAdapter and claudeAdapter are very different although they
+  // work very similarly. They should be refactored to have a common architecture.
   const provider = getBuiltInProviderIdentity("codex");
   const eventSource = options.eventSource ?? "hooks";
   const hookRunner = options.runCodexHookDrivenSession ?? runCodexHookDrivenSession;

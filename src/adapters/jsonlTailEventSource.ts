@@ -1,3 +1,4 @@
+// TODO : use fs-extra instead of node:fs and node:path for consistency with other files
 import fs from "node:fs/promises";
 import { resolve } from "node:path";
 

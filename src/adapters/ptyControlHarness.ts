@@ -239,6 +239,11 @@ export function startPtyControlHarness(
 
     terminal.on("resize", onResize);
     disposers.push(() => {
+      // TODO: `off` is just an alias for `removeListener`, so this if/else is two
+      // names for the same operation. Audit every injected `terminal` (prod
+      // `process.stdout` + all test fakes); once confirmed they're all
+      // EventEmitter-shaped (have `removeListener`), delete this branch and
+      // replace the whole disposer body with `terminal.removeListener?.("resize", onResize);`.
       if (terminal.off) {
         terminal.off("resize", onResize);
       } else {

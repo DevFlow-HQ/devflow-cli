@@ -585,11 +585,11 @@ function requiresProviderBackedProjectContextRefresh(
 ): freshness is Extract<ProjectContextFreshness, { status: "stale" }> {
   return (
     freshness.status === "stale" &&
-    [
+    [ // TODO : We can define the refresh reasons that require provider-backed refresh in a more structured and centralised way
       "missing-context",
       "context-version-changed",
       "max-age-exceeded",
-      "baseline-unavailable",
+      "baLoggerseline-unavailable",
       "relevant-changes",
     ].includes(freshness.refreshReason)
   );
@@ -2091,6 +2091,7 @@ async function runGrillStageWithRetry(options: {
               throw error;
             }
 
+            // TODO: Extract completed-grill recovery shared with the outer retry handler.
             if (
               await recoverCompletedGrillCheckpointIfNeeded({
                 request: options.request,

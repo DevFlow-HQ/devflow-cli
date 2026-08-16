@@ -447,6 +447,8 @@ export function isCliEntrypoint(
       fs.realpathSync(argvPath)
     );
   } catch {
+    //TODO : this fallback compares raw paths without resolving symlinks, so it
+    // can miss the entrypoint when the CLI is invoked via a symlink bin.
     return importMetaUrl === pathToFileURL(argvPath).href;
   }
 }
