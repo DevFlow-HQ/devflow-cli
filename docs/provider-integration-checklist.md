@@ -18,7 +18,7 @@ Use this as a non-trivial capability checklist for adding a provider as a real D
 - [ ] **Submitted-message boundary:** the structured source exposes user-message submission events or equivalent records.
 - [ ] **Completion marker visibility:** DevFlow completion markers appear intact in the structured turn-final assistant message.
 - [ ] **Origin classification:** the adapter can distinguish DevFlow-managed prompts from human replies, or can deterministically mark unknown origins without polluting the grill transcript.
-- [ ] **Metadata-only diagnostics:** the integration can be debugged using event type, source, phase id, origin, message length, paths, offsets, ids, and process status without logging prompt bodies, assistant bodies, hook payload bodies, JSONL bodies, terminal transcript text, or credentials.
+- [ ] **Diagnostic trace policy:** use metadata for ordinary traces; raw Provider-hook payloads follow the narrow exception in ADR 0011.
 
 ## Hooks Capability
 
@@ -79,7 +79,10 @@ Check these before claiming provider-session recovery.
 
 ## Related Architecture
 
-- `../CONTEXT.md`: provider, managed session, control transport, data plane, normalized provider event, completion marker, scoped provider home.
+- `../CONTEXT.md`: the canonical glossary entry point and legacy Provider terminology.
+- `glossary/provider-session-control.md`: managed session, control transport, and scoped provider home.
+- `glossary/provider-events-and-capture.md`: data plane and normalized provider event.
+- `glossary/grill-and-stage-flow.md`: completion marker.
 - `adr/0002-keep-pty-control-with-structured-event-source-fallbacks.md`: PTY control with structured event sources.
 - `adr/0003-keep-provider-events-narrow-and-turn-boundary-shaped.md`: normalized event vocabulary.
 - `adr/0005-treat-provider-session-state-as-recovery-metadata.md`: provider session id and resume policy.

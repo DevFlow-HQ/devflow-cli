@@ -81,12 +81,12 @@ test("ADR and glossary document graceful completed-session cleanup", async () =>
   const adr = await readSource(
     "docs/adr/0014-graceful-completed-session-cleanup-for-structured-runners.md",
   );
-  const context = await readSource("CONTEXT.md");
+  const glossary = await readSource("docs/glossary/provider-session-control.md");
 
   assert.match(adr, /Claude.*\/exit/);
   assert.match(adr, /Codex.*\/quit/);
-  assert.match(context, /\*\*Graceful exit command\*\*/);
-  assert.match(context, /\*\*Completed-session cleanup\*\*/);
+  assert.match(glossary, /\*\*Graceful exit command\*\*/);
+  assert.match(glossary, /\*\*Completed-session cleanup\*\*/);
 });
 
 async function readSource(path: string): Promise<string> {

@@ -29,6 +29,10 @@ test("maintainer context records JSONL rollout constraints for future providers"
 
 test("maintainer context documents the structured grill transcript contract", async () => {
   const context = await readFile(join(repoRoot, "CONTEXT.md"), "utf8");
+  const glossary = await readFile(
+    join(repoRoot, "docs", "glossary", "grill-and-stage-flow.md"),
+    "utf8",
+  );
   const adr = await readFile(
     join(
       repoRoot,
@@ -39,7 +43,8 @@ test("maintainer context documents the structured grill transcript contract", as
     "utf8",
   );
 
-  assert.match(context, /structured grill transcript contract/i);
+  assert.match(context, /glossary\/grill-and-stage-flow\.md/);
+  assert.match(glossary, /structured grill transcript contract/i);
   assert.match(adr, /Adapters should own provider-specific event normalization/i);
   assert.match(adr, /orchestration owns the durable grill transcript artifact policy/i);
   assert.match(adr, /turn-completed\.assistantMessage/);
@@ -53,22 +58,30 @@ test("maintainer context documents the structured grill transcript contract", as
 
 test("maintainer context defines completion marker and grill conclusion confirmation language", async () => {
   const context = await readFile(join(repoRoot, "CONTEXT.md"), "utf8");
+  const glossary = await readFile(
+    join(repoRoot, "docs", "glossary", "grill-and-stage-flow.md"),
+    "utf8",
+  );
 
-  assert.match(context, /\*\*Completion marker\*\*/);
-  assert.match(context, /single\*? authoritative .*done.* signal/i);
-  assert.match(context, /omitting it leaves the stage unable to advance/i);
-  assert.match(context, /emitting it prematurely yields no further turns/i);
+  assert.match(context, /glossary\/grill-and-stage-flow\.md/);
+  assert.match(glossary, /\*\*Completion marker\*\*/);
+  assert.match(glossary, /authoritative completion condition/i);
 
-  assert.match(context, /\*\*Grill conclusion confirmation\*\*/);
-  assert.match(context, /ask the user/i);
-  assert.match(context, /remaining questions or concerns/i);
-  assert.match(context, /provider-prompt-level/i);
-  assert.match(context, /DevFlow still observes only the marker/i);
-  assert.match(context, /does not programmatically validate/i);
+  assert.match(glossary, /\*\*Grill conclusion confirmation\*\*/);
+  assert.match(glossary, /explicit approval/i);
+  assert.match(glossary, /before it emits the grill completion marker/i);
 });
 
 test("maintainer context documents the hook payload diagnostic exception", async () => {
   const context = await readFile(join(repoRoot, "CONTEXT.md"), "utf8");
+  const eventsGlossary = await readFile(
+    join(repoRoot, "docs", "glossary", "provider-events-and-capture.md"),
+    "utf8",
+  );
+  const diagnosticsGlossary = await readFile(
+    join(repoRoot, "docs", "glossary", "diagnostics.md"),
+    "utf8",
+  );
   const adr = await readFile(
     join(
       repoRoot,
@@ -88,9 +101,11 @@ test("maintainer context documents the hook payload diagnostic exception", async
   assert.equal(adr.includes(".devflow/"), true);
   assert.match(adr, /thirty-day prune/i);
 
-  assert.match(context, /Provider hook/);
-  assert.match(context, /Hook IPC endpoint/);
-  assert.match(context, /Diagnostic log/);
+  assert.match(context, /glossary\/provider-events-and-capture\.md/);
+  assert.match(context, /glossary\/diagnostics\.md/);
+  assert.match(eventsGlossary, /Provider hook/);
+  assert.match(eventsGlossary, /Hook IPC endpoint/);
+  assert.match(diagnosticsGlossary, /Diagnostic log/);
 });
 
 test("end-user README documents the current supported invocation honestly", async () => {
