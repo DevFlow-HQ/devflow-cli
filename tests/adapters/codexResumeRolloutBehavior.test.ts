@@ -33,6 +33,7 @@ test("Codex launch args use auto-review without disabling approval or sandbox ga
   assert.deepEqual(freshHookArgs, [
     "-c",
     "approvals_reviewer=auto_review",
+    "--dangerously-bypass-hook-trust",
     "--model",
     "gpt-5.5",
     "Ship the contract",
@@ -46,6 +47,7 @@ test("Codex launch args use auto-review without disabling approval or sandbox ga
   assert.deepEqual(resumeHookArgs, [
     "-c",
     "approvals_reviewer=auto_review",
+    "--dangerously-bypass-hook-trust",
     "--model",
     "gpt-5.5",
     "resume",
@@ -66,8 +68,15 @@ test("Codex launch args use auto-review without disabling approval or sandbox ga
     assert.equal(args.includes("--ask-for-approval"), false);
     assert.equal(args.includes("--sandbox"), false);
     assert.equal(args.includes("-s"), false);
-    assert.equal(args.includes("--dangerously-bypass-hook-trust"), false);
     assert.equal(args.includes("--dangerously-bypass-approvals-and-sandbox"), false);
+  }
+
+  for (const args of [freshHookArgs, resumeHookArgs]) {
+    assert.equal(args.includes("--dangerously-bypass-hook-trust"), true);
+  }
+
+  for (const args of [freshJsonlArgs, resumeJsonlArgs]) {
+    assert.equal(args.includes("--dangerously-bypass-hook-trust"), false);
   }
 });
 

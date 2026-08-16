@@ -237,11 +237,13 @@ const codexHarness: CodexAdapterContractHarness = {
   expectedArgsWithoutModel: [
     "-c",
     "approvals_reviewer=auto_review",
+    "--dangerously-bypass-hook-trust",
     "Ship the contract",
   ],
   expectedArgsWithModel: [
     "-c",
     "approvals_reviewer=auto_review",
+    "--dangerously-bypass-hook-trust",
     "--model",
     "gpt-5.5",
     "Ship the contract",
@@ -1612,6 +1614,7 @@ test("Codex adapter resumeSession delegates hook resume with provider session id
         args: [
           "-c",
           "approvals_reviewer=auto_review",
+          "--dangerously-bypass-hook-trust",
           "--model",
           "gpt-5.5",
           "resume",
