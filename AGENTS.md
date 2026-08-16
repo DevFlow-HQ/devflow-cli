@@ -4,12 +4,16 @@
 
 ### Issue tracker
 
-Issues and specs are tracked in this repository's GitHub Issues. See `docs/agents/issue-tracker.md`.
+Before reading or changing an issue or spec, follow `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Use the repository's five canonical triage labels. See `docs/agents/triage-labels.md`.
+Before applying or interpreting triage labels, follow `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-This is a single-context repository with a root glossary and system-wide ADRs. See `docs/agents/domain.md`.
+Before exploring or changing a domain area, follow `docs/agents/domain.md`.
+
+### Engineering baseline
+
+Before changing source, tests, dependencies, tooling, prototypes, or agent guidance—or declaring implementation complete—follow `docs/agents/engineering-baseline.md`.

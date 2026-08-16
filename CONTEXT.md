@@ -1,12 +1,32 @@
 # DevFlow — Context
 
-DevFlow is a provider-agnostic meta-orchestrator that delegates to AI coding CLIs (Claude, Gemini, Codex, OpenCode). See `.agent/HANDOFF_2.md` and `.agent/Progress.md` for full project history.
+DevFlow is a provider-agnostic meta-orchestrator that delegates to AI coding CLIs (Claude, Gemini, Codex, OpenCode).
 
 ## Glossary
 
-- **Provider** — an AI coding CLI that DevFlow drives (Claude, Gemini, Codex, OpenCode). Each has a built-in `ManagedSessionAdapter`. Every provider is *wired* (adapter + fallback-tier infrastructure present), but only a **Supported provider** is selectable; a **Deferred provider** is wired yet unreachable from the CLI.
+### Target language
+
+- **Workflow Bundle** — one self-contained distributable workflow file, potentially an archive containing its manifest, definitions, prompts, skills,
+  schemas, and **Bundle Assets**. Built-in and **External Workflow Bundles** use the same package structure and runtime path.
+- **External Workflow Bundle** — a **Workflow Bundle** supplied outside Crucible's built-in set. It follows the same package and execution contract as a
+  built-in Workflow Bundle.
+- **Bundle Asset** — a resource carried inside a **Workflow Bundle** and distributed with it.
+- **Harness** — an external coding-agent runtime Crucible can select for workflow execution. Codex, Claude Code, and Gemini are the initial Harnesses;
+  their capabilities need not be identical.
+- **Harness Adapter** — an Adapter at the Harness seam that contains Harness-native control, event, and failure semantics behind a Crucible-owned Interface.
+
+### Legacy provider language
+
+The following terms describe the current DevFlow model, not Crucible's target Harness model.
+
+- **Provider** — DevFlow's legacy selection and fallback-wiring concept around an AI coding CLI, not a synonym for the target **Harness**. Each has a
+  built-in `ManagedSessionAdapter`. Every provider is *wired* (adapter + fallback-tier infrastructure present), but only a **Supported provider** is
+  selectable; a **Deferred provider** is wired yet unreachable from the CLI.
 - **Supported provider** — a provider DevFlow offers for selection because it has a working structured **Data plane / event source** (hooks or JSONL) that truthfully satisfies the **Normalized provider event** contract. MVP supported set: **Claude** and **Codex**. A provider's PTY *fallback* path does not demote it — Claude is supported because its primary/default data plane is structured, even though it retains a PTY fallback.
 - **Deferred provider** — a provider that is fully wired (adapter present, reachable in tests) but excluded from *every* CLI selection path — the first-run picker, single-installed auto-select, the `--provider` flag, and saved-config defaults all treat it as not selectable. A provider is deferred because it has no structured event source yet and would run PTY-synthesis-only, which cannot truthfully support the **Normalized provider event** contract (no clean per-turn content, no reliable **Provider session id**, no resume); shipping it as selectable would mean a broken, not merely rough, experience. MVP deferred set: **Gemini** and **OpenCode**. The deferral is open-ended — promotion to a **Supported provider** depends on the upstream provider's maker shipping hooks/JSONL/other structured output DevFlow can build on, so DevFlow makes no "coming soon" promise and keeps deferred providers entirely invisible in the CLI rather than labelling them "experimental". Distinct from an *unsupported* provider id (an unrecognized name such as a typo), which is not a built-in at all.
+
+### Current implementation language
+
 - **Managed session** — a single provider invocation with a defined prompt/marker contract, lifecycle, and validation. Owned by `runSession(...)` on the adapter.
 - **Control transport** — how DevFlow launches and steers the provider process. Today: `pty` (via `node-pty`). Reserved values: `api`, `inherit`, `stdio`.
 - **PTY control harness** — the shared terminal-control behavior DevFlow uses when a provider session is driven through PTY, independent of whether provider events come from a structured source or PTY fallback.
