@@ -1,0 +1,81 @@
+# THROWAWAY workflow for prototype ticket DevFlow-HQ/devflow-cli#6.
+# Lives only on the prototype/opencode-shell branch. Delete with the prototype.
+#
+# Produces the Windows/macOS/Linux half of the ticket's evidence: a real PTY
+# (ConPTY on Windows) drives the shell through every exit path and asserts the
+# terminal-restoring escape sequences were actually emitted.
+
+name: Prototype Shell (#6)
+
+on:
+  push:
+    branches: [prototype/opencode-shell]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: prototypes/opencode-shell
+
+jobs:
+  shell:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node 26 (OpenTUI's node:ffi requirement)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26.7.0
+
+      - name: Install Bun 1.3.14 (OpenCode's pinned version)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Report runtimes
+        run: |
+          node -v
+          bun -v
+          echo "runner: ${{ runner.os }} ${{ runner.arch }}"
+
+      - run: npm install --no-audit --no-fund
+
+      # 1. The seam is testable with no terminal, no OpenTUI, no native library.
+      - name: Seam tests (no terminal)
+        run: node --test test/seam.test.mjs
+
+      # 2. Does OpenTUI load and create/destroy a renderer under each runtime?
+      - name: Spike - bun arm
+        run: bun src/spike.mjs
+      - name: Spike - node arm
+        run: node --experimental-ffi --no-warnings src/spike.mjs
+
+      # 3. Real-PTY lifecycle: every exit path restores the terminal exactly once.
+      - name: PTY lifecycle - bun arm
+        env:
+          CRUCIBLE_ARM: bun
+          CRUCIBLE_RUNTIME: bun
+        run: node --test test/lifecycle.pty.test.mjs
+
+      - name: PTY lifecycle - node arm
+        env:
+          CRUCIBLE_ARM: node
+          CRUCIBLE_RUNTIME: node
+        run: node --test test/lifecycle.pty.test.mjs
+
+      # 4. Packaging: a standalone binary that runs with no node_modules present.
+      - name: Compile standalone binary (bun arm)
+        run: bun build --compile src/main.mjs --outfile dist/crucible-shell
+
+      - name: Smoke the packaged binary outside its workspace
+        run: node scripts/smoke-packaged.mjs
+
+      - name: Report artifact size
+        run: node scripts/report-size.mjs

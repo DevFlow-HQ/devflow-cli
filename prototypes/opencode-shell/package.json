@@ -1,0 +1,30 @@
+{
+  "name": "crucible-shell-prototype",
+  "private": true,
+  "type": "module",
+  "description": "THROWAWAY prototype for DevFlow-HQ/devflow-cli#6. Not production. Never imported by src/.",
+  "scripts": {
+    "spike:bun": "bun run src/spike.ts",
+    "spike:node": "node --experimental-strip-types src/spike.ts",
+    "shell:bun": "bun run src/hosts/bun-host.tsx",
+    "shell:node": "node --experimental-strip-types src/hosts/node-host.ts",
+    "test:seam": "node --experimental-strip-types --test test/seam.test.ts",
+    "test:pty": "node --test test/lifecycle.pty.test.mjs",
+    "package:bun": "node scripts/package-bun.mjs",
+    "evidence": "node scripts/evidence.mjs"
+  },
+  "dependencies": {
+    "@opentui/core": "0.4.5",
+    "@opentui/core-darwin-arm64": "^0.4.5",
+    "@opentui/core-darwin-x64": "^0.4.5",
+    "@opentui/core-linux-arm64": "^0.4.5",
+    "@opentui/core-linux-arm64-musl": "^0.4.5",
+    "@opentui/core-linux-x64": "^0.4.5",
+    "@opentui/core-linux-x64-musl": "^0.4.5",
+    "@opentui/core-win32-arm64": "^0.4.5",
+    "@opentui/core-win32-x64": "^0.4.5",
+    "@opentui/solid": "0.4.5",
+    "node-pty": "1.1.0",
+    "solid-js": "1.9.12"
+  }
+}

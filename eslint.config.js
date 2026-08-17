@@ -11,6 +11,7 @@ export default tseslint.config(
       ".devflow/**",
       "dist/**",
       "node_modules/**",
+      "prototypes/**",
     ],
   },
   eslint.configs.recommended,
