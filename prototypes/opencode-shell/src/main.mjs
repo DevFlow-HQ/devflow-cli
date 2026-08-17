@@ -65,6 +65,17 @@ const shell = createShell({
 });
 
 shell.start();
+
+// Readiness goes over the side channel, not the terminal.
+//
+// ConPTY is a screen SCRAPER, not a byte pipe: it maintains a console screen
+// buffer and re-emits a rendering of it. Plain stdout text written while the
+// alternate screen is active is absorbed into the screen contents and never
+// surfaces as a contiguous literal line. So on Windows the harness never saw
+// "SHELL_READY", never delivered a keypress, and every exit path timed out with
+// teardown having never run -- which then read as "terminal not restored".
+// Unix ptys pass bytes through verbatim, which is why this only bit Windows.
+record("SHELL_READY");
 process.stdout.write("SHELL_READY\n");
 
 if (fail === "render") {

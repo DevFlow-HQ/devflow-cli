@@ -96,6 +96,7 @@ function runShell({ env = {}, drive }) {
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
+        clearInterval(readyPoll);
         disposeTerminal(child);
         resolve({ out, log: readLog(logFile), exitCode: null, timedOut: true });
       }
@@ -103,16 +104,25 @@ function runShell({ env = {}, drive }) {
 
     child.onData((data) => {
       out += data;
-      if (!ready && out.includes("SHELL_READY")) {
-        ready = true;
-        setTimeout(() => drive?.(child), 120);
-      }
     });
+
+    // Observable readiness from the side-channel file, NOT scraped from the pty:
+    // see the ConPTY note in src/main.mjs. Polling the log makes this identical
+    // on all three platforms instead of relying on byte passthrough.
+    const readyPoll = setInterval(() => {
+      if (ready || settled) return;
+      if (!readLog(logFile).includes("SHELL_READY")) return;
+      ready = true;
+      clearInterval(readyPoll);
+      drive?.(child);
+    }, 25);
+    readyPoll.unref?.();
 
     child.onExit(({ exitCode }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(readyPoll);
       // Give the PTY a beat to flush trailing bytes.
       setTimeout(() => {
         disposeTerminal(child);
@@ -193,7 +203,7 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
   test("starts, renders, and reports ready", async () => {
     const result = await runShell({ drive: (c) => c.write("q") });
     const { out, log, exitCode } = result;
-    assert.ok(out.includes("SHELL_READY"), "shell never reported ready");
+    assert.ok(log.includes("SHELL_READY"), `shell never reported ready${diagnostics(result)}`);
     assert.ok(out.includes("crucible"), "shell never rendered its frame");
   });
 
