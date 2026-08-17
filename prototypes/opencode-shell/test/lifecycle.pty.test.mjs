@@ -12,13 +12,27 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import * as pty from "node-pty";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, "..", "src", "main.mjs");
 
 const ARM = process.env.CRUCIBLE_ARM ?? "node";
-const RUNTIME = process.env.CRUCIBLE_RUNTIME ?? process.execPath;
+
+// node-pty does NOT do PATH lookup: passing a bare "bun" throws
+// `Error: File not found:` on macOS and Windows. Resolve to an absolute path.
+function resolveRuntime(nameOrPath) {
+  if (!nameOrPath) return process.execPath;
+  if (nameOrPath.includes("/") || nameOrPath.includes("\\")) return nameOrPath;
+  const finder = process.platform === "win32" ? "where" : "which";
+  const found = spawnSync(finder, [nameOrPath], { encoding: "utf8" });
+  const first = (found.stdout ?? "").split(/\r?\n/).find((line) => line.trim());
+  if (!first) throw new Error(`could not resolve runtime "${nameOrPath}" on PATH`);
+  return first.trim();
+}
+
+const RUNTIME = resolveRuntime(process.env.CRUCIBLE_RUNTIME);
 const ARGS = ARM === "bun" ? [entry] : ["--experimental-ffi", "--no-warnings", entry];
 
 // What "the terminal was restored" means, as bytes on the wire.
