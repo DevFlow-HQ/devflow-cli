@@ -7,7 +7,38 @@
 // never branches on runtime -- only the launch command and the Windows console
 // handling differ. That is a much thinner runtime seam than expected.
 
+import { writeSync } from "node:fs";
 import { createCliRenderer, BoxRenderable, TextRenderable } from "@opentui/core";
+
+// Terminal-state safety net.
+//
+// FINDING: on Windows, OpenTUI 0.4.5 enables mouse tracking (1000/1002/1003/1006)
+// but never emits the matching disables on teardown -- it does emit them on Linux
+// and macOS. Left as-is, the user's terminal keeps reporting mouse events after
+// the process exits, which is exactly the "broken terminal after exit" the
+// extraction research calls a release blocker.
+//
+// The lesson generalises beyond this one bug: Crucible cannot delegate terminal
+// restoration to the renderer and assume it happened. It owns the final state, so
+// it re-asserts the modes it knows a TUI turns on. Every sequence here is
+// idempotent, so re-sending one the renderer already reset is harmless.
+const TERMINAL_RESET =
+  "\x1b[?1003l" + // any-event mouse tracking
+  "\x1b[?1002l" + // button-event mouse tracking
+  "\x1b[?1000l" + // basic mouse tracking
+  "\x1b[?1006l" + // SGR mouse mode
+  "\x1b[?1004l" + // focus reporting
+  "\x1b[?2004l" + // bracketed paste
+  "\x1b[?25h" + //  cursor visible
+  "\x1b[?1049l"; //  leave alternate screen
+
+function resetTerminalState() {
+  try {
+    writeSync(1, TERMINAL_RESET);
+  } catch {
+    /* a closed stdout must not break teardown */
+  }
+}
 
 export async function createOpenTuiRenderer({ failOnStart = false } = {}) {
   if (failOnStart) {
@@ -98,6 +129,9 @@ export async function createOpenTuiRenderer({ failOnStart = false } = {}) {
         (async () => renderer.destroy())(),
         new Promise((resolve) => setTimeout(resolve, 2000).unref?.()),
       ]);
+
+      // Last word on terminal state, after the renderer has had its turn.
+      resetTerminalState();
     },
   };
 }
