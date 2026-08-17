@@ -133,16 +133,36 @@ function stripAnsi(text) {
     .replace(/\x1b[()][0-9A-B]/g, "");
 }
 
-function assertRestored(out, label) {
+// Diagnostics travel with the failure. Windows can only be debugged through CI
+// from here, so a bare "never restored it" costs a whole round trip; the raw tail
+// and the mode census make the next round trip productive.
+function diagnostics(result) {
+  const { out, log, exitCode, timedOut } = result;
+  const census = RESTORE_PAIRS.map(([what, enable, disable]) => {
+    const on = out.includes(enable);
+    const off = out.includes(disable);
+    return `${what}=${on ? "on" : "-"}/${off ? "off" : "-"}`;
+  }).join(" ");
+  return [
+    `\n  exitCode=${exitCode} timedOut=${!!timedOut}`,
+    `  modes(entered/restored): ${census}`,
+    `  teardownLog: ${JSON.stringify(log)}`,
+    `  tail: ${JSON.stringify(out.slice(-400))}`,
+  ].join("\n");
+}
+
+function assertRestored(result, label) {
+  const out = typeof result === "string" ? result : result.out;
+  const detail = typeof result === "string" ? "" : diagnostics(result);
   let modesEntered = 0;
   for (const [what, enable, disable] of RESTORE_PAIRS) {
     if (!out.includes(enable)) continue; // never turned on here; nothing owed
     modesEntered += 1;
-    assert.ok(out.includes(disable), `${label}: entered ${what} but never restored it`);
+    assert.ok(out.includes(disable), `${label}: entered ${what} but never restored it${detail}`);
   }
   // Guards against a vacuous pass: if the TUI never entered ANY mode, it never
   // really started, and "restored everything it entered" would be trivially true.
-  assert.ok(modesEntered > 0, `${label}: shell never entered any terminal mode`);
+  assert.ok(modesEntered > 0, `${label}: shell never entered any terminal mode${detail}`);
 }
 
 function teardownCount(out) {
@@ -171,13 +191,14 @@ function assertToreDownOnce(log, expectedReason) {
 
 describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
   test("starts, renders, and reports ready", async () => {
-    const { out, log } = await runShell({ drive: (c) => c.write("q") });
+    const result = await runShell({ drive: (c) => c.write("q") });
+    const { out, log, exitCode } = result;
     assert.ok(out.includes("SHELL_READY"), "shell never reported ready");
     assert.ok(out.includes("crucible"), "shell never rendered its frame");
   });
 
   test("accepts input", async () => {
-    const { out, log } = await runShell({
+    const result = await runShell({
       drive: (c) => {
         c.write("x");
         setTimeout(() => c.write("z"), 150);
@@ -188,23 +209,26 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
         setTimeout(() => c.write("q"), 600);
       },
     });
+    const { out, log, exitCode } = result;
     assert.match(stripAnsi(out), /keys\s+x z/, "keypresses never reached the view");
   });
 
   test("handles resize", async () => {
-    const { out, log } = await runShell({
+    const result = await runShell({
       drive: (c) => {
         c.resize(100, 30);
         setTimeout(() => c.write("q"), 200);
       },
     });
+    const { out, log, exitCode } = result;
     const plain = out.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
     assert.ok(/resizes\s+[1-9]/.test(plain), "resize never reached the view");
   });
 
   test("normal quit restores the terminal exactly once", async () => {
-    const { out, log, exitCode } = await runShell({ drive: (c) => c.write("q") });
-    assertRestored(out, "normal quit");
+    const result = await runShell({ drive: (c) => c.write("q") });
+    const { out, log, exitCode } = result;
+    assertRestored(result, "normal quit");
     assertToreDownOnce(log, "normal");
     assert.equal(exitCode, 0);
   });
@@ -214,65 +238,74 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
   // handler would hang forever on Ctrl-C -- which is exactly what this prototype
   // observed before the key path was added.
   test("ctrl-c restores the terminal exactly once", async () => {
-    const { out, log } = await runShell({ drive: (c) => c.write("\x03") });
-    assertRestored(out, "ctrl-c");
+    const result = await runShell({ drive: (c) => c.write("\x03") });
+    const { out, log, exitCode } = result;
+    assertRestored(result, "ctrl-c");
     assertToreDownOnce(log, "ctrl-c");
   });
 
   test("repeated ctrl-c still restores exactly once", async () => {
-    const { out, log } = await runShell({
+    const result = await runShell({
       drive: (c) => {
         c.write("\x03");
         c.write("\x03");
         c.write("\x03");
       },
     });
-    assertRestored(out, "repeated ctrl-c");
+    const { out, log, exitCode } = result;
+    assertRestored(result, "repeated ctrl-c");
     assertToreDownOnce(log, "ctrl-c");
   });
 
   test("startup failure restores the terminal", async () => {
-    const { out, log, exitCode } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "startup" } });
+    const result = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "startup" } });
+    const { out, log, exitCode } = result;
     assertToreDownOnce(log, "startup-failure");
     assert.equal(exitCode, 1);
   });
 
   test("render failure restores the terminal exactly once", async () => {
-    const { out, log } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "render" } });
-    assertRestored(out, "render failure");
+    const result = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "render" } });
+    const { out, log, exitCode } = result;
+    assertRestored(result, "render failure");
     assertToreDownOnce(log, "render-failure");
   });
 
   test("uncaught exception restores the terminal exactly once", async () => {
-    const { out, log } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "throw" } });
-    assertRestored(out, "uncaught exception");
+    const result = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "throw" } });
+    const { out, log, exitCode } = result;
+    assertRestored(result, "uncaught exception");
     assertToreDownOnce(log, "uncaught-exception");
   });
 
   test("unhandled rejection restores the terminal exactly once", async () => {
-    const { out, log } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "reject" } });
-    assertRestored(out, "unhandled rejection");
+    const result = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "reject" } });
+    const { out, log, exitCode } = result;
+    assertRestored(result, "unhandled rejection");
     assertToreDownOnce(log, "unhandled-rejection");
   });
 
   test("ten start/stop cycles each restore exactly once", async () => {
     for (let i = 0; i < 10; i += 1) {
-      const { out, log } = await runShell({ drive: (c) => c.write("q") });
-      assertRestored(out, `cycle ${i}`);
+      const result = await runShell({ drive: (c) => c.write("q") });
+      const { out, log, exitCode } = result;
+      assertRestored(result, `cycle ${i}`);
       assertToreDownOnce(log, "normal");
     }
   });
 
   if (process.platform !== "win32") {
     test("SIGTERM restores the terminal exactly once", async () => {
-      const { out, log } = await runShell({ drive: (c) => process.kill(c.pid, "SIGTERM") });
-      assertRestored(out, "sigterm");
+      const result = await runShell({ drive: (c) => process.kill(c.pid, "SIGTERM") });
+      const { out, log, exitCode } = result;
+      assertRestored(result, "sigterm");
       assertToreDownOnce(log, "sigterm");
     });
 
     test("SIGHUP restores the terminal exactly once", async () => {
-      const { out, log } = await runShell({ drive: (c) => process.kill(c.pid, "SIGHUP") });
-      assertRestored(out, "sighup");
+      const result = await runShell({ drive: (c) => process.kill(c.pid, "SIGHUP") });
+      const { out, log, exitCode } = result;
+      assertRestored(result, "sighup");
       assertToreDownOnce(log, "sighup");
     });
   }
