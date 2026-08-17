@@ -6,7 +6,7 @@
 //
 // Select the arm with CRUCIBLE_ARM=bun|node and CRUCIBLE_RUNTIME=<executable path>.
 
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -40,14 +40,41 @@ const RUNTIME = resolveRuntime(process.env.CRUCIBLE_RUNTIME);
 const ARGS = ARM === "bun" ? [entry] : ["--experimental-ffi", "--no-warnings", entry];
 
 // What "the terminal was restored" means, as bytes on the wire.
-const RESTORE = {
-  "exits alternate screen": "\x1b[?1049l",
-  "shows the cursor": "\x1b[?25h",
-  "disables mouse tracking": "\x1b[?1003l",
-  "disables sgr mouse mode": "\x1b[?1006l",
-  "disables bracketed paste": "\x1b[?2004l",
-  "resets the terminal title": "\x1b]0;",
-};
+//
+// Stated as PAIRS rather than as a fixed list of expected bytes, because the
+// correct invariant is "whatever the shell turned on, it turned back off" -- not
+// "these exact sequences appear". Hardcoding the sequences asserted Windows must
+// emit xterm mouse-tracking codes that ConPTY never enables in the first place,
+// which failed honestly-restored Windows runs.
+const RESTORE_PAIRS = [
+  ["alternate screen", "\x1b[?1049h", "\x1b[?1049l"],
+  ["cursor visibility", "\x1b[?25l", "\x1b[?25h"],
+  ["mouse tracking", "\x1b[?1000h", "\x1b[?1000l"],
+  ["button-event mouse tracking", "\x1b[?1002h", "\x1b[?1002l"],
+  ["any-event mouse tracking", "\x1b[?1003h", "\x1b[?1003l"],
+  ["sgr mouse mode", "\x1b[?1006h", "\x1b[?1006l"],
+  ["bracketed paste", "\x1b[?2004h", "\x1b[?2004l"],
+];
+
+// ROOT CAUSE of the Windows hang: node-pty's ConPTY backend keeps its agent and
+// named-pipe handles alive until the terminal is explicitly disposed. Letting the
+// child exit is enough on POSIX but NOT on Windows, so `node --test` sat with a
+// live event loop for ~163s after the last assertion and was cancelled. Every pty
+// is tracked and killed deterministically instead of force-exiting the runner.
+const liveTerminals = new Set();
+
+function disposeTerminal(child) {
+  liveTerminals.delete(child);
+  try {
+    child.kill();
+  } catch {
+    /* already gone */
+  }
+}
+
+after(() => {
+  for (const child of [...liveTerminals]) disposeTerminal(child);
+});
 
 function runShell({ env = {}, drive }) {
   // Teardown accounting is read from a file, not from the pty: see src/main.mjs.
@@ -60,6 +87,7 @@ function runShell({ env = {}, drive }) {
       cwd: join(here, ".."),
       env: { ...process.env, CRUCIBLE_TEARDOWN_LOG: logFile, ...env },
     });
+    liveTerminals.add(child);
 
     let out = "";
     let ready = false;
@@ -68,11 +96,7 @@ function runShell({ env = {}, drive }) {
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
-        try {
-          child.kill();
-        } catch {
-          /* already gone */
-        }
+        disposeTerminal(child);
         resolve({ out, log: readLog(logFile), exitCode: null, timedOut: true });
       }
     }, 20000);
@@ -90,7 +114,10 @@ function runShell({ env = {}, drive }) {
       settled = true;
       clearTimeout(timer);
       // Give the PTY a beat to flush trailing bytes.
-      setTimeout(() => resolve({ out, log: readLog(logFile), exitCode, timedOut: false }), 80);
+      setTimeout(() => {
+        disposeTerminal(child);
+        resolve({ out, log: readLog(logFile), exitCode, timedOut: false });
+      }, 80);
     });
   });
 }
@@ -107,13 +134,28 @@ function stripAnsi(text) {
 }
 
 function assertRestored(out, label) {
-  for (const [what, sequence] of Object.entries(RESTORE)) {
-    assert.ok(out.includes(sequence), `${label}: terminal never ${what}`);
+  let modesEntered = 0;
+  for (const [what, enable, disable] of RESTORE_PAIRS) {
+    if (!out.includes(enable)) continue; // never turned on here; nothing owed
+    modesEntered += 1;
+    assert.ok(out.includes(disable), `${label}: entered ${what} but never restored it`);
   }
+  // Guards against a vacuous pass: if the TUI never entered ANY mode, it never
+  // really started, and "restored everything it entered" would be trivially true.
+  assert.ok(modesEntered > 0, `${label}: shell never entered any terminal mode`);
 }
 
 function teardownCount(out) {
   return [...out.matchAll(/SHELL_TEARDOWN reason=(\S+) count=(\d+)/g)];
+}
+
+// On Windows the meaningful restoration claim is about console MODE, which no
+// escape-sequence assertion can observe. The shell reports the mode it read at
+// startup and after restoring; they must match.
+function assertConsoleModeRestored(log, label) {
+  const match = log.match(/initialConsoleMode=(\S+) finalConsoleMode=(\S+)/);
+  if (!match) return; // not Windows, or no console: nothing claimed
+  assert.equal(match[2], match[1], `${label}: Windows console mode was not restored`);
 }
 
 // Reports the ACTUAL count. An earlier version hard-coded "ran more than once",
@@ -123,6 +165,7 @@ function assertToreDownOnce(log, expectedReason) {
   assert.equal(marks.length, 1, `expected exactly 1 teardown marker, saw ${marks.length}`);
   if (expectedReason) assert.equal(marks[0][1], expectedReason);
   assert.equal(marks[0][2], "1", "teardown counter was not 1");
+  assertConsoleModeRestored(log, expectedReason ?? "teardown");
   return marks;
 }
 

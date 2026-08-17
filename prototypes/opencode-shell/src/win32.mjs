@@ -1,23 +1,32 @@
 // THROWAWAY prototype for DevFlow-HQ/devflow-cli#6.
 //
-// Windows console mode is the one place the two runtime arms genuinely diverge.
+// Windows console mode is the one place the two runtime arms genuinely diverge --
+// and the one place terminal restoration CANNOT be proven by watching escape
+// sequences on the wire. Windows console state lives behind SetConsoleMode, not
+// behind bytes, so a pty-level byte assertion is blind to it.
 //
-// OpenCode's packages/tui/src/terminal-win32.ts does `import { dlopen, ptr } from
-// "bun:ffi"` at module top level. That is a hard Bun dependency in a statically
-// imported module: under Node it fails at import time, before any of our code
-// runs. Crucible cannot copy that file as-is if it wants a Node arm.
+// This module therefore does two jobs:
+//   1. Own the ENABLE_PROCESSED_INPUT change (so Ctrl-C arrives as input, not as
+//      a CTRL_C_EVENT) and restore the ORIGINAL mode on teardown.
+//   2. Expose the raw mode value so the shell can record it at start and at exit,
+//      letting the harness assert equality directly. That is real evidence for
+//      Windows rather than an inference from Unix behaviour.
 //
-// This version resolves the FFI backend lazily, so the same source loads on both
-// runtimes and on non-Windows platforms.
-//
-// Semantics copied from OpenCode (MIT): clear ENABLE_PROCESSED_INPUT so Ctrl-C
-// arrives as stdin input instead of a CTRL_C_EVENT, and restore the ORIGINAL
-// console mode on teardown.
+// Semantics derived from OpenCode's packages/tui/src/terminal-win32.ts (MIT).
+// Divergence: OpenCode does a top-level `import { dlopen, ptr } from "bun:ffi"`,
+// which is a hard Bun dependency in a statically imported module and fails at
+// import time under Node. This resolves the FFI backend lazily so one source file
+// loads on both arms and on non-Windows platforms.
 
 const STD_INPUT_HANDLE = -10;
 const ENABLE_PROCESSED_INPUT = 0x0001;
 
-const NOOP = () => {};
+const INACTIVE = {
+  active: false,
+  initialMode: null,
+  readMode: () => null,
+  restore: () => {},
+};
 
 async function loadFfi() {
   const isBun = typeof process.versions?.bun === "string";
@@ -28,35 +37,54 @@ async function loadFfi() {
   }
 }
 
-export function installWindowsConsoleGuard() {
-  if (process.platform !== "win32") return NOOP;
-  if (!process.stdin.isTTY) return NOOP;
+export async function installWindowsConsoleGuard() {
+  if (process.platform !== "win32") return INACTIVE;
+  if (!process.stdin.isTTY) return INACTIVE;
 
-  // Synchronous contract, async FFI load: resolve eagerly and let the returned
-  // restore function await the pending work. Good enough for a prototype.
-  let restore = NOOP;
-  const pending = loadFfi()
-    .then((ffi) => {
-      if (!ffi?.dlopen) return;
-      const k32 = ffi.dlopen("kernel32.dll", {
-        GetStdHandle: { args: ["i32"], returns: "ptr" },
-        GetConsoleMode: { args: ["ptr", "ptr"], returns: "i32" },
-        SetConsoleMode: { args: ["ptr", "u32"], returns: "i32" },
-      });
-      const handle = k32.symbols.GetStdHandle(STD_INPUT_HANDLE);
-      const buf = new Uint32Array(1);
-      if (k32.symbols.GetConsoleMode(handle, ffi.ptr(buf)) === 0) return;
-      const initial = buf[0];
-      k32.symbols.SetConsoleMode(handle, initial & ~ENABLE_PROCESSED_INPUT);
-      restore = () => {
-        k32.symbols.SetConsoleMode(handle, initial);
-        restore = NOOP;
-      };
-    })
-    .catch(() => {});
+  const ffi = await loadFfi();
+  if (!ffi?.dlopen) return INACTIVE;
 
-  return () => {
-    void pending.then(() => restore());
-    restore();
+  let k32;
+  try {
+    k32 = ffi.dlopen("kernel32.dll", {
+      GetStdHandle: { args: ["i32"], returns: "ptr" },
+      GetConsoleMode: { args: ["ptr", "ptr"], returns: "i32" },
+      SetConsoleMode: { args: ["ptr", "u32"], returns: "i32" },
+    });
+  } catch {
+    return INACTIVE;
+  }
+
+  const handle = k32.symbols.GetStdHandle(STD_INPUT_HANDLE);
+  const buf = new Uint32Array(1);
+
+  const readMode = () => {
+    try {
+      if (k32.symbols.GetConsoleMode(handle, ffi.ptr(buf)) === 0) return null;
+      return buf[0];
+    } catch {
+      return null;
+    }
+  };
+
+  const initialMode = readMode();
+  if (initialMode === null) return INACTIVE;
+
+  k32.symbols.SetConsoleMode(handle, initialMode & ~ENABLE_PROCESSED_INPUT);
+
+  let restored = false;
+  return {
+    active: true,
+    initialMode,
+    readMode,
+    restore() {
+      if (restored) return;
+      restored = true;
+      try {
+        k32.symbols.SetConsoleMode(handle, initialMode);
+      } catch {
+        /* nothing further we can do */
+      }
+    },
   };
 }

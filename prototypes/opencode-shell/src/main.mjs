@@ -14,7 +14,7 @@ import { assertRendererPort } from "./renderer-port.mjs";
 import { installWindowsConsoleGuard } from "./win32.mjs";
 
 const fail = process.env.CRUCIBLE_SHELL_FAIL ?? "";
-const restoreWindowsConsole = installWindowsConsoleGuard();
+const winConsole = await installWindowsConsoleGuard();
 
 // Teardown accounting goes to a FILE, never to the terminal.
 //
@@ -25,9 +25,20 @@ const restoreWindowsConsole = installWindowsConsoleGuard();
 // terminal was restored perfectly every time. Measuring the counter over the same
 // channel the shell is tearing down produces false failures.
 const LOG = process.env.CRUCIBLE_TEARDOWN_LOG;
+function record(line) {
+  if (LOG) appendFileSync(LOG, `${line}\n`);
+  else writeSync(1, `${line}\n`);
+}
+
 function recordTeardown(reason, count) {
-  if (LOG) appendFileSync(LOG, `SHELL_TEARDOWN reason=${reason} count=${count}\n`);
-  else writeSync(1, `SHELL_TEARDOWN reason=${reason} count=${count}\n`);
+  // Windows console state is invisible to a pty byte assertion, so report the
+  // mode we read back AFTER restoring. The harness asserts it equals the mode
+  // captured at startup.
+  const finalMode = winConsole.active ? winConsole.readMode() : null;
+  record(
+    `SHELL_TEARDOWN reason=${reason} count=${count}` +
+      (winConsole.active ? ` initialConsoleMode=${winConsole.initialMode} finalConsoleMode=${finalMode}` : ""),
+  );
 }
 
 let renderer;
@@ -38,7 +49,7 @@ try {
 } catch (error) {
   // Startup failure: nothing to restore in the renderer, but the Windows console
   // guard already changed global state and MUST be undone.
-  restoreWindowsConsole();
+  winConsole.restore();
   process.stderr.write(`startup failed: ${error.message}\n`);
   recordTeardown("startup-failure", 1);
   process.exit(1);
@@ -48,7 +59,7 @@ const shell = createShell({
   renderer,
   process,
   onExit: ({ reason, teardownCount }) => {
-    restoreWindowsConsole();
+    winConsole.restore();
     recordTeardown(reason, teardownCount);
   },
 });
