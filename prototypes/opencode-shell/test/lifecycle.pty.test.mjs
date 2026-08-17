@@ -10,6 +10,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as pty from "node-pty";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -30,13 +32,15 @@ const RESTORE = {
 };
 
 function runShell({ env = {}, drive }) {
+  // Teardown accounting is read from a file, not from the pty: see src/main.mjs.
+  const logFile = join(mkdtempSync(join(tmpdir(), "crucible-teardown-")), "log");
   return new Promise((resolve) => {
     const child = pty.spawn(RUNTIME, ARGS, {
       name: "xterm-256color",
       cols: 80,
       rows: 24,
       cwd: join(here, ".."),
-      env: { ...process.env, ...env },
+      env: { ...process.env, CRUCIBLE_TEARDOWN_LOG: logFile, ...env },
     });
 
     let out = "";
@@ -51,7 +55,7 @@ function runShell({ env = {}, drive }) {
         } catch {
           /* already gone */
         }
-        resolve({ out, exitCode: null, timedOut: true });
+        resolve({ out, log: readLog(logFile), exitCode: null, timedOut: true });
       }
     }, 20000);
 
@@ -68,9 +72,13 @@ function runShell({ env = {}, drive }) {
       settled = true;
       clearTimeout(timer);
       // Give the PTY a beat to flush trailing bytes.
-      setTimeout(() => resolve({ out, exitCode, timedOut: false }), 80);
+      setTimeout(() => resolve({ out, log: readLog(logFile), exitCode, timedOut: false }), 80);
     });
   });
+}
+
+function readLog(file) {
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
 }
 
 function stripAnsi(text) {
@@ -90,15 +98,25 @@ function teardownCount(out) {
   return [...out.matchAll(/SHELL_TEARDOWN reason=(\S+) count=(\d+)/g)];
 }
 
+// Reports the ACTUAL count. An earlier version hard-coded "ran more than once",
+// which misdescribed the real failure mode (zero markers, not two).
+function assertToreDownOnce(log, expectedReason) {
+  const marks = teardownCount(log);
+  assert.equal(marks.length, 1, `expected exactly 1 teardown marker, saw ${marks.length}`);
+  if (expectedReason) assert.equal(marks[0][1], expectedReason);
+  assert.equal(marks[0][2], "1", "teardown counter was not 1");
+  return marks;
+}
+
 describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
   test("starts, renders, and reports ready", async () => {
-    const { out } = await runShell({ drive: (c) => c.write("q") });
+    const { out, log } = await runShell({ drive: (c) => c.write("q") });
     assert.ok(out.includes("SHELL_READY"), "shell never reported ready");
     assert.ok(out.includes("crucible"), "shell never rendered its frame");
   });
 
   test("accepts input", async () => {
-    const { out } = await runShell({
+    const { out, log } = await runShell({
       drive: (c) => {
         c.write("x");
         setTimeout(() => c.write("z"), 150);
@@ -113,7 +131,7 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
   });
 
   test("handles resize", async () => {
-    const { out } = await runShell({
+    const { out, log } = await runShell({
       drive: (c) => {
         c.resize(100, 30);
         setTimeout(() => c.write("q"), 200);
@@ -124,11 +142,9 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
   });
 
   test("normal quit restores the terminal exactly once", async () => {
-    const { out, exitCode } = await runShell({ drive: (c) => c.write("q") });
+    const { out, log, exitCode } = await runShell({ drive: (c) => c.write("q") });
     assertRestored(out, "normal quit");
-    const marks = teardownCount(out);
-    assert.equal(marks.length, 1, "teardown did not run exactly once");
-    assert.equal(marks[0][2], "1");
+    assertToreDownOnce(log, "normal");
     assert.equal(exitCode, 0);
   });
 
@@ -137,15 +153,13 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
   // handler would hang forever on Ctrl-C -- which is exactly what this prototype
   // observed before the key path was added.
   test("ctrl-c restores the terminal exactly once", async () => {
-    const { out } = await runShell({ drive: (c) => c.write("\x03") });
+    const { out, log } = await runShell({ drive: (c) => c.write("\x03") });
     assertRestored(out, "ctrl-c");
-    const marks = teardownCount(out);
-    assert.equal(marks.length, 1, "teardown did not run exactly once");
-    assert.equal(marks[0][1], "ctrl-c");
+    assertToreDownOnce(log, "ctrl-c");
   });
 
   test("repeated ctrl-c still restores exactly once", async () => {
-    const { out } = await runShell({
+    const { out, log } = await runShell({
       drive: (c) => {
         c.write("\x03");
         c.write("\x03");
@@ -153,64 +167,52 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
       },
     });
     assertRestored(out, "repeated ctrl-c");
-    assert.equal(teardownCount(out).length, 1, "teardown ran more than once");
+    assertToreDownOnce(log, "ctrl-c");
   });
 
   test("startup failure restores the terminal", async () => {
-    const { out, exitCode } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "startup" } });
-    const marks = teardownCount(out);
-    assert.equal(marks.length, 1, "startup failure did not report teardown");
-    assert.equal(marks[0][1], "startup-failure");
+    const { out, log, exitCode } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "startup" } });
+    assertToreDownOnce(log, "startup-failure");
     assert.equal(exitCode, 1);
   });
 
   test("render failure restores the terminal exactly once", async () => {
-    const { out } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "render" } });
+    const { out, log } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "render" } });
     assertRestored(out, "render failure");
-    const marks = teardownCount(out);
-    assert.equal(marks.length, 1);
-    assert.equal(marks[0][1], "render-failure");
+    assertToreDownOnce(log, "render-failure");
   });
 
   test("uncaught exception restores the terminal exactly once", async () => {
-    const { out } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "throw" } });
+    const { out, log } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "throw" } });
     assertRestored(out, "uncaught exception");
-    const marks = teardownCount(out);
-    assert.equal(marks.length, 1);
-    assert.equal(marks[0][1], "uncaught-exception");
+    assertToreDownOnce(log, "uncaught-exception");
   });
 
   test("unhandled rejection restores the terminal exactly once", async () => {
-    const { out } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "reject" } });
+    const { out, log } = await runShell({ env: { CRUCIBLE_SHELL_FAIL: "reject" } });
     assertRestored(out, "unhandled rejection");
-    const marks = teardownCount(out);
-    assert.equal(marks.length, 1);
-    assert.equal(marks[0][1], "unhandled-rejection");
+    assertToreDownOnce(log, "unhandled-rejection");
   });
 
   test("ten start/stop cycles each restore exactly once", async () => {
     for (let i = 0; i < 10; i += 1) {
-      const { out } = await runShell({ drive: (c) => c.write("q") });
+      const { out, log } = await runShell({ drive: (c) => c.write("q") });
       assertRestored(out, `cycle ${i}`);
-      assert.equal(teardownCount(out).length, 1, `cycle ${i} teardown count`);
+      assertToreDownOnce(log, "normal");
     }
   });
 
   if (process.platform !== "win32") {
     test("SIGTERM restores the terminal exactly once", async () => {
-      const { out } = await runShell({ drive: (c) => process.kill(c.pid, "SIGTERM") });
+      const { out, log } = await runShell({ drive: (c) => process.kill(c.pid, "SIGTERM") });
       assertRestored(out, "sigterm");
-      const marks = teardownCount(out);
-      assert.equal(marks.length, 1);
-      assert.equal(marks[0][1], "sigterm");
+      assertToreDownOnce(log, "sigterm");
     });
 
     test("SIGHUP restores the terminal exactly once", async () => {
-      const { out } = await runShell({ drive: (c) => process.kill(c.pid, "SIGHUP") });
+      const { out, log } = await runShell({ drive: (c) => process.kill(c.pid, "SIGHUP") });
       assertRestored(out, "sighup");
-      const marks = teardownCount(out);
-      assert.equal(marks.length, 1);
-      assert.equal(marks[0][1], "sighup");
+      assertToreDownOnce(log, "sighup");
     });
   }
 });

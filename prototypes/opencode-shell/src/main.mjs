@@ -7,6 +7,7 @@
 // CRUCIBLE_SHELL_FAIL selects an abnormal path for the PTY harness:
 //   startup | render | throw | reject
 
+import { writeSync, appendFileSync } from "node:fs";
 import { createShell } from "./shell.mjs";
 import { createOpenTuiRenderer } from "./opentui-renderer.mjs";
 import { assertRendererPort } from "./renderer-port.mjs";
@@ -14,6 +15,20 @@ import { installWindowsConsoleGuard } from "./win32.mjs";
 
 const fail = process.env.CRUCIBLE_SHELL_FAIL ?? "";
 const restoreWindowsConsole = installWindowsConsoleGuard();
+
+// Teardown accounting goes to a FILE, never to the terminal.
+//
+// Terminal restoration must be proven by bytes on the wire -- that is the actual
+// claim. But the teardown COUNTER must not be, because a process that exits
+// immediately after writing races the pty: both process.stdout.write and
+// writeSync(1) lost the marker on roughly a third of rapid-Ctrl-C runs while the
+// terminal was restored perfectly every time. Measuring the counter over the same
+// channel the shell is tearing down produces false failures.
+const LOG = process.env.CRUCIBLE_TEARDOWN_LOG;
+function recordTeardown(reason, count) {
+  if (LOG) appendFileSync(LOG, `SHELL_TEARDOWN reason=${reason} count=${count}\n`);
+  else writeSync(1, `SHELL_TEARDOWN reason=${reason} count=${count}\n`);
+}
 
 let renderer;
 try {
@@ -25,7 +40,7 @@ try {
   // guard already changed global state and MUST be undone.
   restoreWindowsConsole();
   process.stderr.write(`startup failed: ${error.message}\n`);
-  process.stdout.write("SHELL_TEARDOWN reason=startup-failure count=1\n");
+  recordTeardown("startup-failure", 1);
   process.exit(1);
 }
 
@@ -34,8 +49,7 @@ const shell = createShell({
   process,
   onExit: ({ reason, teardownCount }) => {
     restoreWindowsConsole();
-    // The PTY harness greps for this line; count proves "exactly once".
-    process.stdout.write(`SHELL_TEARDOWN reason=${reason} count=${teardownCount}\n`);
+    recordTeardown(reason, teardownCount);
   },
 });
 
