@@ -20,7 +20,6 @@ jobs:
   shell:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +70,9 @@ jobs:
         run: node --test test/lifecycle.pty.test.mjs
 
       # 4. Packaging: a standalone binary that runs with no node_modules present.
+      - name: Install OpenTUI native packages for compilation
+        run: node scripts/install-natives.mjs
+
       - name: Compile standalone binary (bun arm)
         run: bun build --compile src/main.mjs --outfile dist/crucible-shell
 
