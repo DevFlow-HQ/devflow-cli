@@ -46,15 +46,30 @@ const ARGS = ARM === "bun" ? [entry] : ["--experimental-ffi", "--no-warnings", e
 // "these exact sequences appear". Hardcoding the sequences asserted Windows must
 // emit xterm mouse-tracking codes that ConPTY never enables in the first place,
 // which failed honestly-restored Windows runs.
+//
+// `wireVisible` marks pairs whose restoration is actually observable in the pty
+// byte stream on THIS platform. On Windows it is not a transcript at all: ConPTY
+// interprets escape sequences into console state and re-emits its own rendering.
+// It forwards ?1049l, ?25h and ?2004l, but demonstrably swallows the mouse-mode
+// disables -- verified by emitting all eight resets explicitly and watching only
+// the non-mouse ones arrive. Asserting the mouse disables on Windows therefore
+// tests ConPTY's passthrough, not Crucible's teardown.
+//
+// Windows mouse/console restoration is instead proven directly, by comparing the
+// console mode read at startup with the one read after restore (503 == 503) --
+// see assertConsoleModeRestored. Same principle as readiness and teardown
+// accounting: on Windows, measure over a real API or a side channel, never over
+// the terminal.
+const IS_WINDOWS = process.platform === "win32";
 const RESTORE_PAIRS = [
-  ["alternate screen", "\x1b[?1049h", "\x1b[?1049l"],
-  ["cursor visibility", "\x1b[?25l", "\x1b[?25h"],
-  ["mouse tracking", "\x1b[?1000h", "\x1b[?1000l"],
-  ["button-event mouse tracking", "\x1b[?1002h", "\x1b[?1002l"],
-  ["any-event mouse tracking", "\x1b[?1003h", "\x1b[?1003l"],
-  ["sgr mouse mode", "\x1b[?1006h", "\x1b[?1006l"],
-  ["bracketed paste", "\x1b[?2004h", "\x1b[?2004l"],
-];
+  ["alternate screen", "\x1b[?1049h", "\x1b[?1049l", true],
+  ["cursor visibility", "\x1b[?25l", "\x1b[?25h", true],
+  ["bracketed paste", "\x1b[?2004h", "\x1b[?2004l", true],
+  ["mouse tracking", "\x1b[?1000h", "\x1b[?1000l", !IS_WINDOWS],
+  ["button-event mouse tracking", "\x1b[?1002h", "\x1b[?1002l", !IS_WINDOWS],
+  ["any-event mouse tracking", "\x1b[?1003h", "\x1b[?1003l", !IS_WINDOWS],
+  ["sgr mouse mode", "\x1b[?1006h", "\x1b[?1006l", !IS_WINDOWS],
+].map(([what, enable, disable, wireVisible]) => ({ what, enable, disable, wireVisible }));
 
 // ROOT CAUSE of the Windows hang: node-pty's ConPTY backend keeps its agent and
 // named-pipe handles alive until the terminal is explicitly disposed. Letting the
@@ -148,10 +163,10 @@ function stripAnsi(text) {
 // and the mode census make the next round trip productive.
 function diagnostics(result) {
   const { out, log, exitCode, timedOut } = result;
-  const census = RESTORE_PAIRS.map(([what, enable, disable]) => {
+  const census = RESTORE_PAIRS.map(({ what, enable, disable, wireVisible }) => {
     const on = out.includes(enable);
     const off = out.includes(disable);
-    return `${what}=${on ? "on" : "-"}/${off ? "off" : "-"}`;
+    return `${what}=${on ? "on" : "-"}/${off ? "off" : "-"}${wireVisible ? "" : "(not wire-visible)"}`;
   }).join(" ");
   return [
     `\n  exitCode=${exitCode} timedOut=${!!timedOut}`,
@@ -165,9 +180,10 @@ function assertRestored(result, label) {
   const out = typeof result === "string" ? result : result.out;
   const detail = typeof result === "string" ? "" : diagnostics(result);
   let modesEntered = 0;
-  for (const [what, enable, disable] of RESTORE_PAIRS) {
+  for (const { what, enable, disable, wireVisible } of RESTORE_PAIRS) {
     if (!out.includes(enable)) continue; // never turned on here; nothing owed
     modesEntered += 1;
+    if (!wireVisible) continue; // restoration proven via console mode instead
     assert.ok(out.includes(disable), `${label}: entered ${what} but never restored it${detail}`);
   }
   // Guards against a vacuous pass: if the TUI never entered ANY mode, it never

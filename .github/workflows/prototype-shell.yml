@@ -71,6 +71,14 @@ jobs:
           CRUCIBLE_RUNTIME: node
         run: node --test test/lifecycle.pty.test.mjs
 
+      # 3b. Evidence for which actor emits terminal mode sequences on this platform.
+      - name: ConPTY / terminal negotiation probe
+        if: always()
+        env:
+          CRUCIBLE_ARM: bun
+          CRUCIBLE_RUNTIME: bun
+        run: node scripts/conpty-probe.mjs
+
       # 4. Packaging: a standalone binary that runs with no node_modules present.
       - name: Install OpenTUI native packages for compilation
         run: node scripts/install-natives.mjs
