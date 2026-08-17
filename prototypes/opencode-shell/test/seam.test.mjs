@@ -118,6 +118,54 @@ test("an unhandled rejection still tears down", async () => {
   assert.equal(teardowns.at(-1).reason, "unhandled-rejection");
 });
 
+// Regression test for the real bug this prototype found: signal handlers used to
+// be removed at the START of teardown, leaving a window in which a signal arriving
+// mid-teardown hit the default action and killed the process before it finished.
+test("a signal arriving DURING teardown is absorbed, not fatal", async () => {
+  const renderer = createFakeRenderer();
+  const proc = new EventEmitter();
+  const exits = [];
+  const teardowns = [];
+  proc.exit = (code) => exits.push(code);
+  proc.stderr = { write: () => {} };
+
+  let releaseDestroy;
+  const destroyStarted = new Promise((resolve) => {
+    const original = renderer.destroy;
+    renderer.destroy = async () => {
+      await original();
+      resolve();
+      await new Promise((r) => {
+        releaseDestroy = r;
+      });
+    };
+  });
+
+  const shell = createShell({
+    renderer,
+    process: proc,
+    onExit: (info) => teardowns.push(info),
+  });
+  shell.start();
+
+  proc.emit("SIGTERM");
+  await destroyStarted;
+
+  // Mid-teardown: the handlers must STILL be installed, or this signal would be
+  // fatal in a real process.
+  assert.ok(proc.listenerCount("SIGINT") > 0, "SIGINT handler was removed too early");
+  proc.emit("SIGINT");
+  proc.emit("SIGINT");
+
+  releaseDestroy();
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(renderer.destroyCalls.length, 1, "renderer destroyed more than once");
+  assert.equal(teardowns.length, 1, "teardown reported more than once");
+  assert.equal(teardowns[0].reason, "sigterm");
+  assert.equal(proc.eventNames().length, 0, "listeners must be gone AFTER teardown");
+});
+
 test("teardown removes every listener it installed", async () => {
   const { proc, shell } = harness();
   shell.start();

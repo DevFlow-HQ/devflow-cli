@@ -29,6 +29,7 @@ export async function createOpenTuiRenderer({ failOnStart = false } = {}) {
   renderer.root.add(box);
 
   let destroyed = false;
+  let keyHandler;
 
   return {
     get destroyed() {
@@ -44,14 +45,15 @@ export async function createOpenTuiRenderer({ failOnStart = false } = {}) {
       renderer.requestRender();
     },
     onKey(cb) {
-      renderer.keyInput.on("keypress", (key) => {
+      keyHandler = (key) => {
         if (typeof key === "string") return cb(key);
         // Ctrl-C arrives here as input, NOT as SIGINT: OpenTUI puts the terminal
         // in raw mode, which disables ISIG. Normalising it to "ctrl-c" keeps that
         // platform truth inside the adapter instead of leaking into the shell.
         if (key?.ctrl && key?.name === "c") return cb("ctrl-c");
         cb(key?.name ?? key?.sequence ?? "");
-      });
+      };
+      renderer.keyInput.on("keypress", keyHandler);
     },
     onResize(cb) {
       renderer.on("resize", (width, height) => {
@@ -63,22 +65,39 @@ export async function createOpenTuiRenderer({ failOnStart = false } = {}) {
       });
     },
     async destroy() {
-      // Mirrors opencode's util/renderer.ts: title cleared before the
-      // idempotency check, so a second call is a genuine no-op.
+      // ROOT CAUSE FIX. OpenTUI 0.4.5's destroy() can leave its promise unsettled
+      // if a keypress is delivered while it is tearing down. Observed directly:
+      // teardown reached "before destroy" and never resumed, the event loop then
+      // drained, and the process exited 0 with every post-destroy step skipped.
+      // The terminal still LOOKED fine because destroy emits the restore sequences
+      // early -- so the damage is silent, and it hit ~50% of rapid-Ctrl-C runs.
+      //
+      // Two defences, in order:
+      //   1. Detach input BEFORE destroying, so the race cannot be started.
+      //   2. Bound the wait, so teardown completes even if destroy still stalls.
+      try {
+        if (keyHandler) renderer.keyInput.off("keypress", keyHandler);
+        keyHandler = undefined;
+      } catch {
+        /* detaching input must never block destruction */
+      }
+
       try {
         renderer.setTerminalTitle("");
       } catch {
         /* title reset must never block destruction */
       }
+
       if (destroyed || renderer.isDestroyed) {
         destroyed = true;
         return;
       }
       destroyed = true;
-      // NOTE: CliRenderer.destroy() is synchronous in 0.4.5 and returns undefined,
-      // despite reading like an async teardown. Awaiting is harmless but a caller
-      // must not assume a promise contract here.
-      await renderer.destroy();
+
+      await Promise.race([
+        (async () => renderer.destroy())(),
+        new Promise((resolve) => setTimeout(resolve, 2000).unref?.()),
+      ]);
     },
   };
 }

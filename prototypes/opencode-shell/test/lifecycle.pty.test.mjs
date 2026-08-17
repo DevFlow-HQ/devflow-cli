@@ -14,6 +14,10 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import * as pty from "node-pty";
+import { ensureSpawnHelperExecutable } from "../scripts/heal-node-pty.mjs";
+
+// macOS: node-pty 1.1.0 ships spawn-helper without +x. See ADR-0016.
+ensureSpawnHelperExecutable();
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, "..", "src", "main.mjs");

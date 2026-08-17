@@ -20,6 +20,8 @@ jobs:
   shell:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # A hung pty must fail fast, not burn a runner. The whole suite is ~1 min.
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:

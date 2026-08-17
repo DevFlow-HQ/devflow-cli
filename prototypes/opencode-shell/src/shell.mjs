@@ -48,18 +48,24 @@ export function createShell({ renderer, process: proc, onExit }) {
     teardownCount += 1;
     state.status = `exiting:${reason}`;
 
-    for (const remove of installed.splice(0)) {
-      try {
-        remove();
-      } catch {
-        /* a failing listener removal must not block terminal restoration */
-      }
-    }
-
+    // Handlers stay installed for the whole of teardown and are removed only once
+    // it has finished, so a signal arriving mid-teardown re-enters here and the
+    // `tornDown` guard makes it a no-op rather than an unhandled default action.
+    //
+    // This ordering is NOT what fixed the lost-exit bug on repeated Ctrl-C -- that
+    // was OpenTUI's destroy() failing to settle, handled in opentui-renderer.mjs.
+    // It is kept because it is correct on its own merits.
     try {
       await renderer.destroy();
     } finally {
       onExit?.({ reason, teardownCount });
+      for (const remove of installed.splice(0)) {
+        try {
+          remove();
+        } catch {
+          /* a failing listener removal must not block terminal restoration */
+        }
+      }
     }
     return teardownCount;
   }

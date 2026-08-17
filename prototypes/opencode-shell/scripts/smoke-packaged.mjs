@@ -12,6 +12,9 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as pty from "node-pty";
+import { ensureSpawnHelperExecutable } from "./heal-node-pty.mjs";
+
+ensureSpawnHelperExecutable();
 
 const here = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === "win32";
