@@ -102,15 +102,14 @@ describe(`lifecycle on ${ARM} (${RUNTIME})`, () => {
       drive: (c) => {
         c.write("x");
         setTimeout(() => c.write("z"), 150);
-        setTimeout(() => c.write("q"), 300);
+        // OpenTUI redraws only changed cells, so pressed keys otherwise arrive as
+        // scattered incremental updates. Resizing forces a full repaint, which
+        // puts the complete "keys" line back on the wire deterministically.
+        setTimeout(() => c.resize(100, 30), 300);
+        setTimeout(() => c.write("q"), 600);
       },
     });
-    // OpenTUI redraws only changed cells, so the pressed characters arrive as an
-    // incremental update AFTER the initial full frame rather than inside it.
-    const plain = stripAnsi(out);
-    const afterFirstFrame = plain.slice(plain.lastIndexOf("┘") + 1);
-    assert.ok(afterFirstFrame.includes("x"), "first keypress never reached the view");
-    assert.ok(afterFirstFrame.includes("z"), "second keypress never reached the view");
+    assert.match(stripAnsi(out), /keys\s+x z/, "keypresses never reached the view");
   });
 
   test("handles resize", async () => {
