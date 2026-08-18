@@ -48,6 +48,32 @@ transform variable that would confound the runtime answer.
 | `src/spike.mjs`           | Does OpenTUI load/create/destroy under this runtime at all?         |
 | `test/seam.test.mjs`      | Lifecycle through the fake port. Stock Node, any platform.         |
 | `test/lifecycle.pty.test.mjs` | Real PTY (ConPTY on Windows). The cross-platform evidence.      |
+| `scripts/conpty-probe.mjs`| Which actor emits each terminal mode sequence on Windows.          |
+| `scripts/real-terminal-check.mjs` | The Windows evidence ConPTY cannot give. Human-run.        |
+
+## Windows is measured differently, on purpose
+
+ConPTY is not a byte pipe. It interprets escape sequences into console state and
+re-emits its own rendering of the screen buffer, so on Windows the pty stream is a
+*screenshot*, not a transcript. Three consequences shaped the evidence here:
+
+- **Readiness and teardown accounting go to a side-channel file**, never stdout.
+- **Mouse-disable sequences are not wire-observable.** ConPTY forwards the enables
+  and swallows the disables; `scripts/conpty-probe.mjs` proved the enables are ours
+  rather than ConPTY negotiation. Asserting them would test ConPTY's passthrough.
+- **Console mode is unreadable at teardown on the Node arm.** Keypress-driven exits
+  reach teardown after ConPTY has dropped the console input pipe, so `GetConsoleMode`
+  fails with 233 `ERROR_PIPE_NOT_CONNECTED`. The handle is valid; there is no console
+  behind it. The Bun arm does not hit this.
+
+What ConPTY cannot answer, a human answers with `scripts/real-terminal-check.mjs`,
+which measures the console from the shell's **parent** in a real terminal — the state
+the user is actually left holding. Verified on Windows 11 / PowerShell, all paths
+`503 -> 503` with no mouse residue: normal quit, Ctrl-C, and render failure. That is
+what licenses scoping those two assertions out of the harness rather than deleting them.
+
+**General rule for this codebase: on Windows, measure over a real API or a side
+channel, never over the terminal.**
 
 ## Running it
 
@@ -61,13 +87,25 @@ node --test test/seam.test.mjs
 bun src/main.mjs
 node --experimental-ffi src/main.mjs        # Node >= 26 ONLY
 
-# real-PTY evidence
+# real-PTY evidence (CRUCIBLE_RUNTIME must be absolute or on PATH: node-pty does no PATH lookup)
 CRUCIBLE_ARM=bun  CRUCIBLE_RUNTIME=bun  node --test test/lifecycle.pty.test.mjs
 CRUCIBLE_ARM=node CRUCIBLE_RUNTIME=node node --test test/lifecycle.pty.test.mjs
 
 # packaging
+node scripts/install-natives.mjs                            # required before compiling
 bun build --compile src/main.mjs --outfile dist/crucible-shell
 node scripts/smoke-packaged.mjs
+```
+
+Windows only, and **not** through a pty — run these in a real console window:
+
+```powershell
+# who emits which mode sequence
+node scripts/conpty-probe.mjs
+
+# the evidence CI structurally cannot produce; needs a real TTY and a human
+node --experimental-ffi --no-warnings scripts/real-terminal-check.mjs node
+node --experimental-ffi --no-warnings scripts/real-terminal-check.mjs bun
 ```
 
 Cross-platform runs happen in `.github/workflows/prototype-shell.yml`, which exists only on this

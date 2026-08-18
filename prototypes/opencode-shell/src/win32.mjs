@@ -139,12 +139,25 @@ export async function installWindowsConsoleGuard() {
   const initialMode = readMode();
   if (initialMode === null) return INACTIVE;
 
-  k32.setConsoleMode(handle, initialMode & ~ENABLE_PROCESSED_INPUT);
+  // EXPERIMENT SWITCH (#6): is this guard needed at all?
+  //
+  // OpenTUI puts the terminal in raw mode, and libuv's Windows raw mode clears
+  // ENABLE_PROCESSED_INPUT itself -- which is precisely what this guard exists to
+  // do. If that is so, the whole FFI dependency is redundant on the Node arm, and
+  // with it the Node >= 26 and --experimental-ffi requirement. That is a material
+  // input to the runtime choice in #21, so it is worth measuring rather than
+  // assuming. Set CRUCIBLE_SKIP_CONSOLE_GUARD=1 and compare the mode read while
+  // the TUI is live (recorded on the SHELL_READY line by src/main.mjs).
+  const guardApplied = process.env.CRUCIBLE_SKIP_CONSOLE_GUARD !== "1";
+  if (guardApplied) {
+    k32.setConsoleMode(handle, initialMode & ~ENABLE_PROCESSED_INPUT);
+  }
 
   let restored = false;
   return {
     active: true,
     initialMode,
+    guardApplied,
     readMode,
     diagnostics: () => diag.join(" | "),
     restore() {

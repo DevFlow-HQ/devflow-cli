@@ -95,15 +95,32 @@ console.log("");
 console.log("The shell is about to take over this terminal.");
 console.log("Press 'q' to quit it normally, or Ctrl-C to quit via the interrupt path.");
 console.log("");
-console.log("Press Enter to launch...");
 
-await new Promise((done) => process.stdin.once("data", done));
+// This parent MUST NOT read stdin.
+//
+// The child is spawned with stdio "inherit", so both processes hold the same
+// console input handle. If the parent has an active reader -- even a single
+// `process.stdin.once("data", ...)` to wait for a keypress -- it consumes the
+// console input records and the child sees NOTHING. Observed exactly that: the
+// TUI rendered but no key, no Ctrl-C and no mouse event ever reached it, and the
+// terminal had to be killed. So the countdown below is deliberately timer-based
+// rather than "press Enter to continue".
+for (let n = 3; n > 0; n -= 1) {
+  process.stdout.write(`\rlaunching in ${n}... `);
+  await new Promise((done) => setTimeout(done, 1000));
+}
+process.stdout.write("\r                    \r");
 
 const exit = await new Promise((done) => {
   const child = spawn(runtime, args, {
     stdio: "inherit",
     env: { ...process.env, CRUCIBLE_TEARDOWN_LOG: log },
   });
+  // Escape hatch. The shell puts the terminal in raw mode, so if it ever stops
+  // responding there is no Ctrl-C to fall back on -- from ANOTHER window, run
+  // `taskkill /F /PID <pid>` rather than closing this one, which would take the
+  // measurement with it.
+  console.log(`shell pid ${child.pid} -- if it wedges: taskkill /F /PID ${child.pid}`);
   child.on("error", (error) => {
     console.error(`\nfailed to launch ${runtime}: ${error.message}`);
     process.exit(1);

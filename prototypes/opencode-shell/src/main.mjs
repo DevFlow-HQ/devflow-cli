@@ -76,7 +76,17 @@ shell.start();
 // "SHELL_READY", never delivered a keypress, and every exit path timed out with
 // teardown having never run -- which then read as "terminal not restored".
 // Unix ptys pass bytes through verbatim, which is why this only bit Windows.
-record("SHELL_READY");
+// The console mode read HERE -- renderer up, TUI live, before any teardown -- is
+// what answers whether installWindowsConsoleGuard is doing anything OpenTUI's raw
+// mode would not have done anyway. Compare runs with and without
+// CRUCIBLE_SKIP_CONSOLE_GUARD=1: if ENABLE_PROCESSED_INPUT is clear in both, the
+// guard is redundant and the Node arm needs no FFI at all.
+record(
+  "SHELL_READY" +
+    (winConsole.active
+      ? ` guardApplied=${winConsole.guardApplied} initialConsoleMode=${winConsole.initialMode} liveConsoleMode=${winConsole.readMode()}`
+      : ""),
+);
 process.stdout.write("SHELL_READY\n");
 
 if (fail === "render") {
