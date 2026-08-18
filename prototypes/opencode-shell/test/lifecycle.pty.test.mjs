@@ -201,7 +201,7 @@ function teardownCount(out) {
 function assertConsoleModeRestored(log, label) {
   const match = log.match(/initialConsoleMode=(\S+) finalConsoleMode=(\S+)/);
   if (!match) return; // not Windows, or no console: nothing claimed
-  assert.equal(match[2], match[1], `${label}: Windows console mode was not restored`);
+  assert.equal(match[2], match[1], `${label}: Windows console mode was not restored\n  log: ${JSON.stringify(log)}`);
 }
 
 // Reports the ACTUAL count. An earlier version hard-coded "ran more than once",

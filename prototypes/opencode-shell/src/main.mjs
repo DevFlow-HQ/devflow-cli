@@ -37,7 +37,8 @@ function recordTeardown(reason, count) {
   const finalMode = winConsole.active ? winConsole.readMode() : null;
   record(
     `SHELL_TEARDOWN reason=${reason} count=${count}` +
-      (winConsole.active ? ` initialConsoleMode=${winConsole.initialMode} finalConsoleMode=${finalMode}` : ""),
+      (winConsole.active ? ` initialConsoleMode=${winConsole.initialMode} finalConsoleMode=${finalMode}` : "") +
+      (winConsole.diagnostics?.() ? ` win32diag=[${winConsole.diagnostics()}]` : ""),
   );
 }
 

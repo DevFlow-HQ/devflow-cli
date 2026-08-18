@@ -10,6 +10,7 @@
     "spike:node": "node --experimental-ffi --no-warnings src/spike.mjs",
     "test:seam": "node --test test/seam.test.mjs",
     "test:pty": "node --test test/lifecycle.pty.test.mjs",
+    "check:real-terminal": "node --experimental-ffi --no-warnings scripts/real-terminal-check.mjs",
     "natives": "node scripts/install-natives.mjs",
     "package:bun": "bun build --compile src/main.mjs --outfile dist/crucible-shell",
     "smoke:packaged": "node scripts/smoke-packaged.mjs"
