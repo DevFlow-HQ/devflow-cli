@@ -29,12 +29,48 @@
 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-import { readFileSync, rmSync, existsSync } from "node:fs";
+import { dirname, resolve, join } from "node:path";
+import { readFileSync, writeFileSync, appendFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { bindConsoleApi } from "../src/win32.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Everything this script prints is ALSO appended, timestamped, to a fixed path.
+//
+// Legacy conhost was observed taking the whole window down a few seconds after
+// the child exited, which destroys the report before it can be read -- the same
+// class of problem as measuring teardown over a terminal that is being torn down.
+// So the transcript goes to a side channel, and the timestamps localise where a
+// hang happens rather than leaving it to be guessed at.
+const REPORT = join(tmpdir(), "crucible-real-terminal-check.log");
+const T0 = Date.now();
+try {
+  writeFileSync(REPORT, "");
+} catch {
+  /* an unwritable report must not stop the measurement */
+}
+function mirror(write, tag) {
+  return (...args) => {
+    const line = args.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
+    try {
+      appendFileSync(REPORT, `[+${((Date.now() - T0) / 1000).toFixed(1)}s]${tag} ${line}\n`);
+    } catch {
+      /* keep going: the console copy still matters */
+    }
+    write(line);
+  };
+}
+console.log = mirror(console.log.bind(console), "");
+console.error = mirror(console.error.bind(console), " ERR");
+
+process.on("exit", (code) => {
+  try {
+    appendFileSync(REPORT, `[+${((Date.now() - T0) / 1000).toFixed(1)}s] PARENT EXIT code=${code}\n`);
+  } catch {
+    /* nothing left to do */
+  }
+});
 const STD_INPUT_HANDLE = -10;
 const ENABLE_PROCESSED_INPUT = 0x0001;
 
@@ -125,14 +161,21 @@ const exit = await new Promise((done) => {
     console.error(`\nfailed to launch ${runtime}: ${error.message}`);
     process.exit(1);
   });
-  child.on("exit", (code, signal) => done({ code, signal }));
+  child.on("exit", (code, signal) => {
+    console.log(`STEP child exited code=${code} signal=${signal}`);
+    done({ code, signal });
+  });
 });
 
 // Measured from the parent, in the real console, after the child is gone. This is
 // the state the human is actually left with.
+console.log("STEP reading console mode from parent");
 const after = parentConsoleMode();
+console.log(`STEP console mode read: ${after.mode} err=${after.err}`);
+console.log("STEP reading teardown log");
 const teardownLog = existsSync(log) ? readFileSync(log, "utf8") : "(no teardown log written)";
 if (existsSync(log)) rmSync(log);
+console.log("STEP all measurements captured");
 
 console.log("");
 console.log("=".repeat(72));

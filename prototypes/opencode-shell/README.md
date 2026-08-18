@@ -75,6 +75,31 @@ what licenses scoping those two assertions out of the harness rather than deleti
 **General rule for this codebase: on Windows, measure over a real API or a side
 channel, never over the terminal.**
 
+### Windows Terminal is proven; legacy conhost is not
+
+Everything above holds in Windows Terminal. In the **legacy console host**
+(`conhost.exe powershell.exe`), OpenTUI's `renderer.destroy()` destroys the
+console: the window closes itself a few seconds after the shell exits, and both
+the shell's own `SetConsoleMode` and a *parent* process's `GetConsoleMode` fail
+with 233. Four runs isolate the cause:
+
+| run                        | renderer     | at `SHELL_READY` | after teardown | window   |
+| -------------------------- | ------------ | ---------------- | -------------- | -------- |
+| `CRUCIBLE_SHELL_FAIL=startup` | never created | —             | `503 -> 503`   | survives |
+| guard applied              | created      | 520, readable    | 233, gone      | dies     |
+| `CRUCIBLE_SKIP_CONSOLE_GUARD=1` | created | 520, readable    | 233, gone      | dies     |
+| via `real-terminal-check`  | created      | 520, readable    | 233, gone      | dies     |
+
+The console is alive *after* `createCliRenderer` and gone *after*
+`renderer.destroy()`. Our teardown, the console guard and the parent/child console
+sharing in `real-terminal-check.mjs` were each ruled out by control runs — the
+guard makes no difference, and skipping the renderer entirely is clean.
+
+This is an **adoption and maintenance cost of the OpenCode-derived renderer**, not
+a defect in Crucible's teardown, so it belongs to
+[#17](https://github.com/DevFlow-HQ/devflow-cli/issues/17) rather than to this
+prototype. Recorded here so it is not rediscovered later.
+
 ## Running it
 
 ```bash
