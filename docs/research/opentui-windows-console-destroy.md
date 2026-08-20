@@ -7,8 +7,14 @@
 > surviving mechanisms below — M1, the console output code page, and M2, the
 > shutdown VT blob — are refuted by measurement.** The console dies from a
 > lifecycle defect on the JavaScript side that source reading could not reach:
-> `destroy()` leaves live libuv handles and a timer registered, and the console
-> is destroyed only when the event loop is allowed to service them.
+> `destroy()` leaves the `process.stdin` handle that `createCliRenderer` created
+> registered on the event loop, and the console is destroyed only when the loop
+> is allowed to service it.
+>
+> **[Corrected By Measurement](#corrected-by-measurement) is itself corrected in
+> part by [The Actor](#the-actor-processstdin)**, which identifies the handle,
+> exonerates the timer, and replaces the synchronous-teardown workaround with a
+> narrower one. Read both, in order.
 >
 > Everything in this document that is **source read** or **upstream report**
 > still stands and is still useful — the import-table refutations, the OpenCode
@@ -627,8 +633,11 @@ thread, and not elapsed time.
   console input mode 520 (`ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT`)
   that the #6 repro records, and survives. Mode 520 is the runtime's, not
   OpenTUI's.
-- **Tearing stdin down does not fix it.** `setRawMode(false)` plus `pause()`,
-  before or after `destroy()`, dies either way and leaves `TTYWrap:3` registered.
+- **Tearing stdin down does not fix it** — *but see
+  [The Actor](#the-actor-processstdin), which qualifies this.* `setRawMode(false)`
+  plus `pause()`, before or after `destroy()`, dies either way and leaves
+  `TTYWrap:3` registered. That last clause is the tell: `pause()` stops the read,
+  not the handle. Actually removing the handle, before `destroy()`, does fix it.
 - **The prototype's own teardown acts are innocent, individually.** Detaching the
   key handler from inside its own dispatch, `setTerminalTitle("")`, and the reset
   blob each survive in isolation.
@@ -646,6 +655,10 @@ was credited with it.
 
 ### What Crucible can do about it
 
+> **Superseded by [The Actor](#the-actor-processstdin).** The workaround below
+> works, but it is stricter than necessary: the requirement is not that teardown
+> be synchronous, only that `process.stdin` be released before `destroy()`.
+
 A workaround exists and is cheap, and it was not on the original options table:
 **perform no event-loop work between `renderer.destroy()` and process exit.**
 `destroy()` is synchronous (`destroy(): void`), so a teardown that calls it and
@@ -660,3 +673,110 @@ Not established here: which of the three `TTYWrap` handles or the one `Timeout`
 is the actor, and whether a supported OpenTUI call disposes of them. That is the
 detail an upstream report needs, and it is cheap to get with a Node handle dump
 against a patched build; it does not block #17.
+
+**Since resolved — see [The Actor](#the-actor-processstdin).** It is a `TTYWrap`,
+and it is `process.stdin`.
+
+## The Actor: process.stdin
+
+Added after six further controls on 2026-08-20, same harness, same real
+`conhost.exe powershell.exe` window on Windows 11. This section **resolves the
+question the previous one left open**, and corrects two of its conclusions.
+
+### The handle
+
+`process._getActiveHandles()` returns the handle objects rather than a list of
+type names, which is what makes the third `TTYWrap` identifiable at all:
+
+| Phase | stdout | stderr | stdin |
+| --- | --- | --- | --- |
+| before the OpenTUI import | present | present | **absent** |
+| after `createCliRenderer` | present | present | **present, `isRaw=true`** |
+| after `destroy()` | present | present | **present, `isRaw=false`, `readable=true`, `destroyed=false`** |
+
+`createCliRenderer` is what instantiates `process.stdin` and puts it in raw mode.
+`destroy()` turns raw mode back off and leaves the handle open and registered on
+the loop.
+
+### The Timeout is exonerated, and was never a leak
+
+OpenTUI creates exactly one timer during `createCliRenderer`, and it is not a
+render-loop timer:
+
+```
+live timer seq=1 kind=timeout armed=5000 _idleTimeout=5000 _repeat=null
+  from chunk-node-q0cwyvm9.js:4715:23) <- chunk-node-51kpf0mz.js:8665:43)
+```
+
+`destroy()` clears it. A control that clears every non-probe timer after
+`destroy()` reported `cleared 0 timer(s)` — there was nothing left to clear — and
+died anyway. The `Timeout:1` in the `key-wait-resources` dump above is the
+**probe's own** 30s keypress-wait timer, not OpenTUI's; reading it as a leak was
+wrong. Across every dying run, `TIMER FIRED post-destroy: 0` and
+`WRITE post-destroy: 0` — nothing fires, nothing writes, and the console dies
+anyway.
+
+### The deciding trio
+
+Three controls separate *what* must be done from *when*:
+
+| Run | stdin action | On the loop at `destroy()` | Console |
+| --- | --- | --- | --- |
+| `key-stdin-before-destroy` | `setRawMode(false)` + `pause()`, before `destroy()` | yes — `TTYWrap:3` | **dies** |
+| `handles-stdin-destroy`, `handles-stdin-close` | full release, **after** `destroy()` | yes | **dies** |
+| `handles-stdin-before` | full release, **before** `destroy()` | no — `TTYWrap:2` | survives |
+
+Both halves are load-bearing. Pausing the stream is not enough: `pause()` stops
+the read, not the handle, and leaves `TTYWrap` at 3. And a full release after
+`destroy()` is too late.
+
+`handles-quiet-wait` rules out the probe itself. It touches the console in no way
+after `destroy()` — every log line diverted to the side channel — turns the loop
+for 3s, and dies on the same clock. Post-destroy console I/O is neither necessary
+nor sufficient.
+
+### Timing: why every after-the-fact intervention failed
+
+The console is already unresponsive **0.1s after `destroy()` returns**. In
+`handles-stdin-destroy` the probe's own `setRawMode(false)` at that point blocked
+for 0.7s — the same signature as the parent's `GetConsoleMode` blocking before it
+returns 233 — and the run died on the same clock as every other. Its exit code 1
+is conhost taking the child down, not a crash.
+
+Death lands 0.6–0.8s after `destroy()` returns in all five dying runs of this
+round, independent of what the process does next. What the process does next
+decides only whether the console **recovers**:
+
+- exits before that deadline — recovers (`handles-census`)
+- stays alive with the loop blocked — recovers (`key-spin-destroy`)
+- stays alive with the loop turning — wedges permanently
+
+### The corrected workaround
+
+The requirement is **not** that teardown be synchronous:
+
+> Release `process.stdin` **before** calling `renderer.destroy()`: remove its
+> listeners, `setRawMode(false)`, `pause()`, `unref()`, `destroy()`.
+
+With the handle off the loop, `handles-stdin-before` turns the event loop for a
+full 3 seconds after `destroy()` — twelve sampled turns, the exact configuration
+that kills the console in every other run — exits cleanly, and leaves the console
+at `503 / 850` through a 15s watch.
+
+This lifts the constraint the previous section imposed. Async teardown, `await`,
+timeouts and `Promise.race` are all available again; only the stdin release has to
+precede `destroy()`. The prototype's adapter dies because it never releases stdin
+at all: `keyInput.off` detaches OpenTUI's listener but leaves the handle.
+
+One cosmetic caveat, measured: because the release calls `setRawMode(false)`, the
+console sits in ordinary cooked mode (`7`) for the duration of the post-destroy
+window, returning to `503` at process exit. The final state is correct; the
+intermediate one is not the original.
+
+### For an upstream report
+
+`destroy()` leaves the `process.stdin` handle that `createCliRenderer` created
+registered on the event loop. On legacy conhost, any subsequent turn of the loop
+wedges the console host. The repro is `handles-quiet-wait`; the surviving control
+is `handles-stdin-before`; the fix is for `destroy()` to release the handle it
+caused to be created.
