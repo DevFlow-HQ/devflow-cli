@@ -103,7 +103,16 @@ prototype. Recorded here so it is not rediscovered later.
 ## Running it
 
 ```bash
-npm install
+# The lockfile is committed because this prototype IS the evidence behind #6 and
+# #33, so its dependency set is part of the measurement. package.json pins only
+# four direct dependencies; the lockfile pins 111 and carries integrity hashes,
+# which catch a republished tarball at an unchanged version number.
+#
+# `ci`, not `install`: with a lockfile present both install from it, but `install`
+# silently rewrites it when it disagrees with package.json, where `ci` fails. For a
+# re-run that is the whole point -- drift should stop the measurement rather than
+# be quietly absorbed into it.
+npm ci
 
 # lifecycle through the seam - no terminal needed, runs anywhere
 node --test test/seam.test.mjs
@@ -117,6 +126,8 @@ CRUCIBLE_ARM=bun  CRUCIBLE_RUNTIME=bun  node --test test/lifecycle.pty.test.mjs
 CRUCIBLE_ARM=node CRUCIBLE_RUNTIME=node node --test test/lifecycle.pty.test.mjs
 
 # packaging
+# Re-run this after ANY npm ci: only the host's optional native is in the install
+# tree, so ci prunes the other seven and the cross-compile stops resolving them.
 node scripts/install-natives.mjs                            # required before compiling
 bun build --compile src/main.mjs --outfile dist/crucible-shell
 node scripts/smoke-packaged.mjs

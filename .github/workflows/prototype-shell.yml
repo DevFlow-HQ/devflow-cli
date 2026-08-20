@@ -46,7 +46,15 @@ jobs:
           bun -v
           echo "runner: ${{ runner.os }} ${{ runner.arch }}"
 
-      - run: npm install --no-audit --no-fund
+      # `ci`, not `install`. This workflow produces #6's cross-platform evidence, so
+      # the dependency set is part of the measurement. Both install from the committed
+      # lockfile; the difference is that `install` silently rewrites it when it
+      # disagrees with package.json -- here, on a runner, where the rewrite is
+      # discarded and the drift never surfaces. `ci` fails the build instead.
+      #
+      # Note it installs only the host's optional OpenTUI native. Step 4 adds the
+      # other seven back before compiling.
+      - run: npm ci --no-audit --no-fund
 
       # 1. The seam is testable with no terminal, no OpenTUI, no native library.
       - name: Seam tests (no terminal)
