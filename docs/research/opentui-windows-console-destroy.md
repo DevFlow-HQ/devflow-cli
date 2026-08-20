@@ -1,5 +1,21 @@
 # Why OpenTUI's renderer.destroy() Destroys The Legacy Windows Console
 
+> **SUPERSEDED IN PART — read [Corrected By Measurement](#corrected-by-measurement) first.**
+>
+> [#33](https://github.com/DevFlow-HQ/devflow-cli/issues/33) ran the deciding
+> experiment this document specifies, plus eighteen further controls. **Both
+> surviving mechanisms below — M1, the console output code page, and M2, the
+> shutdown VT blob — are refuted by measurement.** The console dies from a
+> lifecycle defect on the JavaScript side that source reading could not reach:
+> `destroy()` leaves live libuv handles and a timer registered, and the console
+> is destroyed only when the event loop is allowed to service them.
+>
+> Everything in this document that is **source read** or **upstream report**
+> still stands and is still useful — the import-table refutations, the OpenCode
+> prevalence evidence, and the upstream commit history. What does not stand is
+> the inference that the mechanism must be M1 or M2, and the options table that
+> was priced against that choice.
+
 ## Answer
 
 `renderer.destroy()` does not detach, close, or free the console. The shipped
@@ -543,3 +559,104 @@ Listed explicitly, because none of it is guessable from source:
   runtime. Both belong to
   [#17](https://github.com/DevFlow-HQ/devflow-cli/issues/17) and the
   product-scope tickets; this research exists to give them a priced menu.
+
+## Corrected By Measurement
+
+Added after [#33](https://github.com/DevFlow-HQ/devflow-cli/issues/33) ran twenty
+controls in a real `conhost.exe powershell.exe` window on Windows 11, 2026-08-20.
+Everything in this section is **measured**, not inferred. The harness is a
+throwaway parent that reads console input mode and output code page over FFI
+before the run, every 500ms while the child owns the console, after the child
+exits, and then once a second for 15s; every line is flushed to a side channel,
+because the window dies before its own report can be read.
+
+### The mechanism
+
+`renderer.destroy()` returns in ~0.1s and does not itself destroy the console.
+It leaves live handles registered on the JavaScript event loop:
+
+```
+active resources right after destroy(): {"TTYWrap":3,"Timeout":1}
+```
+
+The console is destroyed when, and only when, **both** of these hold:
+
+1. a keypress was actually delivered to the renderer during the session, and
+2. the event loop is allowed to turn between `destroy()` and process exit.
+
+Death follows ~0.8-1.6s after the loop resumes. During that window the parent's
+own `GetConsoleMode` blocks, then returns 233 `ERROR_PIPE_NOT_CONNECTED`: the
+console host wedges first and dies during the stall. A `destroy()` that appears
+to hang is this symptom seen from inside, not a cause -- the prototype's 2s
+`Promise.race` was reading the wedge, not a stuck teardown.
+
+### The evidence
+
+Both conditions are necessary; neither alone is sufficient. Twenty runs, no
+exceptions:
+
+| Run | Key delivered | Loop turns after destroy | Console |
+| --- | --- | --- | --- |
+| `baseline`, `input-destroy`, `input-reset-destroy`, `input-guard-destroy` | no | no | survives |
+| `raw-only` (no OpenTUI at all) | no | yes | survives |
+| `delay` (held open 10s) | no | yes | survives |
+| `adapter-destroy` | no | yes | survives |
+| `input-key-destroy`, `key-off-destroy`, `key-title-destroy`, `key-reset-destroy` | yes | no | survives |
+| `key-spin-destroy` (main thread blocked 3s) | yes | no | survives |
+| `key-race-destroy`, `key-wait-destroy`, `key-wait-resources` | yes | yes | **dies** |
+| `key-stdin-before-destroy`, `key-stdin-after-destroy` | yes | yes | **dies** |
+| `adapter-key-destroy`, `shell-bare`, `repro-shell` | yes | yes | **dies** |
+
+`adapter-destroy` and `key-spin-destroy` are the load-bearing controls. The first
+turns the loop without a keypress and lives; the second delivers a keypress and
+passes 3s of wall-clock time with the main thread blocked by `Atomics.wait`, and
+lives. So the actor is JS-scheduled work on the main loop, not a native or worker
+thread, and not elapsed time.
+
+### What this refutes
+
+- **M1, the console output code page, is refuted as a sufficient cause.** The
+  live sampler measured `outputCP` going 850 -> 65001 while the renderer was up
+  and back to 850 after `destroy()` -- the exact switch-and-restore pair M1
+  blames -- in runs where the console **survived**. This is also the first direct
+  observation that 0.4.5 performs the switch at all; the source read inferred it.
+- **M2, the shutdown VT blob, is refuted as a sufficient cause.** Every surviving
+  keypress run executes the same `performShutdownSequence()`. `key-reset-destroy`
+  additionally writes the prototype's own reset blob afterwards and survives.
+- **Raw mode is not the trigger.** `raw-only` loads no OpenTUI, produces the same
+  console input mode 520 (`ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT`)
+  that the #6 repro records, and survives. Mode 520 is the runtime's, not
+  OpenTUI's.
+- **Tearing stdin down does not fix it.** `setRawMode(false)` plus `pause()`,
+  before or after `destroy()`, dies either way and leaves `TTYWrap:3` registered.
+- **The prototype's own teardown acts are innocent, individually.** Detaching the
+  key handler from inside its own dispatch, `setTerminalTitle("")`, and the reset
+  blob each survive in isolation.
+
+### A gap in #6's isolation, for the record
+
+[#6](https://github.com/DevFlow-HQ/devflow-cli/issues/6) recorded the Windows
+console guard as ruled out because `CRUCIBLE_SKIP_CONSOLE_GUARD=1` also died. That
+flag only skips the **initial** `SetConsoleMode`; `restore()` still calls
+`SetConsoleMode` on teardown, so the guard's teardown call was never actually
+controlled for. The conclusion survives -- `input-guard-destroy` isolates the real
+guard and lives, and the #6 log shows `restore:err=233`, meaning the console was
+already gone before restore ran -- but it was not established by the control that
+was credited with it.
+
+### What Crucible can do about it
+
+A workaround exists and is cheap, and it was not on the original options table:
+**perform no event-loop work between `renderer.destroy()` and process exit.**
+`destroy()` is synchronous (`destroy(): void`), so a teardown that calls it and
+then exits in the same tick is achievable; every run that does so survives,
+including one that burned 3s of wall clock first. The cost is a real constraint
+on teardown design -- no `await` after destroy, which is exactly what the
+prototype's adapter does today -- and it is a workaround, not a fix: the leaked
+`TTYWrap` and `Timeout` handles are still there, and anything that resurrects the
+loop re-arms the bug.
+
+Not established here: which of the three `TTYWrap` handles or the one `Timeout`
+is the actor, and whether a supported OpenTUI call disposes of them. That is the
+detail an upstream report needs, and it is cheap to get with a Node handle dump
+against a patched build; it does not block #17.
