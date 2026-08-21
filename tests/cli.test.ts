@@ -156,6 +156,12 @@ async function invokeCli(argv: string[]) {
   };
 }
 
+async function refuseHostProviderDiscovery(): Promise<ProviderDiscoveryResult> {
+  throw new Error(
+    "Test reached real provider discovery, which probes the host for installed executables. Pass discoverProviders (see createDiscoveryResult) or an explicit providerId.",
+  );
+}
+
 async function invokeCliWithOptions(
   argv: string[],
   options: Parameters<typeof runCli>[1] = {},
@@ -169,6 +175,7 @@ async function invokeCliWithOptions(
     await runCli(argv, {
       stdout,
       stderr,
+      discoverProviders: refuseHostProviderDiscovery,
       configureProgram(program) {
         program.exitOverride();
         options.configureProgram?.(program);
@@ -1106,6 +1113,7 @@ test("cli reuses a valid repo-local default provider config when no override is 
 
   const result = await invokeCliWithOptions(["resume", "work"], {
     cwd: projectRoot,
+    discoverProviders: async () => createDiscoveryResult(["claude", "codex"]),
     runExecutionRequest: async (request) => {
       receivedRequests.push(request);
     },
@@ -1178,6 +1186,7 @@ test("cli passes through --model unchanged alongside a saved provider without pe
     ["--model", "gpt-5.5/fast beta", "resume", "work"],
     {
       cwd: projectRoot,
+      discoverProviders: async () => createDiscoveryResult(["claude", "codex"]),
       runExecutionRequest: async (request) => {
         receivedRequests.push(request);
       },
