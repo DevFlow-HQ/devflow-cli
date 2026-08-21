@@ -17,3 +17,6 @@ Before exploring or changing a domain area, follow `docs/agents/domain.md`.
 ### Engineering baseline
 
 Before changing source, tests, dependencies, tooling, prototypes, or agent guidance—or declaring implementation complete—follow `docs/agents/engineering-baseline.md`.
+
+### Commit guidelines
+No Co-author in commit messages
