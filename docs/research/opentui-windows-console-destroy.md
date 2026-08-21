@@ -39,7 +39,7 @@ inside the Zig `CliRenderer.destroy()`:
 2. it restores the console **output code page** with `SetConsoleOutputCP`,
    undoing the switch to UTF-8 (65001) that the renderer performed at creation.
 
-The code page pair is the only console-*host* state the 0.4.5 native library
+The code page pair is the only console-_host_ state the 0.4.5 native library
 mutates anywhere. Upstream deleted it in
 [`a597e88f`](https://github.com/anomalyco/opentui/commit/a597e88fb0a9a3704c0d487fbcc9e1cde3c64377)
 ([PR #1272](https://github.com/anomalyco/opentui/pull/1272)), first shipped in
@@ -125,12 +125,12 @@ invalidates the handle and calls `CliRenderer.destroy()`, which does exactly
 this, in this order
 ([`renderer.zig:355`](https://github.com/anomalyco/opentui/blob/0c8c4f7cff2927e3df63a9757a45eff9a343611c/packages/core/src/zig/renderer.zig#L355)):
 
-| # | Step | Console contact |
-| --- | --- | --- |
-| 1 | `performShutdownSequence()` | builds a VT reset blob and writes it with `WriteFile` |
-| 2 | `backend.deinit()` | joins the render thread; frees buffers; **`StdoutOutput.deinit()` → `SetConsoleOutputCP(original)`** |
-| 3 | `terminal.deinit()` | frees an env map only |
-| 4 | buffer/allocator teardown | none |
+| #   | Step                        | Console contact                                                                                      |
+| --- | --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 1   | `performShutdownSequence()` | builds a VT reset blob and writes it with `WriteFile`                                                |
+| 2   | `backend.deinit()`          | joins the render thread; frees buffers; **`StdoutOutput.deinit()` → `SetConsoleOutputCP(original)`** |
+| 3   | `terminal.deinit()`         | frees an env map only                                                                                |
+| 4   | buffer/allocator teardown   | none                                                                                                 |
 
 The code page pair lives in
 [`renderer-output.zig`](https://github.com/anomalyco/opentui/blob/0c8c4f7cff2927e3df63a9757a45eff9a343611c/packages/core/src/zig/renderer-output.zig#L52-L79).
@@ -186,15 +186,15 @@ process handle from the PEB, on which it never calls `close()`.
 
 This retires, individually, every mechanism the ticket listed as a candidate:
 
-| Candidate from #32 | Verdict | Basis |
-| --- | --- | --- |
-| `FreeConsole` | **Ruled out** | not imported; string absent from binary |
-| `CloseHandle` on `CONOUT$`/`CONIN$`/std handles | **Ruled out** | device names absent; handles never opened; `GetStdHandle` not imported; stdout never closed |
-| Virtual-terminal mode restore (`SetConsoleMode`) | **Ruled out as OpenTUI code** | imported, but not called from any OpenTUI `.zig` source — see caveat below |
-| Native mouse/input reader closing a handle it does not own | **Ruled out** | no native stdin path exists in 0.4.5 |
-| Thread/reader shutdown | **Ruled out as console contact** | `BufferedBackend.deinit()` joins the render thread before touching the output; no console handle involved |
-| Console output code page mutation | **Survives** | see below |
-| Shutdown VT blob | **Survives** | see below |
+| Candidate from #32                                         | Verdict                          | Basis                                                                                                     |
+| ---------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `FreeConsole`                                              | **Ruled out**                    | not imported; string absent from binary                                                                   |
+| `CloseHandle` on `CONOUT$`/`CONIN$`/std handles            | **Ruled out**                    | device names absent; handles never opened; `GetStdHandle` not imported; stdout never closed               |
+| Virtual-terminal mode restore (`SetConsoleMode`)           | **Ruled out as OpenTUI code**    | imported, but not called from any OpenTUI `.zig` source — see caveat below                                |
+| Native mouse/input reader closing a handle it does not own | **Ruled out**                    | no native stdin path exists in 0.4.5                                                                      |
+| Thread/reader shutdown                                     | **Ruled out as console contact** | `BufferedBackend.deinit()` joins the render thread before touching the output; no console handle involved |
+| Console output code page mutation                          | **Survives**                     | see below                                                                                                 |
+| Shutdown VT blob                                           | **Survives**                     | see below                                                                                                 |
 
 Caveat, labelled honestly: `SetConsoleMode`, `SetConsoleTextAttribute`, and
 `GetConsoleScreenBufferInfo` are imported by the 0.4.5 DLL but are not called
@@ -212,16 +212,16 @@ a deliberate removal.
 code page to UTF-8 (65001); at `destroy()` it flips it back. Every byte the
 renderer writes in between goes through `WriteFile`, which decodes against that
 shared code page. Upstream's own words for why this was wrong, in the commit
-that removed it: *"WriteFile decodes console bytes using the active output code
-page, making UTF-8 depend on shared CP 65001 state."*
+that removed it: _"WriteFile decodes console bytes using the active output code
+page, making UTF-8 depend on shared CP 65001 state."_
 
 **Measured in #6.** The console survives `createCliRenderer` — mode reads `520`
 and is readable at `SHELL_READY` — and is gone after `destroy()`. Under M1 the
-fatal call is therefore the *restore*, or the accumulated state that the restore
+fatal call is therefore the _restore_, or the accumulated state that the restore
 disturbs, not the initial switch.
 
 **Fit.** M1 explains why destroy is the boundary, because the restore only
-happens at destroy. It also explains why the symptom is a *host* death rather
+happens at destroy. It also explains why the symptom is a _host_ death rather
 than a process death: the code page is console-global, owned by the host, and #6
 measured `233 ERROR_PIPE_NOT_CONNECTED` from the **parent** process too, which
 is what a dead console server looks like to every remaining client.
@@ -264,7 +264,7 @@ M1 and M2 are not exclusive. The renderer writes UTF-8 bytes through `WriteFile`
 while the console sits at code page 65001 for the whole session; the shutdown
 blob is the last such write. "Legacy conhost mishandles this byte stream under
 65001" would produce M1's boundary and M2's failure shape simultaneously. The
-first control below distinguishes the *mutation* from *everything else*, which
+first control below distinguishes the _mutation_ from _everything else_, which
 is the cut that matters for cost.
 
 ## The Deciding Experiment
@@ -318,11 +318,14 @@ powershell.exe` window:
 
 ```js
 // suspend-only probe: writes the shutdown VT blob, never calls destroy()
-import { createCliRenderer, TextRenderable } from "@opentui/core"
-const r = await createCliRenderer({ targetFps: 10 })
-r.root.add(new TextRenderable(r, { id: "t", content: "suspend probe" }))
-r.requestRender()
-setTimeout(() => { r.suspend(); process.exit(0) }, 2000)
+import { createCliRenderer, TextRenderable } from "@opentui/core";
+const r = await createCliRenderer({ targetFps: 10 });
+r.root.add(new TextRenderable(r, { id: "t", content: "suspend probe" }));
+r.requestRender();
+setTimeout(() => {
+  r.suspend();
+  process.exit(0);
+}, 2000);
 ```
 
 - **Console dies** → M2 confirmed. The shutdown VT blob is the trigger; no
@@ -357,16 +360,16 @@ Crucible's equivalent guard makes no difference to this symptom.
 OpenCode's tracker carries a long-running cluster of reports of the identical
 user-visible symptom. None is fixed.
 
-| Issue | State | Terminal / shell | Note |
-| --- | --- | --- | --- |
-| [#22003 TUI exit closes terminal window on Windows](https://github.com/anomalyco/opencode/issues/22003) | **open** | Windows Terminal + cmd.exe | reporter's own FFI instrumentation: `GetConsoleWindow()` goes valid → `0x0`, no `CTRL_CLOSE_EVENT`, "the console is silently detached" |
-| [#23720 /exit freezes Hyper and alacritty, force-closes PowerShell](https://github.com/anomalyco/opencode/issues/23720) | closed (stale) | Hyper, Alacritty, PowerShell | regression v1.14.18 → v1.14.19; explicitly *not* Windows Terminal, *not* VS Code |
-| [#25691 OpenCode crashes terminal window on exit](https://github.com/anomalyco/opencode/issues/25691) | closed (stale) | cmd.exe | |
-| [#26480 Default opencode corrupts ConPTY-hosted parent shell on exit](https://github.com/anomalyco/opencode/issues/26480) | closed (stale) | Warp / WT / VS Code | detailed `FreeConsole` hypothesis; shell dies with `0x80131623` (CLR `ObjectDisposedException` family) |
-| [#27749 /exit or /quit kills the terminal on Windows PowerShell](https://github.com/anomalyco/opencode/issues/27749) | closed (stale) | PowerShell 7.6.1 | |
-| [#28155 Fatal crash (0x80131623) in PowerShell 7.6.1 when exiting](https://github.com/anomalyco/opencode/issues/28155) | closed (stale) | PowerShell 7.6.1 / WT | same CLR code as #26480 |
-| [#28673 Regression: /exit and Ctrl+C kill parent terminal since v1.14.25](https://github.com/anomalyco/opencode/issues/28673) | closed (stale) | pwsh 7, WezTerm, WT | **bisected to the `@opentui/core` 0.1.99 → 0.1.103 bump** |
-| [#30495 opencode exit causes conhost.exe crash and kills all psmux panes](https://github.com/anomalyco/opencode/issues/30495) | closed (stale) | psmux 3.3.4 / pwsh 7.6.1 | Event Viewer: `conhost.exe` faults with `0xc0000005`; pwsh then FailFasts on `GetConsoleScreenBufferInfo` with error `0xE9`, "No process is on the other end of the pipe" |
+| Issue                                                                                                                         | State          | Terminal / shell             | Note                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------- | -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#22003 TUI exit closes terminal window on Windows](https://github.com/anomalyco/opencode/issues/22003)                       | **open**       | Windows Terminal + cmd.exe   | reporter's own FFI instrumentation: `GetConsoleWindow()` goes valid → `0x0`, no `CTRL_CLOSE_EVENT`, "the console is silently detached"                                    |
+| [#23720 /exit freezes Hyper and alacritty, force-closes PowerShell](https://github.com/anomalyco/opencode/issues/23720)       | closed (stale) | Hyper, Alacritty, PowerShell | regression v1.14.18 → v1.14.19; explicitly _not_ Windows Terminal, _not_ VS Code                                                                                          |
+| [#25691 OpenCode crashes terminal window on exit](https://github.com/anomalyco/opencode/issues/25691)                         | closed (stale) | cmd.exe                      |                                                                                                                                                                           |
+| [#26480 Default opencode corrupts ConPTY-hosted parent shell on exit](https://github.com/anomalyco/opencode/issues/26480)     | closed (stale) | Warp / WT / VS Code          | detailed `FreeConsole` hypothesis; shell dies with `0x80131623` (CLR `ObjectDisposedException` family)                                                                    |
+| [#27749 /exit or /quit kills the terminal on Windows PowerShell](https://github.com/anomalyco/opencode/issues/27749)          | closed (stale) | PowerShell 7.6.1             |                                                                                                                                                                           |
+| [#28155 Fatal crash (0x80131623) in PowerShell 7.6.1 when exiting](https://github.com/anomalyco/opencode/issues/28155)        | closed (stale) | PowerShell 7.6.1 / WT        | same CLR code as #26480                                                                                                                                                   |
+| [#28673 Regression: /exit and Ctrl+C kill parent terminal since v1.14.25](https://github.com/anomalyco/opencode/issues/28673) | closed (stale) | pwsh 7, WezTerm, WT          | **bisected to the `@opentui/core` 0.1.99 → 0.1.103 bump**                                                                                                                 |
+| [#30495 opencode exit causes conhost.exe crash and kills all psmux panes](https://github.com/anomalyco/opencode/issues/30495) | closed (stale) | psmux 3.3.4 / pwsh 7.6.1     | Event Viewer: `conhost.exe` faults with `0xc0000005`; pwsh then FailFasts on `GetConsoleScreenBufferInfo` with error `0xE9`, "No process is on the other end of the pipe" |
 
 Two of these are worth reading closely.
 
@@ -374,8 +377,8 @@ Two of these are worth reading closely.
 names `conhost.exe` faulting with an access violation, and PowerShell then dying
 on a console read with `0xE9` — which is `ERROR_PIPE_NOT_CONNECTED`, decimal
 **233**, the exact error #6 measured from both the shell and its parent. This is
-independent, first-party corroboration that the failure is *the console host
-process dying*, not a handle being detached.
+independent, first-party corroboration that the failure is _the console host
+process dying_, not a handle being detached.
 
 **#28673's bisect is the strongest causal link available.** The reporter
 bisected OpenCode releases to v1.14.25 and identified the only relevant change
@@ -386,7 +389,7 @@ terminal background colour), `95d36f35` (preserve terminal colour intent),
 footer). **Every one of them changes what the renderer writes to the terminal.
 None of them touches a console handle.** That is meaningful support for M2 and
 against any handle-lifetime theory — though it is a user bisect over OpenCode
-releases, not a maintainer-confirmed OpenTUI bisect, and it is a *different*
+releases, not a maintainer-confirmed OpenTUI bisect, and it is a _different_
 regression window from the code-page code, so it does not settle M1 vs M2.
 
 ### Inference
@@ -395,7 +398,7 @@ OpenCode running under `conhost.exe` executes the same native destroy path as
 Crucible's prototype, so the same behaviour is expected. Note the polarity
 disagreement worth carrying: #6 measured Windows Terminal clean and conhost
 fatal, while #26480 reports the opposite matrix (native conhost fine, ConPTY
-hosts fatal). #26480 is about OpenCode's *default server+TUI* mode with a forked
+hosts fatal). #26480 is about OpenCode's _default server+TUI_ mode with a forked
 server child, and its own differential shows the failure disappears with
 `opencode serve` + `opencode attach`. Crucible's prototype has no server child,
 so #26480's mechanism is most likely a second, distinct Windows exit bug in
@@ -424,14 +427,14 @@ v0.4.5 and v0.5.0.
 
 Confirmed in the shipped artifacts, not just in source:
 
-| KERNEL32 import | 0.4.5 DLL | 0.5.4 DLL |
-| --- | --- | --- |
-| `GetConsoleOutputCP` / `SetConsoleOutputCP` | present | **gone** |
-| `SetConsoleMode` / `SetConsoleTextAttribute` / `GetConsoleScreenBufferInfo` | present | **gone** |
-| `WriteConsoleW` | absent | **present** |
-| `GetStdHandle` / `FlushConsoleInputBuffer` | absent | **present** |
-| `GetConsoleMode` | present | present |
-| `FreeConsole` / `AllocConsole` / `AttachConsole` / `SetStdHandle` | absent | absent |
+| KERNEL32 import                                                             | 0.4.5 DLL | 0.5.4 DLL   |
+| --------------------------------------------------------------------------- | --------- | ----------- |
+| `GetConsoleOutputCP` / `SetConsoleOutputCP`                                 | present   | **gone**    |
+| `SetConsoleMode` / `SetConsoleTextAttribute` / `GetConsoleScreenBufferInfo` | present   | **gone**    |
+| `WriteConsoleW`                                                             | absent    | **present** |
+| `GetStdHandle` / `FlushConsoleInputBuffer`                                  | absent    | **present** |
+| `GetConsoleMode`                                                            | present   | present     |
+| `FreeConsole` / `AllocConsole` / `AttachConsole` / `SetStdHandle`           | absent    | absent      |
 
 **The 0.5.4 native library makes no console-mode and no code-page mutating call
 at all.** If M1 is the mechanism, current upstream is already fixed.
@@ -451,9 +454,9 @@ destroying a renderer during async palette detection, closed same-day),
 [#940](https://github.com/anomalyco/opentui/issues/940) (opentui.dll panics
 during DllMain/static init), and
 [#514](https://github.com/anomalyco/opentui/issues/514), which is an OpenCode
-user reporting garbled Windows console output whose diagnosis was *"opentui.dll
+user reporting garbled Windows console output whose diagnosis was _"opentui.dll
 doesn't properly handle console encoding when outputting UTF-8 characters on
-Windows"* — the same code path, closed for want of a reply.
+Windows"_ — the same code path, closed for want of a reply.
 
 **Nobody has connected the console death to `renderer.destroy()` upstream.** #6
 and this ticket are, as far as the trackers show, the first evidence that
@@ -488,17 +491,17 @@ rule in `docs/research/opencode-tui-extraction-constraints.md`.
 
 ## Options And Costs
 
-Read this table *after* running the deciding experiment; the two middle columns
+Read this table _after_ running the deciding experiment; the two middle columns
 change materially depending on the outcome.
 
-| Option | What Crucible does | Cost if M1 (code page) | Cost if M2 (VT blob) | Effect on update cadence |
-| --- | --- | --- | --- | --- |
-| **Document "Windows Terminal required"** | Detect the legacy host at startup, warn or refuse; state the constraint in install docs | Same either way: roughly a day. Detection is cheap. Costs a real user segment — cmd.exe, standalone PowerShell, and any host embedding classic conhost | Same | **None.** The only option with zero recurring cost |
-| **Teardown workaround in Crucible** | Set the console output code page to 65001 before `createCliRenderer`, so OpenTUI's own switch is a no-op and its restore never fires | **~10 lines, hours.** Needs `SetConsoleOutputCP` only; #6 established Crucible needs no runtime FFI, so this adds a small Windows-only FFI dependency back, or shells out to `chcp`. Leaves the user's code page at 65001 unless Crucible restores it once the console is safely idle | **Does not work.** The blob is written regardless | One Windows-only shim to re-validate on every OpenTUI bump; about one line of a smoke checklist |
-| **Avoid `destroy()` entirely** | Call `suspend()`, then exit the process without destroying | Does not help on its own: `suspend()` merely skips the code page restore, so this is the workaround above with worse hygiene | **Does not work if Control B shows suspend also kills the console.** If it does not, this leaks the native renderer and the render thread by design, and #6 already found `destroy()` can stall — trading one lifecycle hazard for another | Fragile; every OpenTUI bump can change what `suspend()` emits |
-| **Upgrade the pin to `@opentui/core` >= 0.5.0** | Take upstream's `WriteConsoleW` rewrite | **Fixed upstream, for free.** Costs a version bump plus revalidation: DLL 3.79 → 5.22 MB, new image/audio surface, Zig 0.16 on `main`, and the packaged-binary size budget re-checked | **No help.** `Terminal.resetState()` is unchanged on `main` | **High.** OpenCode still pins 0.4.5, so Crucible's renderer pin diverges from the tree it ports from. Every OpenCode port must then be reviewed against a renderer version upstream does not test together |
-| **Upstream patch** | File the issue with #6's isolation plus this call-site analysis; contribute the fix | Already landed; worth filing only to confirm and get it acknowledged | **The right home.** Reproduction is crisp and the call site is named; nobody has reported it. Cost is an issue plus a Zig PR plus upstream release latency, with no guaranteed timeline | Best long-run: keeps Crucible on a stock pin. Needs a fallback while the fix is in flight |
-| **Vendored native fix** | Fork `@opentui/core`, patch the Zig, rebuild and republish all eight native packages | Unjustifiable — upstream already did it | **Expensive.** No env-var override exists for the native library path (the platform package exports a hard-coded `./opentui.dll` URL), so this means owning the whole native package set: a Zig toolchain, cross-compilation for 8 targets (`x86_64`/`aarch64` × Windows/macOS/Linux-gnu/Linux-musl), plus the miniaudio/tree-sitter shims and a macOS SDK for the Darwin targets | **Highest.** Crucible owns a native build matrix and re-does it on every upstream bump. A different order of maintenance from vendoring TypeScript, and it should not be entered without the deciding experiment first |
+| Option                                          | What Crucible does                                                                                                                   | Cost if M1 (code page)                                                                                                                                                                                                                                                                | Cost if M2 (VT blob)                                                                                                                                                                                                                                                                                                                                                              | Effect on update cadence                                                                                                                                                                                               |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Document "Windows Terminal required"**        | Detect the legacy host at startup, warn or refuse; state the constraint in install docs                                              | Same either way: roughly a day. Detection is cheap. Costs a real user segment — cmd.exe, standalone PowerShell, and any host embedding classic conhost                                                                                                                                | Same                                                                                                                                                                                                                                                                                                                                                                              | **None.** The only option with zero recurring cost                                                                                                                                                                     |
+| **Teardown workaround in Crucible**             | Set the console output code page to 65001 before `createCliRenderer`, so OpenTUI's own switch is a no-op and its restore never fires | **~10 lines, hours.** Needs `SetConsoleOutputCP` only; #6 established Crucible needs no runtime FFI, so this adds a small Windows-only FFI dependency back, or shells out to `chcp`. Leaves the user's code page at 65001 unless Crucible restores it once the console is safely idle | **Does not work.** The blob is written regardless                                                                                                                                                                                                                                                                                                                                 | One Windows-only shim to re-validate on every OpenTUI bump; about one line of a smoke checklist                                                                                                                        |
+| **Avoid `destroy()` entirely**                  | Call `suspend()`, then exit the process without destroying                                                                           | Does not help on its own: `suspend()` merely skips the code page restore, so this is the workaround above with worse hygiene                                                                                                                                                          | **Does not work if Control B shows suspend also kills the console.** If it does not, this leaks the native renderer and the render thread by design, and #6 already found `destroy()` can stall — trading one lifecycle hazard for another                                                                                                                                        | Fragile; every OpenTUI bump can change what `suspend()` emits                                                                                                                                                          |
+| **Upgrade the pin to `@opentui/core` >= 0.5.0** | Take upstream's `WriteConsoleW` rewrite                                                                                              | **Fixed upstream, for free.** Costs a version bump plus revalidation: DLL 3.79 → 5.22 MB, new image/audio surface, Zig 0.16 on `main`, and the packaged-binary size budget re-checked                                                                                                 | **No help.** `Terminal.resetState()` is unchanged on `main`                                                                                                                                                                                                                                                                                                                       | **High.** OpenCode still pins 0.4.5, so Crucible's renderer pin diverges from the tree it ports from. Every OpenCode port must then be reviewed against a renderer version upstream does not test together             |
+| **Upstream patch**                              | File the issue with #6's isolation plus this call-site analysis; contribute the fix                                                  | Already landed; worth filing only to confirm and get it acknowledged                                                                                                                                                                                                                  | **The right home.** Reproduction is crisp and the call site is named; nobody has reported it. Cost is an issue plus a Zig PR plus upstream release latency, with no guaranteed timeline                                                                                                                                                                                           | Best long-run: keeps Crucible on a stock pin. Needs a fallback while the fix is in flight                                                                                                                              |
+| **Vendored native fix**                         | Fork `@opentui/core`, patch the Zig, rebuild and republish all eight native packages                                                 | Unjustifiable — upstream already did it                                                                                                                                                                                                                                               | **Expensive.** No env-var override exists for the native library path (the platform package exports a hard-coded `./opentui.dll` URL), so this means owning the whole native package set: a Zig toolchain, cross-compilation for 8 targets (`x86_64`/`aarch64` × Windows/macOS/Linux-gnu/Linux-musl), plus the miniaudio/tree-sitter shims and a macOS SDK for the Darwin targets | **Highest.** Crucible owns a native build matrix and re-does it on every upstream bump. A different order of maintenance from vendoring TypeScript, and it should not be entered without the deciding experiment first |
 
 ### Recommendation for #17
 
@@ -547,7 +550,7 @@ Listed explicitly, because none of it is guessable from source:
 
 - Which of the two surviving mechanisms is real is **not established**. That is
   the honest state of this research, and it is a real-console question.
-- Whether the failure is a conhost *crash* or a controlled teardown is supported
+- Whether the failure is a conhost _crash_ or a controlled teardown is supported
   by [opencode#30495](https://github.com/anomalyco/opencode/issues/30495)'s
   Event Viewer `0xc0000005` on `conhost.exe`, but that is one third-party report
   under psmux, not a dump Crucible has taken.
@@ -601,17 +604,17 @@ to hang is this symptom seen from inside, not a cause -- the prototype's 2s
 Both conditions are necessary; neither alone is sufficient. Twenty runs, no
 exceptions:
 
-| Run | Key delivered | Loop turns after destroy | Console |
-| --- | --- | --- | --- |
-| `baseline`, `input-destroy`, `input-reset-destroy`, `input-guard-destroy` | no | no | survives |
-| `raw-only` (no OpenTUI at all) | no | yes | survives |
-| `delay` (held open 10s) | no | yes | survives |
-| `adapter-destroy` | no | yes | survives |
-| `input-key-destroy`, `key-off-destroy`, `key-title-destroy`, `key-reset-destroy` | yes | no | survives |
-| `key-spin-destroy` (main thread blocked 3s) | yes | no | survives |
-| `key-race-destroy`, `key-wait-destroy`, `key-wait-resources` | yes | yes | **dies** |
-| `key-stdin-before-destroy`, `key-stdin-after-destroy` | yes | yes | **dies** |
-| `adapter-key-destroy`, `shell-bare`, `repro-shell` | yes | yes | **dies** |
+| Run                                                                              | Key delivered | Loop turns after destroy | Console  |
+| -------------------------------------------------------------------------------- | ------------- | ------------------------ | -------- |
+| `baseline`, `input-destroy`, `input-reset-destroy`, `input-guard-destroy`        | no            | no                       | survives |
+| `raw-only` (no OpenTUI at all)                                                   | no            | yes                      | survives |
+| `delay` (held open 10s)                                                          | no            | yes                      | survives |
+| `adapter-destroy`                                                                | no            | yes                      | survives |
+| `input-key-destroy`, `key-off-destroy`, `key-title-destroy`, `key-reset-destroy` | yes           | no                       | survives |
+| `key-spin-destroy` (main thread blocked 3s)                                      | yes           | no                       | survives |
+| `key-race-destroy`, `key-wait-destroy`, `key-wait-resources`                     | yes           | yes                      | **dies** |
+| `key-stdin-before-destroy`, `key-stdin-after-destroy`                            | yes           | yes                      | **dies** |
+| `adapter-key-destroy`, `shell-bare`, `repro-shell`                               | yes           | yes                      | **dies** |
 
 `adapter-destroy` and `key-spin-destroy` are the load-bearing controls. The first
 turns the loop without a keypress and lives; the second delivers a keypress and
@@ -633,8 +636,8 @@ thread, and not elapsed time.
   console input mode 520 (`ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT`)
   that the #6 repro records, and survives. Mode 520 is the runtime's, not
   OpenTUI's.
-- **Tearing stdin down does not fix it** — *but see
-  [The Actor](#the-actor-processstdin), which qualifies this.* `setRawMode(false)`
+- **Tearing stdin down does not fix it** — _but see
+  [The Actor](#the-actor-processstdin), which qualifies this._ `setRawMode(false)`
   plus `pause()`, before or after `destroy()`, dies either way and leaves
   `TTYWrap:3` registered. That last clause is the tell: `pause()` stops the read,
   not the handle. Actually removing the handle, before `destroy()`, does fix it.
@@ -688,11 +691,11 @@ question the previous one left open**, and corrects two of its conclusions.
 `process._getActiveHandles()` returns the handle objects rather than a list of
 type names, which is what makes the third `TTYWrap` identifiable at all:
 
-| Phase | stdout | stderr | stdin |
-| --- | --- | --- | --- |
-| before the OpenTUI import | present | present | **absent** |
-| after `createCliRenderer` | present | present | **present, `isRaw=true`** |
-| after `destroy()` | present | present | **present, `isRaw=false`, `readable=true`, `destroyed=false`** |
+| Phase                     | stdout  | stderr  | stdin                                                          |
+| ------------------------- | ------- | ------- | -------------------------------------------------------------- |
+| before the OpenTUI import | present | present | **absent**                                                     |
+| after `createCliRenderer` | present | present | **present, `isRaw=true`**                                      |
+| after `destroy()`         | present | present | **present, `isRaw=false`, `readable=true`, `destroyed=false`** |
 
 `createCliRenderer` is what instantiates `process.stdin` and puts it in raw mode.
 `destroy()` turns raw mode back off and leaves the handle open and registered on
@@ -718,13 +721,13 @@ anyway.
 
 ### The deciding trio
 
-Three controls separate *what* must be done from *when*:
+Three controls separate _what_ must be done from _when_:
 
-| Run | stdin action | On the loop at `destroy()` | Console |
-| --- | --- | --- | --- |
-| `key-stdin-before-destroy` | `setRawMode(false)` + `pause()`, before `destroy()` | yes — `TTYWrap:3` | **dies** |
-| `handles-stdin-destroy`, `handles-stdin-close` | full release, **after** `destroy()` | yes | **dies** |
-| `handles-stdin-before` | full release, **before** `destroy()` | no — `TTYWrap:2` | survives |
+| Run                                            | stdin action                                        | On the loop at `destroy()` | Console  |
+| ---------------------------------------------- | --------------------------------------------------- | -------------------------- | -------- |
+| `key-stdin-before-destroy`                     | `setRawMode(false)` + `pause()`, before `destroy()` | yes — `TTYWrap:3`          | **dies** |
+| `handles-stdin-destroy`, `handles-stdin-close` | full release, **after** `destroy()`                 | yes                        | **dies** |
+| `handles-stdin-before`                         | full release, **before** `destroy()`                | no — `TTYWrap:2`           | survives |
 
 Both halves are load-bearing. Pausing the stream is not enough: `pause()` stops
 the read, not the handle, and leaves `TTYWrap` at 3. And a full release after
