@@ -23,6 +23,12 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   Harnesses; their capabilities need not be identical.
 - **Harness Adapter** — an Adapter at the Harness Seam that contains Harness-native control, event, and failure semantics behind a
   Crucible-owned Interface.
+- **Projection Port** — the Crucible-owned Interface above the TUI's state layer. Crucible pushes a normalized snapshot and incremental events
+  down to the view components; commands travel back up. It is an in-memory Interface, not a wire protocol, so process topology stays a separate
+  decision. Harness selection sits above it, and changing the Harness remounts the session subtree.
+- **Renderer Port** — the Crucible-owned Interface around the terminal renderer, covering lifecycle only: size, key input, resize, and teardown.
+  It exists so the whole shell lifecycle is exercisable against a fake with no terminal, and it carries the teardown ordering the legacy Windows
+  console host requires. See [ADR 0018](./docs/adr/0018-adopt-opencode-presentation-as-pinned-reduced-vendor.md).
 
 ### Legacy Provider language
 
