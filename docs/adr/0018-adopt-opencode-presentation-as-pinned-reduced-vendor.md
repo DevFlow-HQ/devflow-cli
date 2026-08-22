@@ -47,7 +47,10 @@ fails if the ordering is reversed, and the teardown site carries a comment point
 reader will be tempted to tidy the ordering away. Legacy conhost stays a supported host: surrendering a real user segment over a defect with a
 five-line workaround was priced as the worst-value option. The defect belongs upstream and a one-line report is to be filed against `anomalyco/opentui`
 — _`destroy()` leaves the `process.stdin` handle `createCliRenderer` created registered on the event loop; on legacy conhost any subsequent loop turn
-wedges the console host_ — and its URL recorded in this ADR once filed. Crucible ships the workaround regardless and does not wait for a fix. Because
+wedges the console host_ — and is filed as <https://github.com/anomalyco/opentui/issues/1405>. Re-measurement against `0.5.6` on Windows 11 conhost
+confirmed the defect survives the version bump and that the workaround holds, but only on Node: under Bun `1.3.14` the same release leaves
+`process.stdin` fully `destroyed` and the console dies anyway, so adopting Bun later would forfeit legacy conhost support until someone finds a
+Bun-side release. Crucible ships the workaround regardless and does not wait for a fix. Because
 CI structurally cannot observe this (a pty master is not a real terminal, and ConPTY is a screen scraper that has already produced false readings in
 both directions), the human-run real-console check is a **release gate**, re-run on every OpenTUI bump.
 
