@@ -14,6 +14,11 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **External Workflow Bundle** — a **Workflow Bundle** supplied outside Crucible's built-in set. It follows the same package and execution
   contract as a built-in Workflow Bundle.
 - **Bundle Asset** — a resource carried inside a **Workflow Bundle** and distributed with it.
+- **Proof Bundle** — the role held by a maintained **External Workflow Bundle** whose purpose is to keep Crucible's step vocabulary honest. It
+  lives outside the source tree, loads the way a user's own Bundle would, and is exercised in CI. It is not shipped in the catalog. The role
+  survives any particular occupant.
+- **Test Repair Workflow** — the first **Proof Bundle**. Given a path to a failing test, it drives that test to green through bounded **Step
+  Attempts**, then commits only after a **Human Gate** approves.
 - **Harness** — an external coding-agent runtime Crucible can select for workflow execution. Codex, Claude Code, and Gemini are the initial
   Harnesses; their capabilities need not be identical.
 - **Harness Adapter** — an Adapter at the Harness Seam that contains Harness-native control, event, and failure semantics behind a
