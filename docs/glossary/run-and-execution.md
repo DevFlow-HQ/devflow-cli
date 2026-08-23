@@ -4,7 +4,9 @@ This cluster defines legacy DevFlow terms for a Run and the Provider-driven exec
 
 ## Terms
 
-- **Run** — one DevFlow invocation and its run-scoped artifacts.
+- **Legacy Run** — one DevFlow invocation and its run-scoped artifacts. Superseded by the target **Run** in the
+  [Crucible Run lifecycle](./crucible-run-lifecycle.md) cluster, which is scoped to a **Workflow Bundle** and a **Workspace** rather than to a
+  CLI invocation.
 - **Issue** — a Provider-authored, independently-grabbable unit of work derived from the canonical PRD.
 - **Issue decomposition** — the stage that derives **Issues** from the canonical PRD.
 - **Blocked-by edge** — a dependency between sibling **Issues** that prevents one from starting until the other completes.
