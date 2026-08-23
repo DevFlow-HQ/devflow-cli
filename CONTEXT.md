@@ -9,11 +9,19 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 
 ### Target language
 
+- **Workspace** — the resolved absolute directory a **Run** executes against, supplied as a launch input. It is a value on the Run, not an entity
+  with its own identity. _Avoid_: Project.
+- **Run** — one execution of one **Workflow Bundle** against one **Workspace** through one **Harness**. See the
+  [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) cluster for everything inside a Run.
+- **Catalog Entry** — a record that a **Workflow Bundle** of a given id and version is available on this machine, carrying its origin: built-in, a
+  local path, or later a portal. Installing creates one; uninstalling removes it.
 - **Workflow Bundle** — one self-contained distributable workflow file, potentially an archive containing its manifest, definitions, prompts,
   skills, schemas, and **Bundle Assets**. Built-in and **External Workflow Bundles** use the same package and execution contract.
 - **External Workflow Bundle** — a **Workflow Bundle** supplied outside Crucible's built-in set. It follows the same package and execution
   contract as a built-in Workflow Bundle.
-- **Bundle Asset** — a resource carried inside a **Workflow Bundle** and distributed with it.
+- **Bundle Asset** — a resource carried inside a **Workflow Bundle** and distributed with it, carrying a declared **kind** that determines how
+  it reaches the **Harness**. Delivery is the **Harness Adapter**'s job, so a workflow author never needs to know where a Harness keeps its
+  skills. A Bundle Asset is not a **Run Artifact**: it has no producer and no place in a Run's bindings.
 - **Proof Bundle** — the role held by a maintained **External Workflow Bundle** whose purpose is to keep Crucible's step vocabulary honest. It
   lives outside the source tree, loads the way a user's own Bundle would, and is exercised in CI. It is not shipped in the catalog. The role
   survives any particular occupant.
@@ -29,6 +37,11 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **Renderer Port** — the Crucible-owned Interface around the terminal renderer, covering lifecycle only: size, key input, resize, and teardown.
   It exists so the whole shell lifecycle is exercisable against a fake with no terminal, and it carries the teardown ordering the legacy Windows
   console host requires. See [ADR 0018](./docs/adr/0018-adopt-opencode-presentation-as-pinned-reduced-vendor.md).
+
+### Target Crucible clusters
+
+- [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) — Runs, Steps, Step Attempts, Run Artifacts, Harness Sessions, Human Gates,
+  Harness Requests, and the Run states.
 
 ### Legacy Provider language
 
