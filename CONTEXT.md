@@ -19,6 +19,14 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   skills, schemas, and **Bundle Assets**. Built-in and **External Workflow Bundles** use the same package and execution contract.
 - **External Workflow Bundle** — a **Workflow Bundle** supplied outside Crucible's built-in set. It follows the same package and execution
   contract as a built-in Workflow Bundle.
+- **Routing** — the ordered arrangement of **Steps** a **Workflow Bundle** declares over Crucible's **step kinds**, with contiguous spans optionally
+  declared as **Repeat groups**. Strictly sequential: no branching, no parallelism, and no nested groups. A Bundle is runnable when its routing
+  composes — see **Composition check** in the [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) cluster.
+- **Step kind** — one of Crucible's built-in **Step** contracts, all satisfying one uniform Interface: what it requires, what it produces, which
+  **Harness Session** it needs, its preconditions, its capability needs, which attempt outcomes it may retry, and how an **Indeterminate attempt**
+  is reconciled. Crucible owns the set; a **Workflow Bundle** supplies content and parameters and never its own step implementation.
+- **Prompt slot** — a named placeholder in a **Workflow Bundle** prompt, filled from the **Run**'s bindings. Substitution only, with no conditionals
+  or loops. A **Harness Adapter** renders a `file` artifact's slot in that Harness's native reference syntax.
 - **Bundle Asset** — a resource carried inside a **Workflow Bundle** and distributed with it, carrying a declared **kind** that determines how
   it reaches the **Harness**. Delivery is the **Harness Adapter**'s job, so a workflow author never needs to know where a Harness keeps its
   skills. A Bundle Asset is not a **Run Artifact**: it has no producer and no place in a Run's bindings.

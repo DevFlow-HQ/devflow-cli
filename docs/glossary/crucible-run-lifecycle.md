@@ -9,33 +9,54 @@ vocabulary lives in the [index](../../CONTEXT.md); this cluster owns execution.
   history.
 - **Step** — one authored node in a **Workflow Bundle**'s routing, identified by an author-chosen name unique within its Bundle and opaque to
   Crucible.
-- **Iteration** — one logical occurrence of a repeated group of **Steps**. A numbered scope, not an entity.
+- **Agent step** — a **Step kind** running one autonomous **Harness** turn in a named **Harness Session**. It completes without the human, though
+  the human may **Steer** it at any time.
+- **Command step** — the deterministic non-agent **Step kind**. Its attempt succeeds if the command ran to an exit; the exit status becomes a
+  **Verdict** and the captured output a `text` **Run Artifact**. The attempt fails only when the command could not execute.
+- **Verdict** — a **Run Artifact** type holding `pass` or `fail`, produced from a deterministic **Step**'s exit status. The only thing a **Repeat
+  group** may read, and never produced by an agent's judgement.
+- **Iteration** — one logical occurrence of a **Repeat group**. A numbered scope, not an entity.
+- **Repeat group** — a contiguous span of **Steps** in a **Routing**, repeated until a named **Verdict** reads `pass`. The condition is evaluated
+  before every **Iteration** including the first, so a group whose verdict already passes runs zero times.
+- **Iteration checkpoint** — the **Human Gate** Crucible raises when a **Repeat group** has run its default interval of **Iterations** without its
+  **Verdict** passing. Continuing grants another interval; stopping ends the **Run** `failed`. No **Workflow Bundle** declares an iteration bound;
+  the interval is adjustable at launch.
 - **Step Attempt** — one execution of one **Step**, identified by its Step, **Iteration**, and attempt number. Retries and **Iterations** are
   bounded separately.
 - **Attempt outcome** — how a **Step Attempt** ended: `succeeded`, `failed`, `indeterminate`, or `cancelled`.
 - **Indeterminate attempt** — a **Step Attempt** Crucible started and never saw a result for. Distinct from a failure, because a step that died
-  after acting on the world must not be blindly retried.
+  after acting on the world must not be blindly retried. It never auto-retries: it halts the **Run**, and the human's resume is the authorization
+  to re-attempt.
+- **Reconciliation probe** — an optional check a **Step kind** declares, run before re-attempting an **Indeterminate attempt**, answering what the
+  interruption left open. It may be a **Command step** or an **Agent step**, and its **Verdict** is advisory: anything short of a clear answer
+  keeps the Run `halted` and asks the human.
 - **Launch input** — a value supplied when a **Run** is created, seeded into the Run's bindings like any other **Run Artifact**.
 - **Run Artifact** — a named, typed value in the routing's dataflow, produced by a **Step Attempt** and consumable by later **Steps**. Logically
   versioned: the name binds to the latest good version and superseded versions stay reachable.
-- **Artifact home** — where a **Run Artifact**'s bytes live. Crucible's own store by default; a declared path inside the **Workspace** when the
-  artifact genuinely belongs to the repository.
+- **Artifact home** — where a **Run Artifact**'s bytes live, declared by the producing **Step**. Crucible's own store by default; `workspace`
+  places it inside the **Workspace** at an optional Workspace-relative path, defaulting to the Workspace root. Consumers only ever name the
+  artifact, never its location.
 - **Workspace change** — any change inside the **Workspace** that is not a declared **Run Artifact**. Owned by the world and by Git, never by
   Crucible's artifact graph.
 - **Harness Session** — a named conversation with the selected **Harness**, owned by exactly one **Run** and never shared across Runs. The routing
   names the session each agent **Step** runs in; Crucible opens it on first use and reuses it after.
 - **Session availability** — whether a **Harness Session** is `open` (a next turn can be sent now), `detached` (not live, but holding a
   Harness-native id worth reattaching), or `unusable` (reattach failed).
-- **Human Gate** — a Crucible-owned pause carrying a Bundle-authored question. Its answer is a durable **Run Artifact**, so a **Run** can wait on
-  one indefinitely.
+- **Human Gate** — a Crucible-owned pause carrying a Bundle-authored question in one of its shapes: approve/reject, whose rejection ends the
+  **Run** `failed`, or free text. Its answer is a durable **Run Artifact**, so a Run can wait on one indefinitely.
 - **Harness Request** — a **Harness**-originated tool approval or clarification raised mid-turn. Ephemeral: it lives and dies with the live turn.
-- **Interactive agent step** — a **Step** whose **Harness Session** is handed to the human for turn-taking. Crucible relays turns and authors
-  nothing. The legacy grill is this shape.
+- **Interactive agent step** — a **Step kind** whose **Harness Session** is handed to the human for turn-taking; unlike an **Agent step** it cannot
+  complete without the human. Crucible relays turns and authors nothing, and the step ends when the human explicitly ends it through a
+  Crucible-owned control — never on an agent-emitted marker or a recognised phrase. The legacy grill is this shape.
 - **Steer** — injecting a turn into a live **Harness Session**. The **Step Attempt** keeps running and its state is untouched.
 - **Interrupt** — stopping the current **Step Attempt**, which ends `cancelled` and leaves the **Run** `halted` and re-attemptable.
 - **Cancel** — explicitly ending a **Run**. The only route to the terminal `cancelled` state.
-- **Preflight** — the precondition check performed before a **Run** exists: required **Launch inputs**, step preconditions such as "requires a Git
-  repository", and Harness capability requirements. A failed preflight creates no **Run**.
+- **Preflight** — the precondition check performed before a **Run** exists: the **Composition check**, presence of required **Launch inputs**, step
+  preconditions such as "requires a Git repository", and the union of the **Step kinds**' Harness capability needs. A failed preflight creates no
+  **Run**.
+- **Composition check** — the static check that a **Routing** composes: every required **Run Artifact** name is bound earlier by a producer or a
+  **Launch input** with a matching type, every **Prompt slot** names an artifact its **Step** requires, and every **Repeat group**'s **Verdict** is
+  bound before the group is entered. Runs at install and again at launch, since a **Run** pins a **Bundle Snapshot**.
 
 ## Run states
 
@@ -56,12 +77,20 @@ running it.
 ## Rules
 
 - Crucible orchestrates around the **Harness**, never inside it. The Harness owns its own questions, tool approvals, and turn mechanics.
+- Repetition and control read deterministic **Verdicts** about the world, never anything an agent says.
+- Crucible owns the **Step kinds**; a **Workflow Bundle** owns only content and parameters. New behaviour waits for a new Step kind.
+- Declared **Run Artifacts** are checked for existence and non-emptiness only. A repair is a retry in the same **Harness Session**, not a concept.
 - One live **Run** — `running` or `blocked` — per **Workspace**. A `halted` Run holds no claim, so Crucible does not promise its Workspace is
   unchanged when it resumes.
-- No **Step** is skippable. The routing advances only by a Step completing.
+- No **Step** is skippable. The **Routing** advances only by a Step completing, and no decision may jump over one. A **Repeat group** whose
+  **Verdict** already passes runs zero **Iterations**, which is a loop that did not run rather than a Step that was skipped.
 - **Bundle Assets** are not **Run Artifacts**: they have no producer, no per-attempt version, and no place in the bindings.
 
 ## Related decisions
 
 - [ADR 0019](../adr/0019-failed-and-halted-runs-are-resumable-resting-states.md) owns Run resumability and the reset-on-resume rule.
+- [ADR 0020](../adr/0020-deterministic-verdicts-and-human-checkpoints-terminate-repetition.md) owns how repetition terminates and why the legacy
+  agent-emitted marker is retired.
+- [Define the minimum generic Workflow capabilities](https://github.com/DevFlow-HQ/devflow-cli/issues/13) records the step vocabulary and the rules
+  by which a **Routing** composes.
 - [Define Crucible's product domain and lifecycle](https://github.com/DevFlow-HQ/devflow-cli/issues/4) records the full model and its rationale.
