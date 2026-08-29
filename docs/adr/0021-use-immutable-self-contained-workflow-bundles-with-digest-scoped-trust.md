@@ -1,0 +1,34 @@
+# Use Immutable Self-Contained Workflow Bundles With Digest-Scoped Local Trust
+
+A Crucible **Workflow Bundle** is one self-contained `.wfb` file: a constrained ZIP with a strict root `manifest.json`, every prompt, skill, schema,
+script, and resource needed to run, and no runtime dependency on its authoring directory or a remote content URL. Built-in, locally built, imported,
+and future portal Bundles all pass through the same non-executing validator, managed store, Catalog, and runtime. A local build combines packaging and
+atomic installation, while import exists for an already-built `.wfb`; both preserve their inputs. We chose JSON alone for v1 because one strict data
+model and mature schema tooling keep validation and canonical packaging unambiguous, while human-friendly YAML authoring can later compile to the
+same packaged manifest without changing the runtime contract.
+
+The immutable domain identity is `(bundle id, semantic version)`, while SHA-256 over the exact `.wfb` bytes is its integrity and content identity.
+First install wins: a repeat identity is discarded whether its bytes match or collide, so publishing different content under an existing version can
+never silently rewrite a machine's Catalog. The builder normalizes archive bytes for reproducibility, derives the minimum compatible engine range,
+and inserts a declared or build-host platform set; the installer independently verifies semantics and compatibility. The format has no universal
+size ceiling, but every consumer protects itself with locally configurable compressed-byte, expanded-byte, and entry-count budgets that Bundle
+content cannot relax.
+
+The manifest declares only workflow-authored data. Routing selects Crucible-owned Step kinds and supplies their artifact flow, Harness Session,
+retry override, and kind-specific parameters rather than copying Crucible's fixed capabilities or outcome rules into every Step. Static Bundle
+Assets and dynamic Run Artifacts are deliberately separate and explicitly referenced. Commands are structured PATH-resolved executable names,
+argument tokens, safe Workspace working directories, and environment additions; there is no implicit shell or executable path derived from a Bundle,
+Workspace, or artifact. This prevents accidental string interpolation and package-time execution, but it is not a sandbox: launched commands and
+Harnesses retain the current OS user's authority.
+
+Trust therefore lives outside the Bundle and is scoped to its digest. Crucible generates an **Execution summary** from the manifest for the selected
+platform and asks once before the first external execution; the local grant persists until revocation or uninstall, and any new digest asks again.
+Built-ins inherit the trust of the installed app release. A future portal signature may attest who supplied exact bytes, never that executing them is
+safe. Trust is rechecked before Run creation, resume, and Step boundaries, while revocation does not pretend it can retract authority from an already
+running process.
+
+A Run records its Bundle identity and digest as a **Bundle Snapshot**, not another permanent copy of the archive. Normal uninstall is refused only
+while a live (`running` or `blocked`) Run uses that exact Installed Bundle; resting (`halted` or `failed`) Runs do not retain it. Removal deletes only
+Crucible's managed bytes, Catalog Entry, and Trust grant, preserving external inputs and Run history. Such a resting Run can resume after the exact
+digest is reinstalled, while another version or colliding digest never substitutes. Forced removal must first interrupt and clean up live Runs or
+leave the Bundle untouched.

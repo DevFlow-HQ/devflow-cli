@@ -1,12 +1,12 @@
 # Crucible Run Lifecycle
 
-This cluster defines the target Crucible terms for a **Run** and everything that happens inside one. The **Workflow Bundle** side of the
-vocabulary lives in the [index](../../CONTEXT.md); this cluster owns execution.
+This cluster defines the target Crucible terms for a **Run** and everything that happens inside one. The package side lives in the
+[Workflow Bundle](./workflow-bundle.md) cluster; this cluster owns execution.
 
 ## Terms
 
-- **Bundle Snapshot** — the exact **Workflow Bundle** content one **Run** launched with, pinned so a later reinstall cannot rewrite that Run's
-  history.
+- **Bundle Snapshot** — the immutable **Bundle identity** and **Bundle digest** recorded by one **Run**. It pins exact content without duplicating
+  the Installed Bundle's bytes; resume therefore requires that exact digest to remain installed or be reinstalled.
 - **Step** — one authored node in a **Workflow Bundle**'s routing, identified by an author-chosen name unique within its Bundle and opaque to
   Crucible.
 - **Agent step** — a **Step kind** running one autonomous **Harness** turn in a named **Harness Session**. It completes without the human, though
@@ -54,9 +54,9 @@ vocabulary lives in the [index](../../CONTEXT.md); this cluster owns execution.
 - **Preflight** — the precondition check performed before a **Run** exists: the **Composition check**, presence of required **Launch inputs**, step
   preconditions such as "requires a Git repository", and the union of the **Step kinds**' Harness capability needs. A failed preflight creates no
   **Run**.
-- **Composition check** — the static check that a **Routing** composes: every required **Run Artifact** name is bound earlier by a producer or a
-  **Launch input** with a matching type, every **Prompt slot** names an artifact its **Step** requires, and every **Repeat group**'s **Verdict** is
-  bound before the group is entered. Runs at install and again at launch, since a **Run** pins a **Bundle Snapshot**.
+- **Composition check** — the static check that a **Routing** composes: every required **Run Artifact** is bound earlier with a matching type, each
+  Bundle Asset, Prompt slot, and schema reference resolves correctly, each supported platform has a valid invocation, and every **Repeat group**'s
+  **Verdict** is bound before entry. Runs at install and again at launch, since a **Run** pins a **Bundle Snapshot**.
 
 ## Run states
 
@@ -74,20 +74,26 @@ A **Run** pins its **Workspace**, **Bundle Snapshot**, **Harness**, default mode
 `blocked` is derived from the current **Step Attempt** rather than stored, as is the interrupted condition of a Run marked live with no process
 running it.
 
+`running` and `blocked` are live states. `halted` and `failed` are resting, resumable states. `succeeded` and `cancelled` are terminal states.
+
 ## Rules
 
 - Crucible orchestrates around the **Harness**, never inside it. The Harness owns its own questions, tool approvals, and turn mechanics.
 - Repetition and control read deterministic **Verdicts** about the world, never anything an agent says.
 - Crucible owns the **Step kinds**; a **Workflow Bundle** owns only content and parameters. New behaviour waits for a new Step kind.
-- Declared **Run Artifacts** are checked for existence and non-emptiness only. A repair is a retry in the same **Harness Session**, not a concept.
+- Declared **Run Artifacts** receive their type's native validation. A `file` launch input or produced artifact may additionally opt into bundled
+  JSON Schema validation; other content is not interpreted. A repair is a retry in the same **Harness Session**, not a concept.
 - One live **Run** — `running` or `blocked` — per **Workspace**. A `halted` Run holds no claim, so Crucible does not promise its Workspace is
   unchanged when it resumes.
 - No **Step** is skippable. The **Routing** advances only by a Step completing, and no decision may jump over one. A **Repeat group** whose
   **Verdict** already passes runs zero **Iterations**, which is a loop that did not run rather than a Step that was skipped.
 - **Bundle Assets** are not **Run Artifacts**: they have no producer, no per-attempt version, and no place in the bindings.
+- Uninstalling an Installed Bundle preserves its Runs' Bundle Snapshots and history but not duplicate Bundle bytes. A resting Run resumes only when
+  its exact Bundle digest is installed.
 
 ## Related decisions
 
+- [Workflow Bundle](./workflow-bundle.md) owns the package, installation, trust, and removal contract that a Bundle Snapshot refers to.
 - [ADR 0019](../adr/0019-failed-and-halted-runs-are-resumable-resting-states.md) owns Run resumability and the reset-on-resume rule.
 - [ADR 0020](../adr/0020-deterministic-verdicts-and-human-checkpoints-terminate-repetition.md) owns how repetition terminates and why the legacy
   agent-emitted marker is retired.

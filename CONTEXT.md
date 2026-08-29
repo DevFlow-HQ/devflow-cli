@@ -13,10 +13,10 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   with its own identity. _Avoid_: Project.
 - **Run** — one execution of one **Workflow Bundle** against one **Workspace** through one **Harness**. See the
   [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) cluster for everything inside a Run.
-- **Catalog Entry** — a record that a **Workflow Bundle** of a given id and version is available on this machine, carrying its origin: built-in, a
-  local path, or later a portal. Installing creates one; uninstalling removes it.
-- **Workflow Bundle** — one self-contained distributable workflow file, potentially an archive containing its manifest, definitions, prompts,
-  skills, schemas, and **Bundle Assets**. Built-in and **External Workflow Bundles** use the same package and execution contract.
+- **Catalog Entry** — the local record that one exact **Workflow Bundle** identity and digest is installed, plus its advisory **Bundle origin**.
+  Installing creates one; uninstalling removes it with Crucible's managed Bundle bytes.
+- **Workflow Bundle** — one self-contained `.wfb` workflow file: a constrained ZIP archive whose root `manifest.json` declares its workflow and
+  every **Bundle Asset** it carries. Built-in and **External Workflow Bundles** use the same package and execution contract.
 - **External Workflow Bundle** — a **Workflow Bundle** supplied outside Crucible's built-in set. It follows the same package and execution
   contract as a built-in Workflow Bundle.
 - **Routing** — the ordered arrangement of **Steps** a **Workflow Bundle** declares over Crucible's **step kinds**, with contiguous spans optionally
@@ -25,11 +25,10 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **Step kind** — one of Crucible's built-in **Step** contracts, all satisfying one uniform Interface: what it requires, what it produces, which
   **Harness Session** it needs, its preconditions, its capability needs, which attempt outcomes it may retry, and how an **Indeterminate attempt**
   is reconciled. Crucible owns the set; a **Workflow Bundle** supplies content and parameters and never its own step implementation.
-- **Prompt slot** — a named placeholder in a **Workflow Bundle** prompt, filled from the **Run**'s bindings. Substitution only, with no conditionals
-  or loops. A **Harness Adapter** renders a `file` artifact's slot in that Harness's native reference syntax.
-- **Bundle Asset** — a resource carried inside a **Workflow Bundle** and distributed with it, carrying a declared **kind** that determines how
-  it reaches the **Harness**. Delivery is the **Harness Adapter**'s job, so a workflow author never needs to know where a Harness keeps its
-  skills. A Bundle Asset is not a **Run Artifact**: it has no producer and no place in a Run's bindings.
+- **Prompt slot** — an artifact placeholder of the form `{{artifact:name}}` in a **Workflow Bundle** prompt, filled from the **Run**'s bindings.
+  It is substitution only, with no conditionals, loops, includes, or expressions; a **Harness Adapter** renders a `file` artifact natively.
+- **Bundle Asset** — static, read-only content carried inside a **Workflow Bundle**, identified by its relative path and declared kind. It has no
+  producer, no per-attempt version, and no place in a Run's bindings; a **Harness Adapter** decides how referenced assets reach its Harness.
 - **Proof Bundle** — the role held by a maintained **External Workflow Bundle** whose purpose is to keep Crucible's step vocabulary honest. It
   lives outside the source tree, loads the way a user's own Bundle would, and is exercised in CI. It is not shipped in the catalog. The role
   survives any particular occupant.
@@ -48,6 +47,7 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 
 ### Target Crucible clusters
 
+- [Workflow Bundle](./docs/glossary/workflow-bundle.md) — Bundle identity, packaging, manifests, assets, installation, trust, and removal.
 - [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) — Runs, Steps, Step Attempts, Run Artifacts, Harness Sessions, Human Gates,
   Harness Requests, and the Run states.
 
