@@ -38,6 +38,9 @@ This cluster defines the target Crucible terms for a **Run** and everything that
   artifact, never its location.
 - **Workspace change** — any change inside the **Workspace** that is not a declared **Run Artifact**. Owned by the world and by Git, never by
   Crucible's artifact graph.
+- **Workspace prerequisite** — one of Crucible's closed semantic predicates that an authored **Step** may add and **Preflight** evaluates. V1 has
+  only `git-worktree-root`: Git must be runnable and the resolved Workspace must equal the root of a non-bare Git worktree. Linked and unborn
+  worktrees qualify. It does not declare or discover tools that a script or **Harness** might invoke.
 - **Harness Session** — a named conversation with the selected **Harness**, owned by exactly one **Run** and never shared across Runs. The routing
   names the session each agent **Step** runs in; Crucible opens it on first use and reuses it after.
 - **Session availability** — whether a **Harness Session** is `open` (a next turn can be sent now), `detached` (not live, but holding a
@@ -51,9 +54,9 @@ This cluster defines the target Crucible terms for a **Run** and everything that
 - **Steer** — injecting a turn into a live **Harness Session**. The **Step Attempt** keeps running and its state is untouched.
 - **Interrupt** — stopping the current **Step Attempt**, which ends `cancelled` and leaves the **Run** `halted` and re-attemptable.
 - **Cancel** — explicitly ending a **Run**. The only route to the terminal `cancelled` state.
-- **Preflight** — the precondition check performed before a **Run** exists: the **Composition check**, presence of required **Launch inputs**, step
-  preconditions such as "requires a Git repository", and the union of the **Step kinds**' Harness capability needs. A failed preflight creates no
-  **Run**.
+- **Preflight** — the precondition check performed before a **Run** exists: the **Composition check**, presence of required **Launch inputs**, the
+  union of authored **Workspace prerequisites**, intrinsic **Step kind** preconditions and Harness capability needs, and resolution of each selected
+  **Command step** executable through `PATH`. A failed preflight creates no **Run**.
 - **Composition check** — the static check that a **Routing** composes: every required **Run Artifact** is bound earlier with a matching type, each
   Bundle Asset, Prompt slot, and schema reference resolves correctly, each supported platform has a valid invocation, and every **Repeat group**'s
   **Verdict** is bound before entry. Runs at install and again at launch, since a **Run** pins a **Bundle Snapshot**.
@@ -80,7 +83,11 @@ running it.
 
 - Crucible orchestrates around the **Harness**, never inside it. The Harness owns its own questions, tool approvals, and turn mechanics.
 - Repetition and control read deterministic **Verdicts** about the world, never anything an agent says.
-- Crucible owns the **Step kinds**; a **Workflow Bundle** owns only content and parameters. New behaviour waits for a new Step kind.
+- Crucible owns the **Step kinds**; a **Workflow Bundle** owns content, parameters, and optional **Workspace prerequisites**. Behaviour that an
+  ordinary Command can express does not earn another Step kind; other new behaviour waits for a new Crucible-owned kind.
+- Git has no Step kind and no public Crucible Module. A Bundle obtains Git data or mutations through explicit **Command steps**, while a **Harness**
+  may use Git under its own instructions and permissions. Crucible neither injects Git observations nor gives Git-specific authorization,
+  ground-truth tracking, or reconciliation; `git-worktree-root` is only a private Preflight probe.
 - Declared **Run Artifacts** receive their type's native validation. A `file` launch input or produced artifact may additionally opt into bundled
   JSON Schema validation; other content is not interpreted. A repair is a retry in the same **Harness Session**, not a concept.
 - One live **Run** — `running` or `blocked` — per **Workspace**. A `halted` Run holds no claim, so Crucible does not promise its Workspace is
@@ -99,4 +106,6 @@ running it.
   agent-emitted marker is retired.
 - [Define the minimum generic Workflow capabilities](https://github.com/DevFlow-HQ/devflow-cli/issues/13) records the step vocabulary and the rules
   by which a **Routing** composes.
+- [Decide which Git operations Crucible performs for a Workflow and where they sit in the routing](https://github.com/DevFlow-HQ/devflow-cli/issues/14)
+  records why Git uses Command and Harness behaviour rather than a dedicated Step kind or public Module, and introduces **Workspace prerequisite**.
 - [Define Crucible's product domain and lifecycle](https://github.com/DevFlow-HQ/devflow-cli/issues/4) records the full model and its rationale.

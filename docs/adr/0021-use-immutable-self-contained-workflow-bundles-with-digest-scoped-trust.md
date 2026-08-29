@@ -15,17 +15,23 @@ size ceiling, but every consumer protects itself with locally configurable compr
 content cannot relax.
 
 The manifest declares only workflow-authored data. Routing selects Crucible-owned Step kinds and supplies their artifact flow, Harness Session,
-retry override, and kind-specific parameters rather than copying Crucible's fixed capabilities or outcome rules into every Step. Static Bundle
-Assets and dynamic Run Artifacts are deliberately separate and explicitly referenced. Commands are structured PATH-resolved executable names,
-argument tokens, safe Workspace working directories, and environment additions; there is no implicit shell or executable path derived from a Bundle,
-Workspace, or artifact. This prevents accidental string interpolation and package-time execution, but it is not a sandbox: launched commands and
-Harnesses retain the current OS user's authority.
+retry override, kind-specific parameters, and optional members of Crucible's closed **Workspace prerequisite** set rather than copying each kind's
+fixed capabilities or outcome rules into every Step. Static Bundle Assets and dynamic Run Artifacts are deliberately separate and explicitly
+referenced. Commands are structured PATH-resolved executable names, argument tokens, safe Workspace working directories, and environment additions;
+there is no implicit shell or executable path derived from a Bundle, Workspace, or artifact. Preflight resolves the direct executable, while tools a
+script invokes transitively remain opaque runtime dependencies. This prevents accidental string interpolation and package-time execution, but it is
+not a sandbox: launched commands and Harnesses retain the current OS user's authority.
 
 Trust therefore lives outside the Bundle and is scoped to its digest. Crucible generates an **Execution summary** from the manifest for the selected
 platform and asks once before the first external execution; the local grant persists until revocation or uninstall, and any new digest asks again.
 Built-ins inherit the trust of the installed app release. A future portal signature may attest who supplied exact bytes, never that executing them is
 safe. Trust is rechecked before Run creation, resume, and Step boundaries, while revocation does not pretend it can retract authority from an already
 running process.
+
+A later refinement, [Decide which Git operations Crucible performs for a Workflow and where they sit in the routing](https://github.com/DevFlow-HQ/devflow-cli/issues/14),
+removed the provisional Git Step family and any separate Git-write authority. Git reads and mutations use ordinary Commands or Harness behaviour;
+the only Crucible-owned Git behaviour is the private probe implementing the authored `git-worktree-root` Workspace prerequisite. This keeps the
+manifest honest about what it can know: it exposes direct commands and scripts but does not claim to infer their transitive tools or effects.
 
 A Run records its Bundle identity and digest as a **Bundle Snapshot**, not another permanent copy of the archive. Normal uninstall is refused only
 while a live (`running` or `blocked`) Run uses that exact Installed Bundle; resting (`halted` or `failed`) Runs do not retain it. Removal deletes only

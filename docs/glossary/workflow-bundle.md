@@ -53,7 +53,8 @@ what integrity and trust mean before execution.
   ordinary failed Step Attempt. Schema composition is checked at install and launch.
 - `routing` is an ordered array of Steps and contiguous Repeat groups. Repeat groups cannot nest. A Step declares only author data: a unique id,
   Crucible-owned kind, required and produced artifacts, Harness Session selection when applicable, an optional retry override, and kind-specific
-  parameters. It never repeats the kind's Crucible-owned capabilities, preconditions, outcomes, reconciliation, or other fixed contract.
+  parameters, plus optional members of Crucible's closed **Workspace prerequisite** set. It never repeats the kind's intrinsic capabilities,
+  preconditions, outcomes, reconciliation, or other fixed contract.
 - The Composition check also proves that every non-manifest archive entry belongs to exactly one declared asset in non-overlapping asset trees,
   every asset and artifact reference resolves with the right kind or type, every Prompt slot names a required artifact, every schema use is valid,
   and every supported platform resolves one valid command invocation.
@@ -70,8 +71,8 @@ what integrity and trust mean before execution.
   directory, and literal or artifact-derived environment additions. Arguments are literals, Run Artifact references, or Bundle Asset references;
   there is no implicit shell interpolation and an executable cannot come from an absolute path, Workspace path, or artifact.
 - A Bundle may supply per-platform command parameter overrides, but not Routing branches. Running an explicit PATH interpreter such as `bash`,
-  `node`, or `python` with a script asset is valid. Preflight resolves the selected executable; v1 declares no separate dependencies or executable
-  version constraints.
+  `node`, or `python` with a script asset is valid. Preflight resolves only the selected executable; tools invoked transitively by a script remain
+  runtime dependencies whose absence produces ordinary Command results. V1 declares no separate dependency list or executable version constraints.
 - Commands run as the current OS user. Crucible promises no command sandbox: commands and Harness actions may access the user's files, environment,
   network, and Workspace within the authority of that user.
 
@@ -86,8 +87,9 @@ what integrity and trust mean before execution.
   the local Trust grant persists until revoked or uninstalled. A new digest asks again. Built-ins inherit app-release trust, while future external
   signatures or attestations may establish provenance and integrity but never safety.
 - The summary identifies the Bundle, digest, origin, platforms, Step-kind counts, selected commands, working directories, environment variable
-  names, scripts, and Git-write authority, and warns that Harness actions cannot be predicted statically. Trust is checked before a new Run, resume,
-  and Step boundary; revocation blocks the next boundary but does not kill a process already running.
+  names, and scripts, and warns that Commands and Harness actions run with the current user's authority and cannot have all their effects predicted
+  statically. There is no separate Git-write authority. Trust is checked before a new Run, resume, and Step boundary; revocation blocks the next
+  boundary but does not kill a process already running.
 - A Run's Bundle Snapshot records the exact Bundle identity and digest without duplicating `.wfb` bytes. Normal uninstall refuses only while a
   `running` or `blocked` Run uses that exact Installed Bundle. `halted` and `failed` Runs do not prevent removal; their resume fails until the exact
   digest is reinstalled, and another version or digest never substitutes.
@@ -101,3 +103,5 @@ what integrity and trust mean before execution.
   authority, and local trust form one boundary.
 - [Define the self-contained Workflow Bundle contract and trust model](https://github.com/DevFlow-HQ/devflow-cli/issues/9) records the complete v1
   contract and alternatives resolved during grilling.
+- [Decide which Git operations Crucible performs for a Workflow and where they sit in the routing](https://github.com/DevFlow-HQ/devflow-cli/issues/14)
+  adds authored **Workspace prerequisites** while keeping command-tool dependencies and Git effects outside static Bundle inference.

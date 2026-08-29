@@ -22,9 +22,13 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **Routing** — the ordered arrangement of **Steps** a **Workflow Bundle** declares over Crucible's **step kinds**, with contiguous spans optionally
   declared as **Repeat groups**. Strictly sequential: no branching, no parallelism, and no nested groups. A Bundle is runnable when its routing
   composes — see **Composition check** in the [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) cluster.
-- **Step kind** — one of Crucible's built-in **Step** contracts, all satisfying one uniform Interface: what it requires, what it produces, which
-  **Harness Session** it needs, its preconditions, its capability needs, which attempt outcomes it may retry, and how an **Indeterminate attempt**
-  is reconciled. Crucible owns the set; a **Workflow Bundle** supplies content and parameters and never its own step implementation.
+- **Step kind** — one of Crucible's four built-in **Step** contracts: **Agent step**, **Interactive agent step**, **Human Gate**, or **Command step**.
+  All satisfy one uniform Interface: what the kind intrinsically requires, what it produces, which **Harness Session** it needs, its intrinsic
+  preconditions, its capability needs, which attempt outcomes it may retry, and how an **Indeterminate attempt** is reconciled. Crucible owns the
+  set; a **Workflow Bundle** supplies content, parameters, and optional **Workspace prerequisites**, never its own step implementation.
+- **Workspace prerequisite** — one of Crucible's closed semantic facts about a **Workspace** that an authored **Step** may require and **Preflight**
+  checks before creating a **Run**. V1 has one: `git-worktree-root`, meaning Git is runnable and the Workspace is exactly the root of a non-bare Git
+  worktree; linked and unborn worktrees qualify. It is not an inventory of executables a script or **Harness** might invoke.
 - **Prompt slot** — an artifact placeholder of the form `{{artifact:name}}` in a **Workflow Bundle** prompt, filled from the **Run**'s bindings.
   It is substitution only, with no conditionals, loops, includes, or expressions; a **Harness Adapter** renders a `file` artifact natively.
 - **Bundle Asset** — static, read-only content carried inside a **Workflow Bundle**, identified by its relative path and declared kind. It has no
@@ -33,7 +37,8 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   lives outside the source tree, loads the way a user's own Bundle would, and is exercised in CI. It is not shipped in the catalog. The role
   survives any particular occupant.
 - **Test Repair Workflow** — the first **Proof Bundle**. Given a path to a failing test, it drives that test to green through bounded **Step
-  Attempts**, then commits only after a **Human Gate** approves.
+  Attempts**, instructs its fixing Agent not to commit, then routes an ordinary **Command step** to commit after a **Human Gate** approves. The
+  ordering is a Bundle contract, not a Git invariant Crucible enforces around the **Harness**.
 - **Harness** — an external coding-agent runtime Crucible can select for workflow execution. Codex, Claude Code, and Gemini are the initial
   Harnesses; their capabilities need not be identical.
 - **Harness Adapter** — an Adapter at the Harness Seam that contains Harness-native control, event, and failure semantics behind a
