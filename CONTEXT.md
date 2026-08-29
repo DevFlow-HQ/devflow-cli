@@ -53,8 +53,8 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 ### Target Crucible clusters
 
 - [Workflow Bundle](./docs/glossary/workflow-bundle.md) — Bundle identity, packaging, manifests, assets, installation, trust, and removal.
-- [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) — Runs, Steps, Step Attempts, Run Artifacts, Harness Sessions, Human Gates,
-  Harness Requests, and the Run states.
+- [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) — Runs, Steps, Step Attempts, Turns, Run Artifacts, Harness Sessions, Human
+  Gates, Harness Requests, and the Run states.
 
 ### Legacy Provider language
 

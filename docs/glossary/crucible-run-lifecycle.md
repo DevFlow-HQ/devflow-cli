@@ -9,8 +9,8 @@ This cluster defines the target Crucible terms for a **Run** and everything that
   the Installed Bundle's bytes; resume therefore requires that exact digest to remain installed or be reinstalled.
 - **Step** — one authored node in a **Workflow Bundle**'s routing, identified by an author-chosen name unique within its Bundle and opaque to
   Crucible.
-- **Agent step** — a **Step kind** running one autonomous **Harness** turn in a named **Harness Session**. It completes without the human, though
-  the human may **Steer** it at any time.
+- **Agent step** — a **Step kind** running one autonomous **Turn** in a named **Harness Session**. It completes without the human, though the human
+  may **Steer** it while that Turn is live when the selected Harness supports native Steer.
 - **Command step** — the deterministic non-agent **Step kind**. Its attempt succeeds if the command ran to an exit; the exit status becomes a
   **Verdict** and the captured output a `text` **Run Artifact**. The attempt fails only when the command could not execute.
 - **Verdict** — a **Run Artifact** type holding `pass` or `fail`, produced from a deterministic **Step**'s exit status. The only thing a **Repeat
@@ -43,16 +43,22 @@ This cluster defines the target Crucible terms for a **Run** and everything that
   worktrees qualify. It does not declare or discover tools that a script or **Harness** might invoke.
 - **Harness Session** — a named conversation with the selected **Harness**, owned by exactly one **Run** and never shared across Runs. The routing
   names the session each agent **Step** runs in; Crucible opens it on first use and reuses it after.
-- **Session availability** — whether a **Harness Session** is `open` (a next turn can be sent now), `detached` (not live, but holding a
-  Harness-native id worth reattaching), or `unusable` (reattach failed).
+- **Turn** — one mechanical user-to-**Harness** exchange inside a **Harness Session**: submitted input, model and tool activity, streamed progress,
+  and the Harness's authoritative turn boundary. It is neither a Session nor a judgement that the **Step** reached its goal. An **Agent step** has
+  one Turn per attempt; an **Interactive agent step** may have many.
+- **Session availability** — whether a **Harness Session** is `open` (a next Turn can be sent now), `detached` (not live, but holding a native
+  recovery coordinate worth reattaching), or `unusable` (native evidence authoritatively says recovery cannot continue).
 - **Human Gate** — a Crucible-owned pause carrying a Bundle-authored question in one of its shapes: approve/reject, whose rejection ends the
   **Run** `failed`, or free text. Its answer is a durable **Run Artifact**, so a Run can wait on one indefinitely.
-- **Harness Request** — a **Harness**-originated tool approval or clarification raised mid-turn. Ephemeral: it lives and dies with the live turn.
+- **Harness Request** — an ephemeral **Harness**-originated request raised during a **Turn**: either a tool approval with exact offered decisions
+  or a structured clarification with an exact answer shape. It lives and dies with the Turn; an ordinary assistant question that ends a Turn is
+  answered in the next Turn instead.
 - **Interactive agent step** — a **Step kind** whose **Harness Session** is handed to the human for turn-taking; unlike an **Agent step** it cannot
   complete without the human. Crucible relays turns and authors nothing, and the step ends when the human explicitly ends it through a
   Crucible-owned control — never on an agent-emitted marker or a recognised phrase. The legacy grill is this shape.
-- **Steer** — injecting a turn into a live **Harness Session**. The **Step Attempt** keeps running and its state is untouched.
-- **Interrupt** — stopping the current **Step Attempt**, which ends `cancelled` and leaves the **Run** `halted` and re-attemptable.
+- **Steer** — sending native same-Turn guidance while a **Turn** is live. It is not a new Turn, and unsupported Harnesses do not emulate it.
+- **Interrupt** — asking the **Harness** to stop the current live **Turn**, including its native tool work. Confirmation ends the **Step Attempt**
+  `cancelled` and leaves the **Run** `halted` and re-attemptable; it does not close the Harness or cancel the Run.
 - **Cancel** — explicitly ending a **Run**. The only route to the terminal `cancelled` state.
 - **Preflight** — the precondition check performed before a **Run** exists: the **Composition check**, presence of required **Launch inputs**, the
   union of authored **Workspace prerequisites**, intrinsic **Step kind** preconditions and Harness capability needs, and resolution of each selected
