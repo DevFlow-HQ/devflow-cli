@@ -43,9 +43,20 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   Harnesses; their capabilities need not be identical.
 - **Harness Adapter** — an Adapter at the Harness Seam that contains Harness-native control, event, and failure semantics behind a
   Crucible-owned Interface.
-- **Projection Port** — the Crucible-owned Interface above the TUI's state layer. Crucible pushes a normalized snapshot and incremental events
-  down to the view components; commands travel back up. It is an in-memory Interface, not a wire protocol, so process topology stays a separate
-  decision. Harness selection sits above it, and changing the Harness remounts the session subtree.
+- **Projection Port** — the single Crucible-owned application Interface shared by TUI and headless callers. It opens bounded **Projections**,
+  admits user intent as **Operations**, and reads content through **Resource References** without exposing workflow-runtime, persistence, Adapter,
+  or Harness-native objects. It is an in-memory Interface rather than a wire protocol; see [ADR 0024](./docs/adr/0024-use-one-deep-projection-port-for-tui-and-headless-clients.md).
+- **Projection** — a disposable bounded task view over canonical Crucible truth, optionally combined with an explicitly separate live Harness
+  overlay. It carries current **Action Offers** and can be rebuilt without preserving cache, database, or storage identity. _Avoid_: Entity mirror,
+  screen model.
+- **Action Offer** — a typed, state-bound opportunity projected for one exact semantic target, including the input it accepts and evidence when it
+  is unavailable. It tells a client what may be submitted now without making projection presence itself authoritative. _Avoid_: Generic command,
+  capability flag.
+- **Operation** — Crucible's durable admission and application/control result for one user intent, correlated by a caller-generated id. It does
+  not imply that arbitrary Command or Harness effects execute exactly once or that the resulting Run work has completed. _Avoid_: Step Attempt,
+  Harness Turn.
+- **Resource Reference** — an opaque typed reference to bounded history, immutable or retained content, a file-set manifest, or an export readable
+  through the Projection Port. It never exposes internal storage identity or a Harness-native recovery coordinate. _Avoid_: File path, database id.
 - **Renderer Port** — the Crucible-owned Interface around the terminal renderer, covering lifecycle only: size, key input, resize, and teardown.
   It exists so the whole shell lifecycle is exercisable against a fake with no terminal, and it carries the teardown ordering the legacy Windows
   console host requires. See [ADR 0018](./docs/adr/0018-adopt-opencode-presentation-as-pinned-reduced-vendor.md).
