@@ -33,9 +33,18 @@ This cluster defines the target Crucible terms for a **Run** and everything that
 - **Launch input** — a value supplied when a **Run** is created, seeded into the Run's bindings like any other **Run Artifact**.
 - **Run Artifact** — a named, typed value in the routing's dataflow, produced by a **Step Attempt** and consumable by later **Steps**. Logically
   versioned: the name binds to the latest good version and superseded versions stay reachable.
-- **Artifact home** — where a **Run Artifact**'s bytes live, declared by the producing **Step**. Crucible's own store by default; `workspace`
-  places it inside the **Workspace** at an optional Workspace-relative path, defaulting to the Workspace root. Consumers only ever name the
-  artifact, never its location.
+- **Candidate output** — a value, file, or file set a producer has written for a declared output but Crucible has not yet validated and published.
+  It is not a **Run Artifact** and cannot move a binding.
+- **Artifact publication** — the all-or-nothing Run fact that one successful **Step Attempt** produced a validated set of immutable **Run
+  Artifact** versions and moved their current bindings. _Avoid_: File copy, Agent publication.
+- **Workspace materialization** — an optional usable copy of one canonical **Run Artifact** version at a declared Workspace-relative path. The
+  producing Step's `home: workspace` declaration requests this copy; it never makes the Workspace path canonical, and consumers still name the
+  artifact rather than its location. _Avoid_: Workspace-home Artifact, canonical Workspace copy.
+- **Materialization conflict** — the condition in which a required **Workspace materialization** is missing or differs from its canonical Artifact
+  version. Crucible preserves both truths and halts rather than silently restoring or adopting either one.
+- **Run Store** — the durable collection owned by exactly one **Run**, containing its structured truth, immutable Artifact history, publication
+  staging, and separately retained diagnostics. Explicit Run deletion removes it as one lifecycle unit.
+- **Run owner** — the one Crucible runtime process or task currently fenced and authorized to advance a **Run**. It is not the Harness process.
 - **Workspace change** — any change inside the **Workspace** that is not a declared **Run Artifact**. Owned by the world and by Git, never by
   Crucible's artifact graph.
 - **Workspace prerequisite** — one of Crucible's closed semantic predicates that an authored **Step** may add and **Preflight** evaluates. V1 has
@@ -96,6 +105,12 @@ running it.
   ground-truth tracking, or reconciliation; `git-worktree-root` is only a private Preflight probe.
 - Declared **Run Artifacts** receive their type's native validation. A `file` launch input or produced artifact may additionally opt into bundled
   JSON Schema validation; other content is not interpreted. A repair is a retry in the same **Harness Session**, not a concept.
+- A producer creates **Candidate output**; Crucible alone performs **Artifact publication**. Every output of one **Step Attempt** publishes together
+  or none does, and failed, cancelled, or **Indeterminate attempts** leave previous bindings current.
+- Every published Artifact version has canonical Run-owned content. `home: workspace` requests a **Workspace materialization**, never an alternative
+  source of truth. A changed or missing materialization is a **Materialization conflict**, not a new Artifact version.
+- Run-owned canonical truth and Artifact versions remain until explicit Run deletion. Detailed diagnostics are separate and expire after 90 days by
+  default; exactly reproducible caches may be collected earlier.
 - One live **Run** — `running` or `blocked` — per **Workspace**. A `halted` Run holds no claim, so Crucible does not promise its Workspace is
   unchanged when it resumes.
 - No **Step** is skippable. The **Routing** advances only by a Step completing, and no decision may jump over one. A **Repeat group** whose
@@ -110,8 +125,12 @@ running it.
 - [ADR 0019](../adr/0019-failed-and-halted-runs-are-resumable-resting-states.md) owns Run resumability and the reset-on-resume rule.
 - [ADR 0020](../adr/0020-deterministic-verdicts-and-human-checkpoints-terminate-repetition.md) owns how repetition terminates and why the legacy
   agent-emitted marker is retired.
+- [ADR 0023](../adr/0023-own-durable-run-truth-in-isolated-run-stores.md) owns durable Run truth, Artifact publication, Workspace materialization,
+  retention, and recovery storage.
 - [Define the minimum generic Workflow capabilities](https://github.com/DevFlow-HQ/devflow-cli/issues/13) records the step vocabulary and the rules
   by which a **Routing** composes.
 - [Decide which Git operations Crucible performs for a Workflow and where they sit in the routing](https://github.com/DevFlow-HQ/devflow-cli/issues/14)
   records why Git uses Command and Harness behaviour rather than a dedicated Step kind or public Module, and introduces **Workspace prerequisite**.
 - [Define Crucible's product domain and lifecycle](https://github.com/DevFlow-HQ/devflow-cli/issues/4) records the full model and its rationale.
+- [Define durable Run truth, outputs, Artifacts, transcripts, and recovery](https://github.com/DevFlow-HQ/devflow-cli/issues/16) records the complete
+  persistence and recovery contract.
