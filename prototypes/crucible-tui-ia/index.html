@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Crucible TUI IA Prototype</title>
+    <style>
+      /*
+       * PROTOTYPE: Three variants of Crucible's launch and Run information architecture,
+       * switchable via ?variant=, as a static throwaway artifact.
+       *
+       * Question: Which rough TUI information architecture makes launch, current Run work,
+       * recovery, Harness output, gates, requests, and resources understandable while keeping
+       * orchestration behind the Projection Port?
+       *
+       * Accept if one variant, or a clear hybrid, exposes the durable/live/action/resource
+       * distinctions without needing a rich Workspace browser or fake actions.
+       */
+      :root {
+        color-scheme: dark;
+        --bg: #101214;
+        --panel: #171b1f;
+        --panel-2: #20262b;
+        --panel-3: #252118;
+        --ink: #f2efe7;
+        --muted: #a9b0b7;
+        --line: #3a4148;
+        --green: #8fbf88;
+        --blue: #83b7d8;
+        --gold: #d7b56d;
+        --red: #d67d78;
+        --violet: #c09bd8;
+        --cyan: #78c6c8;
+        --shadow: 0 18px 46px rgba(0, 0, 0, 0.36);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", monospace;
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 45%),
+          radial-gradient(
+            circle at 10% 0%,
+            rgba(120, 198, 200, 0.12),
+            transparent 30rem
+          ),
+          var(--bg);
+      }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--ink);
+        background: var(--panel-2);
+        font: inherit;
+        padding: 0.45rem 0.65rem;
+      }
+
+      button.primary {
+        border-color: #b08e49;
+        background: #423620;
+      }
+
+      button.danger {
+        border-color: #8b4c49;
+        background: #402221;
+      }
+
+      button[disabled] {
+        color: #737a81;
+        background: #16191c;
+      }
+
+      .screen {
+        min-height: 100vh;
+        padding: 1rem 1rem 5.5rem;
+      }
+
+      .topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 2.25rem;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+      }
+
+      .brand {
+        color: var(--ink);
+        font-weight: 700;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 0.15rem 0.5rem;
+        white-space: nowrap;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .status {
+        color: var(--ink);
+      }
+
+      .status::before {
+        content: attr(data-symbol);
+        display: inline-block;
+        width: 1.2rem;
+        color: var(--status-color, var(--ink));
+      }
+
+      .ok {
+        --status-color: var(--green);
+      }
+
+      .warn {
+        --status-color: var(--gold);
+      }
+
+      .info {
+        --status-color: var(--blue);
+      }
+
+      .bad {
+        --status-color: var(--red);
+      }
+
+      .grid {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .panel {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(23, 27, 31, 0.92);
+      }
+
+      .panel h2,
+      .panel h3 {
+        margin: 0;
+        padding: 0.7rem 0.8rem;
+        border-bottom: 1px solid var(--line);
+        font-size: 0.9rem;
+        color: #f6e6b2;
+      }
+
+      .panel-body {
+        padding: 0.8rem;
+      }
+
+      .list {
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 0.65rem;
+        align-items: start;
+        min-height: 2rem;
+        padding: 0.45rem 0;
+        border-bottom: 1px solid rgba(58, 65, 72, 0.55);
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .row strong {
+        color: var(--ink);
+      }
+
+      .cols {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+      }
+
+      .mini {
+        border: 1px solid rgba(58, 65, 72, 0.7);
+        border-radius: 6px;
+        padding: 0.55rem;
+        background: rgba(255, 255, 255, 0.025);
+      }
+
+      .mini b {
+        display: block;
+        margin-bottom: 0.3rem;
+        color: #f2d78c;
+      }
+
+      .mono-lines {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .line {
+        display: grid;
+        grid-template-columns: 5.2rem 1fr;
+        gap: 0.6rem;
+        min-width: 0;
+      }
+
+      .line span:last-child,
+      .row > div {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .kbdbar {
+        position: fixed;
+        left: 50%;
+        bottom: 1rem;
+        z-index: 20;
+        display: grid;
+        grid-template-columns: 2.4rem minmax(12rem, 1fr) 2.4rem;
+        align-items: center;
+        gap: 0.45rem;
+        width: min(28rem, calc(100vw - 2rem));
+        border: 1px solid #58616a;
+        border-radius: 999px;
+        padding: 0.45rem;
+        background: rgba(10, 12, 14, 0.95);
+        box-shadow: var(--shadow);
+        transform: translateX(-50%);
+      }
+
+      .kbdbar button {
+        border-radius: 999px;
+        padding: 0.4rem;
+      }
+
+      .kbdbar .label {
+        text-align: center;
+        color: var(--ink);
+        overflow-wrap: anywhere;
+      }
+
+      .state-dump {
+        white-space: pre-wrap;
+        color: #ccd2d8;
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
+      .variant-a .layout {
+        grid-template-columns: minmax(15rem, 21rem) minmax(24rem, 1fr) minmax(
+            18rem,
+            25rem
+          );
+        margin-top: 1rem;
+      }
+
+      .variant-a .launch-flow {
+        display: grid;
+        gap: 0.7rem;
+      }
+
+      .variant-b .layout {
+        grid-template-columns: minmax(13rem, 17rem) minmax(26rem, 1fr) minmax(
+            18rem,
+            23rem
+          );
+        margin-top: 1rem;
+      }
+
+      .variant-b .timeline {
+        min-height: 32rem;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .timeline-scroll {
+        flex: 1;
+        overflow: auto;
+        padding: 0.75rem;
+      }
+
+      .entry {
+        display: grid;
+        grid-template-columns: 7.8rem 1fr;
+        gap: 0.7rem;
+        padding: 0.55rem 0;
+        border-bottom: 1px solid rgba(58, 65, 72, 0.5);
+      }
+
+      .entry .kind {
+        color: var(--cyan);
+      }
+
+      .entry .durable {
+        color: var(--gold);
+      }
+
+      .entry .live {
+        color: var(--violet);
+      }
+
+      .compose {
+        border-top: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 0.5rem;
+        padding: 0.6rem;
+      }
+
+      .compose input {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.5rem;
+        color: var(--ink);
+        background: #111417;
+        font: inherit;
+      }
+
+      .variant-c .layout {
+        grid-template-columns: minmax(12rem, 16rem) minmax(20rem, 27rem) minmax(
+            24rem,
+            1fr
+          );
+        margin-top: 1rem;
+      }
+
+      .nav button {
+        width: 100%;
+        margin-bottom: 0.45rem;
+        text-align: left;
+      }
+
+      .diagram {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.55rem;
+      }
+
+      .diagram .mini {
+        min-height: 6.5rem;
+      }
+
+      @media (max-width: 1050px) {
+        .variant-a .layout,
+        .variant-b .layout,
+        .variant-c .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .diagram,
+        .cols {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section id="fallback" class="screen">
+      <div class="topline">
+        <div>
+          <span class="brand">Crucible</span>
+          <span class="muted">TUI IA prototype</span>
+        </div>
+        <div class="tag">Loading</div>
+      </div>
+      <section class="panel" style="margin-top: 1rem">
+        <h2>Prototype failed to render</h2>
+        <div class="panel-body">
+          If this message stays visible, the browser could not run the prototype
+          script. The artifact is a static file; try a current Chrome, Safari,
+          Firefox, or Edge.
+        </div>
+      </section>
+    </section>
+    <main id="app"></main>
+
+    <script>
+      const variants = {
+        A: {
+          name: "Launch Cockpit",
+          thesis:
+            "Start from the temporary launch draft, then push the user into the exact Run projection after admission.",
+        },
+        B: {
+          name: "Run Workbench",
+          thesis:
+            "Make the normal post-submit experience the Run timeline, with control-plane operations kept small and peripheral.",
+        },
+        C: {
+          name: "Catalog Inspector",
+          thesis:
+            "Use one stable inspector shell for Bundle, Harness, launch, and Run focus so headless projections map cleanly to TUI views.",
+        },
+      };
+
+      const sample = {
+        workspace: "/Users/rohan/src/example-service",
+        bundle: "io.devflow.test-repair@1.0.0",
+        digest: "sha256:48e8...b91c",
+        harness: "Codex",
+        requestedModel: "gpt-5-codex",
+        effectiveModel: "gpt-5-codex",
+        run: "run_01JCRUCIBLE",
+        state: "blocked",
+        step: "approve-fix",
+        attempt: "approve-fix / iteration 2 / attempt 1",
+        projectionState: {
+          opened: "run",
+          durableCursor: "run:01JCRUCIBLE:000184",
+          liveGeneration: "turn:main:7",
+          actionOffers: [
+            "answer-human-gate",
+            "send-interactive-turn",
+            "steer-turn",
+            "interrupt-turn unavailable: harness does not support mid-turn interrupt",
+          ],
+          resources: [
+            "older-session-page",
+            "artifact-index",
+            "diagnostic-index",
+            "workspace-materialization-details",
+          ],
+        },
+      };
+
+      function currentVariantKey() {
+        const key = new URLSearchParams(location.search).get("variant") || "A";
+        return variants[key] ? key : "A";
+      }
+
+      function setVariant(next) {
+        const params = new URLSearchParams(location.search);
+        params.set("variant", next);
+        history.replaceState(
+          null,
+          "",
+          `${location.pathname}?${params.toString()}`,
+        );
+        render();
+      }
+
+      function cycle(offset) {
+        const keys = Object.keys(variants);
+        const current = keys.indexOf(currentVariantKey());
+        const next = keys[(current + offset + keys.length) % keys.length];
+        setVariant(next);
+      }
+
+      function status(symbol, cls, label) {
+        return `<span class="status ${cls}" data-symbol="${symbol}">${label}</span>`;
+      }
+
+      function row(left, main, right = "") {
+        return `<div class="row"><span class="muted">${left}</span><div>${main}</div><span>${right}</span></div>`;
+      }
+
+      function topLine(key) {
+        return `
+          <div class="topline">
+            <div><span class="brand">Crucible</span> <span class="muted">TUI IA prototype</span></div>
+            <div class="tag">${key} ${variants[key].name}</div>
+          </div>
+        `;
+      }
+
+      function stateDump(key) {
+        return `<section class="panel">
+          <h2>Projected state visible in this variant</h2>
+          <div class="panel-body state-dump">${JSON.stringify(
+            {
+              variant: `${key} ${variants[key].name}`,
+              designThesis: variants[key].thesis,
+              sample,
+            },
+            null,
+            2,
+          )}</div>
+        </section>`;
+      }
+
+      function switcher(key) {
+        return `<nav class="kbdbar" aria-label="Prototype variant switcher">
+          <button type="button" title="Previous variant" aria-label="Previous variant" data-dir="-1">&larr;</button>
+          <div class="label">${key} (${variants[key].name})</div>
+          <button type="button" title="Next variant" aria-label="Next variant" data-dir="1">&rarr;</button>
+        </nav>`;
+      }
+
+      function variantA() {
+        return `
+          <section class="screen variant-a">
+            ${topLine("A")}
+            <div class="grid layout">
+              <section class="panel">
+                <h2>Bundle and Workspace</h2>
+                <div class="panel-body launch-flow">
+                  <div class="mini"><b>Installed Bundle</b>${sample.bundle}<br /><span class="muted">${sample.digest}</span></div>
+                  <div class="mini"><b>Workspace</b>${sample.workspace}<br /><span class="muted">explicit path, no rich browser</span></div>
+                  <div class="mini"><b>Trust</b>${status("*", "warn", "external digest needs approval")}<br /><span class="muted">summary before launch, grant tied to digest</span></div>
+                  <button class="primary">Grant trust for this digest</button>
+                  <button disabled>Launch Run - unavailable until trust replacement</button>
+                </div>
+              </section>
+
+              <section class="panel">
+                <h2>Launch Preparation Projection</h2>
+                <div class="panel-body">
+                  <div class="cols">
+                    <div class="mini"><b>Composition</b>${status("+", "ok", "routing composes")}<br />5 steps, 1 repeat group, verdict <code>test-result</code> bound.</div>
+                    <div class="mini"><b>Preflight</b>${status("+", "ok", "git-worktree-root present")}<br />Command executable <code>npm</code> resolves on PATH.</div>
+                    <div class="mini"><b>Harness</b>${status("+", "ok", "Codex qualified")}<br />Requested/effective model truth can be shown after launch.</div>
+                    <div class="mini"><b>Iteration Checkpoint</b>${status("?", "info", "interval 3")}<br />Human controls problem-size continuation, not Bundle author.</div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel">
+                <h2>What happens after submit</h2>
+                <div class="panel-body list">
+                  ${row("submit", "grant-bundle-trust admitted", status("*", "warn", "Operation pending"))}
+                  ${row("result", "trust grant applied to exact digest", status("+", "ok", "Applied"))}
+                  ${row("replace", "launch-preparation reopens ready", status(">", "info", "Launch offered"))}
+                  ${row("submit", "launch-run admitted", status(">", "info", "Run opens"))}
+                  ${row("normal", "user lands in exact Run timeline, not operation screen", status("+", "ok", "Durable/live split"))}
+                </div>
+              </section>
+              ${stateDump("A")}
+            </div>
+            ${switcher("A")}
+          </section>
+        `;
+      }
+
+      function variantB() {
+        return `
+          <section class="screen variant-b">
+            ${topLine("B")}
+            <div class="grid layout">
+              <section class="panel">
+                <h2>Runs</h2>
+                <div class="panel-body list">
+                  ${row("active", `<strong>${sample.run}</strong><br />${sample.bundle}<br /><span class="muted">${sample.workspace}</span>`, status("!", "warn", "Blocked"))}
+                  ${row("resting", "run_01JCPREV<br />same Workspace", status(">", "info", "Resumable"))}
+                  ${row("done", "run_01JCPASS<br />Test Repair", status("+", "ok", "Succeeded"))}
+                </div>
+              </section>
+
+              <section class="panel timeline">
+                <h2>Run Timeline</h2>
+                <div class="timeline-scroll">
+                  <div class="entry"><span class="kind durable">older page</span><div>${status("^", "info", "Load previous session page")} preserves scroll anchor and prepends stable entries.</div></div>
+                  <div class="entry"><span class="kind durable">durable</span><div>Baseline command produced verdict <code>fail</code> and text artifact <code>test-output</code>.</div></div>
+                  <div class="entry"><span class="kind durable">durable</span><div>Agent attempt completed with effective model ${sample.effectiveModel}.</div></div>
+                  <div class="entry"><span class="kind live">live</span><div>Harness request expired with Turn 7; shown as historical evidence, not answerable.</div></div>
+                  <div class="entry"><span class="kind durable">gate</span><div>${status("!", "warn", "Human Gate pending")} Approve generated patch? Answer becomes Run Artifact <code>approval</code>.</div></div>
+                  <div class="entry"><span class="kind live">preview</span><div>Current replaceable preview: assistant is summarizing changed files.</div></div>
+                </div>
+                <div class="compose">
+                  <input aria-label="Interactive turn input" value="Ask the agent to explain the test failure..." />
+                  <button>Send turn</button>
+                  <button>End step</button>
+                </div>
+              </section>
+
+              <section class="panel">
+                <h2>Current Offers</h2>
+                <div class="panel-body list">
+                  ${row("durable", "answer-human-gate", `<button class="primary">Answer</button>`)}
+                  ${row("live", "send-interactive-turn", `<button>Send</button>`)}
+                  ${row("live", "steer-turn", `<button>Steer</button>`)}
+                  ${row("unavailable", "interrupt-turn", status("x", "bad", "Codex session cannot interrupt mid-turn"))}
+                  ${row("resource", "Artifacts, transcript export, diagnostics", `<button>Inspect</button>`)}
+                  ${row("operation", "Last submission: applied", status("+", "ok", "Receipt only"))}
+                </div>
+              </section>
+              ${stateDump("B")}
+            </div>
+            ${switcher("B")}
+          </section>
+        `;
+      }
+
+      function variantC() {
+        return `
+          <section class="screen variant-c">
+            ${topLine("C")}
+            <div class="grid layout">
+              <section class="panel nav">
+                <h2>Projection Families</h2>
+                <div class="panel-body">
+                  <button>Bundle catalog</button>
+                  <button>Harness catalog</button>
+                  <button class="primary">Launch preparation</button>
+                  <button>Run list</button>
+                  <button>Exact Run</button>
+                  <button>Operation</button>
+                </div>
+              </section>
+
+              <section class="panel">
+                <h2>Focused Inspector</h2>
+                <div class="panel-body list">
+                  ${row("focus", `<strong>${sample.bundle}</strong><br />highest stable installed version`, status("+", "ok", "Compatible"))}
+                  ${row("origin", "local file: ~/Downloads/test-repair.wfb", "")}
+                  ${row("routing", "command -> repeat(agent, command) -> human gate -> command", "")}
+                  ${row("trust", "not trusted for digest", status("*", "warn", "Grant offer shown"))}
+                  ${row("harness", `${sample.harness}; requested ${sample.requestedModel}`, status("+", "ok", "Qualified"))}
+                  ${row("workspace", sample.workspace, status("+", "ok", "Preflight passes"))}
+                </div>
+              </section>
+
+              <section class="panel">
+                <h2>Projection Port Shape</h2>
+                <div class="panel-body">
+                  <div class="diagram">
+                    <div class="mini"><b>Durable Snapshot</b>Run state, pending Human Gate, artifacts, recovery evidence, available actions.</div>
+                    <div class="mini"><b>Live Overlay</b>Turn phase, Harness Requests, current activity, usage, replaceable preview.</div>
+                    <div class="mini"><b>Resources</b>Older pages, transcript export, artifact bytes, file sets, diagnostics.</div>
+                    <div class="mini"><b>Action Offers</b>Only exact offered commands. Unavailable reasons shown when relevant.</div>
+                    <div class="mini"><b>Operation</b>Admission/result receipt. Not the main progress surface.</div>
+                    <div class="mini"><b>Headless Parity</b>Same semantic families; no TUI-only state reducers.</div>
+                  </div>
+                </div>
+              </section>
+              ${stateDump("C")}
+            </div>
+            ${switcher("C")}
+          </section>
+        `;
+      }
+
+      function render() {
+        const key = currentVariantKey();
+        const app = document.getElementById("app");
+        const fallback = document.getElementById("fallback");
+        if (fallback) fallback.style.display = "none";
+        app.innerHTML =
+          key === "A" ? variantA() : key === "B" ? variantB() : variantC();
+        document.querySelectorAll("[data-dir]").forEach((button) => {
+          button.addEventListener("click", () =>
+            cycle(Number(button.dataset.dir)),
+          );
+        });
+      }
+
+      document.addEventListener("keydown", (event) => {
+        const target = event.target;
+        const tag =
+          target && target.tagName ? target.tagName.toLowerCase() : "";
+        const isEditable = target && target.isContentEditable;
+        if (tag === "input" || tag === "textarea" || isEditable) return;
+        if (event.key === "ArrowLeft") cycle(-1);
+        if (event.key === "ArrowRight") cycle(1);
+      });
+
+      render();
+    </script>
+  </body>
+</html>
