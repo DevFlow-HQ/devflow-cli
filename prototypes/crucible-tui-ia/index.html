@@ -264,6 +264,56 @@
         line-height: 1.45;
       }
 
+      .home {
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .home-main {
+        display: grid;
+        place-content: center;
+        min-height: calc(100vh - 8rem);
+        text-align: center;
+      }
+
+      .workspace-name {
+        margin: 0;
+        font-size: 2.25rem;
+        font-weight: 700;
+      }
+
+      .workspace-path {
+        margin: 0.55rem 0 2.25rem;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+
+      .home-actions {
+        display: grid;
+        gap: 0.5rem;
+        width: min(25rem, calc(100vw - 2rem));
+      }
+
+      .home-actions button {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 3rem;
+        padding: 0.65rem 0.8rem;
+        text-align: left;
+      }
+
+      .home-actions button::after {
+        content: ">";
+        color: var(--muted);
+      }
+
+      .home-summary {
+        margin: 1.15rem 0 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+
       .variant-a .layout {
         grid-template-columns: minmax(15rem, 21rem) minmax(24rem, 1fr) minmax(
             18rem,
@@ -395,6 +445,11 @@
 
     <script>
       const variants = {
+        H: {
+          name: "Workspace Home",
+          thesis:
+            "Start with one Workspace and a small set of real paths, then reveal detail only after the user chooses a task.",
+        },
         A: {
           name: "Launch Cockpit",
           thesis:
@@ -443,8 +498,8 @@
       };
 
       function currentVariantKey() {
-        const key = new URLSearchParams(location.search).get("variant") || "A";
-        return variants[key] ? key : "A";
+        const key = new URLSearchParams(location.search).get("variant") || "H";
+        return variants[key] ? key : "H";
       }
 
       function setVariant(next) {
@@ -503,6 +558,28 @@
           <div class="label">${key} (${variants[key].name})</div>
           <button type="button" title="Next variant" aria-label="Next variant" data-dir="1">&rarr;</button>
         </nav>`;
+      }
+
+      function workspaceHome() {
+        return `
+          <section class="screen home">
+            ${topLine("H")}
+            <main class="home-main">
+              <div>
+                <h1 class="workspace-name">example-service</h1>
+                <p class="workspace-path">${sample.workspace}</p>
+                <nav class="home-actions" aria-label="Workspace actions">
+                  <button type="button" class="primary" data-view="A">Start a Run</button>
+                  <button type="button" data-view="C">Workflow Bundles</button>
+                  <button type="button" data-view="B">Previous Runs</button>
+                  <button type="button" data-view="C">Harnesses</button>
+                </nav>
+                <p class="home-summary">4 Workflow Bundles · 3 previous Runs · ${sample.harness} qualified</p>
+              </div>
+            </main>
+            ${switcher("H")}
+          </section>
+        `;
       }
 
       function variantA() {
@@ -654,10 +731,21 @@
         const fallback = document.getElementById("fallback");
         if (fallback) fallback.style.display = "none";
         app.innerHTML =
-          key === "A" ? variantA() : key === "B" ? variantB() : variantC();
+          key === "H"
+            ? workspaceHome()
+            : key === "A"
+              ? variantA()
+              : key === "B"
+                ? variantB()
+                : variantC();
         document.querySelectorAll("[data-dir]").forEach((button) => {
           button.addEventListener("click", () =>
             cycle(Number(button.dataset.dir)),
+          );
+        });
+        document.querySelectorAll("[data-view]").forEach((button) => {
+          button.addEventListener("click", () =>
+            setVariant(button.dataset.view),
           );
         });
       }
