@@ -975,12 +975,12 @@
           <div class="launch-content launch-content-narrow">
             <div class="form-fields">
               <div class="field">
-                <label for="general-instructions">General instructions</label>
+                <label for="general-instructions">General instructions (required)</label>
                 <textarea id="general-instructions" data-general-instructions placeholder="Describe the outcome, concerns, constraints, and relevant file locations.">${launchDraft.generalInstructions}</textarea>
               </div>
             </div>
             <div class="launch-actions">
-              <button type="button" class="primary" data-launch-next="review">Review Run</button>
+              <button type="button" class="primary" data-launch-next="review" ${launchDraft.generalInstructions.trim() ? "" : "disabled"}>Review Run</button>
             </div>
           </div>`;
       }
@@ -993,7 +993,7 @@
           ? `<div class="trust-confirmation">${status("+", "ok", "Trust already granted for this exact Bundle digest")}</div>`
           : `<label class="trust-confirmation">
               <input type="checkbox" data-trust-confirmation ${launchDraft.trustApproved ? "checked" : ""} />
-              <span>I trust ${bundle.name} ${bundle.version} with digest ${bundle.digest}.</span>
+              <span>I trust ${bundle.name} ${bundle.version} after reviewing what it can execute.</span>
             </label>`;
         const canStart = isTrusted || launchDraft.trustApproved;
 
@@ -1180,12 +1180,18 @@
           });
         }
 
+        const generalInstructions = document.querySelector(
+          "[data-general-instructions]",
+        );
         const nextButton = document.querySelector("[data-launch-next]");
+        if (generalInstructions && nextButton) {
+          generalInstructions.addEventListener("input", () => {
+            launchDraft.generalInstructions = generalInstructions.value;
+            nextButton.disabled = !generalInstructions.value.trim();
+          });
+        }
         if (nextButton) {
           nextButton.addEventListener("click", () => {
-            const generalInstructions = document.querySelector(
-              "[data-general-instructions]",
-            );
             if (generalInstructions) {
               launchDraft.generalInstructions = generalInstructions.value;
             }
