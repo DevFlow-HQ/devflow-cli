@@ -314,17 +314,134 @@
         font-size: 0.86rem;
       }
 
-      .variant-a .layout {
-        grid-template-columns: minmax(15rem, 21rem) minmax(24rem, 1fr) minmax(
-            18rem,
-            25rem
-          );
-        margin-top: 1rem;
+      .launch-shell {
+        width: min(66rem, 100%);
+        margin: 0 auto;
       }
 
-      .variant-a .launch-flow {
+      .launch-heading {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 0.8rem;
+        align-items: center;
+        min-height: 4rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .launch-heading h1 {
+        margin: 0;
+        font-size: 1.15rem;
+      }
+
+      .launch-content {
+        padding-top: 2rem;
+      }
+
+      .launch-content-narrow {
+        width: min(40rem, 100%);
+        margin: 0 auto;
+      }
+
+      .choice-list {
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      .choice-button {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 1rem;
+        width: 100%;
+        min-height: 4rem;
+        padding: 0.7rem 0.8rem;
+        text-align: left;
+      }
+
+      .choice-button strong,
+      .choice-button small {
+        display: block;
+      }
+
+      .choice-button small {
+        margin-top: 0.25rem;
+        color: var(--muted);
+      }
+
+      .choice-button .choice-meta {
+        align-self: center;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .harness-layout {
+        display: grid;
+        grid-template-columns: minmax(18rem, 1fr) minmax(20rem, 0.85fr);
+        gap: 1rem;
+        align-items: start;
+      }
+
+      .harness-layout.single {
+        grid-template-columns: minmax(18rem, 40rem);
+      }
+
+      .configuration-panel {
+        min-height: 20rem;
+      }
+
+      .form-fields {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .field {
+        display: grid;
+        gap: 0.4rem;
+      }
+
+      .field label {
+        color: var(--muted);
+      }
+
+      .field input,
+      .field select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.6rem;
+        color: var(--ink);
+        background: #111417;
+        font: inherit;
+      }
+
+      .launch-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        margin-top: 1.25rem;
+      }
+
+      .review-list {
         display: grid;
         gap: 0.7rem;
+      }
+
+      .review-item {
+        display: grid;
+        grid-template-columns: 9rem 1fr;
+        gap: 1rem;
+        padding-bottom: 0.7rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .trust-confirmation {
+        display: flex;
+        gap: 0.65rem;
+        align-items: flex-start;
+        margin-top: 1.25rem;
+        padding: 0.8rem;
+        border: 1px solid #7c6434;
+        border-radius: 6px;
+        background: #2c261a;
       }
 
       .variant-b .layout {
@@ -417,7 +534,8 @@
         }
 
         .diagram,
-        .cols {
+        .cols,
+        .harness-layout {
           grid-template-columns: 1fr;
         }
       }
@@ -451,9 +569,9 @@
             "Start with one Workspace and a small set of real paths, then reveal detail only after the user chooses a task.",
         },
         A: {
-          name: "Launch Cockpit",
+          name: "Progressive Launch",
           thesis:
-            "Start from the temporary launch draft, then push the user into the exact Run projection after admission.",
+            "Ask for one launch decision at a time, then show trust and preflight evidence only at final review.",
         },
         B: {
           name: "Run Workbench",
@@ -497,6 +615,71 @@
         },
       };
 
+      const workflowBundles = [
+        {
+          name: "Test Repair",
+          identity: "io.devflow.test-repair@1.0.0",
+          description:
+            "Drive one failing test to green, then ask for approval.",
+          lastUsed: "Used 2 hours ago",
+          inputLabel: "Failing test path",
+          inputValue: "tests/auth.test.ts",
+        },
+        {
+          name: "Git Diff Review",
+          identity: "io.devflow.diff-review@1.1.0",
+          description: "Review the current Git diff and confirm the findings.",
+          lastUsed: "Used yesterday",
+          inputLabel: "Review focus",
+          inputValue: "Review the current changes",
+        },
+        {
+          name: "Issue to Pull Request",
+          identity: "io.devflow.issue-to-pr@2.0.0",
+          description:
+            "Turn a prepared issue into an implementation and pull request.",
+          lastUsed: "Used 6 days ago",
+          inputLabel: "Issue URL",
+          inputValue: "https://github.com/example/repo/issues/42",
+        },
+        {
+          name: "Dependency Upgrade",
+          identity: "io.devflow.dependency-upgrade@1.0.0",
+          description: "Upgrade one dependency and verify the Workspace.",
+          lastUsed: "Never used",
+          inputLabel: "Dependency name",
+          inputValue: "typescript",
+        },
+      ];
+
+      const harnesses = [
+        {
+          name: "Codex",
+          detail: "Qualified · session recovery available",
+          models: ["gpt-5-codex", "gpt-5"],
+        },
+        {
+          name: "Claude Code",
+          detail: "Qualified · interactive requests available",
+          models: ["claude-opus-4-1", "claude-sonnet-4"],
+        },
+        {
+          name: "Gemini",
+          detail: "Qualified · interrupt unavailable",
+          models: ["gemini-2.5-pro", "gemini-2.5-flash"],
+        },
+      ];
+
+      const launchDraft = {
+        step: "bundle",
+        bundleIndex: null,
+        harnessIndex: null,
+        model: "",
+        inputValue: "",
+        checkpointInterval: 3,
+        trustApproved: false,
+      };
+
       function currentVariantKey() {
         const key = new URLSearchParams(location.search).get("variant") || "H";
         return variants[key] ? key : "H";
@@ -511,6 +694,21 @@
           `${location.pathname}?${params.toString()}`,
         );
         render();
+      }
+
+      function resetLaunchDraft() {
+        launchDraft.step = "bundle";
+        launchDraft.bundleIndex = null;
+        launchDraft.harnessIndex = null;
+        launchDraft.model = "";
+        launchDraft.inputValue = "";
+        launchDraft.checkpointInterval = 3;
+        launchDraft.trustApproved = false;
+      }
+
+      function openView(next) {
+        if (next === "A") resetLaunchDraft();
+        setVariant(next);
       }
 
       function cycle(offset) {
@@ -582,49 +780,159 @@
         `;
       }
 
-      function variantA() {
-        return `
-          <section class="screen variant-a">
-            ${topLine("A")}
-            <div class="grid layout">
-              <section class="panel">
-                <h2>Bundle and Workspace</h2>
-                <div class="panel-body launch-flow">
-                  <div class="mini"><b>Installed Bundle</b>${sample.bundle}<br /><span class="muted">${sample.digest}</span></div>
-                  <div class="mini"><b>Workspace</b>${sample.workspace}<br /><span class="muted">explicit path, no rich browser</span></div>
-                  <div class="mini"><b>Trust</b>${status("*", "warn", "external digest needs approval")}<br /><span class="muted">summary before launch, grant tied to digest</span></div>
-                  <button class="primary">Grant trust for this digest</button>
-                  <button disabled>Launch Run - unavailable until trust replacement</button>
-                </div>
-              </section>
+      function launchHeading(title, stepNumber) {
+        const previousSteps = {
+          bundle: "home",
+          harness: "bundle",
+          inputs: "harness",
+          review: "inputs",
+        };
+        const previousStep = previousSteps[launchDraft.step];
 
-              <section class="panel">
-                <h2>Launch Preparation Projection</h2>
-                <div class="panel-body">
-                  <div class="cols">
-                    <div class="mini"><b>Composition</b>${status("+", "ok", "routing composes")}<br />5 steps, 1 repeat group, verdict <code>test-result</code> bound.</div>
-                    <div class="mini"><b>Preflight</b>${status("+", "ok", "git-worktree-root present")}<br />Command executable <code>npm</code> resolves on PATH.</div>
-                    <div class="mini"><b>Harness</b>${status("+", "ok", "Codex qualified")}<br />Requested/effective model truth can be shown after launch.</div>
-                    <div class="mini"><b>Iteration Checkpoint</b>${status("?", "info", "interval 3")}<br />Human controls problem-size continuation, not Bundle author.</div>
-                  </div>
-                </div>
-              </section>
+        return `<header class="launch-heading">
+          <button type="button" aria-label="Back" title="Back" data-launch-back="${previousStep}">&larr;</button>
+          <h1>${title}</h1>
+          <span class="tag">${stepNumber} of 4</span>
+        </header>`;
+      }
 
-              <section class="panel">
-                <h2>What happens after submit</h2>
-                <div class="panel-body list">
-                  ${row("submit", "grant-bundle-trust admitted", status("*", "warn", "Operation pending"))}
-                  ${row("result", "trust grant applied to exact digest", status("+", "ok", "Applied"))}
-                  ${row("replace", "launch-preparation reopens ready", status(">", "info", "Launch offered"))}
-                  ${row("submit", "launch-run admitted", status(">", "info", "Run opens"))}
-                  ${row("normal", "user lands in exact Run timeline, not operation screen", status("+", "ok", "Durable/live split"))}
-                </div>
-              </section>
-              ${stateDump("A")}
+      function workflowBundleChoices() {
+        return workflowBundles
+          .map(
+            (bundle, index) => `
+              <button type="button" class="choice-button" data-bundle-index="${index}">
+                <span>
+                  <strong>${bundle.name}</strong>
+                  <small>${bundle.description}</small>
+                </span>
+                <span class="choice-meta">${bundle.lastUsed} &gt;</span>
+              </button>`,
+          )
+          .join("");
+      }
+
+      function launchBundleStep() {
+        return `${launchHeading("Choose a Workflow Bundle", 1)}
+          <div class="launch-content launch-content-narrow">
+            <div class="choice-list">${workflowBundleChoices()}</div>
+          </div>`;
+      }
+
+      function harnessChoices() {
+        return harnesses
+          .map(
+            (harness, index) => `
+              <button type="button" class="choice-button" data-harness-index="${index}" aria-pressed="${launchDraft.harnessIndex === index}">
+                <span>
+                  <strong>${harness.name}</strong>
+                  <small>${harness.detail}</small>
+                </span>
+                <span class="choice-meta">${launchDraft.harnessIndex === index ? "Selected" : ">"}</span>
+              </button>`,
+          )
+          .join("");
+      }
+
+      function harnessConfiguration() {
+        if (launchDraft.harnessIndex === null) return "";
+
+        const harness = harnesses[launchDraft.harnessIndex];
+        const modelOptions = harness.models
+          .map(
+            (model) =>
+              `<option value="${model}" ${launchDraft.model === model ? "selected" : ""}>${model}</option>`,
+          )
+          .join("");
+
+        return `<aside class="panel configuration-panel">
+          <h2>Configure ${harness.name}</h2>
+          <div class="panel-body form-fields">
+            <div class="field">
+              <label for="launch-model">Model</label>
+              <select id="launch-model" data-launch-model>${modelOptions}</select>
             </div>
-            ${switcher("A")}
-          </section>
-        `;
+            <div class="mini">
+              <b>Session continuity</b>
+              ${harness.detail}
+            </div>
+            <div class="launch-actions">
+              <button type="button" class="primary" data-launch-next="inputs">Continue</button>
+            </div>
+          </div>
+        </aside>`;
+      }
+
+      function launchHarnessStep() {
+        const layoutClass =
+          launchDraft.harnessIndex === null
+            ? "harness-layout single"
+            : "harness-layout";
+
+        return `${launchHeading("Choose a Harness", 2)}
+          <div class="launch-content ${layoutClass}">
+            <div class="choice-list">${harnessChoices()}</div>
+            ${harnessConfiguration()}
+          </div>`;
+      }
+
+      function launchInputsStep() {
+        const bundle = workflowBundles[launchDraft.bundleIndex];
+
+        return `${launchHeading("Provide Run inputs", 3)}
+          <div class="launch-content launch-content-narrow">
+            <div class="form-fields">
+              <div class="field">
+                <label for="workflow-input">${bundle.inputLabel}</label>
+                <input id="workflow-input" data-workflow-input value="${launchDraft.inputValue}" />
+              </div>
+              <div class="field">
+                <label for="checkpoint-interval">Ask before continuing after this many iterations</label>
+                <input id="checkpoint-interval" data-checkpoint-interval type="number" min="1" value="${launchDraft.checkpointInterval}" />
+              </div>
+            </div>
+            <div class="launch-actions">
+              <button type="button" class="primary" data-launch-next="review">Review Run</button>
+            </div>
+          </div>`;
+      }
+
+      function launchReviewStep() {
+        const bundle = workflowBundles[launchDraft.bundleIndex];
+        const harness = harnesses[launchDraft.harnessIndex];
+
+        return `${launchHeading("Review and start", 4)}
+          <div class="launch-content launch-content-narrow">
+            <div class="review-list">
+              <div class="review-item"><span class="muted">Workflow</span><strong>${bundle.name}</strong></div>
+              <div class="review-item"><span class="muted">Workspace</span><span>${sample.workspace}</span></div>
+              <div class="review-item"><span class="muted">Harness</span><span>${harness.name} · ${launchDraft.model}</span></div>
+              <div class="review-item"><span class="muted">${bundle.inputLabel}</span><span>${launchDraft.inputValue}</span></div>
+              <div class="review-item"><span class="muted">Checkpoint</span><span>Every ${launchDraft.checkpointInterval} iterations</span></div>
+              <div class="review-item"><span class="muted">Preflight</span><span>${status("+", "ok", "Composition, Workspace, commands, and Harness are ready")}</span></div>
+            </div>
+            <label class="trust-confirmation">
+              <input type="checkbox" data-trust-confirmation ${launchDraft.trustApproved ? "checked" : ""} />
+              <span>I trust this exact Workflow Bundle digest after reviewing its execution summary.</span>
+            </label>
+            <div class="launch-actions">
+              <button type="button" class="primary" data-start-run ${launchDraft.trustApproved ? "" : "disabled"}>Start Run</button>
+            </div>
+          </div>`;
+      }
+
+      function launchStepContent() {
+        if (launchDraft.step === "bundle") return launchBundleStep();
+        if (launchDraft.step === "harness") return launchHarnessStep();
+        if (launchDraft.step === "inputs") return launchInputsStep();
+        return launchReviewStep();
+      }
+
+      function variantA() {
+        return `<section class="screen variant-a">
+          ${topLine("A")}
+          <div class="launch-shell">${launchStepContent()}</div>
+          ${switcher("A")}
+        </section>`;
       }
 
       function variantB() {
@@ -744,10 +1052,76 @@
           );
         });
         document.querySelectorAll("[data-view]").forEach((button) => {
-          button.addEventListener("click", () =>
-            setVariant(button.dataset.view),
-          );
+          button.addEventListener("click", () => openView(button.dataset.view));
         });
+        document.querySelectorAll("[data-bundle-index]").forEach((button) => {
+          button.addEventListener("click", () => {
+            launchDraft.bundleIndex = Number(button.dataset.bundleIndex);
+            launchDraft.inputValue =
+              workflowBundles[launchDraft.bundleIndex].inputValue;
+            launchDraft.step = "harness";
+            render();
+          });
+        });
+        document.querySelectorAll("[data-harness-index]").forEach((button) => {
+          button.addEventListener("click", () => {
+            launchDraft.harnessIndex = Number(button.dataset.harnessIndex);
+            launchDraft.model = harnesses[launchDraft.harnessIndex].models[0];
+            render();
+          });
+        });
+
+        const modelSelect = document.querySelector("[data-launch-model]");
+        if (modelSelect) {
+          modelSelect.addEventListener("change", () => {
+            launchDraft.model = modelSelect.value;
+          });
+        }
+
+        const nextButton = document.querySelector("[data-launch-next]");
+        if (nextButton) {
+          nextButton.addEventListener("click", () => {
+            const workflowInput = document.querySelector(
+              "[data-workflow-input]",
+            );
+            const checkpointInterval = document.querySelector(
+              "[data-checkpoint-interval]",
+            );
+            if (workflowInput) launchDraft.inputValue = workflowInput.value;
+            if (checkpointInterval) {
+              launchDraft.checkpointInterval = Number(checkpointInterval.value);
+            }
+            launchDraft.step = nextButton.dataset.launchNext;
+            render();
+          });
+        }
+
+        const backButton = document.querySelector("[data-launch-back]");
+        if (backButton) {
+          backButton.addEventListener("click", () => {
+            if (backButton.dataset.launchBack === "home") {
+              setVariant("H");
+              return;
+            }
+            launchDraft.step = backButton.dataset.launchBack;
+            render();
+          });
+        }
+
+        const trustConfirmation = document.querySelector(
+          "[data-trust-confirmation]",
+        );
+        if (trustConfirmation) {
+          trustConfirmation.addEventListener("change", () => {
+            launchDraft.trustApproved = trustConfirmation.checked;
+            render();
+          });
+        }
+
+        const startRunButton = document.querySelector("[data-start-run]");
+        if (startRunButton) {
+          startRunButton.addEventListener("click", () => setVariant("B"));
+        }
       }
 
       document.addEventListener("keydown", (event) => {
