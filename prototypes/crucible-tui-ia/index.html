@@ -456,6 +456,16 @@
         line-height: 1.45;
       }
 
+      .field-problem {
+        color: var(--red);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
+      .field [aria-invalid="true"] {
+        border-color: var(--red);
+      }
+
       .field input,
       .field select,
       .field textarea {
@@ -508,6 +518,23 @@
         border: 1px solid #7c6434;
         border-radius: 6px;
         background: #2c261a;
+      }
+
+      .bundle-info {
+        margin: 0;
+        padding-top: 0.2rem;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
+      .inline-command {
+        border: 0;
+        padding: 0;
+        color: var(--blue);
+        background: transparent;
+        font-size: inherit;
+        text-decoration: underline;
       }
 
       .variant-b .layout {
@@ -690,8 +717,8 @@
           description:
             "Drive one failing test to green, then ask for approval.",
           lastUsed: "Used 2 hours ago",
-          expects: "The file containing the failing test.",
-          interaction: "Approval before the final commit.",
+          origin: "Imported local file",
+          workflow: "1 agent step · 3 commands · 1 approval",
           inputs: [
             {
               name: "failing-test",
@@ -709,9 +736,8 @@
           version: "1.1.0",
           description: "Review the current Git diff and confirm the findings.",
           lastUsed: "Used yesterday",
-          expects:
-            "No additional input. The Bundle reviews the current Workspace diff.",
-          interaction: "Confirmation after findings are prepared.",
+          origin: "Built in",
+          workflow: "1 agent step · 1 command · 1 confirmation",
           inputs: [],
           digest:
             "sha256:cb34eb16a614573e2713f2c22c7c86569ac847fbfa1fb10c96135b55b5cd6f19",
@@ -723,9 +749,8 @@
           description:
             "Turn a prepared issue into an implementation and pull request.",
           lastUsed: "Used 6 days ago",
-          expects: "The issue location.",
-          interaction:
-            "Questions during planning and approval before publishing.",
+          origin: "Imported local file",
+          workflow: "2 agent steps · 2 commands · 2 approvals",
           inputs: [
             {
               name: "issue-location",
@@ -743,8 +768,8 @@
           version: "1.0.0",
           description: "Upgrade one dependency and verify the Workspace.",
           lastUsed: "Never used",
-          expects: "The dependency name and target version.",
-          interaction: "Approval if the upgrade needs broader changes.",
+          origin: "Imported local file",
+          workflow: "1 agent step · 3 commands · 1 approval",
           inputs: [
             {
               name: "dependency-name",
@@ -769,16 +794,19 @@
           name: "Codex",
           detail: "Qualified · session recovery available",
           models: ["gpt-5-codex", "gpt-5"],
+          available: true,
         },
         {
           name: "Claude Code",
-          detail: "Qualified · interactive requests available",
+          detail: "Unavailable · authenticate with Claude Code first",
           models: ["claude-opus-4-1", "claude-sonnet-4"],
+          available: false,
         },
         {
           name: "Gemini",
           detail: "Qualified · interrupt unavailable",
           models: ["gemini-2.5-pro", "gemini-2.5-flash"],
+          available: true,
         },
       ];
 
@@ -788,10 +816,15 @@
         harnessIndex: null,
         model: "",
         inputValues: {},
+        inputProblems: {},
         trustApproved: false,
       };
 
-      const trustedBundleIndexes = new Set();
+      const trustedBundleDigests = new Set(
+        workflowBundles
+          .filter((bundle) => bundle.origin === "Built in")
+          .map((bundle) => bundle.digest),
+      );
 
       function currentVariantKey() {
         const key = new URLSearchParams(location.search).get("variant") || "H";
@@ -815,6 +848,7 @@
         launchDraft.harnessIndex = null;
         launchDraft.model = "";
         launchDraft.inputValues = {};
+        launchDraft.inputProblems = {};
         launchDraft.trustApproved = false;
       }
 
@@ -936,18 +970,28 @@
         if (launchDraft.bundleIndex === null) return "";
 
         const bundle = workflowBundles[launchDraft.bundleIndex];
+        const isTrusted = trustedBundleDigests.has(bundle.digest);
+        const trustControl = isTrusted
+          ? ""
+          : `<label class="trust-confirmation">
+              <input type="checkbox" data-trust-confirmation ${launchDraft.trustApproved ? "checked" : ""} />
+              <span>I trust ${bundle.name} ${bundle.version}.</span>
+            </label>`;
+
         return `<div class="workflow-side">
           <aside class="panel bundle-details">
-            <h2>${bundle.name}</h2>
+            <h2>What this Bundle can do</h2>
             <div class="panel-body review-list">
-              <div class="review-item"><span class="muted">Purpose</span><span>${bundle.description}</span></div>
-              <div class="review-item"><span class="muted">You provide</span><span>${bundle.expects}</span></div>
-              <div class="review-item"><span class="muted">Your involvement</span><span>${bundle.interaction}</span></div>
-              <div class="review-item"><span class="muted">Version</span><span>${bundle.version}</span></div>
+              <div class="review-item"><span class="muted">Name</span><strong>${bundle.name}</strong></div>
+              <div class="review-item"><span class="muted">Description</span><span>${bundle.description}</span></div>
+              <div class="review-item"><span class="muted">Source</span><span>${bundle.origin}</span></div>
+              <div class="review-item"><span class="muted">Workflow</span><span>${bundle.workflow}</span></div>
+              <p class="bundle-info">${status("i", "info", "Harnesses may also run commands while completing agent steps.")} Explore declared steps and commands in <button type="button" class="inline-command" data-view="C">View Bundle Details</button>.</p>
+              ${trustControl}
             </div>
           </aside>
           <div class="launch-actions">
-            <button type="button" class="primary" data-launch-next="harness">Continue</button>
+            <button type="button" class="primary" data-launch-next="harness" ${isTrusted || launchDraft.trustApproved ? "" : "disabled"}>Continue</button>
           </div>
         </div>`;
       }
@@ -967,16 +1011,19 @@
 
       function harnessChoices() {
         return harnesses
-          .map(
-            (harness, index) => `
-              <button type="button" class="choice-button" data-harness-index="${index}" aria-pressed="${launchDraft.harnessIndex === index}">
+          .map((harness, index) => {
+            const selectionAttribute = harness.available
+              ? `data-harness-index="${index}"`
+              : "disabled";
+            return `
+              <button type="button" class="choice-button" ${selectionAttribute} aria-pressed="${launchDraft.harnessIndex === index}">
                 <span>
                   <strong>${harness.name}</strong>
                   <small>${harness.detail}</small>
                 </span>
-                <span class="choice-meta">${launchDraft.harnessIndex === index ? "Selected" : ">"}</span>
-              </button>`,
-          )
+                <span class="choice-meta">${launchDraft.harnessIndex === index ? "Selected" : harness.available ? ">" : "—"}</span>
+              </button>`;
+          })
           .join("");
       }
 
@@ -1038,9 +1085,12 @@
           .replaceAll("'", "&#039;");
       }
 
-      function launchInputControl(input) {
+      function launchInputControl(input, problem) {
         const value = launchDraft.inputValues[input.name] || "";
-        const attributes = `id="launch-input-${input.name}" data-launch-input="${input.name}"`;
+        const problemAttributes = problem
+          ? `aria-invalid="true" aria-describedby="launch-input-${input.name}-problem"`
+          : "";
+        const attributes = `id="launch-input-${input.name}" data-launch-input="${input.name}" ${problemAttributes}`;
 
         if (input.type === "choice") {
           const options = input.choices
@@ -1069,23 +1119,57 @@
 
       function launchInputFields() {
         return selectedBundle()
-          .inputs.map(
-            (input) => `<div class="field">
+          .inputs.map((input) => {
+            const problem = launchDraft.inputProblems[input.name];
+            return `<div class="field">
               <div class="field-heading">
                 <label for="launch-input-${input.name}">${inputLabel(input.name)}</label>
                 <span class="tag">${input.type}</span>
               </div>
               <span class="field-description">${input.description}</span>
-              ${launchInputControl(input)}
-            </div>`,
-          )
+              ${launchInputControl(input, problem)}
+              ${problem ? `<span id="launch-input-${input.name}-problem" class="field-problem" role="alert" data-input-problem="${input.name}">${problem}</span>` : ""}
+            </div>`;
+          })
           .join("");
       }
 
-      function areLaunchInputsPresent() {
-        return selectedBundle().inputs.every((input) =>
-          (launchDraft.inputValues[input.name] || "").trim(),
+      function validateLaunchInput(input) {
+        const value = (launchDraft.inputValues[input.name] || "").trim();
+        if (!value) return "Required by this Workflow Bundle.";
+
+        if (input.type === "file" && value.toLowerCase().includes("missing")) {
+          return "No existing, non-empty file was found at this path.";
+        }
+
+        if (input.type === "file-set") {
+          const paths = value
+            .split("\n")
+            .map((path) => path.trim())
+            .filter(Boolean);
+          if (paths.some((path) => path.toLowerCase().includes("missing"))) {
+            return "One or more files do not exist or are empty.";
+          }
+        }
+
+        if (
+          input.schema &&
+          input.type === "file" &&
+          value.toLowerCase().includes("invalid")
+        ) {
+          return `The JSON file does not match ${input.schema}.`;
+        }
+
+        return "";
+      }
+
+      function validateLaunchInputs() {
+        launchDraft.inputProblems = Object.fromEntries(
+          selectedBundle()
+            .inputs.map((input) => [input.name, validateLaunchInput(input)])
+            .filter(([, problem]) => problem),
         );
+        return Object.keys(launchDraft.inputProblems).length === 0;
       }
 
       function launchInputsStep() {
@@ -1095,7 +1179,7 @@
           <div class="launch-content launch-content-narrow">
             <div class="form-fields">${launchInputFields()}</div>
             <div class="launch-actions">
-              <button type="button" class="primary" data-launch-next="review" ${areLaunchInputsPresent() ? "" : "disabled"}>Review Run</button>
+              <button type="button" class="primary" data-launch-next="review">Review Run</button>
             </div>
           </div>`;
       }
@@ -1114,13 +1198,7 @@
       function launchReviewStep() {
         const bundle = workflowBundles[launchDraft.bundleIndex];
         const harness = harnesses[launchDraft.harnessIndex];
-        const isTrusted = trustedBundleIndexes.has(launchDraft.bundleIndex);
-        const trustContent = isTrusted
-          ? `<div class="trust-confirmation">${status("+", "ok", "Trust already granted for this exact Bundle digest")}</div>`
-          : `<label class="trust-confirmation">
-              <input type="checkbox" data-trust-confirmation ${launchDraft.trustApproved ? "checked" : ""} />
-              <span>I trust ${bundle.name} ${bundle.version} after reviewing what it can execute.</span>
-            </label>`;
+        const isTrusted = trustedBundleDigests.has(bundle.digest);
         const canStart = isTrusted || launchDraft.trustApproved;
 
         return `${launchHeading("Review and start")}
@@ -1128,11 +1206,10 @@
             <div class="review-list">
               <div class="review-item"><span class="muted">Workflow</span><strong>${bundle.name}</strong></div>
               <div class="review-item"><span class="muted">Bundle digest</span><span>${bundle.digest}</span></div>
-              <div class="review-item"><span class="muted">Workspace</span><span>${sample.workspace}</span></div>
+              <div class="review-item"><span class="muted">Workspace</span><span><strong>example-service</strong><br />${sample.workspace}</span></div>
               <div class="review-item"><span class="muted">Harness</span><span>${harness.name} · ${launchDraft.model}</span></div>
               ${launchInputReviewItems(bundle)}
             </div>
-            ${trustContent}
             <div class="launch-actions">
               <button type="button" class="primary" data-start-run ${canStart ? "" : "disabled"}>Start Run</button>
             </div>
@@ -1280,6 +1357,7 @@
             launchDraft.harnessIndex = null;
             launchDraft.model = "";
             launchDraft.inputValues = {};
+            launchDraft.inputProblems = {};
             launchDraft.trustApproved = false;
             render();
             document
@@ -1310,14 +1388,26 @@
         const nextButton = document.querySelector("[data-launch-next]");
         launchInputs.forEach((input) => {
           input.addEventListener("input", () => {
-            launchDraft.inputValues[input.dataset.launchInput] = input.value;
-            if (nextButton) {
-              nextButton.disabled = !areLaunchInputsPresent();
-            }
+            const inputName = input.dataset.launchInput;
+            launchDraft.inputValues[inputName] = input.value;
+            delete launchDraft.inputProblems[inputName];
+            input.removeAttribute("aria-invalid");
+            document
+              .querySelector(`[data-input-problem="${inputName}"]`)
+              ?.remove();
           });
         });
         if (nextButton) {
           nextButton.addEventListener("click", () => {
+            if (
+              launchDraft.step === "inputs" &&
+              nextButton.dataset.launchNext === "review" &&
+              !validateLaunchInputs()
+            ) {
+              render();
+              document.querySelector('[aria-invalid="true"]')?.focus();
+              return;
+            }
             launchDraft.step = nextButton.dataset.launchNext;
             render();
           });
@@ -1348,7 +1438,7 @@
         const startRunButton = document.querySelector("[data-start-run]");
         if (startRunButton) {
           startRunButton.addEventListener("click", () => {
-            trustedBundleIndexes.add(launchDraft.bundleIndex);
+            trustedBundleDigests.add(selectedBundle().digest);
             setVariant("B");
           });
         }
