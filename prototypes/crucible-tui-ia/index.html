@@ -81,6 +81,14 @@
         background: #16191c;
       }
 
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+
       .screen {
         min-height: 100vh;
         padding: 1rem 1rem 5.5rem;
@@ -357,6 +365,11 @@
         text-align: left;
       }
 
+      .choice-button[aria-pressed="true"] {
+        border-color: var(--cyan);
+        background: #203033;
+      }
+
       .choice-button strong,
       .choice-button small {
         display: block;
@@ -371,6 +384,34 @@
         align-self: center;
         color: var(--muted);
         white-space: nowrap;
+      }
+
+      .bundle-recency {
+        align-self: end;
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 400;
+        white-space: nowrap;
+      }
+
+      .workflow-layout {
+        display: grid;
+        grid-template-columns: minmax(20rem, 1fr) minmax(20rem, 0.8fr);
+        gap: 1rem;
+        align-items: start;
+      }
+
+      .workflow-layout.single {
+        grid-template-columns: minmax(20rem, 40rem);
+      }
+
+      .workflow-side {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .bundle-details {
+        min-height: 19rem;
       }
 
       .harness-layout {
@@ -403,7 +444,8 @@
       }
 
       .field input,
-      .field select {
+      .field select,
+      .field textarea {
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -411,6 +453,12 @@
         color: var(--ink);
         background: #111417;
         font: inherit;
+      }
+
+      .field textarea {
+        min-height: 12rem;
+        resize: vertical;
+        line-height: 1.5;
       }
 
       .launch-actions {
@@ -431,6 +479,11 @@
         gap: 1rem;
         padding-bottom: 0.7rem;
         border-bottom: 1px solid var(--line);
+      }
+
+      .review-item > * {
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
 
       .trust-confirmation {
@@ -535,6 +588,7 @@
 
         .diagram,
         .cols,
+        .workflow-layout,
         .harness-layout {
           grid-template-columns: 1fr;
         }
@@ -619,36 +673,51 @@
         {
           name: "Test Repair",
           identity: "io.devflow.test-repair@1.0.0",
+          version: "1.0.0",
           description:
             "Drive one failing test to green, then ask for approval.",
           lastUsed: "Used 2 hours ago",
-          inputLabel: "Failing test path",
-          inputValue: "tests/auth.test.ts",
+          expects:
+            "A test path and any constraints you want the agent to follow.",
+          interaction: "Approval before the final commit.",
+          digest:
+            "sha256:48e8a90bb6f2b80b99781c1bf676bf315b523f819852bad0c6392de88a27b91c",
         },
         {
           name: "Git Diff Review",
           identity: "io.devflow.diff-review@1.1.0",
+          version: "1.1.0",
           description: "Review the current Git diff and confirm the findings.",
           lastUsed: "Used yesterday",
-          inputLabel: "Review focus",
-          inputValue: "Review the current changes",
+          expects: "Any areas, risks, or files that deserve extra attention.",
+          interaction: "Confirmation after findings are prepared.",
+          digest:
+            "sha256:cb34eb16a614573e2713f2c22c7c86569ac847fbfa1fb10c96135b55b5cd6f19",
         },
         {
           name: "Issue to Pull Request",
           identity: "io.devflow.issue-to-pr@2.0.0",
+          version: "2.0.0",
           description:
             "Turn a prepared issue into an implementation and pull request.",
           lastUsed: "Used 6 days ago",
-          inputLabel: "Issue URL",
-          inputValue: "https://github.com/example/repo/issues/42",
+          expects: "The issue location and implementation constraints.",
+          interaction:
+            "Questions during planning and approval before publishing.",
+          digest:
+            "sha256:a6b79fb09f2c4573cbafd69d924a78f80ce26cf77009af765f24b3c8be2368bf",
         },
         {
           name: "Dependency Upgrade",
           identity: "io.devflow.dependency-upgrade@1.0.0",
+          version: "1.0.0",
           description: "Upgrade one dependency and verify the Workspace.",
           lastUsed: "Never used",
-          inputLabel: "Dependency name",
-          inputValue: "typescript",
+          expects:
+            "The dependency, target version, and compatibility constraints.",
+          interaction: "Approval if the upgrade needs broader changes.",
+          digest:
+            "sha256:856bf331f350db309e09272d8734576ec9b713fe726f9b01fdcf5339c51d6c38",
         },
       ];
 
@@ -675,10 +744,11 @@
         bundleIndex: null,
         harnessIndex: null,
         model: "",
-        inputValue: "",
-        checkpointInterval: 3,
+        generalInstructions: "",
         trustApproved: false,
       };
+
+      const trustedBundleIndexes = new Set();
 
       function currentVariantKey() {
         const key = new URLSearchParams(location.search).get("variant") || "H";
@@ -701,8 +771,7 @@
         launchDraft.bundleIndex = null;
         launchDraft.harnessIndex = null;
         launchDraft.model = "";
-        launchDraft.inputValue = "";
-        launchDraft.checkpointInterval = 3;
+        launchDraft.generalInstructions = "";
         launchDraft.trustApproved = false;
       }
 
@@ -800,21 +869,47 @@
         return workflowBundles
           .map(
             (bundle, index) => `
-              <button type="button" class="choice-button" data-bundle-index="${index}">
+              <button type="button" class="choice-button" data-bundle-index="${index}" aria-pressed="${launchDraft.bundleIndex === index}">
                 <span>
                   <strong>${bundle.name}</strong>
                   <small>${bundle.description}</small>
                 </span>
-                <span class="choice-meta">${bundle.lastUsed} &gt;</span>
+                <span class="bundle-recency">${bundle.lastUsed}</span>
               </button>`,
           )
           .join("");
       }
 
+      function workflowBundleDetails() {
+        if (launchDraft.bundleIndex === null) return "";
+
+        const bundle = workflowBundles[launchDraft.bundleIndex];
+        return `<div class="workflow-side">
+          <aside class="panel bundle-details">
+            <h2>${bundle.name}</h2>
+            <div class="panel-body review-list">
+              <div class="review-item"><span class="muted">Purpose</span><span>${bundle.description}</span></div>
+              <div class="review-item"><span class="muted">You provide</span><span>${bundle.expects}</span></div>
+              <div class="review-item"><span class="muted">Your involvement</span><span>${bundle.interaction}</span></div>
+              <div class="review-item"><span class="muted">Version</span><span>${bundle.version}</span></div>
+            </div>
+          </aside>
+          <div class="launch-actions">
+            <button type="button" class="primary" data-launch-next="harness">Continue</button>
+          </div>
+        </div>`;
+      }
+
       function launchBundleStep() {
+        const layoutClass =
+          launchDraft.bundleIndex === null
+            ? "workflow-layout single"
+            : "workflow-layout";
+
         return `${launchHeading("Choose a Workflow Bundle", 1)}
-          <div class="launch-content launch-content-narrow">
+          <div class="launch-content ${layoutClass}">
             <div class="choice-list">${workflowBundleChoices()}</div>
+            ${workflowBundleDetails()}
           </div>`;
       }
 
@@ -876,18 +971,12 @@
       }
 
       function launchInputsStep() {
-        const bundle = workflowBundles[launchDraft.bundleIndex];
-
         return `${launchHeading("Provide Run inputs", 3)}
           <div class="launch-content launch-content-narrow">
             <div class="form-fields">
               <div class="field">
-                <label for="workflow-input">${bundle.inputLabel}</label>
-                <input id="workflow-input" data-workflow-input value="${launchDraft.inputValue}" />
-              </div>
-              <div class="field">
-                <label for="checkpoint-interval">Ask before continuing after this many iterations</label>
-                <input id="checkpoint-interval" data-checkpoint-interval type="number" min="1" value="${launchDraft.checkpointInterval}" />
+                <label for="general-instructions">General instructions</label>
+                <textarea id="general-instructions" data-general-instructions placeholder="Describe the outcome, concerns, constraints, and relevant file locations.">${launchDraft.generalInstructions}</textarea>
               </div>
             </div>
             <div class="launch-actions">
@@ -899,23 +988,27 @@
       function launchReviewStep() {
         const bundle = workflowBundles[launchDraft.bundleIndex];
         const harness = harnesses[launchDraft.harnessIndex];
+        const isTrusted = trustedBundleIndexes.has(launchDraft.bundleIndex);
+        const trustContent = isTrusted
+          ? `<div class="trust-confirmation">${status("+", "ok", "Trust already granted for this exact Bundle digest")}</div>`
+          : `<label class="trust-confirmation">
+              <input type="checkbox" data-trust-confirmation ${launchDraft.trustApproved ? "checked" : ""} />
+              <span>I trust ${bundle.name} ${bundle.version} with digest ${bundle.digest}.</span>
+            </label>`;
+        const canStart = isTrusted || launchDraft.trustApproved;
 
         return `${launchHeading("Review and start", 4)}
           <div class="launch-content launch-content-narrow">
             <div class="review-list">
               <div class="review-item"><span class="muted">Workflow</span><strong>${bundle.name}</strong></div>
+              <div class="review-item"><span class="muted">Bundle digest</span><span>${bundle.digest}</span></div>
               <div class="review-item"><span class="muted">Workspace</span><span>${sample.workspace}</span></div>
               <div class="review-item"><span class="muted">Harness</span><span>${harness.name} · ${launchDraft.model}</span></div>
-              <div class="review-item"><span class="muted">${bundle.inputLabel}</span><span>${launchDraft.inputValue}</span></div>
-              <div class="review-item"><span class="muted">Checkpoint</span><span>Every ${launchDraft.checkpointInterval} iterations</span></div>
-              <div class="review-item"><span class="muted">Preflight</span><span>${status("+", "ok", "Composition, Workspace, commands, and Harness are ready")}</span></div>
+              <div class="review-item"><span class="muted">Instructions</span><span>${launchDraft.generalInstructions || "None provided"}</span></div>
             </div>
-            <label class="trust-confirmation">
-              <input type="checkbox" data-trust-confirmation ${launchDraft.trustApproved ? "checked" : ""} />
-              <span>I trust this exact Workflow Bundle digest after reviewing its execution summary.</span>
-            </label>
+            ${trustContent}
             <div class="launch-actions">
-              <button type="button" class="primary" data-start-run ${launchDraft.trustApproved ? "" : "disabled"}>Start Run</button>
+              <button type="button" class="primary" data-start-run ${canStart ? "" : "disabled"}>Start Run</button>
             </div>
           </div>`;
       }
@@ -1056,18 +1149,27 @@
         });
         document.querySelectorAll("[data-bundle-index]").forEach((button) => {
           button.addEventListener("click", () => {
-            launchDraft.bundleIndex = Number(button.dataset.bundleIndex);
-            launchDraft.inputValue =
-              workflowBundles[launchDraft.bundleIndex].inputValue;
-            launchDraft.step = "harness";
+            const bundleIndex = Number(button.dataset.bundleIndex);
+            launchDraft.bundleIndex = bundleIndex;
+            launchDraft.harnessIndex = null;
+            launchDraft.model = "";
+            launchDraft.generalInstructions = "";
+            launchDraft.trustApproved = false;
             render();
+            document
+              .querySelector(`[data-bundle-index="${bundleIndex}"]`)
+              .focus();
           });
         });
         document.querySelectorAll("[data-harness-index]").forEach((button) => {
           button.addEventListener("click", () => {
-            launchDraft.harnessIndex = Number(button.dataset.harnessIndex);
+            const harnessIndex = Number(button.dataset.harnessIndex);
+            launchDraft.harnessIndex = harnessIndex;
             launchDraft.model = harnesses[launchDraft.harnessIndex].models[0];
             render();
+            document
+              .querySelector(`[data-harness-index="${harnessIndex}"]`)
+              .focus();
           });
         });
 
@@ -1081,15 +1183,11 @@
         const nextButton = document.querySelector("[data-launch-next]");
         if (nextButton) {
           nextButton.addEventListener("click", () => {
-            const workflowInput = document.querySelector(
-              "[data-workflow-input]",
+            const generalInstructions = document.querySelector(
+              "[data-general-instructions]",
             );
-            const checkpointInterval = document.querySelector(
-              "[data-checkpoint-interval]",
-            );
-            if (workflowInput) launchDraft.inputValue = workflowInput.value;
-            if (checkpointInterval) {
-              launchDraft.checkpointInterval = Number(checkpointInterval.value);
+            if (generalInstructions) {
+              launchDraft.generalInstructions = generalInstructions.value;
             }
             launchDraft.step = nextButton.dataset.launchNext;
             render();
@@ -1120,7 +1218,10 @@
 
         const startRunButton = document.querySelector("[data-start-run]");
         if (startRunButton) {
-          startRunButton.addEventListener("click", () => setVariant("B"));
+          startRunButton.addEventListener("click", () => {
+            trustedBundleIndexes.add(launchDraft.bundleIndex);
+            setVariant("B");
+          });
         }
       }
 
@@ -1129,7 +1230,39 @@
         const tag =
           target && target.tagName ? target.tagName.toLowerCase() : "";
         const isEditable = target && target.isContentEditable;
-        if (tag === "input" || tag === "textarea" || isEditable) return;
+        if (event.key === "Escape") {
+          const backButton = document.querySelector("[data-launch-back]");
+          if (backButton) {
+            event.preventDefault();
+            backButton.click();
+          }
+          return;
+        }
+        if (
+          tag === "input" ||
+          tag === "select" ||
+          tag === "textarea" ||
+          isEditable
+        )
+          return;
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          const choices = Array.from(
+            document.querySelectorAll(".choice-button"),
+          );
+          if (choices.length > 0) {
+            event.preventDefault();
+            const currentIndex = choices.indexOf(document.activeElement);
+            const offset = event.key === "ArrowDown" ? 1 : -1;
+            const nextIndex =
+              currentIndex === -1
+                ? offset === 1
+                  ? 0
+                  : choices.length - 1
+                : (currentIndex + offset + choices.length) % choices.length;
+            choices[nextIndex].focus();
+          }
+          return;
+        }
         if (event.key === "ArrowLeft") cycle(-1);
         if (event.key === "ArrowRight") cycle(1);
       });
