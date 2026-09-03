@@ -443,6 +443,19 @@
         color: var(--muted);
       }
 
+      .field-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+
+      .field-description {
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
       .field input,
       .field select,
       .field textarea {
@@ -677,9 +690,16 @@
           description:
             "Drive one failing test to green, then ask for approval.",
           lastUsed: "Used 2 hours ago",
-          expects:
-            "A test path and any constraints you want the agent to follow.",
+          expects: "The file containing the failing test.",
           interaction: "Approval before the final commit.",
+          inputs: [
+            {
+              name: "failing-test",
+              type: "file",
+              description: "Path to the file containing the failing test.",
+              placeholder: "tests/example.test.ts",
+            },
+          ],
           digest:
             "sha256:48e8a90bb6f2b80b99781c1bf676bf315b523f819852bad0c6392de88a27b91c",
         },
@@ -689,8 +709,10 @@
           version: "1.1.0",
           description: "Review the current Git diff and confirm the findings.",
           lastUsed: "Used yesterday",
-          expects: "Any areas, risks, or files that deserve extra attention.",
+          expects:
+            "No additional input. The Bundle reviews the current Workspace diff.",
           interaction: "Confirmation after findings are prepared.",
+          inputs: [],
           digest:
             "sha256:cb34eb16a614573e2713f2c22c7c86569ac847fbfa1fb10c96135b55b5cd6f19",
         },
@@ -701,9 +723,17 @@
           description:
             "Turn a prepared issue into an implementation and pull request.",
           lastUsed: "Used 6 days ago",
-          expects: "The issue location and implementation constraints.",
+          expects: "The issue location.",
           interaction:
             "Questions during planning and approval before publishing.",
+          inputs: [
+            {
+              name: "issue-location",
+              type: "text",
+              description: "Issue URL or reference to implement.",
+              placeholder: "https://github.com/owner/repository/issues/123",
+            },
+          ],
           digest:
             "sha256:a6b79fb09f2c4573cbafd69d924a78f80ce26cf77009af765f24b3c8be2368bf",
         },
@@ -713,9 +743,22 @@
           version: "1.0.0",
           description: "Upgrade one dependency and verify the Workspace.",
           lastUsed: "Never used",
-          expects:
-            "The dependency, target version, and compatibility constraints.",
+          expects: "The dependency name and target version.",
           interaction: "Approval if the upgrade needs broader changes.",
+          inputs: [
+            {
+              name: "dependency-name",
+              type: "text",
+              description: "Dependency to upgrade.",
+              placeholder: "typescript",
+            },
+            {
+              name: "target-version",
+              type: "text",
+              description: "Version the dependency should reach.",
+              placeholder: "5.9.2",
+            },
+          ],
           digest:
             "sha256:856bf331f350db309e09272d8734576ec9b713fe726f9b01fdcf5339c51d6c38",
         },
@@ -744,7 +787,7 @@
         bundleIndex: null,
         harnessIndex: null,
         model: "",
-        generalInstructions: "",
+        inputValues: {},
         trustApproved: false,
       };
 
@@ -771,7 +814,7 @@
         launchDraft.bundleIndex = null;
         launchDraft.harnessIndex = null;
         launchDraft.model = "";
-        launchDraft.generalInstructions = "";
+        launchDraft.inputValues = {};
         launchDraft.trustApproved = false;
       }
 
@@ -849,19 +892,28 @@
         `;
       }
 
-      function launchHeading(title, stepNumber) {
-        const previousSteps = {
-          bundle: "home",
-          harness: "bundle",
-          inputs: "harness",
-          review: "inputs",
-        };
-        const previousStep = previousSteps[launchDraft.step];
+      function selectedBundle() {
+        return launchDraft.bundleIndex === null
+          ? null
+          : workflowBundles[launchDraft.bundleIndex];
+      }
+
+      function launchSequence() {
+        const bundle = selectedBundle();
+        return bundle && bundle.inputs.length === 0
+          ? ["bundle", "harness", "review"]
+          : ["bundle", "harness", "inputs", "review"];
+      }
+
+      function launchHeading(title) {
+        const steps = launchSequence();
+        const stepIndex = steps.indexOf(launchDraft.step);
+        const previousStep = stepIndex <= 0 ? "home" : steps[stepIndex - 1];
 
         return `<header class="launch-heading">
           <button type="button" aria-label="Back" title="Back" data-launch-back="${previousStep}">&larr;</button>
           <h1>${title}</h1>
-          <span class="tag">${stepNumber} of 4</span>
+          <span class="tag">${stepIndex + 1} of ${steps.length}</span>
         </header>`;
       }
 
@@ -906,7 +958,7 @@
             ? "workflow-layout single"
             : "workflow-layout";
 
-        return `${launchHeading("Choose a Workflow Bundle", 1)}
+        return `${launchHeading("Choose a Workflow Bundle")}
           <div class="launch-content ${layoutClass}">
             <div class="choice-list">${workflowBundleChoices()}</div>
             ${workflowBundleDetails()}
@@ -951,7 +1003,7 @@
               ${harness.detail}
             </div>
             <div class="launch-actions">
-              <button type="button" class="primary" data-launch-next="inputs">Continue</button>
+              <button type="button" class="primary" data-launch-next="${launchSequence()[2]}">Continue</button>
             </div>
           </div>
         </aside>`;
@@ -963,26 +1015,100 @@
             ? "harness-layout single"
             : "harness-layout";
 
-        return `${launchHeading("Choose a Harness", 2)}
+        return `${launchHeading("Choose a Harness")}
           <div class="launch-content ${layoutClass}">
             <div class="choice-list">${harnessChoices()}</div>
             ${harnessConfiguration()}
           </div>`;
       }
 
-      function launchInputsStep() {
-        return `${launchHeading("Provide Run inputs", 3)}
-          <div class="launch-content launch-content-narrow">
-            <div class="form-fields">
-              <div class="field">
-                <label for="general-instructions">General instructions (required)</label>
-                <textarea id="general-instructions" data-general-instructions placeholder="Describe the outcome, concerns, constraints, and relevant file locations.">${launchDraft.generalInstructions}</textarea>
+      function inputLabel(name) {
+        return name
+          .split("-")
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" ");
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function launchInputControl(input) {
+        const value = launchDraft.inputValues[input.name] || "";
+        const attributes = `id="launch-input-${input.name}" data-launch-input="${input.name}"`;
+
+        if (input.type === "choice") {
+          const options = input.choices
+            .map(
+              (choice) =>
+                `<option value="${escapeHtml(choice)}" ${value === choice ? "selected" : ""}>${escapeHtml(choice)}</option>`,
+            )
+            .join("");
+          return `<select ${attributes}><option value="">Select one</option>${options}</select>`;
+        }
+
+        if (input.type === "verdict") {
+          return `<select ${attributes}>
+            <option value="">Select one</option>
+            <option value="pass" ${value === "pass" ? "selected" : ""}>Pass</option>
+            <option value="fail" ${value === "fail" ? "selected" : ""}>Fail</option>
+          </select>`;
+        }
+
+        if (input.type === "file-set") {
+          return `<textarea ${attributes} placeholder="One file path per line">${escapeHtml(value)}</textarea>`;
+        }
+
+        return `<input type="text" ${attributes} value="${escapeHtml(value)}" placeholder="${escapeHtml(input.placeholder || "")}" />`;
+      }
+
+      function launchInputFields() {
+        return selectedBundle()
+          .inputs.map(
+            (input) => `<div class="field">
+              <div class="field-heading">
+                <label for="launch-input-${input.name}">${inputLabel(input.name)}</label>
+                <span class="tag">${input.type}</span>
               </div>
-            </div>
+              <span class="field-description">${input.description}</span>
+              ${launchInputControl(input)}
+            </div>`,
+          )
+          .join("");
+      }
+
+      function areLaunchInputsPresent() {
+        return selectedBundle().inputs.every((input) =>
+          (launchDraft.inputValues[input.name] || "").trim(),
+        );
+      }
+
+      function launchInputsStep() {
+        const bundle = selectedBundle();
+
+        return `${launchHeading(`Provide inputs for ${bundle.name}`)}
+          <div class="launch-content launch-content-narrow">
+            <div class="form-fields">${launchInputFields()}</div>
             <div class="launch-actions">
-              <button type="button" class="primary" data-launch-next="review" ${launchDraft.generalInstructions.trim() ? "" : "disabled"}>Review Run</button>
+              <button type="button" class="primary" data-launch-next="review" ${areLaunchInputsPresent() ? "" : "disabled"}>Review Run</button>
             </div>
           </div>`;
+      }
+
+      function launchInputReviewItems(bundle) {
+        return bundle.inputs
+          .map((input) => {
+            const value = escapeHtml(
+              launchDraft.inputValues[input.name],
+            ).replaceAll("\n", "<br />");
+            return `<div class="review-item"><span class="muted">${inputLabel(input.name)}</span><span>${value}</span></div>`;
+          })
+          .join("");
       }
 
       function launchReviewStep() {
@@ -997,14 +1123,14 @@
             </label>`;
         const canStart = isTrusted || launchDraft.trustApproved;
 
-        return `${launchHeading("Review and start", 4)}
+        return `${launchHeading("Review and start")}
           <div class="launch-content launch-content-narrow">
             <div class="review-list">
               <div class="review-item"><span class="muted">Workflow</span><strong>${bundle.name}</strong></div>
               <div class="review-item"><span class="muted">Bundle digest</span><span>${bundle.digest}</span></div>
               <div class="review-item"><span class="muted">Workspace</span><span>${sample.workspace}</span></div>
               <div class="review-item"><span class="muted">Harness</span><span>${harness.name} · ${launchDraft.model}</span></div>
-              <div class="review-item"><span class="muted">Instructions</span><span>${launchDraft.generalInstructions || "None provided"}</span></div>
+              ${launchInputReviewItems(bundle)}
             </div>
             ${trustContent}
             <div class="launch-actions">
@@ -1153,7 +1279,7 @@
             launchDraft.bundleIndex = bundleIndex;
             launchDraft.harnessIndex = null;
             launchDraft.model = "";
-            launchDraft.generalInstructions = "";
+            launchDraft.inputValues = {};
             launchDraft.trustApproved = false;
             render();
             document
@@ -1180,21 +1306,18 @@
           });
         }
 
-        const generalInstructions = document.querySelector(
-          "[data-general-instructions]",
-        );
+        const launchInputs = document.querySelectorAll("[data-launch-input]");
         const nextButton = document.querySelector("[data-launch-next]");
-        if (generalInstructions && nextButton) {
-          generalInstructions.addEventListener("input", () => {
-            launchDraft.generalInstructions = generalInstructions.value;
-            nextButton.disabled = !generalInstructions.value.trim();
+        launchInputs.forEach((input) => {
+          input.addEventListener("input", () => {
+            launchDraft.inputValues[input.dataset.launchInput] = input.value;
+            if (nextButton) {
+              nextButton.disabled = !areLaunchInputsPresent();
+            }
           });
-        }
+        });
         if (nextButton) {
           nextButton.addEventListener("click", () => {
-            if (generalInstructions) {
-              launchDraft.generalInstructions = generalInstructions.value;
-            }
             launchDraft.step = nextButton.dataset.launchNext;
             render();
           });
