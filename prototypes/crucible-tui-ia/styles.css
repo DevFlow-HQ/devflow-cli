@@ -293,15 +293,6 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.workspace-change {
-  border: 0;
-  padding: 0;
-  color: var(--blue);
-  background: transparent;
-  font-size: 0.82rem;
-  text-decoration: underline;
-}
-
 .home-actions {
   display: grid;
   gap: 0.5rem;
@@ -326,6 +317,39 @@ textarea:focus-visible {
   margin: 1.15rem 0 0;
   color: var(--muted);
   font-size: 0.86rem;
+}
+
+.workspace-approval-main {
+  display: grid;
+  place-content: center;
+  min-height: calc(100vh - 8rem);
+}
+
+.workspace-approval {
+  width: min(36rem, calc(100vw - 2rem));
+  text-align: center;
+}
+
+.workspace-approval h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.workspace-approval .workspace-path {
+  margin-bottom: 2.5rem;
+}
+
+.workspace-approval-copy {
+  margin: 0.75rem auto 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.workspace-approval-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
 }
 
 .launch-shell {
@@ -354,21 +378,6 @@ textarea:focus-visible {
 .launch-content-narrow {
   width: min(40rem, 100%);
   margin: 0 auto;
-}
-
-.workspace-layout {
-  display: grid;
-  grid-template-columns: minmax(20rem, 1fr) minmax(20rem, 0.8fr);
-  gap: 1rem;
-  align-items: start;
-}
-
-.workspace-layout.single {
-  grid-template-columns: minmax(20rem, 40rem);
-}
-
-.workspace-path-panel {
-  min-height: 14rem;
 }
 
 .choice-list {
@@ -649,7 +658,6 @@ textarea:focus-visible {
 
   .diagram,
   .cols,
-  .workspace-layout,
   .workflow-layout,
   .harness-layout {
     grid-template-columns: 1fr;

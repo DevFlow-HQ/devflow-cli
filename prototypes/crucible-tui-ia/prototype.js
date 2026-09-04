@@ -7,9 +7,9 @@ const variants = {
       "Start with one Workspace and a small set of real paths, then reveal detail only after the user chooses a task.",
   },
   W: {
-    name: "Workspace Resolution",
+    name: "Workspace Approval",
     thesis:
-      "Keep the current directory on the common path while allowing an explicit existing directory without adding a Workspace browser.",
+      "Use the exact launch directory as the Workspace and ask for approval only the first time Crucible opens there.",
   },
   A: {
     name: "Progressive Launch",
@@ -169,15 +169,11 @@ const launchDraft = {
   trustApproved: false,
 };
 
-const currentDirectory = {
-  name: "example-service",
-  path: "/Users/rohan/src/example-service",
-};
+const WORKSPACE_APPROVALS_KEY = "crucible-prototype.workspace-approvals";
 
-const workspaceDraft = {
-  enteringPath: false,
-  path: "",
-  problem: "",
+const workspaceApproval = {
+  approvedPaths: loadWorkspaceApprovals(),
+  declined: false,
 };
 
 const trustedBundleDigests = new Set(
@@ -187,7 +183,10 @@ const trustedBundleDigests = new Set(
 );
 
 function currentVariantKey() {
-  const key = new URLSearchParams(location.search).get("variant") || "H";
+  const requestedKey = new URLSearchParams(location.search).get("variant");
+  const key =
+    requestedKey ||
+    (workspaceApproval.approvedPaths.has(sample.workspace) ? "H" : "W");
   return variants[key] ? key : "H";
 }
 
@@ -208,15 +207,8 @@ function resetLaunchDraft() {
   launchDraft.trustApproved = false;
 }
 
-function resetWorkspaceDraft() {
-  workspaceDraft.enteringPath = false;
-  workspaceDraft.path = "";
-  workspaceDraft.problem = "";
-}
-
 function openView(next) {
   if (next === "A") resetLaunchDraft();
-  if (next === "W") resetWorkspaceDraft();
   setVariant(next);
 }
 
@@ -276,10 +268,7 @@ function workspaceHome() {
       <main class="home-main">
         <div>
           <h1 class="workspace-name">${escapeHtml(sample.workspaceName)}</h1>
-          <p class="workspace-path">
-            <span>${escapeHtml(sample.workspace)}</span>
-            <button type="button" class="workspace-change" data-view="W">Change Workspace</button>
-          </p>
+          <p class="workspace-path">${escapeHtml(sample.workspace)}</p>
           <nav class="home-actions" aria-label="Workspace actions">
             <button type="button" class="primary" data-view="A">Start a Run</button>
             <button type="button" data-view="C">Workflow Bundles</button>
@@ -294,109 +283,64 @@ function workspaceHome() {
   `;
 }
 
-function workspaceResolutionHeading() {
-  return `<header class="launch-heading">
-    <button type="button" aria-label="Back" title="Back" data-workspace-back>&larr;</button>
-    <h1>Choose a Workspace</h1>
-    <span></span>
-  </header>`;
+function loadWorkspaceApprovals() {
+  try {
+    const storedPaths = JSON.parse(
+      localStorage.getItem(WORKSPACE_APPROVALS_KEY) || "[]",
+    );
+    return new Set(Array.isArray(storedPaths) ? storedPaths : []);
+  } catch {
+    return new Set();
+  }
 }
 
-function workspaceChoices() {
-  const currentIsActive = sample.workspace === currentDirectory.path;
-  return `<div class="choice-list">
-    <button type="button" class="choice-button" data-workspace-current aria-pressed="${currentIsActive}">
-      <span>
-        <strong>Current directory</strong>
-        <small>${currentDirectory.name} · ${currentDirectory.path}</small>
-      </span>
-      <span class="choice-meta">${currentIsActive ? "In use" : "Use"}</span>
-    </button>
-    <button type="button" class="choice-button" data-workspace-explicit aria-pressed="${workspaceDraft.enteringPath}">
-      <span>
-        <strong>Enter a path</strong>
-        <small>Use another existing directory.</small>
-      </span>
-      <span class="choice-meta">&gt;</span>
-    </button>
+function persistWorkspaceApprovals() {
+  try {
+    localStorage.setItem(
+      WORKSPACE_APPROVALS_KEY,
+      JSON.stringify([...workspaceApproval.approvedPaths]),
+    );
+  } catch {
+    // Browser storage only models the future Crucible-home approval record.
+  }
+}
+
+function workspaceApprovalContent() {
+  if (workspaceApproval.declined) {
+    return `<div class="workspace-approval">
+      <h1>Crucible closed</h1>
+      <p class="workspace-path">${escapeHtml(sample.workspace)}</p>
+      <p class="workspace-approval-copy">This Workspace was not approved, so Crucible did not open it.</p>
+    </div>`;
+  }
+
+  const isApproved = workspaceApproval.approvedPaths.has(sample.workspace);
+  return `<div class="workspace-approval">
+    <h1 class="workspace-name">${escapeHtml(sample.workspaceName)}</h1>
+    <p class="workspace-path">${escapeHtml(sample.workspace)}</p>
+    <h2>${isApproved ? "Workspace approved" : "Trust this Workspace?"}</h2>
+    <p class="workspace-approval-copy">
+      ${
+        isApproved
+          ? "Crucible remembers approval for this exact directory."
+          : "Crucible runs selected Workflow Bundles through Harnesses in this folder. Harnesses may read and change files while a Run is active."
+      }
+    </p>
+    <div class="workspace-approval-actions">
+      <button type="button" data-workspace-decline>Exit</button>
+      <button type="button" class="primary" data-workspace-approve>${isApproved ? "Continue" : "Trust and Continue"}</button>
+    </div>
   </div>`;
 }
 
-function workspacePathPanel() {
-  if (!workspaceDraft.enteringPath) return "";
-
-  const problemAttributes = workspaceDraft.problem
-    ? 'aria-invalid="true" aria-describedby="workspace-path-problem"'
-    : "";
-  return `<aside class="panel workspace-path-panel">
-    <h2>Workspace path</h2>
-    <form class="panel-body form-fields" data-workspace-form>
-      <div class="field">
-        <label for="workspace-path">Directory</label>
-        <input id="workspace-path" type="text" value="${escapeHtml(workspaceDraft.path)}" placeholder="/Users/rohan/src/payments-service" data-workspace-path ${problemAttributes} />
-        ${workspaceDraft.problem ? `<span id="workspace-path-problem" class="field-problem" role="alert">${workspaceDraft.problem}</span>` : ""}
-      </div>
-      <div class="launch-actions">
-        <button type="submit" class="primary">Use Workspace</button>
-      </div>
-    </form>
-  </aside>`;
-}
-
-function workspaceResolution() {
-  const layoutClass = workspaceDraft.enteringPath
-    ? "workspace-layout"
-    : "workspace-layout single";
+function workspaceApprovalScreen() {
   return `<section class="screen variant-w">
     ${topLine("W")}
-    <div class="launch-shell">
-      ${workspaceResolutionHeading()}
-      <div class="launch-content ${layoutClass}">
-        ${workspaceChoices()}
-        ${workspacePathPanel()}
-      </div>
-    </div>
+    <main class="workspace-approval-main">
+      ${workspaceApprovalContent()}
+    </main>
     ${switcher("W")}
   </section>`;
-}
-
-function isAbsoluteWorkspacePath(path) {
-  return (
-    path.startsWith("/") ||
-    /^[A-Za-z]:[\\\\/]/.test(path) ||
-    path.startsWith("\\\\")
-  );
-}
-
-function normalizedWorkspacePath(path) {
-  const trimmed = path.trim();
-  if (trimmed === "/" || /^[A-Za-z]:[\\\\/]$/.test(trimmed)) {
-    return trimmed;
-  }
-  return trimmed.replace(/[\\\\/]+$/, "");
-}
-
-function workspaceNameFromPath(path) {
-  const parts = path.split(/[\\\\/]/).filter(Boolean);
-  return parts.at(-1) || path;
-}
-
-function validateWorkspacePath(path) {
-  const value = path.trim();
-  if (!value) return "Enter a directory path.";
-  if (!isAbsoluteWorkspacePath(value)) {
-    return "Enter an absolute directory path.";
-  }
-  if (value.toLowerCase().includes("missing")) {
-    return "No directory was found at this path.";
-  }
-  return "";
-}
-
-function activateWorkspace(path, name = workspaceNameFromPath(path)) {
-  sample.workspace = normalizedWorkspacePath(path);
-  sample.workspaceName = name;
-  setVariant("H");
 }
 
 function selectedBundle() {
@@ -812,7 +756,7 @@ function render() {
     key === "H"
       ? workspaceHome()
       : key === "W"
-        ? workspaceResolution()
+        ? workspaceApprovalScreen()
         : key === "A"
           ? variantA()
           : key === "B"
@@ -824,54 +768,26 @@ function render() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => openView(button.dataset.view));
   });
-  const currentWorkspaceButton = document.querySelector(
-    "[data-workspace-current]",
+  const workspaceApproveButton = document.querySelector(
+    "[data-workspace-approve]",
   );
-  if (currentWorkspaceButton) {
-    currentWorkspaceButton.addEventListener("click", () => {
-      activateWorkspace(currentDirectory.path, currentDirectory.name);
+  if (workspaceApproveButton) {
+    workspaceApproveButton.addEventListener("click", () => {
+      workspaceApproval.approvedPaths.add(sample.workspace);
+      workspaceApproval.declined = false;
+      persistWorkspaceApprovals();
+      setVariant("H");
     });
   }
 
-  const explicitWorkspaceButton = document.querySelector(
-    "[data-workspace-explicit]",
+  const workspaceDeclineButton = document.querySelector(
+    "[data-workspace-decline]",
   );
-  if (explicitWorkspaceButton) {
-    explicitWorkspaceButton.addEventListener("click", () => {
-      workspaceDraft.enteringPath = true;
-      workspaceDraft.problem = "";
+  if (workspaceDeclineButton) {
+    workspaceDeclineButton.addEventListener("click", () => {
+      workspaceApproval.declined = true;
       render();
-      document.querySelector("[data-workspace-path]")?.focus();
     });
-  }
-
-  const workspacePathInput = document.querySelector("[data-workspace-path]");
-  if (workspacePathInput) {
-    workspacePathInput.addEventListener("input", () => {
-      workspaceDraft.path = workspacePathInput.value;
-      workspaceDraft.problem = "";
-      workspacePathInput.removeAttribute("aria-invalid");
-      document.querySelector("#workspace-path-problem")?.remove();
-    });
-  }
-
-  const workspaceForm = document.querySelector("[data-workspace-form]");
-  if (workspaceForm) {
-    workspaceForm.addEventListener("submit", (event) => {
-      event.preventDefault();
-      workspaceDraft.problem = validateWorkspacePath(workspaceDraft.path);
-      if (workspaceDraft.problem) {
-        render();
-        document.querySelector("[data-workspace-path]")?.focus();
-        return;
-      }
-      activateWorkspace(workspaceDraft.path);
-    });
-  }
-
-  const workspaceBackButton = document.querySelector("[data-workspace-back]");
-  if (workspaceBackButton) {
-    workspaceBackButton.addEventListener("click", () => setVariant("H"));
   }
   document.querySelectorAll("[data-bundle-index]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -964,9 +880,7 @@ document.addEventListener("keydown", (event) => {
   const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
   const isEditable = target && target.isContentEditable;
   if (event.key === "Escape") {
-    const backButton = document.querySelector(
-      "[data-launch-back], [data-workspace-back]",
-    );
+    const backButton = document.querySelector("[data-launch-back]");
     if (backButton) {
       event.preventDefault();
       backButton.click();
