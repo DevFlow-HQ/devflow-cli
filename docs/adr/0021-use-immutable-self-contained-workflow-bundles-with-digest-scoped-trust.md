@@ -37,4 +37,5 @@ A Run records its Bundle identity and digest as a **Bundle Snapshot**, not anoth
 normal uninstall is refused only while a live (`running` or `blocked`) Run uses that exact Installed Bundle; resting (`halted` or `failed`) Runs do
 not retain it. Removal deletes only Crucible's managed bytes, Catalog Entry, and Trust grant, preserving external inputs and Run history. Such a
 resting Run can resume after the exact digest is reinstalled, while another version or colliding digest never substitutes. Forced removal must first
-interrupt and clean up live Runs or leave the Bundle untouched. Whether built-in Bundles may be removed remains undecided.
+interrupt and clean up live Runs or leave the Bundle untouched. V1 exposes no removal of built-in Bundles; whether a later version permits it remains
+open.

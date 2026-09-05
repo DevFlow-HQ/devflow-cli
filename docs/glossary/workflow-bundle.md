@@ -97,8 +97,8 @@ what integrity and trust mean before execution.
   their resume fails until the exact digest is reinstalled, and another version or digest never substitutes.
 - Successfully uninstalling an External Workflow Bundle removes only Crucible's managed `.wfb`, Catalog Entry, and Trust grant. It preserves the
   original authoring folder or imported file and the Run's history, events, artifacts, identity, version, and digest. Forced uninstall first
-  interrupts affected live Runs to `halted` and completes their cleanup; if safe stopping fails, nothing is removed. Whether built-in Bundles may be
-  uninstalled remains undecided.
+  interrupts affected live Runs to `halted` and completes their cleanup; if safe stopping fails, nothing is removed. V1 exposes no removal of
+  built-in Bundles; whether a later version permits it remains open.
 
 ## Related decisions
 
