@@ -40,7 +40,7 @@ const variants = {
   C: {
     name: "Workflow Bundles",
     thesis:
-      "Keep Installed Bundle discovery compact, then show one focused Bundle's purpose, trust, inputs, and declared workflow without exposing package internals.",
+      "Keep Installed Bundle discovery compact, then show one focused Bundle's purpose, inputs, and declared workflow without exposing package internals.",
   },
   D: {
     name: "Harnesses",
@@ -588,15 +588,16 @@ const launchScenarioDefinitions = {
     remediation:
       "Exit Crucible and launch it from the Git worktree root, or choose a Bundle that does not require one.",
   },
-  trust: {
-    label: "Trust changed",
-    target: "bundle",
-    code: "trust",
-    title: "Bundle trust changed",
+  "bundle-removed": {
+    label: "Bundle removed",
+    target: "bundle-list",
+    step: "bundle",
+    code: "bundle-removed",
+    title: "Test Repair is no longer installed",
     explanation:
-      "Trust for this exact Test Repair digest was revoked after the review.",
+      "This external Bundle was uninstalled after the review, so Crucible cannot create the Run.",
     remediation:
-      'Review the Bundle details, then select "I trust Test Repair 1.0.0" again.',
+      "Reinstall the exact Bundle and start again, or choose another installed Bundle.",
   },
   harness: {
     label: "Harness changed",
@@ -1199,8 +1200,10 @@ function launchScenarioSwitcher() {
 
 function workflowBundleChoices() {
   return workflowBundles
-    .map(
-      (bundle, index) => `
+    .map((bundle, index) =>
+      launchDraft.finding?.code === "bundle-removed" && index === 0
+        ? ""
+        : `
         <button type="button" class="choice-button" data-bundle-index="${index}" aria-pressed="${launchDraft.bundleIndex === index}">
           <span>
             <strong>${bundle.name}</strong>
@@ -1217,9 +1220,7 @@ function workflowBundleDetails() {
 
   const bundle = workflowBundles[launchDraft.bundleIndex];
   const isTrusted = trustedBundleDigests.has(bundle.digest);
-  const blockingFinding =
-    launchDraft.finding?.target === "bundle" &&
-    launchDraft.finding.code !== "trust";
+  const blockingFinding = launchDraft.finding?.target === "bundle";
   const trustControl = isTrusted
     ? ""
     : `<label class="trust-confirmation">
@@ -1253,6 +1254,7 @@ function launchBundleStep() {
       : "workflow-layout";
 
   return `${launchHeading("Choose a Workflow Bundle")}
+    ${launchFinding("bundle-list")}
     <div class="launch-content ${layoutClass}">
       <div class="choice-list">${workflowBundleChoices()}</div>
       ${workflowBundleDetails()}
@@ -1534,17 +1536,19 @@ function startLaunchAttempt() {
     }
 
     const finding = launchScenarioDefinitions[launchSimulation.scenario];
+    const correctionStep = finding.step || finding.target;
     launchSimulation.armed = false;
     launchDraft.finding = finding;
     launchDraft.operation = {
       state: "failed",
       title: "Run not started",
-      message: `No Run was created. Review the highlighted ${finding.target === "bundle" ? "Bundle" : "Harness"} finding.`,
+      message: `No Run was created. Review the highlighted ${correctionStep === "bundle" ? "Bundle" : "Harness"} finding.`,
     };
-    launchDraft.step = finding.target;
+    launchDraft.step = correctionStep;
 
-    if (finding.code === "trust") {
-      trustedBundleDigests.delete(selectedBundle().digest);
+    if (finding.code === "bundle-removed") {
+      trustedBundleDigests.delete(workflowBundles[0].digest);
+      launchDraft.bundleIndex = null;
       launchDraft.trustApproved = false;
     }
     if (finding.code === "harness") {
@@ -3062,10 +3066,6 @@ function render() {
   if (trustConfirmation) {
     trustConfirmation.addEventListener("change", () => {
       launchDraft.trustApproved = trustConfirmation.checked;
-      if (launchDraft.trustApproved && launchDraft.finding?.code === "trust") {
-        launchDraft.finding = null;
-        launchDraft.operation = null;
-      }
       render();
     });
   }
