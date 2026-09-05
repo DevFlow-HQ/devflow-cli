@@ -1,0 +1,205 @@
+/*
+ * PROTOTYPE SLICE: Can one exact Run view explain terminal, resting,
+ * Indeterminate, lost-Session, and expired-resource conditions while offering
+ * only truthful actions?
+ *
+ * Accept if recovery evidence remains beside the timeline, destructive actions
+ * require confirmation, and unavailable Resume is explained without inventing
+ * a recovery path.
+ */
+
+.activity.recovery-activity .activity-marker {
+  color: var(--gold);
+}
+
+.lifecycle-dock {
+  border-left-color: var(--gold);
+}
+
+.success-dock {
+  border-left-color: var(--green);
+}
+
+.danger-button {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.danger-button:hover,
+.danger-button:focus-visible {
+  border-color: var(--red);
+  color: var(--ink);
+  background: #3a1b1b;
+}
+
+.recovery-evidence {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.7rem 0 0;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--line);
+}
+
+.recovery-evidence div {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.recovery-evidence dt,
+.recovery-evidence dd {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.recovery-evidence dt {
+  color: var(--muted);
+}
+
+.recovery-acknowledgement {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+  margin-top: 0.7rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.recovery-acknowledgement input {
+  margin-top: 0.15rem;
+}
+
+.lifecycle-dock .action-unavailable {
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+}
+
+.run-state-switcher label,
+.run-state-switcher select,
+.run-state-switcher button {
+  font-size: 0.72rem;
+}
+
+.run-state-switcher select {
+  min-width: 13rem;
+  border: 1px solid var(--cyan);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  color: var(--cyan);
+  background: var(--panel);
+  font-family: inherit;
+}
+
+.run-operation-feedback {
+  position: fixed;
+  top: 4.25rem;
+  right: 1rem;
+  z-index: 45;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  width: min(25rem, calc(100vw - 2rem));
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.run-operation-feedback.applied {
+  border-left-color: var(--green);
+}
+
+.run-operation-feedback p {
+  margin: 0.35rem 0 0 1.2rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.run-operation-feedback .icon-button {
+  width: 1.8rem;
+  height: 1.8rem;
+  border: 0;
+  background: transparent;
+}
+
+.run-confirmation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(5, 7, 8, 0.78);
+}
+
+.run-confirmation {
+  width: min(32rem, 100%);
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.run-confirmation header {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.run-confirmation h2,
+.run-confirmation p {
+  margin: 0;
+}
+
+.run-confirmation h2 {
+  font-size: 1rem;
+}
+
+.run-confirmation p {
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.run-list-notice {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0.75rem 0;
+  padding: 0.55rem 0.75rem;
+  border-left: 2px solid var(--green);
+  background: #172019;
+}
+
+.run-list-notice .icon-button {
+  width: 1.8rem;
+  height: 1.8rem;
+  border: 0;
+  background: transparent;
+}
+
+@media (max-width: 760px) {
+  .recovery-evidence div {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+
+  .run-state-switcher label,
+  .run-state-switcher select {
+    flex: 0 0 auto;
+  }
+
+  .run-operation-feedback {
+    top: 3.75rem;
+    right: 0.5rem;
+  }
+}

@@ -1,4 +1,15 @@
-/* global document, history, location */
+/* global document, history, location, runLifecyclePrototype */
+
+const {
+  applyRunConfirmation,
+  resumeCurrentRun,
+  runConfirmationDialog,
+  runLifecycleDock,
+  runLifecycleTimelineEntry,
+  runModeDefinitions,
+  runOperationFeedback,
+  runStateSwitcher,
+} = runLifecyclePrototype;
 
 const variants = {
   H: {
@@ -620,7 +631,7 @@ const launchSimulation = {
   attempt: 0,
 };
 
-const runModes = ["running", "gate", "request", "question"];
+const runModes = Object.keys(runModeDefinitions);
 const requestedRunMode = new URLSearchParams(location.search).get("runState");
 
 const runWorkbench = {
@@ -630,6 +641,10 @@ const runWorkbench = {
   resource: null,
   notice: "",
   olderLoaded: false,
+  recoveryAcknowledged: false,
+  confirmation: null,
+  operation: null,
+  operationAttempt: 0,
 };
 
 const requestedRunListMode = new URLSearchParams(location.search).get(
@@ -643,6 +658,8 @@ const runHistory = {
   loadingOlder: false,
   openedRunId: null,
   resumedRunIds: new Set(),
+  deletedRunIds: new Set(),
+  notice: "",
 };
 
 const bundleCatalog = {
@@ -687,6 +704,13 @@ function setVariant(next) {
 function setRunMode(mode) {
   runWorkbench.historyRunId = null;
   runWorkbench.mode = runModes.includes(mode) ? mode : "running";
+  runWorkbench.detailsOpen = false;
+  runWorkbench.resource =
+    runWorkbench.mode === "expired-resource" ? "expired-diagnostics" : null;
+  runWorkbench.notice = "";
+  runWorkbench.recoveryAcknowledged = false;
+  runWorkbench.confirmation = null;
+  runWorkbench.operation = null;
   const params = new URLSearchParams(location.search);
   params.set("runState", runWorkbench.mode);
   history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
@@ -771,7 +795,7 @@ function workspaceHome() {
             <button type="button" data-view="R">Previous Runs</button>
             <button type="button" data-view="D">Harnesses</button>
           </nav>
-          <p class="home-summary">4 Workflow Bundles · ${runHistory.mode === "empty" ? "No previous Runs" : `${previousRuns.length} previous Runs`} · ${sample.harness} qualified</p>
+          <p class="home-summary">4 Workflow Bundles · ${runHistory.mode === "empty" ? "No previous Runs" : `${previousRuns.filter((run) => !runHistory.deletedRunIds.has(run.id)).length} previous Runs`} · ${sample.harness} qualified</p>
         </div>
       </main>
       ${switcher("H")}
@@ -788,7 +812,7 @@ function visiblePreviousRuns() {
       const matchesFilter =
         runHistory.filter === "all" ||
         (run.resumable && !runHistory.resumedRunIds.has(run.id));
-      return isLoaded && matchesFilter;
+      return isLoaded && matchesFilter && !runHistory.deletedRunIds.has(run.id);
     })
     .sort(
       (left, right) => right.latestActivityOrder - left.latestActivityOrder,
@@ -840,6 +864,7 @@ function previousRunListContent() {
   const hasOlderRuns = previousRuns.some(
     (run) =>
       !run.loadedInitially &&
+      !runHistory.deletedRunIds.has(run.id) &&
       (runHistory.filter === "all" ||
         (run.resumable && !runHistory.resumedRunIds.has(run.id))),
   );
@@ -887,6 +912,7 @@ function previousRunListScreen() {
           <button type="button" role="tab" data-run-list-filter="resumable" aria-selected="${runHistory.filter === "resumable"}">Resumable</button>
         </div>
       </header>
+      ${runHistory.notice ? `<div class="run-list-notice" role="status">${status("+", "ok", runHistory.notice)}<button type="button" class="icon-button" aria-label="Dismiss feedback" title="Dismiss feedback" data-dismiss-run-list-feedback>&times;</button></div>` : ""}
       ${previousRunListContent()}
       <p class="run-list-keys">Up/Down move · Enter opens the exact Run · Esc returns home</p>
     </main>
@@ -1447,6 +1473,11 @@ function startLaunchAttempt() {
       runWorkbench.historyRunId = null;
       runWorkbench.notice = "";
       runWorkbench.olderLoaded = false;
+      runWorkbench.detailsOpen = false;
+      runWorkbench.resource = null;
+      runWorkbench.recoveryAcknowledged = false;
+      runWorkbench.confirmation = null;
+      runWorkbench.operation = null;
       setVariant("B");
       return;
     }
@@ -1494,6 +1525,8 @@ function variantB() {
         ${runDetails(runState)}
         ${runResourceInspector()}
       </main>
+      ${runOperationFeedback()}
+      ${runConfirmationDialog()}
       ${runStateSwitcher()}
       ${switcher("B")}
     </section>
@@ -1591,10 +1624,47 @@ function runWorkbenchState() {
       position: "Commit fix · Attempt 1",
     },
     failed: {
-      status: status("x", "bad", "Stopped"),
-      step: 3,
+      status: status("x", "bad", "Failed"),
+      step: 2,
+      iteration: "Iteration 6",
+      position: "Fix test · review interval ended",
+    },
+    halted: {
+      status: status("!", "warn", "Halted"),
+      step: 2,
+      iteration: "Iteration 2",
+      position: "Fix test · interrupted",
+    },
+    indeterminate: {
+      status: status("!", "warn", "Halted"),
+      step: 4,
       iteration: "",
-      position: "Approve fix",
+      position: "Commit fix · result unknown",
+    },
+    "session-lost": {
+      status: status("!", "warn", "Halted"),
+      step: 2,
+      iteration: "Iteration 2",
+      position: "Fix test · Session unavailable",
+    },
+    "expired-resource": {
+      status: status("x", "bad", "Failed"),
+      step: 2,
+      iteration: "Iteration 4",
+      position: "Fix test · attempt bounds exhausted",
+    },
+    succeeded: {
+      status: status("+", "ok", "Succeeded"),
+      step: 4,
+      iteration: "",
+      position: "Workflow complete",
+      completeAll: true,
+    },
+    cancelled: {
+      status: status("x", "bad", "Cancelled"),
+      step: 2,
+      iteration: "Iteration 2",
+      position: "Run ended by user",
     },
   };
   return states[runWorkbench.mode] || states.running;
@@ -1619,8 +1689,9 @@ function runProgress(runState) {
   ]);
   const items = steps
     .map(([label, index]) => {
-      const state =
-        index < runState.step
+      const state = runState.completeAll
+        ? "complete"
+        : index < runState.step
           ? "complete"
           : index === runState.step
             ? "current"
@@ -1678,10 +1749,13 @@ function runTimeline() {
       <div class="activity-marker">*</div>
       <div><header><strong>Commit fix</strong><span>now</span></header><p>Running the Bundle-declared commit command.</p></div>
     </article>`,
-    failed: `<article class="activity failed-activity">
-      <div class="activity-marker">x</div>
-      <div><header><strong>Run stopped</strong><span>now</span></header><p>The generated patch was not approved. No commit was created.</p></div>
-    </article>`,
+    succeeded: runLifecycleTimelineEntry(),
+    cancelled: runLifecycleTimelineEntry(),
+    failed: runLifecycleTimelineEntry(),
+    halted: runLifecycleTimelineEntry(),
+    indeterminate: runLifecycleTimelineEntry(),
+    "session-lost": runLifecycleTimelineEntry(),
+    "expired-resource": runLifecycleTimelineEntry(),
   }[runWorkbench.mode];
 
   return `<article class="activity milestone">
@@ -1770,8 +1844,11 @@ function runInteractionDock() {
     </section>`;
   }
 
+  const lifecycleDock = runLifecycleDock();
+  if (lifecycleDock) return lifecycleDock;
+
   return `<footer class="run-working">
-    ${runWorkbench.mode === "failed" ? `<span class="failed-mark" aria-hidden="true">x</span><span>This Run has stopped.</span>` : `<span class="working-pulse" aria-hidden="true">*</span><span>${runWorkbench.mode === "committing" ? "Running Commit fix" : "Codex is working on Fix test"} · ${sample.effectiveModel}</span>`}
+    <span class="working-pulse" aria-hidden="true">*</span><span>Running Commit fix · ${sample.effectiveModel}</span>
   </footer>`;
 }
 
@@ -1787,6 +1864,18 @@ function runDetails(runState) {
       <button type="button" data-run-resource="transcript">Transcript</button>
       <button type="button" data-run-resource="diagnostics">Diagnostics</button>
     </div>`;
+  const activeActions = [
+    "running",
+    "gate",
+    "request",
+    "question",
+    "committing",
+  ].includes(runWorkbench.mode)
+    ? `<h3>Run actions</h3>
+      <div class="resource-actions">
+        <button type="button" data-run-cancel>Cancel Run</button>
+      </div>`
+    : "";
 
   return `<aside class="run-details" aria-label="Run details">
     <div class="run-details-heading">
@@ -1802,6 +1891,7 @@ function runDetails(runState) {
       <div><dt>Effective</dt><dd>${sample.effectiveModel}</dd></div>
     </dl>
     ${inspectActions}
+    ${activeActions}
   </aside>`;
 }
 
@@ -1859,6 +1949,14 @@ function runResourceInspector() {
       meta: "Run and Harness diagnostic evidence",
       body: `<div class="empty-resource"><strong>No active diagnostic findings</strong><span>Earlier diagnostic entries remain in the Run timeline.</span></div>`,
     },
+    "expired-diagnostics": {
+      title: "Detailed diagnostics unavailable",
+      meta: "Retention period ended",
+      body: `<div class="empty-resource">
+        <strong>These supplementary details are no longer retained</strong>
+        <span>Detailed diagnostics expired 90 days after this Run failed. The durable failure reason, timeline, Attempt outcome, and published Artifacts remain available.</span>
+      </div>`,
+    },
   };
   const resource = resources[runWorkbench.resource];
   if (!resource) return "";
@@ -1870,19 +1968,6 @@ function runResourceInspector() {
     </header>
     <div class="resource-inspector-body">${resource.body}</div>
   </section>`;
-}
-
-function runStateSwitcher() {
-  const modes = [
-    ["running", "Working"],
-    ["gate", "Workflow approval"],
-    ["request", "Harness request"],
-    ["question", "Agent question"],
-  ];
-  return `<nav class="run-state-switcher" aria-label="Run state prototype switcher">
-    <span>Prototype state</span>
-    ${modes.map(([mode, label]) => `<button type="button" data-run-mode="${mode}" aria-pressed="${runWorkbench.mode === mode}">${label}</button>`).join("")}
-  </nav>`;
 }
 
 function filteredWorkflowBundles() {
@@ -2449,6 +2534,9 @@ function render() {
       runWorkbench.detailsOpen = false;
       runWorkbench.resource = null;
       runWorkbench.olderLoaded = false;
+      runWorkbench.recoveryAcknowledged = false;
+      runWorkbench.confirmation = null;
+      runWorkbench.operation = null;
       setVariant("B");
     });
   }
@@ -2605,12 +2693,89 @@ function render() {
     });
   }
 
-  document.querySelectorAll("[data-run-mode]").forEach((button) => {
+  const runModeSelect = document.querySelector("[data-run-mode-select]");
+  if (runModeSelect) {
+    runModeSelect.addEventListener("change", () => {
+      setRunMode(runModeSelect.value);
+    });
+  }
+
+  const replayRunModeButton = document.querySelector("[data-replay-run-mode]");
+  if (replayRunModeButton) {
+    replayRunModeButton.addEventListener("click", () => {
+      setRunMode(runWorkbench.mode);
+    });
+  }
+
+  const recoveryAcknowledgement = document.querySelector(
+    "[data-recovery-acknowledgement]",
+  );
+  if (recoveryAcknowledgement) {
+    recoveryAcknowledgement.addEventListener("change", () => {
+      runWorkbench.recoveryAcknowledged = recoveryAcknowledgement.checked;
+      render();
+    });
+  }
+
+  const resumeRunButton = document.querySelector("[data-run-resume]");
+  if (resumeRunButton) {
+    resumeRunButton.addEventListener("click", resumeCurrentRun);
+  }
+
+  document.querySelectorAll("[data-run-cancel]").forEach((button) => {
     button.addEventListener("click", () => {
-      runWorkbench.notice = "";
-      setRunMode(button.dataset.runMode);
+      runWorkbench.resource = null;
+      runWorkbench.confirmation = "cancel";
+      render();
+      document.querySelector('[data-run-confirm="cancel"]')?.focus();
     });
   });
+
+  const deleteRunButton = document.querySelector("[data-run-delete]");
+  if (deleteRunButton) {
+    deleteRunButton.addEventListener("click", () => {
+      runWorkbench.resource = null;
+      runWorkbench.confirmation = "delete";
+      render();
+      document.querySelector('[data-run-confirm="delete"]')?.focus();
+    });
+  }
+
+  document
+    .querySelectorAll("[data-run-confirmation-dismiss]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        runWorkbench.confirmation = null;
+        render();
+      });
+    });
+
+  const runConfirmationButton = document.querySelector("[data-run-confirm]");
+  if (runConfirmationButton) {
+    runConfirmationButton.addEventListener("click", () => {
+      applyRunConfirmation(runConfirmationButton.dataset.runConfirm);
+    });
+  }
+
+  const dismissRunFeedbackButton = document.querySelector(
+    "[data-dismiss-run-feedback]",
+  );
+  if (dismissRunFeedbackButton) {
+    dismissRunFeedbackButton.addEventListener("click", () => {
+      runWorkbench.operation = null;
+      render();
+    });
+  }
+
+  const dismissRunListFeedbackButton = document.querySelector(
+    "[data-dismiss-run-list-feedback]",
+  );
+  if (dismissRunListFeedbackButton) {
+    dismissRunListFeedbackButton.addEventListener("click", () => {
+      runHistory.notice = "";
+      render();
+    });
+  }
 
   document.querySelectorAll("[data-run-answer]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2672,6 +2837,22 @@ document.addEventListener("keydown", (event) => {
   const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
   const isEditable = target && target.isContentEditable;
   if (event.key === "Escape") {
+    const confirmationDismissButton = document.querySelector(
+      "[data-run-confirmation-dismiss]",
+    );
+    if (confirmationDismissButton) {
+      event.preventDefault();
+      confirmationDismissButton.click();
+      return;
+    }
+    const resourceCloseButton = document.querySelector(
+      "[data-run-resource-close]",
+    );
+    if (resourceCloseButton) {
+      event.preventDefault();
+      resourceCloseButton.click();
+      return;
+    }
     const backButton = document.querySelector("[data-launch-back]");
     if (backButton) {
       event.preventDefault();
