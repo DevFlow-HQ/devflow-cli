@@ -1,0 +1,203 @@
+/*
+ * PROTOTYPE SLICE: Can one Run timeline keep the reader's place across older
+ * history and live updates while making observer freshness distinct from Run
+ * state?
+ *
+ * Accept if prepending never moves the first visible activity, live activity
+ * follows only at the live edge, readers elsewhere get a jump control, and no
+ * state-bound Run action is offered while the Projection is loading or stale.
+ *
+ * Advisory reference: OpenCode 1ead9e3d7f02661176fd46d7bcac7f6b7be3b52d
+ * supplied cursor paging, visible-row anchoring, follow-on-append, and
+ * jump-to-latest patterns. Crucible retains its own Projection and Run states.
+ */
+
+.variant-b {
+  padding-bottom: 11.5rem;
+}
+
+.run-shell {
+  height: min(52rem, calc(100vh - 13rem));
+  min-height: 36rem;
+}
+
+.run-main {
+  overflow: hidden;
+}
+
+.run-timeline-frame {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.run-timeline {
+  height: 100%;
+  min-height: 0;
+  overflow-anchor: none;
+}
+
+.projection-freshness {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.projection-freshness.current {
+  color: var(--green);
+}
+
+.projection-freshness.disconnected {
+  color: var(--red);
+}
+
+.projection-freshness.stale {
+  color: var(--gold);
+}
+
+.timeline-freshness {
+  position: sticky;
+  top: -1rem;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  margin: -1rem -1rem 1rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(31, 28, 22, 0.98);
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.2);
+}
+
+.timeline-freshness.disconnected {
+  border-bottom-color: var(--red);
+  background: rgba(45, 25, 25, 0.98);
+}
+
+.timeline-freshness div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.timeline-freshness span,
+.timeline-history-status,
+.history-page-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.timeline-history-status,
+.history-page-label {
+  padding: 0.4rem 0 0.7rem;
+  text-align: center;
+}
+
+.timeline-history-status .working-pulse {
+  margin-right: 0.35rem;
+}
+
+.history-page + .history-page {
+  border-top: 1px dashed var(--line);
+}
+
+.timeline-empty-state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 100%;
+  padding: 2rem;
+  text-align: center;
+}
+
+.timeline-empty-state h2,
+.timeline-empty-state p {
+  margin: 0.45rem 0 0;
+}
+
+.timeline-empty-state p {
+  max-width: 42rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.timeline-empty-state button {
+  margin-top: 1rem;
+}
+
+.new-activity-control {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.8rem;
+  z-index: 5;
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: rgba(23, 27, 31, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.freshness-dock {
+  border-left-color: var(--muted);
+}
+
+.timeline-state-switcher {
+  position: fixed;
+  right: 1rem;
+  bottom: 6.75rem;
+  left: 1rem;
+  z-index: 10;
+  display: flex;
+  gap: 0.4rem;
+  justify-content: center;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.35rem;
+  color: var(--muted);
+  background: rgba(16, 18, 20, 0.96);
+}
+
+.timeline-state-switcher label,
+.timeline-state-switcher select,
+.timeline-state-switcher button,
+.timeline-state-switcher span {
+  font-size: 0.72rem;
+}
+
+.timeline-state-switcher select {
+  min-width: 12rem;
+  border: 1px solid var(--cyan);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  color: var(--cyan);
+  background: var(--panel);
+  font-family: inherit;
+}
+
+.timeline-state-switcher span {
+  max-width: 25rem;
+}
+
+@media (max-width: 780px) {
+  .variant-b {
+    padding-bottom: 15rem;
+  }
+
+  .run-shell {
+    height: calc(100vh - 16rem);
+    min-height: 34rem;
+  }
+
+  .timeline-state-switcher {
+    bottom: 8.2rem;
+    flex-wrap: wrap;
+  }
+
+  .timeline-state-switcher span {
+    width: 100%;
+    text-align: center;
+  }
+
+  .timeline-freshness {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,4 +1,4 @@
-/* global document, history, location, runLifecyclePrototype */
+/* global document, history, location, requestAnimationFrame, runLifecyclePrototype */
 
 const {
   applyRunConfirmation,
@@ -633,6 +633,15 @@ const launchSimulation = {
 
 const runModes = Object.keys(runModeDefinitions);
 const requestedRunMode = new URLSearchParams(location.search).get("runState");
+const timelineViewDefinitions = {
+  live: "Live and current",
+  loading: "Initial loading",
+  disconnected: "Disconnected",
+  stale: "Connected, catching up",
+};
+const requestedTimelineView = new URLSearchParams(location.search).get(
+  "timelineState",
+);
 
 const runWorkbench = {
   mode: runModes.includes(requestedRunMode) ? requestedRunMode : "running",
@@ -641,7 +650,14 @@ const runWorkbench = {
   detailsOpen: false,
   resource: null,
   notice: "",
-  olderLoaded: false,
+  historyPage: 0,
+  historyLoading: false,
+  historyLoadAttempt: 0,
+  timelineView: timelineViewDefinitions[requestedTimelineView]
+    ? requestedTimelineView
+    : "live",
+  liveActivityCount: 0,
+  unseenActivityCount: 0,
   recoveryAcknowledged: false,
   confirmation: null,
   operation: null,
@@ -720,6 +736,11 @@ function setRunMode(mode) {
   runWorkbench.recoveryAcknowledged = false;
   runWorkbench.confirmation = null;
   runWorkbench.operation = null;
+  runWorkbench.historyPage = 0;
+  runWorkbench.historyLoading = false;
+  runWorkbench.historyLoadAttempt += 1;
+  runWorkbench.liveActivityCount = 0;
+  runWorkbench.unseenActivityCount = 0;
   runWorkbench.iteration = runWorkbench.mode === "checkpoint" ? 3 : 2;
   runWorkbench.stoppedAtCheckpoint = false;
   runWorkbench.interactiveTurn = 4;
@@ -729,6 +750,17 @@ function setRunMode(mode) {
   params.set("runState", runWorkbench.mode);
   history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
   render();
+}
+
+function setTimelineView(view, followLatest = false) {
+  const snapshot = captureTimelineSnapshot();
+  runWorkbench.timelineView = timelineViewDefinitions[view] ? view : "live";
+  runWorkbench.unseenActivityCount = 0;
+  const params = new URLSearchParams(location.search);
+  params.set("timelineState", runWorkbench.timelineView);
+  history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+  render();
+  restoreTimelineSnapshot(snapshot, followLatest);
 }
 
 function setRunListMode(mode) {
@@ -1486,7 +1518,12 @@ function startLaunchAttempt() {
       runWorkbench.mode = "running";
       runWorkbench.historyRunId = null;
       runWorkbench.notice = "";
-      runWorkbench.olderLoaded = false;
+      runWorkbench.historyPage = 0;
+      runWorkbench.historyLoading = false;
+      runWorkbench.historyLoadAttempt += 1;
+      runWorkbench.liveActivityCount = 0;
+      runWorkbench.unseenActivityCount = 0;
+      runWorkbench.timelineView = "live";
       runWorkbench.detailsOpen = false;
       runWorkbench.resource = null;
       runWorkbench.recoveryAcknowledged = false;
@@ -1530,9 +1567,11 @@ function variantB() {
         <section class="run-main" aria-label="Active Run">
           ${runHeader(runState)}
           ${runProgress(runState)}
-          <div class="run-timeline" aria-label="Run timeline">
-            ${runWorkbench.olderLoaded ? runEarlierActivity() : `<button type="button" class="load-earlier" data-run-load-earlier>Load earlier activity</button>`}
-            ${runTimeline()}
+          <div class="run-timeline-frame">
+            <div class="run-timeline" data-run-timeline aria-label="Run timeline" aria-busy="${runWorkbench.timelineView === "loading" || runWorkbench.historyLoading}">
+              ${runTimelineContent()}
+            </div>
+            ${newActivityControl()}
           </div>
           ${runInteractionDock()}
         </section>
@@ -1541,10 +1580,83 @@ function variantB() {
       </main>
       ${runOperationFeedback()}
       ${runConfirmationDialog()}
+      ${timelineStateSwitcher()}
       ${runStateSwitcher()}
       ${switcher("B")}
     </section>
   `;
+}
+
+function runTimelineContent() {
+  if (runWorkbench.timelineView === "loading") {
+    return `<section class="timeline-empty-state" role="status">
+      <span class="working-pulse" aria-hidden="true">*</span>
+      <h2>Loading current Run activity</h2>
+      <p>Crucible is loading saved activity and checking for newer updates. Run controls appear when this view is current.</p>
+      <button type="button" data-timeline-complete-load>Complete loading</button>
+    </section>`;
+  }
+
+  return `${timelineFreshnessNotice()}
+    ${timelineHistoryBoundary()}
+    ${runTimeline()}
+    ${liveTimelineActivity()}`;
+}
+
+function timelineFreshnessNotice() {
+  if (runWorkbench.timelineView === "disconnected") {
+    return `<aside class="timeline-freshness disconnected" role="status">
+      <div><strong>Live updates disconnected</strong><span>Last confirmed at 10:43. The Run may continue outside this view.</span></div>
+      <button type="button" data-timeline-reconnect>Reconnect</button>
+    </aside>`;
+  }
+
+  if (runWorkbench.timelineView === "stale") {
+    return `<aside class="timeline-freshness stale" role="status">
+      <div><strong>Connected · catching up</strong><span>Displayed activity is last-known until durable catch-up reaches the live edge.</span></div>
+      <button type="button" data-timeline-complete-catchup>Complete catch-up</button>
+    </aside>`;
+  }
+
+  return "";
+}
+
+function timelineHistoryBoundary() {
+  const pageCount = 2;
+  const boundary = runWorkbench.historyLoading
+    ? `<div class="timeline-history-status" role="status"><span class="working-pulse" aria-hidden="true">*</span> Loading 3 earlier activities&hellip;</div>`
+    : runWorkbench.historyPage >= pageCount
+      ? '<div class="timeline-history-status">Beginning of Run history</div>'
+      : runWorkbench.timelineView !== "live"
+        ? '<button type="button" class="load-earlier" disabled>Load earlier activity unavailable until this view is current</button>'
+        : '<button type="button" class="load-earlier" data-run-load-earlier>Load 3 earlier activities</button>';
+
+  return `${boundary}${runEarlierActivity()}`;
+}
+
+function newActivityControl() {
+  if (runWorkbench.unseenActivityCount === 0) return "";
+  const label =
+    runWorkbench.unseenActivityCount === 1
+      ? "1 new activity"
+      : `${runWorkbench.unseenActivityCount} new activities`;
+  return `<button type="button" class="new-activity-control" data-timeline-latest aria-live="polite">${label} · Jump to latest &darr;</button>`;
+}
+
+function timelineStateSwitcher() {
+  const options = Object.entries(timelineViewDefinitions)
+    .map(
+      ([view, label]) =>
+        `<option value="${view}" ${runWorkbench.timelineView === view ? "selected" : ""}>${label}</option>`,
+    )
+    .join("");
+  return `<nav class="timeline-state-switcher" aria-label="Timeline behavior prototype controls">
+    <label for="timeline-state">Prototype timeline</label>
+    <select id="timeline-state" data-timeline-view-select>${options}</select>
+    <button type="button" data-apply-timeline-view>Load view</button>
+    <button type="button" data-add-live-activity ${runWorkbench.timelineView === "live" ? "" : "disabled"}>Add live activity</button>
+    <span>Load earlier, scroll upward, then add activity to test anchoring.</span>
+  </nav>`;
 }
 
 function resumedHistoryRun() {
@@ -1715,11 +1827,18 @@ function runWorkbenchState() {
 
 function runHeader(runState) {
   const activeRun = activeRunPresentation();
+  const viewStatus = {
+    live: '<span class="projection-freshness current">View current</span>',
+    loading: '<span class="projection-freshness">View loading</span>',
+    disconnected:
+      '<span class="projection-freshness disconnected">View disconnected</span>',
+    stale: '<span class="projection-freshness stale">View catching up</span>',
+  }[runWorkbench.timelineView];
   return `<header class="run-header">
     <button type="button" class="icon-button" aria-label="Back to Workspace home" title="Back to Workspace home" data-view="H">&larr;</button>
     <div class="run-title">
       <h1>${escapeHtml(activeRun.title)}</h1>
-      <p>${escapeHtml(activeRun.id)} · ${runState.status}</p>
+      <p>${escapeHtml(activeRun.id)} · ${runState.status} · ${viewStatus}</p>
     </div>
     <button type="button" class="details-toggle" aria-expanded="${runWorkbench.detailsOpen}" data-run-details>${runWorkbench.detailsOpen ? "Hide details" : "Details"}</button>
   </header>`;
@@ -1776,9 +1895,9 @@ function runTimeline() {
   }
 
   const pendingEntry = {
-    running: `<article class="activity current">
-      <div class="activity-marker">*</div>
-      <div><header><strong>Codex is working</strong><span>now</span></header><p>Checking the updated assertion against the focused test.</p><p class="activity-preview">Running <code>npm test -- tests/example.test.ts</code></p></div>
+    running: `<article class="activity ${runWorkbench.liveActivityCount > 0 ? "milestone" : "current"}">
+      <div class="activity-marker">${runWorkbench.liveActivityCount > 0 ? "+" : "*"}</div>
+      <div><header><strong>${runWorkbench.liveActivityCount > 0 ? "Focused test check started" : "Codex is working"}</strong><span>now</span></header><p>Checking the updated assertion against the focused test.</p><p class="activity-preview">Running <code>npm test -- tests/example.test.ts</code></p></div>
     </article>`,
     checkpoint: `<article class="activity tool-activity">
       <div class="activity-marker">#</div>
@@ -1883,27 +2002,108 @@ function interactiveRunTimeline() {
 }
 
 function runEarlierActivity() {
+  if (runWorkbench.historyPage === 0) return "";
+
   const resumedRun = resumedHistoryRun();
-  if (resumedRun) {
-    return `<div class="earlier-activity">
-      <span>Earlier activity loaded</span>
+  const runName = resumedRun ? resumedRun.bundleName : "Test Repair";
+  const pages = [
+    `<div class="history-page" data-history-page="1">
+      <div class="history-page-label">Earlier activity · page 1</div>
       <article class="activity milestone">
         <div class="activity-marker">+</div>
-        <div><header><strong>Run started</strong><span>Earlier</span></header><p>${escapeHtml(resumedRun.bundleName)} started in ${escapeHtml(sample.workspaceName)} with ${sample.harness}.</p></div>
+        <div><header><strong>Run started</strong><span>10:40</span></header><p>${escapeHtml(runName)} started in ${escapeHtml(sample.workspaceName)} with ${sample.harness}.</p></div>
       </article>
-    </div>`;
-  }
+      <article class="activity tool-activity">
+        <div class="activity-marker">#</div>
+        <div><header><strong>Launch inputs bound</strong><span>10:40</span></header><p>The focused test path was stored as a Run Artifact.</p></div>
+      </article>
+      <article class="activity milestone">
+        <div class="activity-marker">+</div>
+        <div><header><strong>Fix test started</strong><span>10:42</span></header><p>Codex opened the repair Harness Session for Iteration 1.</p></div>
+      </article>
+    </div>`,
+    `<div class="history-page" data-history-page="2">
+      <div class="history-page-label">Earlier activity · page 2</div>
+      <article class="activity milestone">
+        <div class="activity-marker">+</div>
+        <div><header><strong>Preflight passed</strong><span>10:39</span></header><p>Bundle composition, Workspace prerequisites, Harness, and model were ready.</p></div>
+      </article>
+      <article class="activity milestone">
+        <div class="activity-marker">+</div>
+        <div><header><strong>Bundle digest trusted</strong><span>10:39</span></header><p>The exact installed Bundle digest was trusted before Run creation.</p></div>
+      </article>
+      <article class="activity tool-activity">
+        <div class="activity-marker">#</div>
+        <div><header><strong>Workspace lease acquired</strong><span>10:40</span></header><p>This Run became the one live Run for example-service.</p></div>
+      </article>
+    </div>`,
+  ];
 
-  return `<div class="earlier-activity">
-    <span>Earlier activity loaded</span>
-    <article class="activity milestone">
-      <div class="activity-marker">+</div>
-      <div><header><strong>Run started</strong><span>10:40</span></header><p>Test Repair started in ${escapeHtml(sample.workspaceName)} with ${sample.harness}.</p></div>
-    </article>
-  </div>`;
+  return `<div class="earlier-activity">${pages
+    .slice(0, runWorkbench.historyPage)
+    .toReversed()
+    .join("")}</div>`;
+}
+
+function liveTimelineActivity() {
+  if (runWorkbench.liveActivityCount === 0) return "";
+  const entries = [
+    [
+      "#",
+      "tool-activity",
+      "Focused test completed",
+      "exit 1 · now",
+      "The latest deterministic Verdict remains fail.",
+    ],
+    [
+      "C",
+      "message",
+      "Codex",
+      `${sample.effectiveModel} · now`,
+      "I found another assertion coupled to the old response shape and am checking whether it is intentional.",
+    ],
+  ];
+  const completedActivity = Array.from(
+    { length: runWorkbench.liveActivityCount },
+    (_, index) => {
+      const [marker, className, title, meta, description] =
+        entries[index % entries.length];
+      return `<article class="activity ${className}" data-live-activity="${index + 1}">
+      <div class="activity-marker">${marker}</div>
+      <div><header><strong>${title}</strong><span>${meta}</span></header><p>${description}</p></div>
+    </article>`;
+    },
+  ).join("");
+  return `${completedActivity}<article class="activity current">
+    <div class="activity-marker">*</div>
+    <div><header><strong>Codex is working</strong><span>now</span></header><p>Inspecting the related fixture without moving your timeline position.</p></div>
+  </article>`;
 }
 
 function runInteractionDock() {
+  if (runWorkbench.timelineView !== "live") {
+    const messages = {
+      loading: [
+        "Loading current Run state",
+        "Run controls appear only after the current Run view has loaded.",
+      ],
+      disconnected: [
+        "Run controls temporarily unavailable",
+        "The Run may still be progressing. Reconnect and catch up before sending another action.",
+      ],
+      stale: [
+        "Refreshing available actions",
+        "The connection is back, but Run controls remain unavailable until catch-up completes.",
+      ],
+    };
+    const [title, description] = messages[runWorkbench.timelineView];
+    return `<section class="interaction-dock freshness-dock" aria-label="Run controls unavailable">
+      <div class="dock-label">View freshness · not Run state</div>
+      <h2>${title}</h2>
+      <p>${description}</p>
+    </section>`;
+  }
+
   if (runWorkbench.mode === "checkpoint") {
     const operationPending = runWorkbench.operation?.state === "pending";
     return `<section class="interaction-dock checkpoint-dock" aria-label="Review checkpoint">
@@ -2007,18 +2207,15 @@ function runDetails(runState) {
       <button type="button" data-run-resource="transcript">Transcript</button>
       <button type="button" data-run-resource="diagnostics">Diagnostics</button>
     </div>`;
-  const activeActions = [
-    "running",
-    "gate",
-    "request",
-    "question",
-    "committing",
-  ].includes(runWorkbench.mode)
-    ? `<h3>Run actions</h3>
+  const activeActions =
+    ["running", "gate", "request", "question", "committing"].includes(
+      runWorkbench.mode,
+    ) && runWorkbench.timelineView === "live"
+      ? `<h3>Run actions</h3>
       <div class="resource-actions">
         <button type="button" data-run-cancel>Cancel Run</button>
       </div>`
-    : "";
+      : "";
 
   return `<aside class="run-details" aria-label="Run details">
     <div class="run-details-heading">
@@ -2466,6 +2663,68 @@ function variantD() {
   </section>`;
 }
 
+function timelineIsAtLatest(timeline) {
+  return (
+    timeline.scrollHeight - timeline.clientHeight - timeline.scrollTop <= 12
+  );
+}
+
+function captureTimelineSnapshot() {
+  const timeline = document.querySelector("[data-run-timeline]");
+  if (!timeline) return null;
+  const viewport = timeline.getBoundingClientRect();
+  const anchor = Array.from(timeline.querySelectorAll(".activity")).find(
+    (activity) => activity.getBoundingClientRect().bottom > viewport.top,
+  );
+  return {
+    anchorText: anchor?.textContent,
+    anchorOffset: anchor
+      ? anchor.getBoundingClientRect().top - viewport.top
+      : 0,
+    scrollHeight: timeline.scrollHeight,
+    scrollTop: timeline.scrollTop,
+    atLatest: timelineIsAtLatest(timeline),
+  };
+}
+
+function restoreTimelineSnapshot(snapshot, followLatest = false) {
+  if (!snapshot) return;
+  const apply = () => {
+    const timeline = document.querySelector("[data-run-timeline]");
+    if (!timeline) return;
+    if (followLatest) {
+      timeline.scrollTop = timeline.scrollHeight;
+      return;
+    }
+
+    const viewport = timeline.getBoundingClientRect();
+    const anchor = Array.from(timeline.querySelectorAll(".activity")).find(
+      (activity) => activity.textContent === snapshot.anchorText,
+    );
+    if (anchor) {
+      timeline.scrollTop +=
+        anchor.getBoundingClientRect().top -
+        viewport.top -
+        snapshot.anchorOffset;
+      return;
+    }
+
+    timeline.scrollTop =
+      snapshot.scrollTop + timeline.scrollHeight - snapshot.scrollHeight;
+  };
+  apply();
+  requestAnimationFrame(apply);
+}
+
+function appendLiveActivity(count = 1) {
+  const snapshot = captureTimelineSnapshot();
+  const followsLatest = !snapshot || snapshot.atLatest;
+  runWorkbench.liveActivityCount += count;
+  if (!followsLatest) runWorkbench.unseenActivityCount += count;
+  render();
+  restoreTimelineSnapshot(snapshot, followsLatest);
+}
+
 function render() {
   const key = currentVariantKey();
   const app = document.getElementById("app");
@@ -2676,7 +2935,12 @@ function render() {
       runWorkbench.notice = "Resume applied. Continuing the existing Run.";
       runWorkbench.detailsOpen = false;
       runWorkbench.resource = null;
-      runWorkbench.olderLoaded = false;
+      runWorkbench.historyPage = 0;
+      runWorkbench.historyLoading = false;
+      runWorkbench.historyLoadAttempt += 1;
+      runWorkbench.timelineView = "live";
+      runWorkbench.liveActivityCount = 0;
+      runWorkbench.unseenActivityCount = 0;
       runWorkbench.recoveryAcknowledged = false;
       runWorkbench.confirmation = null;
       runWorkbench.operation = null;
@@ -2847,6 +3111,93 @@ function render() {
   if (replayRunModeButton) {
     replayRunModeButton.addEventListener("click", () => {
       setRunMode(runWorkbench.mode);
+    });
+  }
+
+  const timelineViewSelect = document.querySelector(
+    "[data-timeline-view-select]",
+  );
+  const applyTimelineViewButton = document.querySelector(
+    "[data-apply-timeline-view]",
+  );
+  if (timelineViewSelect && applyTimelineViewButton) {
+    applyTimelineViewButton.addEventListener("click", () => {
+      setTimelineView(
+        timelineViewSelect.value,
+        timelineViewSelect.value === "live",
+      );
+    });
+  }
+
+  const completeTimelineLoadButton = document.querySelector(
+    "[data-timeline-complete-load]",
+  );
+  if (completeTimelineLoadButton) {
+    completeTimelineLoadButton.addEventListener("click", () => {
+      setTimelineView("live", true);
+    });
+  }
+
+  const reconnectTimelineButton = document.querySelector(
+    "[data-timeline-reconnect]",
+  );
+  if (reconnectTimelineButton) {
+    reconnectTimelineButton.addEventListener("click", () => {
+      setTimelineView("stale");
+    });
+  }
+
+  const completeTimelineCatchupButton = document.querySelector(
+    "[data-timeline-complete-catchup]",
+  );
+  if (completeTimelineCatchupButton) {
+    completeTimelineCatchupButton.addEventListener("click", () => {
+      const snapshot = captureTimelineSnapshot();
+      const followsLatest = !snapshot || snapshot.atLatest;
+      runWorkbench.timelineView = "live";
+      runWorkbench.liveActivityCount += 2;
+      runWorkbench.unseenActivityCount = followsLatest ? 0 : 2;
+      const params = new URLSearchParams(location.search);
+      params.set("timelineState", "live");
+      history.replaceState(
+        null,
+        "",
+        `${location.pathname}?${params.toString()}`,
+      );
+      render();
+      restoreTimelineSnapshot(snapshot, followsLatest);
+    });
+  }
+
+  const addLiveActivityButton = document.querySelector(
+    "[data-add-live-activity]",
+  );
+  if (addLiveActivityButton) {
+    addLiveActivityButton.addEventListener("click", () => {
+      appendLiveActivity();
+    });
+  }
+
+  const latestActivityButton = document.querySelector("[data-timeline-latest]");
+  if (latestActivityButton) {
+    latestActivityButton.addEventListener("click", () => {
+      runWorkbench.unseenActivityCount = 0;
+      latestActivityButton.remove();
+      const timeline = document.querySelector("[data-run-timeline]");
+      timeline?.scrollTo({ top: timeline.scrollHeight, behavior: "smooth" });
+    });
+  }
+
+  const runTimelineElement = document.querySelector("[data-run-timeline]");
+  if (runTimelineElement) {
+    runTimelineElement.addEventListener("scroll", () => {
+      if (
+        runWorkbench.unseenActivityCount === 0 ||
+        !timelineIsAtLatest(runTimelineElement)
+      )
+        return;
+      runWorkbench.unseenActivityCount = 0;
+      document.querySelector("[data-timeline-latest]")?.remove();
     });
   }
 
@@ -3032,8 +3383,20 @@ function render() {
   const loadEarlierButton = document.querySelector("[data-run-load-earlier]");
   if (loadEarlierButton) {
     loadEarlierButton.addEventListener("click", () => {
-      runWorkbench.olderLoaded = true;
+      const snapshot = captureTimelineSnapshot();
+      runWorkbench.historyLoadAttempt += 1;
+      const attempt = runWorkbench.historyLoadAttempt;
+      runWorkbench.historyLoading = true;
       render();
+      restoreTimelineSnapshot(snapshot);
+      setTimeout(() => {
+        if (runWorkbench.historyLoadAttempt !== attempt) return;
+        const loadingSnapshot = captureTimelineSnapshot();
+        runWorkbench.historyLoading = false;
+        runWorkbench.historyPage = Math.min(2, runWorkbench.historyPage + 1);
+        render();
+        restoreTimelineSnapshot(loadingSnapshot);
+      }, 550);
     });
   }
 
