@@ -1,0 +1,116 @@
+/*
+ * PROTOTYPE SLICE: Can the Run Workbench present a Review checkpoint,
+ * explicit Interactive-step completion, and post-action feedback without a
+ * permanent control panel or an Operation destination screen?
+ *
+ * Accept if the active interaction replaces the bottom input, every action's
+ * receipt is brief, and its durable result remains visible in Run progress and
+ * the timeline after the receipt disappears.
+ *
+ * Advisory presentation inspiration: OpenCode at 1ead9e3d7f02661176fd46d7bcac7f6b7be3b52d
+ * replaces its normal prompt with focused question/permission choices, keeps
+ * confirmations compact, and uses transient toasts for command receipts. No
+ * OpenCode state, event, or action semantics are copied here.
+ */
+
+.checkpoint-dock {
+  border-left-color: var(--gold);
+}
+
+.checkpoint-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0.75rem 0 0;
+}
+
+.checkpoint-evidence div {
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.checkpoint-evidence dt,
+.checkpoint-evidence dd {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.checkpoint-evidence dt {
+  margin-bottom: 0.3rem;
+  color: var(--muted);
+}
+
+.interactive-step-dock {
+  border-left-color: var(--cyan);
+}
+
+.interactive-step-dock label {
+  display: block;
+  margin: 0.65rem 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.interactive-reply-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.interactive-reply-row textarea {
+  min-width: 0;
+  resize: vertical;
+}
+
+.interactive-end-row {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--line);
+}
+
+.interactive-end-row p {
+  margin: 0;
+}
+
+.human-message .activity-marker {
+  color: var(--cyan);
+}
+
+.completion-summary .recovery-evidence {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.completion-summary .recovery-evidence div {
+  display: block;
+}
+
+.completion-summary .recovery-evidence dt {
+  margin-bottom: 0.25rem;
+}
+
+.completion-actions {
+  flex-wrap: wrap;
+}
+
+.run-operation-feedback.accepted {
+  border-left-color: var(--green);
+}
+
+@media (max-width: 760px) {
+  .checkpoint-evidence,
+  .completion-summary .recovery-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .interactive-end-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

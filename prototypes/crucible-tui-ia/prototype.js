@@ -636,6 +636,7 @@ const requestedRunMode = new URLSearchParams(location.search).get("runState");
 
 const runWorkbench = {
   mode: runModes.includes(requestedRunMode) ? requestedRunMode : "running",
+  scenario: requestedRunMode === "interactive" ? "interactive" : "test-repair",
   historyRunId: null,
   detailsOpen: false,
   resource: null,
@@ -645,6 +646,11 @@ const runWorkbench = {
   confirmation: null,
   operation: null,
   operationAttempt: 0,
+  iteration: requestedRunMode === "checkpoint" ? 3 : 2,
+  stoppedAtCheckpoint: false,
+  interactiveTurn: 4,
+  interactiveReply: "",
+  interactiveResponseReady: false,
 };
 
 const requestedRunListMode = new URLSearchParams(location.search).get(
@@ -702,8 +708,11 @@ function setVariant(next) {
 }
 
 function setRunMode(mode) {
+  runWorkbench.operationAttempt += 1;
   runWorkbench.historyRunId = null;
   runWorkbench.mode = runModes.includes(mode) ? mode : "running";
+  runWorkbench.scenario =
+    runWorkbench.mode === "interactive" ? "interactive" : "test-repair";
   runWorkbench.detailsOpen = false;
   runWorkbench.resource =
     runWorkbench.mode === "expired-resource" ? "expired-diagnostics" : null;
@@ -711,6 +720,11 @@ function setRunMode(mode) {
   runWorkbench.recoveryAcknowledged = false;
   runWorkbench.confirmation = null;
   runWorkbench.operation = null;
+  runWorkbench.iteration = runWorkbench.mode === "checkpoint" ? 3 : 2;
+  runWorkbench.stoppedAtCheckpoint = false;
+  runWorkbench.interactiveTurn = 4;
+  runWorkbench.interactiveReply = "";
+  runWorkbench.interactiveResponseReady = false;
   const params = new URLSearchParams(location.search);
   params.set("runState", runWorkbench.mode);
   history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
@@ -1539,6 +1553,21 @@ function resumedHistoryRun() {
 
 function activeRunPresentation() {
   const run = resumedHistoryRun();
+  if (!run && runWorkbench.scenario.startsWith("interactive")) {
+    const drafting = runWorkbench.scenario === "interactive-next";
+    return {
+      id: "run_01JPLAN",
+      title: "Implementation Planning",
+      bundle: "Implementation Planning 1.0.0",
+      steps: ["Gather context", "Clarify implementation", "Draft plan"],
+      currentStep: drafting ? 3 : 2,
+      iteration: "",
+      position: drafting
+        ? "Draft plan · Attempt 1"
+        : `Clarify implementation · Turn ${runWorkbench.interactiveTurn}`,
+    };
+  }
+
   if (!run) {
     return {
       id: sample.run,
@@ -1546,8 +1575,8 @@ function activeRunPresentation() {
       bundle: "Test Repair 1.0.0",
       steps: ["Run failing test", "Fix test", "Approve fix", "Commit fix"],
       currentStep: 2,
-      iteration: "Iteration 2",
-      position: "Fix test · Iteration 2 · Attempt 1",
+      iteration: `Iteration ${runWorkbench.iteration}`,
+      position: `Fix test · Iteration ${runWorkbench.iteration} · Attempt 1`,
     };
   }
 
@@ -1599,6 +1628,18 @@ function runWorkbenchState() {
       iteration: activeRun.iteration,
       position: activeRun.position,
     },
+    checkpoint: {
+      status: status("!", "warn", "Review checkpoint"),
+      step: 2,
+      iteration: `Iteration ${runWorkbench.iteration}`,
+      position: `Fix test · ${runWorkbench.iteration} iterations reviewed`,
+    },
+    interactive: {
+      status: status("?", "info", "Waiting for you"),
+      step: activeRun.currentStep,
+      iteration: "",
+      position: activeRun.position,
+    },
     gate: {
       status: status("!", "warn", "Waiting for approval"),
       step: 3,
@@ -1626,8 +1667,10 @@ function runWorkbenchState() {
     failed: {
       status: status("x", "bad", "Failed"),
       step: 2,
-      iteration: "Iteration 6",
-      position: "Fix test · review interval ended",
+      iteration: `Iteration ${runWorkbench.iteration}`,
+      position: runWorkbench.stoppedAtCheckpoint
+        ? "Fix test · stopped at Review checkpoint"
+        : "Fix test · review interval ended",
     },
     halted: {
       status: status("!", "warn", "Halted"),
@@ -1728,10 +1771,22 @@ function runTimeline() {
     </article>`;
   }
 
+  if (runWorkbench.scenario.startsWith("interactive")) {
+    return interactiveRunTimeline();
+  }
+
   const pendingEntry = {
     running: `<article class="activity current">
       <div class="activity-marker">*</div>
       <div><header><strong>Codex is working</strong><span>now</span></header><p>Checking the updated assertion against the focused test.</p><p class="activity-preview">Running <code>npm test -- tests/example.test.ts</code></p></div>
+    </article>`,
+    checkpoint: `<article class="activity tool-activity">
+      <div class="activity-marker">#</div>
+      <div><header><strong>Verify test</strong><span>exit 1 · now</span></header><p>The latest Verdict is <code>fail</code>. The authored three-iteration review cadence has been reached.</p></div>
+    </article>
+    <article class="activity milestone">
+      <div class="activity-marker">!</div>
+      <div><header><strong>Review checkpoint opened</strong><span>now</span></header><p>The Repeat group is durably paused until you choose whether to continue.</p></div>
     </article>`,
     gate: `<article class="activity milestone">
       <div class="activity-marker">!</div>
@@ -1774,6 +1829,59 @@ function runTimeline() {
     ${pendingEntry}`;
 }
 
+function interactiveRunTimeline() {
+  if (runWorkbench.scenario === "interactive-next") {
+    return `<article class="activity milestone">
+      <div class="activity-marker">+</div>
+      <div><header><strong>Gather context</strong><span>10:41</span></header><p>Repository context was collected for the planning conversation.</p></div>
+    </article>
+    <article class="activity message">
+      <div class="activity-marker">C</div>
+      <div><header><strong>Codex</strong><span>${sample.effectiveModel} · 10:48</span></header><p>We agreed to keep the change behind the existing Projection Port and verify it with a deterministic integration test.</p></div>
+    </article>
+    <article class="activity milestone">
+      <div class="activity-marker">+</div>
+      <div><header><strong>Interactive step ended</strong><span>now</span></header><p>You explicitly completed Clarify implementation. Crucible did not infer completion from the conversation.</p></div>
+    </article>
+    ${runWorkbench.notice ? `<div class="run-notice">${escapeHtml(runWorkbench.notice)}</div>` : ""}
+    <article class="activity current">
+      <div class="activity-marker">*</div>
+      <div><header><strong>Draft implementation plan</strong><span>now</span></header><p>Codex is preparing the declared output for the next Step.</p></div>
+    </article>`;
+  }
+
+  const reply = runWorkbench.interactiveReply
+    ? `<article class="activity message human-message">
+      <div class="activity-marker">Y</div>
+      <div><header><strong>You</strong><span>now</span></header><p>${escapeHtml(runWorkbench.interactiveReply)}</p></div>
+    </article>`
+    : "";
+  const current =
+    runWorkbench.mode === "running"
+      ? `<article class="activity current">
+      <div class="activity-marker">*</div>
+      <div><header><strong>Codex is working</strong><span>now</span></header><p>Continuing the same Interactive agent step in Turn ${runWorkbench.interactiveTurn + 1}.</p></div>
+    </article>`
+      : runWorkbench.interactiveResponseReady
+        ? `<article class="activity message">
+      <div class="activity-marker">C</div>
+      <div><header><strong>Codex</strong><span>${sample.effectiveModel} · now</span></header><p>I incorporated that constraint. The implementation boundary and verification approach are now clear.</p></div>
+    </article>`
+        : "";
+
+  return `<article class="activity milestone">
+      <div class="activity-marker">+</div>
+      <div><header><strong>Gather context</strong><span>10:41</span></header><p>Repository context was collected for the planning conversation.</p></div>
+    </article>
+    <article class="activity message">
+      <div class="activity-marker">C</div>
+      <div><header><strong>Codex</strong><span>${sample.effectiveModel} · 10:46</span></header><p>The existing Projection Port is the right boundary. Is there another constraint to account for before I draft the plan?</p></div>
+    </article>
+    ${reply}
+    ${current}
+    ${runWorkbench.notice ? `<div class="run-notice">${escapeHtml(runWorkbench.notice)}</div>` : ""}`;
+}
+
 function runEarlierActivity() {
   const resumedRun = resumedHistoryRun();
   if (resumedRun) {
@@ -1796,6 +1904,41 @@ function runEarlierActivity() {
 }
 
 function runInteractionDock() {
+  if (runWorkbench.mode === "checkpoint") {
+    const operationPending = runWorkbench.operation?.state === "pending";
+    return `<section class="interaction-dock checkpoint-dock" aria-label="Review checkpoint">
+      <div class="dock-label">Review checkpoint · durable Workflow pause</div>
+      <h2>The focused test is still failing after ${runWorkbench.iteration} iterations</h2>
+      <p>Review the latest evidence before deciding whether this approach should receive another three iterations.</p>
+      <dl class="checkpoint-evidence">
+        <div><dt>Latest Verdict</dt><dd><code>fail</code></dd></div>
+        <div><dt>Test output</dt><dd><button type="button" class="text-button" data-run-resource="test-output">View latest output</button></dd></div>
+        <div><dt>Candidate changes</dt><dd><button type="button" class="text-button" data-run-resource="candidate">View 2 changed files</button></dd></div>
+      </dl>
+      <div class="dock-actions">
+        <button type="button" data-checkpoint-answer="stop" ${operationPending ? "disabled" : ""}>Stop Run</button>
+        <button type="button" class="primary" data-checkpoint-answer="continue" ${operationPending ? "disabled" : ""}>Continue 3 More Iterations</button>
+      </div>
+    </section>`;
+  }
+
+  if (runWorkbench.mode === "interactive") {
+    const operationPending = runWorkbench.operation?.state === "pending";
+    return `<section class="interaction-dock interactive-step-dock" aria-label="Interactive agent step">
+      <div class="dock-label">Interactive agent step · Turn ${runWorkbench.interactiveTurn} complete</div>
+      <h2>Continue the conversation or explicitly end this Step</h2>
+      <label for="run-reply">Your next Turn</label>
+      <div class="interactive-reply-row">
+        <textarea id="run-reply" rows="2" placeholder="Add another constraint or question..." data-run-reply ${operationPending ? "disabled" : ""}></textarea>
+        <button type="button" class="primary" data-run-send ${operationPending ? "disabled" : ""}>Send Turn</button>
+      </div>
+      <div class="interactive-end-row">
+        <p>Ending advances to <strong>Draft plan</strong>. The conversation remains in Run history.</p>
+        <button type="button" data-run-end-interactive ${operationPending ? "disabled" : ""}>End Step&hellip;</button>
+      </div>
+    </section>`;
+  }
+
   if (runWorkbench.mode === "gate") {
     return `<section class="interaction-dock gate-dock" aria-label="Workflow approval">
       <div class="dock-label">Workflow approval · remains here until answered</div>
@@ -2780,19 +2923,111 @@ function render() {
   document.querySelectorAll("[data-run-answer]").forEach((button) => {
     button.addEventListener("click", () => {
       const interaction = runWorkbench.mode;
-      runWorkbench.notice =
-        interaction === "gate"
-          ? `Workflow approval ${button.dataset.runAnswer}.`
-          : `Harness request ${button.dataset.runAnswer}.`;
-      runWorkbench.mode =
-        interaction === "gate"
-          ? button.dataset.runAnswer === "approved"
-            ? "committing"
-            : "failed"
-          : "running";
+      const answer = button.dataset.runAnswer;
+      runWorkbench.operationAttempt += 1;
+      const attempt = runWorkbench.operationAttempt;
+      runWorkbench.operation = {
+        state: "pending",
+        title:
+          interaction === "gate"
+            ? "Answering Workflow approval"
+            : "Answering Harness request",
+        message:
+          interaction === "gate"
+            ? "Crucible is applying your answer to this durable Human Gate."
+            : "Crucible is sending your answer to the current Codex Turn.",
+      };
       render();
+
+      setTimeout(() => {
+        if (runWorkbench.operationAttempt !== attempt) return;
+        runWorkbench.notice =
+          interaction === "gate"
+            ? `Workflow approval ${answer}.`
+            : `Harness request ${answer}.`;
+        runWorkbench.mode =
+          interaction === "gate"
+            ? answer === "approved"
+              ? "committing"
+              : "failed"
+            : "running";
+        runWorkbench.operation = {
+          state: interaction === "gate" ? "applied" : "accepted",
+          title:
+            interaction === "gate"
+              ? "Approval recorded"
+              : "Harness response accepted",
+          message:
+            interaction === "gate"
+              ? answer === "approved"
+                ? "The Workflow advanced to Commit fix."
+                : "The Workflow ended failed without creating a commit."
+              : "The Run timeline will show what the current Turn does next.",
+        };
+        render();
+
+        if (interaction !== "gate" || answer !== "approved") return;
+        setTimeout(() => {
+          if (
+            runWorkbench.operationAttempt !== attempt ||
+            runWorkbench.mode !== "committing"
+          )
+            return;
+          runWorkbench.mode = "succeeded";
+          runWorkbench.notice = "Commit fix completed with exit 0.";
+          runWorkbench.operation = null;
+          render();
+        }, 1150);
+      }, 450);
     });
   });
+
+  document.querySelectorAll("[data-checkpoint-answer]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const answer = button.dataset.checkpointAnswer;
+      runWorkbench.operationAttempt += 1;
+      const attempt = runWorkbench.operationAttempt;
+      runWorkbench.operation = {
+        state: "pending",
+        title: "Answering Review checkpoint",
+        message:
+          answer === "continue"
+            ? "Crucible is granting the Repeat group another three iterations."
+            : "Crucible is applying your decision to stop this Run.",
+      };
+      render();
+      setTimeout(() => {
+        if (runWorkbench.operationAttempt !== attempt) return;
+        runWorkbench.stoppedAtCheckpoint = answer === "stop";
+        runWorkbench.notice =
+          answer === "continue"
+            ? "Review checkpoint answered: continue for three more iterations."
+            : "You stopped the Run at the Review checkpoint.";
+        runWorkbench.iteration = answer === "continue" ? 4 : 3;
+        runWorkbench.mode = answer === "continue" ? "running" : "failed";
+        runWorkbench.operation = {
+          state: "applied",
+          title: answer === "continue" ? "Checkpoint continued" : "Run stopped",
+          message:
+            answer === "continue"
+              ? "Fix test is starting Iteration 4 on the same Run."
+              : "The Run is now failed; its evidence and Artifacts remain available.",
+        };
+        render();
+      }, 500);
+    });
+  });
+
+  const endInteractiveStepButton = document.querySelector(
+    "[data-run-end-interactive]",
+  );
+  if (endInteractiveStepButton) {
+    endInteractiveStepButton.addEventListener("click", () => {
+      runWorkbench.confirmation = "end-interactive";
+      render();
+      document.querySelector('[data-run-confirm="end-interactive"]')?.focus();
+    });
+  }
 
   const loadEarlierButton = document.querySelector("[data-run-load-earlier]");
   if (loadEarlierButton) {
@@ -2808,6 +3043,41 @@ function render() {
       const reply = document.querySelector("[data-run-reply]").value.trim();
       if (!reply) {
         document.querySelector("[data-run-reply]").focus();
+        return;
+      }
+      if (runWorkbench.mode === "interactive") {
+        runWorkbench.operationAttempt += 1;
+        const attempt = runWorkbench.operationAttempt;
+        runWorkbench.interactiveReply = reply;
+        runWorkbench.interactiveResponseReady = false;
+        runWorkbench.notice = "";
+        runWorkbench.mode = "running";
+        runWorkbench.operation = {
+          state: "pending",
+          title: "Sending next Turn",
+          message:
+            "Crucible is admitting your input to the existing Harness Session.",
+        };
+        render();
+        setTimeout(() => {
+          if (runWorkbench.operationAttempt !== attempt) return;
+          runWorkbench.operation = {
+            state: "accepted",
+            title: "Turn accepted",
+            message:
+              "Codex accepted the next Turn. The timeline now owns its progress and result.",
+          };
+          render();
+        }, 300);
+        setTimeout(() => {
+          if (runWorkbench.operationAttempt !== attempt) return;
+          runWorkbench.interactiveTurn += 1;
+          runWorkbench.interactiveResponseReady = true;
+          runWorkbench.mode = "interactive";
+          runWorkbench.notice = `Turn ${runWorkbench.interactiveTurn} completed. Continue or end the Step explicitly.`;
+          runWorkbench.operation = null;
+          render();
+        }, 1200);
         return;
       }
       runWorkbench.notice = `You replied: ${reply}`;

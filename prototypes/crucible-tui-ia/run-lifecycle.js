@@ -3,6 +3,8 @@
 globalThis.runLifecyclePrototype = (() => {
   const runModeDefinitions = {
     running: "Working",
+    checkpoint: "Review checkpoint",
+    interactive: "Interactive agent step",
     gate: "Workflow approval",
     request: "Harness request",
     question: "Agent question",
@@ -77,7 +79,18 @@ globalThis.runLifecyclePrototype = (() => {
       <div class="dock-label">Terminal Run</div>
       <h2>Workflow completed</h2>
       <p>All four Steps completed. This Run cannot resume or be cancelled; its history and Artifacts remain available.</p>
-      ${terminalActions}
+      <div class="completion-summary">
+        ${recoveryEvidence([
+          ["Result", "Succeeded"],
+          ["Published", "test-output and proposed-patch"],
+          ["Workspace", "Commit fix completed with exit 0"],
+        ])}
+      </div>
+      <div class="dock-actions completion-actions">
+        <button type="button" data-run-resource="artifacts">View Artifacts</button>
+        <button type="button" data-view="R">Previous Runs</button>
+        <button type="button" class="danger-button" data-run-delete ${operationPending ? "disabled" : ""}>Delete Run</button>
+      </div>
     </section>`;
     }
 
@@ -145,14 +158,17 @@ globalThis.runLifecyclePrototype = (() => {
     const failedAtApproval = runWorkbench.notice.startsWith(
       "Workflow approval rejected",
     );
+    const stoppedAtCheckpoint = runWorkbench.stoppedAtCheckpoint;
     return `<section class="interaction-dock lifecycle-dock" aria-label="Failed Run recovery">
     <div class="dock-label">Resting Run · recovery available</div>
-    <h2>${failedAtApproval ? "The proposed fix was rejected" : "The Workflow reached a negative result"}</h2>
+    <h2>${failedAtApproval ? "The proposed fix was rejected" : stoppedAtCheckpoint ? "You stopped at the Review checkpoint" : "The Workflow reached a negative result"}</h2>
     <p>${failedAtApproval ? "Resuming keeps this Run and returns to Approve fix. The proposed patch and earlier evidence remain available for review." : "Resuming keeps this Run and starts Fix test again with a fresh review interval. Earlier attempts and Artifacts remain unchanged."}</p>
     ${recoveryEvidence([
       [
         "Stopped at",
-        failedAtApproval ? "Approve fix" : "Fix test · Iteration 6",
+        failedAtApproval
+          ? "Approve fix"
+          : `Fix test · Iteration ${runWorkbench.iteration}`,
       ],
       [
         "Resume will",
@@ -202,11 +218,24 @@ globalThis.runLifecyclePrototype = (() => {
     const confirmation = runWorkbench.confirmation;
     if (!confirmation) return "";
     const deleting = confirmation === "delete";
-    const title = deleting ? "Delete this Run?" : "Cancel this Run?";
+    const endingInteractiveStep = confirmation === "end-interactive";
+    const title = deleting
+      ? "Delete this Run?"
+      : endingInteractiveStep
+        ? "End Clarify implementation?"
+        : "Cancel this Run?";
     const message = deleting
       ? "This permanently removes the Run history, Artifacts, transcripts, and retained diagnostics from Crucible. Workspace files are not removed."
-      : "This permanently ends the Run. Its history and published Artifacts remain available until you delete it.";
-    const action = deleting ? "Delete Run" : "Cancel Run";
+      : endingInteractiveStep
+        ? "This completes the Interactive agent step and advances the Workflow to Draft implementation plan. The conversation remains in this Run's history, but you cannot add another Turn to this Step."
+        : "This permanently ends the Run. Its history and published Artifacts remain available until you delete it.";
+    const action = deleting
+      ? "Delete Run"
+      : endingInteractiveStep
+        ? "End Step"
+        : "Cancel Run";
+    const keepLabel = endingInteractiveStep ? "Keep Talking" : "Keep Run";
+    const actionClass = endingInteractiveStep ? "primary" : "danger-button";
 
     return `<div class="run-confirmation-backdrop">
     <section class="run-confirmation" role="dialog" aria-modal="true" aria-labelledby="run-confirmation-title">
@@ -216,8 +245,8 @@ globalThis.runLifecyclePrototype = (() => {
       </header>
       <p>${message}</p>
       <div class="dock-actions">
-        <button type="button" data-run-confirmation-dismiss>Keep Run</button>
-        <button type="button" class="danger-button" data-run-confirm="${confirmation}">${action}</button>
+        <button type="button" data-run-confirmation-dismiss>${keepLabel}</button>
+        <button type="button" class="${actionClass}" data-run-confirm="${confirmation}">${action}</button>
       </div>
     </section>
   </div>`;
@@ -265,6 +294,33 @@ globalThis.runLifecyclePrototype = (() => {
 
   function applyRunConfirmation(action) {
     runWorkbench.confirmation = null;
+    if (action === "end-interactive") {
+      runWorkbench.operationAttempt += 1;
+      const attempt = runWorkbench.operationAttempt;
+      runWorkbench.operation = {
+        state: "pending",
+        title: "Ending Interactive step",
+        message:
+          "Crucible is applying the explicit end control to Clarify implementation.",
+      };
+      render();
+      setTimeout(() => {
+        if (runWorkbench.operationAttempt !== attempt) return;
+        runWorkbench.scenario = "interactive-next";
+        runWorkbench.mode = "running";
+        runWorkbench.notice =
+          "Interactive step ended. Draft implementation plan is now running.";
+        runWorkbench.operation = {
+          state: "applied",
+          title: "Step ended",
+          message:
+            "Clarify implementation completed and the Workflow advanced without interpreting the conversation.",
+        };
+        render();
+      }, 550);
+      return;
+    }
+
     if (action === "cancel") {
       runWorkbench.mode = "cancelled";
       runWorkbench.notice = "";
