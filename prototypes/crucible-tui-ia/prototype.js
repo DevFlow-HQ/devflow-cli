@@ -14,7 +14,7 @@ const variants = {
   A: {
     name: "Progressive Launch",
     thesis:
-      "Ask for one launch decision at a time, then show trust and preflight evidence only at final review.",
+      "Ask for one launch decision at a time, then return changed launch conditions to the exact decision that can resolve them.",
   },
   R: {
     name: "Previous Runs",
@@ -553,6 +553,71 @@ const launchDraft = {
   inputValues: {},
   inputProblems: {},
   trustApproved: false,
+  finding: null,
+  operation: null,
+};
+
+const launchScenarioDefinitions = {
+  ready: { label: "Ready" },
+  composition: {
+    label: "Composition changed",
+    target: "bundle",
+    code: "composition",
+    title: "This Bundle can no longer start",
+    explanation:
+      "This Bundle is corrupted and can no longer be started. Reinstall it, or choose another installed Bundle.",
+  },
+  prerequisite: {
+    label: "Prerequisite missing",
+    target: "bundle",
+    code: "prerequisite",
+    title: "Workspace prerequisite not met",
+    explanation:
+      "Test Repair requires this Workspace to be the root of a non-bare Git worktree, but example-service is not currently that root.",
+    remediation:
+      "Exit Crucible and launch it from the Git worktree root, or choose a Bundle that does not require one.",
+  },
+  trust: {
+    label: "Trust changed",
+    target: "bundle",
+    code: "trust",
+    title: "Bundle trust changed",
+    explanation:
+      "Trust for this exact Test Repair digest was revoked after the review.",
+    remediation:
+      'Review the Bundle details, then select "I trust Test Repair 1.0.0" again.',
+  },
+  harness: {
+    label: "Harness changed",
+    target: "harness",
+    code: "harness",
+    title: "Codex is no longer ready",
+    explanation: "The installed Codex Harness now requires authentication.",
+    remediation:
+      "Open Codex and sign in, then return here; or choose another qualified Harness.",
+  },
+  model: {
+    label: "Model changed",
+    target: "harness",
+    code: "model",
+    title: "The selected model is no longer available",
+    explanation: "Codex no longer reports gpt-5-codex as selectable.",
+    remediation: "Choose another model currently reported by Codex.",
+  },
+};
+
+const requestedLaunchScenario = new URLSearchParams(location.search).get(
+  "launchState",
+);
+
+const launchSimulation = {
+  scenario: launchScenarioDefinitions[requestedLaunchScenario]
+    ? requestedLaunchScenario
+    : "ready",
+  armed: Boolean(
+    requestedLaunchScenario && requestedLaunchScenario !== "ready",
+  ),
+  attempt: 0,
 };
 
 const runModes = ["running", "gate", "request", "question"];
@@ -641,6 +706,9 @@ function setRunListMode(mode) {
 }
 
 function resetLaunchDraft() {
+  launchSimulation.attempt += 1;
+  launchSimulation.scenario = "ready";
+  launchSimulation.armed = false;
   launchDraft.step = "bundle";
   launchDraft.bundleIndex = null;
   launchDraft.harnessIndex = null;
@@ -648,6 +716,8 @@ function resetLaunchDraft() {
   launchDraft.inputValues = {};
   launchDraft.inputProblems = {};
   launchDraft.trustApproved = false;
+  launchDraft.finding = null;
+  launchDraft.operation = null;
 }
 
 function openView(next) {
@@ -990,6 +1060,71 @@ function launchHeading(title) {
   </header>`;
 }
 
+function launchFinding(target) {
+  const finding = launchDraft.finding;
+  if (!finding || finding.target !== target) return "";
+
+  return `<section class="launch-finding" role="alert" tabindex="-1" data-launch-finding>
+    ${status("!", "warn", finding.title)}
+    <p>${escapeHtml(finding.explanation)}</p>
+    ${finding.remediation ? `<p><strong>What to do:</strong> ${escapeHtml(finding.remediation)}</p>` : ""}
+  </section>`;
+}
+
+function launchOperationFeedback() {
+  const operation = launchDraft.operation;
+  if (!operation) return "";
+
+  const isPending = operation.state === "pending";
+  return `<aside class="launch-operation-feedback ${operation.state}" role="${isPending ? "status" : "alert"}" aria-live="polite">
+    <div>
+      ${status(isPending ? "*" : "!", isPending ? "info" : "warn", operation.title)}
+      <p>${escapeHtml(operation.message)}</p>
+    </div>
+    ${isPending ? "" : '<button type="button" class="icon-button" aria-label="Dismiss launch feedback" title="Dismiss" data-dismiss-launch-feedback>&times;</button>'}
+  </aside>`;
+}
+
+function prepareLaunchScenario(scenario) {
+  const nextScenario = launchScenarioDefinitions[scenario] ? scenario : "ready";
+  launchSimulation.attempt += 1;
+  launchSimulation.scenario = nextScenario;
+  launchSimulation.armed = nextScenario !== "ready";
+  launchDraft.step = "review";
+  launchDraft.bundleIndex = 0;
+  launchDraft.harnessIndex = 0;
+  launchDraft.model = harnesses[0].models[0];
+  launchDraft.inputValues = { "failing-test": "tests/example.test.ts" };
+  launchDraft.inputProblems = {};
+  launchDraft.trustApproved = true;
+  launchDraft.finding = null;
+  launchDraft.operation = null;
+}
+
+function setLaunchScenario(scenario) {
+  prepareLaunchScenario(scenario);
+  const params = new URLSearchParams(location.search);
+  params.set("variant", "A");
+  params.set("launchState", launchSimulation.scenario);
+  history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+  render();
+}
+
+function launchScenarioSwitcher() {
+  const options = Object.entries(launchScenarioDefinitions)
+    .map(
+      ([id, scenario]) =>
+        `<option value="${id}" ${launchSimulation.scenario === id ? "selected" : ""}>${scenario.label}</option>`,
+    )
+    .join("");
+
+  return `<nav class="launch-state-switcher" aria-label="Launch result prototype switcher">
+    <label for="launch-state">Prototype launch result</label>
+    <select id="launch-state" data-launch-scenario>${options}</select>
+    <button type="button" data-replay-launch-scenario>Load state</button>
+  </nav>`;
+}
+
 function workflowBundleChoices() {
   return workflowBundles
     .map(
@@ -1010,6 +1145,9 @@ function workflowBundleDetails() {
 
   const bundle = workflowBundles[launchDraft.bundleIndex];
   const isTrusted = trustedBundleDigests.has(bundle.digest);
+  const blockingFinding =
+    launchDraft.finding?.target === "bundle" &&
+    launchDraft.finding.code !== "trust";
   const trustControl = isTrusted
     ? ""
     : `<label class="trust-confirmation">
@@ -1021,6 +1159,7 @@ function workflowBundleDetails() {
     <aside class="panel bundle-details">
       <h2>What this Bundle can do</h2>
       <div class="panel-body review-list">
+        ${launchFinding("bundle")}
         <div class="review-item"><span class="muted">Name</span><strong>${bundle.name}</strong></div>
         <div class="review-item"><span class="muted">Description</span><span>${bundle.description}</span></div>
         <div class="review-item"><span class="muted">Source</span><span>${bundle.origin}</span></div>
@@ -1030,7 +1169,7 @@ function workflowBundleDetails() {
       </div>
     </aside>
     <div class="launch-actions">
-      <button type="button" class="primary" data-launch-next="harness" ${isTrusted || launchDraft.trustApproved ? "" : "disabled"}>Continue</button>
+      <button type="button" class="primary" data-launch-next="harness" ${!blockingFinding && (isTrusted || launchDraft.trustApproved) ? "" : "disabled"}>Continue</button>
     </div>
   </div>`;
 }
@@ -1051,16 +1190,22 @@ function launchBundleStep() {
 function harnessChoices() {
   return harnesses
     .map((harness, index) => {
-      const selectionAttribute = harness.available
+      const changedHarness =
+        launchDraft.finding?.code === "harness" && index === 0;
+      const isAvailable = harness.available && !changedHarness;
+      const detail = changedHarness
+        ? "Unavailable · authentication is required in Codex"
+        : harness.detail;
+      const selectionAttribute = isAvailable
         ? `data-harness-index="${index}"`
         : "disabled";
       return `
         <button type="button" class="choice-button" ${selectionAttribute} aria-pressed="${launchDraft.harnessIndex === index}">
           <span>
             <strong>${harness.name}</strong>
-            <small>${harness.detail}</small>
+            <small>${detail}</small>
           </span>
-          <span class="choice-meta">${launchDraft.harnessIndex === index ? "Selected" : harness.available ? ">" : "—"}</span>
+          <span class="choice-meta">${launchDraft.harnessIndex === index ? "Selected" : isAvailable ? ">" : "—"}</span>
         </button>`;
     })
     .join("");
@@ -1070,7 +1215,11 @@ function harnessConfiguration() {
   if (launchDraft.harnessIndex === null) return "";
 
   const harness = harnesses[launchDraft.harnessIndex];
-  const modelOptions = harness.models
+  const availableModels =
+    launchDraft.finding?.code === "model" && launchDraft.harnessIndex === 0
+      ? harness.models.filter((model) => model !== "gpt-5-codex")
+      : harness.models;
+  const modelOptions = availableModels
     .map(
       (model) =>
         `<option value="${model}" ${launchDraft.model === model ? "selected" : ""}>${model}</option>`,
@@ -1080,16 +1229,20 @@ function harnessConfiguration() {
   return `<aside class="panel configuration-panel">
     <h2>Configure ${harness.name}</h2>
     <div class="panel-body form-fields">
+      ${launchFinding("harness")}
       <div class="field">
         <label for="launch-model">Model</label>
-        <select id="launch-model" data-launch-model>${modelOptions}</select>
+        <select id="launch-model" data-launch-model>
+          ${launchDraft.model ? "" : '<option value="">Select a model</option>'}
+          ${modelOptions}
+        </select>
       </div>
       <div class="mini">
         <b>Session continuity</b>
         ${harness.detail}
       </div>
       <div class="launch-actions">
-        <button type="button" class="primary" data-launch-next="${launchSequence()[2]}">Continue</button>
+        <button type="button" class="primary" data-launch-next="${launchSequence()[2]}" ${launchDraft.model ? "" : "disabled"}>Continue</button>
       </div>
     </div>
   </aside>`;
@@ -1102,6 +1255,7 @@ function launchHarnessStep() {
       : "harness-layout";
 
   return `${launchHeading("Choose a Harness")}
+    ${launchDraft.harnessIndex === null ? launchFinding("harness") : ""}
     <div class="launch-content ${layoutClass}">
       <div class="choice-list">${harnessChoices()}</div>
       ${harnessConfiguration()}
@@ -1251,7 +1405,7 @@ function launchReviewStep() {
         ${launchInputReviewItems(bundle)}
       </div>
       <div class="launch-actions">
-        <button type="button" class="primary" data-start-run ${canStart ? "" : "disabled"}>Start Run</button>
+        <button type="button" class="primary" data-start-run ${canStart && launchDraft.operation?.state !== "pending" ? "" : "disabled"}>${launchDraft.operation?.state === "pending" ? "Checking launch..." : "Start Run"}</button>
       </div>
     </div>`;
 }
@@ -1267,8 +1421,59 @@ function variantA() {
   return `<section class="screen variant-a">
     ${topLine("A")}
     <div class="launch-shell">${launchStepContent()}</div>
+    ${launchOperationFeedback()}
+    ${launchScenarioSwitcher()}
     ${switcher("A")}
   </section>`;
+}
+
+function startLaunchAttempt() {
+  launchSimulation.attempt += 1;
+  const attempt = launchSimulation.attempt;
+  launchDraft.operation = {
+    state: "pending",
+    title: "Checking launch",
+    message:
+      "Crucible is rechecking Bundle trust, Composition, Preflight, Harness, and model availability.",
+  };
+  render();
+
+  setTimeout(() => {
+    if (launchSimulation.attempt !== attempt) return;
+
+    if (!launchSimulation.armed) {
+      trustedBundleDigests.add(selectedBundle().digest);
+      runWorkbench.mode = "running";
+      runWorkbench.historyRunId = null;
+      runWorkbench.notice = "";
+      runWorkbench.olderLoaded = false;
+      setVariant("B");
+      return;
+    }
+
+    const finding = launchScenarioDefinitions[launchSimulation.scenario];
+    launchSimulation.armed = false;
+    launchDraft.finding = finding;
+    launchDraft.operation = {
+      state: "failed",
+      title: "Run not started",
+      message: `No Run was created. Review the highlighted ${finding.target === "bundle" ? "Bundle" : "Harness"} finding.`,
+    };
+    launchDraft.step = finding.target;
+
+    if (finding.code === "trust") {
+      trustedBundleDigests.delete(selectedBundle().digest);
+      launchDraft.trustApproved = false;
+    }
+    if (finding.code === "harness") {
+      launchDraft.harnessIndex = null;
+      launchDraft.model = "";
+    }
+    if (finding.code === "model") launchDraft.model = "";
+
+    render();
+    document.querySelector("[data-launch-finding]")?.focus();
+  }, 650);
 }
 
 function variantB() {
@@ -2059,6 +2264,32 @@ function render() {
     button.addEventListener("click", () => openView(button.dataset.view));
   });
 
+  const launchScenarioSelect = document.querySelector("[data-launch-scenario]");
+  if (launchScenarioSelect) {
+    launchScenarioSelect.addEventListener("change", () => {
+      setLaunchScenario(launchScenarioSelect.value);
+    });
+  }
+
+  const replayLaunchScenarioButton = document.querySelector(
+    "[data-replay-launch-scenario]",
+  );
+  if (replayLaunchScenarioButton) {
+    replayLaunchScenarioButton.addEventListener("click", () => {
+      setLaunchScenario(launchSimulation.scenario);
+    });
+  }
+
+  const dismissLaunchFeedbackButton = document.querySelector(
+    "[data-dismiss-launch-feedback]",
+  );
+  if (dismissLaunchFeedbackButton) {
+    dismissLaunchFeedbackButton.addEventListener("click", () => {
+      launchDraft.operation = null;
+      render();
+    });
+  }
+
   const openBundleDetailsButton = document.querySelector(
     "[data-open-bundle-details]",
   );
@@ -2246,12 +2477,19 @@ function render() {
   document.querySelectorAll("[data-bundle-index]").forEach((button) => {
     button.addEventListener("click", () => {
       const bundleIndex = Number(button.dataset.bundleIndex);
+      const keepsCurrentFinding =
+        launchDraft.bundleIndex === bundleIndex &&
+        launchDraft.finding?.target === "bundle";
       launchDraft.bundleIndex = bundleIndex;
       launchDraft.harnessIndex = null;
       launchDraft.model = "";
       launchDraft.inputValues = {};
       launchDraft.inputProblems = {};
       launchDraft.trustApproved = false;
+      if (!keepsCurrentFinding) {
+        launchDraft.finding = null;
+        launchDraft.operation = null;
+      }
       render();
       document.querySelector(`[data-bundle-index="${bundleIndex}"]`).focus();
     });
@@ -2259,8 +2497,16 @@ function render() {
   document.querySelectorAll("[data-harness-index]").forEach((button) => {
     button.addEventListener("click", () => {
       const harnessIndex = Number(button.dataset.harnessIndex);
+      const unavailableModel =
+        launchDraft.finding?.code === "model" && harnessIndex === 0
+          ? "gpt-5-codex"
+          : null;
       launchDraft.harnessIndex = harnessIndex;
-      launchDraft.model = harnesses[launchDraft.harnessIndex].models[0];
+      launchDraft.model = harnesses[harnessIndex].models.find(
+        (model) => model !== unavailableModel,
+      );
+      launchDraft.finding = null;
+      launchDraft.operation = null;
       render();
       document.querySelector(`[data-harness-index="${harnessIndex}"]`).focus();
     });
@@ -2270,6 +2516,11 @@ function render() {
   if (modelSelect) {
     modelSelect.addEventListener("change", () => {
       launchDraft.model = modelSelect.value;
+      if (launchDraft.model && launchDraft.finding?.code === "model") {
+        launchDraft.finding = null;
+        launchDraft.operation = null;
+        render();
+      }
     });
   }
 
@@ -2316,20 +2567,17 @@ function render() {
   if (trustConfirmation) {
     trustConfirmation.addEventListener("change", () => {
       launchDraft.trustApproved = trustConfirmation.checked;
+      if (launchDraft.trustApproved && launchDraft.finding?.code === "trust") {
+        launchDraft.finding = null;
+        launchDraft.operation = null;
+      }
       render();
     });
   }
 
   const startRunButton = document.querySelector("[data-start-run]");
   if (startRunButton) {
-    startRunButton.addEventListener("click", () => {
-      trustedBundleDigests.add(selectedBundle().digest);
-      runWorkbench.mode = "running";
-      runWorkbench.historyRunId = null;
-      runWorkbench.notice = "";
-      runWorkbench.olderLoaded = false;
-      setVariant("B");
-    });
+    startRunButton.addEventListener("click", startLaunchAttempt);
   }
 
   document.querySelectorAll("[data-run-details]").forEach((button) => {
@@ -2511,5 +2759,9 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft") cycle(-1);
   if (event.key === "ArrowRight") cycle(1);
 });
+
+if (launchSimulation.scenario !== "ready") {
+  prepareLaunchScenario(launchSimulation.scenario);
+}
 
 render();

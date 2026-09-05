@@ -585,6 +585,10 @@ textarea:focus-visible {
   margin: 0 auto;
 }
 
+.variant-a {
+  padding-bottom: 8.5rem;
+}
+
 .launch-heading {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -606,6 +610,100 @@ textarea:focus-visible {
 .launch-content-narrow {
   width: min(40rem, 100%);
   margin: 0 auto;
+}
+
+.launch-finding {
+  padding: 0.75rem;
+  border-left: 3px solid var(--gold);
+  background: rgba(215, 181, 109, 0.08);
+}
+
+.launch-shell > .launch-finding {
+  margin-top: 1rem;
+}
+
+.launch-finding .status {
+  display: block;
+  font-weight: 700;
+}
+
+.launch-finding p {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.launch-finding strong {
+  color: var(--ink);
+}
+
+.launch-operation-feedback {
+  position: fixed;
+  top: 4.25rem;
+  right: 1.25rem;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 6px;
+  background: rgba(23, 27, 31, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.launch-operation-feedback.failed {
+  border-left-color: var(--gold);
+}
+
+.launch-operation-feedback p {
+  margin: 0.35rem 0 0 1.2rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.launch-operation-feedback .icon-button {
+  width: 1.8rem;
+  height: 1.8rem;
+  border: 0;
+  background: transparent;
+}
+
+.launch-state-switcher {
+  position: fixed;
+  right: 1rem;
+  bottom: 3.9rem;
+  left: 1rem;
+  z-index: 10;
+  display: flex;
+  gap: 0.45rem;
+  justify-content: center;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.35rem;
+  color: var(--muted);
+  background: rgba(16, 18, 20, 0.96);
+}
+
+.launch-state-switcher label,
+.launch-state-switcher select,
+.launch-state-switcher button {
+  font-size: 0.72rem;
+}
+
+.launch-state-switcher select {
+  min-width: 12rem;
+  border: 1px solid var(--cyan);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  color: var(--cyan);
+  background: var(--panel);
+  font-family: inherit;
 }
 
 .choice-list {
@@ -1943,6 +2041,22 @@ textarea:focus-visible {
   .run-state-switcher {
     justify-content: flex-start;
     overflow-x: auto;
+  }
+
+  .launch-state-switcher {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .launch-state-switcher label,
+  .launch-state-switcher select,
+  .launch-state-switcher button {
+    flex: 0 0 auto;
+  }
+
+  .launch-operation-feedback {
+    top: 3.75rem;
+    right: 0.5rem;
   }
 
   .run-state-switcher span,
