@@ -23,11 +23,12 @@ human control rather than on a marker or a recognised phrase: Crucible must neve
 
 ADR 0010's fixed cap of `2N + 5` iterations is replaced by an **Iteration checkpoint**, and **no Bundle declares any iteration bound**. A workflow is
 problem-agnostic — one **Routing** serves "repair a single function" and "build the whole application" — so an author cannot know how many
-iterations are enough, and the goal was never to choose a number but to make an unattended infinite loop impossible. After a Crucible-owned default
-interval without the verdict passing, the group raises a **Human Gate**: continuing grants another interval, stopping ends the Run `failed`, and the
-interval itself is adjustable at launch because the human is the one who knows the size of the problem. A Run resting `blocked` costs nothing and
-can wait indefinitely, so this guarantees termination without ever failing a legitimate long Run because someone guessed a constant wrong. The cap
-was only ever a runaway guard; the drained-queue verdict was always the honest exit. **Retries** are bounded differently and deliberately so: they
-measure transient flakiness rather than problem size, so the step kind decides what is retryable at all, Crucible sets the default budget, and a
-**Workflow Bundle** may optionally override it. A bound that reads an artifact — the literal expression of `2N + 5` — was rejected as the beginning
-of the workflow expression language this design exists to avoid.
+iterations are enough, and the goal was never to choose a maximum but to make unattended repetition stop for review. Every Repeat group instead
+declares a required positive-integer review interval and plain-text message. When that cadence is reached without the verdict passing, the group
+raises a **Human Gate** with the authored message plus Crucible-owned runtime evidence: continuing grants another interval and stopping ends the Run
+`failed`. The cadence is authored workflow guidance, not a maximum or a launch-time control, and Crucible enforces an engine-owned safety ceiling so
+a Bundle cannot effectively disable review. A Run resting `blocked` costs nothing and can wait indefinitely, so this guarantees human checkpoints
+without failing a legitimate long Run because someone guessed a maximum. The cap was only ever a runaway guard; the drained-queue verdict was
+always the honest exit. **Retries** are bounded differently and deliberately so: they measure transient flakiness rather than problem size, so the
+step kind decides what is retryable at all, Crucible sets the default budget, and a **Workflow Bundle** may optionally override it. A bound that reads
+an artifact — the literal expression of `2N + 5` — was rejected as the beginning of the workflow expression language this design exists to avoid.

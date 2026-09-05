@@ -23,18 +23,18 @@ script invokes transitively remain opaque runtime dependencies. This prevents ac
 not a sandbox: launched commands and Harnesses retain the current OS user's authority.
 
 Trust therefore lives outside the Bundle and is scoped to its digest. Crucible generates an **Execution summary** from the manifest for the selected
-platform and asks once before the first external execution; the local grant persists until revocation or uninstall, and any new digest asks again.
-Built-ins inherit the trust of the installed app release. A future portal signature may attest who supplied exact bytes, never that executing them is
-safe. Trust is rechecked before Run creation, resume, and Step boundaries, while revocation does not pretend it can retract authority from an already
-running process.
+platform and asks once before the first external execution; the local grant persists while that exact Bundle remains installed, and any new digest
+asks again. There is no separate trust-revocation action or pipeline: a user may decline to launch an unwanted Bundle, and uninstalling an External
+Workflow Bundle removes both it and its grant. Built-ins inherit the trust of the installed app release. A future portal signature may attest who
+supplied exact bytes, never that executing them is safe. Trust is checked before Run creation and resume.
 
 A later refinement, [Decide which Git operations Crucible performs for a Workflow and where they sit in the routing](https://github.com/DevFlow-HQ/devflow-cli/issues/14),
 removed the provisional Git Step family and any separate Git-write authority. Git reads and mutations use ordinary Commands or Harness behaviour;
 the only Crucible-owned Git behaviour is the private probe implementing the authored `git-worktree-root` Workspace prerequisite. This keeps the
 manifest honest about what it can know: it exposes direct commands and scripts but does not claim to infer their transitive tools or effects.
 
-A Run records its Bundle identity and digest as a **Bundle Snapshot**, not another permanent copy of the archive. Normal uninstall is refused only
-while a live (`running` or `blocked`) Run uses that exact Installed Bundle; resting (`halted` or `failed`) Runs do not retain it. Removal deletes only
-Crucible's managed bytes, Catalog Entry, and Trust grant, preserving external inputs and Run history. Such a resting Run can resume after the exact
-digest is reinstalled, while another version or colliding digest never substitutes. Forced removal must first interrupt and clean up live Runs or
-leave the Bundle untouched.
+A Run records its Bundle identity and digest as a **Bundle Snapshot**, not another permanent copy of the archive. For an External Workflow Bundle,
+normal uninstall is refused only while a live (`running` or `blocked`) Run uses that exact Installed Bundle; resting (`halted` or `failed`) Runs do
+not retain it. Removal deletes only Crucible's managed bytes, Catalog Entry, and Trust grant, preserving external inputs and Run history. Such a
+resting Run can resume after the exact digest is reinstalled, while another version or colliding digest never substitutes. Forced removal must first
+interrupt and clean up live Runs or leave the Bundle untouched. Whether built-in Bundles may be removed remains undecided.

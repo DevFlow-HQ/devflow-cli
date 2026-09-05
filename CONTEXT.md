@@ -9,8 +9,8 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 
 ### Target language
 
-- **Workspace** — the resolved absolute directory a **Run** executes against, supplied as a launch input. It is a value on the Run, not an entity
-  with its own identity. _Avoid_: Project.
+- **Workspace** — the resolved absolute directory a **Run** executes against, taken from the directory where Crucible was launched. It is a value
+  on the Run, not an entity with its own identity. _Avoid_: Project.
 - **Run** — one execution of one **Workflow Bundle** against one **Workspace** through one **Harness**. See the
   [Crucible Run lifecycle](./docs/glossary/crucible-run-lifecycle.md) cluster for everything inside a Run.
 - **Catalog Entry** — the local record that one exact **Workflow Bundle** identity and digest is installed, plus its advisory **Bundle origin**.

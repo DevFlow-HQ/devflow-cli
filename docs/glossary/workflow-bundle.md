@@ -15,8 +15,8 @@ what integrity and trust mean before execution.
   and imported files are not Installed Bundles and remain outside Crucible's ownership. _Avoid_: Archive copy, Bundle Snapshot.
 - **Bundle origin** — advisory Catalog metadata describing where Crucible obtained an Installed Bundle: an app release, local build directory,
   imported local file, or later a portal coordinate. It is not consulted during execution. _Avoid_: Trust, authority.
-- **Trust grant** — local approval to execute one installed Bundle digest. It is not Bundle content and says nothing about another digest, even
-  when the two Bundles claim the same publisher or id.
+- **Trust grant** — local approval to execute one installed Bundle digest. It persists while that exact Bundle remains installed, has no separate
+  revocation path, and says nothing about another digest even when the two Bundles claim the same publisher or id.
 - **Execution summary** — Crucible's generated account of the authority an Installed Bundle can exercise on the selected platform, shown before
   the first execution of an untrusted digest. It is derived from the Bundle rather than supplied by its author.
 
@@ -55,6 +55,8 @@ what integrity and trust mean before execution.
   Crucible-owned kind, required and produced artifacts, Harness Session selection when applicable, an optional retry override, and kind-specific
   parameters, plus optional members of Crucible's closed **Workspace prerequisite** set. It never repeats the kind's intrinsic capabilities,
   preconditions, outcomes, reconciliation, or other fixed contract.
+- Every Repeat group declares a required `reviewCheckpoint` with a positive-integer `interval` and plain-text `message`. The interval is a review
+  cadence rather than a maximum or launch input; Crucible enforces an engine-owned safety ceiling.
 - The Composition check also proves that every non-manifest archive entry belongs to exactly one declared asset in non-overlapping asset trees,
   every asset and artifact reference resolves with the right kind or type, every Prompt slot names a required artifact, every schema use is valid,
   and every supported platform resolves one valid command invocation.
@@ -84,18 +86,19 @@ what integrity and trust mean before execution.
 - Built-in, local-build, local-file, and future portal Bundles share one ingestion and runtime contract. Versions install side by side; interactive
   selection defaults to the highest stable installed version, prereleases require explicit selection, and Crucible never auto-updates.
 - External Bundles install untrusted. Before the first attempted Run for a digest, Crucible presents its generated Execution summary and asks once;
-  the local Trust grant persists until revoked or uninstalled. A new digest asks again. Built-ins inherit app-release trust, while future external
-  signatures or attestations may establish provenance and integrity but never safety.
+  the local Trust grant persists for as long as that exact Bundle remains installed. A new digest asks again. There is no independent trust-
+  revocation action or pipeline: a user may decline to launch the Bundle, and removing an External Workflow Bundle also removes its grant. Built-ins
+  inherit app-release trust, while future external signatures or attestations may establish provenance and integrity but never safety.
 - The summary identifies the Bundle, digest, origin, platforms, Step-kind counts, selected commands, working directories, environment variable
   names, and scripts, and warns that Commands and Harness actions run with the current user's authority and cannot have all their effects predicted
-  statically. There is no separate Git-write authority. Trust is checked before a new Run, resume, and Step boundary; revocation blocks the next
-  boundary but does not kill a process already running.
-- A Run's Bundle Snapshot records the exact Bundle identity and digest without duplicating `.wfb` bytes. Normal uninstall refuses only while a
-  `running` or `blocked` Run uses that exact Installed Bundle. `halted` and `failed` Runs do not prevent removal; their resume fails until the exact
-  digest is reinstalled, and another version or digest never substitutes.
-- Successful uninstall removes only Crucible's managed `.wfb`, Catalog Entry, and Trust grant. It preserves the original authoring folder or imported
-  file and the Run's history, events, artifacts, identity, version, and digest. Forced uninstall first interrupts affected live Runs to `halted` and
-  completes their cleanup; if safe stopping fails, nothing is removed.
+  statically. There is no separate Git-write authority. Trust is checked before a new Run or resume.
+- A Run's Bundle Snapshot records the exact Bundle identity and digest without duplicating `.wfb` bytes. For an External Workflow Bundle, normal
+  uninstall refuses only while a `running` or `blocked` Run uses that exact Installed Bundle. `halted` and `failed` Runs do not prevent removal;
+  their resume fails until the exact digest is reinstalled, and another version or digest never substitutes.
+- Successfully uninstalling an External Workflow Bundle removes only Crucible's managed `.wfb`, Catalog Entry, and Trust grant. It preserves the
+  original authoring folder or imported file and the Run's history, events, artifacts, identity, version, and digest. Forced uninstall first
+  interrupts affected live Runs to `halted` and completes their cleanup; if safe stopping fails, nothing is removed. Whether built-in Bundles may be
+  uninstalled remains undecided.
 
 ## Related decisions
 
