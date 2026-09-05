@@ -27,9 +27,14 @@ const variants = {
       "Make the normal post-submit experience the Run timeline, with control-plane operations kept small and peripheral.",
   },
   C: {
-    name: "Catalog Inspector",
+    name: "Workflow Bundles",
     thesis:
-      "Use one stable inspector shell for Bundle, Harness, launch, and Run focus so headless projections map cleanly to TUI views.",
+      "Keep Installed Bundle discovery compact, then show one focused Bundle's purpose, trust, inputs, and declared workflow without exposing package internals.",
+  },
+  D: {
+    name: "Harnesses",
+    thesis:
+      "Inspect Harness availability, models, and truthful capability differences without turning the catalog into launch configuration.",
   },
 };
 
@@ -72,7 +77,42 @@ const workflowBundles = [
     description: "Drive one failing test to green, then ask for approval.",
     lastUsed: "Used 2 hours ago",
     origin: "Imported local file",
+    originDetail: "~/Downloads/test-repair.wfb",
+    compatibility: "macOS, Linux, Windows",
+    workspaceRequirement: "Workspace is a Git worktree root",
     workflow: "1 agent step · 3 commands · 1 approval",
+    workflowSteps: [
+      {
+        kind: "Command",
+        id: "run-failing-test",
+        command: "npm test -- {{failing-test}}",
+      },
+      {
+        kind: "Repeat group",
+        until: "test-result is pass",
+        children: [
+          {
+            kind: "Agent",
+            id: "fix-test",
+          },
+          {
+            kind: "Command",
+            id: "verify-test",
+            command: "npm test -- {{failing-test}}",
+          },
+        ],
+      },
+      {
+        kind: "Human Gate",
+        id: "approve-fix",
+        question: "Approve the generated patch?",
+      },
+      {
+        kind: "Command",
+        id: "commit-fix",
+        command: 'git commit -am "fix: repair failing test"',
+      },
+    ],
     inputs: [
       {
         name: "failing-test",
@@ -91,7 +131,26 @@ const workflowBundles = [
     description: "Review the current Git diff and confirm the findings.",
     lastUsed: "Used yesterday",
     origin: "Built in",
+    originDetail: "Included with Crucible",
+    compatibility: "macOS, Linux, Windows",
+    workspaceRequirement: "Workspace is a Git worktree root",
     workflow: "1 agent step · 1 command · 1 confirmation",
+    workflowSteps: [
+      {
+        kind: "Command",
+        id: "collect-diff",
+        command: "git diff --no-ext-diff",
+      },
+      {
+        kind: "Agent",
+        id: "review-changes",
+      },
+      {
+        kind: "Human Gate",
+        id: "confirm-review",
+        question: "Confirm these review findings?",
+      },
+    ],
     inputs: [],
     digest:
       "sha256:cb34eb16a614573e2713f2c22c7c86569ac847fbfa1fb10c96135b55b5cd6f19",
@@ -104,7 +163,40 @@ const workflowBundles = [
       "Turn a prepared issue into an implementation and pull request.",
     lastUsed: "Used 6 days ago",
     origin: "Imported local file",
+    originDetail: "~/Downloads/issue-to-pr.wfb",
+    compatibility: "macOS, Linux",
+    workspaceRequirement: "Workspace is a Git worktree root",
     workflow: "2 agent steps · 2 commands · 2 approvals",
+    workflowSteps: [
+      {
+        kind: "Agent",
+        id: "implement-issue",
+      },
+      {
+        kind: "Command",
+        id: "run-checks",
+        command: "npm run check",
+      },
+      {
+        kind: "Human Gate",
+        id: "approve-implementation",
+        question: "Approve this implementation?",
+      },
+      {
+        kind: "Agent",
+        id: "prepare-pull-request",
+      },
+      {
+        kind: "Human Gate",
+        id: "approve-pull-request",
+        question: "Approve the pull request proposal?",
+      },
+      {
+        kind: "Command",
+        id: "publish-branch",
+        command: "git push --set-upstream origin HEAD",
+      },
+    ],
     inputs: [
       {
         name: "issue-location",
@@ -123,7 +215,36 @@ const workflowBundles = [
     description: "Upgrade one dependency and verify the Workspace.",
     lastUsed: "Never used",
     origin: "Imported local file",
+    originDetail: "~/Downloads/dependency-upgrade.wfb",
+    compatibility: "macOS, Linux, Windows",
+    workspaceRequirement: "None declared",
     workflow: "1 agent step · 3 commands · 1 approval",
+    workflowSteps: [
+      {
+        kind: "Command",
+        id: "record-current-version",
+        command: "npm list {{dependency-name}}",
+      },
+      {
+        kind: "Agent",
+        id: "upgrade-dependency",
+      },
+      {
+        kind: "Command",
+        id: "verify-workspace",
+        command: "npm run check",
+      },
+      {
+        kind: "Human Gate",
+        id: "approve-upgrade",
+        question: "Approve the dependency upgrade?",
+      },
+      {
+        kind: "Command",
+        id: "record-updated-version",
+        command: "npm list {{dependency-name}}",
+      },
+    ],
     inputs: [
       {
         name: "dependency-name",
@@ -239,24 +360,188 @@ const previousRuns = [
   },
 ];
 
+const harnessCapabilityDefinitions = [
+  {
+    id: "session-recovery",
+    name: "Session recovery",
+    description:
+      "Continue an existing Harness Session after Crucible or the Harness restarts.",
+  },
+  {
+    id: "same-turn-steering",
+    name: "Same-Turn steering",
+    description:
+      "Send additional guidance while the current Turn is still running.",
+  },
+  {
+    id: "turn-interruption",
+    name: "Turn interruption",
+    description:
+      "Ask the Harness to stop the current Turn and confirm that it ended.",
+  },
+  {
+    id: "tool-approvals",
+    name: "Tool approvals",
+    description:
+      "Present Harness tool requests with the decisions the Harness allows.",
+  },
+  {
+    id: "structured-questions",
+    name: "Structured questions",
+    description: "Present structured questions raised during an active Turn.",
+  },
+  {
+    id: "effective-model",
+    name: "Effective model",
+    description: "Report which model actually handled a Turn.",
+  },
+];
+
 const harnesses = [
   {
+    id: "codex",
     name: "Codex",
+    summary: "OpenAI's coding agent for software development.",
     detail: "Qualified · session recovery available",
     models: ["gpt-5-codex", "gpt-5"],
     available: true,
+    qualification: "Qualified",
+    qualificationTone: "ok",
+    qualificationSymbol: "+",
+    executable: "/opt/homebrew/bin/codex",
+    version: "codex-cli 0.41.0",
+    platform: "macOS · arm64",
+    checkedAt: "Today, 10:32 AM",
+    authentication: "Ready in Codex",
+    configuration:
+      "Uses the existing Codex installation and its local configuration.",
+    modelEvidence: "Reported by the qualified Codex installation.",
+    capabilities: [
+      { id: "session-recovery", state: "Available", tone: "ok", symbol: "+" },
+      { id: "same-turn-steering", state: "Available", tone: "ok", symbol: "+" },
+      { id: "turn-interruption", state: "Available", tone: "ok", symbol: "+" },
+      { id: "tool-approvals", state: "Available", tone: "ok", symbol: "+" },
+      {
+        id: "structured-questions",
+        state: "Available",
+        tone: "ok",
+        symbol: "+",
+      },
+      { id: "effective-model", state: "Available", tone: "ok", symbol: "+" },
+    ],
   },
   {
+    id: "claude-code",
     name: "Claude Code",
+    summary: "Anthropic's coding agent for software development.",
     detail: "Unavailable · authenticate with Claude Code first",
-    models: ["claude-opus-4-1", "claude-sonnet-4"],
+    models: [],
     available: false,
+    qualification: "Not ready",
+    qualificationTone: "warn",
+    qualificationSymbol: "!",
+    unavailableReason:
+      "Authentication is required before Crucible can finish qualifying Claude Code.",
+    remediation:
+      "Open Claude Code and sign in there, then return to Crucible. Crucible does not collect or store Claude Code credentials.",
+    executable: "/usr/local/bin/claude",
+    version: "claude-code 1.0.73",
+    platform: "macOS · arm64",
+    checkedAt: "Today, 10:31 AM",
+    authentication: "Required in Claude Code",
+    configuration:
+      "Uses the installed Claude Code configuration after authentication succeeds.",
+    modelEvidence:
+      "Supported models will be reported after qualification succeeds.",
+    capabilities: [
+      {
+        id: "session-recovery",
+        state: "Not checked",
+        tone: "warn",
+        symbol: "!",
+      },
+      {
+        id: "same-turn-steering",
+        state: "Not checked",
+        tone: "warn",
+        symbol: "!",
+      },
+      {
+        id: "turn-interruption",
+        state: "Not checked",
+        tone: "warn",
+        symbol: "!",
+      },
+      { id: "tool-approvals", state: "Not checked", tone: "warn", symbol: "!" },
+      {
+        id: "structured-questions",
+        state: "Not checked",
+        tone: "warn",
+        symbol: "!",
+      },
+      {
+        id: "effective-model",
+        state: "Not checked",
+        tone: "warn",
+        symbol: "!",
+      },
+    ],
   },
   {
+    id: "gemini",
     name: "Gemini",
+    summary: "Google's coding agent for software development.",
     detail: "Qualified · interrupt unavailable",
     models: ["gemini-2.5-pro", "gemini-2.5-flash"],
     available: true,
+    qualification: "Qualified with limits",
+    qualificationTone: "info",
+    qualificationSymbol: "i",
+    executable: "/opt/homebrew/bin/gemini",
+    version: "gemini-cli 0.19.2",
+    platform: "macOS · arm64",
+    checkedAt: "Today, 10:30 AM",
+    authentication: "Ready in Gemini CLI",
+    configuration:
+      "Uses the existing Gemini CLI authentication and configuration.",
+    modelEvidence: "Reported dynamically by this Gemini CLI installation.",
+    capabilities: [
+      {
+        id: "session-recovery",
+        state: "Available with limits",
+        tone: "info",
+        symbol: "i",
+        limits:
+          "Recovery reloads the Session and replays its known history before continuing.",
+      },
+      {
+        id: "same-turn-steering",
+        state: "Unavailable",
+        tone: "muted",
+        symbol: "-",
+      },
+      {
+        id: "turn-interruption",
+        state: "Unavailable",
+        tone: "muted",
+        symbol: "-",
+      },
+      { id: "tool-approvals", state: "Available", tone: "ok", symbol: "+" },
+      {
+        id: "structured-questions",
+        state: "Unavailable",
+        tone: "muted",
+        symbol: "-",
+      },
+      {
+        id: "effective-model",
+        state: "Available with limits",
+        tone: "info",
+        symbol: "i",
+        limits:
+          "The effective model is reported only when the current Session exposes it.",
+      },
+    ],
   },
 ];
 
@@ -293,6 +578,17 @@ const runHistory = {
   loadingOlder: false,
   openedRunId: null,
   resumedRunIds: new Set(),
+};
+
+const bundleCatalog = {
+  query: "",
+  selectedIndex: 0,
+  returnView: "H",
+};
+
+const harnessCatalog = {
+  query: "",
+  selectedIndex: 0,
 };
 
 const WORKSPACE_APPROVALS_KEY = "crucible-prototype.workspace-approvals";
@@ -357,6 +653,9 @@ function resetLaunchDraft() {
 function openView(next) {
   if (next === "A") resetLaunchDraft();
   if (next === "R") runHistory.openedRunId = null;
+  if (next === "C") {
+    bundleCatalog.returnView = "H";
+  }
   setVariant(next);
 }
 
@@ -371,10 +670,6 @@ function status(symbol, cls, label) {
   return `<span class="status ${cls}" data-symbol="${symbol}">${label}</span>`;
 }
 
-function row(left, main, right = "") {
-  return `<div class="row"><span class="muted">${left}</span><div>${main}</div><span>${right}</span></div>`;
-}
-
 function topLine(key) {
   return `
     <div class="topline">
@@ -382,23 +677,6 @@ function topLine(key) {
       <div class="tag">${key} ${variants[key].name}</div>
     </div>
   `;
-}
-
-function stateDump(key) {
-  return `<section class="panel">
-    <h2>Projected state visible in this variant</h2>
-    <div class="panel-body state-dump">${escapeHtml(
-      JSON.stringify(
-        {
-          variant: `${key} ${variants[key].name}`,
-          designThesis: variants[key].thesis,
-          sample,
-        },
-        null,
-        2,
-      ),
-    )}</div>
-  </section>`;
 }
 
 function switcher(key) {
@@ -421,7 +699,7 @@ function workspaceHome() {
             <button type="button" class="primary" data-view="A">Start a Run</button>
             <button type="button" data-view="C">Workflow Bundles</button>
             <button type="button" data-view="R">Previous Runs</button>
-            <button type="button" data-view="C">Harnesses</button>
+            <button type="button" data-view="D">Harnesses</button>
           </nav>
           <p class="home-summary">4 Workflow Bundles · ${runHistory.mode === "empty" ? "No previous Runs" : `${previousRuns.length} previous Runs`} · ${sample.harness} qualified</p>
         </div>
@@ -747,7 +1025,7 @@ function workflowBundleDetails() {
         <div class="review-item"><span class="muted">Description</span><span>${bundle.description}</span></div>
         <div class="review-item"><span class="muted">Source</span><span>${bundle.origin}</span></div>
         <div class="review-item"><span class="muted">Workflow</span><span>${bundle.workflow}</span></div>
-        <p class="bundle-info">${status("i", "info", "Harnesses may also run commands while completing agent steps.")} Explore declared steps and commands in <button type="button" class="inline-command" data-view="C">View Bundle Details</button>.</p>
+        <p class="bundle-info">${status("i", "info", "Harnesses may also run commands while completing agent steps.")} Explore declared steps and commands in <button type="button" class="inline-command" data-open-bundle-details>View Bundle Details</button>.</p>
         ${trustControl}
       </div>
     </aside>
@@ -1402,53 +1680,357 @@ function runStateSwitcher() {
   </nav>`;
 }
 
-function variantC() {
-  return `
-    <section class="screen variant-c">
-      ${topLine("C")}
-      <div class="grid layout">
-        <section class="panel nav">
-          <h2>Projection Families</h2>
-          <div class="panel-body">
-            <button>Bundle catalog</button>
-            <button>Harness catalog</button>
-            <button class="primary">Launch preparation</button>
-            <button>Run list</button>
-            <button>Exact Run</button>
-            <button>Operation</button>
-          </div>
-        </section>
+function filteredWorkflowBundles() {
+  const query = bundleCatalog.query.trim().toLowerCase();
+  return workflowBundles
+    .map((bundle, index) => ({ bundle, index }))
+    .filter(({ bundle }) => {
+      if (!query) return true;
+      return [
+        bundle.name,
+        bundle.identity,
+        bundle.description,
+        bundle.origin,
+      ].some((value) => value.toLowerCase().includes(query));
+    });
+}
 
-        <section class="panel">
-          <h2>Focused Inspector</h2>
-          <div class="panel-body list">
-            ${row("focus", `<strong>${sample.bundle}</strong><br />highest stable installed version`, status("+", "ok", "Compatible"))}
-            ${row("origin", "local file: ~/Downloads/test-repair.wfb", "")}
-            ${row("routing", "command -> repeat(agent, command) -> human gate -> command", "")}
-            ${row("trust", "not trusted for digest", status("*", "warn", "Grant offer shown"))}
-            ${row("harness", `${sample.harness}; requested ${sample.requestedModel}`, status("+", "ok", "Qualified"))}
-            ${row("workspace", escapeHtml(sample.workspace), status("+", "ok", "Preflight passes"))}
-          </div>
-        </section>
+function selectedCatalogBundle() {
+  return workflowBundles[bundleCatalog.selectedIndex] || workflowBundles[0];
+}
 
-        <section class="panel">
-          <h2>Projection Port Shape</h2>
-          <div class="panel-body">
-            <div class="diagram">
-              <div class="mini"><b>Durable Snapshot</b>Run state, pending Human Gate, artifacts, recovery evidence, available actions.</div>
-              <div class="mini"><b>Live Overlay</b>Turn phase, Harness Requests, current activity, usage, replaceable preview.</div>
-              <div class="mini"><b>Resources</b>Older pages, transcript export, artifact bytes, file sets, diagnostics.</div>
-              <div class="mini"><b>Action Offers</b>Only exact offered commands. Unavailable reasons shown when relevant.</div>
-              <div class="mini"><b>Operation</b>Admission/result receipt. Not the main progress surface.</div>
-              <div class="mini"><b>Headless Parity</b>Same semantic families; no TUI-only state reducers.</div>
-            </div>
-          </div>
-        </section>
-        ${stateDump("C")}
+function bundleCatalogRows() {
+  const matches = filteredWorkflowBundles();
+  if (matches.length === 0) {
+    return `<div class="bundle-catalog-empty">
+      <strong>No matching Workflow Bundles</strong>
+      <span>Try a different name, id, description, or source.</span>
+    </div>`;
+  }
+
+  return matches
+    .map(({ bundle, index }) => {
+      const selected = bundleCatalog.selectedIndex === index;
+      return `<button type="button" class="bundle-catalog-row" data-keyboard-choice data-catalog-bundle-index="${index}" aria-pressed="${selected}">
+        <span class="bundle-catalog-row-main">
+          <span><strong>${escapeHtml(bundle.name)}</strong><small>${escapeHtml(bundle.version)}</small></span>
+          <span>${escapeHtml(bundle.description)}</span>
+        </span>
+        <span class="bundle-catalog-row-meta">${escapeHtml(bundle.origin)}</span>
+      </button>`;
+    })
+    .join("");
+}
+
+function bundleInputRows(bundle) {
+  if (bundle.inputs.length === 0) {
+    return `<div class="bundle-empty-section">
+      <strong>No launch inputs</strong>
+      <span>Start a Run proceeds from Harness configuration directly to Review.</span>
+    </div>`;
+  }
+
+  return `<div class="bundle-input-list">
+    ${bundle.inputs
+      .map(
+        (input) => `<div class="bundle-input-row">
+          <div><strong>${escapeHtml(input.name)}</strong><span>${escapeHtml(input.description)}</span></div>
+          <span class="bundle-kind">${escapeHtml(input.type)}</span>
+        </div>`,
+      )
+      .join("")}
+  </div>`;
+}
+
+function bundleStepRows(steps, nested = false) {
+  return steps
+    .map((step, index) => {
+      const label = step.id || "Repeat group";
+      const detail = step.question
+        ? `<p><span class="muted">Question</span> ${escapeHtml(step.question)}</p>`
+        : step.until
+          ? `<p><span class="muted">Until</span> ${escapeHtml(step.until)}</p>`
+          : "";
+      const command = step.command
+        ? `<code class="bundle-command">${escapeHtml(step.command)}</code>`
+        : "";
+      const children = step.children
+        ? `<ol class="bundle-repeat-steps">${bundleStepRows(step.children, true)}</ol>`
+        : "";
+      return `<li class="bundle-step ${nested ? "nested" : ""}">
+        <span class="bundle-step-number">${index + 1}</span>
+        <div class="bundle-step-content">
+          <header><strong><code>${escapeHtml(label)}</code></strong><span class="bundle-kind">${escapeHtml(step.kind)}</span></header>
+          ${detail}
+          ${command}
+          ${children}
+        </div>
+      </li>`;
+    })
+    .join("");
+}
+
+function bundleCatalogInspector() {
+  if (filteredWorkflowBundles().length === 0) {
+    return `<article class="bundle-inspector bundle-inspector-empty">
+      <strong>No Bundle selected</strong>
+      <span>Clear or change the search to inspect an Installed Bundle.</span>
+    </article>`;
+  }
+
+  const bundle = selectedCatalogBundle();
+  return `<article class="bundle-inspector" aria-label="${escapeHtml(bundle.name)} details">
+    <header class="bundle-inspector-heading">
+      <div>
+        <p>Installed Bundle</p>
+        <h2>${escapeHtml(bundle.name)}</h2>
+        <span>${escapeHtml(bundle.description)}</span>
       </div>
-      ${switcher("C")}
+    </header>
+
+    <dl class="bundle-facts">
+      <div><dt>Bundle</dt><dd>${escapeHtml(bundle.identity)}</dd></div>
+      <div><dt>Source</dt><dd>${escapeHtml(bundle.origin)}<small>${escapeHtml(bundle.originDetail)}</small></dd></div>
+      <div><dt>Platforms</dt><dd>${escapeHtml(bundle.compatibility)}</dd></div>
+      <div><dt>Requires</dt><dd>${escapeHtml(bundle.workspaceRequirement)}</dd></div>
+      <div><dt>Digest</dt><dd class="bundle-digest">${escapeHtml(bundle.digest)}</dd></div>
+    </dl>
+
+    <section class="bundle-inspector-section" aria-labelledby="bundle-workflow-heading">
+      <div class="bundle-section-heading">
+        <div><h3 id="bundle-workflow-heading">Workflow</h3><p>${escapeHtml(bundle.workflow)}</p></div>
+      </div>
+      <div class="bundle-command-info">
+        ${status("i", "info", "Command steps are deterministic commands declared by this Bundle. During Agent steps, the selected Harness may run other commands as needed.")}
+      </div>
+      <ol class="bundle-step-list">${bundleStepRows(bundle.workflowSteps)}</ol>
     </section>
-  `;
+
+    <section class="bundle-inspector-section" aria-labelledby="bundle-inputs-heading">
+      <div class="bundle-section-heading">
+        <div><h3 id="bundle-inputs-heading">Launch inputs</h3><p>Required information supplied before this Bundle starts.</p></div>
+      </div>
+      ${bundleInputRows(bundle)}
+    </section>
+  </article>`;
+}
+
+function variantC() {
+  const backDestination =
+    bundleCatalog.returnView === "A" ? "Start a Run" : "Workspace home";
+  return `<section class="screen variant-c bundle-catalog-screen">
+      ${topLine("C")}
+      <main class="bundle-catalog-shell">
+        <header class="bundle-catalog-heading">
+          <button type="button" class="icon-button" aria-label="Back to ${backDestination}" title="Back to ${backDestination}" data-catalog-back>&larr;</button>
+          <div><h1>Workflow Bundles</h1><p>${workflowBundles.length} installed in Crucible</p></div>
+        </header>
+        <div class="bundle-catalog-layout">
+          <section class="bundle-catalog-list" aria-label="Installed Workflow Bundles">
+            <label for="bundle-search">Find an installed Bundle</label>
+            <input id="bundle-search" type="search" value="${escapeHtml(bundleCatalog.query)}" placeholder="Search by name, id, or source" data-catalog-search />
+            <div class="bundle-catalog-results">${bundleCatalogRows()}</div>
+            <p class="bundle-catalog-keys">Up/Down move · Enter keeps details open · Esc returns home</p>
+          </section>
+          ${bundleCatalogInspector()}
+        </div>
+      </main>
+      ${switcher("C")}
+    </section>`;
+}
+
+function filteredHarnesses() {
+  const query = harnessCatalog.query.trim().toLowerCase();
+  return harnesses
+    .map((harness, index) => ({ harness, index }))
+    .filter(({ harness }) => {
+      if (!query) return true;
+      return [
+        harness.name,
+        harness.id,
+        harness.summary,
+        harness.qualification,
+        harness.models.join(" "),
+        harness.capabilities
+          .flatMap((capability) => {
+            const definition = harnessCapabilityDefinitions.find(
+              ({ id }) => id === capability.id,
+            );
+            return [
+              definition?.name || "",
+              capability.state,
+              capability.limits || "",
+            ];
+          })
+          .join(" "),
+      ].some((value) => value.toLowerCase().includes(query));
+    });
+}
+
+function selectedCatalogHarness() {
+  return harnesses[harnessCatalog.selectedIndex] || harnesses[0];
+}
+
+function harnessCatalogRows() {
+  const matches = filteredHarnesses();
+  if (matches.length === 0) {
+    return `<div class="bundle-catalog-empty">
+      <strong>No matching Harnesses</strong>
+      <span>Try a different name, capability, model, or qualification state.</span>
+    </div>`;
+  }
+
+  return matches
+    .map(({ harness, index }) => {
+      const selected = harnessCatalog.selectedIndex === index;
+      const modelSummary = harness.models.length
+        ? `${harness.models.length} models observed`
+        : "Models not yet observed";
+      return `<button type="button" class="bundle-catalog-row harness-catalog-row" data-keyboard-choice data-catalog-harness-index="${index}" aria-pressed="${selected}">
+        <span class="bundle-catalog-row-main">
+          <span><strong>${escapeHtml(harness.name)}</strong>${status(harness.qualificationSymbol, harness.qualificationTone, escapeHtml(harness.qualification))}</span>
+          <span>${escapeHtml(harness.summary)}</span>
+        </span>
+        <span class="bundle-catalog-row-meta">${modelSummary}</span>
+      </button>`;
+    })
+    .join("");
+}
+
+function harnessModelRows(harness) {
+  if (harness.models.length === 0) {
+    return `<div class="bundle-empty-section harness-model-empty">
+      <strong>Models not available yet</strong>
+      <span>${escapeHtml(harness.modelEvidence)}</span>
+    </div>`;
+  }
+
+  return `<div class="harness-model-list">
+    ${harness.models
+      .map(
+        (model) => `<div class="harness-model-row">
+          <code>${escapeHtml(model)}</code>
+          <span>Available for Run selection</span>
+        </div>`,
+      )
+      .join("")}
+  </div>`;
+}
+
+function harnessCapabilityRows(harness) {
+  return `<div class="harness-capability-list">
+    ${harnessCapabilityDefinitions
+      .map((definition) => {
+        const capability = harness.capabilities.find(
+          ({ id }) => id === definition.id,
+        );
+        if (!capability) return "";
+        const limits =
+          capability.state === "Available with limits" && capability.limits
+            ? `<details class="harness-capability-limits">
+                <summary>View limits</summary>
+                <p>${escapeHtml(capability.limits)}</p>
+              </details>`
+            : "";
+        return `<div class="harness-capability-row">
+          <div>
+            <strong>${escapeHtml(definition.name)}</strong>
+            <span>${escapeHtml(definition.description)}</span>
+            ${limits}
+          </div>
+          ${status(capability.symbol, capability.tone, escapeHtml(capability.state))}
+        </div>`;
+      })
+      .join("")}
+  </div>`;
+}
+
+function harnessQualificationFinding(harness) {
+  if (harness.available) return "";
+
+  return `<div class="harness-qualification-note unavailable">
+    ${status(harness.qualificationSymbol, harness.qualificationTone, escapeHtml(harness.unavailableReason))}
+    <span>${escapeHtml(harness.remediation)}</span>
+  </div>`;
+}
+
+function harnessCatalogInspector() {
+  if (filteredHarnesses().length === 0) {
+    return `<article class="bundle-inspector bundle-inspector-empty">
+      <strong>No Harness selected</strong>
+      <span>Clear or change the search to inspect a Harness.</span>
+    </article>`;
+  }
+
+  const harness = selectedCatalogHarness();
+  return `<article class="bundle-inspector harness-inspector" aria-label="${escapeHtml(harness.name)} details">
+    <header class="bundle-inspector-heading harness-inspector-heading">
+      <div>
+        <p>Harness</p>
+        <div class="harness-inspector-title">
+          <h2>${escapeHtml(harness.name)}</h2>
+          ${status(harness.qualificationSymbol, harness.qualificationTone, escapeHtml(harness.qualification))}
+        </div>
+        <span>${escapeHtml(harness.summary)}</span>
+      </div>
+    </header>
+
+    ${harnessQualificationFinding(harness)}
+
+    <dl class="bundle-facts harness-facts">
+      <div><dt>Harness</dt><dd><code>${escapeHtml(harness.id)}</code></dd></div>
+      <div><dt>Executable</dt><dd><code>${escapeHtml(harness.executable)}</code></dd></div>
+      <div><dt>Version</dt><dd>${escapeHtml(harness.version)}</dd></div>
+      <div><dt>Platform</dt><dd>${escapeHtml(harness.platform)}</dd></div>
+      <div><dt>Checked</dt><dd>${escapeHtml(harness.checkedAt)}</dd></div>
+      <div><dt>Authentication</dt><dd>${escapeHtml(harness.authentication)}</dd></div>
+    </dl>
+
+    <section class="bundle-inspector-section" aria-labelledby="harness-models-heading">
+      <div class="bundle-section-heading">
+        <div><h3 id="harness-models-heading">Supported models</h3><p>${escapeHtml(harness.modelEvidence)} Model selection happens when starting or resuming a Run.</p></div>
+      </div>
+      ${harnessModelRows(harness)}
+    </section>
+
+    <section class="bundle-inspector-section" aria-labelledby="harness-capabilities-heading">
+      <div class="bundle-section-heading">
+        <div><h3 id="harness-capabilities-heading">Capabilities</h3><p>What this Harness currently exposes truthfully to Crucible.</p></div>
+      </div>
+      ${harnessCapabilityRows(harness)}
+    </section>
+
+    <section class="bundle-inspector-section" aria-labelledby="harness-configuration-heading">
+      <div class="bundle-section-heading">
+        <div><h3 id="harness-configuration-heading">Configuration</h3><p>${escapeHtml(harness.configuration)}</p></div>
+      </div>
+      <div class="harness-configuration-note">
+        ${status("i", "info", "Harness-owned settings stay with the Harness. Crucible asks only for relevant Run choices during launch or resume.")}
+      </div>
+    </section>
+  </article>`;
+}
+
+function variantD() {
+  return `<section class="screen bundle-catalog-screen harness-catalog-screen">
+    ${topLine("D")}
+    <main class="bundle-catalog-shell">
+      <header class="bundle-catalog-heading">
+        <button type="button" class="icon-button" aria-label="Back to Workspace home" title="Back to Workspace home" data-harness-catalog-back>&larr;</button>
+        <div><h1>Harnesses</h1><p>${harnesses.length} discovered · ${harnesses.filter((harness) => harness.available).length} qualified on this system</p></div>
+      </header>
+      <div class="bundle-catalog-layout">
+        <section class="bundle-catalog-list" aria-label="Discovered Harnesses">
+          <label for="harness-search">Find a Harness</label>
+          <input id="harness-search" type="search" value="${escapeHtml(harnessCatalog.query)}" placeholder="Search by name, model, or capability" data-harness-catalog-search />
+          <div class="bundle-catalog-results">${harnessCatalogRows()}</div>
+          <p class="bundle-catalog-keys">Up/Down move · Enter keeps details open · Esc returns home</p>
+        </section>
+        ${harnessCatalogInspector()}
+      </div>
+    </main>
+    ${switcher("D")}
+  </section>`;
 }
 
 function render() {
@@ -1467,13 +2049,115 @@ function render() {
             ? previousRunsScreen()
             : key === "B"
               ? variantB()
-              : variantC();
+              : key === "C"
+                ? variantC()
+                : variantD();
   document.querySelectorAll("[data-dir]").forEach((button) => {
     button.addEventListener("click", () => cycle(Number(button.dataset.dir)));
   });
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => openView(button.dataset.view));
   });
+
+  const openBundleDetailsButton = document.querySelector(
+    "[data-open-bundle-details]",
+  );
+  if (openBundleDetailsButton) {
+    openBundleDetailsButton.addEventListener("click", () => {
+      bundleCatalog.selectedIndex = launchDraft.bundleIndex ?? 0;
+      bundleCatalog.query = "";
+      bundleCatalog.returnView = "A";
+      setVariant("C");
+    });
+  }
+
+  const catalogBackButton = document.querySelector("[data-catalog-back]");
+  if (catalogBackButton) {
+    catalogBackButton.addEventListener("click", () =>
+      setVariant(bundleCatalog.returnView),
+    );
+  }
+
+  document.querySelectorAll("[data-catalog-bundle-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      bundleCatalog.selectedIndex = Number(button.dataset.catalogBundleIndex);
+      render();
+      document
+        .querySelector(
+          `[data-catalog-bundle-index="${bundleCatalog.selectedIndex}"]`,
+        )
+        ?.focus();
+    });
+  });
+
+  const catalogSearch = document.querySelector("[data-catalog-search]");
+  if (catalogSearch) {
+    catalogSearch.addEventListener("input", () => {
+      bundleCatalog.query = catalogSearch.value;
+      const matches = filteredWorkflowBundles();
+      if (
+        matches.length > 0 &&
+        !matches.some(({ index }) => index === bundleCatalog.selectedIndex)
+      ) {
+        bundleCatalog.selectedIndex = matches[0].index;
+      }
+      render();
+      const nextSearch = document.querySelector("[data-catalog-search]");
+      nextSearch?.focus();
+      nextSearch?.setSelectionRange(
+        bundleCatalog.query.length,
+        bundleCatalog.query.length,
+      );
+    });
+  }
+
+  const harnessCatalogBackButton = document.querySelector(
+    "[data-harness-catalog-back]",
+  );
+  if (harnessCatalogBackButton) {
+    harnessCatalogBackButton.addEventListener("click", () => setVariant("H"));
+  }
+
+  document
+    .querySelectorAll("[data-catalog-harness-index]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        harnessCatalog.selectedIndex = Number(
+          button.dataset.catalogHarnessIndex,
+        );
+        render();
+        document
+          .querySelector(
+            `[data-catalog-harness-index="${harnessCatalog.selectedIndex}"]`,
+          )
+          ?.focus();
+      });
+    });
+
+  const harnessCatalogSearch = document.querySelector(
+    "[data-harness-catalog-search]",
+  );
+  if (harnessCatalogSearch) {
+    harnessCatalogSearch.addEventListener("input", () => {
+      harnessCatalog.query = harnessCatalogSearch.value;
+      const matches = filteredHarnesses();
+      if (
+        matches.length > 0 &&
+        !matches.some(({ index }) => index === harnessCatalog.selectedIndex)
+      ) {
+        harnessCatalog.selectedIndex = matches[0].index;
+      }
+      render();
+      const nextSearch = document.querySelector(
+        "[data-harness-catalog-search]",
+      );
+      nextSearch?.focus();
+      nextSearch?.setSelectionRange(
+        harnessCatalog.query.length,
+        harnessCatalog.query.length,
+      );
+    });
+  }
 
   const historyBackButton = document.querySelector("[data-history-back]");
   if (historyBackButton) {
@@ -1750,6 +2434,48 @@ document.addEventListener("keydown", (event) => {
     if (historyBackButton) {
       event.preventDefault();
       historyBackButton.click();
+      return;
+    }
+    const catalogBackButton = document.querySelector("[data-catalog-back]");
+    if (catalogBackButton) {
+      event.preventDefault();
+      catalogBackButton.click();
+      return;
+    }
+    const harnessCatalogBackButton = document.querySelector(
+      "[data-harness-catalog-back]",
+    );
+    if (harnessCatalogBackButton) {
+      event.preventDefault();
+      harnessCatalogBackButton.click();
+    }
+    return;
+  }
+  if (
+    target?.matches?.("[data-catalog-search]") &&
+    (event.key === "ArrowUp" || event.key === "ArrowDown")
+  ) {
+    const choices = Array.from(
+      document.querySelectorAll("[data-catalog-bundle-index]"),
+    );
+    if (choices.length > 0) {
+      event.preventDefault();
+      const next = event.key === "ArrowDown" ? choices[0] : choices.at(-1);
+      next.click();
+    }
+    return;
+  }
+  if (
+    target?.matches?.("[data-harness-catalog-search]") &&
+    (event.key === "ArrowUp" || event.key === "ArrowDown")
+  ) {
+    const choices = Array.from(
+      document.querySelectorAll("[data-catalog-harness-index]"),
+    );
+    if (choices.length > 0) {
+      event.preventDefault();
+      const next = event.key === "ArrowDown" ? choices[0] : choices.at(-1);
+      next.click();
     }
     return;
   }
@@ -1769,7 +2495,16 @@ document.addEventListener("keydown", (event) => {
             ? 0
             : choices.length - 1
           : (currentIndex + offset + choices.length) % choices.length;
-      choices[nextIndex].focus();
+      const nextChoice = choices[nextIndex];
+      if (
+        nextChoice.matches(
+          "[data-catalog-bundle-index], [data-catalog-harness-index]",
+        )
+      ) {
+        nextChoice.click();
+      } else {
+        nextChoice.focus();
+      }
     }
     return;
   }
