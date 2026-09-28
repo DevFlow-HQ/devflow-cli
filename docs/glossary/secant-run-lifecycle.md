@@ -108,8 +108,8 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Interactive agent step** — a **Step kind** whose **Harness Session** is handed to the human for turn-taking; unlike an **Agent step** it cannot
   complete without the human. Secant relays turns and authors nothing beyond the **Entry Turn**, and the step ends through a Secant-owned control
   given by the human or, when the Bundle opts the step in, by the agent's **Agent-declared completion** — never on an agent-emitted marker or a
-  recognised phrase in a **Turn**. The legacy grill is this shape. A step may opt into an **Entry Turn**. Inside a **Repeat group** each iteration is its own **Step Attempt** with its own **Harness Session**; ending the step
-  advances only that iteration.
+  recognised phrase in a **Turn**. The legacy grill is this shape. A step may opt into an **Entry Turn**. Inside a **Repeat group** each
+  iteration is its own **Step Attempt** with its own **Harness Session**; ending the step advances only that iteration.
 - **Entry Turn** — an **Interactive agent step**'s optional first **Turn**: its Bundle-authored prompt, rendered with **Launch inputs** and bundled
   skill paths, sent once on entry so the human need not retype what the launch already carries. It is never re-sent: after a halt the human
   continues the same **Harness Session**.
