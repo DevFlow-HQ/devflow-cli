@@ -9,6 +9,10 @@ This cluster defines the target Secant terms for a **Run** and everything that h
   the Installed Bundle's bytes; resume therefore requires that exact digest to remain installed or be reinstalled.
 - **Step** — one authored node in a **Workflow Bundle**'s routing, identified by an author-chosen name unique within its Bundle and opaque to
   Secant.
+- **Stage** — one top-level entry in a **Routing**: either a single **Step** or a whole **Repeat group** across all its **Iterations**. Stage and
+  Step are two facts about a node, not synonyms: Step says what kind of work it is, Stage says where it sits in the Routing's order. A Step inside
+  a Repeat group is a Step but not a Stage; the group is the Stage. **End Stage** and an **Agent-declared completion**'s stage done complete a
+  human-controlled group's Stage.
 - **Agent step** — a **Step kind** running one autonomous **Turn** in a named **Harness Session**. It completes without the human, though the human
   may **Steer** it while that Turn is live when the selected Harness supports native Steer.
 - **Command step** — the deterministic non-agent **Step kind**. Its attempt succeeds if the command ran to an exit; the exit status becomes a
@@ -18,19 +22,31 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Iteration** — one logical occurrence of a **Repeat group**. A numbered scope, not an entity.
 - **Repeat group** — a contiguous span of **Steps** in a **Routing**, repeated until a named **Verdict** reads `pass`. The condition is evaluated
   before every **Iteration** including the first, so a group whose verdict already passes runs zero times. A **human-controlled** group instead
-  names no Verdict: each Iteration pauses at its one **Interactive agent step**, only the human's **Continue** opens the next, and only a
-  confirmed **End Stage** exits it.
-- **Continue** — the human's control that settles a human-controlled **Repeat group**'s current Iteration at a **Turn** boundary and opens the
-  next in a fresh **Harness Session**. It is that Iteration's review decision, so the group raises no **Review checkpoint**. It never reads or
-  changes a tracker.
-- **End Stage** — the human's confirmed declaration, at a **Turn** boundary, that a human-controlled **Repeat group**'s stage is complete. It
-  settles the current Iteration and exits the group, so a trailing group completes the **Run** `succeeded` as a **human-declared completion**,
-  which history and the Run summary show apart from an automatically verified one. Secant checks no tracker for it.
+  names no Verdict: each Iteration pauses at its one **Interactive agent step**, only a **Continue** opens the next, and only an **End Stage**
+  exits it, each given by the human or, when that Step opts in, by the agent's **Agent-declared completion**.
+- **End Step** — the control that ends an **Interactive agent step** outside a human-controlled **Repeat group** at a **Turn** boundary, given by
+  the human or, when the Step opts in, by the agent's step done. Inside a human-controlled group **Continue** takes its place.
+- **Continue** — the control that settles a human-controlled **Repeat group**'s current Iteration at a **Turn** boundary and opens the next in a
+  fresh **Harness Session**, given by the human or, when the Step opts in, by the agent's step done. The human's Continue is that Iteration's review
+  decision; the agent's counts toward the group's **Review checkpoint**. It never reads or changes a tracker.
+- **End Stage** — the declaration, at a **Turn** boundary, that a human-controlled **Repeat group**'s **Stage** is complete: by the human after a
+  confirmation, or by the agent's stage done without one. It settles the current Iteration, lets that Iteration's remaining Steps run, and exits
+  the group, so a trailing group completes the **Run** `succeeded` as a **Human-declared completion** or an **Agent-declared completion**, which
+  history and the Run summary show apart from each other and from an automatically verified one. Secant checks no tracker for it.
+- **Human-declared completion** — a **Stage**, and for a trailing group the **Run**, completed by the human's confirmed **End Stage** rather than
+  by a **Verdict**. It records the human's judgement, not a verification. _Avoid_: verified completion.
+- **Agent-declared completion** — an agent's deliberate call to Secant, from an **Interactive agent step** its Bundle opts in, that its **Step**
+  is done (step done) or that its human-controlled **Repeat group**'s **Stage** is done (stage done), carrying a required one-line reason. It asks
+  for a control the human already has (**End Step**, **Continue**, or **End Stage**) and reaches the same settlement. Secant applies it only when
+  the **Turn** it was made in ends cleanly and drops it if that Turn fails, is interrupted, or the Run is cancelled; the latest call in a Turn wins.
+  Secant stores and shows the reason and never interprets it, and the human keeps every control. _Avoid_: completion marker, done phrase.
 - **Review checkpoint** — the **Human Gate** Secant raises when a **Repeat group** reaches its Bundle-authored review cadence without its
   **Verdict** passing. Every Verdict-driven Repeat group declares a positive-integer interval and plain-text message; Secant adds current runtime evidence and
   enforces an engine-owned safety ceiling. Continuing grants another interval and stopping ends the **Run** `failed`. The cadence is not a maximum
-  and is not adjustable at launch. _Avoid_: Iteration checkpoint (the name used before the
-  [Review checkpoint amendment](https://github.com/DevFlow-HQ/devflow-cli/issues/13#issuecomment-5528817597)).
+  and is not adjustable at launch. In a human-controlled group it is instead the pause Secant makes once the agent has ended the interval's worth
+  of Iterations in a row: the agent's **Continue** is withheld and the Iteration waits for the human, whose own Continue resets the count. That
+  interval is optional, defaults to 100, and has no ceiling; an agent's **End Stage** is never withheld. _Avoid_: Iteration checkpoint (the name
+  used before the [Review checkpoint amendment](https://github.com/DevFlow-HQ/devflow-cli/issues/13#issuecomment-5528817597)).
 - **Step Attempt** — one execution of one **Step**, identified by its Step, **Iteration**, and attempt number. Retries and **Iterations** are
   bounded separately.
 - **Attempt outcome** — how a **Step Attempt** ended: `succeeded`, `failed`, `indeterminate`, or `cancelled`.
@@ -90,10 +106,10 @@ This cluster defines the target Secant terms for a **Run** and everything that h
   or a structured clarification with an exact answer shape. It lives and dies with the Turn; an ordinary assistant question that ends a Turn is
   answered in the next Turn instead.
 - **Interactive agent step** — a **Step kind** whose **Harness Session** is handed to the human for turn-taking; unlike an **Agent step** it cannot
-  complete without the human. Secant relays turns and authors nothing, and the step ends when the human explicitly ends it through a
-  Secant-owned control — never on an agent-emitted marker or a recognised phrase. The legacy grill is this shape. A step may opt into an
-  **Entry Turn**. Inside a **Repeat group** each iteration is its own **Step Attempt** with its own **Harness Session**; ending the step
-  advances only that iteration.
+  complete without the human. Secant relays turns and authors nothing beyond the **Entry Turn**, and the step ends through a Secant-owned control
+  given by the human or, when the Bundle opts the step in, by the agent's **Agent-declared completion** — never on an agent-emitted marker or a
+  recognised phrase in a **Turn**. The legacy grill is this shape. A step may opt into an **Entry Turn**. Inside a **Repeat group** each
+  iteration is its own **Step Attempt** with its own **Harness Session**; ending the step advances only that iteration.
 - **Entry Turn** — an **Interactive agent step**'s optional first **Turn**: its Bundle-authored prompt, rendered with **Launch inputs** and bundled
   skill paths, sent once on entry so the human need not retype what the launch already carries. It is never re-sent: after a halt the human
   continues the same **Harness Session**.
@@ -133,7 +149,9 @@ row and the `blocked` state are written in one transaction, and execution also s
 ## Rules
 
 - Secant orchestrates around the **Harness**, never inside it. The Harness owns its own questions, tool approvals, and turn mechanics.
-- Repetition and control read deterministic **Verdicts** about the world, never anything an agent says.
+- Repetition and control read deterministic **Verdicts** about the world, never anything an agent says in a **Turn**. An **Agent-declared
+  completion** is a deliberate call outside the Turn's content: it reaches only controls the human already has and never ends a Verdict-driven
+  **Repeat group**.
 - Secant owns the **Step kinds**; a **Workflow Bundle** owns content, parameters, and optional **Workspace prerequisites**. Behaviour that an
   ordinary Command can express does not earn another Step kind; other new behaviour waits for a new Secant-owned kind.
 - Git has no Step kind and no public Secant Module. A Bundle obtains Git data or mutations through explicit **Command steps**, while a **Harness**
@@ -163,6 +181,8 @@ row and the `blocked` state are written in one transaction, and execution also s
 - [ADR 0019](../adr/0019-failed-and-halted-runs-are-resumable-resting-states.md) owns Run resumability and the reset-on-resume rule.
 - [ADR 0020](../adr/0020-deterministic-verdicts-and-human-checkpoints-terminate-repetition.md) owns how repetition terminates and why the legacy
   agent-emitted marker is retired.
+- [ADR 0032](../adr/0032-let-opted-in-interactive-agent-steps-accept-agent-declared-completion.md) owns **Agent-declared completion**, its answer
+  to ADR 0020's reasons, and the human-controlled group's **Review checkpoint**.
 - [ADR 0023](../adr/0023-own-durable-run-truth-in-isolated-run-stores.md) owns durable Run truth, Artifact publication, Workspace materialization,
   retention, and recovery storage.
 - [ADR 0031](../adr/0031-own-runs-per-run-not-per-workspace.md) owns Run ownership: many live Runs per Workspace, one owner per Run, and what a
