@@ -109,3 +109,12 @@ that is not an existing absolute directory is a typed `writable-directory-unavai
 fails the Turn. Composition supplies the Run working area that [ADR 0023](./0023-own-durable-run-truth-in-isolated-run-stores.md)'s 2026-09-23
 amendment gives each Run Store; the Adapter sees only a path, never a Run fact, so it still knows no Run state and is never granted the Run database
 or Artifact repository.
+
+## Amendment (2026-09-28): Agent calls cross the Seam as opaque declarations
+
+[ADR 0033](./0033-carry-agent-calls-to-secant-over-a-per-session-loopback-mcp-server.md) lets an agent call Secant through a Secant-hosted MCP
+server the Adapter attaches to its Session. The caller passes a Session's call declarations as opaque data, bound when the Session opens; the Turn's
+event stream gains a data-only agent-call event, the Turn handle gains one closed control that answers it, a call unanswered at Turn end expires
+before the producer closes, and the profile gains an evidence-bearing `agentCalls` capability. The Adapter still learns no Step, Stage, or Run fact:
+it delivers the declarations and reports the call, and the caller judges it. The same decision makes Codex MCP tool approvals ordinary tool-approval
+Harness Requests and declines other MCP elicitations without failing the Turn, instead of treating them as unsupported server requests.
