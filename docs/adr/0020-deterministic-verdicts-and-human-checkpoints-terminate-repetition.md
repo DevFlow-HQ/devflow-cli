@@ -55,3 +55,11 @@ at a Turn boundary the human's **Continue** settles that iteration and opens the
 the group. Continue is the iteration's review decision, so no periodic Review checkpoint is raised; the guarantee this ADR protects — unattended
 repetition always stops for a human — holds, because every iteration already stops for one. The engine still reads nothing from the agent to
 choose the exit.
+
+## Amendment — agent-declared completion (#243)
+
+[ADR 0032](./0032-let-opted-in-interactive-agent-steps-accept-agent-declared-completion.md) supersedes, for Interactive agent steps a Bundle opts
+in, the sentence that ends an Interactive agent step on an explicit human control, and the M6 Amendment's last line: an opted-in agent may call
+step done or stage done, which Secant applies as End Step, Continue, or End Stage when the Turn ends cleanly. Crucible still never reads meaning out
+of a turn, and a Verdict-driven Repeat group still ends only on its Verdict. A human-controlled group whose agent may Continue regains a Review
+checkpoint that counts agent-ended Iterations; ADR 0032 records its default and why it has no ceiling.
