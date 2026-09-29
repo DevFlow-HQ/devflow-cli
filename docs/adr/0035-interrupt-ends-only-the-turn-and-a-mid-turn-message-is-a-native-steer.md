@@ -32,11 +32,15 @@ model followed it.
 
 **The Turn stretches until every Steer is delivered.** A Turn ends at the first Harness boundary after which no accepted Steer is pending, so one Secant
 Turn may span several native exchanges. The human's message therefore always reaches the agent before an Agent-declared completion from that Turn is
-applied. Codex can take a steered text into history after its last model request, during stop hooks, post-Turn compaction, or a failing Turn, and then
-complete without answering it; the Codex Adapter re-delivers that leftover with a native `turn/start` inside the same Secant Turn, using an empty
-input if Codex accepts one and the same text otherwise, so a Steer is answered before its Turn ends on both Harnesses. That text is the human's own, so
-this is ordinary turn-taking, not emulation. A Steer that arrives after the Turn has ended is rejected and its draft kept: in an Interactive agent
-step the human sends it as the next Turn, and in an Agent step that has advanced the human is told it was not delivered.
+applied. Codex can accept a Steer in the few milliseconds between its last check for pending input and the end of the Turn, or on a failing Turn,
+write it into history, and complete without answering it; a Steer sent during its Stop hooks is answered, because pending input re-runs the Turn.
+The Codex Adapter detects that leftover, a `userMessage` item with the Steer's `clientId` followed by `turn/completed` with no model output, and
+re-delivers it inside the same Secant Turn with a native `turn/start` whose input is empty. Recorded on codex-cli 0.157.1, that start is accepted on
+the idle thread and the model answers the leftover from history, which holds the text once. It is sent only on a detected leftover, since on a thread
+with nothing pending it makes the model repeat itself or invent work. A Codex that refuses an empty input falls back to re-sending the same text,
+which answers too but leaves the message in history twice. Either way the input is the human's own message, so a Steer is answered before its Turn
+ends on both Harnesses and this is ordinary turn-taking, not emulation. A Steer that arrives after the Turn has ended is rejected and its draft
+kept: in an Interactive agent step the human sends it as the next Turn, and in an Agent step that has advanced the human is told it was not delivered.
 
 **Interrupt drops what has not been delivered.** Every accepted Steer still pending when an Interrupt lands is dropped and its text returned to the
 human's compose, so nothing runs after the human said stop. Codex discards pending steered input on `turn/interrupt`; Claude Code is interrupted with
