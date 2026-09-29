@@ -69,3 +69,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `Bun.main` separator normalisation, the #62 Windows entry quirk (`:48-53`); and the top-level error handler that prints a stack and sets exit 1
   (`:55-62`). The file records at `:40-47` why it cannot be unit-tested as written; if a fourth branch appears, revisit a small `tests/cli` rather than
   widening the smoke.
+
+## Read next
+
+- [Headless parity](../../docs/headless-parity.md) lists the TUI capabilities headless deliberately lacks; update it when a decision adds or closes one.
