@@ -8,7 +8,9 @@ x64; `claude --version` returned `2.1.284 (Claude Code)`).
 Ticket: [#255](https://github.com/secantdev/secant/issues/255). This note settles
 the Claude Code items left **Untested** or **Unknown** in
 [Harness Interrupt and Queued Messages](harness-interrupt-and-queued-messages.md)
-by running small live model sessions against the installed CLI.
+by running small live model sessions against the installed CLI. A second round,
+[Round 2](#round-2-permission-waits-and-multi-tool-rounds), repeats the key stops and
+sends through a stand-in for Secant's MCP permission bridge.
 
 ## Answer
 
@@ -80,6 +82,30 @@ The nearest entries are listed under [Version floor](#test-6-version-floor).
 `control_request` `interrupt`. SIGINT keeps the partial Turn but ends the process.
 SIGTERM ends the process and loses streamed text.
 
+**Round 2: the same holds while a tool call waits on the permission bridge.** See
+[Round 2](#round-2-permission-waits-and-multi-tool-rounds).
+
+- **Raw `interrupt` during a permission wait.** It was honoured in three of three
+  runs, with a `control_response` in 2 to 4 ms. Claude Code sent the bridge an MCP
+  `notifications/cancelled` for the pending `approve` call within 4 ms. The Turn
+  ended with the same `error_during_execution` / `aborted_tools` `result` as a
+  mid-tool interrupt, and `permission_denials` named the waiting call. The process
+  stayed alive and the next user frame ran in the same Session. The model saw the
+  call as "rejected before it could execute". The bridge's late `allow`, 30 s
+  later, had no effect: the command never ran.
+- **SIGTERM during a permission wait (one run).** The process exited 143 with no `result`
+  and no `tool_result`. No `notifications/cancelled` was sent. During shutdown,
+  Claude Code opened a new MCP session to the bridge and sent a second `approve`
+  call for the same `tool_use_id`. On `--resume`, the transcript gained a synthetic
+  `tool_result`: "[Tool call interrupted: the session ended before this call's
+  result was recorded, so its outcome is unknown…]".
+- **A user frame is still taken at a tool boundary, but only after the whole tool
+  round.** This held when two MCP calls ran at once, when a Bash call and an MCP
+  call ran one after the other in one round, and for a single MCP call. It also
+  held for a frame written while a Bash call waited on the bridge: the frame was
+  held through the approval and the command. Each time, the frame reached the model
+  in the same Turn, and its `uuid` was in that `result`'s `user_message_uuids`.
+
 Windows was not tested.
 
 ## Evidence Vocabulary
@@ -143,8 +169,8 @@ conversation before this message? Quote the last line you wrote…".
 Differences from Secant's launch:
 
 - Secant adds the loopback MCP permission bridge (`--mcp-config`,
-  `--permission-prompt-tool`). The driver did not. A tool call parked on a
-  permission prompt at the moment of a stop was not tested.
+  `--permission-prompt-tool`). The round 1 driver did not. Round 2 added a stand-in
+  bridge; see [Round 2](#round-2-permission-waits-and-multi-tool-rounds).
 - The host's user settings load no-op `SessionStart`, `PreToolUse`, `PostToolUse`,
   and `Stop` hooks, plus a user `CLAUDE.md`.
 
@@ -521,25 +547,296 @@ The installed 2.1.284 advertises both, and also `msg_lifecycle_v1`, in
 Not tested. No Windows host was available. Signal delivery, `taskkill` tree
 behaviour, and the SIGINT and SIGTERM results above are all Linux-only.
 
+## Round 2: permission waits and multi-tool rounds
+
+Run on 2026-09-29 against the same Claude Code **2.1.284**. Every fact in this
+section is Recorded (2.1.284) unless it carries another label.
+
+### Round 2 method
+
+The round 2 driver used the same launch flags as `src/harness/claude-code.ts`:
+`-p --input-format stream-json --output-format stream-json --verbose
+--include-partial-messages --model haiku --session-id <uuid>` (or `--resume <uuid>`),
+then the bridge fragment. It passed no `--allowedTools` and no permission-mode flag,
+so `system/init` reported `permissionMode: "default"`.
+
+The stand-in bridge copied `src/harness/permission-bridge.ts`:
+
+- a Streamable HTTP MCP server on `127.0.0.1` with a random port and a bearer
+  token, one transport per MCP session, built on the repository's
+  `@modelcontextprotocol/sdk` 1.29.0;
+- server `secant-permissions` with one `approve` tool (`tool_name`, `input`,
+  `tool_use_id`), returning `{"behavior":"allow","updatedInput":…}` or
+  `{"behavior":"deny",…}` as JSON text;
+- launch fragment `--mcp-config <inline JSON> --permission-prompt-tool
+mcp__secant-permissions__approve`.
+
+Unlike Secant, the stand-in let the experiment set a delay for each `approve`
+answer, and it did not stop when the call was cancelled. It logged every HTTP
+request body, every closed response stream, and the handler's abort signal. For
+round 2 it also served a second MCP server, `slowtools`, from the same process. Its
+one tool, `slow_echo(text, delay_s)`, waits `delay_s` seconds and returns `echo:
+<text>`. It is marked `readOnlyHint: true`.
+
+Other differences from round 1:
+
+- `ORCA_*` variables were removed from the child environment, as well as
+  `CLAUDE*`. The host's user hooks, including a `PermissionRequest` hook, then
+  printed `{}` and did not decide anything. Every `Bash ./slowjob.sh` and
+  `./slow15.sh` call reached the stand-in `approve`. A Bash `echo` the model ran
+  on its own did not: Claude Code allowed it without a prompt.
+- The user's other MCP servers (context7 and the claude.ai connectors) also loaded,
+  as they would under Secant. MCP tools were deferred, so the model sometimes
+  called `ToolSearch` before `slow_echo`.
+- `slow15.sh` is `echo started-15; sleep 15; echo done-15`.
+
+`HTTP` and `MCP` lines below are the stand-in's log, on the same clock as the
+stream frames.
+
+### R2-A1: raw `interrupt` while Bash waits on the bridge (two runs, plus one with `cancel_queued`)
+
+The stand-in held the Bash `approve` for 30 s, then answered `allow`. The
+interrupt came 3 s into the wait. Run 1:
+
+```text
+t=5832 assistant tool_use toolu_01Y7… Bash {"command":"./slowjob.sh",…}
+t=5854 HTTP POST /mcp tools/call#2 name=approve
+t=5857 MCP approve#1 CALLED tool=Bash tool_use_id=toolu_01Y7… -> will allow after 30000ms
+t=8937 ps: no slowjob or sleep 27
+t=8938 in  {"type":"control_request","request_id":"int1","request":{"subtype":"interrupt"}}
+t=8940 control_response {"subtype":"success","request_id":"int1","response":{"still_queued":[]}}
+t=8942 HTTP POST /mcp notifications/cancelled params={"requestId":2,"reason":"AbortError: remote-cancel"}
+t=8944 MCP approve#1 extra.signal ABORTED
+t=8946 user tool_result "The user doesn't want to proceed with this tool use. The tool use was
+       rejected …" is_error
+t=8948 user text "[Request interrupted by user for tool use]"
+t=8958 result subtype=error_during_execution is_error=true terminal_reason=aborted_tools
+       stop_reason=tool_use num_turns=3 result_index=0 queued_turn_count=0
+       user_message_uuids=[<prompt uuid>]
+       permission_denials=[{"tool_name":"Bash","tool_use_id":"toolu_01Y7…",…}]
+t=8960 command_lifecycle <prompt uuid> state=cancelled
+t=10495 in  user <the question>
+t=17396 assistant text "I attempted to call the Bash tool to run `./slowjob.sh`, but the tool use
+        was rejected before it could execute. No command finished and no output was
+        produced—the tool call was denied by the user."
+t=17424 result subtype=success num_turns=1 result_index=1
+t=35858 MCP approve#1 RETURNING {"behavior":"allow",…} (signal.aborted=true)
+t=39891 ps: no slowjob or sleep 27; no further stream frames
+t=42932 HTTP approve response stream closed (only when the driver closed stdin)
+t=43767 EXIT code=0
+```
+
+Run 2 (test C, the repeat) gave the same frames: `control_response` in 2 ms,
+`notifications/cancelled` 4 ms after the interrupt, the same `result`, and the same
+`permission_denials`. Asked afterwards, the model said "My only action was an
+attempted Bash tool call to run `./slowjob.sh`, which was rejected before
+execution."
+
+- **Honoured, and the process stays alive.** The next user frame ran as
+  `result_index: 1` in the same process and Session.
+- **Claude Code cancels the bridge call.** The bridge receives a standard MCP
+  `notifications/cancelled` with the `approve` call's JSON-RPC id and `reason:
+"AbortError: remote-cancel"`. It is sent on a new POST. The HTTP response stream
+  for the cancelled call is not closed. It stayed open until the process exited.
+- **A late answer does nothing.** The stand-in's `allow` came 27 s after the
+  interrupt. The SDK server does not send a response for a cancelled request, so
+  nothing reached Claude Code. **Inferred** from the SDK, and consistent with what
+  was seen: `slowjob.sh` never started, and no frame followed.
+- **The transcript matches a mid-tool interrupt.** The `tool_result` is stored with
+  `toolUseResult: "User rejected tool use"` and `toolDenialKind: "user-rejected"`,
+  followed by `[Request interrupted by user for tool use]`. Nothing marks that the
+  call was waiting on approval and never ran. Only `permission_denials` in the
+  `result` names it.
+
+With `cancel_queued: true` and a user frame written 1.5 s before the interrupt:
+
+```text
+t=5571 MCP approve#1 CALLED tool=Bash … -> will allow after 30000ms
+t=7110 in  user uuid=a1a1a1a1-…-01 "Queued message: reply with the single word MANGO."
+t=7111 command_lifecycle a1a1a1a1-… state=queued
+t=8610 in  control_request interrupt int1 cancel_queued=true
+t=8613 command_lifecycle a1a1a1a1-… state=cancelled
+t=8614 control_response {"still_queued":[],"cancelled":["a1a1a1a1-0000-4000-8000-000000000001"]}
+t=8615 HTTP POST /mcp notifications/cancelled params={"requestId":2,…}
+t=8631 result subtype=error_during_execution terminal_reason=aborted_tools result_index=0
+t=13667 in  user <the question>        (no Turn started before this)
+t=18831 result subtype=success result_index=1
+```
+
+The queued message was dropped as in test 5b, and the bridge call was cancelled the
+same way.
+
+### R2-A2: SIGTERM while Bash waits on the bridge
+
+```text
+t=4926 assistant tool_use toolu_01Ub… Bash {"command":"./slowjob.sh",…}
+t=4975 MCP approve#1 CALLED tool=Bash tool_use_id=toolu_01Ub… reqId=2 (held 30 s)
+t=8033 SIGNAL SIGTERM group
+t=8037 HTTP response streams closed: both GET streams and the approve#1 stream
+t=8055 HTTP POST /mcp server/discover, then initialize → new MCP session cea0a024
+t=8072 HTTP POST /mcp sid=cea0a024 tools/call#1 name=approve
+t=8073 MCP approve#2 CALLED tool=Bash tool_use_id=toolu_01Ub… (same call, again)
+t=8896 approve#2 response stream closed
+t=8897 EXIT code=143 signal=null
+```
+
+- **The process exits 143 with no `result`**, 864 ms after the signal. No
+  `notifications/cancelled` was sent. The bridge saw its streams drop.
+- **A second `approve` call arrives during shutdown.** Claude Code opened a new MCP
+  session and asked again for the same `tool_use_id`, 39 ms after the SIGTERM. It
+  exited without waiting for the answer. The bash command never ran. Seen in the
+  one run.
+- **The original process writes nothing for the waiting call.** The transcript ends
+  at the `tool_use`, with no `tool_result`.
+- **`--resume` fills the gap with a synthetic result.** The resume process
+  (launched with the bridge flags) appended, before its first Turn:
+
+```text
+user       tool_result "[Tool call interrupted: the session ended before this call's result
+           was recorded, so its outcome is unknown. Check whether it took effect before
+           relying on it or running it again.]" is_error  toolDenialKind="interrupted"
+assistant  "No response requested."  model=<synthetic>
+user       <the question>
+```
+
+The resumed model answered: "The last line I wrote was "No response requested." The
+command did not finish — the session ended before the tool result was recorded, so
+I received no output from `./slowjob.sh`." The resume process made no `approve`
+call.
+
+This differs from test 1a. There, a SIGTERM during a running Bash call wrote a real
+`Exit code 137` result before the exit.
+
+### R2-B1: a user frame during a round with two slow tool calls
+
+**Two `slow_echo` calls in one message (8 s and 20 s).** Both ran at once. Both
+`approve` calls came first, and both `slow_echo` calls started within 350 ms.
+
+```text
+t=5514 assistant tool_use toolu_013T… slow_echo {"text":"alpha","delay_s":8}
+t=5543 MCP slow_echo#1 START alpha
+t=5855 assistant tool_use toolu_012b… slow_echo {"text":"beta","delay_s":20}
+t=5890 MCP slow_echo#2 START beta
+t=8585 in  user uuid=b1a00000-…-01 "Additional instruction: when you reply, also say the word MANGO."
+t=8587 command_lifecycle b1a00000-… state=queued
+t=13562 user tool_result toolu_013T… "echo: alpha"
+t=25904 user tool_result toolu_012b… "echo: beta"
+t=25921 command_lifecycle b1a00000-… state=started
+t=30394 assistant text "echo: alpha\necho: beta"
+t=30430 command_lifecycle b1a00000-… state=completed
+t=30434 result subtype=success num_turns=3 result_index=0
+        user_message_uuids=[<prompt uuid>, "b1a00000-0000-4000-8000-000000000001"]
+```
+
+**Bash `./slow15.sh` and `slow_echo` (5 s) in one message.** These ran one after
+the other. The `approve` call for `slow_echo` came only after Bash finished.
+
+```text
+t=10142 assistant tool_use toolu_01E8… Bash {"command":"./slow15.sh",…}
+t=10166 MCP approve#1 CALLED tool=Bash (allowed at once)
+t=10347 assistant tool_use toolu_01UN… slow_echo {"text":"gamma","delay_s":5}
+t=14186 in  user uuid=b1b00000-…-01 "Additional instruction: … MANGO."
+t=14188 command_lifecycle b1b00000-… state=queued
+t=25233 user tool_result toolu_01E8… "started-15\ndone-15"
+t=25246 MCP approve#2 CALLED tool=mcp__slowtools__slow_echo
+t=25253 MCP slow_echo#1 START gamma
+t=30266 user tool_result toolu_01UN… "echo: gamma"
+t=30299 command_lifecycle b1b00000-… state=started
+t=33981 assistant text "PINEAPPLE"
+t=34012 result subtype=success num_turns=4
+        user_message_uuids=[<prompt uuid>, "b1b00000-0000-4000-8000-000000000001"]
+```
+
+An earlier run wrote the frame during the second call, the MCP one. It was taken
+after that call's result, in the same way.
+
+- **A frame is taken only after the whole round.** It is not taken after the first
+  call's result, whether the calls run together (first result at 13.6 s, pickup at
+  25.9 s) or one after the other (the Bash result, then the whole MCP call, then
+  pickup). In the transcript, the `queued_command` attachment follows the last
+  `tool_result` of the round, and the `queue-operation` `remove` has `reason:
+"absorbed_mid_turn"`.
+- **Same Turn, listed.** Each time there was one `result`, and the picked-up `uuid`
+  was in its `user_message_uuids`.
+- Haiku did not say MANGO in either run. Delivery does not mean compliance, as in
+  test 4c.
+
+### R2-B2: a user frame during one MCP call, and during a permission wait
+
+**During one `slow_echo` (15 s).**
+
+```text
+t=9359 assistant tool_use toolu_01Qq… slow_echo {"text":"delta","delay_s":15}
+t=9387 MCP slow_echo#1 START delta
+t=12410 in  user uuid=b2a00000-…-01 "Additional instruction: … MANGO."
+t=12412 command_lifecycle b2a00000-… state=queued
+t=24400 user tool_result toolu_01Qq… "echo: delta"
+t=24415 command_lifecycle b2a00000-… state=started
+t=28050 assistant text "delta"
+t=28085 result subtype=success num_turns=4
+        user_message_uuids=[<prompt uuid>, "b2a00000-0000-4000-8000-000000000001"]
+```
+
+The MCP call was not cut short, and no `notifications/cancelled` was sent. The
+frame was taken after the MCP result, as for Bash in test 4a. In a first run, the
+frame arrived while the model was streaming the call that became `slow_echo`. It
+was held through the whole MCP call and taken after its result, in the same Turn.
+
+**While Bash waits on the bridge (held 10 s, then `allow`).**
+
+```text
+t=29043 assistant tool_use toolu_01Nn… Bash {"command":"./slow15.sh",…}
+t=29068 MCP approve#1 CALLED tool=Bash -> will allow after 10000ms
+t=32092 in  user uuid=b2b00000-…-01 "Additional instruction: … MANGO."
+t=32095 command_lifecycle b2b00000-… state=queued
+t=39070 MCP approve#1 RETURNING {"behavior":"allow",…}
+t=42120 system/task_started local_bash
+t=54146 user tool_result toolu_01Nn… "started-15\ndone-15"
+t=54168 command_lifecycle b2b00000-… state=started
+t=56342 assistant text "PINEAPPLE MANGO"
+t=56369 result subtype=success num_turns=2
+        user_message_uuids=[<prompt uuid>, "b2b00000-0000-4000-8000-000000000001"]
+```
+
+- **The frame does not end or answer the permission wait.** It was held through
+  the rest of the wait, the approval, and the 15 s command. It was taken after the
+  tool result, in the same Turn, and listed. Haiku acted on it this time.
+
+### `command_lifecycle` in round 2
+
+In every run:
+
+- A written frame got `queued` within 1 to 3 ms.
+- A picked-up frame got `started` 15 to 33 ms after the round's last `tool_result`
+  frame, and `completed` just before the Turn's `result`. The prompt's `completed`
+  came just after the `result`.
+- After an interrupt, the prompt got `cancelled` just after the `result`.
+- With `cancel_queued`, the queued frame got `cancelled` just before the
+  `control_response`.
+
 ## The Four Original Unknowns
 
-| Unknown in [Harness Interrupt and Queued Messages](harness-interrupt-and-queued-messages.md)       | Result on 2.1.284                                                                                                                                                                                                                                                                                | Evidence                                    |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
-| Does SIGTERM in `-p` mode keep the partial assistant text in the transcript that `--resume` loads? | **No for streamed text:** nothing of the unfinished model call is saved, not even thinking. **Yes for a finished tool round:** the `tool_use` and a real `Exit code 137` result with partial stdout are saved. There is no interrupted marker. Resume adds a synthetic `No response requested.`. | Recorded (2.1.284)                          |
-| Does SIGINT to a `-p --input-format stream-json` process end only the Turn and keep reading stdin? | **No.** It writes one `error_during_execution` `result`, then exits with code 0 about 1 s later, with stdin still open. The partial Turn is kept for `--resume`. A still-queued message is lost.                                                                                                 | Recorded (2.1.284)                          |
-| Is a raw `control_request` `interrupt` honoured without the SDK's `initialize`?                    | **Yes.** `control_response` success with the receipt in 2 to 4 ms, then an `error_during_execution` `result`. The process stays alive, and the next user frame runs in the same Session with the partial Turn in context. `cancel_queued` works raw.                                             | Recorded (2.1.284)                          |
-| Minimum version for headless mid-Turn pickup and for `priority`                                    | **Not named** in the changelog. Pickup between tool rounds is Recorded on 2.1.284. `priority` was not sent.                                                                                                                                                                                      | Documented (none found); Recorded (2.1.284) |
+| Unknown in [Harness Interrupt and Queued Messages](harness-interrupt-and-queued-messages.md)       | Result on 2.1.284                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Evidence                                    |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Does SIGTERM in `-p` mode keep the partial assistant text in the transcript that `--resume` loads? | **No for streamed text:** nothing of the unfinished model call is saved, not even thinking. **Yes for a finished tool round:** the `tool_use` and a real `Exit code 137` result with partial stdout are saved. There is no interrupted marker. Resume adds a synthetic `No response requested.`. **Round 2:** for a call waiting on the permission bridge nothing is saved after the `tool_use`; resume adds a synthetic "Tool call interrupted… outcome is unknown" `tool_result`. | Recorded (2.1.284)                          |
+| Does SIGINT to a `-p --input-format stream-json` process end only the Turn and keep reading stdin? | **No.** It writes one `error_during_execution` `result`, then exits with code 0 about 1 s later, with stdin still open. The partial Turn is kept for `--resume`. A still-queued message is lost.                                                                                                                                                                                                                                                                                    | Recorded (2.1.284)                          |
+| Is a raw `control_request` `interrupt` honoured without the SDK's `initialize`?                    | **Yes.** `control_response` success with the receipt in 2 to 4 ms, then an `error_during_execution` `result`. The process stays alive, and the next user frame runs in the same Session with the partial Turn in context. `cancel_queued` works raw. **Round 2:** the same during a permission-bridge wait, and the bridge call gets MCP `notifications/cancelled`.                                                                                                                 | Recorded (2.1.284)                          |
+| Minimum version for headless mid-Turn pickup and for `priority`                                    | **Not named** in the changelog. Pickup between tool rounds is Recorded on 2.1.284. `priority` was not sent.                                                                                                                                                                                                                                                                                                                                                                         | Documented (none found); Recorded (2.1.284) |
 
 ## Capability Table
 
-| Stop or send on the raw `-p` stream                      | Turn ends with                                                           | Process            | Partial text in context    | Tool call in context                                    | Foreground Bash tree | Queued message                                          |
-| -------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------ | -------------------------- | ------------------------------------------------------- | -------------------- | ------------------------------------------------------- |
-| SIGTERM (group)                                          | No `result`                                                              | Exits 143          | No, not even on resume     | Yes: `tool_use` plus `Exit code 137` and partial stdout | Killed by the CLI    | Not tested                                              |
-| SIGINT (group or pid)                                    | `result` `error_during_execution`, `aborted_streaming` / `aborted_tools` | Exits 0 after ~1 s | Yes, on resume             | Yes, as a "rejected" result; partial stdout discarded   | Killed               | Lost; not replayed on resume                            |
-| `control_request` `interrupt`                            | `control_response` receipt, then the same `result`                       | Stays alive        | Yes, in the next Turn      | Yes, as a "rejected" result; partial stdout discarded   | Killed               | Runs next by itself; listed in `still_queued`           |
-| `control_request` `interrupt` with `cancel_queued: true` | Same, with `cancelled: [uuid]`                                           | Stays alive        | Not tested (mid-tool only) | Same as above                                           | Killed               | Dropped; `command_lifecycle` `cancelled`                |
-| User frame during a tool call                            | Same Turn continues                                                      | Stays alive        | n/a                        | n/a                                                     | Runs to completion   | Delivered with the tool result; in `user_message_uuids` |
-| User frame while text streams, no tool round left        | First Turn ends normally                                                 | Stays alive        | n/a                        | n/a                                                     | n/a                  | Runs next as its own Turn with its own `result`         |
+| Stop or send on the raw `-p` stream                            | Turn ends with                                                                            | Process            | Partial text in context    | Tool call in context                                                           | Foreground Bash tree                        | Queued message                                                                           |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------ | -------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| SIGTERM (group)                                                | No `result`                                                                               | Exits 143          | No, not even on resume     | Yes: `tool_use` plus `Exit code 137` and partial stdout                        | Killed by the CLI                           | Not tested                                                                               |
+| SIGINT (group or pid)                                          | `result` `error_during_execution`, `aborted_streaming` / `aborted_tools`                  | Exits 0 after ~1 s | Yes, on resume             | Yes, as a "rejected" result; partial stdout discarded                          | Killed                                      | Lost; not replayed on resume                                                             |
+| `control_request` `interrupt`                                  | `control_response` receipt, then the same `result`                                        | Stays alive        | Yes, in the next Turn      | Yes, as a "rejected" result; partial stdout discarded                          | Killed                                      | Runs next by itself; listed in `still_queued`                                            |
+| `control_request` `interrupt` with `cancel_queued: true`       | Same, with `cancelled: [uuid]`                                                            | Stays alive        | Not tested (mid-tool only) | Same as above                                                                  | Killed                                      | Dropped; `command_lifecycle` `cancelled`                                                 |
+| User frame during a tool call                                  | Same Turn continues                                                                       | Stays alive        | n/a                        | n/a                                                                            | Runs to completion                          | Delivered with the tool result; in `user_message_uuids`                                  |
+| `interrupt` while a tool call waits on the permission bridge   | Same `result`; `permission_denials` names the call; bridge gets `notifications/cancelled` | Stays alive        | n/a                        | Yes, as a "rejected" result; the tool never ran                                | Never started; a late `allow` has no effect | With `cancel_queued`: dropped, as above                                                  |
+| SIGTERM while a tool call waits on the permission bridge       | No `result`; a second `approve` for the same call during shutdown                         | Exits 143          | n/a                        | Only on resume: a synthetic "Tool call interrupted… outcome is unknown" result | Never started                               | Not tested                                                                               |
+| User frame during an MCP call, or a round of two or more calls | Same Turn continues                                                                       | Stays alive        | n/a                        | n/a                                                                            | Runs to completion                          | Delivered after the round's last tool result, not between calls; in `user_message_uuids` |
+| User frame while a tool call waits on the permission bridge    | Same Turn continues                                                                       | Stays alive        | n/a                        | n/a                                                                            | Runs after approval                         | Held through approval and the tool; delivered with its result; in `user_message_uuids`   |
+| User frame while text streams, no tool round left              | First Turn ends normally                                                                  | Stays alive        | n/a                        | n/a                                                                            | n/a                                         | Runs next as its own Turn with its own `result`                                          |
 
 ## Still Unknown
 
@@ -550,11 +847,16 @@ behaviour, and the SIGINT and SIGTERM results above are all Linux-only.
   non-zero.
 - Whether an interrupted mid-text Turn's tokens are counted anywhere. Its `result`
   reported `total_cost_usd: 0` and zero usage.
-- Whether a user frame is picked up at a boundary between two tool calls when the
-  tool round has several calls, or with MCP or permission-bridge tools. Only one
-  foreground Bash call per round was used.
-- What any stop does while a tool call waits on a permission prompt through
-  Secant's `--permission-prompt-tool` bridge. The driver used `--allowedTools`.
+- What SIGINT does while a tool call waits on the permission bridge. Round 2
+  tested only the raw `interrupt` and SIGTERM there.
+- Whether the second `approve` call that SIGTERM set off (R2-A2, one run) always
+  happens, and whether a quick `allow` answer to it could start the tool before
+  the process exits. The stand-in held it.
+- Whether a user frame is taken between calls when a round has a call the bridge
+  denies, or a call that fails. Round 2 allowed every call.
+- Whether MCP tools without `readOnlyHint` run at the same time in one round. The
+  stand-in's `slow_echo` set it, and a Bash call plus an MCP call ran one after the
+  other.
 - How a SIGTERM that arrives while a user frame is queued treats that frame. It was
   not tested, but the SIGINT result suggests it is lost. **Inferred.**
 - Whether `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` changes what a resume after
