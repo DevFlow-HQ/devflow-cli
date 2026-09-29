@@ -40,3 +40,10 @@ meaning depends on position, which cannot tell Continue from End Stage; calls na
 Secant's structure; letting an opted-in Step be ended only by the agent, which leaves the human no way out but Cancel when the agent never calls; a
 human confirmation for stage done, since an author who wants a human sign-off leaves stage done off; and a required checkpoint interval. The
 decision was made on [Define agent-declared completion for Interactive agent steps](https://github.com/secantdev/secant/issues/243).
+
+## Amendment — the channel (#244)
+
+[ADR 0033](./0033-carry-agent-calls-to-secant-over-a-per-session-loopback-mcp-server.md) settles the channel and attribution left open above: the
+calls are `step_done` and `stage_done` tools on a Secant-hosted loopback MCP server attached per Session, attributed by a per-Session token to the
+Session's live Turn without the agent supplying identity. A call from the agent's own helpers inside the Session counts as the agent's call. The
+reason is stored as sent, up to 400 characters, and a step done that reaches the Review checkpoint is answered "held for review".

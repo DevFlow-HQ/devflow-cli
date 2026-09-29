@@ -40,6 +40,10 @@ This cluster defines the target Secant terms for a **Run** and everything that h
   for a control the human already has (**End Step**, **Continue**, or **End Stage**) and reaches the same settlement. Secant applies it only when
   the **Turn** it was made in ends cleanly and drops it if that Turn fails, is interrupted, or the Run is cancelled; the latest call in a Turn wins.
   Secant stores and shows the reason and never interprets it, and the human keeps every control. _Avoid_: completion marker, done phrase.
+- **Agent call** — an agent's named call to Secant during a **Turn**, today step done or stage done, made through a Secant tool attached to its
+  **Harness Session** and attributed to that Session's live Turn without the agent naming itself. Secant answers it at once, never the human,
+  as accepted, held for review, or refused, and applies an accepted one as an **Agent-declared completion** when the Turn ends cleanly. It never
+  blocks the **Run**. _Avoid_: Harness Request, tool approval, done marker.
 - **Review checkpoint** — the **Human Gate** Secant raises when a **Repeat group** reaches its Bundle-authored review cadence without its
   **Verdict** passing. Every Verdict-driven Repeat group declares a positive-integer interval and plain-text message; Secant adds current runtime evidence and
   enforces an engine-owned safety ceiling. Continuing grants another interval and stopping ends the **Run** `failed`. The cadence is not a maximum
@@ -104,8 +108,9 @@ This cluster defines the target Secant terms for a **Run** and everything that h
   **Run** `failed`, or free text. A free-text Gate may offer authored suggestions: quick-choice answers plus an Other free-text entry, and either way
   the answer is one durable text **Run Artifact**, so a Run can wait on one indefinitely.
 - **Harness Request** — an ephemeral **Harness**-originated request raised during a **Turn**: either a tool approval with exact offered decisions
-  or a structured clarification with an exact answer shape. It lives and dies with the Turn; an ordinary assistant question that ends a Turn is
-  answered in the next Turn instead.
+  or a structured clarification with an exact answer shape. A tool approval covers the Harness's own tools and the user's MCP servers' tools alike.
+  It lives and dies with the Turn; an ordinary assistant question that ends a Turn is answered in the next Turn instead, and an **Agent call** is
+  never one, because Secant, not the human, answers it.
 - **Interactive agent step** — a **Step kind** whose **Harness Session** is handed to the human for turn-taking; unlike an **Agent step** it cannot
   complete without the human. Secant relays turns and authors nothing beyond the **Entry Turn**, and the step ends through a Secant-owned control
   given by the human or, when the Bundle opts the step in, by the agent's **Agent-declared completion** — never on an agent-emitted marker or a
@@ -184,6 +189,8 @@ row and the `blocked` state are written in one transaction, and execution also s
   agent-emitted marker is retired.
 - [ADR 0032](../adr/0032-let-opted-in-interactive-agent-steps-accept-agent-declared-completion.md) owns **Agent-declared completion**, its answer
   to ADR 0020's reasons, and the human-controlled group's **Review checkpoint**.
+- [ADR 0033](../adr/0033-carry-agent-calls-to-secant-over-a-per-session-loopback-mcp-server.md) owns the **Agent call**'s channel, its
+  attribution to a **Harness Session**'s live **Turn**, and its reply.
 - [ADR 0023](../adr/0023-own-durable-run-truth-in-isolated-run-stores.md) owns durable Run truth, Artifact publication, Workspace materialization,
   retention, and recovery storage.
 - [ADR 0031](../adr/0031-own-runs-per-run-not-per-workspace.md) owns Run ownership: many live Runs per Workspace, one owner per Run, and what a
