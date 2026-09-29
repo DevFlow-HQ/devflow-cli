@@ -103,8 +103,9 @@ this ADR already drops — Cursor, Vercel, GitHub, Material, and Monokai — it 
 generic community palettes: `opencode`, `orng`, and `lucent-orng` (OpenCode's signature theme and its two orange house palettes). Shipping a theme
 that carries the upstream tool's own identity inside Crucible raises the same naming question the product-named five did, so the same answer applies.
 That leaves 25 of the 33 upstream theme assets shipped, each attributed by one line in `THIRD-PARTY-NOTICES.md`. Because the default OpenCode theme was
-among the drops, Crucible's shipped default is `nord` — a widely-known MIT community palette — and there is no theme picker and no persisted preference
-yet.
+among the drops, Crucible initially shipped `nord` with no picker or persisted preference. Amended 2026-09-29: [ADR 0036](./0036-the-run-workbench-mirrors-the-agent.md)
+chooses everforest as the default, and [ADR 0037](./0037-own-saved-presentation-preferences-in-catalog-and-apply-themes-independently.md) adds the picker,
+dark and light appearance, and persisted Preferences.
 
 ## Amendment (ADR 0030): runtime resolved, legacy conhost dropped
 

@@ -65,6 +65,8 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **Renderer Port** — the Secant-owned Interface around the terminal renderer, covering lifecycle only: size, key input, resize, and teardown.
   It exists so the whole shell lifecycle is exercisable against a fake with no terminal, and it carries the teardown ordering the legacy Windows
   console host requires. See [ADR 0018](./docs/adr/0018-adopt-opencode-presentation-as-pinned-reduced-vendor.md).
+- **Preferences** — saved presentation choices shared across **Workspaces** within one Secant home: the theme and its dark or light appearance.
+  They determine a TUI's initial appearance; its active appearance can differ during a preview or after an unsuccessful save.
 
 ### Secant clusters
 

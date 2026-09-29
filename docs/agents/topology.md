@@ -8,23 +8,23 @@ The [Module design](./module-design.md), [dependency](./dependencies.md), and [t
 
 One ESM package contains these ownership areas. Every path exists; new files land under the area that owns their behavior, never in a new one.
 
-| Source area                | Responsibility                                                                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `src/cli/`                 | CLI hosting and dispatch to the selected client; one executable entry                                          |
-| `src/composition/`         | Outermost construction, configuration wiring, and lifecycle wiring                                             |
-| `src/application/`         | Projection Port, separate Bundle-management Interface, Preflight, launch, and cross-domain coordination        |
-| `src/workflow/`            | Execution-free Routing composition, static Step-kind contracts, and their authored value vocabulary            |
-| `src/bundle/`              | Non-executing archive validation/build, Bundle Asset capture, and managed Bundle bytes                         |
-| `src/catalog/`             | `catalog.db`, installation lifetime, Trust grants and their Operation receipts, replaceable Run index          |
-| `src/drizzle/`             | Generated per-database SQL migrations and the embedded ordered migration journals                              |
-| `src/run/execution/`       | Run lifecycle policy, uniform scheduling/retries, and private executable Step kinds                            |
-| `src/run/store/`           | Run creation/deletion, Workspace coordination and fencing, `run.db`, canonical records, and atomic publication |
-| `src/run/store/artifacts/` | Private Run Artifact capture, Git staging/history, and verified Workspace materialization                      |
-| `src/process/`             | Owned child process: PATH-walk executable resolution, Windows shim resolution, direct spawn, tree-reaping kill |
-| `src/harness/`             | Secant's Harness Interface, discovery/qualification, and private native Adapters                               |
-| `src/tui/`                 | Secant presentation plus the reduced OpenCode-derived presentation subset                                      |
-| `src/tui/renderer/`        | Renderer Port lifecycle and terminal teardown ordering                                                         |
-| `src/headless/`            | Headless client, including Bundle-management commands                                                          |
+| Source area                | Responsibility                                                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `src/cli/`                 | CLI hosting and dispatch to the selected client; one executable entry                                                          |
+| `src/composition/`         | Outermost construction, configuration wiring, and lifecycle wiring                                                             |
+| `src/application/`         | Projection Port, separate Bundle-management Interface, Preferences use cases, Preflight, launch, and cross-domain coordination |
+| `src/workflow/`            | Execution-free Routing composition, static Step-kind contracts, and their authored value vocabulary                            |
+| `src/bundle/`              | Non-executing archive validation/build, Bundle Asset capture, and managed Bundle bytes                                         |
+| `src/catalog/`             | `catalog.db`, Preferences persistence, installation lifetime, Trust grants and their Operation receipts, replaceable Run index |
+| `src/drizzle/`             | Generated per-database SQL migrations and the embedded ordered migration journals                                              |
+| `src/run/execution/`       | Run lifecycle policy, uniform scheduling/retries, and private executable Step kinds                                            |
+| `src/run/store/`           | Run creation/deletion, Workspace coordination and fencing, `run.db`, canonical records, and atomic publication                 |
+| `src/run/store/artifacts/` | Private Run Artifact capture, Git staging/history, and verified Workspace materialization                                      |
+| `src/process/`             | Owned child process: PATH-walk executable resolution, Windows shim resolution, direct spawn, tree-reaping kill                 |
+| `src/harness/`             | Secant's Harness Interface, discovery/qualification, and private native Adapters                                               |
+| `src/tui/`                 | Secant presentation plus the reduced OpenCode-derived presentation subset                                                      |
+| `src/tui/renderer/`        | Renderer Port lifecycle and terminal teardown ordering                                                                         |
+| `src/headless/`            | Headless client, including Bundle-management commands                                                                          |
 
 `cli/main.ts` and `composition/main.ts` name entrypoints, not single-file implementations. A composition root may span cohesive private wiring files
 and invoke child composition roots. Only the hosting entrypoint or parent root invokes a root; domain Modules receive dependencies.
@@ -40,6 +40,8 @@ An `index.ts` is valid for one cohesive Module after declaring it in that table.
 - Clients receive Application Interfaces; they import `projection-port.ts` and, for headless Bundle management, `bundle-management.ts`.
   `application.ts` is the construction surface for composition, not a client shortcut. Client contracts and their `contracts/` subtree remain
   self-contained; they expose normalized semantic values rather than internal runtime, storage, or Harness objects.
+- Preferences cross the Projection Port; Catalog owns their durable storage and the TUI owns active appearance. Read
+  [ADR 0037](../adr/0037-own-saved-presentation-preferences-in-catalog-and-apply-themes-independently.md) before changing preference ownership or save handling.
 - Application coordinates the domain Modules through their Interfaces. Bundle and Catalog depend only on the static Workflow vocabulary.
   Catalog's Run index is advisory; Application uses Run Store authority for lifecycle decisions.
 - Drizzle owns only generated migration assets and their ordered journal Interface. Catalog and Run Store keep their schemas, queries, SQLite
