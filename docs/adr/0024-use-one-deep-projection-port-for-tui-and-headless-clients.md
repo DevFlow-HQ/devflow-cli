@@ -29,3 +29,9 @@ The family arithmetic is reconciled against what the closed `ProjectionSelector`
 M3 adds **five Operations** to the closed set, as the `approve-workspace` (2026-09-09) and `cancel-run`/`delete-run` (2026-09-13) extensions each recorded theirs:
 `answer-harness-request` (#117), `interrupt-turn` and `steer-turn` (#118), and `send-interactive-turn` and `end-interactive-step` (#122). This extends the #19
 vocabulary; no other decision here changes.
+
+## Amendment (2026-09-29): distinct as data, not as styling
+
+[ADR 0036](./0036-the-run-workbench-mirrors-the-agent.md) narrows "durable state, ephemeral live Harness state, and replaceable previews remain
+visibly distinct". The three stay distinct as data at the Projection Port, so a client always knows which kind of update it holds. A screen need not
+style them differently: the Run Workbench grows streaming text in place and marks live work only with its working indicator and row spinners.

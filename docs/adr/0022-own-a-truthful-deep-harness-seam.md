@@ -27,6 +27,8 @@ interruption is unknown and the last authoritative observation. The Step kind, a
 The event stream preserves every user-meaningful assistant, tool, command, file-edit, subagent, request, retry, failure, model, session, and recovery
 fact; unknown but displayable work becomes generic activity. Context-window pressure is prominent when observed or honestly calculable, while usage,
 cost, and rate facts are optional and estimates stay labelled. Raw protocol frames, private reasoning, telemetry, and ordinary stderr remain private.
+(Edited 2026-09-29: [ADR 0036](./0036-the-run-workbench-mirrors-the-agent.md) settles that a provider-written reasoning summary is not private
+reasoning and may cross the Seam; the raw chain of thought stays private.)
 The Adapter drains the native transport independently of a slow TUI, coalesces only replaceable previews, closes the producer after all final facts
 are queued, and only then settles the result; no event can follow it. The result alone carries terminal status, authoritative final assistant content
 when available, the effective-model observation, post-Turn Session availability, and structured failure.
