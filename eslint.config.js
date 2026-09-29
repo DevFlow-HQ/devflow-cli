@@ -10,6 +10,8 @@ export default tseslint.config(
       ".debug/**",
       "dist/**",
       "node_modules/**",
+      // Byte-faithful research archive, retained with its original checksums.
+      "prototypes/windows-contained-spawn/stdio/**",
     ],
   },
   eslint.configs.recommended,

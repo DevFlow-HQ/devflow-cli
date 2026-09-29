@@ -1,0 +1,10 @@
+import { spawnContained } from "./contained-spawn";
+const c = await spawnContained(`bun -e "const b=Buffer.alloc(1<<20,97); for(let i=0;i<64;i++){ if(!process.stdout.write(b)) await new Promise(r=>process.stdout.once('drain',r)); } process.stderr.write('child done')"`);
+let n = 0;
+c.stderr.on("data", (d) => console.log("stderr", String(d)));
+c.stdout.on("data", (d: Buffer) => (n += d.length));
+c.stdout.on("end", () => console.log("stdout end", n));
+const iv = setInterval(() => console.log("bytes", n), 1000);
+console.log("exit", await c.exited, n);
+clearInterval(iv);
+await Bun.sleep(500);

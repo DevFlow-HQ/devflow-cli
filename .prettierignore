@@ -17,3 +17,7 @@ tests/harness/fixtures/codex/codex-qualification/stable-schema.generated.json
 # The Matt Bundle's skill folders are the maintainer's originals, copied unchanged;
 # reformatting them would change their bytes and the Bundle digest.
 bundles/matt-front-spec/skills
+
+# Byte-faithful Windows containment experiment sources; their recorded hashes
+# must remain unchanged. The prototype README is still checked normally.
+prototypes/windows-contained-spawn/stdio
