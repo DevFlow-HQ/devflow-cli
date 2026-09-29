@@ -47,3 +47,9 @@ decision was made on [Define agent-declared completion for Interactive agent ste
 calls are `step_done` and `stage_done` tools on a Secant-hosted loopback MCP server attached per Session, attributed by a per-Session token to the
 Session's live Turn without the agent supplying identity. A call from the agent's own helpers inside the Session counts as the agent's call. The
 reason is stored as sent, up to 400 characters, and a step done that reaches the Review checkpoint is answered "held for review".
+
+## Amendment — the author's texts are full sentences (#253)
+
+An author's `stepDoneWhen` or `stageDoneWhen` is one or more full sentences that Secant appends verbatim in place of its default sentence, with no
+wrapping, prefix, or suffix. The author's text therefore names the call and asks for the one-line reason itself. The Matt Front Spec Bundle's
+adoption was decided on [Decide how the Matt Bundle adopts agent-declared completion](https://github.com/secantdev/secant/issues/253).
