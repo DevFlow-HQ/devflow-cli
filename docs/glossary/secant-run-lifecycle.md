@@ -127,6 +127,9 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Interrupt** — asking the **Harness** to stop the current live **Turn** and its foreground tool work. It ends only the Turn: the **Step Attempt**
   stays open and the **Run** waits `blocked` on the human, whose next message continues the same **Harness Session**. It does not close the
   Harness, halt the Run, or cancel it.
+- **Reasoning summary** — text a **Harness**'s provider writes for the user about the model's reasoning during a **Turn**, such as a
+  summarized thought. It may cross the Harness Seam and be shown. The raw chain of thought is private reasoning and never does. _Avoid_: thinking,
+  chain of thought.
 - **Cancel** — explicitly ending a **Run**. The only route to the terminal `cancelled` state.
 - **Preflight** — the precondition check performed before a **Run** exists: the **Composition check**, presence of required **Launch inputs**, the
   union of authored **Workspace prerequisites**, intrinsic **Step kind** preconditions and Harness capability needs, and resolution of each selected
@@ -198,6 +201,8 @@ row and the `blocked` state are written in one transaction, and execution also s
   attribution to a **Harness Session**'s live **Turn**, and its reply.
 - [ADR 0035](../adr/0035-interrupt-ends-only-the-turn-and-a-mid-turn-message-is-a-native-steer.md) owns what an **Interrupt** leaves behind,
   **Steer** delivery, and why a Turn lasts until every Steer is delivered.
+- [ADR 0036](../adr/0036-the-run-workbench-mirrors-the-agent.md) owns how the Run Workbench shows a **Run** as an agent screen, and why a
+  **Reasoning summary** is not private reasoning.
 - [ADR 0023](../adr/0023-own-durable-run-truth-in-isolated-run-stores.md) owns durable Run truth, Artifact publication, Workspace materialization,
   retention, and recovery storage.
 - [ADR 0031](../adr/0031-own-runs-per-run-not-per-workspace.md) owns Run ownership: many live Runs per Workspace, one owner per Run, and what a
