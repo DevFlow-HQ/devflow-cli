@@ -77,7 +77,9 @@ Harness selection ([ADR 0019](./0019-failed-and-halted-runs-are-resumable-restin
 changed. Launch and resume hand that one stored value to the Adapter's prepare, so a resumed Run asks for exactly what its launch asked for; an absent
 value means the Harness default, never a substitute. The requested model is free text in the store, checked against the Adapter's declared model list
 at launch-preparation and at prepare ([ADR 0022](./0022-own-a-truthful-deep-harness-seam.md)); a Command-only Run carries none. It is not evidence:
-the effective model each Attempt observes stays a per-Attempt fact and never overwrites the request.
+the effective model each Attempt observes stays a per-Attempt fact and never overwrites the request. (Edited 2026-09-29: [ADR 0034](./0034-choose-and-change-model-and-effort-as-one-run-wide-model-choice.md)
+replaces this never-changed request with a Run-wide **Model choice** of model and effort that the store holds, updates on each change, and copies into
+each Turn's requested model and effort beside the observed effective values; no value means "Harness default" any more.)
 
 ## Amendment — a Run owns one editable working area (2026-09-23, [#214](https://github.com/secantdev/secant/issues/214))
 

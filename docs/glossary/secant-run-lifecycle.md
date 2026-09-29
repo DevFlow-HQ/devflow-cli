@@ -91,14 +91,15 @@ This cluster defines the target Secant terms for a **Run** and everything that h
   one Turn per attempt; an **Interactive agent step** may have many.
 - **Session availability** — whether a **Harness Session** is `open` (a next Turn can be sent now), `detached` (not live, but holding a native
   recovery coordinate worth reattaching), or `unusable` (native evidence authoritatively says recovery cannot continue).
-- **Requested model** — the optional model a **Launch draft** requests, threaded through prepare to the selected **Harness** at its native point and
-  stored durably on the **Run** beside the selected Harness before the first **Step Attempt**. It is Run-level and immutable: reopen and resume reuse
-  it and never change it, per-**Turn** selection is not built, and `Harness default` means no requested model, so the Harness's own configuration stays
-  authoritative. A Command-only Run and a Run launched without a model carry none. _Avoid_: Selected model, model override.
-- **Effective model** — the model one Agent-step **Step Attempt** actually ran under, observed from the prepared **Harness** and recorded per Attempt;
-  the **Run** view surfaces the latest Attempt's value. It is kept as a separate fact from the **Requested model** so a Harness substitution stays
-  visible: the requested model is the one durable Run-level choice, while the effective model is the per-Attempt observation of what actually served.
-  _Avoid_: Requested model, served model.
+- **Model choice** — the **Run**'s one current model and effort level, each a real value the selected **Harness** names, never "Harness default". It
+  is set at launch, preselected with the human's last Model choice for that Harness or else the defaults the Harness reports, saved with the Run, and
+  changeable whenever the Run is open. Every **Turn** in every **Harness Session** of the Run requests the Model choice current when it starts. A
+  Command-only Run carries none. _Avoid_: Selected model, model setting, Harness default.
+- **Requested model** and **Requested effort** — what one **Turn** asked its **Harness** for, copied from the **Model choice** when the Turn starts.
+  _Avoid_: Model override.
+- **Effective model** and **Effective effort** — what one **Turn** was observed to run on, as the **Harness** reports it, or unknown when it reports
+  nothing. They stay separate facts from the **Requested model** and **Requested effort** so a Harness substitution or fallback stays visible, and they
+  never copy the request. _Avoid_: Served model.
 - **Human Gate** — a Secant-owned pause carrying a Bundle-authored question in one of its shapes: approve/reject, whose rejection ends the
   **Run** `failed`, or free text. A free-text Gate may offer authored suggestions: quick-choice answers plus an Other free-text entry, and either way
   the answer is one durable text **Run Artifact**, so a Run can wait on one indefinitely.
@@ -127,9 +128,9 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 ## Run states
 
 An Agent-bearing **Run** pins its semantic **Harness** selection with its **Workspace**, **Bundle Snapshot**, and **Launch inputs** at launch, plus an
-optional **Requested model** beside that selection; a Command-only Run has no Harness selection and no model. The selected Harness is immutable recovery
-and routing truth, while each Agent-step Attempt separately records the Harness executable, version, Adapter evidence, and the **Effective model** it
-actually observed.
+**Model choice** beside that selection; a Command-only Run has no Harness selection and no model. The selected Harness is immutable recovery and
+routing truth, while the Model choice may change between and during Turns; each Agent-step Attempt separately records the Harness executable, version,
+and Adapter evidence, and each Turn its requested and effective model and effort.
 
 | State       | Meaning                                                         | Terminal |
 | ----------- | --------------------------------------------------------------- | -------- |

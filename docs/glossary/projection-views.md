@@ -8,7 +8,7 @@ generic **Projection**, **Action Offer**, and **Operation** terms live in the [c
 ## Terms
 
 - **Launch draft** — the complete, client-owned set of choices that selects a **`launch-preparation`** Projection: **Bundle identity** and version,
-  the selected **Harness** id when the routing needs one, an optional **Requested model**, the typed **Launch inputs**, and the trust digest once
+  the selected **Harness** id when the routing needs one, the initial **Model choice**, the typed **Launch inputs**, and the trust digest once
   acknowledged. It is the Projection's selector, so changing any field opens a new Projection rather than mutating one, and the family rebases rather
   than preserving identity. A draft is client-owned scratch: it creates no **Run**, **Harness Session**, **Turn**, **Trust grant**, or durable draft.
   _Avoid_: Pending Run, draft Run.
@@ -16,9 +16,10 @@ generic **Projection**, **Action Offer**, and **Operation** terms live in the [c
   checks a launch runs today without creating a **Run**, in that first-fail order: exact **Installed Bundle** still present, **Workspace** approval,
   the pinned bytes still valid and composed, **Interactive agent step** refusal for a client without interactive turns, selected-**Harness** discovery
   and served capabilities, **Launch input** presence and type, **Workspace prerequisites**, **Command step** executables, and **Trust grant**. When the
-  draft is otherwise ready and a model is requested, it additionally qualifies only the selected Harness through the bounded qualify path to check the
-  **Requested model** against the declared list, then releases it immediately. Its status is `assessing`, `ready`, or `not-ready`; only a `ready` draft
-  carries the `launch-run` **Action Offer**, and no status ever creates a Run, Session, Turn, or Trust grant. _Avoid_: Dry-run launch, launch validation.
+  draft is otherwise ready, it additionally qualifies only the selected Harness through the bounded qualify path to read the Harness's own default
+  model and effort and check the **Model choice** against the declared lists, then releases it immediately. Its status is `assessing`, `ready`, or
+  `not-ready`; only a `ready` draft carries the `launch-run` **Action Offer**, and no status ever creates a Run, Session, Turn, or Trust grant.
+  _Avoid_: Dry-run launch, launch validation.
 - **`harness-catalog`** — the **Projection** family for bounded discovery and qualification of the installed **Harnesses**, with an optional exact
   focus on one semantic Harness id. Its `list` view carries one **Harness summary** per registered Harness and spawns nothing; its `focus` view runs
   bounded qualification for that one Harness (prepare then immediate close in composition), caches the result for this process, and adds the
@@ -49,8 +50,8 @@ generic **Projection**, **Action Offer**, and **Operation** terms live in the [c
 
 ## Related decisions
 
-- [Secant Run Lifecycle](./secant-run-lifecycle.md) owns the **Run** a ready draft creates, and defines **Requested model** and **Effective model**,
-  the pair a `launch-preparation` draft and the Run Workbench both surface.
+- [Secant Run Lifecycle](./secant-run-lifecycle.md) owns the **Run** a ready draft creates, and defines the **Model choice** a `launch-preparation`
+  draft and the Run Workbench both surface, with the per-Turn requested and effective model and effort.
 - [Workflow Bundle](./workflow-bundle.md) owns **Bundle identity**, **Trust grant**, and the **Installed Bundle** bytes a `launch-preparation` draft
   re-checks.
 - [ADR 0024](../adr/0024-use-one-deep-projection-port-for-tui-and-headless-clients.md) owns the one deep **Projection Port** these families and views
