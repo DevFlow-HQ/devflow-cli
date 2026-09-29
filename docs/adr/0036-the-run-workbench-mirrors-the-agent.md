@@ -24,7 +24,9 @@ appears once the Run leaves an active state.
   agent, or not delivered.
 - An **Entry Turn**'s Bundle prompt is one muted line saying Secant started the Step with it, since the human did not write it.
 - Assistant text streams as markdown and is never truncated, so an agent's question is always read in full.
-- A reasoning summary is one collapsed `Thought: <title> · <duration>` row, with a spinner and `Thinking` while it streams.
+- A supplied reasoning summary is one collapsed Thought row, with its first nonempty line as a shortened label, a spinner and `Thinking` while it
+  streams, and a duration only when the Harness reports a trustworthy reasoning duration. Existing Harness summary settings and unset defaults are
+  inherited (ADR 0038).
 - Each tool call is one row that changes in place: muted once settled, a spinner while running, the error colour when it fails. Shell output and
   file diffs are panels.
 - An **Agent call** shows its call, the agent's reason, and what Secant did with it. An answered Human Gate shows the answer.
@@ -33,6 +35,8 @@ appears once the Run leaves an active state.
 
 **Truncation.** Only shell output collapses, at 10 lines, ending with how many lines are hidden. Reasoning bodies and the Entry Turn prompt collapse
 to their line. `ctrl+o` or a click expands everything collapsed. Assistant text, questions, the human's messages, and diffs are never cut; they wrap.
+The shell bound applies to live output and completed output alike, fits the available width, and expands only on human action. Native output updates
+replace the same call's preview; streaming never automatically opens a panel (ADR 0038).
 
 **Colour.** Colour comes only from the vendored theme roles, and everforest is the default theme. The agent colour marks the human's messages, the
 prompt bar, the Turn line, and the working indicator. Muted text marks settled work, `warning` marks reasoning rows and Harness Requests, `error`
@@ -76,7 +80,8 @@ raw reasoning text, stays private under ADR 0022.
 - typed tool rows (a kind, the main input, and a result count), command output and exit code as fields, and file diffs as data;
 - a reasoning-summary event;
 - Turn history that grows during a Turn, with message identity so streaming text settles in place and durable rows arrive mid-Turn;
-- noise kept out of `activity`, and `context` filled by both Adapters;
+- noise kept out of `activity`, and context/usage facts supplied by both Adapters only where reported; Secant calculates no context occupancy,
+  token counts, or percentages (ADR 0038);
 - Steer state, Turn duration, Entry Turn authorship, and Agent-call rows in the Projection;
 - which of these facts headless `--json` gains.
 
