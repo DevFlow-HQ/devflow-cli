@@ -26,8 +26,8 @@ Interactive agent steps alike, wherever the profile's Steer evidence says the Ha
 `expectedTurnId` and a Secant-minted `clientUserMessageId`, which comes back as the `clientId` of the `userMessage` item written when the text is taken
 into history before the next model request. Claude Code delivers it as a stdin `user` frame on the existing `claude -p --input-format stream-json`
 process, stamped with a Secant-minted `uuid`: a frame written while a tool round runs, including one waiting on a tool approval, is taken with the round's
-last tool result in the same exchange and listed in `result.user_message_uuids`, and one written while text streams runs as the next native exchange with its own `result`; `command_lifecycle` frames,
-advertised as `msg_lifecycle_v1`, say which frames are still queued. Delivery means the Harness put the text in front of the model, never that the
+last tool result in the same exchange and listed in `result.user_message_uuids`, and one written while text streams runs as the next native
+exchange with its own `result`; `command_lifecycle` frames, advertised as `msg_lifecycle_v1`, say which frames are still queued. Delivery means the Harness put the text in front of the model, never that the
 model followed it.
 
 **The Turn stretches until every Steer is delivered.** A Turn ends at the first Harness boundary after which no accepted Steer is pending, so one Secant
@@ -49,8 +49,8 @@ human's compose, so nothing runs after the human said stop. Codex discards pendi
 **How Claude Code stops.** Claude Code is interrupted with a raw `control_request` `interrupt` written to the same stdin, which, recorded on Claude
 Code 2.1.284, answers without the SDK's `initialize` in milliseconds, ends the Turn with a `result`, keeps the process and Session live for the next
 frame, keeps the partial text in context, and kills the foreground tool tree. It holds while a tool waits on Secant's permission bridge too: Claude
-Code cancels the pending approval call with an MCP `notifications/cancelled`, which expires the Harness Request, and the tool never runs. That makes Claude Code's interruption a confirmed active-Turn
-interruption rather than a process-only stop. Qualification bounds the dependency: a Claude Code that does not answer the request falls back to
+Code cancels the pending approval call with an MCP `notifications/cancelled`, which expires the Harness Request, and the tool never runs. That
+makes Claude Code's interruption a confirmed active-Turn interruption rather than a process-only stop. Qualification bounds the dependency: a Claude Code that does not answer the request falls back to
 today's SIGTERM of the process tree and `--resume`, which loses partial streamed text. This is the same wire and the same degrade rule
 [ADR 0034](./0034-choose-and-change-model-and-effort-as-one-run-wide-model-choice.md) adopted for `set_model`; adopting the Agent SDK itself stays
 rejected for the reasons in [Establish Claude Code's viable structured transports](https://github.com/secantdev/secant/issues/3). An Interrupt stops
