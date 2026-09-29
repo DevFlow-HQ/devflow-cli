@@ -14,7 +14,8 @@ This cluster defines the target Secant terms for a **Run** and everything that h
   a Repeat group is a Step but not a Stage; the group is the Stage. **End Stage** and an **Agent-declared completion**'s stage done complete a
   human-controlled group's Stage.
 - **Agent step** — a **Step kind** running one autonomous **Turn** in a named **Harness Session**. It completes without the human, though the human
-  may **Steer** it while that Turn is live when the selected Harness supports native Steer.
+  may **Steer** it while a Turn is live when the selected Harness supports Steer. After an **Interrupt** the human's message starts a follow-up Turn
+  in the same Session and **Step Attempt**, and the Attempt takes its outcome from its last Turn.
 - **Command step** — the deterministic non-agent **Step kind**. Its attempt succeeds if the command ran to an exit; the exit status becomes a
   **Verdict** and the captured output a `text` **Run Artifact**. The attempt fails only when the command could not execute.
 - **Verdict** — a **Run Artifact** type holding `pass` or `fail`, produced from a deterministic **Step**'s exit status. The only thing a **Repeat
@@ -91,8 +92,9 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Harness Session** — a named conversation with the selected **Harness**, owned by exactly one **Run** and never shared across Runs. The routing
   names the session each agent **Step** runs in; Secant opens it on first use and reuses it after.
 - **Turn** — one mechanical user-to-**Harness** exchange inside a **Harness Session**: submitted input, model and tool activity, streamed progress,
-  and the Harness's authoritative turn boundary. It is neither a Session nor a judgement that the **Step** reached its goal. An **Agent step** has
-  one Turn per attempt; an **Interactive agent step** may have many.
+  and the Harness's authoritative turn boundary, the first one after which no **Steer** is still pending, so one Turn may span several native
+  exchanges. It is neither a Session nor a judgement that the **Step** reached its goal. An **Agent step** has one autonomous Turn per attempt, plus
+  any follow-up Turns the human starts after an **Interrupt**; an **Interactive agent step** may have many.
 - **Session availability** — whether a **Harness Session** is `open` (a next Turn can be sent now), `detached` (not live, but holding a native
   recovery coordinate worth reattaching), or `unusable` (native evidence authoritatively says recovery cannot continue).
 - **Model choice** — the **Run**'s one current model and effort level, each a real value the selected **Harness** names, never "Harness default". It
@@ -117,11 +119,14 @@ This cluster defines the target Secant terms for a **Run** and everything that h
   recognised phrase in a **Turn**. The legacy grill is this shape. A step may opt into an **Entry Turn**. Inside a **Repeat group** each
   iteration is its own **Step Attempt** with its own **Harness Session**; ending the step advances only that iteration.
 - **Entry Turn** — an **Interactive agent step**'s optional first **Turn**: its Bundle-authored prompt, rendered with **Launch inputs** and bundled
-  skill paths, sent once on entry so the human need not retype what the launch already carries. It is never re-sent: after a halt the human
-  continues the same **Harness Session**.
-- **Steer** — sending native same-Turn guidance while a **Turn** is live. It is not a new Turn, and unsupported Harnesses do not emulate it.
-- **Interrupt** — asking the **Harness** to stop the current live **Turn**, including its native tool work. Confirmation ends the **Step Attempt**
-  `cancelled` and leaves the **Run** `halted` and re-attemptable; it does not close the Harness or cancel the Run.
+  skill paths, sent once on entry so the human need not retype what the launch already carries. It is never re-sent: after an **Interrupt** or a halt the
+  human continues the same **Harness Session**.
+- **Steer** — a message the human sends while a **Turn** is live, delivered natively at the **Harness**'s next boundary and inside that Turn,
+  which lasts until every Steer is delivered. Delivered means the Harness put it in front of the model, not that the model followed it. An
+  **Interrupt** drops a Steer not yet delivered and returns its text to the human. _Avoid_: queued message.
+- **Interrupt** — asking the **Harness** to stop the current live **Turn** and its foreground tool work. It ends only the Turn: the **Step Attempt**
+  stays open and the **Run** waits `blocked` on the human, whose next message continues the same **Harness Session**. It does not close the
+  Harness, halt the Run, or cancel it.
 - **Cancel** — explicitly ending a **Run**. The only route to the terminal `cancelled` state.
 - **Preflight** — the precondition check performed before a **Run** exists: the **Composition check**, presence of required **Launch inputs**, the
   union of authored **Workspace prerequisites**, intrinsic **Step kind** preconditions and Harness capability needs, and resolution of each selected
@@ -137,14 +142,14 @@ An Agent-bearing **Run** pins its semantic **Harness** selection with its **Work
 routing truth, while the Model choice may change between and during Turns; each Agent-step Attempt separately records the Harness executable, version,
 and Adapter evidence, and each Turn its requested and effective model and effort.
 
-| State       | Meaning                                                         | Terminal |
-| ----------- | --------------------------------------------------------------- | -------- |
-| `running`   | a **Step Attempt** is executing                                 | no       |
-| `blocked`   | a **Human Gate** or **Harness Request** is waiting on the human | no       |
-| `halted`    | stopped for a reason outside the workflow's logic               | no       |
-| `failed`    | the workflow concluded negatively                               | no       |
-| `succeeded` | the routing completed                                           | yes      |
-| `cancelled` | the user explicitly ended the Run                               | yes      |
+| State       | Meaning                                                                       | Terminal |
+| ----------- | ----------------------------------------------------------------------------- | -------- |
+| `running`   | a **Step Attempt** is executing                                               | no       |
+| `blocked`   | a **Human Gate**, **Harness Request**, or the human's next message is waiting | no       |
+| `halted`    | stopped for a reason outside the workflow's logic                             | no       |
+| `failed`    | the workflow concluded negatively                                             | no       |
+| `succeeded` | the routing completed                                                         | yes      |
+| `cancelled` | the user explicitly ended the Run                                             | yes      |
 
 `blocked` is durable truth, not computed: since [#108](https://github.com/secantdev/secant/issues/108) the authored **Human Gate**'s `pending_gate`
 row and the `blocked` state are written in one transaction, and execution also stores `blocked` before a checkpoint pause, so a killed Run reconciles
@@ -191,6 +196,8 @@ row and the `blocked` state are written in one transaction, and execution also s
   to ADR 0020's reasons, and the human-controlled group's **Review checkpoint**.
 - [ADR 0033](../adr/0033-carry-agent-calls-to-secant-over-a-per-session-loopback-mcp-server.md) owns the **Agent call**'s channel, its
   attribution to a **Harness Session**'s live **Turn**, and its reply.
+- [ADR 0035](../adr/0035-interrupt-ends-only-the-turn-and-a-mid-turn-message-is-a-native-steer.md) owns what an **Interrupt** leaves behind,
+  **Steer** delivery, and why a Turn lasts until every Steer is delivered.
 - [ADR 0023](../adr/0023-own-durable-run-truth-in-isolated-run-stores.md) owns durable Run truth, Artifact publication, Workspace materialization,
   retention, and recovery storage.
 - [ADR 0031](../adr/0031-own-runs-per-run-not-per-workspace.md) owns Run ownership: many live Runs per Workspace, one owner per Run, and what a

@@ -36,7 +36,11 @@ clarification; `interrupt` means Harness-confirmed termination of the active Tur
 and ending an Interactive agent step remains a Crucible control above the Seam. Expected races return an accepted or rejected receipt rather than
 throwing. Acceptance does not prove final effect: after an accepted interrupt the Adapter rejects new inputs, drains to native terminal evidence,
 and the Turn result confirms whether interruption occurred. Harness Requests are Turn-scoped, independently keyed, may coexist, and expire when the
-Turn ends, is interrupted, or is lost; an ordinary assistant question at a Turn boundary is not a Harness Request.
+Turn ends, is interrupted, or is lost; an ordinary assistant question at a Turn boundary is not a Harness Request. (Edited 2026-09-29:
+[ADR 0035](./0035-interrupt-ends-only-the-turn-and-a-mid-turn-message-is-a-native-steer.md) widens `steer` to native mid-Turn delivery of the human's text at the Harness's
+next boundary, keeps a Turn open until every accepted Steer is delivered, adds a delivered-or-dropped Steer lifecycle to the event stream, drops
+undelivered Steers on interrupt, and qualifies Claude Code's `interrupt` control request as a confirmed active-Turn interruption with a process-stop
+fallback.)
 
 Native conversation identifiers are opaque recovery coordinates, never Run truth. When one is observable before submission, the Adapter awaits a
 Crucible-owned durable recorder before sending content; recording failure proves `not-started`. When a Harness reveals it only after acceptance, the

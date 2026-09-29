@@ -279,7 +279,9 @@ installed version's tag. T3 Code was read from a local clone at the commit above
   retried. A `lost` Turn maps to `indeterminate`, and the Run also rests `halted`. `resume-run` re-attempts the Step. Because the Session
   record is `detached`, the retry sends the Step's prompt again into the same native Session.[^sec-exec-cancelled][^sec-agent-recovery]
 - **Interactive agent step.**
-  - Each human Turn runs with `detachAfterTurn`, and the Harness is closed after each Turn.[^sec-agent-interactive]
+  - Each human Turn runs with `detachAfterTurn`, which records the Session `detached` after each Turn.[^sec-agent-interactive] (Corrected
+    2026-09-29: the Harness is not closed after each Turn. The wiring keeps one prepared Harness, and one Claude Code process, across the
+    Step's Turns; only Codex reissues `thread/resume` before each human Turn because of the `detached` record.)
   - An interrupted or lost human Turn rests the Run `halted`, not `blocked`, and publishes no Attempt. An interrupted Entry Turn does the
     same.[^sec-app-interactive][^sec-exec-entry]
   - The glossary says that "after a halt the human continues the same Harness Session". That takes a resume back to `blocked` before the
