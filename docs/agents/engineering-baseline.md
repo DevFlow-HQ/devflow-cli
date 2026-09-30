@@ -15,8 +15,9 @@ every change to production code or a prototype obeys it.
 - Keep the minimum verification gate green and runtime declarations, types, build targets, dependencies, and verification environments aligned.
 - Apply structural standards as a quality ratchet to new production code and to legacy code whose seam a change crosses.
 - Leave untouched legacy code alone unless current work depends on changing it.
-- Unused is not dead. In a project still being built, declared surface (exports, Interface members, vendored helpers, ADR-named contracts) awaits
-  its callers. Delete only what a decision, a ticket, or a retired consumer names, never because a search found no importer.
+- Unused code fails the gate: an unused file, dependency, export, or type, front doors included, and use by tests counts as use. Export a value or
+  type only when another file imports it. Clear a finding by dropping the `export` and keeping the code, and delete a declaration only when nothing
+  in its file uses it either. What runs is declared as an entry point; nothing is allowlisted.
 - Apply the lightweight prototype contract; other focused rules apply only when a prototype crosses their explicit trigger.
 
 ## Architecture-Independent Rules
@@ -41,6 +42,8 @@ The repository must expose one canonical check entrypoint covering:
   linting and before the tests) is the only place Module-boundary, test-mirror, guidance-structure, release-workflow, and vendor-provenance
   violations print, each with a `fix:` and a `see:` line; see [topology](./topology.md#enforcement-and-tests) and
   [release workflow](./release-workflow.md). The other suites under `tests/architecture/` still report through the tests.
+- Unused-code checking (`bun run unused:check`, right after the structural step), which prints each unused file, dependency, export, or type in the
+  structural step's report form.
 
 CI must perform a clean dependency installation before running the check entrypoint. Tests that require an installed Harness, network access,
 credentials, or a real terminal remain opt-in. External URL validation, coverage thresholds, and a general architecture linter are not part of the

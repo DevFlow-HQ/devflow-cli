@@ -5,8 +5,6 @@
 import { installReplayerAt } from "./replayer-install.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
-export type { BridgeRecord, InstalledReplayer } from "./replayer-install.js";
-
 export function installReplayer(
   version: string,
   protocolCaseDirectory?: string,

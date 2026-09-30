@@ -57,7 +57,7 @@ export interface TRunDatabaseHandle {
   close(): void;
 }
 
-export type TOpenRunDatabase = (path: string) => TRunDatabaseHandle;
+type TOpenRunDatabase = (path: string) => TRunDatabaseHandle;
 
 interface TStageRunStoreParams {
   readonly dir: string;

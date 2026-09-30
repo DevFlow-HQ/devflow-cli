@@ -3,11 +3,7 @@ import { wireApplication } from "./wiring.js";
 
 // wireApplication is the one wiring path both roots take; the composition suite
 // reaches it through this entry to prove both roots agree (#74 A18).
-export {
-  wireApplication,
-  type Wiring,
-  type WiringOverrides,
-} from "./wiring.js";
+export { wireApplication, type Wiring } from "./wiring.js";
 
 // The composition entry: both surfaces reach the runtime through here.
 // `withClients` wires the Application (see wiring.ts) and hands its Ports to the

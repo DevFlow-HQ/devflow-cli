@@ -14,9 +14,7 @@ export {
   createStdinKeypress,
   runBehindConhostNotice,
   type ConhostNoticeGate,
-  type ConsoleProbe,
   type KeypressInput,
-  type WaitForKeypress,
 } from "./conhost-notice.js";
 
 // The Renderer Port is narrowed to lifecycle only (ADR 0018): size, onKey,

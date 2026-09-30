@@ -32,7 +32,7 @@ function readLogEntries(logPath: string) {
   return text.split("\n").map((line) => JSON.parse(line));
 }
 
-export interface BridgeRecord {
+interface BridgeRecord {
   id: string;
   tool_name: string;
   behavior: string;

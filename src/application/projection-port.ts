@@ -77,9 +77,9 @@ export type ApprovalDecisionName = "allow" | "deny";
  *  headless client's declared `--harness-requests` policy. The client naming its
  *  own answer's provenance is what lets the durable timeline record "answered by
  *  client policy" without the Harness Adapter knowing a client policy exists. */
-export type HarnessAnswerSource = "human" | "client-policy";
+type HarnessAnswerSource = "human" | "client-policy";
 
-export interface ApproveWorkspaceSubmission {
+interface ApproveWorkspaceSubmission {
   readonly operationId: string;
   readonly operation: "approve-workspace";
   readonly input: { readonly path: string };
@@ -87,7 +87,7 @@ export interface ApproveWorkspaceSubmission {
 
 /** Launch an installed Command-only Bundle against the approved launch
  *  Workspace, optionally acknowledging trust for the exact installed digest. */
-export interface LaunchRunSubmission {
+interface LaunchRunSubmission {
   readonly operationId: string;
   readonly operation: "launch-run";
   readonly input: LaunchRunInput;
@@ -119,7 +119,7 @@ export interface LaunchRunInput {
  *  Run continues from the Step it stopped at (e.g. after a Materialization
  *  conflict is fixed, #88); a `failed` Run resets that Step's attempt and
  *  Iteration bounds, so the resume is itself the grant of another try. */
-export interface ResumeRunSubmission {
+interface ResumeRunSubmission {
   readonly operationId: string;
   readonly operation: "resume-run";
   readonly input: ResumeRunInput;
@@ -140,7 +140,7 @@ export interface ResumeRunInput {
  *  gate the `text` answer is published as a `text` Run Artifact bound to the Step's
  *  declared output name, the gate's Attempt settles `succeeded`, and the Run
  *  advances — all in one Store boundary. The answer survives closing Secant. */
-export interface AnswerHumanGateSubmission {
+interface AnswerHumanGateSubmission {
   readonly operationId: string;
   readonly operation: "answer-human-gate";
   readonly input: AnswerHumanGateInput;
@@ -169,7 +169,7 @@ export interface AnswerHumanGateInput {
  *  rejected precisely and answers nothing (ADR 0022: races settle as rejected
  *  values, never a throw). `by` is the answering client's provenance, recorded on
  *  the durable `request-answered` timeline entry. */
-export interface AnswerHarnessRequestSubmission {
+interface AnswerHarnessRequestSubmission {
   readonly operationId: string;
   readonly operation: "answer-harness-request";
   readonly input: AnswerHarnessRequestInput;
@@ -193,7 +193,7 @@ export interface AnswerHarnessRequestInput {
  *  `indeterminate` and still rests the Run `halted`. Offered on the `run`
  *  Projection only while a Turn is live; a control issued once the Turn has
  *  settled is rejected as a value (`not-applied`). Idempotent per operation id. */
-export interface InterruptTurnSubmission {
+interface InterruptTurnSubmission {
   readonly operationId: string;
   readonly operation: "interrupt-turn";
   readonly input: InterruptTurnInput;
@@ -209,7 +209,7 @@ export interface InterruptTurnInput {
  *  Harness declaring native steer (Codex) accepts it and keeps working; a Harness
  *  without it (Claude Code) rejects the submission as a value (`not-applied`) with
  *  the profile's evidence, never emulated. Idempotent per operation id. */
-export interface SteerTurnSubmission {
+interface SteerTurnSubmission {
   readonly operationId: string;
   readonly operation: "steer-turn";
   readonly input: SteerTurnInput;
@@ -227,7 +227,7 @@ export interface SteerTurnInput {
  *  is sent. Between Turns the Run stays `blocked`; a submission while a Turn is still
  *  live, or against a Run not blocked at this Step, is rejected as a value. Idempotent
  *  per operation id. */
-export interface SendInteractiveTurnSubmission {
+interface SendInteractiveTurnSubmission {
   readonly operationId: string;
   readonly operation: "send-interactive-turn";
   readonly input: SendInteractiveTurnInput;
@@ -246,7 +246,7 @@ export interface SendInteractiveTurnInput {
  *  with a precise Problem. It settles the Step's Attempt `succeeded` and advances the
  *  routing (the following Step reuses the same Session). No phrase, marker, or timeout
  *  ends the Step. Idempotent per operation id. */
-export interface EndInteractiveStepSubmission {
+interface EndInteractiveStepSubmission {
   readonly operationId: string;
   readonly operation: "end-interactive-step";
   readonly input: EndInteractiveStepInput;
@@ -265,7 +265,7 @@ export interface EndInteractiveStepInput {
  *  Turn is live is rejected with a precise Problem — and only for a Step inside a
  *  human-controlled Repeat (End Step is refused there). It does not read or change any
  *  tracker. Idempotent per operation id. */
-export interface ContinueRepeatSubmission {
+interface ContinueRepeatSubmission {
   readonly operationId: string;
   readonly operation: "continue-repeat";
   readonly input: ContinueRepeatInput;
@@ -284,7 +284,7 @@ export interface ContinueRepeatInput {
  *  completion (`RunView.completion`). It neither reads nor changes any tracker.
  *  Admitted only at a Turn boundary and only inside a human-controlled Repeat;
  *  idempotent per operation id. Clients confirm before submitting. */
-export interface EndStageSubmission {
+interface EndStageSubmission {
   readonly operationId: string;
   readonly operation: "end-stage";
   readonly input: EndStageInput;
@@ -299,7 +299,7 @@ export interface EndStageInput {
  *  state — stopping execution and keeping its history and Artifacts. Offered on
  *  the `run` Projection only while the Run is live; on a resting or terminal Run
  *  it yields a Problem. Idempotent per operation id. */
-export interface CancelRunSubmission {
+interface CancelRunSubmission {
   readonly operationId: string;
   readonly operation: "cancel-run";
   readonly input: { readonly runId: string };
@@ -309,7 +309,7 @@ export interface CancelRunSubmission {
  *  admitted delete with quarantine (idempotent per operation id). Offered on the
  *  `run` Projection only while the Run is not live; on a live Run it yields a
  *  Problem. */
-export interface DeleteRunSubmission {
+interface DeleteRunSubmission {
   readonly operationId: string;
   readonly operation: "delete-run";
   readonly input: { readonly runId: string };
@@ -448,7 +448,7 @@ export interface HarnessCapabilityView {
   readonly limits?: string;
 }
 
-export type SupportedModelDeclarationView =
+type SupportedModelDeclarationView =
   | { readonly kind: "list"; readonly models: readonly string[] }
   | { readonly kind: "free-text" };
 
@@ -479,7 +479,7 @@ export interface HarnessFocusSnapshot {
 export type HarnessFocusResult =
   | { readonly found: true; readonly harness: HarnessFocus }
   | { readonly found: false; readonly problem: Problem };
-export type WorkspaceApprovalState =
+type WorkspaceApprovalState =
   | { readonly state: "approved"; readonly approvedAt: string } // ISO 8601
   | { readonly state: "unapproved" };
 
@@ -505,16 +505,14 @@ export type OperationOutcome =
 // SQLite type crosses, and it offers no Action Offers (#9, #49).
 
 /** The three supported operating systems, in canonical order. */
-export type BundlePlatform = "windows" | "macos" | "linux";
+type BundlePlatform = "windows" | "macos" | "linux";
 /** The five Run Artifact types a launch input or produced artifact may be. */
-export type ArtifactTypeName =
-  "text" | "file" | "file-set" | "verdict" | "choice";
+type ArtifactTypeName = "text" | "file" | "file-set" | "verdict" | "choice";
 /** The four Crucible-owned Step kinds. */
-export type StepKindName =
-  "agent" | "interactive-agent" | "human-gate" | "command";
+type StepKindName = "agent" | "interactive-agent" | "human-gate" | "command";
 
 /** Whether a version is a stable release or a SemVer prerelease. */
-export type BundleStability = "stable" | "prerelease";
+type BundleStability = "stable" | "prerelease";
 
 /** Where a Bundle came from. Advisory provenance, never a runtime dependency;
  *  the managed store path is not this and never crosses. */
@@ -570,7 +568,7 @@ export interface BundleCatalogSnapshot {
  *  bytes are missing or no longer validate — a broken Catalog invariant that
  *  fails the whole set, carried the way a focus carries the same fault (#74 A3,
  *  docs/agents/validation.md) rather than thrown. */
-export type BundleListResult =
+type BundleListResult =
   /** Sorted by name, then version descending (#9, #49). */
   | {
       readonly found: true;
@@ -579,7 +577,7 @@ export type BundleListResult =
   | { readonly found: false; readonly problem: Problem };
 
 /** Optional Bundle author metadata, shown only in a focus. */
-export interface BundleAuthorMetadata {
+interface BundleAuthorMetadata {
   readonly authors?: readonly string[];
   readonly license?: string;
   readonly homepage?: string;
@@ -628,7 +626,7 @@ export interface ProducedArtifactView {
 }
 
 /** One command Step's authority on the selected platform. */
-export interface ExecutionCommandView {
+interface ExecutionCommandView {
   readonly stepId: string;
   readonly executable: string;
   readonly workingDirectory?: string;
@@ -650,7 +648,7 @@ export interface ExecutionSummary {
 }
 
 /** One Composition check finding, shown in a focus. */
-export interface CompositionFindingView {
+interface CompositionFindingView {
   readonly code: string;
   readonly severity: "error" | "warning";
   readonly target: string; // the Step id or dotted manifest field
@@ -846,7 +844,7 @@ export interface RunSessionView {
  *  and resume. Only these semantic facts cross the Port — never a native Session id, a
  *  recovery coordinate, the Adapter object, or any storage identity. The effective
  *  model that qualified the same Attempt is the sibling `effectiveModel` field. */
-export interface RunHarnessView {
+interface RunHarnessView {
   readonly name: string;
   readonly executable: string;
   readonly executableVersion: string;
@@ -991,7 +989,7 @@ export interface RunListSnapshot {
 
 /** `assessing` while the selected Harness is qualifying to check a requested
  *  model; then `ready` (no findings) or `not-ready` (one or more findings). */
-export type LaunchPreparationStatus = "assessing" | "ready" | "not-ready";
+type LaunchPreparationStatus = "assessing" | "ready" | "not-ready";
 
 /** The assessed draft in normalized form. Bundle `version`/`digest`/`name` are
  *  filled once the exact Installed Bundle resolves; they are absent when the
@@ -1056,7 +1054,7 @@ export interface AnswerHarnessRequestOffer {
 }
 
 /** Approve the launch Workspace (M1). Offered while it is unapproved. */
-export interface ApproveWorkspaceOffer {
+interface ApproveWorkspaceOffer {
   readonly action: "approve-workspace";
   readonly input: { readonly path: string };
 }
@@ -1278,7 +1276,7 @@ export type ObserverEnd =
 /** The seven launch-draft fields a finding or refusal routes correction to
  *  (#189). A client moves to the step that owns the named field; it never
  *  classifies Problem codes or reads free-form details to decide. */
-export type CorrectionTarget =
+type CorrectionTarget =
   "bundle" | "harness" | "model" | "inputs" | "trust" | "workspace" | "command";
 
 /**

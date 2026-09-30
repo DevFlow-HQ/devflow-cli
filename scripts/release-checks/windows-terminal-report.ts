@@ -3,7 +3,7 @@ import {
   type ReleaseEvidenceReport,
 } from "./release-evidence.js";
 
-export type WindowsTerminalEvidence =
+type WindowsTerminalEvidence =
   | { readonly kind: "fresh" }
   | {
       readonly kind: "carry-forward";

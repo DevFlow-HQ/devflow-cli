@@ -53,7 +53,7 @@ export function parseHarnessRequestPolicy(
  *  The answer reaches the live Turn and unblocks it, so the Run can rest. `stop`
  *  closes the follower once the Run settles. Harmless for a Command-only Run: it
  *  sees no overlay and answers nothing. */
-export function followHarnessRequests(
+function followHarnessRequests(
   port: ProjectionPort,
   runId: string,
   policy: HarnessRequestPolicy,

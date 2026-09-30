@@ -34,11 +34,7 @@ export type { BundleFinding } from "./manifest.js";
 
 // The Execution summary is a private submodule re-exported by the entry; the
 // warning string it embeds as `summary.warning` stays private to that submodule.
-export {
-  generateExecutionSummary,
-  type BundleExecutionCommand,
-  type BundleExecutionSummary,
-} from "./execution-summary.js";
+export { generateExecutionSummary } from "./execution-summary.js";
 
 const MANIFEST_ENTRY = "manifest.json";
 
@@ -50,7 +46,7 @@ const MANIFEST_ENTRY = "manifest.json";
 // hashes the exact bytes. It imports only the Workflow vocabulary and Node
 // built-ins; there is no ZIP-library dependency (see zip.ts for that decision).
 
-export interface BuiltBundle {
+interface BuiltBundle {
   readonly identity: { readonly id: string; readonly version: string };
   readonly bytes: Uint8Array;
   readonly digest: string; // SHA-256 hex over the exact bytes

@@ -6,13 +6,7 @@
 import { installCodexReplayerAt } from "./codex-replayer-install.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
-export type {
-  CodexApprovalReplay,
-  CodexInvocation,
-  CodexRecoveryReplayOptions,
-  CodexTurnReplayOptions,
-  InstalledCodexReplayer,
-} from "./codex-replayer-install.js";
+export type { InstalledCodexReplayer } from "./codex-replayer-install.js";
 
 export function installCodexReplayer(
   caseName: string,

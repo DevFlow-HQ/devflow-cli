@@ -59,7 +59,7 @@ export interface LaunchPreparationDeps {
 /** The resolved facts a passing (or partially passing) evaluation carries, so
  *  `submitLaunch` can create the Run without re-resolving them. Absent when the
  *  Bundle could not be resolved or its bytes are gone/corrupt. */
-export interface LaunchDraftResolution {
+interface LaunchDraftResolution {
   readonly entry: CatalogEntry;
   readonly manifest: AuthoredManifest;
   readonly selectedHarness?: HarnessChoice["id"];
@@ -69,7 +69,7 @@ export interface LaunchDraftResolution {
   readonly needsGrant: boolean;
 }
 
-export interface LaunchDraftEvaluation {
+interface LaunchDraftEvaluation {
   /** Ordered findings in launch order; empty exactly when the draft is launchable
    *  (before the additional model qualification the assessment layers on). */
   readonly findings: readonly Problem[];

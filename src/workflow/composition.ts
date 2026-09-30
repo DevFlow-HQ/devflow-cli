@@ -27,7 +27,7 @@ import {
 // tests are already split at that seam.
 // ---------------------------------------------------------------------------
 
-export type FindingSeverity = "error" | "warning";
+type FindingSeverity = "error" | "warning";
 
 /** One reason a manifest does not compose. Any error-severity finding blocks
  *  the build; the surface (build path, headless client) prints these. */

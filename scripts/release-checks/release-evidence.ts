@@ -1,6 +1,6 @@
 import { fail, record, text } from "../release-helpers.js";
 
-export type EvidenceSubject =
+type EvidenceSubject =
   | {
       readonly kind: "terminal";
       readonly name: string;

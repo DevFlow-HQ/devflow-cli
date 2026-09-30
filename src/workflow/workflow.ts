@@ -42,7 +42,7 @@ export type AttemptOutcome =
   "succeeded" | "failed" | "indeterminate" | "cancelled";
 
 /** How a Step kind relates to a Harness Session. */
-export type SessionNeed = "none" | "named";
+type SessionNeed = "none" | "named";
 
 /**
  * The one reserved Session name (ADR 0020, spec #107 story 8). An Agent Step
@@ -203,7 +203,7 @@ export const ASSET_KINDS: readonly AssetKind[] = [
   "resource",
 ];
 
-export interface BundleMeta {
+interface BundleMeta {
   readonly id: string;
   readonly version: string;
   readonly name: string;
@@ -247,7 +247,7 @@ export interface CommandParams extends CommandInvocation {
 }
 export type PlatformOverride = Partial<CommandInvocation>;
 
-export interface StepCommon {
+interface StepCommon {
   readonly id: string;
   readonly kind: StepKindName;
   readonly requires?: readonly string[];
@@ -279,13 +279,13 @@ export interface HumanGateStep extends StepCommon {
 }
 export type Step = AgentStep | CommandStep | HumanGateStep;
 
-export interface ReviewCheckpoint {
+interface ReviewCheckpoint {
   readonly interval: number;
   readonly message: string;
 }
 /** Repeats until the named Verdict reads `pass`, with a periodic Review checkpoint
  *  (ADR 0020). */
-export interface VerdictRepeat {
+interface VerdictRepeat {
   readonly until: string;
   readonly reviewCheckpoint: ReviewCheckpoint;
   readonly steps: readonly Step[];
@@ -293,7 +293,7 @@ export interface VerdictRepeat {
 /** Repeats until a human ends the stage (#217, #218): each iteration pauses at its one
  *  interactive-agent Step, and the human's Continue is that iteration's review
  *  decision, so no Verdict is read and no periodic Review checkpoint is raised. */
-export interface HumanRepeat {
+interface HumanRepeat {
   readonly control: "human";
   readonly steps: readonly Step[];
 }
@@ -341,6 +341,5 @@ export {
   MAX_REVIEW_CHECKPOINT_INTERVAL,
   routingNeedsHarness,
   type CompositionFinding,
-  type FindingSeverity,
   type TextAssets,
 } from "./composition.js";

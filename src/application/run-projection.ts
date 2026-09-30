@@ -746,7 +746,7 @@ function deleteRunOffer(runId: string): ActionOffer {
  *  retired `created` reads as `running` — a launched Run is observed running from
  *  the moment it is admitted — and every other stored state is already one of
  *  RunStateName. */
-export function toRunState(state: string): RunStateName {
+function toRunState(state: string): RunStateName {
   switch (state) {
     case "running":
     case "blocked":

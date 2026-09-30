@@ -46,6 +46,8 @@ jobs:
         run: bun run lint
       - name: Structural check
         run: bun run structure:check
+      - name: Unused-code check
+        run: bun run unused:check
       - name: Configure Windows test temp drive
         id: windows_test_temp
         if: runner.os == 'Windows'

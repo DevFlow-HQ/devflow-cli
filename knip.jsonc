@@ -1,0 +1,16 @@
+// The unused-code check (`bun run unused:check`). Entries are what runs, never an
+// allowlist: the binary's entry (the `!` marks production code for the Milestone
+// audit's `--production` run), the test files `scripts/test.ts` hands to `bun test`
+// (knip cannot see through that spawn), and the two human-run fixture recorders.
+// Package scripts and CI workflow steps are found by knip itself.
+{
+  "entry": [
+    "src/cli/main.ts!",
+    "tests/**/*.test.{ts,tsx}",
+    "tests/harness/record.ts",
+    "tests/harness/record-codex.ts",
+  ],
+  "project": ["src/**/*.{ts,tsx}!", "tests/**/*.{ts,tsx}", "scripts/**/*.ts"],
+  "include": ["files", "dependencies", "exports", "types"],
+  "includeEntryExports": true,
+}

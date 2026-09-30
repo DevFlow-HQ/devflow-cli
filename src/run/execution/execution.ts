@@ -51,13 +51,9 @@ export {
 } from "./agent.js";
 export type {
   HarnessExecutionDeps,
-  InteractiveTurnRequest,
-  LiveAnswerOutcome,
   LiveObservation,
   LiveRequestView,
   LiveSteerFn,
-  LiveSteerOutcome,
-  RequestAnswerBy,
   RequestAnswerFn,
   RequestChannel,
 } from "./agent.js";
@@ -134,7 +130,7 @@ export interface ExecutionDeps {
 /** How a Run came to rest. `blocked` is a durable pause at a Review checkpoint,
  *  derived (never written) from the current Step Attempt (#84, #85). `halted` is
  *  a resumable rest a Materialization conflict leaves the Run in (#88, ADR 0023). */
-export type RunOutcome = "succeeded" | "failed" | "blocked" | "halted";
+type RunOutcome = "succeeded" | "failed" | "blocked" | "halted";
 
 export interface RunReport {
   readonly outcome: RunOutcome;
@@ -271,15 +267,6 @@ async function runInteractiveAgent(
     ...(halted ? { halted: true } : {}),
   };
 }
-
-/** The Step kinds this release can dispatch — the keys of the closed executable
- *  table. Preflight refuses a Routing that uses any other kind (an intrinsic
- *  precondition failure) before a Run is created, so the Proof Bundle's Agent
- *  step is caught at launch rather than at spawn. Single source of truth: adding
- *  a kind to the table adds it here. */
-export const EXECUTABLE_STEP_KINDS: readonly StepKindName[] = Object.keys(
-  STEP_EXECUTORS,
-) as StepKindName[];
 
 interface WalkContext {
   readonly step: StepContext;

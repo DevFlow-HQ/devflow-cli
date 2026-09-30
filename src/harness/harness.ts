@@ -43,7 +43,7 @@ export const HARNESS_PLATFORMS = exhaustive<HarnessPlatform>()([
 
 /** Crucible's per-Turn correlation key. Opaque, and not an exactly-once
  *  promise, so uncertain submission is never automatically retried. */
-export interface CorrelationKey {
+interface CorrelationKey {
   readonly opaque: string;
 }
 
@@ -68,7 +68,7 @@ export interface RequestId {
 // ---------------------------------------------------------------------------
 
 /** Native recovery: reattach by native id, load-with-replay, or none. */
-export type RecoveryCapability =
+type RecoveryCapability =
   | { readonly mode: "native-reattach"; readonly evidence: string }
   | { readonly mode: "load-with-replay"; readonly evidence: string }
   | { readonly mode: "unavailable"; readonly evidence: string };
@@ -76,20 +76,20 @@ export type RecoveryCapability =
 /** Interruption: confirmed active-Turn interruption, process-only stop, or
  *  none. Process-only stop ends the Turn and the process but leaves the Session
  *  resumable. */
-export type InterruptionCapability =
+type InterruptionCapability =
   | { readonly mode: "active-turn"; readonly evidence: string }
   | { readonly mode: "process-only"; readonly evidence: string }
   | { readonly mode: "unavailable"; readonly evidence: string };
 
 /** Whether tool approvals can be raised as Harness Requests. Independent of
  *  structured clarifications. */
-export type ApprovalsCapability =
+type ApprovalsCapability =
   | { readonly available: true; readonly evidence: string }
   | { readonly available: false; readonly evidence: string };
 
 /** Whether structured clarifications can be raised as Harness Requests.
  *  Independent of approvals; never emulated when unavailable. */
-export type ClarificationsCapability =
+type ClarificationsCapability =
   | { readonly available: true; readonly evidence: string }
   | { readonly available: false; readonly evidence: string };
 
@@ -104,14 +104,14 @@ export type SteerCapability =
  *  during qualification, or free-text entry of any model string. The profile
  *  supplies the list when the Harness exposes one and declares free-text otherwise
  *  (ADR 0022, 2026-09-07 amendment). */
-export type ModelDeclaration =
+type ModelDeclaration =
   | { readonly kind: "list"; readonly models: readonly string[] }
   | { readonly kind: "free-text" };
 
 /** Where model selection can occur and what the Harness admits, or that Crucible
  *  cannot select a model. Every selectable variant carries the declaration a
  *  caller's requested model is checked against. */
-export type ModelSelectionCapability =
+type ModelSelectionCapability =
   | {
       readonly at: "launch";
       readonly declaration: ModelDeclaration;
@@ -132,24 +132,24 @@ export type ModelSelectionCapability =
 /** Whether the Adapter observes the effective model from native evidence, giving
  *  the `model` event and a result's effective-model observation a declared source.
  *  Independent of selection: a Harness may report its model without accepting one. */
-export type ModelObservationCapability =
+type ModelObservationCapability =
   | { readonly available: true; readonly evidence: string }
   | { readonly available: false; readonly evidence: string };
 
 /** Whether a durable recovery coordinate can be recorded before submission,
  *  only after native acceptance (an unavoidable crash window), or never. */
-export type RecoveryCoordinateTiming =
+type RecoveryCoordinateTiming =
   | { readonly timing: "before-submission"; readonly evidence: string }
   | { readonly timing: "after-acceptance"; readonly evidence: string }
   | { readonly timing: "unavailable"; readonly evidence: string };
 
 /** How a skill Bundle Asset reaches the agent: natively or by plain path. */
-export type SkillDelivery =
+type SkillDelivery =
   | { readonly mode: "native"; readonly evidence: string }
   | { readonly mode: "plain-path"; readonly evidence: string };
 
 /** How a file artifact reaches the agent. Plain path in v1. */
-export type FileDelivery =
+type FileDelivery =
   | { readonly mode: "native"; readonly evidence: string }
   | { readonly mode: "plain-path"; readonly evidence: string };
 
@@ -202,7 +202,7 @@ export const TURN_ORIGINS = exhaustive<TurnOrigin>()([
 /** The content of one Turn. The caller renders the prompt text, substituting
  *  any Bundle artifacts, and supplies it here; the Adapter owns only the
  *  delivery mode (a profile fact), never the prompt text (ADR 0022). */
-export interface TurnInput {
+interface TurnInput {
   readonly text: string;
 }
 
@@ -295,7 +295,7 @@ export type RequestAnswer =
     };
 
 /** Who answered a Harness Request. */
-export type AnswerSource = "human" | "client-policy";
+type AnswerSource = "human" | "client-policy";
 
 // ---------------------------------------------------------------------------
 // Turn event vocabulary
@@ -306,7 +306,7 @@ export type AnswerSource = "human" | "client-policy";
 // ---------------------------------------------------------------------------
 
 /** A tool's lifecycle within a Turn. */
-export interface ToolActivity {
+interface ToolActivity {
   readonly tool: string;
   readonly phase: "started" | "completed";
   readonly summary: string;
@@ -327,7 +327,7 @@ export interface SessionFacts {
 }
 
 /** Context-window pressure, prominent when observed or honestly calculable. */
-export interface ContextObservation {
+interface ContextObservation {
   readonly usedTokens: number;
   readonly limitTokens: number;
 }
@@ -469,12 +469,12 @@ export interface HarnessFailure {
 // ---------------------------------------------------------------------------
 
 /** The Turn never started: durable admission failed before any content. */
-export interface NotStartedDetail {
+interface NotStartedDetail {
   readonly failure: HarnessFailure;
 }
 
 /** An authoritative Harness boundary was reached. */
-export interface CompletedDetail {
+interface CompletedDetail {
   readonly finalContent?: string;
   readonly effectiveModel: ModelObservation;
   readonly session: SessionAvailability;
@@ -485,14 +485,14 @@ export interface CompletedDetail {
 }
 
 /** The Harness reported a terminal error subtype. */
-export interface FailedDetail {
+interface FailedDetail {
   readonly failure: HarnessFailure;
   readonly effectiveModel: ModelObservation;
   readonly session: SessionAvailability;
 }
 
 /** The active Turn was interrupted and its native work stopped. */
-export interface InterruptedDetail {
+interface InterruptedDetail {
   readonly interruption: InterruptionCapability;
   readonly session: SessionAvailability;
 }
@@ -506,7 +506,7 @@ export const LOST_UNKNOWNS = exhaustive<LostUnknown>()([
 ] as const);
 
 /** Effects may have started but no terminal truth survived recovery probes. */
-export interface LostDetail {
+interface LostDetail {
   readonly unknown: LostUnknown;
   /** The last authoritative observation before truth was lost. */
   readonly lastObservation: string;
@@ -641,10 +641,8 @@ export type HarnessAdapterFactory = () => HarnessAdapter;
 // ---------------------------------------------------------------------------
 
 export { createClaudeCodeAdapter } from "./claude-code.js";
-export type { ClaudeCodeAdapterOverrides } from "./claude-code.js";
-
 export { createCodexAdapter } from "./codex.js";
-export type { CodexAdapterOverrides, CodexRecordingObserver } from "./codex.js";
+export type { CodexRecordingObserver } from "./codex.js";
 
 export {
   CLAUDE_CODE_EXECUTABLE_ENV,
@@ -654,20 +652,10 @@ export {
   discoverCodex,
   discoverClaudeCode,
 } from "./discovery.js";
-export type {
-  HarnessDiscovery,
-  HarnessDiscoveryAttempt,
-  HarnessDiscoveryOptions,
-} from "./discovery.js";
+export type { HarnessDiscovery } from "./discovery.js";
 
 // The permission bridge the Claude Code Adapter launches against. Exported so the
 // opt-in fixture recorder composes the production bridge (with its own approval
 // router) instead of carrying a copy (#127 D3). The surface is opaque strings and
 // launch flags: no MCP vocabulary or protocol type crosses this entry.
 export { startPermissionBridge } from "./permission-bridge.js";
-export type {
-  ApprovalOutcome,
-  ApprovalRequest,
-  ApprovalRouter,
-  PermissionBridge,
-} from "./permission-bridge.js";

@@ -14,7 +14,7 @@ import {
 // (bundle-catalog) is its only consumer; origin is joined in there.
 
 /** One command Step resolved for a single platform. */
-export interface BundleExecutionCommand {
+interface BundleExecutionCommand {
   readonly stepId: string;
   readonly executable: string;
   readonly workingDirectory?: string;
@@ -35,7 +35,7 @@ export interface BundleExecutionSummary {
 }
 
 /** The fixed authority warning every Execution summary carries (#9 glossary). */
-export const EXECUTION_AUTHORITY_WARNING =
+const EXECUTION_AUTHORITY_WARNING =
   "Commands and Harness actions run with the current user's authority and cannot have all their effects predicted statically.";
 
 /**

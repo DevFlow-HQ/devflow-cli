@@ -5,7 +5,7 @@
 // reports are the same shape.
 import type { Problem } from "./projection-port.js";
 
-export interface BundleIdentity {
+interface BundleIdentity {
   readonly id: string;
   readonly version: string;
 }
@@ -20,7 +20,7 @@ export interface BundleBuildOptions {
 /** How an install settled. Absent on a `--no-install` build. The installation
  *  generation is a private Catalog ordering fact and never crosses this contract
  *  (#74 A4). */
-export type BundleInstallStatus =
+type BundleInstallStatus =
   { readonly status: "installed" } | { readonly status: "already-installed" };
 
 export interface BundleReport {

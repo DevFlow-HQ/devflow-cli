@@ -2,7 +2,7 @@ import type { CodexRecordingObserver } from "../../src/harness/harness.js";
 
 export type CodexTrafficDirection = "stdin" | "stdout" | "stderr";
 
-export interface CodexTrafficEntry {
+interface CodexTrafficEntry {
   readonly direction: CodexTrafficDirection;
   readonly line: string;
 }

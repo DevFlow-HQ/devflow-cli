@@ -132,7 +132,7 @@ function init() {
   };
 }
 
-export type DialogContext = ReturnType<typeof init>;
+type DialogContext = ReturnType<typeof init>;
 
 const ctx = createContext<DialogContext>();
 

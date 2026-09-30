@@ -24,7 +24,7 @@ export const CODEX_SERVED_CAPABILITIES: Readonly<Record<string, true>> =
 const CLAUDE_CODE_PATH_NAME = "claude";
 const CODEX_PATH_NAME = "codex";
 
-export interface HarnessDiscoveryAttempt {
+interface HarnessDiscoveryAttempt {
   readonly source: "configured" | "path";
   readonly name: string;
   readonly description: string;

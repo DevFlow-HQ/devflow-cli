@@ -192,7 +192,7 @@ export interface ConformanceScenarios
 }
 
 /** What a load-with-replay provider promises the suite can observe on resume. */
-export interface ReplayScenario {
+interface ReplayScenario {
   readonly factory: HarnessAdapterFactory;
   /** The transcript events the first Turn emits, in order — the history. */
   readonly history: readonly TurnEvent[];
@@ -642,7 +642,7 @@ export function runPrepareProfileCases(
 
 /** A granting Adapter and the directories its native side was handed: one list
  *  per native launch (Claude Code) or thread start/resume (Codex). */
-export interface WritableDirectoryGrant {
+interface WritableDirectoryGrant {
   readonly factory: HarnessAdapterFactory;
   readonly grants: () => readonly (readonly string[])[];
 }

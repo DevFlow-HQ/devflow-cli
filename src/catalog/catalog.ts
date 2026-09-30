@@ -25,7 +25,7 @@ import { catalogEntries, trustGrants, workspaceApprovals } from "./schema.js";
 // never reach into rows. (ADR 0025, #21 storage.)
 
 /** A recorded Workspace approval. Its home is the Catalog database. */
-export interface WorkspaceApproval {
+interface WorkspaceApproval {
   readonly path: string; // canonical absolute path, compared exactly
   readonly approvedAt: string; // ISO 8601
 }
@@ -53,7 +53,7 @@ export interface CatalogEntry {
  * installation generation, so it never carries to a later install of the same
  * identity with different bytes (ADR 0021).
  */
-export interface TrustGrant {
+interface TrustGrant {
   readonly operationId: string;
   readonly grantedAt: string; // ISO 8601
 }
@@ -68,7 +68,7 @@ export interface BundleInstall {
 }
 
 /** One manifest-declared asset file inside exact `.wfb` bytes. */
-export interface AssetFile {
+interface AssetFile {
   readonly path: string; // the archive entry's relative path
   readonly data: Uint8Array;
 }
@@ -80,9 +80,7 @@ export interface AssetFile {
  * depending only on the Workflow vocabulary. Without a reader every install
  * derives an empty tree.
  */
-export type AssetReader = (
-  bytes: Uint8Array,
-) => readonly AssetFile[] | undefined;
+type AssetReader = (bytes: Uint8Array) => readonly AssetFile[] | undefined;
 
 export interface CatalogOptions {
   readonly readAssets?: AssetReader;

@@ -7,7 +7,7 @@
   "scripts": {
     "assemble": "bun run scripts/assemble.ts",
     "build": "bun run scripts/build.ts",
-    "check": "bun run migrations:check && bun run typecheck && bun run format:check && bun run lint && bun run structure:check && bun run test && bun run build && bun run test:package",
+    "check": "bun run migrations:check && bun run typecheck && bun run format:check && bun run lint && bun run structure:check && bun run unused:check && bun run test && bun run build && bun run test:package",
     "check:claude-code": "bun scripts/release-checks/installed-harness.ts claude-code",
     "check:codex": "bun scripts/release-checks/installed-harness.ts codex",
     "check:windows-terminal": "bun scripts/release-checks/windows-terminal.ts",
@@ -24,7 +24,8 @@
     "test:package": "bun scripts/package-smoke.ts",
     "test:runtime-conformance": "bun tests/process/runtime-conformance.ts",
     "test:terminal": "bun tests/terminal/lifecycle.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "unused:check": "bun tests/architecture/unused-step.ts"
   },
   "files": [
     "THIRD-PARTY-NOTICES.md"
@@ -37,6 +38,7 @@
     "drizzle-kit": "1.0.0-rc.4",
     "eslint": "^10.8.1",
     "globals": "^17.11.0",
+    "knip": "6.39.0",
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.67.0"

@@ -94,16 +94,16 @@ export interface RunListing {
 }
 
 /** Why a Run could not be read: its store is damaged, or no such Run exists. */
-export type RunProblem =
+type RunProblem =
   | { readonly kind: "run-store-damaged"; readonly runId: string }
   | { readonly kind: "unknown-run"; readonly runId: string };
 
-export type ReadRunResult =
+type ReadRunResult =
   | { readonly ok: true; readonly run: RunRecord }
   | { readonly ok: false; readonly problem: RunProblem };
 
 /** The inputs a fresh Run pins. `operationId` makes create idempotent. */
-export interface CreateRunRequest {
+interface CreateRunRequest {
   readonly operationId: string;
   readonly bundleSnapshotDigest: string;
   readonly launch: unknown; // JSON-serialisable; stored opaque
@@ -120,7 +120,7 @@ export interface CreateRunRequest {
  * operation id replayed) both name the Run. Create never refuses for the Workspace
  * (ADR 0031: any number of Runs may be live at once).
  */
-export type CreateRunResult =
+type CreateRunResult =
   | {
       readonly outcome: "created";
       readonly runId: string;
@@ -133,7 +133,7 @@ export type CreateRunResult =
     };
 
 /** The outcome of an admitted delete; idempotent per operation id. */
-export type DeleteRunResult =
+type DeleteRunResult =
   | { readonly outcome: "deleted"; readonly runId: string }
   | { readonly outcome: "already-deleted"; readonly runId: string };
 
@@ -143,7 +143,7 @@ export type DeleteRunResult =
  *  named directly); `unknown-run` names a Run this group never registered. A
  *  takeover (`acquireRun` with `takeover`) fences that owner regardless of the
  *  courtesy probe (ADR 0031). */
-export type ResumeRunResult =
+type ResumeRunResult =
   | { readonly outcome: "resumed"; readonly runId: string }
   | {
       readonly outcome: "run-live-elsewhere";
@@ -227,7 +227,7 @@ export interface HarnessIdentityRecord {
 
 /** One Attempt's co-sourced observed Harness evidence. The identity-less variant
  *  is read compatibility for legacy model-only rows; current writes cannot create it. */
-export type HarnessEvidenceRecord =
+type HarnessEvidenceRecord =
   | {
       readonly identity: HarnessIdentityRecord;
       readonly effectiveModel?: string;
@@ -272,7 +272,7 @@ export interface RecordConflictRequest {
   readonly diagnostic: Uint8Array;
   readonly at: Date;
 }
-export type RecordConflictResult =
+type RecordConflictResult =
   | { readonly ok: true; readonly diagnosticId: string }
   | { readonly ok: false; readonly reason: "fenced" };
 
@@ -305,7 +305,7 @@ export interface RecordGateAnswerRequest {
    *  for a `stop`, so the answer and the rest commit together). */
   readonly advanceState?: string;
 }
-export type RecordGateAnswerResult =
+type RecordGateAnswerResult =
   | {
       readonly ok: true;
       readonly versionId: string;

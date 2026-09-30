@@ -17,7 +17,8 @@ interface Rule<Data> {
   fix(data: Data): string;
 }
 
-type Family = "module" | "topology" | "guidance" | "release" | "vendor";
+type Family =
+  "module" | "topology" | "guidance" | "release" | "vendor" | "unused";
 
 type NoData = Record<never, never>;
 
@@ -26,6 +27,7 @@ const rule = <Data>(entry: Rule<Data>) => entry;
 const TOPOLOGY_OWNERSHIP = "docs/agents/topology.md#ownership";
 const TOPOLOGY_IMPORTS = "docs/agents/topology.md#interfaces-and-imports";
 const TOPOLOGY_ENFORCEMENT = "docs/agents/topology.md#enforcement-and-tests";
+const BASELINE_SCOPE = "docs/agents/engineering-baseline.md#scope";
 const GUIDANCE_SHAPE = "docs/agents/guidance.md#shape";
 const GUIDANCE_MODULE_LOCAL = "docs/agents/guidance.md#module-local-agentsmd";
 const GUIDANCE_LIMITS = "docs/agents/guidance.md#limits";
@@ -232,6 +234,35 @@ export const rules = {
       callee === "require"
         ? "replace require(…) with a static ESM import"
         : "remove eval and import the code it runs as an ESM module",
+  }),
+  "unused/file": rule<NoData>({
+    see: BASELINE_SCOPE,
+    problem: () => "nothing imports or runs this file",
+    fix: () =>
+      "delete this file, or import it from the code that needs it; if it is run by hand, stop and ask a human",
+  }),
+  "unused/dependency": rule<{
+    name: string;
+    field: "dependencies" | "devDependencies" | "optionalPeerDependencies";
+  }>({
+    see: BASELINE_SCOPE,
+    problem: ({ name, field }) =>
+      `${field} declares ${name}, but nothing uses it`,
+    fix: ({ name, field }) =>
+      `remove ${name} from ${field}; if something still needs it, stop and ask a human`,
+  }),
+  "unused/export": rule<{ name: string }>({
+    see: BASELINE_SCOPE,
+    problem: ({ name }) => `exports ${name}, which no other file imports`,
+    fix: ({ name }) =>
+      `stop exporting ${name}, and delete it only if nothing in this file uses it either`,
+  }),
+  "unused/type": rule<{ name: string }>({
+    see: BASELINE_SCOPE,
+    problem: ({ name }) =>
+      `exports the type ${name}, which no other file imports`,
+    fix: ({ name }) =>
+      `stop exporting the type ${name}, and delete it only if nothing in this file uses it either`,
   }),
   "guidance/unresolved-see-anchor": rule<{
     file: string;

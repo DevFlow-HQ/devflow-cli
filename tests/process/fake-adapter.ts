@@ -31,16 +31,16 @@ export function processWithSpawn(
   };
 }
 
-export interface FakeResolutionScript {
+interface FakeResolutionScript {
   readonly name: string;
   readonly result: ExecutableResolution;
 }
 
-export type FakeCommandScript =
+type FakeCommandScript =
   | { readonly trigger: "immediate"; readonly result: SpawnResult }
   | { readonly trigger: "cancellation"; readonly result: SpawnResult };
 
-export interface FakeSyncCommandScript {
+interface FakeSyncCommandScript {
   readonly result:
     SpawnSyncResult | ((options: SpawnSyncOptions) => SpawnSyncResult);
 }
@@ -60,7 +60,7 @@ export type FakeOwnedProcessEmission =
       readonly expectedGracefulMs?: number;
     };
 
-export type FakeOwnedProcessScript =
+type FakeOwnedProcessScript =
   | {
       readonly kind: "launch-failure";
       readonly failure: Extract<

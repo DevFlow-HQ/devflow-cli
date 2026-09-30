@@ -46,7 +46,7 @@ copyFileSync(
   join(sharedSchemaDirectory, SCHEMA_FILE),
 );
 
-export interface CodexInvocation {
+interface CodexInvocation {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly stdinLines: readonly string[];
@@ -87,7 +87,7 @@ export interface InstalledCodexReplayer {
   configureRecovery(options: CodexRecoveryReplayOptions): void;
 }
 
-export interface CodexTurnReplayOptions {
+interface CodexTurnReplayOptions {
   /** Acknowledge workspace-write without the requested writable root (#214). */
   readonly ignoreWritableRoots?: boolean;
   readonly stopAfter?: "accepted" | "item-completed";
@@ -126,7 +126,7 @@ export interface CodexTurnReplayOptions {
     | "near-miss";
 }
 
-export interface CodexApprovalReplay {
+interface CodexApprovalReplay {
   readonly id: string | number;
   readonly kind:
     "command" | "file" | "unsupported-command" | "request-user-input";
@@ -139,7 +139,7 @@ export interface CodexApprovalReplay {
   }[];
 }
 
-export interface CodexRecoveryReplayOptions {
+interface CodexRecoveryReplayOptions {
   readonly threadId?: string | null;
   readonly malformedFrame?: boolean;
 }

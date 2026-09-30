@@ -14,6 +14,7 @@ import {
 } from "./release-workflow-fixture.js";
 import { headingSlug, rules, type RuleId } from "./rule-catalogue.js";
 import { runStructuralStep } from "./structural-step.js";
+import { reprintKnipReport } from "./unused-step.js";
 
 // The structural step's printed report is the seam these tests pin: each catalogued
 // rule's full three-line report over a synthetic source tree, as exact strings.
@@ -84,7 +85,7 @@ async function reportOf(
 
 // A fix names only a change to the violating code, never a lever on the gate.
 const forbiddenLever =
-  /polic|allow-?list|grant|checker|catalogue|\.test\.|eslint-disable|@ts-|@internal|suppress/i;
+  /polic|allow-?list|grant|checker|catalogue|\.test\.|eslint-disable|@ts-|@internal|suppress|knip|ignore/i;
 
 /** Splits the output into its three-line reports, asserting each keeps the
  *  contract, so every pinned fixture also proves its fix names no lever. */
@@ -1422,6 +1423,112 @@ test("release/promotion-script-placement", async () => {
     `${WORKFLOW}  release/promotion-script-placement  job smoke runs scripts/release-promote.ts, which may run only in the protected promote job\n` +
       "fix: remove scripts/release-promote.ts from job smoke\n" +
       PROMOTION,
+  );
+});
+
+// The unused-code link reprints knip's JSON report; these pin that translation
+// over synthetic knip output, so they need no knip run over a temporary tree.
+
+function reprint(issues: object[]) {
+  let output = "";
+  const exitCode = reprintKnipReport(JSON.stringify({ issues }), (text) => {
+    output += text;
+  });
+  return { exitCode, output };
+}
+
+/** The report blocks one knip issue list reprints, joined; the link exits non-zero. */
+function unusedReportOf(issues: object[]) {
+  const { exitCode, output } = reprint(issues);
+  assert.equal(exitCode, 1, output);
+  return blocks(output).join("\n");
+}
+
+/** One knip JSON issue entry: every enabled category present, empty unless given. */
+function knipIssue(file: string, categories: Record<string, object[]>) {
+  return {
+    file,
+    dependencies: [],
+    devDependencies: [],
+    exports: [],
+    files: [],
+    optionalPeerDependencies: [],
+    types: [],
+    ...categories,
+  };
+}
+
+test("a clean knip report prints nothing and passes", () => {
+  assert.deepEqual(reprint([]), { exitCode: 0, output: "" });
+  assert.deepEqual(reprint([knipIssue("src/tui/tui.ts", {})]), {
+    exitCode: 0,
+    output: "",
+  });
+});
+
+test("a knip report outside the enabled categories fails instead of passing", () => {
+  assert.throws(
+    () => reprint([{ ...knipIssue("src/tui/tui.ts", {}), unlisted: [] }]),
+    /knip/,
+  );
+  assert.throws(() => reprintKnipReport("not json", () => {}), /knip/);
+});
+
+test("unused/file", () => {
+  assert.equal(
+    unusedReportOf([
+      knipIssue("tests/helpers/stray.ts", {
+        files: [{ name: "tests/helpers/stray.ts" }],
+      }),
+    ]),
+    "tests/helpers/stray.ts:1:1  unused/file  nothing imports or runs this file\n" +
+      "fix: delete this file, or import it from the code that needs it; if it is run by hand, stop and ask a human\n" +
+      "see: docs/agents/engineering-baseline.md#scope",
+  );
+});
+
+test("unused/dependency", () => {
+  assert.equal(
+    unusedReportOf([
+      knipIssue("package.json", {
+        dependencies: [{ name: "left-pad", line: 48, col: 6, pos: 1500 }],
+        devDependencies: [{ name: "@types/which", line: 36, col: 6 }],
+      }),
+    ]),
+    "package.json:48:6  unused/dependency  dependencies declares left-pad, but nothing uses it\n" +
+      "fix: remove left-pad from dependencies; if something still needs it, stop and ask a human\n" +
+      "see: docs/agents/engineering-baseline.md#scope\n" +
+      "package.json:36:6  unused/dependency  devDependencies declares @types/which, but nothing uses it\n" +
+      "fix: remove @types/which from devDependencies; if something still needs it, stop and ask a human\n" +
+      "see: docs/agents/engineering-baseline.md#scope",
+  );
+});
+
+test("unused/export", () => {
+  assert.equal(
+    unusedReportOf([
+      knipIssue("src/bundle/execution-summary.ts", {
+        exports: [
+          { name: "EXECUTION_AUTHORITY_WARNING", line: 38, col: 14, pos: 900 },
+        ],
+      }),
+    ]),
+    "src/bundle/execution-summary.ts:38:14  unused/export  exports EXECUTION_AUTHORITY_WARNING, which no other file imports\n" +
+      "fix: stop exporting EXECUTION_AUTHORITY_WARNING, and delete it only if nothing in this file uses it either\n" +
+      "see: docs/agents/engineering-baseline.md#scope",
+  );
+});
+
+test("unused/type", () => {
+  assert.equal(
+    unusedReportOf([
+      knipIssue("src/harness/harness.ts", {
+        types: [{ name: "CorrelationKey", line: 46, col: 18, pos: 1200 }],
+      }),
+    ]),
+    "src/harness/harness.ts:46:18  unused/type  exports the type CorrelationKey, which no other file imports\n" +
+      "fix: stop exporting the type CorrelationKey, and delete it only if nothing in this file uses it either\n" +
+      "see: docs/agents/engineering-baseline.md#scope",
   );
 });
 

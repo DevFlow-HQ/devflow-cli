@@ -103,7 +103,7 @@ export type StageProblem =
       readonly cause?: unknown;
     };
 
-export type StageResult =
+type StageResult =
   | { readonly ok: true; readonly versionId: string }
   | { readonly ok: false; readonly problem: StageProblem };
 

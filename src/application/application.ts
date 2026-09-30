@@ -185,7 +185,7 @@ export type RunExecution = (context: {
   readonly observeSteer?: (capability: RunSteerCapability) => void;
 }) => Promise<RunExecutionReport>;
 
-export interface RunExecutionReport extends RunReport {
+interface RunExecutionReport extends RunReport {
   /** An already-qualified Harness whose ownership transfers to the Application
    *  when execution rests at an interactive Step. The Application treats it as
    *  opaque and closes it when that Step ends or the Run releases ownership. */
@@ -217,7 +217,7 @@ export interface RunInteractiveStep {
   close(): Promise<void>;
 }
 
-export type TRunInteractiveStepPreparation =
+type TRunInteractiveStepPreparation =
   | { readonly ok: true; readonly interactiveStep: RunInteractiveStep }
   | { readonly ok: false; readonly failure: RunHarnessPreparationFailure };
 

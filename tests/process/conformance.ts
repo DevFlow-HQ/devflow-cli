@@ -5,12 +5,12 @@ import type {
   SpawnOptions,
 } from "../../src/process/process.js";
 
-export interface ProcessConformanceCase<T> {
+interface ProcessConformanceCase<T> {
   readonly process: ProcessAdapter;
   readonly options: T;
 }
 
-export interface InterruptConformanceCase extends ProcessConformanceCase<OwnedProcessOptions> {
+interface InterruptConformanceCase extends ProcessConformanceCase<OwnedProcessOptions> {
   readonly ready: string;
   readonly gracefulMs: number;
   readonly escalated: boolean;

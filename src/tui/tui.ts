@@ -6,7 +6,7 @@
 // Module boundary, which the boundary suite requires to go through this entrypoint.
 
 export { App } from "./app.js";
-export { mountTui, type MountOptions } from "./mount.js";
+export { mountTui } from "./mount.js";
 export type { WorkspaceView } from "./workspace-view.js";
 export type { BundleCatalogView } from "./bundle-view.js";
 export {
@@ -32,11 +32,7 @@ export {
   type AnswerOutcome,
   type TRunViewFreshness,
 } from "./run-view.js";
-export type {
-  RunListView,
-  RunListController,
-  RunListState,
-} from "./run-list-view.js";
+export type { RunListView, RunListState } from "./run-list-view.js";
 export type { RunActionsView, RunActionOutcome } from "./run-actions-view.js";
 // The Workbench's pure timeline model, exposed for #91's unit tests across the
 // boundary, for the same reason.

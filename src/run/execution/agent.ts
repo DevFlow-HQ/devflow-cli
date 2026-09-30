@@ -45,7 +45,7 @@ import type {
 
 /** Who answered a request — carried down so the durable `request-answered` names
  *  the provenance the Harness Adapter cannot know (a client policy vs a human). */
-export type RequestAnswerBy = "human" | "client-policy";
+type RequestAnswerBy = "human" | "client-policy";
 
 /** One outstanding approval request, flattened to strings. */
 export interface LiveRequestView {
@@ -56,7 +56,7 @@ export interface LiveRequestView {
 }
 
 /** The normalized outcome of answering one request. Never throws. */
-export type LiveAnswerOutcome =
+type LiveAnswerOutcome =
   | { readonly outcome: "accepted" }
   | { readonly outcome: "rejected"; readonly reason: string }
   | { readonly outcome: "indeterminate" };
@@ -70,7 +70,7 @@ export type RequestAnswerFn = (
 
 /** The outcome of steering the live Turn (#148): accepted, or a rejected native
  *  control race carrying its reason. Mirrors {@link LiveAnswerOutcome}. */
-export type LiveSteerOutcome =
+type LiveSteerOutcome =
   | { readonly outcome: "accepted" }
   | { readonly outcome: "rejected"; readonly reason: string };
 

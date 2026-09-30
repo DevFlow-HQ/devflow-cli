@@ -35,7 +35,7 @@ export function fail(message: string, cause?: unknown): never {
   throw new Error(message, cause === undefined ? undefined : { cause });
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

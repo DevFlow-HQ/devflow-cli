@@ -37,7 +37,7 @@ export interface RunListState {
   readonly hasMore: boolean;
 }
 
-export interface RunListController {
+interface RunListController {
   readonly state: Accessor<RunListState>;
   /** Switch the filter (All ⇄ Resumable) and reload from the newest page. */
   setResumable(resumable: boolean): void;

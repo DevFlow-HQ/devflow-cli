@@ -33,7 +33,7 @@ export interface RedactionResult {
 }
 
 /** Credential shapes that must never survive into a committed fixture. */
-export const CREDENTIAL_PATTERNS: readonly {
+const CREDENTIAL_PATTERNS: readonly {
   readonly label: string;
   readonly pattern: RegExp;
 }[] = [
