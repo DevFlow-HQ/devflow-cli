@@ -619,6 +619,14 @@ test("release/job-env-secret", async () => {
       "fix: move secrets.NPM_READONLY_TOKEN from job build's env to the env of the dispatch-gated step that needs it\n" +
       VALIDATION,
   );
+  assert.equal(
+    await releaseReport("release/job-env-secret", (_, jobs) => {
+      jobs.smoke!.env = { TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" };
+    }),
+    `${WORKFLOW}  release/job-env-secret  job smoke's env references secret NPM_READONLY_TOKEN, which reaches every step on every run\n` +
+      "fix: remove secrets.NPM_READONLY_TOKEN from job smoke's env; if the job needs it, stop and ask a human\n" +
+      VALIDATION,
+  );
 });
 
 test("release/secret-outside-build", async () => {
@@ -814,6 +822,21 @@ test("release/approval-secret", async () => {
     }),
     `${WORKFLOW}  release/approval-secret  job release-approval references secrets NPM_PUBLISH_TOKEN and GH_PAT, but no credential may exist before the protected boundary\n` +
       "fix: remove secrets.NPM_PUBLISH_TOKEN and secrets.GH_PAT from job release-approval; if the job needs a credential, stop and ask a human\n" +
+      PROTECTION,
+  );
+  // One secret named twice reads as one secret.
+  assert.equal(
+    await releaseReport("release/approval-secret", (_, jobs) => {
+      stepsToEdit(jobs["release-approval"]!).push({
+        env: {
+          NODE_AUTH_TOKEN: "${{ secrets.GH_PAT }}",
+          GH_TOKEN: "${{ secrets.GH_PAT }}",
+        },
+        run: "echo x",
+      });
+    }),
+    `${WORKFLOW}  release/approval-secret  job release-approval references secret GH_PAT, but no credential may exist before the protected boundary\n` +
+      "fix: remove secrets.GH_PAT from job release-approval; if the job needs a credential, stop and ask a human\n" +
       PROTECTION,
   );
 });
