@@ -55,6 +55,13 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Step Attempt** — one execution of one **Step**, identified by its Step, **Iteration**, and attempt number. Retries and **Iterations** are
   bounded separately.
 - **Attempt outcome** — how a **Step Attempt** ended: `succeeded`, `failed`, `indeterminate`, or `cancelled`.
+- **Failure evidence** — the lasting typed fact on a **Step Attempt** or **Turn** saying why it failed, was lost, or was interrupted, including
+  whether it may already have changed the world. Kept until Run deletion; its plain wording is derived when read, never stored. _Avoid_: error
+  message, Problem.
+- **Resting cause** — the lasting typed fact saying why a **Run** rests `halted` or `failed`, pointing at the **Failure evidence** behind it when
+  there is one. _Avoid_: halt reason.
+- **Detailed diagnostic** — the expiring companion to **Failure evidence**: the verbose technical detail an expert inspects on demand, removed
+  after 90 days by default while the Failure evidence stays.
 - **Indeterminate attempt** — a **Step Attempt** Secant started and never saw a result for. Distinct from a failure, because a step that died
   after acting on the world must not be blindly retried. It never auto-retries: it halts the **Run**, and the human's resume is the authorization
   to re-attempt.
@@ -177,8 +184,8 @@ row and the `blocked` state are written in one transaction, and execution also s
   or none does, and failed, cancelled, or **Indeterminate attempts** leave previous bindings current.
 - Every published Artifact version has canonical Run-owned content. `home: workspace` requests a **Workspace materialization**, never an alternative
   source of truth. A changed or missing materialization is a **Materialization conflict**, not a new Artifact version.
-- Run-owned canonical truth and Artifact versions remain until explicit Run deletion. Detailed diagnostics are separate and expire after 90 days by
-  default; exactly reproducible caches may be collected earlier.
+- Run-owned canonical truth, Artifact versions, **Failure evidence**, and **Resting causes** remain until explicit Run deletion. **Detailed
+  diagnostics** are separate and expire after 90 days by default; exactly reproducible caches may be collected earlier.
 - Any number of **Runs** may be live in one **Workspace**; each live Run has exactly one **Run owner**, and a second instance is refused for that Run
   only. No Run holds a Workspace claim, so Secant never promises a Run's Workspace is unchanged between Steps or when it resumes.
 - No **Step** is skippable. The **Routing** advances only by a Step completing, and no decision may jump over one. A **Repeat group** whose
@@ -193,6 +200,8 @@ row and the `blocked` state are written in one transaction, and execution also s
 - [Projection Views](./projection-views.md) owns the **Launch draft** that requests a model and the client Projection families and view freshness
   that read this Run.
 - [ADR 0019](../adr/0019-failed-and-halted-runs-are-resumable-resting-states.md) owns Run resumability and the reset-on-resume rule.
+- [ADR 0041](../adr/0041-record-typed-failure-evidence-and-resting-causes-in-the-run-store.md) owns Failure evidence, Resting causes, and
+  Detailed diagnostics.
 - [ADR 0020](../adr/0020-deterministic-verdicts-and-human-checkpoints-terminate-repetition.md) owns how repetition terminates and why the legacy
   agent-emitted marker is retired.
 - [ADR 0032](../adr/0032-let-opted-in-interactive-agent-steps-accept-agent-declared-completion.md) owns **Agent-declared completion**, its answer
