@@ -14,7 +14,7 @@
     "dev": "bun src/cli/main.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "migrations:check": "bun scripts/check-migrations.ts",
     "migrations:generate": "bun drizzle-kit generate --config drizzle.catalog.config.ts && bun drizzle-kit generate --config drizzle.coordination.config.ts && bun drizzle-kit generate --config drizzle.run.config.ts",
     "pack": "bun run scripts/pack.ts",

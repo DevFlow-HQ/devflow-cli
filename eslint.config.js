@@ -18,6 +18,9 @@ export default tseslint.config(
     languageOptions: {
       globals: globals.node,
     },
+    linterOptions: {
+      reportUnusedDisableDirectives: "error",
+    },
     rules: {
       "@typescript-eslint/no-unused-vars": [
         "error",
@@ -29,6 +32,8 @@ export default tseslint.config(
         },
       ],
       "no-constant-condition": ["error", { checkLoops: false }],
+      "no-else-return": "error",
+      "no-lonely-if": "error",
       "prefer-const": ["error", { ignoreReadBeforeAssign: true }],
     },
   },
