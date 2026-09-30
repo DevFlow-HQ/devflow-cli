@@ -45,7 +45,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   list, including an empty one, is a typed `model-unavailable` prepare failure, never a substitution; free text forwards any value. The effective model a
   Turn reports is observed and never copies the request.
 
-## Invariants (interrupt, recovery, cleanup)
+### Interrupt, recovery, and cleanup
 
 - A Turn settles `interrupted` only on confirmed interruption; a force-kill, lost connection, or unconfirmed termination settles it `lost` with
   `interruption-unknown`. Windows has no graceful stage ([process notes](../process/AGENTS.md)), so a live-child interrupt there truthfully settles

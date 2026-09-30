@@ -38,9 +38,9 @@ The repository must expose one canonical check entrypoint covering:
 - The production build.
 - Compiled-binary smoke testing of the produced single-file executable (ADR 0030), covering `--help`/`--version` and the headless commands a slice lands.
 - Narrow structural checks when a settled, high-cost rule becomes mechanically enforceable. The structural step (`bun run structure:check`, after
-  linting and before the tests) is the only place Module-boundary, test-mirror, and release-workflow violations print, each with a `fix:` and a
-  `see:` line; see [topology](./topology.md#enforcement-and-tests) and [release workflow](./release-workflow.md). The other suites under
-  `tests/architecture/` still report through the tests.
+  linting and before the tests) is the only place Module-boundary, test-mirror, guidance-structure, and release-workflow violations print, each
+  with a `fix:` and a `see:` line; see [topology](./topology.md#enforcement-and-tests) and [release workflow](./release-workflow.md). The other
+  suites under `tests/architecture/` still report through the tests.
 
 CI must perform a clean dependency installation before running the check entrypoint. Tests that require an installed Harness, network access,
 credentials, or a real terminal remain opt-in. External URL validation, coverage thresholds, and a general architecture linter are not part of the

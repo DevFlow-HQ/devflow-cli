@@ -31,15 +31,16 @@ mechanics and reliability evidence are in [agent-guidance progressive disclosure
 
 ## Limits
 
-The guidance-structure suite under `tests/architecture/` enforces:
+The structural step (`bun run structure:check`) enforces:
 
 - Root `AGENTS.md` at most 60 lines. Focused documents and Module-local `AGENTS.md` trigger a split review at 80–100 lines and fail at 120.
 - Agent-facing prose in `AGENTS.md`, `docs/agents/`, `CONTEXT.md`, and `docs/glossary/` wraps at 175 characters. Lines carrying a URL, Markdown
   table rows, and code fences are exempt.
 - Every relative link in those files plus `docs/adr/` and `docs/research/` resolves; every backticked `.md` path in `AGENTS.md` and `docs/agents/`
   resolves.
-- Every Module-local `AGENTS.md` sits at a declared Module root and is listed in root `AGENTS.md`.
-- Every recorded Harness fixture directory carries its `recording.json` sidecar; see [testing](./testing.md).
+- Every Module-local `AGENTS.md` sits at a declared Module root and is listed in root `AGENTS.md`, and its second-level headings are only the
+  sections above, each at most once and in that order.
+- Every recorded Harness fixture directory carries a valid `recording.json` sidecar and no credential; see [testing](./testing.md).
 
 ## Maintenance
 

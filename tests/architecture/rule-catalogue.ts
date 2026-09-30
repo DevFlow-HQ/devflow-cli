@@ -1,5 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  headings,
+  moduleSections,
+  sidecarKeys,
+  type SidecarKey,
+} from "./check-guidance-structure.js";
 import { isClient, modules, type ModuleName } from "./module-policy.js";
 
 /** A structural rule: where its reason lives, and how a violation of it reads. The
@@ -20,6 +26,10 @@ const rule = <Data>(entry: Rule<Data>) => entry;
 const TOPOLOGY_OWNERSHIP = "docs/agents/topology.md#ownership";
 const TOPOLOGY_IMPORTS = "docs/agents/topology.md#interfaces-and-imports";
 const TOPOLOGY_ENFORCEMENT = "docs/agents/topology.md#enforcement-and-tests";
+const GUIDANCE_SHAPE = "docs/agents/guidance.md#shape";
+const GUIDANCE_MODULE_LOCAL = "docs/agents/guidance.md#module-local-agentsmd";
+const GUIDANCE_LIMITS = "docs/agents/guidance.md#limits";
+const RECORDED_FIXTURES = "docs/agents/testing.md#recorded-harness-fixtures";
 const RELEASE_VALIDATION =
   "docs/agents/release-workflow.md#candidate-validation";
 const RELEASE_PROTECTION =
@@ -223,6 +233,143 @@ export const rules = {
       `no heading here resolves #${anchor}, the see: anchor of ${list(ids, "and")}`,
     fix: ({ file, anchor }) =>
       `restore a heading whose slug is ${anchor} in ${file}; if it was retired on purpose, stop and ask a human`,
+  }),
+  "guidance/root-index": rule<NoData>({
+    see: GUIDANCE_SHAPE,
+    problem: () => "root AGENTS.md, the always-loaded index, is missing",
+    fix: () =>
+      "create AGENTS.md at the repository root with one trigger line per focused document and per Module-local AGENTS.md",
+  }),
+  "guidance/root-length": rule<{ limit: number }>({
+    see: GUIDANCE_LIMITS,
+    problem: ({ limit }) =>
+      `root AGENTS.md is too long for its ${limit}-line limit`,
+    fix: ({ limit }) =>
+      `shorten AGENTS.md to fewer than ${limit} lines by moving detail into the focused document it routes to`,
+  }),
+  "guidance/claude-symlink": rule<NoData>({
+    see: GUIDANCE_SHAPE,
+    problem: () =>
+      "CLAUDE.md is a symlink, which Git checks out as plain text where symlinks are off",
+    fix: () => "replace the symlink with a file whose only line is @AGENTS.md",
+  }),
+  "guidance/claude-import": rule<NoData>({
+    see: GUIDANCE_SHAPE,
+    problem: () => "CLAUDE.md holds more than the @AGENTS.md import",
+    fix: () =>
+      "reduce CLAUDE.md to the single line @AGENTS.md and move anything else into AGENTS.md or a focused document",
+  }),
+  "guidance/focused-length": rule<{ limit: number }>({
+    see: GUIDANCE_LIMITS,
+    problem: ({ limit }) =>
+      `this guidance is too long for its ${limit}-line limit`,
+    fix: ({ limit }) =>
+      `split it by concern or move detail into a deeper document until it has fewer than ${limit} lines`,
+  }),
+  "guidance/module-local-placement": rule<{
+    directory: string;
+    ownerRoot?: string;
+  }>({
+    see: GUIDANCE_MODULE_LOCAL,
+    problem: ({ directory }) =>
+      `this Module-local AGENTS.md sits in ${directory}, which is not a Module root`,
+    fix: ({ ownerRoot }) =>
+      ownerRoot
+        ? `move its facts into ${ownerRoot}AGENTS.md, the guidance at the owning Module's root, and delete this file`
+        : "move its facts into the AGENTS.md at the root of the Module they describe; if no Module owns them, stop and ask a human",
+  }),
+  "guidance/module-local-unlisted": rule<{ file: string }>({
+    see: GUIDANCE_MODULE_LOCAL,
+    problem: ({ file }) => `root AGENTS.md does not list ${file} by path`,
+    fix: ({ file }) =>
+      `add a trigger line naming ${file} to the Module-local guidance list in AGENTS.md`,
+  }),
+  "guidance/module-section": rule<
+    | { heading: string; kind: "disallowed" }
+    | { heading: string; kind: "repeated" }
+    | { heading: string; kind: "out-of-order"; after: string }
+  >({
+    see: GUIDANCE_MODULE_LOCAL,
+    problem: (data) => {
+      if (data.kind === "disallowed")
+        return `## ${data.heading} is not a Module guidance section`;
+      if (data.kind === "repeated")
+        return `## ${data.heading} appears a second time`;
+      return `## ${data.heading} comes after ## ${data.after}`;
+    },
+    fix: (data) => {
+      if (data.kind === "disallowed")
+        return `rename it to ${list(moduleSections, "or")}, or make it a ### heading inside one of those sections`;
+      if (data.kind === "repeated")
+        return `merge this section into the first ## ${data.heading}, keeping any subheading as ###`;
+      return `move the ## ${data.heading} section above ## ${data.after}; the order is ${moduleSections.join(", ")}`;
+    },
+  }),
+  "guidance/prose-width": rule<{ columns: number; limit: number }>({
+    see: GUIDANCE_LIMITS,
+    problem: ({ columns, limit }) =>
+      `this line is ${columns} characters, over the ${limit}-character prose limit`,
+    fix: ({ limit }) => `wrap it at ${limit} characters`,
+  }),
+  "guidance/broken-link": rule<{ target: string }>({
+    see: GUIDANCE_LIMITS,
+    problem: ({ target }) => `links to ${target}, which does not exist`,
+    fix: ({ target }) =>
+      `point ${target} at an existing file, or remove the link`,
+  }),
+  "guidance/unresolved-path": rule<{ target: string }>({
+    see: GUIDANCE_LIMITS,
+    problem: ({ target }) =>
+      `names ${target}, which resolves neither beside this file nor from the repository root`,
+    fix: ({ target }) =>
+      `correct ${target} to an existing guidance path, or remove it`,
+  }),
+  "guidance/fixture-sidecar": rule<{ sidecar: string }>({
+    see: RECORDED_FIXTURES,
+    problem: () => "this recorded fixture has no recording.json",
+    fix: ({ sidecar }) => `add ${sidecar} naming ${list(sidecarKeys, "and")}`,
+  }),
+  "guidance/sidecar-missing-keys": rule<{ keys: SidecarKey[] }>({
+    see: RECORDED_FIXTURES,
+    problem: ({ keys }) => `recording.json lacks ${list(keys, "and")}`,
+    fix: ({ keys }) => `add ${list(keys, "and")} to recording.json`,
+  }),
+  "guidance/sidecar-unexpected-keys": rule<{ keys: string[] }>({
+    see: RECORDED_FIXTURES,
+    problem: ({ keys }) => `recording.json has unexpected ${list(keys, "and")}`,
+    fix: ({ keys }) => `remove ${list(keys, "and")} from recording.json`,
+  }),
+  "guidance/sidecar-invalid-value": rule<{ key: SidecarKey }>({
+    see: RECORDED_FIXTURES,
+    problem: ({ key }) => `recording.json has an invalid ${key}`,
+    fix: ({ key }) => {
+      if (key === "recordedAt")
+        return 'set recordedAt to an ISO-8601 instant such as 2026-09-06T00:00:00.000Z, or to "synthetic" for a hand-authored case';
+      if (key === "redactions")
+        return "set redactions to an array of { placeholder, reason } entries, each a non-empty string";
+      return `set ${key} to a non-empty string`;
+    },
+  }),
+  "guidance/codex-protocol-version": rule<NoData>({
+    see: RECORDED_FIXTURES,
+    problem: () =>
+      "this Codex recording's protocolVersion names no codex-probe revision",
+    fix: () =>
+      'set protocolVersion to "codex-probe-<n>", the probe revision the case was recorded against',
+  }),
+  "guidance/synthetic-refresh": rule<NoData>({
+    see: RECORDED_FIXTURES,
+    problem: () =>
+      "this synthetic recording's refreshCommand does not say why it is synthetic",
+    fix: () =>
+      'set refreshCommand to "synthetic -- <why a real Harness cannot produce this case>"',
+  }),
+  "guidance/fixture-credential": rule<{ labels: string[] }>({
+    see: RECORDED_FIXTURES,
+    problem: ({ labels }) =>
+      `this recording still matches the credential pattern${labels.length > 1 ? "s" : ""} ${list(labels, "and")}`,
+    fix: () =>
+      "replace the matching bytes with a placeholder listed in recording.json redactions, or re-record the case",
   }),
   "release/workflow-not-mapping": rule<NoData>({
     see: RELEASE_VALIDATION,
@@ -562,12 +709,8 @@ export function headingSlug(heading: string): string {
 function headingAnchors(markdown: string): Set<string> {
   const anchors = new Set<string>();
   const seen = new Map<string, number>();
-  let fenced = false;
-  for (const line of markdown.split(/\r?\n/)) {
-    if (line.trimStart().startsWith("```")) fenced = !fenced;
-    const heading = !fenced && /^#{1,6}\s+(.*?)(?:\s+#+)?\s*$/.exec(line);
-    if (!heading) continue;
-    const slug = headingSlug(heading[1]!);
+  for (const { text } of headings(markdown)) {
+    const slug = headingSlug(text);
     const count = seen.get(slug) ?? 0;
     seen.set(slug, count + 1);
     anchors.add(count === 0 ? slug : `${slug}-${count}`);

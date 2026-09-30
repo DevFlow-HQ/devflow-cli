@@ -28,7 +28,10 @@ performance characteristics.
 - Keep correctness-critical ordering and lifecycle visible in cohesive orchestration.
 - Extract when the result names an independent concept, centralizes an invariant, hides substantial knowledge, owns a side effect, or serves genuine consumers.
 - Apply the deletion test: removing a worthwhile Module redistributes meaningful complexity into callers.
-- Introduce a Seam where behavior genuinely varies, normally demonstrated by at least two justified Adapters.
+- Don't preserve complexity because it already exists: a change that crosses it applies the deletion test.
+- Introduce a Seam where behavior genuinely varies, normally demonstrated by at least two justified Adapters, never because a Seam looks architectural.
+- An object that owns mutable state across a lifecycle behind an Interface may be a class; stateless behaviour over dependencies stays a function or
+  closure.
 
 ## File Shape
 

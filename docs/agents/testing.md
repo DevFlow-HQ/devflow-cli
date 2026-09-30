@@ -72,7 +72,10 @@ real-Harness evidence that CI cannot produce is recorded per release; see [ADR 0
 ## Recorded Harness Fixtures
 
 - Recordings live under `tests/harness/fixtures/<harness>/<case>/` and stay byte-faithful; their metadata lives beside them in `recording.json`.
-- `recording.json` names `harness`, `executableVersion`, `protocolVersion`, `recordedAt`, `redactions`, and `refreshCommand`. The guidance-structure
-  suite fails a case directory without it.
+- `recording.json` names exactly `harness`, `executableVersion`, `protocolVersion`, `recordedAt`, `redactions`, and `refreshCommand`. The structural
+  step fails a case directory without it, and a sidecar with a missing, extra, or invalid key.
+- `recordedAt` is an ISO-8601 instant, or `"synthetic"` for a hand-authored case whose `refreshCommand` reads `synthetic -- <why>`. `redactions` lists
+  one `{ placeholder, reason }` per substitution class. A Codex `protocolVersion` names the `codex-probe-<n>` revision it was recorded against.
+- No byte in a case directory may still match a credential pattern after redaction.
 - Refresh is an opt-in script that needs the installed Harness. An agent or a human may re-record; the implementing issue states what changed
   semantically.

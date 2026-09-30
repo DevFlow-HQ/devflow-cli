@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { makeTempDir } from "../helpers/tempDir.js";
+import { headings, limits } from "./check-guidance-structure.js";
 import { CI_WORKFLOW } from "./check-release-workflow.js";
 import {
   jobsToEdit,
@@ -27,19 +28,22 @@ async function writeTree(root: string, files: Record<string, string>) {
   }
 }
 
-/** A synthetic tree carrying the repository's real guidance files, so every `see:`
- *  anchor resolves unless a test overrides the file it names, and a minimal valid
- *  CI workflow. */
+/** A synthetic tree carrying a root index, the headings of the repository's real
+ *  guidance files, and a minimal valid CI workflow: every `see:` anchor resolves
+ *  unless a test overrides the file it names, and no copied link or path dangles. */
 async function tree(files: Record<string, string>) {
   const root = makeTempDir("secant-structural-");
   const guidance: Record<string, string> = {};
   for (const file of guidanceFiles)
-    guidance[file] = await readFile(join(process.cwd(), file), "utf8");
+    guidance[file] = headings(await readFile(join(process.cwd(), file), "utf8"))
+      .map(({ level, text }) => `${"#".repeat(level)} ${text}\n`)
+      .join("");
   await writeTree(root, {
     "tsconfig.json": JSON.stringify({
       compilerOptions: { module: "ESNext", moduleResolution: "bundler" },
       include: ["src", "tests"],
     }),
+    "AGENTS.md": "# Agent Instructions\n",
     [CI_WORKFLOW]: JSON.stringify(validWorkflow()),
     ...guidance,
     ...files,
@@ -137,6 +141,304 @@ test("anchors use GitHub's heading slugs", () => {
   assert.equal(
     headingSlug("Invariants (interrupt, recovery, cleanup)"),
     "invariants-interrupt-recovery-cleanup",
+  );
+});
+
+const source = { "src/tui/tui.ts": "export {};" };
+
+test("guidance/root-index", async () => {
+  const root = await tree(source);
+  await rm(join(root, "AGENTS.md"));
+  assert.deepEqual(run(root), {
+    exitCode: 1,
+    output:
+      "AGENTS.md:1:1  guidance/root-index  root AGENTS.md, the always-loaded index, is missing\n" +
+      "fix: create AGENTS.md at the repository root with one trigger line per focused document and per Module-local AGENTS.md\n" +
+      "see: docs/agents/guidance.md#shape\n",
+  });
+});
+
+test("guidance/root-length", async () => {
+  assert.equal(
+    await reportOf("guidance/root-length", {
+      ...source,
+      "AGENTS.md": "- line\n".repeat(limits.rootLines),
+    }),
+    "AGENTS.md:1:1  guidance/root-length  root AGENTS.md is too long for its 60-line limit\n" +
+      "fix: shorten AGENTS.md to fewer than 60 lines by moving detail into the focused document it routes to\n" +
+      "see: docs/agents/guidance.md#limits",
+  );
+});
+
+test("guidance/claude-symlink", async () => {
+  const root = await tree(source);
+  await symlink("AGENTS.md", join(root, "CLAUDE.md"));
+  assert.deepEqual(run(root), {
+    exitCode: 1,
+    output:
+      "CLAUDE.md:1:1  guidance/claude-symlink  CLAUDE.md is a symlink, which Git checks out as plain text where symlinks are off\n" +
+      "fix: replace the symlink with a file whose only line is @AGENTS.md\n" +
+      "see: docs/agents/guidance.md#shape\n",
+  });
+});
+
+test("guidance/claude-import", async () => {
+  assert.equal(
+    await reportOf("guidance/claude-import", {
+      ...source,
+      "CLAUDE.md": "@AGENTS.md\n\n# Duplicate\n",
+    }),
+    "CLAUDE.md:1:1  guidance/claude-import  CLAUDE.md holds more than the @AGENTS.md import\n" +
+      "fix: reduce CLAUDE.md to the single line @AGENTS.md and move anything else into AGENTS.md or a focused document\n" +
+      "see: docs/agents/guidance.md#shape",
+  );
+});
+
+test("guidance/focused-length", async () => {
+  assert.equal(
+    await reportOf("guidance/focused-length", {
+      ...source,
+      "docs/agents/prototypes.md": "line\n".repeat(limits.focusedLines),
+    }),
+    "docs/agents/prototypes.md:1:1  guidance/focused-length  this guidance is too long for its 120-line limit\n" +
+      "fix: split it by concern or move detail into a deeper document until it has fewer than 120 lines\n" +
+      "see: docs/agents/guidance.md#limits",
+  );
+});
+
+test("guidance/module-local-placement", async () => {
+  assert.equal(
+    await reportOf("guidance/module-local-placement", {
+      ...source,
+      "AGENTS.md": "- Read `src/harness/native/AGENTS.md`.\n",
+      "src/harness/native/AGENTS.md": "# native\n",
+    }),
+    "src/harness/native/AGENTS.md:1:1  guidance/module-local-placement  this Module-local AGENTS.md sits in src/harness/native/, which is not a Module root\n" +
+      "fix: move its facts into src/harness/AGENTS.md, the guidance at the owning Module's root, and delete this file\n" +
+      "see: docs/agents/guidance.md#module-local-agentsmd",
+  );
+  // No Module owns the folder: a human decides where the facts belong.
+  assert.equal(
+    await reportOf("guidance/module-local-placement", {
+      ...source,
+      "AGENTS.md": "- Read `src/stray/AGENTS.md`.\n",
+      "src/stray/AGENTS.md": "# stray\n",
+    }),
+    "src/stray/AGENTS.md:1:1  guidance/module-local-placement  this Module-local AGENTS.md sits in src/stray/, which is not a Module root\n" +
+      "fix: move its facts into the AGENTS.md at the root of the Module they describe; if no Module owns them, stop and ask a human\n" +
+      "see: docs/agents/guidance.md#module-local-agentsmd",
+  );
+});
+
+test("guidance/module-local-unlisted", async () => {
+  assert.equal(
+    await reportOf("guidance/module-local-unlisted", {
+      ...source,
+      "src/harness/AGENTS.md": "# harness\n",
+    }),
+    "src/harness/AGENTS.md:1:1  guidance/module-local-unlisted  root AGENTS.md does not list src/harness/AGENTS.md by path\n" +
+      "fix: add a trigger line naming src/harness/AGENTS.md to the Module-local guidance list in AGENTS.md\n" +
+      "see: docs/agents/guidance.md#module-local-agentsmd",
+  );
+});
+
+test("guidance/prose-width", async () => {
+  const long = "a".repeat(limits.proseColumns + 1);
+  assert.equal(
+    await reportOf("guidance/prose-width", {
+      ...source,
+      "docs/agents/prototypes.md": [
+        "# Prototypes",
+        long,
+        `see https://example.com/${long}`,
+        `| ${long} |`,
+        "```",
+        long,
+        "```",
+        "",
+      ].join("\n"),
+    }),
+    "docs/agents/prototypes.md:2:176  guidance/prose-width  this line is 176 characters, over the 175-character prose limit\n" +
+      "fix: wrap it at 175 characters\n" +
+      "see: docs/agents/guidance.md#limits",
+  );
+});
+
+test("guidance/broken-link", async () => {
+  assert.equal(
+    await reportOf("guidance/broken-link", {
+      ...source,
+      "docs/agents/prototypes.md":
+        "See [gone](./gone.md), [root](../../AGENTS.md#failing-checks), [here](#here), and [web](https://x.test/a.md).\n",
+      "docs/adr/0001-x.md": "\n[adr](./0002-missing.md#context)\n",
+    }),
+    "docs/agents/prototypes.md:1:12  guidance/broken-link  links to ./gone.md, which does not exist\n" +
+      "fix: point ./gone.md at an existing file, or remove the link\n" +
+      "see: docs/agents/guidance.md#limits\n" +
+      "docs/adr/0001-x.md:2:7  guidance/broken-link  links to ./0002-missing.md#context, which does not exist\n" +
+      "fix: point ./0002-missing.md#context at an existing file, or remove the link\n" +
+      "see: docs/agents/guidance.md#limits",
+  );
+});
+
+test("guidance/unresolved-path", async () => {
+  assert.equal(
+    await reportOf("guidance/unresolved-path", {
+      ...source,
+      "docs/agents/prototypes.md":
+        "Read `docs/agents/missing.md` and `guidance.md`.\n",
+      "docs/adr/0001-x.md": "Unchecked: `some/opencode/AGENTS.md`.\n",
+    }),
+    "docs/agents/prototypes.md:1:7  guidance/unresolved-path  names docs/agents/missing.md, which resolves neither beside this file nor from the repository root\n" +
+      "fix: correct docs/agents/missing.md to an existing guidance path, or remove it\n" +
+      "see: docs/agents/guidance.md#limits",
+  );
+});
+
+const fixture = "tests/harness/fixtures/codex/case";
+const sidecar = {
+  harness: "codex",
+  executableVersion: "0.1.0",
+  protocolVersion: "codex-probe-2",
+  recordedAt: "2026-09-06T00:00:00.000Z",
+  redactions: [{ placeholder: "«HOME»", reason: "user home path" }],
+  refreshCommand: "bun tests/harness/record-codex.ts case",
+};
+
+/** A recorded Codex case whose sidecar is the valid one above with `changes`. */
+function recorded(changes: Record<string, unknown>, bytes = "{}\n") {
+  return {
+    ...source,
+    [`${fixture}/case.json`]: bytes,
+    [`${fixture}/recording.json`]: JSON.stringify({ ...sidecar, ...changes }),
+  };
+}
+
+test("guidance/fixture-sidecar", async () => {
+  assert.equal(
+    await reportOf("guidance/fixture-sidecar", {
+      ...source,
+      [`${fixture}/case.json`]: "{}\n",
+    }),
+    "tests/harness/fixtures/codex/case:1:1  guidance/fixture-sidecar  this recorded fixture has no recording.json\n" +
+      "fix: add tests/harness/fixtures/codex/case/recording.json naming harness, executableVersion, protocolVersion, recordedAt, redactions, and refreshCommand\n" +
+      "see: docs/agents/testing.md#recorded-harness-fixtures",
+  );
+});
+
+test("guidance/sidecar-missing-keys", async () => {
+  assert.equal(
+    await reportOf(
+      "guidance/sidecar-missing-keys",
+      recorded({ executableVersion: undefined, redactions: undefined }),
+    ),
+    "tests/harness/fixtures/codex/case/recording.json:1:1  guidance/sidecar-missing-keys  recording.json lacks executableVersion and redactions\n" +
+      "fix: add executableVersion and redactions to recording.json\n" +
+      "see: docs/agents/testing.md#recorded-harness-fixtures",
+  );
+});
+
+test("guidance/sidecar-unexpected-keys", async () => {
+  assert.equal(
+    await reportOf(
+      "guidance/sidecar-unexpected-keys",
+      recorded({ extra: true }),
+    ),
+    "tests/harness/fixtures/codex/case/recording.json:1:1  guidance/sidecar-unexpected-keys  recording.json has unexpected extra\n" +
+      "fix: remove extra from recording.json\n" +
+      "see: docs/agents/testing.md#recorded-harness-fixtures",
+  );
+});
+
+test("guidance/sidecar-invalid-value", async () => {
+  assert.equal(
+    await reportOf(
+      "guidance/sidecar-invalid-value",
+      recorded({
+        executableVersion: " ",
+        recordedAt: "2026-09-06",
+        redactions: ["home path"],
+      }),
+    ),
+    "tests/harness/fixtures/codex/case/recording.json:1:1  guidance/sidecar-invalid-value  recording.json has an invalid executableVersion\n" +
+      "fix: set executableVersion to a non-empty string\n" +
+      "see: docs/agents/testing.md#recorded-harness-fixtures\n" +
+      "tests/harness/fixtures/codex/case/recording.json:1:1  guidance/sidecar-invalid-value  recording.json has an invalid recordedAt\n" +
+      'fix: set recordedAt to an ISO-8601 instant such as 2026-09-06T00:00:00.000Z, or to "synthetic" for a hand-authored case\n' +
+      "see: docs/agents/testing.md#recorded-harness-fixtures\n" +
+      "tests/harness/fixtures/codex/case/recording.json:1:1  guidance/sidecar-invalid-value  recording.json has an invalid redactions\n" +
+      "fix: set redactions to an array of { placeholder, reason } entries, each a non-empty string\n" +
+      "see: docs/agents/testing.md#recorded-harness-fixtures",
+  );
+});
+
+test("guidance/codex-protocol-version", async () => {
+  assert.equal(
+    await reportOf(
+      "guidance/codex-protocol-version",
+      recorded({ protocolVersion: "app-server v1" }),
+    ),
+    "tests/harness/fixtures/codex/case/recording.json:1:1  guidance/codex-protocol-version  this Codex recording's protocolVersion names no codex-probe revision\n" +
+      'fix: set protocolVersion to "codex-probe-<n>", the probe revision the case was recorded against\n' +
+      "see: docs/agents/testing.md#recorded-harness-fixtures",
+  );
+});
+
+test("guidance/synthetic-refresh", async () => {
+  assert.equal(
+    await reportOf(
+      "guidance/synthetic-refresh",
+      recorded({ recordedAt: "synthetic", refreshCommand: "hand-authored" }),
+    ),
+    "tests/harness/fixtures/codex/case/recording.json:1:1  guidance/synthetic-refresh  this synthetic recording's refreshCommand does not say why it is synthetic\n" +
+      'fix: set refreshCommand to "synthetic -- <why a real Harness cannot produce this case>"\n' +
+      "see: docs/agents/testing.md#recorded-harness-fixtures",
+  );
+});
+
+test("guidance/fixture-credential", async () => {
+  assert.equal(
+    await reportOf(
+      "guidance/fixture-credential",
+      recorded({}, '{"token":"sk-abcdefghijklmnopqrstuvwxyz012345"}\n'),
+    ),
+    "tests/harness/fixtures/codex/case/case.json:1:1  guidance/fixture-credential  this recording still matches the credential pattern OpenAI-style API key\n" +
+      "fix: replace the matching bytes with a placeholder listed in recording.json redactions, or re-record the case\n" +
+      "see: docs/agents/testing.md#recorded-harness-fixtures",
+  );
+});
+
+const harnessListed =
+  "# Agent Instructions\n\n- Before editing under `src/harness/`, read `src/harness/AGENTS.md`.\n";
+
+test("guidance/module-section", async () => {
+  assert.equal(
+    await reportOf("guidance/module-section", {
+      "AGENTS.md": harnessListed,
+      "src/harness/harness.ts": "export {};",
+      "src/harness/AGENTS.md": [
+        "# harness",
+        "## Invariants",
+        "```",
+        "## Fenced",
+        "```",
+        "### Interrupt",
+        "## Invariants (interrupt, recovery, cleanup)",
+        "## Read next",
+        "## Owns",
+        "## Read next",
+        "",
+      ].join("\n"),
+    }),
+    "src/harness/AGENTS.md:7:1  guidance/module-section  ## Invariants (interrupt, recovery, cleanup) is not a Module guidance section\n" +
+      "fix: rename it to Owns, Never owns, Invariants, Tests, or Read next, or make it a ### heading inside one of those sections\n" +
+      "see: docs/agents/guidance.md#module-local-agentsmd\n" +
+      "src/harness/AGENTS.md:9:1  guidance/module-section  ## Owns comes after ## Read next\n" +
+      "fix: move the ## Owns section above ## Read next; the order is Owns, Never owns, Invariants, Tests, Read next\n" +
+      "see: docs/agents/guidance.md#module-local-agentsmd\n" +
+      "src/harness/AGENTS.md:10:1  guidance/module-section  ## Read next appears a second time\n" +
+      "fix: merge this section into the first ## Read next, keeping any subheading as ###\n" +
+      "see: docs/agents/guidance.md#module-local-agentsmd",
   );
 });
 

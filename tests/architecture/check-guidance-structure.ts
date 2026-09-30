@@ -2,12 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { findCredentials } from "../harness/redact.js";
 import { ownerOf } from "./module-policy.js";
-
-export interface GuidanceIssue {
-  file: string;
-  line: number;
-  message: string;
-}
+import type { Finding } from "./rule-catalogue.js";
 
 export const limits = {
   rootLines: 60,
@@ -15,7 +10,16 @@ export const limits = {
   proseColumns: 175,
 } as const;
 
-const sidecarKeys = [
+/** The second-level headings a Module-local AGENTS.md may use, in order. */
+export const moduleSections = [
+  "Owns",
+  "Never owns",
+  "Invariants",
+  "Tests",
+  "Read next",
+] as const;
+
+export const sidecarKeys = [
   "harness",
   "executableVersion",
   "protocolVersion",
@@ -24,34 +28,61 @@ const sidecarKeys = [
   "refreshCommand",
 ] as const;
 
+export type SidecarKey = (typeof sidecarKeys)[number];
+
+type Located = Pick<Finding, "file" | "line" | "column">;
+type Report = (finding: Finding) => void;
+
+/** Markdown headings outside code fences, with their 1-based line. */
+export function headings(markdown: string) {
+  const found: { level: number; text: string; line: number }[] = [];
+  let fenced = false;
+  markdown.split(/\r?\n/).forEach((text, index) => {
+    if (text.trimStart().startsWith("```")) fenced = !fenced;
+    const heading = !fenced && /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(text);
+    if (heading)
+      found.push({
+        level: heading[1]!.length,
+        text: heading[2]!,
+        line: index + 1,
+      });
+  });
+  return found;
+}
+
 /** Reads the guidance tree as text; loads and executes nothing. */
-export function checkGuidanceStructure(root: string): GuidanceIssue[] {
-  const issues: GuidanceIssue[] = [];
+export function checkGuidanceStructure(root: string): Finding[] {
+  const findings: Finding[] = [];
   const pathOf = (path: string) => relative(root, path).split(sep).join("/");
-  const report = (file: string, line: number, message: string) =>
-    issues.push({ file: pathOf(file), line, message });
+  const at = (file: string, line = 1, column = 1): Located => ({
+    file: pathOf(file),
+    line,
+    column,
+  });
+  const report: Report = (finding) => findings.push(finding);
   const linesOf = (file: string) => readFileSync(file, "utf8").split("\n");
 
   const rootIndex = join(root, "AGENTS.md");
   if (!existsSync(rootIndex)) {
-    report(rootIndex, 1, "Root AGENTS.md is the always-loaded index");
-    return issues;
+    report({ ...at(rootIndex), rule: "guidance/root-index", data: {} });
+    return findings;
   }
   const rootText = readFileSync(rootIndex, "utf8");
   if (linesOf(rootIndex).length > limits.rootLines)
-    report(rootIndex, 1, `Root AGENTS.md exceeds ${limits.rootLines} lines`);
+    report({
+      ...at(rootIndex),
+      rule: "guidance/root-length",
+      data: { limit: limits.rootLines },
+    });
 
   const claude = join(root, "CLAUDE.md");
-  if (existsSync(claude) || isSymlink(claude)) {
-    if (isSymlink(claude))
-      report(
-        claude,
-        1,
-        "CLAUDE.md must be an @AGENTS.md import, not a symlink",
-      );
-    else if (readFileSync(claude, "utf8").trim() !== "@AGENTS.md")
-      report(claude, 1, "CLAUDE.md must contain only @AGENTS.md");
-  }
+  if (isSymlink(claude))
+    report({ ...at(claude), rule: "guidance/claude-symlink", data: {} });
+  else if (
+    existsSync(claude) &&
+    readFileSync(claude, "utf8").trim() !== "@AGENTS.md"
+  )
+    report({ ...at(claude), rule: "guidance/claude-import", data: {} });
 
   const focused = markdownIn(join(root, "docs/agents"));
   const local = existsSync(join(root, "src"))
@@ -73,23 +104,33 @@ export function checkGuidanceStructure(root: string): GuidanceIssue[] {
 
   for (const file of [...focused, ...local]) {
     if (linesOf(file).length > limits.focusedLines)
-      report(file, 1, `Focused guidance exceeds ${limits.focusedLines} lines`);
+      report({
+        ...at(file),
+        rule: "guidance/focused-length",
+        data: { limit: limits.focusedLines },
+      });
   }
 
   for (const file of local) {
     const directory = pathOf(dirname(file)) + "/";
-    if (ownerOf(directory)?.root !== directory)
-      report(
-        file,
-        1,
-        "Module-local AGENTS.md must sit at a declared Module root",
-      );
+    const owner = ownerOf(directory);
+    if (owner?.root !== directory)
+      report({
+        ...at(file),
+        rule: "guidance/module-local-placement",
+        data: { directory, ...(owner && { ownerRoot: owner.root }) },
+      });
     if (!rootText.includes(pathOf(file)))
-      report(
-        file,
-        1,
-        "Module-local AGENTS.md must be listed by path in root AGENTS.md",
-      );
+      report({
+        ...at(file),
+        rule: "guidance/module-local-unlisted",
+        data: { file: pathOf(file) },
+      });
+    checkModuleSections(
+      readFileSync(file, "utf8"),
+      (line) => at(file, line),
+      report,
+    );
   }
 
   for (const file of linked) {
@@ -104,21 +145,33 @@ export function checkGuidanceStructure(root: string): GuidanceIssue[] {
         !/https?:\/\//.test(text) &&
         !text.startsWith("|")
       )
-        report(file, line, `Prose exceeds ${limits.proseColumns} characters`);
+        report({
+          ...at(file, line, limits.proseColumns + 1),
+          rule: "guidance/prose-width",
+          data: { columns: text.length, limit: limits.proseColumns },
+        });
       for (const match of text.matchAll(/\]\(([^)\s]+)\)/g)) {
-        const target = match[1];
+        const target = match[1]!;
         if (/^(?:[a-z]+:|#)/.test(target)) continue;
-        if (!existsSync(resolve(dirname(file), target.split("#")[0])))
-          report(file, line, `Broken link ${target}`);
+        if (!existsSync(resolve(dirname(file), target.split("#")[0]!)))
+          report({
+            ...at(file, line, match.index + 3),
+            rule: "guidance/broken-link",
+            data: { target },
+          });
       }
       if (!pathChecked.has(file)) return;
       for (const match of text.matchAll(/`([^`<>\s@]+\.md)`/g)) {
-        const target = match[1];
+        const target = match[1]!;
         if (
           !existsSync(resolve(dirname(file), target)) &&
           !existsSync(resolve(root, target))
         )
-          report(file, line, `Unresolved guidance path ${target}`);
+          report({
+            ...at(file, line, match.index + 2),
+            rule: "guidance/unresolved-path",
+            data: { target },
+          });
       }
     });
   }
@@ -129,46 +182,89 @@ export function checkGuidanceStructure(root: string): GuidanceIssue[] {
       for (const recording of subdirectories(harness)) {
         const sidecar = join(recording, "recording.json");
         if (!existsSync(sidecar)) {
-          report(recording, 1, "Recorded fixture lacks recording.json");
+          report({
+            ...at(recording),
+            rule: "guidance/fixture-sidecar",
+            data: { sidecar: pathOf(sidecar) },
+          });
           continue;
         }
         const metadata = parseObject(sidecar);
         const missing = sidecarKeys.filter((key) => !(key in metadata));
         if (missing.length)
-          report(sidecar, 1, `recording.json lacks ${missing.join(", ")}`);
+          report({
+            ...at(sidecar),
+            rule: "guidance/sidecar-missing-keys",
+            data: { keys: missing },
+          });
         const extra = Object.keys(metadata).filter(
-          (key) => !sidecarKeys.includes(key as (typeof sidecarKeys)[number]),
+          (key) => !sidecarKeys.includes(key as SidecarKey),
         );
-        if (extra.length) {
-          report(
-            sidecar,
-            1,
-            `recording.json has unexpected ${extra.join(", ")}`,
-          );
-        }
-        validateRecordingMetadata(metadata, sidecar, report);
+        if (extra.length)
+          report({
+            ...at(sidecar),
+            rule: "guidance/sidecar-unexpected-keys",
+            data: { keys: extra },
+          });
+        validateRecordingMetadata(metadata, at(sidecar), report);
         for (const file of filesIn(recording)) {
           const labels = findCredentials(readFileSync(file, "utf8"));
-          if (labels.length > 0) {
-            report(
-              file,
-              1,
-              `recording still matches credential pattern(s): ${labels.join(", ")}`,
-            );
-          }
+          if (labels.length > 0)
+            report({
+              ...at(file),
+              rule: "guidance/fixture-credential",
+              data: { labels },
+            });
         }
       }
     }
   }
 
-  return issues;
+  return findings;
+}
+
+/** A Module-local AGENTS.md uses only the Module sections as `##` headings, each
+ *  once and in order; a missing section is allowed. */
+function checkModuleSections(
+  markdown: string,
+  at: (line: number) => Located,
+  report: Report,
+): void {
+  const seen = new Set<string>();
+  let highest = -1;
+  for (const { level, text: heading, line } of headings(markdown)) {
+    if (level !== 2) continue;
+    const rank = (moduleSections as readonly string[]).indexOf(heading);
+    const where = { ...at(line), rule: "guidance/module-section" } as const;
+    if (rank < 0) report({ ...where, data: { heading, kind: "disallowed" } });
+    else if (seen.has(heading))
+      report({ ...where, data: { heading, kind: "repeated" } });
+    else if (rank < highest)
+      report({
+        ...where,
+        data: {
+          heading,
+          kind: "out-of-order",
+          after: moduleSections[highest]!,
+        },
+      });
+    if (rank < 0) continue;
+    seen.add(heading);
+    highest = Math.max(highest, rank);
+  }
 }
 
 function validateRecordingMetadata(
   metadata: Record<string, unknown>,
-  sidecar: string,
-  report: (file: string, line: number, message: string) => void,
+  sidecar: Located,
+  report: Report,
 ): void {
+  const invalid = (key: SidecarKey) =>
+    report({
+      ...sidecar,
+      rule: "guidance/sidecar-invalid-value",
+      data: { key },
+    });
   for (const key of [
     "harness",
     "executableVersion",
@@ -179,7 +275,7 @@ function validateRecordingMetadata(
       typeof metadata[key] !== "string" ||
       metadata[key].trim().length === 0
     ) {
-      report(sidecar, 1, `recording.json has invalid ${key}`);
+      invalid(key);
     }
   }
   if (
@@ -187,7 +283,7 @@ function validateRecordingMetadata(
     (typeof metadata.recordedAt !== "string" ||
       !isIsoInstant(metadata.recordedAt))
   ) {
-    report(sidecar, 1, "recording.json has invalid recordedAt");
+    invalid("recordedAt");
   }
   if (
     !Array.isArray(metadata.redactions) ||
@@ -200,29 +296,21 @@ function validateRecordingMetadata(
         entry.reason.length === 0,
     )
   ) {
-    report(sidecar, 1, "recording.json has invalid redactions");
+    invalid("redactions");
   }
   if (
     metadata.harness === "codex" &&
     (typeof metadata.protocolVersion !== "string" ||
       !/^codex-probe-\d+$/.test(metadata.protocolVersion))
   ) {
-    report(
-      sidecar,
-      1,
-      "Codex protocolVersion must name a codex-probe revision",
-    );
+    report({ ...sidecar, rule: "guidance/codex-protocol-version", data: {} });
   }
   if (
     metadata.recordedAt === "synthetic" &&
     (typeof metadata.refreshCommand !== "string" ||
       !/^synthetic -- .+/.test(metadata.refreshCommand))
   ) {
-    report(
-      sidecar,
-      1,
-      "Synthetic recording refreshCommand must state why it is synthetic",
-    );
+    report({ ...sidecar, rule: "guidance/synthetic-refresh", data: {} });
   }
 }
 

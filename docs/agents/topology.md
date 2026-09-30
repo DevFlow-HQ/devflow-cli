@@ -28,8 +28,9 @@ One ESM package contains these ownership areas. Every path exists; new files lan
 
 `cli/main.ts` and `composition/main.ts` name entrypoints, not single-file implementations. A composition root may span cohesive private wiring files
 and invoke child composition roots. Only the hosting entrypoint or parent root invokes a root; domain Modules receive dependencies.
-Keep command handling, Run policy, Adapter internals, and persistence with their owners. Review growing files for cohesion and split when a named
-private submodule improves Locality. There is no numerical source-file limit or requirement to split into one-file-per-helper.
+Keep command handling, Run policy, Adapter internals, and persistence with their owners. Presentation renders the projection it is given and sends
+intents; it owns no Run policy. Review growing files for cohesion and split when a named private submodule improves Locality. There is no numerical
+source-file limit or requirement to split into one-file-per-helper.
 
 ## Interfaces And Imports
 
@@ -62,8 +63,9 @@ An `index.ts` is valid for one cohesive Module after declaring it in that table.
 
 ## Enforcement And Tests
 
-The structural step (`bun run structure:check`) runs the boundary and test-mirror checks in the canonical gate, and
-[the boundary suite](../../tests/architecture/module-boundaries.test.ts) tests them over synthetic source graphs. The check resolves the
+The structural step (`bun run structure:check`) runs the boundary, test-mirror, and [guidance-structure](./guidance.md#limits) checks in the
+canonical gate. [The boundary suite](../../tests/architecture/module-boundaries.test.ts) tests the first two over synthetic source graphs, and
+[the guidance suite](../../tests/architecture/guidance-structure.test.ts) tests the third over synthetic guidance trees. The check resolves the
 actual source behind imports using the project's compiler options, including `.js` specifiers targeting TypeScript and configured aliases.
 It checks imports of values and types, re-exports, import-type expressions, literal dynamic imports, public entrypoints, and prohibited directions.
 Computed imports, custom loaders, source symlinks, and unchecked reference directives need a deliberate rule change rather than a silent bypass.

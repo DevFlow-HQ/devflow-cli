@@ -15,8 +15,8 @@ this file owns only the milestone loop.
 
 ## After the spine
 
-- The spine defines no milestone after M6, so this loop never opens one on its own. What follows is decided on the wayfinder map
-  ([#2](https://github.com/secantdev/secant/issues/2)) and recorded there before implementation work starts.
+- The spine defines no milestone after M6, so this loop never opens one on its own. Pre-public-release work is decided on the pre-public-release
+  map ([#235](https://github.com/secantdev/secant/issues/235)) and recorded there before implementation work starts.
 - The first public release is a human Task issue on the map, not a milestone: the ADR 0028 public-use gates, then the `v0.1.0` tag through the
   protected release path with fresh digest-bound human evidence (ADR 0027). It carries no spec, tickets, or audit.
 - [#38](https://github.com/secantdev/secant/issues/38) and [#39](https://github.com/secantdev/secant/issues/39) are picked from the map after that

@@ -3,6 +3,7 @@
 // as `<file>:<line>:<col>  <rule-id>  <what is wrong>`, then `fix:`, then `see:`,
 // with nothing else on stdout. It fails on any violation, including a `see:` anchor
 // that names no heading.
+import { checkGuidanceStructure } from "./check-guidance-structure.js";
 import {
   checkModuleBoundaries,
   checkTestDomainMirror,
@@ -19,6 +20,7 @@ export function runStructuralStep(
     ...unresolvedAnchors(root),
     ...checkModuleBoundaries(root),
     ...checkTestDomainMirror(root),
+    ...checkGuidanceStructure(root),
     ...checkReleaseWorkflow(root),
   ];
   for (const finding of findings) write(formatFinding(finding) + "\n");

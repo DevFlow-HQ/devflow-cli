@@ -3,8 +3,8 @@
 Byte-faithful recordings of a real installed Harness, replayed in CI so the
 Adapter is exercised against exactly what it saw once — never a fake in place of
 a spawn (ADR 0027). The `claude` replayer (`../replayer.mjs`) reads these; the
-guidance-structure suite (`tests/architecture/check-guidance-structure.ts`)
-fails any case directory missing its `recording.json`.
+structural step (`bun run structure:check`) fails any case directory missing
+its `recording.json`.
 
 ## Layout
 
@@ -20,7 +20,7 @@ fixtures/<harness>/<case>/
 
 ## `recording.json` (sidecar)
 
-Six keys, all required (the guidance-structure suite enforces their presence):
+Six keys, all required (the structural step enforces their presence):
 
 - `harness` — e.g. `"claude-code"`.
 - `executableVersion` — full `claude --version` string at record time.
