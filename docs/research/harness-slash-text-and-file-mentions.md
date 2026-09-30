@@ -14,7 +14,7 @@ Versions examined, on Linux (x64):
 - `@opentui/core` **0.4.5** (the Run Workbench compose's native input).
 
 Ticket: [Decide how typed commands work in the Run Workbench compose](https://github.com/secantdev/secant/issues/267). This note records facts
-only; the decision is [ADR 0039](../adr/0039-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md).
+only; the decision is [ADR 0040](../adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md).
 
 ## Claude Code runs a leading slash command from Secant's frames
 

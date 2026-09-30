@@ -50,7 +50,7 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **Harness input rule** — a rule a **Harness** declares that any text Secant sends it (a human **Turn**, a **Steer**, or a **Workflow Bundle**
   prompt) must satisfy, whatever the transport. It is closed data with a kind; the one kind today, reserved leading words, names the first words
   that would change a conversation, Model choice, or permission Secant owns. Secant owns the matching and the refusal. See
-  [ADR 0039](./docs/adr/0039-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md).
+  [ADR 0040](./docs/adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md).
 - **Projection Port** — the single Secant-owned application Interface shared by TUI and headless callers. It opens bounded **Projections**,
   admits user intent as **Operations**, and reads content through **Resource References** without exposing workflow-runtime, persistence, Adapter,
   or Harness-native objects. It is an in-memory Interface rather than a wire protocol; see
