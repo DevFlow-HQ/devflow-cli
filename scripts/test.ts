@@ -7,14 +7,10 @@
 // so the Bun 1.4.2 child-lifecycle defect (#149, #150) — and the #172 three-worker
 // rejection it caused on the Windows runner — can no longer fire.
 //
-// Three is where worker count stops paying off, measured on the split-out per-step
-// CI timing (check.yml). The `bun test` step is slow only on the Windows runner
-// (~190s vs ~20s on Linux/macOS) and is I/O-bound, not CPU-bound: the tests each
-// open a temp dir and a per-test SQLite database, and the workers contend on the
-// runner's disk rather than overlapping, so effective parallelism plateaus near
-// three. Raising to four was measured and moved the Windows `Test` step by ~0s, so
-// the count is held at three. The remaining Windows cost is the tests' own disk
-// I/O; no worker count reduces it.
+// Three workers remain the calibrated count. #274 traced intermittent Windows
+// stalls to temp-file and SQLite writes on the runner's system disk. The Windows
+// check job now routes TEMP/TMP under RUNNER_TEMP and fails if that path is on
+// the system drive.
 //
 // File isolation stays load-bearing: each file runs in its own worker, so
 // module-level helpers and environment changes never leak across files. Tests

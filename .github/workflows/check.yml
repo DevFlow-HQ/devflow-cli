@@ -46,6 +46,26 @@ jobs:
         run: bun run lint
       - name: Structural check
         run: bun run structure:check
+      - name: Configure Windows test temp drive
+        id: windows_test_temp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not $env:RUNNER_TEMP -or -not $env:SystemDrive) {
+            throw "Windows test temp setup needs RUNNER_TEMP and SystemDrive."
+          }
+          $runnerTemp = (Resolve-Path -LiteralPath $env:RUNNER_TEMP).ProviderPath
+          $runnerDrive = [IO.Path]::GetPathRoot($runnerTemp).TrimEnd('\')
+          $systemDrive = $env:SystemDrive.TrimEnd('\')
+          Write-Host "RUNNER_TEMP resolves to $runnerTemp (drive $runnerDrive); system drive: $systemDrive"
+          if ($runnerDrive -ieq $systemDrive) {
+            throw "RUNNER_TEMP ($runnerTemp) is on the system drive ($systemDrive); Windows tests require a separate temp drive."
+          }
+          $testTemp = Join-Path $runnerTemp 'secant-tests'
+          New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
+          Write-Host "Windows test TEMP and TMP: $testTemp"
+          "TEMP=$testTemp" >> $env:GITHUB_ENV
+          "TMP=$testTemp" >> $env:GITHUB_ENV
       - name: Test
         run: bun run test
       - name: Build
@@ -53,7 +73,9 @@ jobs:
       - name: Compiled-binary smoke
         run: bun run test:package
       - name: Process runtime conformance
-        if: always()
+        # Keep independent failure evidence, but never run on the system disk
+        # after the Windows temp-drive guard rejects the runner image.
+        if: always() && (runner.os != 'Windows' || steps.windows_test_temp.outcome == 'success')
         run: bun run test:runtime-conformance
 
   # One Linux runner cross-compiles all three gated targets (ADR 0030). The wide

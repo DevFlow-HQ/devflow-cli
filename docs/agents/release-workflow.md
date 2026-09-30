@@ -15,8 +15,9 @@ and `checkReleasePromotion`. They run in the structural step (`bun run structure
 as a tool error. Each guard is proven under `bun test` by a synthetic workflow that breaks exactly that guard, so the step and the guards' proofs both run
 on Windows, macOS, and Linux without publishing.
 
-Each three-OS `check` job also runs the `Process runtime conformance` step with `if: always()`, so it blocks independently of the canonical links
-([testing](./testing.md)). A workflow-level `concurrency` group per ref cancels a superseded run in progress, except on the default branch and on `v*` tags:
+Each three-OS `check` job also runs the `Process runtime conformance` step after other check failures, so it blocks independently of the canonical
+links ([testing](./testing.md)). On Windows it skips only when the preceding temp-drive guard fails, keeping that process-heavy step off the system disk.
+A workflow-level `concurrency` group per ref cancels a superseded run in progress, except on the default branch and on `v*` tags:
 those runs are durable release evidence — the default-branch gate and the tag's promotion — so a newer push must never cancel them.
 
 The release scripts build the candidate once and download those artifacts everywhere else. After approval they never rebuild or repack: every promoted

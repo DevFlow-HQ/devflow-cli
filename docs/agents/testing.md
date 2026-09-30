@@ -24,9 +24,10 @@ mask a failure with a retry, sleep, timeout increase, or silent assertion remova
 
 The canonical test script (`scripts/test.ts`) runs three isolated file workers on every OS (`--parallel=3`). Three is safe only because no worker spawns a
 child: under the Bun 1.4.2 child-lifecycle defect ([#149](https://github.com/secantdev/secant/issues/149)), workers each spawning a child at startup on a
-CPU-constrained runner occasionally lost the child's `exit`/`close`/stdio events, and the spawn never settled. The count is tuned by the per-step CI timing
-in `check.yml`: the Windows `bun test` step is disk-I/O-bound, so parallelism plateaus near three and more workers buy nothing. Isolation stays
-load-bearing: each file runs in its own worker, so module-level helpers and environment changes never leak across files. Tests within each file remain
+CPU-constrained runner occasionally lost the child's `exit`/`close`/stdio events, and the spawn never settled. Three workers remain the calibrated
+count. [#274](https://github.com/secantdev/secant/issues/274#issuecomment-5911415757) traced intermittent Windows stalls to temp-file and SQLite
+writes on the runner's system disk. The Windows `check` job routes `TEMP` and `TMP` under `RUNNER_TEMP` and fails if it is on the system drive. Isolation
+stays load-bearing: each file runs in its own worker, so module-level helpers and environment changes never leak across files. Tests within each file remain
 sequential; do not replace file parallelism with `--concurrent`, which would race their shared fixtures. Should child-lifecycle flakiness return, keep
 the spawn out of the semantic suite — never a retry, sleep, or timeout increase.
 
