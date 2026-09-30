@@ -94,3 +94,10 @@ Store directory was rejected: the first leaks planning state into the user's pro
 Later the same day ([#220](https://github.com/secantdev/secant/issues/220)): per-Attempt Output receipts also live in a Store-named subdirectory of the working
 area, because the one grant must cover every file an agent is told to write. A receipt is Candidate output: only its validated bytes are published, through the
 ordinary Attempt publication, so the working area itself still holds no Run truth.
+
+## Amendment (2026-09-30): the shape of failure evidence and detailed diagnostics
+
+[ADR 0041](./0041-record-typed-failure-evidence-and-resting-causes-in-the-run-store.md) gives "minimal failure evidence" and "detailed diagnostics"
+their shape. Typed **Failure evidence** rides the Attempt or Turn and a **Resting cause** rides a `halted` or `failed` Run, both until Run
+deletion; the verbose cause, output tail, and Harness diagnostics are a **Detailed diagnostic** file under `diagnostics/`, pruned after 90 days.
+Canonical content stays exact; only Secant-introduced secrets are redacted from a Detailed diagnostic. No other decision here changes.

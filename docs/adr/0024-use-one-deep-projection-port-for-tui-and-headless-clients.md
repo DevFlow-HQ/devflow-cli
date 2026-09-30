@@ -43,3 +43,10 @@ newest 200 rows of one Session's conversation, with no cursor. Each stored chang
 clients never reduce stored rows; one new live update variant carries a single row's preview. Durable, live, and preview updates stay distinct as
 data. The `run` family's live overlay drops its Run-wide `preview` and `activity` strings, and the scalar `preview` update kind retires. No other
 decision here changes.
+
+## Amendment (2026-09-30): failure evidence reaches clients as derived wording
+
+[ADR 0041](./0041-record-typed-failure-evidence-and-resting-causes-in-the-run-store.md) has the Projection derive each stored failure code's plain
+explanation and next step when it reads it, as Problems carry `explanation` and `remediation`, and narrow unknown codes tolerantly. Attempts,
+Turns, and the Run gain optional failure fields in snapshots and `--json`; Detailed diagnostics stay outside bounded snapshots behind a diagnostic
+reference. Problems remain transient Operation outcomes. No other decision here changes.
