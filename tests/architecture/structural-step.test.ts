@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { makeTempDir } from "../helpers/tempDir.js";
+import type { DeclarationEmit } from "./check-vendor-provenance.js";
 import { headings, limits } from "./check-guidance-structure.js";
 import { CI_WORKFLOW } from "./check-release-workflow.js";
 import {
@@ -43,6 +44,8 @@ async function tree(files: Record<string, string>) {
       compilerOptions: { module: "ESNext", moduleResolution: "bundler" },
       include: ["src", "tests"],
     }),
+    "package.json": JSON.stringify({ dependencies: { solid: "1.0.0" } }),
+    "THIRD-PARTY-NOTICES.md": "## solid\n\n`solid` pinned at `1.0.0`.\n",
     "AGENTS.md": "# Agent Instructions\n",
     [CI_WORKFLOW]: JSON.stringify(validWorkflow()),
     ...guidance,
@@ -51,17 +54,28 @@ async function tree(files: Record<string, string>) {
   return root;
 }
 
-function run(root: string) {
+/** Declarations emitted for no Module entry: the emit never spawns `tsc` here. */
+const noDeclarations: DeclarationEmit = { ok: true, declarations: new Map() };
+
+function run(root: string, emit = noDeclarations) {
   let output = "";
-  const exitCode = runStructuralStep(root, (text) => {
-    output += text;
-  });
+  const exitCode = runStructuralStep(
+    root,
+    (text) => {
+      output += text;
+    },
+    () => emit,
+  );
   return { exitCode, output };
 }
 
 /** The report blocks one rule printed, joined; the step exits non-zero. */
-async function reportOf(rule: RuleId, files: Record<string, string>) {
-  const { exitCode, output } = run(await tree(files));
+async function reportOf(
+  rule: RuleId,
+  files: Record<string, string>,
+  emit = noDeclarations,
+) {
+  const { exitCode, output } = run(await tree(files), emit);
   assert.equal(exitCode, 1, output);
   return blocks(output)
     .filter((block) => block.split("\n")[0]!.includes(`  ${rule}  `))
@@ -70,7 +84,7 @@ async function reportOf(rule: RuleId, files: Record<string, string>) {
 
 // A fix names only a change to the violating code, never a lever on the gate.
 const forbiddenLever =
-  /polic|allow-?list|checker|catalogue|\.test\.|eslint-disable|@ts-|@internal|suppress/i;
+  /polic|allow-?list|grant|checker|catalogue|\.test\.|eslint-disable|@ts-|@internal|suppress/i;
 
 /** Splits the output into its three-line reports, asserting each keeps the
  *  contract, so every pinned fixture also proves its fix names no lever. */
@@ -96,7 +110,8 @@ function blocks(output: string) {
 
 test("a clean tree prints nothing and passes", async () => {
   const root = await tree({
-    "src/cli/main.ts": 'import { start } from "../composition/main.js";',
+    "src/cli/main.ts":
+      'import { start } from "../composition/main.js";\nif (Bun.main) start();',
     "src/composition/main.ts": "export function start() {}",
     "tests/cli/main.test.ts": 'import { start } from "../../src/cli/main.js";',
   });
@@ -121,7 +136,8 @@ test("the step exits non-zero and prints nothing outside the report contract", a
 test("guidance/unresolved-see-anchor", async () => {
   const root = await tree({
     "src/tui/tui.ts": "export {};",
-    "docs/agents/dependencies.md": "# Dependencies\n\n## Growth\n",
+    "docs/agents/dependencies.md":
+      "# Dependencies\n\n## Growth\n\n## Third-Party Provenance\n",
   });
   assert.deepEqual(run(root), {
     exitCode: 1,
@@ -773,6 +789,129 @@ test("module/require-or-eval", async () => {
       "src/tui/tui.ts:2:1  module/require-or-eval  calls eval, which bypasses the declared ESM graph\n" +
       "fix: remove eval and import the code it runs as an ESM module\n" +
       "see: docs/agents/topology.md#enforcement-and-tests",
+  );
+});
+
+test("vendor/bun-api", async () => {
+  assert.equal(
+    await reportOf("vendor/bun-api", {
+      "src/tui/tui.ts":
+        'export {};\nexport const b = globalThis.Bun;\nimport "bun:sqlite";',
+    }),
+    "src/tui/tui.ts:2:18  vendor/bun-api  touches the Bun global and bun:sqlite, but target source is runtime-neutral\n" +
+      "fix: replace the Bun global with a node: built-in or a runtime-neutral library; " +
+      "move the code that needs bun:sqlite into src/catalog/catalog.ts or src/run/store/store.ts; if none fits, stop and ask a human\n" +
+      "see: docs/agents/topology.md#interfaces-and-imports",
+  );
+});
+
+test("vendor/bun-api-scope", async () => {
+  assert.equal(
+    await reportOf("vendor/bun-api-scope", {
+      "src/run/store/store.ts":
+        'import { Database } from "bun:sqlite";\nexport const entry = Bun.main;\nexport const d = Database;',
+    }),
+    "src/run/store/store.ts:2:22  vendor/bun-api-scope  touches Bun.main, but this file may touch only bun:sqlite\n" +
+      "fix: move the code that needs Bun.main into src/cli/main.ts; if none fits, stop and ask a human\n" +
+      "see: docs/agents/topology.md#interfaces-and-imports",
+  );
+});
+
+test("vendor/dead-grant", async () => {
+  assert.equal(
+    await reportOf("vendor/dead-grant", { "src/cli/main.ts": "export {};" }),
+    "src/cli/main.ts:1:1  vendor/dead-grant  touches no Bun runtime API, but this file may still touch Bun.main\n" +
+      "fix: stop and ask a human whether this file still needs Bun.main\n" +
+      "see: docs/agents/topology.md#interfaces-and-imports",
+  );
+});
+
+test("vendor/shell-spawn", async () => {
+  assert.equal(
+    await reportOf("vendor/shell-spawn", {
+      "src/process/process.ts":
+        'declare function spawnSync(file: string, options: object): void;\nspawnSync("ls", { shell: true });',
+    }),
+    "src/process/process.ts:2:19  vendor/shell-spawn  spawns with shell: true, which runs the command through a shell\n" +
+      "fix: remove shell: true and spawn the resolved executable with its arguments directly\n" +
+      "see: docs/agents/topology.md#interfaces-and-imports",
+  );
+});
+
+test("vendor/provenance-record", async () => {
+  assert.equal(
+    await reportOf("vendor/provenance-record", {
+      "src/tui/vendor/exit.tsx":
+        "// Vendored from OpenCode at commit deadbeef.\nexport {};",
+    }),
+    "UPSTREAM:1:1  vendor/provenance-record  UPSTREAM is missing, but vendored source such as src/tui/vendor/exit.tsx needs it at the repository root\n" +
+      "fix: add UPSTREAM at the repository root, recording each copied path's OpenCode commit, local modifications, and date\n" +
+      "see: docs/agents/dependencies.md#third-party-provenance",
+  );
+});
+
+test("vendor/notices-section", async () => {
+  assert.equal(
+    await reportOf("vendor/notices-section", {
+      "src/tui/tui.ts": "export {};",
+      "package.json": JSON.stringify({
+        dependencies: { solid: "1.0.0", "left-pad": "1.3.0" },
+      }),
+    }),
+    "THIRD-PARTY-NOTICES.md:1:1  vendor/notices-section  no section names the runtime dependency left-pad\n" +
+      "fix: add a section naming `left-pad` and its exact pin `1.3.0`\n" +
+      "see: docs/agents/release-consumers.md#release-legal-closure",
+  );
+});
+
+test("vendor/notices-pin", async () => {
+  assert.equal(
+    await reportOf("vendor/notices-pin", {
+      "src/tui/tui.ts": "export {};",
+      "package.json": JSON.stringify({ dependencies: { solid: "1.2.0" } }),
+    }),
+    "THIRD-PARTY-NOTICES.md:1:1  vendor/notices-pin  the notices for solid do not name its exact pin 1.2.0\n" +
+      "fix: name the pin `1.2.0` from package.json in the section for `solid`\n" +
+      "see: docs/agents/release-consumers.md#release-legal-closure",
+  );
+});
+
+test("vendor/entry-declaration", async () => {
+  assert.equal(
+    await reportOf(
+      "vendor/entry-declaration",
+      { "src/application/application.ts": "export {};" },
+      {
+        ok: true,
+        declarations: new Map([
+          [
+            "src/application/application.ts",
+            'export declare function make(): import("@opentui/core").Renderable;\n',
+          ],
+        ]),
+      },
+    ),
+    "src/application/application.ts:1:1  vendor/entry-declaration  this Module entry's emitted declarations name the fenced package @opentui/core\n" +
+      "fix: give the export whose type is inferred from @opentui/core an explicit type this Module declares\n" +
+      "see: docs/agents/topology.md#interfaces-and-imports",
+  );
+});
+
+test("vendor/declaration-emit", async () => {
+  assert.equal(
+    await reportOf(
+      "vendor/declaration-emit",
+      { "src/tui/tui.ts": "export {};" },
+      {
+        ok: false,
+        output:
+          "src/tui/tui.ts(3,14): error TS4023: Exported variable 'view' has or is using name 'Renderable' from external module \"@opentui/core\" but cannot be named.\n",
+      },
+    ),
+    "src/tui/tui.ts:3:14  vendor/declaration-emit  declarations do not emit, so no Module entry's surface is checked: " +
+      "error TS4023: Exported variable 'view' has or is using name 'Renderable' from external module \"@opentui/core\" but cannot be named.\n" +
+      "fix: resolve this compiler error so every Module entry's declarations emit\n" +
+      "see: docs/agents/topology.md#interfaces-and-imports",
   );
 });
 

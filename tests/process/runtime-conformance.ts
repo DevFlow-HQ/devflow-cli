@@ -48,7 +48,6 @@ import { registerClaudeCodeAdapterConformance } from "../harness/claude-code-ada
 import { registerCodexAdapterConformance } from "../harness/codex-adapter-conformance.js";
 import { writeCommandBundle } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
-import { checkEntryDeclarations } from "../architecture/check-vendor-provenance.js";
 import { installReplayer } from "../harness/replayer.js";
 import { runMain, withTimeout } from "../helpers/standalone.js";
 
@@ -253,7 +252,6 @@ cases.push(
     body: mattFrontReplayerWorkbench,
   },
   { name: "migration-generator-drift", body: migrationGeneratorDrift },
-  { name: "entry-declaration-surface", body: entryDeclarationSurface },
 );
 
 // The shared Harness conformance suite over the REAL replayers. Under the test
@@ -1721,14 +1719,6 @@ function migrationGeneratorDrift(): void {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Schema has changes not captured in migrations!/);
   assert.match(result.stderr, /Run: bun run migrations:generate/);
-}
-
-// Real declaration emission keeps fenced packages out of Module entry surfaces (was
-// tests/architecture/vendor-provenance.test.ts; #185). `checkEntryDeclarations`
-// spawns `tsc` to emit every Module's public .d.ts, so it runs here, not in the
-// process-free semantic suite.
-function entryDeclarationSurface(): void {
-  assert.deepEqual(checkEntryDeclarations(repoRoot), []);
 }
 
 async function main(): Promise<void> {

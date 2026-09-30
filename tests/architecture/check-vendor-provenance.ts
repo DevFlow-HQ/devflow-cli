@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import { modules } from "./module-policy.js";
+import type { Finding } from "./rule-catalogue.js";
 
 // A structural check that guards the vendored-copy policy (ADR 0018, as extended
 // by ADR 0030). It is the single runtime-neutrality mechanism: the import-specifier
@@ -29,14 +30,11 @@ import { modules } from "./module-policy.js";
 // caught as a dead grant. Once any vendored file exists the repository must carry
 // both provenance records — `UPSTREAM` and `THIRD-PARTY-NOTICES.md`. A file is
 // "vendored" when it carries the copy marker below. Pure over a directory tree, so
-// it is exercised with synthetic graphs as well as the real repository.
-
-export interface ProvenanceIssue {
-  file: string;
-  message: string;
-}
+// it is exercised with synthetic graphs as well as the real repository. Every
+// finding is a catalogued `vendor/…` rule; the structural step prints them.
 
 const VENDOR_MARKER = "Vendored from OpenCode";
+const NOTICES = "THIRD-PARTY-NOTICES.md";
 const SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 
 // The runtime-neutrality allowlist (ADR 0030): the few target-source sites that
@@ -81,14 +79,17 @@ function bunMemberToken(reference: ts.Node): string {
 }
 
 /** Every Bun runtime API and `bun:` specifier a source file touches, by parsing
- *  its syntax tree. Catches `Bun.x`, `Bun?.x`, `<expr>.Bun`, `<expr>["Bun"]`, a
- *  bare `Bun` alias, and `bun:` import/require specifiers — not comments or type
- *  positions. */
-function bunApiTokens(source: ts.SourceFile): Set<string> {
-  const tokens = new Set<string>();
+ *  its syntax tree, each mapped to its first touching node in source order.
+ *  Catches `Bun.x`, `Bun?.x`, `<expr>.Bun`, `<expr>["Bun"]`, a bare `Bun` alias,
+ *  and `bun:` import/require specifiers — not comments or type positions. */
+function bunApiTokens(source: ts.SourceFile): Map<string, ts.Node> {
+  const touches = new Map<string, ts.Node>();
+  const touch = (token: string, node: ts.Node) => {
+    if (!touches.has(token)) touches.set(token, node);
+  };
   const specifier = (node: ts.Expression | undefined): void => {
     if (node && ts.isStringLiteralLike(node) && node.text.startsWith("bun:")) {
-      tokens.add(node.text);
+      touch(node.text, node);
     }
   };
   const visit = (node: ts.Node): void => {
@@ -112,33 +113,34 @@ function bunApiTokens(source: ts.SourceFile): Set<string> {
       specifier(node.arguments[0]);
     } else if (ts.isPropertyAccessExpression(node)) {
       if (ts.isIdentifier(node.expression) && node.expression.text === "Bun") {
-        tokens.add(`Bun.${node.name.text}`);
+        touch(`Bun.${node.name.text}`, node);
       } else if (node.name.text === "Bun") {
-        tokens.add(bunMemberToken(node));
+        touch(bunMemberToken(node), node);
       }
     } else if (ts.isElementAccessExpression(node)) {
       if (ts.isIdentifier(node.expression) && node.expression.text === "Bun") {
         const argument = node.argumentExpression;
-        tokens.add(
+        touch(
           ts.isStringLiteralLike(argument) ? `Bun.${argument.text}` : "Bun",
+          node,
         );
       } else if (
         ts.isStringLiteralLike(node.argumentExpression) &&
         node.argumentExpression.text === "Bun"
       ) {
-        tokens.add(bunMemberToken(node));
+        touch(bunMemberToken(node), node);
       }
     } else if (
       ts.isIdentifier(node) &&
       node.text === "Bun" &&
       !isBunPropertyName(node)
     ) {
-      tokens.add(bunMemberToken(node));
+      touch(bunMemberToken(node), node);
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return tokens;
+  return touches;
 }
 
 /** Whether a `Bun` identifier is a *name* rather than a value reference — the
@@ -156,18 +158,19 @@ function isBunPropertyName(node: ts.Identifier): boolean {
   );
 }
 
-/** Whether a file spawns with `shell: true` — a shell-out that ADR 0030 / #21
- *  forbid in target source (every spawn resolves the executable directly). */
-function hasShellTrue(source: ts.SourceFile): boolean {
-  let found = false;
+/** The first `shell: true` spawn option in a file — a shell-out that ADR 0030 /
+ *  #21 forbid in target source (every spawn resolves the executable directly). */
+function shellTrue(source: ts.SourceFile): ts.Node | undefined {
+  let found: ts.Node | undefined;
   const visit = (node: ts.Node): void => {
     if (
+      !found &&
       ts.isPropertyAssignment(node) &&
       ((ts.isIdentifier(node.name) && node.name.text === "shell") ||
         (ts.isStringLiteralLike(node.name) && node.name.text === "shell")) &&
       node.initializer.kind === ts.SyntaxKind.TrueKeyword
     ) {
-      found = true;
+      found = node;
     }
     ts.forEachChild(node, visit);
   };
@@ -175,12 +178,19 @@ function hasShellTrue(source: ts.SourceFile): boolean {
   return found;
 }
 
-export function checkVendorProvenance(root: string): ProvenanceIssue[] {
-  const issues: ProvenanceIssue[] = [];
+/** Where each Bun API may be touched: the files keyed to it. */
+function homesOf(api: string): string[] {
+  return [...BUN_API_ALLOWLIST]
+    .filter(([, permitted]) => permitted.has(api))
+    .map(([file]) => file);
+}
+
+export function checkVendorProvenance(root: string): Finding[] {
+  const issues: Finding[] = [];
   const sourceRoot = join(root, "src");
   const pathOf = (path: string) => relative(root, path).split(sep).join("/");
 
-  let vendoredFileFound = false;
+  let vendored: string | undefined;
   const files: string[] = [];
   function discover(directory: string) {
     if (!existsSync(directory)) return;
@@ -202,58 +212,73 @@ export function checkVendorProvenance(root: string): ProvenanceIssue[] {
       ts.ScriptTarget.Latest,
       true,
     );
-    const tokens = bunApiTokens(source);
-    if (tokens.size > 0) {
+    const at = (node: ts.Node) => {
+      const { line, character } = source.getLineAndCharacterOfPosition(
+        node.getStart(source),
+      );
+      return { file: relPath, line: line + 1, column: character + 1 };
+    };
+    const touches = bunApiTokens(source);
+    if (touches.size > 0) {
       const permitted = BUN_API_ALLOWLIST.get(relPath);
       if (permitted === undefined) {
+        // One finding per file, placed at its first touch.
         issues.push({
-          file: relPath,
-          message:
-            "Target source outside the Bun-API allowlist must not call Bun runtime APIs or import bun: modules",
+          rule: "vendor/bun-api",
+          ...at(touches.values().next().value!),
+          data: {
+            apis: [...touches.keys()].map((api) => ({
+              api,
+              homes: homesOf(api),
+            })),
+          },
         });
       } else {
         allowlistHits.add(relPath);
-        for (const token of tokens) {
-          if (!permitted.has(token)) {
+        for (const [api, node] of touches) {
+          if (!permitted.has(api)) {
             issues.push({
-              file: relPath,
-              message: `Allowlisted file may touch only ${[...permitted].join(", ")}, not ${token} (ADR 0030 keys each Bun-API site to one API)`,
+              rule: "vendor/bun-api-scope",
+              ...at(node),
+              data: { api, homes: homesOf(api), permitted: [...permitted] },
             });
           }
         }
       }
     }
-    if (hasShellTrue(source)) {
-      issues.push({
-        file: relPath,
-        message:
-          "Target source must not spawn with `shell: true`; resolve the executable and spawn it directly (ADR 0030, #21)",
-      });
-    }
-    if (text.includes(VENDOR_MARKER)) vendoredFileFound = true;
+    const shell = shellTrue(source);
+    if (shell)
+      issues.push({ rule: "vendor/shell-spawn", ...at(shell), data: {} });
+    if (vendored === undefined && text.includes(VENDOR_MARKER))
+      vendored = relPath;
   }
 
   // A dead grant: an allowlist entry whose file no longer touches any Bun API. The
   // grant would silently keep a future `Bun.*` addition unchecked, so it must be
   // retired when its last real use goes (D8).
-  for (const allowlisted of BUN_API_ALLOWLIST.keys()) {
+  for (const [allowlisted, permitted] of BUN_API_ALLOWLIST) {
     const path = join(root, allowlisted);
     if (existsSync(path) && !allowlistHits.has(allowlisted)) {
       issues.push({
+        rule: "vendor/dead-grant",
         file: allowlisted,
-        message:
-          "Bun-API allowlist entry has no live Bun access; retire the dead grant (ADR 0030)",
+        line: 1,
+        column: 1,
+        data: { permitted: [...permitted] },
       });
     }
   }
 
-  if (vendoredFileFound) {
-    for (const record of ["UPSTREAM", "THIRD-PARTY-NOTICES.md"]) {
+  if (vendored !== undefined) {
+    for (const record of ["UPSTREAM", NOTICES] as const) {
       const recordPath = join(root, record);
       if (!existsSync(recordPath) || !statSync(recordPath).isFile()) {
         issues.push({
+          rule: "vendor/provenance-record",
           file: record,
-          message: `Vendored source requires a ${record} provenance record at the repository root`,
+          line: 1,
+          column: 1,
+          data: { record, vendored },
         });
       }
     }
@@ -270,23 +295,26 @@ export function checkVendorProvenance(root: string): ProvenanceIssue[] {
 // natives (the per-platform `@opentui/core-*` packages, `bun-ffi-structs`) are
 // deferred to the M4 licence gate, which walks the shipped artifact's closure.
 // devDependencies are not shipped and are out of scope.
-export function checkNoticesCoverage(root: string): ProvenanceIssue[] {
-  const issues: ProvenanceIssue[] = [];
+export function checkNoticesCoverage(root: string): Finding[] {
+  const issues: Finding[] = [];
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  const notices = readFileSync(join(root, "THIRD-PARTY-NOTICES.md"), "utf8");
+  const notices = readFileSync(join(root, NOTICES), "utf8");
   const dependencies: Record<string, string> = pkg.dependencies ?? {};
+  const fileLevel = { file: NOTICES, line: 1, column: 1 };
   for (const [name, version] of Object.entries(dependencies)) {
     if (!notices.includes(`\`${name}\``)) {
       issues.push({
-        file: "THIRD-PARTY-NOTICES.md",
-        message: `Runtime dependency ${name} has no notices section naming it`,
+        rule: "vendor/notices-section",
+        ...fileLevel,
+        data: { name, version },
       });
       continue;
     }
     if (!notices.includes(`\`${version}\``)) {
       issues.push({
-        file: "THIRD-PARTY-NOTICES.md",
-        message: `Notices for ${name} do not name its exact pin \`${version}\``,
+        rule: "vendor/notices-pin",
+        ...fileLevel,
+        data: { name, version },
       });
     }
   }
@@ -318,14 +346,14 @@ const ENTRY_DECLARATION_ALLOWLIST = new Map<string, ReadonlySet<string>>([
 ]);
 
 /** The fenced-package references in one entry's declaration text, minus that
- *  entry's allowlisted specifiers. Pure, so a synthetic `.d.ts` exercises it. */
+ *  entry's allowlisted specifiers, each reported against the entry source. Pure,
+ *  so a synthetic `.d.ts` exercises it. */
 export function scanEntryDeclaration(
   entry: string,
   dtsText: string,
-): ProvenanceIssue[] {
-  const dtsRel = entry.replace(/\.tsx?$/, ".d.ts");
+): Finding[] {
   const permitted = ENTRY_DECLARATION_ALLOWLIST.get(entry) ?? new Set<string>();
-  const issues: ProvenanceIssue[] = [];
+  const issues: Finding[] = [];
   const seen = new Set<string>();
   for (const banned of BANNED_ENTRY_SPECIFIERS) {
     const pattern = new RegExp(
@@ -337,20 +365,31 @@ export function scanEntryDeclaration(
       if (permitted.has(specifier) || seen.has(specifier)) continue;
       seen.add(specifier);
       issues.push({
-        file: dtsRel,
-        message: `Module entry declaration names the fenced package \`${specifier}\`; a type crossed the entry without an import (S2)`,
+        rule: "vendor/entry-declaration",
+        file: entry,
+        line: 1,
+        column: 1,
+        data: { specifier },
       });
     }
   }
   return issues;
 }
 
-// Emit each Module entry's `.d.ts` with `tsc --emitDeclarationOnly` and scan the
-// declaration surface for a fenced package (S2). This is the one thing the
-// import-graph check cannot see: a type inferred across an entry leaves no import
-// specifier, only a reference in the emitted declaration. Runs the emit once for
-// the whole project (~3 s) and reads each entry's declaration from the temp dir.
-export function checkEntryDeclarations(root: string): ProvenanceIssue[] {
+/** What emitting the project's declarations produced: each Module entry's `.d.ts`
+ *  text keyed by its entry source path, or the compiler's output when it failed. */
+export type DeclarationEmit =
+  | { ok: true; declarations: ReadonlyMap<string, string> }
+  | { ok: false; output: string };
+
+// Emit each Module entry's `.d.ts` with `tsc --emitDeclarationOnly` (S2). This is
+// the one thing the import-graph check cannot see: a type inferred across an entry
+// leaves no import specifier, only a reference in the emitted declaration. Runs the
+// emit once for the whole project (~7 s) and reads each entry's declaration from the
+// temp dir. It spawns `tsc`, so only the structural step calls it; tests inject a
+// `DeclarationEmit` instead. Deliberately untested under the runner: the step runs
+// it over the real repository on every gate, so a broken emit fails the gate.
+export function emitEntryDeclarations(root: string): DeclarationEmit {
   const outDir = mkdtempSync(join(tmpdir(), "secant-entry-dts-"));
   try {
     const emit = spawnSync(
@@ -363,30 +402,54 @@ export function checkEntryDeclarations(root: string): ProvenanceIssue[] {
         "--emitDeclarationOnly",
         "--noEmit",
         "false",
+        "--pretty",
+        "false",
         "--outDir",
         outDir,
       ],
       { cwd: root, encoding: "utf8" },
     );
-    if (emit.status !== 0) {
-      return [
-        {
-          file: "tsconfig.json",
-          message: `Declaration emit failed: ${(emit.stderr || emit.stdout || "").trim()}`,
-        },
-      ];
-    }
-    const issues: ProvenanceIssue[] = [];
+    if (emit.status !== 0)
+      return { ok: false, output: `${emit.stdout ?? ""}${emit.stderr ?? ""}` };
+    const declarations = new Map<string, string>();
     for (const module of modules) {
       const entry = `${module.root}${module.entry}`;
       const dtsPath = join(outDir, entry.replace(/\.tsx?$/, ".d.ts"));
-      if (!existsSync(dtsPath)) continue;
-      issues.push(
-        ...scanEntryDeclaration(entry, readFileSync(dtsPath, "utf8")),
-      );
+      if (existsSync(dtsPath))
+        declarations.set(entry, readFileSync(dtsPath, "utf8"));
     }
-    return issues;
+    return { ok: true, declarations };
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }
+}
+
+/** Scans every emitted entry declaration for a fenced package (S2), or reports the
+ *  compiler's first error, at its own location when it names one. */
+export function checkEntryDeclarations(emit: DeclarationEmit): Finding[] {
+  if (emit.ok)
+    return [...emit.declarations].flatMap(([entry, dts]) =>
+      scanEntryDeclaration(entry, dts),
+    );
+  const lines = emit.output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const located = lines
+    .map((line) => /^(.+?)\((\d+),(\d+)\): (error .*)$/.exec(line))
+    .find(Boolean);
+  const [where, error] = located
+    ? [
+        {
+          file: located[1]!.split(sep).join("/"),
+          line: Number(located[2]),
+          column: Number(located[3]),
+        },
+        located[4]!,
+      ]
+    : [
+        { file: "tsconfig.json", line: 1, column: 1 },
+        lines[0] ?? "tsc exited without output",
+      ];
+  return [{ rule: "vendor/declaration-emit", ...where, data: { error } }];
 }

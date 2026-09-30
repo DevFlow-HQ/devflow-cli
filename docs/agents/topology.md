@@ -59,13 +59,18 @@ An `index.ts` is valid for one cohesive Module after declaring it in that table.
 - SQLite belongs to Catalog and Run Store; OpenTUI belongs to presentation/renderer; Harness-native dependencies belong to Harness. Target code
   excludes OpenCode domain imports and PTY transport; Bun APIs (`Bun.*` calls and `bun:` imports) are confined to a named per-API allowlist of four
   target files — the CLI entry (`Bun.main`), the Catalog and Run Store SQLite adapters (`bun:sqlite`), and the Windows console guard (`bun:ffi`), each
-  keyed to the one specifier it needs (D6). Renderer drawing may use OpenTUI directly; the Renderer Port covers lifecycle only.
+  keyed to the one specifier it needs (D6). No target source spawns with `shell: true`; every spawn resolves its executable and runs it directly
+  ([ADR 0030](../adr/0030-ship-the-shell-as-a-bun-compiled-single-file-executable.md#runtime-neutrality)). Renderer drawing may use OpenTUI directly;
+  the Renderer Port covers lifecycle only.
+- A Module entry's emitted declarations never name a fenced package (OpenTUI, the MCP SDK, OpenCode, PTY transport, or a Harness-native SDK), so no
+  inferred type carries one across the entry without an import. The renderer entry alone exposes `@opentui/core`, which it wraps by design.
 
 ## Enforcement And Tests
 
-The structural step (`bun run structure:check`) runs the boundary, test-mirror, and [guidance-structure](./guidance.md#limits) checks in the
-canonical gate. [The boundary suite](../../tests/architecture/module-boundaries.test.ts) tests the first two over synthetic source graphs, and
-[the guidance suite](../../tests/architecture/guidance-structure.test.ts) tests the third over synthetic guidance trees. The check resolves the
+The structural step (`bun run structure:check`) runs the boundary, test-mirror, [guidance-structure](./guidance.md#limits), and vendor-provenance
+checks in the canonical gate. [The boundary suite](../../tests/architecture/module-boundaries.test.ts) tests the first two over synthetic source graphs,
+[the guidance suite](../../tests/architecture/guidance-structure.test.ts) the third over synthetic guidance trees, and
+[the provenance suite](../../tests/architecture/vendor-provenance.test.ts) the fourth over synthetic source trees. The boundary check resolves the
 actual source behind imports using the project's compiler options, including `.js` specifiers targeting TypeScript and configured aliases.
 It checks imports of values and types, re-exports, import-type expressions, literal dynamic imports, public entrypoints, and prohibited directions.
 Computed imports, custom loaders, source symlinks, and unchecked reference directives need a deliberate rule change rather than a silent bypass.

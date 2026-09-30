@@ -20,3 +20,9 @@ Read this before changing dependencies, composition, or allowed import direction
 
 Before creating target source, moving a public entrypoint, or crossing a target Module, read [target topology](./topology.md) for ownership and the
 checked import map. Enforce settled, expensive-to-violate directions with the narrowest honest mechanism rather than a general architecture linter.
+
+## Third-Party Provenance
+
+Code copied from OpenCode follows [ADR 0018](../adr/0018-adopt-opencode-presentation-as-pinned-reduced-vendor.md): each copied file carries a
+`Vendored from OpenCode` comment, and the repository root then carries `UPSTREAM` (each copied path's OpenCode commit, local modifications, and
+date) and `THIRD-PARTY-NOTICES.md` (the licence notices shipped with the artifact).

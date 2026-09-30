@@ -53,7 +53,7 @@ const SUBPROCESS_SOURCE_PATTERNS = [
   /(?<!\.)\bcreateApplication\(/,
   /\bwireApplication\(/,
   /\bexecuteRouting\(/,
-  /\bcheckEntryDeclarations\(/,
+  /\bemitEntryDeclarations\(/,
 ];
 const EVIDENCE_LAYERS = new Set([
   "process-free semantic suite",
@@ -132,7 +132,7 @@ test("[evidence-ledger] discovery finds direct and indirect children without mat
     "openHeadlessHarness(t);",
     "wireApplication(options);",
     "executeRouting(routing, options);",
-    "checkEntryDeclarations(root);",
+    "emitEntryDeclarations(root);",
   ];
   for (const source of spawningSources) {
     assert.equal(

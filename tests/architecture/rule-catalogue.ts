@@ -17,7 +17,7 @@ interface Rule<Data> {
   fix(data: Data): string;
 }
 
-type Family = "module" | "topology" | "guidance" | "release";
+type Family = "module" | "topology" | "guidance" | "release" | "vendor";
 
 type NoData = Record<never, never>;
 
@@ -37,6 +37,16 @@ const RELEASE_PROTECTION =
 const RELEASE_PROMOTION =
   "docs/agents/release-workflow.md#release-promotion-state-machine";
 const DECLARE_JOBS = "declare the gate's jobs as a mapping under jobs:";
+const THIRD_PARTY_PROVENANCE =
+  "docs/agents/dependencies.md#third-party-provenance";
+const RELEASE_LEGAL_CLOSURE =
+  "docs/agents/release-consumers.md#release-legal-closure";
+
+/** A Bun runtime API a file touches, and the files where that API may be touched. */
+interface BunApi {
+  api: string;
+  homes: readonly string[];
+}
 
 interface Crossing {
   importer: ModuleName;
@@ -670,6 +680,75 @@ export const rules = {
       `job ${job} runs ${script}, which may run only in the protected ${promote} job`,
     fix: ({ job, script }) => `remove ${script} from job ${job}`,
   }),
+  "vendor/bun-api": rule<{ apis: readonly BunApi[] }>({
+    see: TOPOLOGY_IMPORTS,
+    problem: ({ apis }) =>
+      `touches ${list(
+        apis.map(({ api }) => bunApiName(api)),
+        "and",
+      )}, but target source is runtime-neutral`,
+    fix: ({ apis }) =>
+      `${apis.map(bunApiRoute).join("; ")}; if none fits, stop and ask a human`,
+  }),
+  "vendor/bun-api-scope": rule<BunApi & { permitted: readonly string[] }>({
+    see: TOPOLOGY_IMPORTS,
+    problem: ({ api, permitted }) =>
+      `touches ${bunApiName(api)}, but this file may touch only ${list(permitted, "and")}`,
+    fix: (data) => `${bunApiRoute(data)}; if none fits, stop and ask a human`,
+  }),
+  "vendor/dead-grant": rule<{ permitted: readonly string[] }>({
+    see: TOPOLOGY_IMPORTS,
+    problem: ({ permitted }) =>
+      `touches no Bun runtime API, but this file may still touch ${list(permitted, "and")}`,
+    fix: ({ permitted }) =>
+      `stop and ask a human whether this file still needs ${list(permitted, "or")}`,
+  }),
+  "vendor/shell-spawn": rule<NoData>({
+    see: TOPOLOGY_IMPORTS,
+    problem: () =>
+      "spawns with shell: true, which runs the command through a shell",
+    fix: () =>
+      "remove shell: true and spawn the resolved executable with its arguments directly",
+  }),
+  "vendor/provenance-record": rule<{
+    record: "UPSTREAM" | "THIRD-PARTY-NOTICES.md";
+    vendored: string;
+  }>({
+    see: THIRD_PARTY_PROVENANCE,
+    problem: ({ record, vendored }) =>
+      `${record} is missing, but vendored source such as ${vendored} needs it at the repository root`,
+    fix: ({ record }) =>
+      record === "UPSTREAM"
+        ? "add UPSTREAM at the repository root, recording each copied path's OpenCode commit, local modifications, and date"
+        : "add THIRD-PARTY-NOTICES.md at the repository root, carrying the licence notices for the copied code",
+  }),
+  "vendor/notices-section": rule<{ name: string; version: string }>({
+    see: RELEASE_LEGAL_CLOSURE,
+    problem: ({ name }) => `no section names the runtime dependency ${name}`,
+    fix: ({ name, version }) =>
+      `add a section naming \`${name}\` and its exact pin \`${version}\``,
+  }),
+  "vendor/notices-pin": rule<{ name: string; version: string }>({
+    see: RELEASE_LEGAL_CLOSURE,
+    problem: ({ name, version }) =>
+      `the notices for ${name} do not name its exact pin ${version}`,
+    fix: ({ name, version }) =>
+      `name the pin \`${version}\` from package.json in the section for \`${name}\``,
+  }),
+  "vendor/entry-declaration": rule<{ specifier: string }>({
+    see: TOPOLOGY_IMPORTS,
+    problem: ({ specifier }) =>
+      `this Module entry's emitted declarations name the fenced package ${specifier}`,
+    fix: ({ specifier }) =>
+      `give the export whose type is inferred from ${specifier} an explicit type this Module declares`,
+  }),
+  "vendor/declaration-emit": rule<{ error: string }>({
+    see: TOPOLOGY_IMPORTS,
+    problem: ({ error }) =>
+      `declarations do not emit, so no Module entry's surface is checked: ${error}`,
+    fix: () =>
+      "resolve this compiler error so every Module entry's declarations emit",
+  }),
 } satisfies { [id: `${Family}/${string}`]: Rule<never> };
 
 export type RuleId = keyof typeof rules;
@@ -792,6 +871,19 @@ function reaches(from: ModuleName, to: ModuleName, seen = new Set()): boolean {
   if (seen.has(from)) return false;
   seen.add(from);
   return importsOf(from).some((next) => reaches(next, to, seen));
+}
+
+/** `Bun` alone is a bare alias or computed member: the global, unnamed. */
+function bunApiName(api: string): string {
+  return api === "Bun" ? "the Bun global" : api;
+}
+
+/** Where code touching `api` goes: into a file that may touch it, or onto a
+ *  runtime-neutral replacement when no file may. */
+function bunApiRoute({ api, homes }: BunApi): string {
+  return homes.length > 0
+    ? `move the code that needs ${api} into ${list(homes, "or")}`
+    : `replace ${bunApiName(api)} with a node: built-in or a runtime-neutral library`;
 }
 
 function list(items: readonly string[], conjunction: "and" | "or"): string {
