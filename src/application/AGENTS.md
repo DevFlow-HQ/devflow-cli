@@ -54,6 +54,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The Agent executor's Turn writes (`admitTurn`/`appendTurnEvent`/`settleTurn`) go through the raw owner (not intercepted by `observedOwner`), so they push no **durable**
   snapshot; the Turn's durable timeline, Session availability, and effective model surface on the next intercepted write (the Attempt's `publishAttempt`). The live lane is
   separate — Turn activity reaches an open client through the live overlay (#117, [run-control](../../docs/agents/run-control.md)), not through this durable write.
+  Decided, not yet built: ADR 0039 publishes each stored Turn row to the per-Session history family during the Turn, keeping the three admitted writes.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and
   independently exposes the latest Agent-step Attempt's normalized name/executable/version as `run.harness` plus its sibling `effectiveModel` (#125, #147).
   Resume may replace only the observed fields; Command-only Runs omit both selection and observations.

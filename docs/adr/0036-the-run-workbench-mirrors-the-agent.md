@@ -36,7 +36,8 @@ appears once the Run leaves an active state.
 **Truncation.** Only shell output collapses, at 10 lines, ending with how many lines are hidden. Reasoning bodies and the Entry Turn prompt collapse
 to their line. `ctrl+o` or a click expands everything collapsed. Assistant text, questions, the human's messages, and diffs are never cut; they wrap.
 The shell bound applies to live output and completed output alike, fits the available width, and expands only on human action. Native output updates
-replace the same call's preview; streaming never automatically opens a panel (ADR 0038).
+replace the same call's preview; streaming never automatically opens a panel (ADR 0038). A Turn's cumulative diff collapses to its changed files
+with lines added and removed and expands to the full diff; per-call patches are not cut (ADR 0039).
 
 **Colour.** Colour comes only from the vendored theme roles, and everforest is the default theme. The agent colour marks the human's messages, the
 prompt bar, the Turn line, and the working indicator. Muted text marks settled work, `warning` marks reasoning rows and Harness Requests, `error`
@@ -64,7 +65,8 @@ arrives after its Turn ended gets a notice, and its text stays in the draft.
 
 The details panel takes focus from the prompt, so resume, cancel, and delete keep their letter keys and confirmations there. The mouse is on: the
 wheel scrolls and a click expands. Every mouse action also has a key. The separate transcript overlay is retired: the conversation is on screen, and
-captured command output and Run Artifacts are inspected from the details panel.
+captured command output and Run Artifacts are inspected from the details panel. The screen holds a Session's newest 200 rows; earlier rows are
+marked as not shown, and the whole conversation opens on demand from the details panel's Session transcript (ADR 0039).
 
 **ADR 0024 amended.** Durable, live, and preview updates stay distinct as data at the Projection Port, so a client always knows which kind of update
 it holds. They are no longer required to look different on screen. Streaming text grows in place and settles without restyling. Only the working
@@ -74,7 +76,8 @@ indicator and the row spinners show that something is live.
 thinking or Codex's reasoning summary. It may cross the Harness Seam, and the transcript shows it collapsed. The raw chain of thought, such as Codex's
 raw reasoning text, stays private under ADR 0022.
 
-**What this needs beneath the screen.** The Harness Seam and the Run Projection do not yet carry everything above. These gaps are decided separately:
+**What this needs beneath the screen.** The Harness Seam and the Run Projection do not yet carry everything above. These gaps are decided separately,
+in ADR 0038 for the Harness Seam and ADR 0039 for Turn history, its Projection facts, and headless `--json`:
 
 - tool-call identity that pairs start and end, and running, failed, and declined states with error text;
 - typed tool rows (a kind, the main input, and a result count), command output and exit code as fields, and file diffs as data;

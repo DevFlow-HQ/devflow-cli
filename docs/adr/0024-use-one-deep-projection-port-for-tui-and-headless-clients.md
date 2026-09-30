@@ -35,3 +35,11 @@ vocabulary; no other decision here changes.
 [ADR 0036](./0036-the-run-workbench-mirrors-the-agent.md) narrows "durable state, ephemeral live Harness state, and replaceable previews remain
 visibly distinct". The three stay distinct as data at the Projection Port, so a client always knows which kind of update it holds. A screen need not
 style them differently: the Run Workbench grows streaming text in place and marks live work only with its working indicator and row spinners.
+
+## Amendment (2026-09-30): the per-Session history family and the retired `preview` update
+
+[ADR 0039](./0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) adds a bounded, per-Session history family: the
+newest 200 rows of one Session's conversation, with no cursor. Each stored change arrives as that whole page through the `durable` update, so
+clients never reduce stored rows; one new live update variant carries a single row's preview. Durable, live, and preview updates stay distinct as
+data. The `run` family's live overlay drops its Run-wide `preview` and `activity` strings, and the scalar `preview` update kind retires. No other
+decision here changes.
