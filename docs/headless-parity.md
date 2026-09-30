@@ -14,3 +14,6 @@ decision says otherwise; closing one needs its own decision.
 | A waiting Steer before it is delivered                                                    | none; a delivered or undelivered Steer appears in `run read --transcript`                        | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
 | Tool, Thought, Turn-diff, and Agent-call rows                                             | none; the transcript carries human input, Steers, and assistant messages                         | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
 | Reported context and usage                                                                | none; live-only, never stored                                                                    | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
+
+Typed **Slash commands** and the Ctrl+P palette are TUI presentation, not a gap: each App command maps to an Operation headless has or to a gap
+above ([ADR 0040](./adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md)).

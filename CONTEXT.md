@@ -47,6 +47,10 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   than part of this term; Harness capabilities need not be identical.
 - **Harness Adapter** — an Adapter at the Harness Seam that contains Harness-native control, event, and failure semantics behind a
   Secant-owned Interface.
+- **Harness input rule** — a rule a **Harness** declares that any text Secant sends it (a human **Turn**, a **Steer**, or a **Workflow Bundle**
+  prompt) must satisfy, whatever the transport. It is closed data with a kind; the one kind today, reserved leading words, names the first words
+  that would change a conversation, Model choice, or permission Secant owns. Secant owns the matching and the refusal. See
+  [ADR 0040](./docs/adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md).
 - **Projection Port** — the single Secant-owned application Interface shared by TUI and headless callers. It opens bounded **Projections**,
   admits user intent as **Operations**, and reads content through **Resource References** without exposing workflow-runtime, persistence, Adapter,
   or Harness-native objects. It is an in-memory Interface rather than a wire protocol; see
@@ -65,6 +69,11 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **Renderer Port** — the Secant-owned Interface around the terminal renderer, covering lifecycle only: size, key input, resize, and teardown.
   It exists so the whole shell lifecycle is exercisable against a fake with no terminal, and it carries the teardown ordering the legacy Windows
   console host requires. See [ADR 0018](./docs/adr/0018-adopt-opencode-presentation-as-pinned-reduced-vendor.md).
+- **App command** — one entry in Secant's single command catalog: a named human action that owns its availability and its effect, presented
+  on Home, in the Ctrl+P palette, and, when it has a slash name, as a **Slash command**. It presents an **Action Offer** and submits its
+  **Operation**; it adds no authority of its own. _Avoid_: Command alone, which is ambiguous with **Command step**.
+- **Slash command** — the typed `/name` form of an **App command** in the Run Workbench compose. A draft whose first word is a Slash command's
+  name is always that App command and is never sent to the **Harness**. _Avoid_: Harness command, for the Harness's own slash vocabulary.
 - **Preferences** — saved presentation choices shared across **Workspaces** within one Secant home: the theme and its dark or light appearance.
   They determine a TUI's initial appearance; its active appearance can differ during a preview or after an unsuccessful save.
 

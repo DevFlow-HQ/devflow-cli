@@ -30,8 +30,8 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   The Step is "active" whenever the Run is blocked at an `interactive-agent` Step (independent of a live Turn), so focus stays on the input across the whole
   Step and returns to the timeline when it ends.
 - Typed-but-unsent interactive text (the `draft` signal) clears only on a **fresh** interactive Step (the focus effect keyed on the Step id), so it survives a
-  Turn settle and a tab away within the same Step; a send clears it optimistically before dispatch, so a refused send loses the text (the refusal re-surfaces,
-  the draft does not).
+  Turn settle and a tab away within the same Step; a refused send keeps it (the refusal surfaces beside it, A9), and only an applied send
+  clears it.
 
 ## Modal stack and composes
 
