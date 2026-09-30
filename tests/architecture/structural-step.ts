@@ -7,6 +7,7 @@ import {
   checkModuleBoundaries,
   checkTestDomainMirror,
 } from "./check-module-boundaries.js";
+import { checkReleaseWorkflow } from "./check-release-workflow.js";
 import { formatFinding, unresolvedAnchors } from "./rule-catalogue.js";
 
 /** Reports every structural violation under `root` and returns the exit code. */
@@ -18,6 +19,7 @@ export function runStructuralStep(
     ...unresolvedAnchors(root),
     ...checkModuleBoundaries(root),
     ...checkTestDomainMirror(root),
+    ...checkReleaseWorkflow(root),
   ];
   for (const finding of findings) write(formatFinding(finding) + "\n");
   return findings.length === 0 ? 0 : 1;

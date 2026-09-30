@@ -10,10 +10,10 @@ plain gate; a manual dispatch adds the authenticated npm dry-run; a `v*` tag add
 `continue-on-error`, and an always-run aggregation step fails the job if any outcome is not successful. Three deterministic checks prove the shape over
 the parsed YAML (`Bun.YAML`, no dependency) in
 [tests/architecture/check-release-workflow.ts](../../tests/architecture/check-release-workflow.ts): `checkValidationWorkflow`, `checkReleaseProtection`,
-and `checkReleasePromotion`.
-Each guard is proven by a synthetic
-workflow that breaks exactly that guard, so a failure names the guard. All run under `bun test`, so all are proven on Windows, macOS, and Linux without
-publishing.
+and `checkReleasePromotion`. They run in the structural step (`bun run structure:check`), the only place their `release/…` violations print, each at
+`.github/workflows/check.yml:1:1` with a `fix:` and a `see:` line naming one of the three sections below. A missing or unparseable workflow fails the step
+as a tool error. Each guard is proven under `bun test` by a synthetic workflow that breaks exactly that guard, so the step and the guards' proofs both run
+on Windows, macOS, and Linux without publishing.
 
 Each three-OS `check` job also runs the `Process runtime conformance` step with `if: always()`, so it blocks independently of the canonical links
 ([testing](./testing.md)). A workflow-level `concurrency` group per ref cancels a superseded run in progress, except on the default branch and on `v*` tags:

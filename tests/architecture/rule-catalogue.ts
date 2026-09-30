@@ -11,7 +11,7 @@ interface Rule<Data> {
   fix(data: Data): string;
 }
 
-type Family = "module" | "topology" | "guidance";
+type Family = "module" | "topology" | "guidance" | "release";
 
 type NoData = Record<never, never>;
 
@@ -20,6 +20,13 @@ const rule = <Data>(entry: Rule<Data>) => entry;
 const TOPOLOGY_OWNERSHIP = "docs/agents/topology.md#ownership";
 const TOPOLOGY_IMPORTS = "docs/agents/topology.md#interfaces-and-imports";
 const TOPOLOGY_ENFORCEMENT = "docs/agents/topology.md#enforcement-and-tests";
+const RELEASE_VALIDATION =
+  "docs/agents/release-workflow.md#candidate-validation";
+const RELEASE_PROTECTION =
+  "docs/agents/release-workflow.md#release-protection-policy";
+const RELEASE_PROMOTION =
+  "docs/agents/release-workflow.md#release-promotion-state-machine";
+const DECLARE_JOBS = "declare the gate's jobs as a mapping under jobs:";
 
 interface Crossing {
   importer: ModuleName;
@@ -216,6 +223,305 @@ export const rules = {
       `no heading here resolves #${anchor}, the see: anchor of ${list(ids, "and")}`,
     fix: ({ file, anchor }) =>
       `restore a heading whose slug is ${anchor} in ${file}; if it was retired on purpose, stop and ask a human`,
+  }),
+  "release/workflow-not-mapping": rule<NoData>({
+    see: RELEASE_VALIDATION,
+    problem: () => "the workflow is not a YAML mapping",
+    fix: () => "rewrite the workflow as a mapping with on: and jobs: keys",
+  }),
+  "release/workflow-env-secret": rule<{ secret: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ secret }) =>
+      `the workflow-level env references secret ${secret}, which reaches every job on every run`,
+    fix: ({ secret }) =>
+      `remove secrets.${secret} from the workflow-level env; if a step needs it, stop and ask a human`,
+  }),
+  "release/dispatch-trigger": rule<{ trigger: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ trigger }) =>
+      `the workflow has no ${trigger} trigger, so candidate validation has no manual entrypoint`,
+    fix: ({ trigger }) => `add ${trigger} under on:`,
+  }),
+  "release/validation-no-jobs": rule<NoData>({
+    see: RELEASE_VALIDATION,
+    problem: () =>
+      "the workflow declares no jobs, so no candidate is assembled or validated",
+    fix: () => DECLARE_JOBS,
+  }),
+  "release/no-build-job": rule<{ build: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ build }) =>
+      `the workflow has no ${build} job to assemble the one candidate`,
+    fix: ({ build }) =>
+      `restore the ${build} job that assembles the candidate once; if it was removed on purpose, stop and ask a human`,
+  }),
+  "release/missing-dry-run": rule<{
+    build: string;
+    script: string;
+    trigger: string;
+  }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ build, script }) =>
+      `the ${build} job never runs ${script}, the candidate-validation dry-run`,
+    fix: ({ build, script, trigger }) =>
+      `add a step to the ${build} job that runs ${script}, gated on github.event_name == '${trigger}'`,
+  }),
+  "release/job-not-mapping": rule<{ job: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job }) => `job ${job} is not a mapping`,
+    fix: ({ job }) =>
+      `rewrite job ${job} as a mapping with runs-on: and steps:`,
+  }),
+  "release/needs-build": rule<{ job: string; build: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, build }) =>
+      `job ${job} does not need ${build}, so it cannot consume the one candidate`,
+    fix: ({ job, build }) => `add ${build} to the needs: of job ${job}`,
+  }),
+  "release/candidate-download": rule<{ job: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job }) => `job ${job} never downloads the candidate artifact`,
+    fix: ({ job }) =>
+      `add an actions/download-artifact step to job ${job} and use the candidate it downloads instead of rebuilding it`,
+  }),
+  "release/reassembly": rule<{ job: string; script: string; build: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, script, build }) =>
+      `job ${job} runs ${script}, but the candidate is assembled once on ${build}`,
+    fix: ({ job, script }) =>
+      `remove ${script} from job ${job} and download the candidate artifact instead`,
+  }),
+  "release/job-env-secret": rule<{
+    job: string;
+    secret: string;
+    build: string;
+  }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, secret }) =>
+      `job ${job}'s env references secret ${secret}, which reaches every step on every run`,
+    fix: ({ job, secret, build }) =>
+      job === build
+        ? `move secrets.${secret} from job ${job}'s env to the env of the dispatch-gated step that needs it`
+        : `remove secrets.${secret} from job ${job}'s env; if the job needs it, stop and ask a human`,
+  }),
+  "release/secret-outside-build": rule<{ job: string; build: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, build }) =>
+      `job ${job} references a secret, but before approval only the ${build} dry-run step may hold one`,
+    fix: ({ job }) =>
+      `remove the secret from job ${job}; if the job needs a credential, stop and ask a human`,
+  }),
+  "release/ungated-credential": rule<{ job: string; trigger: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, trigger }) =>
+      `the credentialed step in job ${job} is not gated on a ${trigger} run, so it runs on every push`,
+    fix: ({ job, trigger }) =>
+      `gate the credentialed step in job ${job} with if: github.event_name == '${trigger}'`,
+  }),
+  // The read-only guard reads only the secret's name, so the fix never offers a rename.
+  "release/secret-not-read-only": rule<{ job: string; secret: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ secret }) =>
+      `secret ${secret} does not read as a read-only identity, so it may carry publication authority`,
+    fix: ({ job, secret }) =>
+      `remove secrets.${secret} from the step in job ${job}; the dry-run authenticates only with the read-only npm identity, so if the step needs ${secret}, stop and ask a human`,
+  }),
+  "release/stray-environment": rule<{ job: string; promote: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, promote }) =>
+      `job ${job} declares an environment, but only the protected ${promote} job may`,
+    fix: ({ job }) => `remove environment: from job ${job}`,
+  }),
+  "release/real-publish": rule<{ job: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job }) =>
+      `job ${job} runs a real npm publish, but validation publishes only with --dry-run`,
+    fix: ({ job }) => `add --dry-run to the npm publish in job ${job}`,
+  }),
+  "release/gh-release": rule<{ job: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job }) =>
+      `job ${job} runs gh release, but validation exposes no public release`,
+    fix: ({ job }) => `remove the gh release command from job ${job}`,
+  }),
+  "release/release-action": rule<{ job: string; action: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, action }) =>
+      `job ${job} uses release action ${action}, but validation exposes no public release`,
+    fix: ({ job, action }) => `remove the ${action} step from job ${job}`,
+  }),
+  "release/retry-action": rule<{ job: string; action: string }>({
+    see: RELEASE_VALIDATION,
+    problem: ({ job, action }) =>
+      `job ${job} uses retry action ${action}, which re-runs a flaky release step instead of fixing it`,
+    fix: ({ job, action }) =>
+      `remove the ${action} wrapper from job ${job} and run its step directly`,
+  }),
+  "release/protection-no-jobs": rule<NoData>({
+    see: RELEASE_PROTECTION,
+    problem: () =>
+      "the workflow declares no jobs, so no protected boundary guards promotion",
+    fix: () => DECLARE_JOBS,
+  }),
+  "release/protection-no-promote-job": rule<{
+    promote: string;
+    environment: string;
+  }>({
+    see: RELEASE_PROTECTION,
+    problem: ({ promote, environment }) =>
+      `the workflow has no ${promote} job to hold publication behind the protected ${environment} environment`,
+    fix: ({ promote, environment }) =>
+      `restore the ${promote} job with environment: ${environment}; if it was removed on purpose, stop and ask a human`,
+  }),
+  "release/no-approval-job": rule<{ approval: string; script: string }>({
+    see: RELEASE_PROTECTION,
+    problem: ({ approval }) =>
+      `the workflow has no ${approval} job to run the tag and version gate and write the approval summary`,
+    fix: ({ approval, script }) =>
+      `restore the ${approval} job that runs ${script}; if it was removed on purpose, stop and ask a human`,
+  }),
+  "release/protection-environment": rule<{
+    promote: string;
+    environment: string;
+  }>({
+    see: RELEASE_PROTECTION,
+    problem: ({ promote, environment }) =>
+      `job ${promote} does not target the protected ${environment} environment`,
+    fix: ({ promote, environment }) =>
+      `set environment: ${environment} on job ${promote}`,
+  }),
+  "release/promote-needs": rule<{
+    job: string;
+    promote: string;
+    approval: string;
+  }>({
+    see: RELEASE_PROTECTION,
+    problem: ({ job, promote }) =>
+      `job ${job} does not gate job ${promote}: it is outside ${promote}'s transitive needs`,
+    fix: ({ job, promote, approval }) =>
+      job === approval
+        ? `add ${approval} to the needs: of job ${promote}`
+        : `add ${job} to the needs: of job ${approval}`,
+  }),
+  "release/tag-ref-gate": rule<{ job: string; ref: string }>({
+    see: RELEASE_PROTECTION,
+    problem: ({ job, ref }) =>
+      `job ${job} is not gated on a ${ref}* tag ref, so it can run on a branch`,
+    fix: ({ job, ref }) =>
+      `add startsWith(github.ref, '${ref}') to the if: of job ${job}`,
+  }),
+  "release/missing-tag-gate": rule<{ approval: string; script: string }>({
+    see: RELEASE_PROTECTION,
+    problem: ({ approval, script }) =>
+      `job ${approval} never runs ${script}, so a tag is admitted without matching the package version`,
+    fix: ({ approval, script }) =>
+      `add a step to job ${approval} that runs ${script}`,
+  }),
+  "release/approval-secret": rule<{ approval: string; secrets: string[] }>({
+    see: RELEASE_PROTECTION,
+    problem: ({ approval, secrets }) =>
+      `job ${approval} references secret${secrets.length > 1 ? "s" : ""} ${list(secrets, "and")}, but no credential may exist before the protected boundary`,
+    fix: ({ approval, secrets }) =>
+      `remove ${list(
+        secrets.map((secret) => `secrets.${secret}`),
+        "and",
+      )} from job ${approval}; if the job needs a credential, stop and ask a human`,
+  }),
+  "release/promotion-no-jobs": rule<NoData>({
+    see: RELEASE_PROMOTION,
+    problem: () =>
+      "the workflow declares no jobs, so no protected job promotes the release",
+    fix: () => DECLARE_JOBS,
+  }),
+  "release/promotion-no-promote-job": rule<{ promote: string }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ promote }) =>
+      `the workflow has no ${promote} job to run release promotion`,
+    fix: ({ promote }) =>
+      `restore the ${promote} job; if it was removed on purpose, stop and ask a human`,
+  }),
+  "release/promotion-environment": rule<{
+    promote: string;
+    environment: string;
+  }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ promote, environment }) =>
+      `job ${promote} does not target the protected ${environment} environment, so publication waits for no approval`,
+    fix: ({ promote, environment }) =>
+      `set environment: ${environment} on job ${promote}`,
+  }),
+  "release/missing-promotion-script": rule<{ promote: string; script: string }>(
+    {
+      see: RELEASE_PROMOTION,
+      problem: ({ promote, script }) =>
+        `job ${promote} never runs ${script}, the one publication state machine`,
+      fix: ({ promote, script }) =>
+        `add a step to job ${promote} that runs ${script}`,
+    },
+  ),
+  "release/promote-download": rule<{ promote: string; artifact: string }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ promote, artifact }) =>
+      `job ${promote} does not download the approved ${artifact} artifact`,
+    fix: ({ promote, artifact }) =>
+      `add an actions/download-artifact step with name: ${artifact} to job ${promote}`,
+  }),
+  "release/promote-permissions": rule<{ promote: string }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ promote }) =>
+      `job ${promote} lacks permissions: contents: write, so it cannot expose the approved GitHub release assets`,
+    fix: ({ promote }) => `set permissions: contents: write on job ${promote}`,
+  }),
+  "release/promote-unexpected-secret": rule<{
+    promote: string;
+    secret: string;
+    credential: string;
+  }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ promote, secret, credential }) =>
+      `job ${promote} references secret ${secret}, but only ${credential} belongs on its state-machine step`,
+    fix: ({ promote, secret }) =>
+      `remove secrets.${secret} from job ${promote}; if promotion needs it, stop and ask a human`,
+  }),
+  "release/credential-placement": rule<{
+    job: string;
+    credential: string;
+    promote: string;
+    script: string;
+  }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ job, credential, promote, script }) =>
+      `job ${job} references ${credential} outside the ${promote} step that runs ${script}`,
+    fix: ({ job, credential, promote, script }) =>
+      job === promote
+        ? `move secrets.${credential} to the ${promote} step that runs ${script}`
+        : `remove secrets.${credential} from job ${job}`,
+  }),
+  "release/credential-count": rule<{
+    count: number;
+    credential: string;
+    promote: string;
+    script: string;
+  }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ count, credential, promote, script }) =>
+      count === 0
+        ? `no ${promote} step that runs ${script} references ${credential}`
+        : `the ${promote} steps that run ${script} reference ${credential} ${count} times, not once`,
+    fix: ({ count, credential, promote, script }) =>
+      count === 0
+        ? `add secrets.${credential} to the env of the ${promote} step that runs ${script}`
+        : `keep one secrets.${credential} reference, on the one ${promote} step that runs ${script}`,
+  }),
+  "release/promotion-script-placement": rule<{
+    job: string;
+    script: string;
+    promote: string;
+  }>({
+    see: RELEASE_PROMOTION,
+    problem: ({ job, script, promote }) =>
+      `job ${job} runs ${script}, which may run only in the protected ${promote} job`,
+    fix: ({ job, script }) => `remove ${script} from job ${job}`,
   }),
 } satisfies { [id: `${Family}/${string}`]: Rule<never> };
 

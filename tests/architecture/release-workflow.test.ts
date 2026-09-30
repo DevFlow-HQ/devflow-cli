@@ -1,48 +1,53 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { CANDIDATE_CHECK_JOBS } from "../../scripts/release-gate.js";
+import { makeTempDir } from "../helpers/tempDir.js";
 import {
   CI_WORKFLOW,
   checkReleasePromotion,
+  checkReleaseWorkflow,
   checkReleaseProtection,
   checkValidationWorkflow,
+  readWorkflow,
 } from "./check-release-workflow.js";
+import {
+  jobsToEdit,
+  stepsToEdit,
+  validWorkflow,
+} from "./release-workflow-fixture.js";
+import type { Finding, RuleId } from "./rule-catalogue.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-/** Bun's YAML parser (Bun 1.4.2, YAML 1.2 — `on:` stays a string key, not a
- *  boolean), so the check needs no YAML dependency in the tree. */
-function parseYaml(text: string): unknown {
-  return (
-    Bun as unknown as { YAML: { parse(text: string): unknown } }
-  ).YAML.parse(text);
+// These tests prove each guard over a synthetic workflow that breaks exactly that
+// guard. The real workflow is reported only by the structural step (`bun run
+// structure:check`); its report wording is pinned in structural-step.test.ts.
+
+/** Whether `findings` report `rule`, with `data` among its fields when given. */
+function reports(
+  findings: Finding[],
+  rule: RuleId,
+  data: Record<string, unknown> = {},
+) {
+  return findings.some(
+    (finding) =>
+      finding.rule === rule &&
+      Object.entries(data).every(
+        ([key, value]) =>
+          (finding.data as Record<string, unknown>)[key] === value,
+      ),
+  );
 }
-
-test("the real CI workflow satisfies the candidate-validation policy", () => {
-  const text = readFileSync(join(repoRoot, CI_WORKFLOW), "utf8");
-  assert.deepEqual(checkValidationWorkflow(parseYaml(text)), []);
-});
-
-test("the real CI workflow satisfies the release-protection policy", () => {
-  const text = readFileSync(join(repoRoot, CI_WORKFLOW), "utf8");
-  assert.deepEqual(checkReleaseProtection(parseYaml(text)), []);
-});
-
-test("the real CI workflow satisfies the release-promotion state-machine policy", () => {
-  const text = readFileSync(join(repoRoot, CI_WORKFLOW), "utf8");
-  assert.deepEqual(checkReleasePromotion(parseYaml(text)), []);
-});
 
 test("the approval summary's blocking-jobs list matches release-approval's needs", () => {
   // The reviewer-facing CANDIDATE_CHECK_JOBS list and the workflow's actual gating
   // edges must not drift; checkReleaseProtection guards the needs graph, this guards
   // the display copy.
-  const text = readFileSync(join(repoRoot, CI_WORKFLOW), "utf8");
   const jobs = (
-    parseYaml(text) as { jobs: Record<string, { needs: string[] }> }
+    readWorkflow(repoRoot) as { jobs: Record<string, { needs: string[] }> }
   ).jobs;
   assert.deepEqual(
     [...CANDIDATE_CHECK_JOBS].sort(),
@@ -50,152 +55,92 @@ test("the approval summary's blocking-jobs list matches release-approval's needs
   );
 });
 
-// A minimal workflow that passes every guard. Each negative case below breaks
-// exactly one guard, so a failure names the guard whose removal it proves.
-function valid(): Record<string, unknown> {
-  return {
-    on: { push: null, pull_request: null, workflow_dispatch: null },
-    jobs: {
-      check: {
-        "runs-on": "ubuntu-latest",
-        steps: [{ run: "bun run check" }],
-      },
-      build: {
-        "runs-on": "ubuntu-latest",
-        steps: [
-          { run: "bun run scripts/build.ts --all" },
-          { run: "bun run scripts/assemble.ts" },
-          { run: "bun run scripts/pack.ts" },
-          { run: "bun run scripts/pack-launcher.ts" },
-          { run: "bun run scripts/inventory.ts" },
-          {
-            name: "Dry-run",
-            if: "github.event_name == 'workflow_dispatch'",
-            env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" },
-            run: "bun scripts/npm-dry-run.ts dist/packages",
-          },
-        ],
-      },
-      smoke: {
-        needs: "build",
-        "runs-on": "ubuntu-latest",
-        steps: [
-          { uses: "actions/download-artifact@v4" },
-          { run: "bun scripts/package-smoke.ts dist/secant-linux-x64" },
-        ],
-      },
-      "release-approval": {
-        needs: ["check", "build", "smoke"],
-        if: "startsWith(github.ref, 'refs/tags/v')",
-        "runs-on": "ubuntu-latest",
-        steps: [
-          { uses: "actions/download-artifact@v4" },
-          { run: "bun scripts/release-gate.ts dist/release" },
-        ],
-      },
-      promote: {
-        needs: "release-approval",
-        if: "startsWith(github.ref, 'refs/tags/v')",
-        "runs-on": "ubuntu-latest",
-        environment: "release",
-        permissions: { contents: "write" },
-        steps: [
-          { uses: "actions/checkout@v4" },
-          {
-            uses: "actions/download-artifact@v4",
-            with: { name: "release-archives", path: "dist/release" },
-          },
-          {
-            uses: "actions/download-artifact@v4",
-            with: { name: "platform-packages", path: "dist/packages" },
-          },
-          {
-            env: {
-              NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}",
-              GH_TOKEN: "${{ github.token }}",
-            },
-            run: "bun scripts/release-promote.ts dist/release dist/packages",
-          },
-        ],
-      },
-    },
-  };
-}
+test("a missing or unparseable workflow is a tool failure, not a finding", async () => {
+  const root = makeTempDir("secant-workflow-");
+  assert.throws(() => checkReleaseWorkflow(root), /ENOENT/);
+  await mkdir(dirname(join(root, CI_WORKFLOW)), { recursive: true });
+  await writeFile(join(root, CI_WORKFLOW), "jobs: [unclosed\n");
+  assert.throws(
+    () => checkReleaseWorkflow(root),
+    new RegExp(`${CI_WORKFLOW} is not valid YAML`),
+  );
+});
+
+test("the workflow is read from YAML and checked by all three scenarios", async () => {
+  const root = makeTempDir("secant-workflow-");
+  await mkdir(dirname(join(root, CI_WORKFLOW)), { recursive: true });
+  await writeFile(join(root, CI_WORKFLOW), "on: push\njobs: {}\n");
+  assert.deepEqual(
+    checkReleaseWorkflow(root).map((finding) => finding.rule),
+    [
+      "release/dispatch-trigger",
+      "release/no-build-job",
+      "release/protection-no-promote-job",
+      "release/promotion-no-promote-job",
+    ],
+  );
+});
 
 test("the minimal valid workflow passes, so each negative isolates one guard", () => {
-  assert.deepEqual(checkValidationWorkflow(valid()), []);
+  assert.deepEqual(checkValidationWorkflow(validWorkflow()), []);
 });
 
 test("a non-mapping workflow fails closed", () => {
-  assert.ok(checkValidationWorkflow("not a workflow").length > 0);
-  assert.ok(checkValidationWorkflow(null).length > 0);
+  for (const workflow of ["not a workflow", null])
+    assert.deepEqual(
+      checkValidationWorkflow(workflow).map((finding) => finding.rule),
+      ["release/workflow-not-mapping"],
+    );
 });
 
 test("a workflow without a manual dispatch entrypoint is rejected", () => {
-  const workflow = valid();
+  const workflow = validWorkflow();
   workflow.on = { push: null, pull_request: null };
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("manual entrypoint"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/dispatch-trigger"),
   );
 });
 
 test("a build job that never runs the dry-run is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  jobs.build.steps = (jobs.build.steps as Record<string, unknown>[]).slice(
-    0,
-    5,
-  );
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  jobs.build.steps = stepsToEdit(jobs.build).slice(0, 5);
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("npm-dry-run.ts"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/missing-dry-run"),
   );
 });
 
 test("a downstream job missing `needs: build` is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   delete jobs.smoke.needs;
-  assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("needs: build"),
-    ),
-  );
+  assert.ok(reports(checkValidationWorkflow(workflow), "release/needs-build"));
 });
 
 test("a downstream job that does not download the artifact is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.smoke.steps = [
     { run: "bun scripts/package-smoke.ts dist/secant-linux-x64" },
   ];
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("download the candidate artifact"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/candidate-download"),
   );
 });
 
 test("a non-build job that re-runs an assembly script is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.smoke.steps = [
     { uses: "actions/download-artifact@v4" },
     { run: "bun run scripts/assemble.ts" },
   ];
-  assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("assembled once"),
-    ),
-  );
+  assert.ok(reports(checkValidationWorkflow(workflow), "release/reassembly"));
 });
 
 test("a secret outside the build dry-run step is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.smoke.steps = [
     { uses: "actions/download-artifact@v4" },
     {
@@ -205,392 +150,344 @@ test("a secret outside the build dry-run step is rejected", () => {
     },
   ];
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("only the build dry-run step"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/secret-outside-build"),
   );
 });
 
 test("a credentialed step not gated on workflow_dispatch is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  const step = (jobs.build.steps as Record<string, unknown>[])[5]!;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  const step = stepsToEdit(jobs.build)[5]!;
   delete step.if;
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("gated on `workflow_dispatch`"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/ungated-credential"),
   );
 });
 
 test("a NEGATED dispatch guard on a credentialed step is rejected", () => {
   // The exact opposite gate — runs on every push/PR, skips only on dispatch — still
   // contains the substring "workflow_dispatch", so a substring test would pass it.
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  const step = (jobs.build.steps as Record<string, unknown>[])[5]!;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  const step = stepsToEdit(jobs.build)[5]!;
   step.if = "github.event_name != 'workflow_dispatch'";
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("gated on `workflow_dispatch`"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/ungated-credential"),
   );
 });
 
 test("a job-level env secret is rejected", () => {
   // Placed on the whole job (sibling of steps), it cannot be dispatch-gated: an
   // ungated step then runs with the credential on every push.
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.build.env = { NODE_AUTH_TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" };
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes(
-        "scoped to a dispatch-gated step, not the whole job",
-      ),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/job-env-secret"),
   );
 });
 
 test("a workflow-level env secret is rejected", () => {
-  const workflow = valid();
+  const workflow = validWorkflow();
   workflow.env = { NODE_AUTH_TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" };
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("never the whole workflow"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/workflow-env-secret"),
   );
 });
 
 test("a publication-capable secret is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  const step = (jobs.build.steps as Record<string, unknown>[])[5]!;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  const step = stepsToEdit(jobs.build)[5]!;
   step.env = { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" };
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("read-only identity"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/secret-not-read-only"),
   );
 });
 
 test("a protected environment is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.build.environment = "release";
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("environment"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/stray-environment"),
   );
 });
 
 test("a real npm publish is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  (jobs.smoke.steps as Record<string, unknown>[]).push({
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  stepsToEdit(jobs.smoke).push({
     run: "npm publish dist/packages/secant.tgz",
   });
-  assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("real `npm publish`"),
-    ),
-  );
+  assert.ok(reports(checkValidationWorkflow(workflow), "release/real-publish"));
 });
 
 test("a GitHub-release action or `gh release` is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.smoke.steps = [
     { uses: "actions/download-artifact@v4" },
     { uses: "softprops/action-gh-release@v2" },
   ];
   assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("no public release"),
-    ),
+    reports(checkValidationWorkflow(workflow), "release/release-action"),
   );
 
-  const withGhRelease = valid();
-  const jobs2 = withGhRelease.jobs as Record<string, Record<string, unknown>>;
-  (jobs2.smoke.steps as Record<string, unknown>[]).push({
+  const withGhRelease = validWorkflow();
+  const jobs2 = jobsToEdit(withGhRelease);
+  stepsToEdit(jobs2.smoke).push({
     run: "gh release create v1.0.0",
   });
   assert.ok(
-    checkValidationWorkflow(withGhRelease).some((issue) =>
-      issue.message.includes("no public release"),
-    ),
+    reports(checkValidationWorkflow(withGhRelease), "release/gh-release"),
   );
 });
 
 test("a retry action is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.smoke.steps = [
     { uses: "actions/download-artifact@v4" },
     { uses: "nick-fields/retry@v3" },
   ];
-  assert.ok(
-    checkValidationWorkflow(workflow).some((issue) =>
-      issue.message.includes("re-run"),
-    ),
-  );
+  assert.ok(reports(checkValidationWorkflow(workflow), "release/retry-action"));
 });
 
 // --- release-protection-policy scenario (#158) -----------------------------------
-// The same valid() workflow passes protection too, so each negative below isolates one
+// The minimal valid workflow passes protection too, so each negative below isolates one
 // protection guard.
 
 test("the minimal valid workflow passes release protection", () => {
-  assert.deepEqual(checkReleaseProtection(valid()), []);
+  assert.deepEqual(checkReleaseProtection(validWorkflow()), []);
 });
 
 test("release protection fails closed on a non-mapping workflow", () => {
-  assert.ok(checkReleaseProtection("nope").length > 0);
-  assert.ok(checkReleaseProtection(null).length > 0);
+  for (const workflow of ["nope", null])
+    assert.deepEqual(
+      checkReleaseProtection(workflow).map((finding) => finding.rule),
+      ["release/protection-no-jobs"],
+    );
 });
 
 test("a workflow without a promote job is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   delete jobs.promote;
   assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("no promote job"),
+    reports(
+      checkReleaseProtection(workflow),
+      "release/protection-no-promote-job",
     ),
   );
 });
 
 test("a promote job without the protected release environment is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   delete jobs.promote.environment;
   assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("environment: release"),
-    ),
+    reports(checkReleaseProtection(workflow), "release/protection-environment"),
   );
 });
 
 test("a promote job targeting the wrong environment is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.promote.environment = "staging";
   assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("environment: release"),
-    ),
+    reports(checkReleaseProtection(workflow), "release/protection-environment"),
   );
 });
 
 test("a candidate check that does not gate promotion is rejected", () => {
   // smoke drops out of the dependency chain, so the protected environment could be
   // reached without it.
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs["release-approval"].needs = ["check", "build"];
   assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("smoke does not gate it"),
-    ),
+    reports(checkReleaseProtection(workflow), "release/promote-needs", {
+      job: "smoke",
+    }),
   );
 });
 
 test("a promote job not gated on a tag ref is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   delete jobs.promote.if;
-  assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("tag ref"),
-    ),
-  );
+  assert.ok(reports(checkReleaseProtection(workflow), "release/tag-ref-gate"));
 });
 
 test("a job gated on a non-`v` tag ref is rejected", () => {
   // `refs/tags/` alone is not enough: the `v*` shape is part of the invariant.
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.promote.if = "startsWith(github.ref, 'refs/tags/')";
-  assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("tag ref"),
-    ),
-  );
+  assert.ok(reports(checkReleaseProtection(workflow), "release/tag-ref-gate"));
 });
 
 test("an approval job that never runs the tag/version gate is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs["release-approval"].steps = [{ uses: "actions/download-artifact@v4" }];
   assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("release-gate.ts"),
-    ),
+    reports(checkReleaseProtection(workflow), "release/missing-tag-gate"),
   );
 });
 
 test("a publication credential on a pre-approval promotion job is rejected", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  (jobs["release-approval"].steps as Record<string, unknown>[]).push({
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  stepsToEdit(jobs["release-approval"]).push({
     env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" },
     run: "echo x",
   });
   assert.ok(
-    checkReleaseProtection(workflow).some((issue) =>
-      issue.message.includes("no publication credential"),
-    ),
+    reports(checkReleaseProtection(workflow), "release/approval-secret"),
   );
 });
 
 // --- release-promotion-state-machine scenario (#159) -----------------------------
 
 test("the minimal valid workflow passes release promotion", () => {
-  assert.deepEqual(checkReleasePromotion(valid()), []);
+  assert.deepEqual(checkReleasePromotion(validWorkflow()), []);
 });
 
 test("release promotion fails closed on a non-mapping workflow", () => {
-  assert.ok(checkReleasePromotion("nope").length > 0);
-  assert.ok(checkReleasePromotion(null).length > 0);
+  for (const workflow of ["nope", null])
+    assert.deepEqual(
+      checkReleasePromotion(workflow).map((finding) => finding.rule),
+      ["release/promotion-no-jobs"],
+    );
 });
 
 test("release promotion requires the protected promote job and environment", () => {
-  const missing = valid();
-  const missingJobs = missing.jobs as Record<string, Record<string, unknown>>;
+  const missing = validWorkflow();
+  const missingJobs = jobsToEdit(missing);
   delete missingJobs.promote;
   assert.ok(
-    checkReleasePromotion(missing).some((issue) =>
-      issue.message.includes("no promote job"),
-    ),
+    reports(checkReleasePromotion(missing), "release/promotion-no-promote-job"),
   );
 
-  const wrongEnvironment = valid();
-  const wrongJobs = wrongEnvironment.jobs as Record<
-    string,
-    Record<string, unknown>
-  >;
+  const wrongEnvironment = validWorkflow();
+  const wrongJobs = jobsToEdit(wrongEnvironment);
   wrongJobs.promote.environment = "staging";
   assert.ok(
-    checkReleasePromotion(wrongEnvironment).some((issue) =>
-      issue.message.includes("environment: release"),
+    reports(
+      checkReleasePromotion(wrongEnvironment),
+      "release/promotion-environment",
     ),
   );
 });
 
 test("promotion must run the one release state-machine script", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  const steps = jobs.promote.steps as Record<string, unknown>[];
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  const steps = stepsToEdit(jobs.promote);
   steps[3]!.run = "echo approved";
   assert.ok(
-    checkReleasePromotion(workflow).some((issue) =>
-      issue.message.includes("release-promote.ts"),
+    reports(
+      checkReleasePromotion(workflow),
+      "release/missing-promotion-script",
     ),
   );
 });
 
 test("promotion must download both approved candidate artifacts", () => {
   for (const missing of ["release-archives", "platform-packages"]) {
-    const workflow = valid();
-    const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-    jobs.promote.steps = (
-      jobs.promote.steps as Record<string, unknown>[]
-    ).filter(
+    const workflow = validWorkflow();
+    const jobs = jobsToEdit(workflow);
+    jobs.promote.steps = stepsToEdit(jobs.promote).filter(
       (step) =>
         (step.with as Record<string, unknown> | undefined)?.name !== missing,
     );
     assert.ok(
-      checkReleasePromotion(workflow).some((issue) =>
-        issue.message.includes(missing),
-      ),
+      reports(checkReleasePromotion(workflow), "release/promote-download", {
+        artifact: missing,
+      }),
     );
   }
 });
 
 test("the publication credential must exist only on the protected promote step", () => {
-  const missingCredential = valid();
-  const missingJobs = missingCredential.jobs as Record<
-    string,
-    Record<string, unknown>
-  >;
-  const promotionStep = (
-    missingJobs.promote.steps as Record<string, unknown>[]
-  )[3]!;
+  const missingCredential = validWorkflow();
+  const missingJobs = jobsToEdit(missingCredential);
+  const promotionStep = stepsToEdit(missingJobs.promote)[3]!;
   promotionStep.env = { GH_TOKEN: "${{ github.token }}" };
   assert.ok(
-    checkReleasePromotion(missingCredential).some((issue) =>
-      issue.message.includes("NPM_PUBLISH_TOKEN"),
+    reports(
+      checkReleasePromotion(missingCredential),
+      "release/credential-count",
+      { count: 0 },
     ),
   );
 
-  const duplicateCredential = valid();
-  const duplicateJobs = duplicateCredential.jobs as Record<
-    string,
-    Record<string, unknown>
-  >;
-  (duplicateJobs.promote.steps as Record<string, unknown>[]).push({
+  const duplicateCredential = validWorkflow();
+  const duplicateJobs = jobsToEdit(duplicateCredential);
+  stepsToEdit(duplicateJobs.promote).push({
     env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" },
     run: "bun scripts/release-promote.ts duplicate",
   });
   assert.ok(
-    checkReleasePromotion(duplicateCredential).some((issue) =>
-      issue.message.includes("exactly one NPM_PUBLISH_TOKEN"),
+    reports(
+      checkReleasePromotion(duplicateCredential),
+      "release/credential-count",
+      { count: 2 },
     ),
   );
 
-  const earlyCredential = valid();
-  const earlyJobs = earlyCredential.jobs as Record<
-    string,
-    Record<string, unknown>
-  >;
-  (earlyJobs.smoke.steps as Record<string, unknown>[]).push({
+  const earlyCredential = validWorkflow();
+  const earlyJobs = jobsToEdit(earlyCredential);
+  stepsToEdit(earlyJobs.smoke).push({
     env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" },
     run: "echo leaked",
   });
   assert.ok(
-    checkReleasePromotion(earlyCredential).some((issue) =>
-      issue.message.includes("only on the protected promote job"),
+    reports(
+      checkReleasePromotion(earlyCredential),
+      "release/credential-placement",
+      { job: "smoke" },
     ),
   );
 
-  const extraCredential = valid();
-  const extraJobs = extraCredential.jobs as Record<
-    string,
-    Record<string, unknown>
-  >;
-  const extraStep = (extraJobs.promote.steps as Record<string, unknown>[])[3]!;
+  const extraCredential = validWorkflow();
+  const extraJobs = jobsToEdit(extraCredential);
+  const extraStep = stepsToEdit(extraJobs.promote)[3]!;
   extraStep.env = {
     ...(extraStep.env as Record<string, unknown>),
     EXTRA_TOKEN: "${{ secrets.EXTRA_TOKEN }}",
   };
   assert.ok(
-    checkReleasePromotion(extraCredential).some((issue) =>
-      issue.message.includes("unexpected secret EXTRA_TOKEN"),
+    reports(
+      checkReleasePromotion(extraCredential),
+      "release/promote-unexpected-secret",
+      { secret: "EXTRA_TOKEN" },
     ),
   );
 });
 
 test("the promotion state machine cannot run outside protected promote", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
-  (jobs.smoke.steps as Record<string, unknown>[]).push({
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
+  stepsToEdit(jobs.smoke).push({
     run: "bun scripts/release-promote.ts dist/release dist/packages",
   });
   assert.ok(
-    checkReleasePromotion(workflow).some((issue) =>
-      issue.message.includes("only in the protected promote job"),
+    reports(
+      checkReleasePromotion(workflow),
+      "release/promotion-script-placement",
+      { job: "smoke" },
     ),
   );
 });
 
 test("promotion needs GitHub contents write permission for release assets", () => {
-  const workflow = valid();
-  const jobs = workflow.jobs as Record<string, Record<string, unknown>>;
+  const workflow = validWorkflow();
+  const jobs = jobsToEdit(workflow);
   jobs.promote.permissions = { contents: "read" };
   assert.ok(
-    checkReleasePromotion(workflow).some((issue) =>
-      issue.message.includes("contents: write"),
-    ),
+    reports(checkReleasePromotion(workflow), "release/promote-permissions"),
   );
 });
