@@ -8,16 +8,17 @@ import {
   checkTestDomainMirror,
 } from "./check-module-boundaries.js";
 import { modules } from "./module-policy.js";
+import type { Finding, RuleId } from "./rule-catalogue.js";
 
-test("production imports and tests respect target Module ownership", () => {
-  const result = checkModuleBoundaries(process.cwd());
-  assert.deepEqual(result.issues, [], JSON.stringify(result.issues, null, 2));
-});
+// These tests prove the checkers over synthetic trees. The real tree is reported only
+// by the structural step (`bun run structure:check`); its report wording is pinned in
+// structural-step.test.ts.
 
-test("every domain-mirroring test folder imports its own source domain (S1)", () => {
-  const issues = checkTestDomainMirror(process.cwd());
-  assert.deepEqual(issues, [], JSON.stringify(issues, null, 2));
-});
+const reports = (findings: Finding[], rule: RuleId, file?: string) =>
+  findings.some(
+    (finding) =>
+      finding.rule === rule && (file === undefined || finding.file === file),
+  );
 
 test("a suite filed under the wrong domain folder is flagged (S1)", async () => {
   const root = makeTempDir("secant-mirror-");
@@ -39,9 +40,10 @@ test("a suite filed under the wrong domain folder is flagged (S1)", async () => 
     'import assert from "node:assert/strict";\nvoid assert;\n',
   );
   const issues = checkTestDomainMirror(root);
-  assert.equal(issues.length, 1);
-  assert.match(issues[0]!.message, /tests\/headless\/ must import a Module/);
-  assert.equal(issues[0]!.file, "tests/headless/misfiled.test.ts");
+  assert.deepEqual(
+    issues.map(({ rule, file }) => ({ rule, file })),
+    [{ rule: "topology/test-mirror", file: "tests/headless/misfiled.test.ts" }],
+  );
 });
 
 test("the declared ownership graph names existing owners and has no cycles", () => {
@@ -97,7 +99,7 @@ test("a cohesive Module can split privately while clients use its chosen entrypo
       'import { stage } from "./artifacts/artifacts.js";',
     "src/run/store/artifacts/artifacts.ts": "export function stage() {}",
   });
-  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result, []);
 });
 
 for (const [name, statement] of [
@@ -121,11 +123,7 @@ for (const [name, statement] of [
       "src/run/store/private.ts":
         "export const row = 1; export type Row = number;",
     });
-    assert.ok(
-      result.issues.some((issue) =>
-        issue.message.includes("public entrypoint"),
-      ),
-    );
+    assert.ok(reports(result, "module/private-import"));
   });
 }
 
@@ -138,9 +136,7 @@ test("aliases resolve to the same private-source restriction", async () => {
     },
     { paths: { "@store/*": ["./src/run/store/*"] } },
   );
-  assert.ok(
-    result.issues.some((issue) => issue.message.includes("public entrypoint")),
-  );
+  assert.ok(reports(result, "module/private-import"));
 });
 
 test("clients cannot bypass Application through even a public Run Store entrypoint", async () => {
@@ -150,8 +146,11 @@ test("clients cannot bypass Application through even a public Run Store entrypoi
     "src/run/store/store.ts": "export interface Store {}",
   });
   assert.ok(
-    result.issues.some(
-      (issue) => issue.message === "headless cannot import store",
+    result.some(
+      (finding) =>
+        finding.rule === "module/import-direction" &&
+        finding.data.importer === "headless" &&
+        finding.data.module === "store",
     ),
   );
 });
@@ -166,11 +165,7 @@ test("a public contract cannot launder storage types through an internal re-expo
       'export type { Store } from "../../run/store/store.js";',
     "src/run/store/store.ts": "export interface Store {}",
   });
-  assert.ok(
-    result.issues.some((issue) =>
-      issue.message.includes("independent of implementation"),
-    ),
-  );
+  assert.ok(reports(result, "module/client-contract-implementation"));
 });
 
 test("target code cannot import unowned implementation, and unowned source is rejected", async () => {
@@ -179,15 +174,9 @@ test("target code cannot import unowned implementation, and unowned source is re
     "src/stray.ts": "export const value = true;",
     "src/adapters/stray.ts": "export const other = true;",
   });
+  assert.ok(reports(result, "module/unowned-import"));
   assert.ok(
-    result.issues.some((issue) => issue.message.includes("legacy or unowned")),
-  );
-  assert.ok(
-    result.issues.some(
-      (issue) =>
-        issue.file === "src/adapters/stray.ts" &&
-        issue.message.includes("no target owner"),
-    ),
+    reports(result, "topology/unowned-source", "src/adapters/stray.ts"),
   );
 });
 
@@ -197,7 +186,7 @@ test("a Module may import a literal static asset it owns", async () => {
       'import migration from "./migrations/initial/migration.sql" with { type: "text" }; void migration;',
     "src/catalog/migrations/initial/migration.sql": "SELECT 1;",
   });
-  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result, []);
 });
 
 test("a Module cannot import a literal static asset outside target ownership", async () => {
@@ -206,9 +195,7 @@ test("a Module cannot import a literal static asset outside target ownership", a
       'import migration from "../../migration.sql" with { type: "text" }; void migration;',
     "migration.sql": "SELECT 1;",
   });
-  assert.ok(
-    result.issues.some((issue) => issue.message.includes("legacy or unowned")),
-  );
+  assert.ok(reports(result, "module/unowned-import"));
 });
 
 test("tests cross a target Module's public Interface too", async () => {
@@ -217,9 +204,7 @@ test("tests cross a target Module's public Interface too", async () => {
     "tests/catalog/catalog.test.ts":
       'import { database } from "../../src/catalog/private.js";',
   });
-  assert.ok(
-    result.issues.some((issue) => issue.message.includes("public entrypoint")),
-  );
+  assert.ok(reports(result, "module/private-import"));
 });
 
 test("Artifact storage is private to Run Store and child composition is private to its root", async () => {
@@ -232,20 +217,15 @@ test("Artifact storage is private to Run Store and child composition is private 
     "src/cli/main.ts": 'import "../composition/child.js";',
   });
   assert.ok(
-    result.issues.some(
-      (issue) => issue.message === "execution cannot import artifacts",
+    result.some(
+      (finding) =>
+        finding.rule === "module/import-direction" &&
+        finding.data.importer === "execution" &&
+        finding.data.module === "artifacts",
     ),
   );
-  assert.ok(
-    result.issues.some((issue) => issue.message.includes("Only the CLI host")),
-  );
-  assert.ok(
-    result.issues.some(
-      (issue) =>
-        issue.file === "src/cli/main.ts" &&
-        issue.message.includes("public entrypoint"),
-    ),
-  );
+  assert.ok(reports(result, "module/composition-invocation"));
+  assert.ok(reports(result, "module/private-import", "src/cli/main.ts"));
 });
 
 test("the bun: spelling of a driver obeys the same ownership as its node: spelling", async () => {
@@ -260,21 +240,10 @@ test("the bun: spelling of a driver obeys the same ownership as its node: spelli
     // where it used to be allowed before `bun:sqlite` replaced it.
     "src/catalog/catalog.ts": 'import { DatabaseSync } from "node:sqlite";',
   });
-  assert.ok(
-    result.issues.some(
-      (issue) =>
-        issue.file === "src/tui/tui.ts" && issue.message.includes("SQLite"),
-    ),
-  );
-  assert.ok(
-    result.issues.some(
-      (issue) =>
-        issue.file === "src/catalog/catalog.ts" &&
-        issue.message.includes("SQLite"),
-    ),
-  );
+  assert.ok(reports(result, "module/dependency-owner", "src/tui/tui.ts"));
+  assert.ok(reports(result, "module/sqlite-driver", "src/catalog/catalog.ts"));
   assert.deepEqual(
-    result.issues.filter((issue) => issue.file === "src/run/store/store.ts"),
+    result.filter((finding) => finding.file === "src/run/store/store.ts"),
     [],
   );
 });
@@ -287,17 +256,14 @@ test("native mechanisms stay with their owners and uncheckable loaders fail visi
       'import "node:sqlite"; import "@opentui/core"; import "@opencode-ai/sdk"; import "node-pty"; require("x"); import "node:module";',
   });
   for (const expected of [
-    "execution-free",
-    "Computed imports",
-    "SQLite",
-    "OpenTUI",
-    "OpenCode",
-    "require or eval",
-    "Custom loaders",
-  ]) {
-    assert.ok(
-      result.issues.some((issue) => issue.message.includes(expected)),
-      expected,
-    );
+    "module/workflow-builtin",
+    "module/computed-import",
+    "module/sqlite-driver",
+    "module/dependency-owner",
+    "module/excluded-dependency",
+    "module/require-or-eval",
+    "module/custom-loader",
+  ] as const) {
+    assert.ok(reports(result, expected), expected);
   }
 });

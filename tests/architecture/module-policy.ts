@@ -115,49 +115,63 @@ export const modules = [
 
 export type ModuleName = (typeof modules)[number]["name"];
 
+/** The client Modules: they receive Application Interfaces, never its construction entry. */
+export function isClient(name: ModuleName | undefined): boolean {
+  return name === "tui" || name === "headless";
+}
+
 export function ownerOf(path: string) {
   return [...modules]
     .sort((left, right) => right.root.length - left.root.length)
     .find((module) => path.startsWith(module.root));
 }
 
+const sqliteOwners: readonly ModuleName[] = ["store", "catalog"];
+
+/** External dependencies only their owners may import. */
+const fencedDependencies: readonly {
+  owners: readonly ModuleName[];
+  matches(specifier: string): boolean;
+}[] = [
+  { owners: ["tui", "renderer"], matches: (s) => s.startsWith("@opentui/") },
+  // `bun:sqlite` is the sole admitted SQLite driver (ADR 0030), fenced to the
+  // Run Store and Catalog.
+  { owners: sqliteOwners, matches: (s) => s === "bun:sqlite" },
+  {
+    owners: ["harness"],
+    matches: (s) =>
+      /^(?:@anthropic-ai\/|@agentclientprotocol\/|@modelcontextprotocol\/|@google\/genai|@openai\/|openai(?:\/|$))/.test(
+        s,
+      ),
+  },
+];
+
+export type ExternalViolation =
+  | { kind: "excluded" }
+  | { kind: "fenced"; owners: readonly ModuleName[] }
+  | { kind: "sqlite-driver"; owners: readonly ModuleName[] }
+  | { kind: "loader" };
+
 export function externalViolation(
   owner: ModuleName,
   specifier: string,
-): string | undefined {
+): ExternalViolation | undefined {
   // Strip the runtime builtin prefix so a runtime-agnostic rule below can key on
   // the bare name (runtime neutrality itself is the allowlist's job).
   const name = specifier.replace(/^(?:node|bun):/, "");
-  if (specifier.startsWith("@opencode-ai/") || specifier === "node-pty") {
-    return "Target Modules cannot depend on OpenCode domain packages or PTY transport";
-  }
-  if (
-    specifier.startsWith("@opentui/") &&
-    owner !== "tui" &&
-    owner !== "renderer"
-  ) {
-    return "OpenTUI belongs to presentation and renderer ownership";
-  }
-  // `bun:sqlite` is the sole admitted SQLite driver (ADR 0030), fenced to the
-  // Run Store and Catalog. `node:sqlite` (its Windows close() lock) and
-  // better-sqlite3 are no longer admitted anywhere.
-  if (specifier === "bun:sqlite") {
-    if (owner !== "store" && owner !== "catalog") {
-      return "SQLite belongs to Run Store or Catalog";
-    }
-  } else if (name === "sqlite" || specifier === "better-sqlite3") {
-    return "SQLite uses bun:sqlite only; node:sqlite and better-sqlite3 are not admitted";
-  }
-  if (name === "module" || name === "vm") {
-    return "Custom loaders and evaluated module graphs need an explicit topology decision";
-  }
-  if (
-    /^(?:@anthropic-ai\/|@agentclientprotocol\/|@modelcontextprotocol\/|@google\/genai|@openai\/|openai(?:\/|$))/.test(
-      specifier,
-    ) &&
-    owner !== "harness"
-  ) {
-    return "Harness-native SDK and protocol dependencies belong to Harness";
-  }
+  if (specifier.startsWith("@opencode-ai/") || specifier === "node-pty")
+    return { kind: "excluded" };
+  const fenced = fencedDependencies.find((dependency) =>
+    dependency.matches(specifier),
+  );
+  if (fenced)
+    return fenced.owners.includes(owner)
+      ? undefined
+      : { kind: "fenced", owners: fenced.owners };
+  // `node:sqlite` (its Windows close() lock) and better-sqlite3 are no longer
+  // admitted anywhere.
+  if (name === "sqlite" || specifier === "better-sqlite3")
+    return { kind: "sqlite-driver", owners: sqliteOwners };
+  if (name === "module" || name === "vm") return { kind: "loader" };
   return undefined;
 }

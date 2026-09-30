@@ -49,6 +49,10 @@ Before editing under a Module root that carries its own `AGENTS.md`, read that f
 - `src/run/execution/AGENTS.md` — Run execution Module: abort-reason to resting-state mapping, the three admitted Turn writes, Agent evidence, Command-step Git hardening.
 - `src/catalog/AGENTS.md` — Catalog Module: first-install-wins, generation-keyed Trust grants, lock-free re-extraction, and the asset-root Interface crossing.
 
+## Failing checks
+
+A failing check is fixed in the code that tripped it. Never edit a check, its policy, allowlist, or tests to make it pass; if no fix fits, stop and say so.
+
 ## Commits
 
 No Co-author in commit messages.

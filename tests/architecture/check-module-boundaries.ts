@@ -2,13 +2,8 @@ import { isBuiltin } from "node:module";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
-import { externalViolation, ownerOf } from "./module-policy.js";
-
-export interface BoundaryIssue {
-  file: string;
-  line: number;
-  message: string;
-}
+import { externalViolation, isClient, ownerOf } from "./module-policy.js";
+import type { Finding } from "./rule-catalogue.js";
 
 // Test folders that do not mirror a source domain (S1): the architecture checks,
 // shared helpers, shared fixtures, the human release checks, release-script tests,
@@ -29,8 +24,8 @@ const NON_MIRRORING_TEST_FOLDERS = new Set([
  *  pure-helper suite such as `tests/harness/redact.test.ts`, which imports only its
  *  sibling test helper) is skipped; the non-mirroring folders above are skipped wholesale.
  *  This catches a suite filed by ticket rather than by the Interface it crosses. */
-export function checkTestDomainMirror(root: string): BoundaryIssue[] {
-  const issues: BoundaryIssue[] = [];
+export function checkTestDomainMirror(root: string): Finding[] {
+  const issues: Finding[] = [];
   const testsRoot = join(root, "tests");
   if (!existsSync(testsRoot)) return issues;
   const pathOf = (path: string) => relative(root, path).split(sep).join("/");
@@ -99,9 +94,11 @@ export function checkTestDomainMirror(root: string): BoundaryIssue[] {
       )
     ) {
       issues.push({
+        rule: "topology/test-mirror",
         file: relPath,
         line: 1,
-        message: `Test under tests/${prefix}/ must import a Module rooted at src/${prefix}/ (it imports ${[...new Set(importedModules)].join(", ")}); move it to the folder mirroring its domain (S1)`,
+        column: 1,
+        data: { prefix, roots: [...new Set(importedModules)] },
       });
     }
   }
@@ -109,12 +106,9 @@ export function checkTestDomainMirror(root: string): BoundaryIssue[] {
 }
 
 /** Uses the project's resolver and real source graph; does not load or execute any production Module. */
-export function checkModuleBoundaries(root: string): {
-  issues: BoundaryIssue[];
-  targetFiles: number;
-} {
+export function checkModuleBoundaries(root: string): Finding[] {
   root = realpathSync(root);
-  const issues: BoundaryIssue[] = [];
+  const issues: Finding[] = [];
   const configPath = join(root, "tsconfig.json");
   const config = ts.readConfigFile(configPath, ts.sys.readFile);
   if (config.error)
@@ -131,7 +125,6 @@ export function checkModuleBoundaries(root: string): {
         .join("\n"),
     );
   }
-  let targetCount = 0;
   const pathOf = (path: string) => relative(root, path).split(sep).join("/");
   const files: string[] = [];
   function discover(directory: string) {
@@ -139,10 +132,11 @@ export function checkModuleBoundaries(root: string): {
       const path = join(directory, entry.name);
       if (entry.isSymbolicLink()) {
         issues.push({
+          rule: "topology/source-symlink",
           file: pathOf(path),
           line: 1,
-          message:
-            "Source symlinks bypass ownership; use ordinary source files",
+          column: 1,
+          data: {},
         });
       } else if (entry.isDirectory()) discover(path);
       else if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(entry.name)) files.push(path);
@@ -156,27 +150,34 @@ export function checkModuleBoundaries(root: string): {
     const owner = ownerOf(path);
     if (!owner && !isTest) {
       issues.push({
+        rule: "topology/unowned-source",
         file: path,
         line: 1,
-        message: "Source has no target owner",
+        column: 1,
+        data: {},
       });
       continue;
     }
-    if (owner) targetCount++;
     const source = ts.createSourceFile(
       file,
       readFileSync(file, "utf8"),
       ts.ScriptTarget.Latest,
       true,
     );
-    const report = (node: ts.Node, message: string) => {
+    const report = (
+      position: number,
+      finding: DistributiveOmit<Finding, "file" | "line" | "column">,
+    ) => {
+      const { line, character } =
+        source.getLineAndCharacterOfPosition(position);
       issues.push({
+        ...finding,
         file: path,
-        line:
-          source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
-        message,
-      });
+        line: line + 1,
+        column: character + 1,
+      } as Finding);
     };
+    const at = (node: ts.Node) => node.getStart(source);
     const clientContract =
       path === "src/application/projection-port.ts" ||
       path === "src/application/bundle-management.ts" ||
@@ -207,11 +208,7 @@ export function checkModuleBoundaries(root: string): {
       ) {
         const other = ownerOf(target);
         if (owner && !other) {
-          report(
-            node,
-            "Target code cannot import legacy or unowned implementation: " +
-              target,
-          );
+          report(at(node), { rule: "module/unowned-import", data: { target } });
           return;
         }
         if (
@@ -222,11 +219,10 @@ export function checkModuleBoundaries(root: string): {
             target.startsWith("src/application/contracts/")
           )
         ) {
-          report(
-            node,
-            "Application client contracts must stay independent of implementation: " +
-              target,
-          );
+          report(at(node), {
+            rule: "module/client-contract-implementation",
+            data: { target },
+          });
           return;
         }
         if (!other || owner?.name === other.name) return;
@@ -235,55 +231,77 @@ export function checkModuleBoundaries(root: string): {
           ("contracts" in other &&
             other.contracts.some((entry) => target === other.root + entry));
         if (!isPublic)
-          report(
-            node,
-            "Cross-Module import must use a declared public entrypoint: " +
-              target,
-          );
-        if (other.name === "composition" && !isTest && owner?.name !== "cli") {
-          report(
-            node,
-            "Only the CLI host may invoke the outer composition root",
-          );
+          report(at(node), {
+            rule: "module/private-import",
+            data: { importer: owner?.name, module: other.name, target },
+          });
+        // A test has no owner and unowned source returned above, so `owner` means `!isTest`.
+        if (other.name === "composition" && owner && owner.name !== "cli") {
+          report(at(node), {
+            rule: "module/composition-invocation",
+            data: { importer: owner.name },
+          });
         }
         if (
           owner &&
           !(owner.imports as readonly string[]).includes(other.name)
         ) {
-          report(node, `${owner.name} cannot import ${other.name}`);
+          report(at(node), {
+            rule: "module/import-direction",
+            data: { importer: owner.name, module: other.name },
+          });
         }
         if (owner && reexport)
-          report(
-            node,
-            "Expose this Module's contract; do not re-export another owner's surface",
-          );
+          report(at(node), {
+            rule: "module/foreign-reexport",
+            data: { importer: owner.name, module: other.name, target },
+          });
         if (
-          (owner?.name === "tui" || owner?.name === "headless") &&
+          owner &&
+          isClient(owner.name) &&
           target === "src/application/application.ts"
         ) {
-          report(
-            node,
-            "Clients receive Application Interfaces; only composition constructs the application",
-          );
+          report(at(node), {
+            rule: "module/client-construction",
+            data: { importer: owner.name },
+          });
         }
         return;
       }
       if (!owner) return;
       if (clientContract)
-        report(
-          node,
-          "Application client contracts must not depend on external packages or native types",
-        );
+        report(at(node), {
+          rule: "module/client-contract-external",
+          data: { specifier },
+        });
       const forbidden =
         externalViolation(owner.name, specifier) ||
         (resolved?.packageId &&
           externalViolation(owner.name, resolved.packageId.name));
-      if (forbidden) report(node, forbidden);
-      if (owner.name === "workflow" && isBuiltin(specifier))
+      if (forbidden) {
+        const importer = owner.name;
         report(
-          node,
-          "Workflow composition is execution-free and cannot import Node mechanisms",
+          at(node),
+          forbidden.kind === "excluded"
+            ? { rule: "module/excluded-dependency", data: { specifier } }
+            : forbidden.kind === "fenced"
+              ? {
+                  rule: "module/dependency-owner",
+                  data: { importer, specifier, owners: forbidden.owners },
+                }
+              : forbidden.kind === "sqlite-driver"
+                ? {
+                    rule: "module/sqlite-driver",
+                    data: { importer, specifier, owners: forbidden.owners },
+                  }
+                : { rule: "module/custom-loader", data: { specifier } },
         );
+      }
+      if (owner.name === "workflow" && isBuiltin(specifier))
+        report(at(node), {
+          rule: "module/workflow-builtin",
+          data: { specifier },
+        });
       // A `bun:` builtin does not resolve to an installed dependency; the
       // allowlist (check-vendor-provenance) governs whether it is permitted at
       // all, but ownership rules above (e.g. SQLite) still apply here.
@@ -292,22 +310,22 @@ export function checkModuleBoundaries(root: string): {
         !specifier.startsWith("bun:") &&
         (!resolved || !resolved.isExternalLibraryImport)
       ) {
-        report(
-          node,
-          "Import cannot be assigned to an installed dependency or owned source: " +
-            specifier,
-        );
+        report(at(node), {
+          rule: "module/unresolved-import",
+          data: { specifier },
+        });
       }
     }
 
-    if (
-      owner &&
-      (source.referencedFiles.length || source.typeReferenceDirectives.length)
-    ) {
-      report(
-        source,
-        "Use explicit module imports instead of triple-slash references",
-      );
+    const directive = [
+      ...source.referencedFiles,
+      ...source.typeReferenceDirectives,
+    ].sort((left, right) => left.pos - right.pos)[0];
+    if (owner && directive) {
+      report(source.text.lastIndexOf("///", directive.pos), {
+        rule: "module/triple-slash-reference",
+        data: {},
+      });
     }
     function visit(node: ts.Node) {
       if (
@@ -321,10 +339,10 @@ export function checkModuleBoundaries(root: string): {
           ts.isExportDeclaration(node),
         );
         if (owner && ts.isExportDeclaration(node) && !node.exportClause)
-          report(
-            node,
-            "Public exports must name their intended surface; wildcard barrels are not allowed",
-          );
+          report(at(node), {
+            rule: "module/wildcard-export",
+            data: { specifier: node.moduleSpecifier.text },
+          });
       } else if (
         ts.isImportTypeNode(node) &&
         ts.isLiteralTypeNode(node.argument) &&
@@ -335,36 +353,42 @@ export function checkModuleBoundaries(root: string): {
         ts.isImportEqualsDeclaration(node) &&
         ts.isExternalModuleReference(node.moduleReference)
       ) {
+        const reference = node.moduleReference.expression;
         if (owner)
-          report(
-            node,
-            "Target code uses ESM imports, not require-style import assignments",
-          );
+          report(at(node), {
+            rule: "module/require-assignment",
+            data: {
+              specifier: ts.isStringLiteralLike(reference)
+                ? reference.text
+                : reference.getText(source),
+            },
+          });
       } else if (ts.isCallExpression(node)) {
         if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
           const argument = node.arguments[0];
           if (argument && ts.isStringLiteralLike(argument))
             checkImport(node, argument.text);
           else if (owner)
-            report(
-              node,
-              "Computed imports cannot be checked; use an explicit table of literal imports",
-            );
+            report(at(node), { rule: "module/computed-import", data: {} });
         } else if (
           owner &&
           ts.isIdentifier(node.expression) &&
           (node.expression.text === "require" ||
             node.expression.text === "eval")
         ) {
-          report(
-            node,
-            "Target code cannot bypass the declared ESM dependency graph with require or eval",
-          );
+          report(at(node), {
+            rule: "module/require-or-eval",
+            data: { callee: node.expression.text },
+          });
         }
       }
       ts.forEachChild(node, visit);
     }
     visit(source);
   }
-  return { issues, targetFiles: targetCount };
+  return issues;
 }
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
