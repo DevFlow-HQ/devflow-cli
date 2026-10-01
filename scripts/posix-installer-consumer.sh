@@ -7,13 +7,15 @@
 # scripts/powershell-installer-consumer.ps1; see docs/agents/release-consumers.md.
 #
 # Usage: posix-installer-consumer.sh --scenario supported|unsupported \
-#          --candidate-dir <dir>
+#          --candidate-dir <dir> [--hanging-executable <path>]
 #
 #   supported   (macOS arm64, Linux x64): install/replace the real candidate,
-#               prove SECANT_HOME independence, exact-version selection, PATH
-#               idempotency, and that a malformed candidate (checksum, layout,
-#               version, legal material) is refused while the existing install
-#               is preserved.
+#               prove the phase lines in order, SECANT_HOME independence,
+#               exact-version selection, PATH idempotency, and that a missing
+#               or malformed candidate (missing file, checksum, layout,
+#               version, legal material, a --version that hangs) is refused
+#               while the existing install is preserved. Requires
+#               --hanging-executable: a native executable that never exits.
 #   unsupported (Windows x64): refuse the native target before any candidate
 #               access.
 
@@ -21,6 +23,7 @@ set -euo pipefail
 
 scenario=""
 candidate_dir=""
+hanging_executable=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --scenario)
@@ -29,6 +32,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --candidate-dir)
       candidate_dir=${2:-}
+      shift 2
+      ;;
+    --hanging-executable)
+      hanging_executable=${2:-}
       shift 2
       ;;
     *)
@@ -77,6 +84,8 @@ if [ "$scenario" != supported ]; then
 fi
 
 [ -n "$candidate_dir" ] || fail "--candidate-dir is required for the supported scenario"
+[ -f "$hanging_executable" ] ||
+  fail "--hanging-executable must name a native executable that never exits"
 original_candidate=$(cd "$candidate_dir" && pwd)
 manifest_name=candidate-manifest.json
 sums_name=SHA256SUMS
@@ -111,14 +120,15 @@ reset_local_candidate() {
   cp -R "$original_candidate/." "$local_candidate/"
 }
 
-# Rewrite the archiveSha256 of the host target only (the block whose archive
+# Rewrite one digest field of the host target only (the block whose archive
 # field matches), mirroring install.sh's own single-target awk selection.
-set_target_archive_digest() {
-  digest=$1
-  awk -v archive="$archive" -v digest="$digest" '
+set_target_digest() {
+  field=$1
+  digest=$2
+  awk -v archive="$archive" -v field="$field" -v digest="$digest" '
     $0 ~ "\"archive\"[[:space:]]*:[[:space:]]*\"" archive "\"" { in_target = 1 }
-    in_target && /"archiveSha256"[[:space:]]*:/ {
-      sub(/"archiveSha256"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"archiveSha256\": \"" digest "\"")
+    in_target && $0 ~ "\"" field "\"[[:space:]]*:" {
+      sub("\"" field "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"", "\"" field "\": \"" digest "\"")
       in_target = 0
     }
     { print }
@@ -150,13 +160,82 @@ set_sums_digest() {
   mv "$local_candidate/$sums_name.tmp" "$local_candidate/$sums_name"
 }
 
+# Every installer run has an outer bound, so a regression that hangs fails this
+# step instead of holding the CI leg. Output goes to a file, so a stray child
+# holding the installer's streams cannot stall the read.
 run_installer() {
+  run_installer_bounded 300 "$@"
+}
+
+run_installer_bounded() {
+  outer_seconds=$1
+  shift
   installer_output_file=$test_root/installer-output
+  rm -f "$test_root/installer-outer-bound"
+  sh "$installer" --candidate-dir "$local_candidate" "$@" >"$installer_output_file" 2>&1 &
+  installer_pid=$!
+  (
+    waited=0
+    while [ "$waited" -lt "$outer_seconds" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    : >"$test_root/installer-outer-bound"
+    kill -s KILL "$installer_pid"
+  ) >/dev/null 2>&1 &
+  outer_watchdog_pid=$!
   set +e
-  sh "$installer" --candidate-dir "$local_candidate" "$@" >"$installer_output_file" 2>&1
+  wait "$installer_pid" 2>/dev/null
   installer_status=$?
   set -e
+  kill "$outer_watchdog_pid" 2>/dev/null || true
+  wait "$outer_watchdog_pid" 2>/dev/null || true
   installer_output=$(cat "$installer_output_file")
+  [ ! -e "$test_root/installer-outer-bound" ] ||
+    fail "the installer was still running after the ${outer_seconds}s outer bound: $installer_output"
+}
+
+# The installer announces each phase as it starts, in this order.
+assert_phase_lines() {
+  name=$1
+  requested=$2
+  expected=$(printf '%s\n' \
+    "Resolving the Secant release ($requested)" \
+    "Fetching the release manifest and checksums" \
+    "Downloading $archive" \
+    "Verifying $archive" \
+    "Installing Secant $version to $install_dir")
+  actual=$(printf '%s\n' "$installer_output" | grep -E '^(Resolving|Fetching|Downloading|Verifying|Installing) ' || true)
+  [ "$actual" = "$expected" ] ||
+    fail "$name did not print the phase lines in order. Expected:
+$expected
+Actual output:
+$installer_output"
+}
+
+# Repack the local candidate archive from a directory with explicit member
+# names (no leading `./`), then rewrite its digest in SHA256SUMS and the manifest.
+repack_local_archive() {
+  repack_dir=$1
+  shift
+  rm -f "$local_candidate/$archive"
+  case "$archive" in
+    *.zip) (cd "$repack_dir" && zip -q -X "$local_candidate/$archive" "$@") ;;
+    *.tar.gz) (cd "$repack_dir" && tar -czf "$local_candidate/$archive" "$@") ;;
+  esac
+  new_digest=$(sha256_file "$local_candidate/$archive")
+  set_sums_digest "$new_digest"
+  set_target_digest archiveSha256 "$new_digest"
+}
+
+extract_local_archive() {
+  extract_into=$1
+  rm -rf "$extract_into"
+  mkdir -p "$extract_into"
+  case "$archive" in
+    *.zip) (cd "$extract_into" && unzip -q "$local_candidate/$archive") ;;
+    *.tar.gz) tar -xzf "$local_candidate/$archive" -C "$extract_into" ;;
+  esac
 }
 
 assert_installed_runs() {
@@ -185,6 +264,7 @@ assert_failure_preserves() {
 reset_local_candidate
 run_installer --no-modify-path
 [ "$installer_status" -eq 0 ] || fail "latest installation failed: $installer_output"
+assert_phase_lines "the latest installation" latest
 assert_installed_runs
 [ -f "$install_dir/LICENSE" ] || fail "the installer did not install LICENSE"
 [ -f "$install_dir/THIRD-PARTY-NOTICES.md" ] ||
@@ -202,6 +282,7 @@ fi
 reset_local_candidate
 run_installer --version "$version" --no-modify-path
 [ "$installer_status" -eq 0 ] || fail "exact-version installation failed: $installer_output"
+assert_phase_lines "the exact-version installation" "$version"
 assert_installed_runs
 reset_local_candidate
 run_installer --version "v$version" --no-modify-path
@@ -214,29 +295,20 @@ assert_failure_preserves "a mismatched exact version" "does not match requested 
 
 # --- Malformed candidate refusals preserve the install -----------------------
 reset_local_candidate
+rm -f "$local_candidate/$sums_name"
+assert_failure_preserves "a missing candidate file" \
+  "Fetching the release manifest and checksums failed: local candidate file not found: $local_candidate/$sums_name" \
+  --no-modify-path
+
+reset_local_candidate
 printf 'tampered' >>"$local_candidate/$archive"
 assert_failure_preserves "a tampered checksum" "checksum does not match" --no-modify-path
 
 reset_local_candidate
 layout_dir=$test_root/layout
-rm -rf "$layout_dir"
-mkdir -p "$layout_dir"
-case "$archive" in
-  *.zip) (cd "$layout_dir" && unzip -q "$local_candidate/$archive") ;;
-  *.tar.gz) tar -xzf "$local_candidate/$archive" -C "$layout_dir" ;;
-esac
+extract_local_archive "$layout_dir"
 printf 'unexpected\n' >"$layout_dir/unexpected.txt"
-rm -f "$local_candidate/$archive"
-# Repack with explicit member names (no leading `./`) so the only layout
-# difference the installer sees is the extra file, not a path-prefix artefact.
-layout_members="secant LICENSE THIRD-PARTY-NOTICES.md unexpected.txt"
-case "$archive" in
-  *.zip) (cd "$layout_dir" && zip -q -X "$local_candidate/$archive" $layout_members) ;;
-  *.tar.gz) (cd "$layout_dir" && tar -czf "$local_candidate/$archive" $layout_members) ;;
-esac
-new_digest=$(sha256_file "$local_candidate/$archive")
-set_sums_digest "$new_digest"
-set_target_archive_digest "$new_digest"
+repack_local_archive "$layout_dir" secant LICENSE THIRD-PARTY-NOTICES.md unexpected.txt
 assert_failure_preserves "an unexpected archive layout" "layout must contain only" --no-modify-path
 
 reset_local_candidate
@@ -248,6 +320,32 @@ set_manifest_field licenseSha256 "$(printf '0%.0s' $(seq 1 64))"
 assert_failure_preserves "a legal-material digest mismatch" "LICENSE checksum is invalid" \
   --no-modify-path
 
+# --- A --version that hangs fails bounded and preserves the install ----------
+# A well-formed candidate whose executable never exits: every digest matches,
+# so only the installer's own probe bound can end the run. TMPDIR is pinned so
+# the killed probe's path is recognisable afterwards.
+reset_local_candidate
+hang_dir=$test_root/hang
+extract_local_archive "$hang_dir"
+cp "$hanging_executable" "$hang_dir/secant"
+chmod 755 "$hang_dir/secant"
+set_target_digest binarySha256 "$(sha256_file "$hang_dir/secant")"
+repack_local_archive "$hang_dir" secant LICENSE THIRD-PARTY-NOTICES.md
+installer_tmp=$test_root/installer-tmp
+mkdir -p "$installer_tmp"
+before=$(sha256_file "$executable")
+TMPDIR=$installer_tmp run_installer_bounded 120 --no-modify-path
+[ "$installer_status" -ne 0 ] || fail "a hanging --version was accepted: $installer_output"
+printf '%s\n' "$installer_output" |
+  grep -F 'Candidate executable could not report its version within 30 seconds' >/dev/null ||
+  fail "a hanging --version did not fail as a bounded executable-version failure: $installer_output"
+if ps -A -o args= | grep -F "$installer_tmp/" | grep -v grep >/dev/null; then
+  fail "the installer left the hanging version probe running"
+fi
+[ "$(sha256_file "$executable")" = "$before" ] ||
+  fail "a hanging --version changed the existing installation"
+assert_installed_runs
+
 # --- PATH modification is idempotent -----------------------------------------
 reset_local_candidate
 run_installer
@@ -258,4 +356,4 @@ path_lines=$(grep -F -c 'export PATH="$HOME/.secant/bin:$PATH"' "$test_home/.zsh
 [ "$path_lines" = "1" ] ||
   fail "PATH modification was not idempotent ($path_lines profile entries)"
 
-echo "POSIX installer installed and ran the local candidate and preserved it across malformed-candidate failures."
+echo "POSIX installer installed and ran the local candidate, printed its phases, and preserved it across malformed-candidate and hung-probe failures."

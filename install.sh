@@ -24,6 +24,15 @@ fail() {
   exit 1
 }
 
+current_phase=""
+
+# Announce each install phase as it starts, so a slow step is visibly in
+# progress and a failed download can name the phase it interrupted.
+phase() {
+  current_phase=$1
+  printf '%s\n' "$current_phase"
+}
+
 validate_version() {
   version_value=$1
   version_source=$2
@@ -104,8 +113,23 @@ install_dir=$install_parent/bin
 temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/secant-install.XXXXXX")
 install_stage=""
 next_link=""
+probe_pid=""
+watchdog_pid=""
+
+# Every network call is bounded: connect, the whole transfer, and a few
+# retries of curl's transient failures. Nothing else goes to the network.
+connect_timeout_seconds=20
+download_timeout_seconds=600
+download_retries=3
+version_probe_seconds=30
 
 cleanup() {
+  if [ -n "$probe_pid" ]; then
+    kill -s KILL "$probe_pid" 2>/dev/null || true
+  fi
+  if [ -n "$watchdog_pid" ]; then
+    kill "$watchdog_pid" 2>/dev/null || true
+  fi
   rm -rf "$temporary_dir"
   if [ -n "$install_stage" ]; then
     rm -rf "$install_stage"
@@ -122,20 +146,19 @@ download() {
   download_destination=$2
   if [ -n "$candidate_dir" ]; then
     [ -f "$candidate_dir/$download_name" ] ||
-      fail "Local candidate file not found: $candidate_dir/$download_name"
+      fail "$current_phase failed: local candidate file not found: $candidate_dir/$download_name"
     cp "$candidate_dir/$download_name" "$download_destination"
     return
   fi
 
-  command -v curl >/dev/null 2>&1 || fail "curl is required to install Secant"
-  if [ -n "$requested_version" ]; then
-    release_path="download/v$requested_version"
-  else
-    release_path=latest/download
-  fi
+  download_url=$release_url/$download_name
   curl -fsSL \
-    "https://github.com/secantdev/secant/releases/$release_path/$download_name" \
-    -o "$download_destination"
+    --connect-timeout "$connect_timeout_seconds" \
+    --max-time "$download_timeout_seconds" \
+    --retry "$download_retries" \
+    "$download_url" \
+    -o "$download_destination" ||
+    fail "$current_phase failed: could not download $download_url"
 }
 
 manifest_value() {
@@ -190,6 +213,17 @@ sha256_file() {
   fi
 }
 
+phase "Resolving the Secant release (${requested_version:-latest})"
+if [ -z "$candidate_dir" ]; then
+  command -v curl >/dev/null 2>&1 || fail "curl is required to install Secant"
+  if [ -n "$requested_version" ]; then
+    release_url="https://github.com/secantdev/secant/releases/download/v$requested_version"
+  else
+    release_url=https://github.com/secantdev/secant/releases/latest/download
+  fi
+fi
+
+phase "Fetching the release manifest and checksums"
 download "$manifest_file" "$temporary_dir/$manifest_file"
 download "$checksums_file" "$temporary_dir/$checksums_file"
 
@@ -217,7 +251,10 @@ case "$archive_type" in
 esac
 
 archive_path=$temporary_dir/$archive
+phase "Downloading $archive"
 download "$archive" "$archive_path"
+
+phase "Verifying $archive"
 expected_archive_sha256=$(
   awk -v archive="$archive" '
     $2 == archive && NF == 2 { count += 1; digest = $1 }
@@ -270,11 +307,45 @@ if [ "$os" = darwin ]; then
     fail "Candidate executable failed strict macOS signature verification"
 fi
 
-reported_version=$("$extract_dir/$executable" --version) ||
+# Bound the local version probe without timeout(1), which is not POSIX: run
+# it in the background and let a watchdog kill it once the bound expires. Its
+# output goes to files, never a pipe, so a killed probe cannot hold the
+# installer's own output open. The watchdog sleeps one second at a time so
+# cancelling it never strands a long sleep.
+probe_dir=$temporary_dir/version-probe
+mkdir "$probe_dir"
+"$extract_dir/$executable" --version >"$probe_dir/stdout" 2>"$probe_dir/stderr" </dev/null &
+probe_pid=$!
+(
+  waited=0
+  while [ "$waited" -lt "$version_probe_seconds" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  : >"$probe_dir/timed-out"
+  kill -s KILL "$probe_pid"
+) >/dev/null 2>&1 &
+watchdog_pid=$!
+if wait "$probe_pid" 2>/dev/null; then
+  probe_status=0
+else
+  probe_status=$?
+fi
+probe_pid=""
+kill "$watchdog_pid" 2>/dev/null || true
+wait "$watchdog_pid" 2>/dev/null || true
+watchdog_pid=""
+[ ! -e "$probe_dir/timed-out" ] ||
+  fail "Candidate executable could not report its version within $version_probe_seconds seconds"
+if [ "$probe_status" -ne 0 ]; then
+  cat "$probe_dir/stderr" >&2
   fail "Candidate executable could not report its version"
+fi
+reported_version=$(cat "$probe_dir/stdout")
 [ "$reported_version" = "$candidate_version" ] ||
   fail "Candidate executable reported version $reported_version instead of $candidate_version"
 
+phase "Installing Secant $candidate_version to $install_dir"
 # Stage one immutable layout on the destination filesystem, then atomically
 # switch the fixed bin path. The previous executable and its legal material
 # therefore remain one coherent installation until the single rename.

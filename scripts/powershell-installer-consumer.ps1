@@ -5,7 +5,11 @@ param(
 
   [Parameter(Mandatory = $true)]
   [ValidateSet("supported", "unsupported")]
-  [string]$Scenario
+  [string]$Scenario,
+
+  # The supported scenario's native executable that never exits, for the
+  # bounded version-probe failure.
+  [string]$HangingExecutable
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,10 +30,14 @@ function Assert-True {
   }
 }
 
+# Every child run is bounded, so a regression that hangs fails this step
+# instead of holding the CI leg; the streams are read concurrently and the
+# read is bounded too, in case a stray grandchild still holds them.
 function Invoke-PowerShell {
   param(
     [string[]]$Arguments,
-    [hashtable]$Environment = @{}
+    [hashtable]$Environment = @{},
+    [int]$TimeoutSeconds = 300
   )
 
   $StartInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -47,24 +55,38 @@ function Invoke-PowerShell {
   $Process = [Diagnostics.Process]::new()
   $Process.StartInfo = $StartInfo
   [void]$Process.Start()
-  $StandardOutput = $Process.StandardOutput.ReadToEnd()
-  $StandardError = $Process.StandardError.ReadToEnd()
+  $StandardOutputRead = $Process.StandardOutput.ReadToEndAsync()
+  $StandardErrorRead = $Process.StandardError.ReadToEndAsync()
+  if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
+    $Process.Kill($true)
+    throw "The child PowerShell was still running after the ${TimeoutSeconds}s outer bound: $($Arguments -join ' ')"
+  }
+  if (-not [Threading.Tasks.Task]::WaitAll(@($StandardOutputRead, $StandardErrorRead), 10000)) {
+    throw "The child PowerShell exited but its output streams stayed open: $($Arguments -join ' ')"
+  }
   $Process.WaitForExit()
+  $StandardOutput = $StandardOutputRead.Result
+  $StandardError = $StandardErrorRead.Result
+  # PowerShell's error view colours and wraps a message across gutter lines,
+  # so messages are matched against one flattened line.
+  $FlatOutput = (($StandardOutput + $StandardError) -replace "\x1b\[[0-9;]*m", "" -split "\r?\n" | ForEach-Object { $_ -replace '^\s*\|\s?', '' }) -join " " -replace "\s+", " "
   return [pscustomobject]@{
     ExitCode = $Process.ExitCode
     StandardOutput = $StandardOutput
     StandardError = $StandardError
     Output = $StandardOutput + $StandardError
+    FlatOutput = $FlatOutput
   }
 }
 
 function Invoke-Installer {
   param(
     [string[]]$Arguments,
-    [hashtable]$Environment
+    [hashtable]$Environment,
+    [int]$TimeoutSeconds = 300
   )
 
-  return Invoke-PowerShell -Arguments (@("-NoProfile", "-NonInteractive", "-File", $Installer) + $Arguments) -Environment $Environment
+  return Invoke-PowerShell -Arguments (@("-NoProfile", "-NonInteractive", "-File", $Installer) + $Arguments) -Environment $Environment -TimeoutSeconds $TimeoutSeconds
 }
 
 if ($Scenario -eq "unsupported") {
@@ -85,6 +107,10 @@ if ($Scenario -eq "unsupported") {
 if (-not $IsWindows) {
   throw "The supported PowerShell installer scenario requires Windows x64."
 }
+if (-not $HangingExecutable -or -not (Test-Path -LiteralPath $HangingExecutable -PathType Leaf)) {
+  throw "The supported scenario requires -HangingExecutable: a native executable that never exits."
+}
+$HangingExecutable = [System.IO.Path]::GetFullPath($HangingExecutable)
 
 $OriginalCandidateDirectory = [System.IO.Path]::GetFullPath($CandidateDirectory)
 $OriginalManifest = Get-Content -LiteralPath (Join-Path $OriginalCandidateDirectory "candidate-manifest.json") -Raw | ConvertFrom-Json
@@ -102,11 +128,17 @@ function Reset-LocalCandidate {
 }
 
 function Update-LocalArchiveDigest {
+  param([string]$BinarySha256)
+
   $ArchivePath = Join-Path $LocalCandidate "secant-windows-x64.zip"
   $ArchiveDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArchivePath).Hash.ToLowerInvariant()
   $ManifestPath = Join-Path $LocalCandidate "candidate-manifest.json"
   $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-  ($Manifest.targets | Where-Object { $_.key -eq "windows-x64" }).archiveSha256 = $ArchiveDigest
+  $WindowsTarget = $Manifest.targets | Where-Object { $_.key -eq "windows-x64" }
+  $WindowsTarget.archiveSha256 = $ArchiveDigest
+  if ($BinarySha256) {
+    $WindowsTarget.binarySha256 = $BinarySha256
+  }
   $Manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ManifestPath
   $ChecksumPath = Join-Path $LocalCandidate "SHA256SUMS"
   $Checksums = @(Get-Content -LiteralPath $ChecksumPath | ForEach-Object {
@@ -132,6 +164,26 @@ function Assert-InstalledCandidateRuns {
   Assert-True (($InstalledVersion | Out-String).Trim() -eq $Version) "The installed executable reported the wrong version."
 }
 
+# The installer announces each phase as it starts, in this order, on stdout
+# (Write-Host reaches a redirected stdout in order with Write-Output).
+function Assert-PhaseLines {
+  param(
+    [string]$Name,
+    [object]$Result,
+    [string]$Requested
+  )
+
+  $Expected = @(
+    "Resolving the Secant release ($Requested)",
+    "Fetching the release manifest and checksums",
+    "Downloading secant-windows-x64.zip",
+    "Verifying secant-windows-x64.zip",
+    "Installing Secant $Version to $InstallDirectory"
+  )
+  $Actual = @($Result.StandardOutput -split "`r?`n" | Where-Object { $_ -match '^(Resolving|Fetching|Downloading|Verifying|Installing) ' })
+  Assert-True (($Actual -join "`n") -ceq ($Expected -join "`n")) "$Name did not print the phase lines in order. Expected:`n$($Expected -join "`n")`nActual output:`n$($Result.StandardOutput)"
+}
+
 function Assert-FailurePreservesInstall {
   param(
     [string]$Name,
@@ -143,7 +195,7 @@ function Assert-FailurePreservesInstall {
   $Failed = Invoke-Installer -Arguments $Arguments -Environment $Environment
   Assert-True ($Failed.ExitCode -ne 0) "$Name was accepted: $($Failed.Output)"
   if ($ExpectedPattern) {
-    Assert-True ($Failed.Output -match $ExpectedPattern) "$Name did not fail at the expected validation: $($Failed.Output)"
+    Assert-True ($Failed.FlatOutput -match $ExpectedPattern) "$Name did not fail at the expected validation: $($Failed.Output)"
   }
   $AfterFailure = (Get-FileHash -Algorithm SHA256 -LiteralPath $Executable).Hash
   Assert-True ($AfterFailure -eq $BeforeFailure) "$Name changed the existing installation."
@@ -157,6 +209,7 @@ try {
   $PathBeforeDecline = [Environment]::GetEnvironmentVariable("Path", "User")
   $Declined = Invoke-Installer -Arguments @("-NoModifyPath") -Environment $Environment
   Assert-True ($Declined.ExitCode -eq 0) "Latest installation failed: $($Declined.Output)"
+  Assert-PhaseLines "The latest installation" $Declined "latest"
   Assert-True ([Environment]::GetEnvironmentVariable("Path", "User") -eq $PathBeforeDecline) "-NoModifyPath changed user PATH."
 
   Assert-True (Test-Path -LiteralPath (Join-Path $InstallDirectory "LICENSE") -PathType Leaf) "The installer did not install LICENSE."
@@ -185,6 +238,7 @@ try {
   Reset-LocalCandidate
   $Exact = Invoke-Installer -Arguments @("-Version", $Version) -Environment $Environment
   Assert-True ($Exact.ExitCode -eq 0) "Exact-version installation failed: $($Exact.Output)"
+  Assert-PhaseLines "The exact-version installation" $Exact $Version
   $PathAfterExact = [Environment]::GetEnvironmentVariable("Path", "User")
   $Again = Invoke-Installer -Arguments @("-Version", "v$Version") -Environment $Environment
   Assert-True ($Again.ExitCode -eq 0) "Repeated v-prefixed exact-version installation failed: $($Again.Output)"
@@ -197,7 +251,7 @@ try {
 
   Reset-LocalCandidate
   Remove-Item -LiteralPath (Join-Path $LocalCandidate "SHA256SUMS")
-  Assert-FailurePreservesInstall "a missing candidate download"
+  Assert-FailurePreservesInstall "a missing candidate download" -ExpectedPattern ([regex]::Escape("Fetching the release manifest and checksums failed: local candidate file is missing: $(Join-Path $LocalCandidate 'SHA256SUMS')"))
 
   Reset-LocalCandidate
   Set-Content -LiteralPath (Join-Path $LocalCandidate "candidate-manifest.json") -Value "{"
@@ -286,7 +340,34 @@ try {
   Update-LocalArchiveDigest
   Assert-FailurePreservesInstall "a non-file archive entry" -ExpectedPattern "non-file entry"
 
-  Write-Output "PowerShell installer installed and ran the local Windows x64 candidate and preserved it across download and validation failures."
+  # A well-formed candidate whose executable never exits: every digest matches,
+  # so only the installer's own probe bound can end the run. TEMP is pinned so
+  # the killed probe's path is recognisable afterwards.
+  Reset-LocalCandidate
+  $HangDirectory = Join-Path $TestRoot "hang"
+  Expand-Archive -LiteralPath (Join-Path $LocalCandidate "secant-windows-x64.zip") -DestinationPath $HangDirectory
+  Copy-Item -LiteralPath $HangingExecutable -Destination (Join-Path $HangDirectory "secant.exe") -Force
+  $HangingDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $HangDirectory "secant.exe")).Hash.ToLowerInvariant()
+  Remove-Item -LiteralPath (Join-Path $LocalCandidate "secant-windows-x64.zip")
+  Compress-Archive -Path (Join-Path $HangDirectory "*") -DestinationPath (Join-Path $LocalCandidate "secant-windows-x64.zip")
+  Update-LocalArchiveDigest -BinarySha256 $HangingDigest
+  $InstallerTemp = Join-Path $TestRoot "installer-temp"
+  New-Item -ItemType Directory -Path $InstallerTemp -Force | Out-Null
+  $HangEnvironment = $Environment.Clone()
+  $HangEnvironment.TEMP = $InstallerTemp
+  $HangEnvironment.TMP = $InstallerTemp
+  $BeforeHang = (Get-FileHash -Algorithm SHA256 -LiteralPath $Executable).Hash
+  $Hung = Invoke-Installer -Arguments @("-NoModifyPath") -Environment $HangEnvironment -TimeoutSeconds 120
+  Assert-True ($Hung.ExitCode -ne 0) "A hanging --version was accepted: $($Hung.Output)"
+  Assert-True ($Hung.FlatOutput -match ([regex]::Escape("secant.exe --version did not exit within 30 seconds."))) "A hanging --version did not fail as a bounded executable-version failure: $($Hung.Output)"
+  # Match on the unique test-root leaf: TEMP may spell its parent as an 8.3 short name.
+  $InstallerTempMarker = Join-Path (Split-Path -Leaf $TestRoot) "installer-temp"
+  $LeftoverProbes = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Contains($InstallerTempMarker) })
+  Assert-True ($LeftoverProbes.Count -eq 0) "The installer left the hanging version probe running."
+  Assert-True ((Get-FileHash -Algorithm SHA256 -LiteralPath $Executable).Hash -eq $BeforeHang) "A hanging --version changed the existing installation."
+  Assert-InstalledCandidateRuns
+
+  Write-Output "PowerShell installer installed and ran the local Windows x64 candidate, printed its phases, and preserved it across download, validation, and hung-probe failures."
 }
 finally {
   [Environment]::SetEnvironmentVariable("Path", $OriginalUserPath, "User")

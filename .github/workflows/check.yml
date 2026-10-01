@@ -200,6 +200,18 @@ jobs:
       - name: Restore the executable bit
         if: runner.os != 'Windows'
         run: chmod +x "dist/${{ matrix.binary }}"
+      # Both installer consumers need a native candidate whose `--version` never
+      # exits, to prove the installer's bounded version probe. It is built with the
+      # pinned Bun from source written here, so it is signed like the real candidate
+      # on macOS and adds no tracked file.
+      - name: Build the hanging version-probe stand-in
+        shell: bash
+        run: |
+          set -euo pipefail
+          stand_in_dir="$RUNNER_TEMP/hanging-candidate"
+          mkdir -p "$stand_in_dir"
+          printf 'setInterval(() => {}, 1 << 30);\n' >"$stand_in_dir/hang.ts"
+          bun build --compile "$stand_in_dir/hang.ts" --outfile "$stand_in_dir/hang${{ runner.os == 'Windows' && '.exe' || '' }}"
       - name: Compiled-binary smoke
         id: compiled_binary_smoke
         continue-on-error: true
@@ -222,7 +234,7 @@ jobs:
         shell: pwsh
         run: |
           if ("${{ runner.os }}" -eq "Windows") {
-            ./scripts/powershell-installer-consumer.ps1 -CandidateDirectory dist/release -Scenario supported
+            ./scripts/powershell-installer-consumer.ps1 -CandidateDirectory dist/release -Scenario supported -HangingExecutable "$env:RUNNER_TEMP/hanging-candidate/hang.exe"
           } else {
             ./scripts/powershell-installer-consumer.ps1 -CandidateDirectory dist/release -Scenario unsupported
           }
@@ -234,7 +246,8 @@ jobs:
           if [ "${{ runner.os }}" = 'Windows' ]; then
             bash scripts/posix-installer-consumer.sh --scenario unsupported --candidate-dir dist/release
           else
-            bash scripts/posix-installer-consumer.sh --scenario supported --candidate-dir dist/release
+            bash scripts/posix-installer-consumer.sh --scenario supported --candidate-dir dist/release \
+              --hanging-executable "$RUNNER_TEMP/hanging-candidate/hang"
           fi
       - name: Terminal lifecycle
         id: terminal_lifecycle

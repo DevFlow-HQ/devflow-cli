@@ -14,6 +14,38 @@ $NoticesName = "THIRD-PARTY-NOTICES.md"
 $ManifestName = "candidate-manifest.json"
 $ChecksumsName = "SHA256SUMS"
 $RepositoryReleases = "https://github.com/secantdev/secant/releases"
+$VersionProbeSeconds = 30
+$script:CurrentPhase = ""
+
+# Write-Host reaches the console (or a redirected stdout) without entering a
+# function's return value, so a phase line can never corrupt a result.
+function Write-Phase {
+  param([string]$Message)
+  $script:CurrentPhase = $Message
+  Write-Host $Message
+}
+
+# Bound every download with the native parameters this PowerShell offers.
+# PowerShell 7.4+ bounds the connection and any stall between reads (it has no
+# whole-transfer bound); older PowerShell, including Windows PowerShell 5.1,
+# gets one generous request timeout, which is safe whether it covers only the
+# connection or the whole transfer. Retries exist from PowerShell 6.1.
+function Get-WebRequestBounds {
+  $Available = (Get-Command Invoke-WebRequest).Parameters
+  $Bounds = @{}
+  if ($Available.ContainsKey("OperationTimeoutSeconds")) {
+    $Bounds.ConnectionTimeoutSeconds = 20
+    $Bounds.OperationTimeoutSeconds = 60
+  }
+  else {
+    $Bounds.TimeoutSec = 600
+  }
+  if ($Available.ContainsKey("MaximumRetryCount")) {
+    $Bounds.MaximumRetryCount = 3
+    $Bounds.RetryIntervalSec = 2
+  }
+  return $Bounds
+}
 
 function Get-HostPlatform {
   if ($PSVersionTable.PSEdition -eq "Desktop") {
@@ -79,29 +111,39 @@ function Resolve-RequestedVersion {
   }
 }
 
+function Get-ReleaseBase {
+  param([string]$RequestedVersion)
+
+  if ($RequestedVersion -eq "latest") {
+    return "$RepositoryReleases/latest/download"
+  }
+  return "$RepositoryReleases/download/v$RequestedVersion"
+}
+
 function Copy-CandidateFile {
   param(
     [string]$Name,
     [string]$Destination,
-    [string]$RequestedVersion
+    [string]$ReleaseBase,
+    [hashtable]$WebRequestBounds
   )
 
   if ($env:SECANT_INSTALLER_CANDIDATE_DIRECTORY) {
     $Source = Join-Path $env:SECANT_INSTALLER_CANDIDATE_DIRECTORY $Name
     if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-      throw "Local candidate file is missing: $Source."
+      throw "$script:CurrentPhase failed: local candidate file is missing: $Source."
     }
     Copy-Item -LiteralPath $Source -Destination $Destination
     return
   }
 
-  if ($RequestedVersion -eq "latest") {
-    $ReleaseBase = "$RepositoryReleases/latest/download"
+  $Uri = "$ReleaseBase/$Name"
+  try {
+    Invoke-WebRequest @WebRequestBounds -UseBasicParsing -Uri $Uri -OutFile $Destination
   }
-  else {
-    $ReleaseBase = "$RepositoryReleases/download/v$RequestedVersion"
+  catch {
+    throw [System.Net.WebException]::new("$script:CurrentPhase failed: could not download ${Uri}: $($_.Exception.Message)", $_.Exception)
   }
-  Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/$Name" -OutFile $Destination
 }
 
 function Get-Sha256 {
@@ -182,6 +224,37 @@ function Assert-ArchiveChecksum {
   }
 }
 
+function Get-ProbeVersion {
+  param(
+    [string]$ProbePath,
+    [string]$OutputDirectory
+  )
+
+  # Output goes to files, never a pipe, so a killed probe cannot hold this
+  # installer's own streams open; the bound then kills a probe that hangs.
+  $StandardOutputPath = Join-Path $OutputDirectory "version-stdout.txt"
+  $StandardErrorPath = Join-Path $OutputDirectory "version-stderr.txt"
+  $Probe = Start-Process -FilePath $ProbePath -ArgumentList "--version" -NoNewWindow -PassThru `
+    -RedirectStandardOutput $StandardOutputPath -RedirectStandardError $StandardErrorPath
+  # Reading the handle now keeps ExitCode available after the process exits.
+  $null = $Probe.Handle
+  if (-not $Probe.WaitForExit($VersionProbeSeconds * 1000)) {
+    try {
+      $Probe.Kill()
+    }
+    catch [System.InvalidOperationException] {
+      # The probe exited between the bound and the kill; it still overran.
+    }
+    $Probe.WaitForExit()
+    throw "$ExecutableName --version did not exit within $VersionProbeSeconds seconds."
+  }
+  $Probe.WaitForExit()
+  if ($Probe.ExitCode -ne 0) {
+    throw "$ExecutableName --version exited $($Probe.ExitCode)."
+  }
+  return ([string](Get-Content -LiteralPath $StandardOutputPath -Raw)).Trim()
+}
+
 function Assert-StagedCandidate {
   param(
     [string]$StageDirectory,
@@ -213,10 +286,7 @@ function Assert-StagedCandidate {
   $ProbePath = Join-Path $ProbeDirectory $ExecutableName
   Copy-Item -LiteralPath $ExecutablePath -Destination $ProbePath
   Assert-Digest $ProbePath ([string]$Target.binarySha256) $ExecutableName
-  $ObservedVersion = (& $ProbePath --version 2>&1 | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0) {
-    throw "$ExecutableName --version exited $LASTEXITCODE."
-  }
+  $ObservedVersion = Get-ProbeVersion $ProbePath $ProbeDirectory
   if ($ObservedVersion -ne [string]$Manifest.version) {
     throw "$ExecutableName reported version '$ObservedVersion' instead of '$($Manifest.version)'."
   }
@@ -280,6 +350,9 @@ function Update-UserPath {
 
 Assert-SupportedTarget
 $RequestedVersion = Resolve-RequestedVersion
+Write-Phase "Resolving the Secant release ($RequestedVersion)"
+$ReleaseBase = Get-ReleaseBase $RequestedVersion
+$WebRequestBounds = Get-WebRequestBounds
 $DownloadDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("secant-installer-" + [Guid]::NewGuid().ToString("N"))
 $HomeDirectory = $HOME
 $SecantDirectory = Join-Path $HomeDirectory ".secant"
@@ -292,8 +365,9 @@ try {
   $ManifestPath = Join-Path $DownloadDirectory $ManifestName
   $ChecksumsPath = Join-Path $DownloadDirectory $ChecksumsName
   $ArchivePath = Join-Path $DownloadDirectory $ArchiveName
-  Copy-CandidateFile $ManifestName $ManifestPath $RequestedVersion
-  Copy-CandidateFile $ChecksumsName $ChecksumsPath $RequestedVersion
+  Write-Phase "Fetching the release manifest and checksums"
+  Copy-CandidateFile $ManifestName $ManifestPath $ReleaseBase $WebRequestBounds
+  Copy-CandidateFile $ChecksumsName $ChecksumsPath $ReleaseBase $WebRequestBounds
 
   try {
     $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
@@ -303,12 +377,16 @@ try {
   }
   $Target = Read-CandidateTarget $Manifest $RequestedVersion
 
-  Copy-CandidateFile $ArchiveName $ArchivePath $RequestedVersion
-  Assert-ArchiveChecksum $ArchivePath $ChecksumsPath $Target
+  Write-Phase "Downloading $ArchiveName"
+  Copy-CandidateFile $ArchiveName $ArchivePath $ReleaseBase $WebRequestBounds
 
+  Write-Phase "Verifying $ArchiveName"
+  Assert-ArchiveChecksum $ArchivePath $ChecksumsPath $Target
   New-Item -ItemType Directory -Path $SecantDirectory, $StageDirectory -Force | Out-Null
   Expand-Archive -LiteralPath $ArchivePath -DestinationPath $StageDirectory
   Assert-StagedCandidate $StageDirectory $Manifest $Target $DownloadDirectory
+
+  Write-Phase "Installing Secant $($Manifest.version) to $InstallDirectory"
   Install-StagedCandidate $StageDirectory $InstallDirectory $BackupDirectory
 }
 finally {
