@@ -467,6 +467,25 @@ What was taken and changed:
              for the `animations_enabled` toggle until ADR 0037's stored
              setting exists.
 
+Added 2026-10-01 for the M7 Start a Run choices and model check (#286). Rebuilt
+against OpenCode at 228e9095ba; no OpenCode source crosses. The highlighted
+Bundle and Harness rows reuse catalog-navigation.tsx's `CatalogRow` (internal
+reuse; #284 records its study above).
+
+  src/tui/start-run-views.tsx   Harness step's checking line rebuilt against the
+                                loading option of
+                                packages/tui/src/component/dialog-console-org.tsx
+
+What was taken and changed:
+
+  loading row (from dialog-console-org.tsx):
+    Taken:   plain in-progress words ("Loading orgs…") stand where the choice
+             will be, and Enter does nothing until the data arrives.
+    Changed: the words are "Checking models…" on the chosen Harness's status
+             line (and its list row), not a selectable option; Continue leaves
+             the footer and no model control mounts until the check settles,
+             then the model control or the existing unavailable block shows.
+
 THEME ASSETS (25 vendored, unmodified palettes)
 -----------------------------------------------
 

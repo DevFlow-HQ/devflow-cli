@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { testRender } from "@opentui/solid";
+import { TextAttributes } from "@opentui/core";
 import { createSignal } from "solid-js";
 import { App, createLiveRunLaunchView } from "../../src/tui/tui.js";
 import { inertRunActionsView, inertRunListView } from "./inert.js";
@@ -57,6 +58,15 @@ import type {
 // narrow layouts, worded colour-independent states, notice dismissal, and the
 // fake-view-seam renderer path. Timeline mechanics and large content do not apply;
 // renderer/pin code is unchanged, so the Windows Terminal check does not apply.
+//
+// #286 slice coverage (the `[start-run-checking]` and `[start-run-highlight]`
+// groups): keymap and focus (Enter, ←/→, and typing are inert while models are
+// checked; a click highlights without choosing), small terminals and resize
+// (40/30 columns mid-check), large content (names longer than the row), interaction
+// tuning (the check settling into the model control or the unavailable block, and
+// Esc back to the list mid-check), meaning without colour (the glyph and the
+// checking words in character frames, the fill and bold in spans), and renderer
+// evidence through `testRender` with the fake Renderer Port.
 
 const WORKSPACE = "/tmp/secant-launch-workspace";
 
@@ -256,6 +266,53 @@ function harnessCatalog(specs: readonly HarnessSpec[]): {
     },
   };
   return { view, focusCalls };
+}
+
+/** A fake `harness-catalog` view whose focus opens `not-checked`, as the
+ *  Application's uncached focus does while qualification runs, and publishes
+ *  its result only when the test calls `settle`. Like the fixed list above, the
+ *  list is not re-pushed on settle, so only the focus carries the result. */
+function checkingHarnessCatalog(specs: readonly HarnessSpec[]): {
+  view: HarnessCatalogView;
+  settle: (id: HarnessSpec["id"]) => void;
+} {
+  const [list] = createSignal<HarnessCatalogSnapshot>({
+    family: "harness-catalog",
+    view: "list",
+    harnesses: specs.map(summaryOf),
+  });
+  const settlers = new Map<string, () => void>();
+  const view: HarnessCatalogView = {
+    openList: () => list,
+    openFocus: (selector: HarnessFocusSelector) => {
+      const spec = specs.find((candidate) => candidate.id === selector.id);
+      if (spec === undefined) throw new Error(`no Harness ${selector.id}`);
+      const [snapshot, setSnapshot] = createSignal<HarnessFocusSnapshot>({
+        family: "harness-catalog",
+        view: "focus",
+        selection: selector,
+        result: {
+          found: true,
+          harness: { ...summaryOf(spec), capabilities: [] },
+        },
+      });
+      settlers.set(selector.id, () =>
+        setSnapshot({
+          family: "harness-catalog",
+          view: "focus",
+          selection: selector,
+          result: { found: true, harness: focusOf(spec) },
+        }),
+      );
+      return snapshot;
+    },
+  };
+  const settle = (id: HarnessSpec["id"]) => {
+    const settler = settlers.get(id);
+    if (settler === undefined) throw new Error(`${id} focus was never opened`);
+    settler();
+  };
+  return { view, settle };
 }
 
 const AVAILABLE_HARNESSES: readonly HarnessSpec[] = [
@@ -858,6 +915,9 @@ test("[both-client-harness-selection] the Harness step shows worded rows, spawns
   // Worded qualification, never a raw enum, and colour-independent.
   assert.match(frame, /Not checked/);
   assert.doesNotMatch(frame, /availability/i);
+  // The step names no discovery evidence; that lives in the Harness catalog.
+  assert.doesNotMatch(frame, /found via/i);
+  assert.doesNotMatch(frame, /\/usr\/bin\/harness/);
   // Opening the step spawns nothing: no focus opened until a Harness is chosen.
   assert.deepEqual(harnesses.focusCalls, []);
   for (const line of frame.split("\n")) {
@@ -1038,6 +1098,293 @@ test("an unavailable Harness names its reason and remediation, cannot continue, 
   for (const line of t.captureCharFrame().split("\n")) {
     assert.ok(line.length <= 30, `overflow at 30: ${JSON.stringify(line)}`);
   }
+});
+
+// --- #286: checking models and highlighted choices -------------------------
+
+/** The styled span of the choice row titled `title`, and the screen background
+ *  (the bundle-catalog test's `rowSpan`). */
+function rowSpan(t: Awaited<ReturnType<typeof mountFlow>>["t"], title: string) {
+  const frame = t.captureSpans();
+  const background = frame.lines[0]?.spans[0]?.bg;
+  for (const line of frame.lines) {
+    const span = line.spans.find((candidate) =>
+      [`› ${title}`, `  ${title}`].includes(candidate.text.trimEnd()),
+    );
+    if (span !== undefined) return { span, background };
+  }
+  throw new Error(`no row titled '${title}'`);
+}
+
+const CHECKED_HARNESSES: readonly HarnessSpec[] = [
+  { id: "claude-code", name: "Claude Code", models: "free-text" },
+  { id: "codex", name: "Codex", models: ["gpt-5-codex", "gpt-5"] },
+];
+
+test("[start-run-checking] while models are checked the step says so and holds Continue; once qualified the model control and Continue appear", async () => {
+  const harnesses = checkingHarnessCatalog(CHECKED_HARNESSES);
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    fakeLaunch().view,
+    100,
+    40,
+    noRunView(),
+    harnesses.view,
+  );
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  t.mockInput.pressArrow("down"); // highlight Codex
+  t.mockInput.pressEnter(); // choose Codex → its check starts
+  await t.waitForFrame((frame) => frame.includes("Harness: Codex"));
+
+  const checking = t.captureCharFrame();
+  assert.match(checking, /Checking models…/);
+  assert.doesNotMatch(checking, /Not checked/);
+  assert.doesNotMatch(checking, /Qualifying/);
+  // No model control until the check settles, so a list Harness never reads
+  // as default-only.
+  assert.doesNotMatch(checking, /Harness default/);
+  assert.doesNotMatch(checking, /Model/);
+  // Continue is not offered: the footer drops it.
+  assert.match(checking, /esc choose another · q quit/);
+  assert.doesNotMatch(checking, /enter continue/);
+
+  // Enter does nothing and ←/→ cycles nothing while the check runs.
+  t.mockInput.pressEnter();
+  t.mockInput.pressArrow("right");
+  await t.renderOnce();
+  const held = t.captureCharFrame();
+  assert.match(held, /Checking models…/);
+  assert.doesNotMatch(held, /Review/);
+
+  harnesses.settle("codex");
+  await t.waitForFrame((frame) => frame.includes("‹ Harness default ›"));
+  const settled = t.captureCharFrame();
+  assert.match(settled, /Qualified/);
+  assert.doesNotMatch(settled, /Checking models/);
+  assert.match(settled, /gpt-5-codex, gpt-5/);
+  assert.match(settled, /←\/→ model · enter continue · esc choose another/);
+
+  t.mockInput.pressEnter(); // Continue is offered now → Review
+  await t.waitForFrame((frame) => frame.includes("Review"));
+  assert.match(t.captureCharFrame(), /Harness: Codex \(codex\)/);
+});
+
+test("[start-run-checking] a free-text Harness mounts no model field until its check settles", async () => {
+  const harnesses = checkingHarnessCatalog(CHECKED_HARNESSES);
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    fakeLaunch().view,
+    100,
+    40,
+    noRunView(),
+    harnesses.view,
+  );
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  t.mockInput.pressEnter(); // choose Claude Code (free-text)
+  await t.waitForFrame((frame) => frame.includes("Checking models…"));
+  assert.doesNotMatch(t.captureCharFrame(), /Leave blank/);
+  t.mockInput.pressKey("o"); // nothing to type into
+  await t.renderOnce();
+
+  harnesses.settle("claude-code");
+  await t.waitForFrame((frame) =>
+    frame.includes("Leave blank for Harness default"),
+  );
+  t.mockInput.pressKey("o");
+  t.mockInput.pressKey("4");
+  await t.waitForFrame((frame) => frame.includes("o4"));
+  assert.doesNotMatch(t.captureCharFrame(), /oo4/);
+  assert.match(t.captureCharFrame(), /enter continue/);
+});
+
+test("[start-run-checking] an unavailable Harness says so only once its check finishes, and still cannot continue", async () => {
+  const harnesses = checkingHarnessCatalog([
+    { id: "claude-code", name: "Claude Code", models: ["claude-sonnet"] },
+    {
+      id: "codex",
+      name: "Codex",
+      unavailable: {
+        code: "harness-qualification-unavailable",
+        explanation: "Codex is not ready (authentication).",
+        remediation: "Log in separately through Codex.",
+        possibleEffects: "none",
+      },
+    },
+  ]);
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    fakeLaunch().view,
+    100,
+    40,
+    noRunView(),
+    harnesses.view,
+  );
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressEnter(); // choose Codex
+  await t.waitForFrame((frame) => frame.includes("Checking models…"));
+  assert.doesNotMatch(t.captureCharFrame(), /Unavailable/);
+
+  harnesses.settle("codex");
+  await t.waitForFrame((frame) => frame.includes("Unavailable · Codex"));
+  const frame = t.captureCharFrame();
+  assert.match(frame, /Not ready/);
+  assert.match(frame, /Log in separately through Codex/);
+  assert.equal(
+    frame.split("Unavailable").length - 1,
+    1,
+    "says it is unavailable once",
+  );
+  assert.doesNotMatch(frame, /Checking models/);
+  assert.doesNotMatch(frame, /enter continue/);
+  t.mockInput.pressEnter();
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /Choose a Harness/);
+  assert.doesNotMatch(t.captureCharFrame(), /Review/);
+});
+
+test("[start-run-checking] back on the list mid-check, the chosen row reads Checking models… until its focus settles; other rows keep their list words", async () => {
+  const harnesses = checkingHarnessCatalog(CHECKED_HARNESSES);
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    fakeLaunch().view,
+    100,
+    40,
+    noRunView(),
+    harnesses.view,
+  );
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressEnter(); // choose Codex
+  await t.waitForFrame((frame) => frame.includes("Checking models…"));
+  t.mockInput.pressEscape(); // back to the list while the check runs
+  await until(() => t.captureCharFrame().includes("enter choose"));
+  const list = t.captureCharFrame();
+  assert.match(list, /› Codex \(codex\) — Checking models…/);
+  assert.match(list, /Claude Code \(claude-code\) — Not checked/);
+
+  harnesses.settle("codex");
+  await t.waitForFrame((frame) => frame.includes("Codex (codex) — Qualified"));
+  assert.match(
+    t.captureCharFrame(),
+    /Claude Code \(claude-code\) — Not checked/,
+  );
+});
+
+test("[start-run-checking] the checking step relayouts at small widths and after resize without overflow, with long names", async () => {
+  const harnesses = checkingHarnessCatalog([
+    {
+      id: "codex",
+      name: "Codex With An Unusually Long Display Name For A Harness",
+      models: ["gpt-5"],
+    },
+  ]);
+  const longBundle = focus({
+    ...AGENT_ALPHA,
+    name: "An Agent Bundle Whose Name Runs Far Past The Choice Column",
+  });
+  const { t } = await mountFlow(
+    catalog([longBundle]),
+    fakeLaunch().view,
+    40,
+    16,
+    noRunView(),
+    harnesses.view,
+  );
+  const noOverflow = (width: number) => {
+    for (const line of t.captureCharFrame().split("\n")) {
+      assert.ok(
+        line.length <= width,
+        `overflow at ${width}: ${JSON.stringify(line)}`,
+      );
+    }
+  };
+  noOverflow(40);
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  noOverflow(40);
+  t.mockInput.pressEnter(); // choose the only Harness
+  await t.waitForFrame((frame) => frame.includes("Checking models…"));
+  noOverflow(40);
+  t.resize(30, 14);
+  await t.renderOnce();
+  noOverflow(30);
+  assert.match(t.captureCharFrame(), /Checking models…/);
+  assert.doesNotMatch(t.captureCharFrame(), /enter continue/);
+});
+
+test("[start-run-highlight] the highlighted Bundle and Harness are filled and bold, and keep the glyph with colour off", async () => {
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA, AGENT_BETA]),
+    fakeLaunch().view,
+  );
+  const bundle = rowSpan(t, "Agent Alpha");
+  const otherBundle = rowSpan(t, "Agent Beta");
+  assert.ok(bundle.span.text.includes("› Agent Alpha"));
+  assert.ok(!otherBundle.span.text.includes("›"));
+  assert.ok(bundle.span.attributes & TextAttributes.BOLD);
+  assert.equal(otherBundle.span.attributes & TextAttributes.BOLD, 0);
+  assert.ok(!bundle.span.bg.equals(bundle.background));
+  assert.ok(!bundle.span.bg.equals(otherBundle.span.bg));
+  // The id@version line stays a muted detail under the title.
+  assert.match(t.captureCharFrame(), /^\s*dev\.agent-alpha@1\.0\.0/m);
+
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  const harness = rowSpan(t, "Claude Code (claude-code) — Not checked");
+  const otherHarness = rowSpan(t, "Codex (codex) — Not checked");
+  assert.ok(harness.span.text.includes("› Claude Code"));
+  assert.ok(!otherHarness.span.text.includes("›"));
+  assert.ok(harness.span.attributes & TextAttributes.BOLD);
+  assert.equal(otherHarness.span.attributes & TextAttributes.BOLD, 0);
+  assert.ok(!harness.span.bg.equals(harness.background));
+  assert.ok(!harness.span.bg.equals(otherHarness.span.bg));
+
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((frame) => frame.includes("› Codex"));
+  const moved = rowSpan(t, "Codex (codex) — Not checked");
+  assert.ok(moved.span.attributes & TextAttributes.BOLD);
+  assert.ok(!moved.span.bg.equals(moved.background));
+});
+
+test("[start-run-highlight] a click moves the highlight on both lists without choosing", async () => {
+  const harnesses = harnessCatalog(AVAILABLE_HARNESSES);
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA, AGENT_BETA]),
+    fakeLaunch().view,
+    100,
+    40,
+    noRunView(),
+    harnesses.view,
+  );
+  const clickLine = async (needle: string) => {
+    const lines = t.captureCharFrame().split("\n");
+    const y = lines.findIndex((line) => line.includes(needle));
+    assert.ok(y >= 0, `no line with '${needle}'`);
+    await t.mockMouse.click(lines[y]!.indexOf(needle), y);
+  };
+
+  await clickLine("Agent Beta");
+  await t.waitForFrame((frame) => frame.includes("› Agent Beta"));
+  assert.match(t.captureCharFrame(), /An agent Bundle with draft input\./);
+  assert.match(t.captureCharFrame(), /Start a Run/);
+
+  t.mockInput.pressArrow("up"); // back to Agent Alpha, which has no inputs
+  await t.waitForFrame((frame) => frame.includes("› Agent Alpha"));
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  await clickLine("Codex (codex)");
+  await t.waitForFrame((frame) => frame.includes("› Codex"));
+  // A click highlights only: nothing is chosen, so nothing is qualified.
+  assert.match(t.captureCharFrame(), /enter choose/);
+  assert.deepEqual(harnesses.focusCalls, []);
+  t.mockInput.pressEnter(); // Enter chooses the clicked row
+  await t.waitForFrame((frame) => frame.includes("Harness: Codex"));
+  assert.deepEqual(harnesses.focusCalls, ["codex"]);
 });
 
 test("[start-run-model-choice] a list Harness offers Harness default first then its models, and the draft carries the chosen model", async () => {

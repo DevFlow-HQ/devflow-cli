@@ -19,10 +19,11 @@ import type {
   Problem,
   RoutingNodeView,
 } from "../application/projection-port.js";
+import { CatalogRow } from "./catalog-navigation.js";
 import {
-  discoveryWord,
+  harnessFocusStatus,
   harnessRowStatus,
-  qualificationWord,
+  isCheckingModels,
 } from "./harness-format.js";
 import { useBindings } from "./keymap.js";
 import { LaunchTextBox, type LaunchTextBoxHandle } from "./launch-text-box.js";
@@ -264,9 +265,12 @@ export function ChooseStep(props: {
               >
                 <For each={props.rows()}>
                   {(bundle, index) => (
-                    <ChoiceRow
-                      bundle={bundle}
+                    <CatalogRow
+                      title={bundle.name}
+                      details={[`${bundle.id}@${bundle.version}`]}
                       selected={index() === props.selected()}
+                      focused
+                      onSelect={() => props.setSelected(index())}
                     />
                   )}
                 </For>
@@ -303,26 +307,6 @@ export function ChooseStep(props: {
       >
         {chooserFooter()}
       </text>
-    </box>
-  );
-}
-
-function ChoiceRow(props: {
-  bundle: InstalledBundleSummary;
-  selected: boolean;
-}) {
-  const { theme } = useTheme();
-  const b = () => props.bundle;
-  const color = () => (props.selected ? theme.text : theme.textMuted);
-  return (
-    <box flexDirection="column" flexShrink={0}>
-      <text
-        fg={theme.text}
-        attributes={props.selected ? TextAttributes.BOLD : 0}
-      >
-        {`${props.selected ? "› " : "  "}${b().name}`}
-      </text>
-      <text fg={color()}>{`  ${b().id}@${b().version}`}</text>
     </box>
   );
 }
@@ -403,6 +387,7 @@ export function HarnessStep(props: {
   problem: Accessor<Problem | undefined>;
   notice: Accessor<string | undefined>;
   onDismissNotice: () => void;
+  canContinue: Accessor<boolean>;
   onContinue: () => void;
   onBack: () => void;
 }) {
@@ -458,8 +443,14 @@ export function HarnessStep(props: {
         ? "free-text"
         : "default-only";
   };
-  const available = () =>
-    props.focus() !== undefined && props.focus()?.unavailable === undefined;
+  // Where the chosen Harness stands: its models are still being checked, it is
+  // ready to continue (StartRun's gate), or its settled check found it unavailable.
+  const standing = (): HarnessStanding =>
+    isCheckingModels(props.focus())
+      ? "checking"
+      : props.canContinue()
+        ? "ready"
+        : "unavailable";
   // The model choices for a list-declaring Harness, `Harness default` first.
   const modelOptions = (): readonly string[] => {
     const decl = declaration();
@@ -482,10 +473,6 @@ export function HarnessStep(props: {
     // otherwise-valid model. Blank still means `Harness default`.
     const trimmed = value.trim();
     props.setModel(trimmed.length === 0 ? undefined : trimmed);
-  };
-
-  const tryContinue = () => {
-    if (available()) props.onContinue();
   };
 
   // List phase: move the highlight (spawn-free) and choose a Harness. `q` quits —
@@ -521,9 +508,10 @@ export function HarnessStep(props: {
       { key: "ctrl+c", desc: "Quit", group: "Harness", cmd: () => exit() },
     ],
   }));
-  // Model phase, common: Enter continues (gated on the chosen Harness being
-  // available), Escape returns to the list to choose another. `q` is bound only when
-  // no free-text field is focused (below) — never while it is, per the keymap rule.
+  // Model phase, common: Enter continues (StartRun holds it until the chosen
+  // Harness's check settles available), Escape returns to the list to choose
+  // another. `q` is bound only when no free-text field is focused (below) — never
+  // while it is, per the keymap rule.
   useBindings(() => ({
     enabled: phase() === "model" && dialog.stack.length === 0,
     bindings: [
@@ -531,7 +519,7 @@ export function HarnessStep(props: {
         key: "return",
         desc: "Continue",
         group: "Harness",
-        cmd: () => tryContinue(),
+        cmd: () => props.onContinue(),
       },
       {
         key: "escape",
@@ -555,7 +543,7 @@ export function HarnessStep(props: {
     enabled:
       phase() === "model" &&
       modelMode() === "list" &&
-      available() &&
+      standing() === "ready" &&
       dialog.stack.length === 0,
     bindings: [
       {
@@ -608,20 +596,13 @@ export function HarnessStep(props: {
           <box flexDirection="column" flexGrow={1} overflow="hidden">
             <For each={props.rows()}>
               {(harness, index) => (
-                <box flexDirection="column" flexShrink={0}>
-                  <text
-                    fg={index() === highlight() ? theme.text : theme.textMuted}
-                    attributes={
-                      index() === highlight() ? TextAttributes.BOLD : 0
-                    }
-                    flexShrink={0}
-                  >
-                    {`${index() === highlight() ? "› " : "  "}${harness.name} (${harness.id}) — ${harnessRowStatus(harness)}`}
-                  </text>
-                  <text fg={theme.textMuted} flexShrink={0}>
-                    {`  ${discoveryWord(harness.discovery)}`}
-                  </text>
-                </box>
+                <CatalogRow
+                  title={`${harness.name} (${harness.id}) — ${rowStatus(harness)}`}
+                  details={[]}
+                  selected={index() === highlight()}
+                  focused
+                  onSelect={() => setHighlight(index())}
+                />
               )}
             </For>
           </box>
@@ -634,7 +615,7 @@ export function HarnessStep(props: {
             harness={chosenHarnessName}
             focus={props.focus}
             mode={modelMode}
-            available={available}
+            standing={standing}
             modelLabel={modelLabel}
             modelOptions={modelOptions}
             model={props.model}
@@ -644,6 +625,14 @@ export function HarnessStep(props: {
       </Switch>
     </box>
   );
+
+  // The chosen row speaks from its held focus, which settles before the list is
+  // re-pushed; every other row keeps the list's words.
+  function rowStatus(harness: HarnessSummary): string {
+    return harness.id === props.chosenId()
+      ? harnessFocusStatus(props.focus())
+      : harnessRowStatus(harness);
+  }
 
   function chosenHarnessName(): string {
     const harness =
@@ -655,11 +644,13 @@ export function HarnessStep(props: {
   }
 }
 
+type HarnessStanding = "checking" | "ready" | "unavailable";
+
 function ModelField(props: {
   harness: () => string;
   focus: Accessor<HarnessFocus | undefined>;
   mode: Accessor<"list" | "free-text" | "default-only">;
-  available: Accessor<boolean>;
+  standing: Accessor<HarnessStanding>;
   modelLabel: Accessor<string>;
   modelOptions: Accessor<readonly string[]>;
   model: Accessor<string | undefined>;
@@ -676,25 +667,16 @@ function ModelField(props: {
         <text fg={theme.text} flexShrink={0}>
           {`Harness: ${props.harness()}`}
         </text>
-        <Show
-          when={focus()}
-          fallback={
-            <text fg={theme.textMuted} flexShrink={0}>
-              Qualifying…
-            </text>
-          }
-        >
-          {(resolved) => (
-            <text fg={theme.textMuted} flexShrink={0}>
-              {qualificationWord(resolved().qualification)}
-            </text>
-          )}
-        </Show>
+        <text fg={theme.textMuted} flexShrink={0}>
+          {harnessFocusStatus(focus())}
+        </text>
       </box>
       <Show
-        when={props.available()}
+        when={props.standing() === "ready"}
         fallback={
-          <Show when={focus()?.unavailable}>
+          <Show
+            when={props.standing() === "unavailable" && focus()?.unavailable}
+          >
             {(unavailable) => (
               <box flexDirection="column" flexShrink={0}>
                 <text fg={theme.warning} flexShrink={0}>
@@ -745,13 +727,15 @@ function ModelField(props: {
         </box>
       </Show>
       <text fg={theme.textMuted} flexShrink={0}>
-        {!props.available()
-          ? "esc choose another Harness · ctrl+c quit"
-          : props.mode() === "list"
-            ? "←/→ model · enter continue · esc choose another · q quit"
-            : props.mode() === "free-text"
-              ? "type model · enter continue · esc choose another"
-              : "enter continue · esc choose another · q quit"}
+        {props.standing() === "checking"
+          ? "esc choose another · q quit"
+          : props.standing() === "unavailable"
+            ? "esc choose another Harness · ctrl+c quit"
+            : props.mode() === "list"
+              ? "←/→ model · enter continue · esc choose another · q quit"
+              : props.mode() === "free-text"
+                ? "type model · enter continue · esc choose another"
+                : "enter continue · esc choose another · q quit"}
       </text>
     </box>
   );

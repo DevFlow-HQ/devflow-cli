@@ -34,6 +34,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   bindings fire under the dialog.
 - Start a Run skips Harness/model for Command-only Bundles; Agent-bearing Bundles use the Harness catalog's worded rows and supported-model declaration. Review opens a
   fresh `launch-preparation` Projection for the complete draft, offers Start only while ready, and submits that Projection's exact `launch-run` draft (#191/#192).
+- A focus that reads `not-checked` is a check in flight (the Port always settles it), so `StartRun` alone holds Harness Continue while `isCheckingModels`. The chosen
+  row reads `harnessFocusStatus` from that focus, because the list snapshot is re-pushed only after the focus settles (#286).
 - A refused launch routes only by `correction`, clears only the invalidated draft field, preserves every other choice, and keeps its inline finding after the dismissible
   `Run not started` notice leaves. A typed preparation failure after admission still rides the Run Projection into the Workbench (#146).
 - `paddingLeft` on a `<text>` does not indent it; wrap the text in a `paddingLeft` `<box>`, which also keeps its wrapped lines indented (#285).
@@ -72,7 +74,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   value (`{ name?, ctrl? }`, A16) so the Workbench needs no cast.
 - `catalog-navigation.tsx` (A4) owns both catalogs' search pane, pane focus, selection (empty on arrival from Home), bindings, and row/empty
   shells, on the vendored `vendor/panels.tsx` and bounded `vendor/scroll.ts` primitives (see `UPSTREAM`); filters, focus, and inspectors stay
-  per screen.
+  per screen. Its `CatalogRow` also draws Start a Run's Bundle and Harness choice rows, always `focused` there (#286).
   `bundle-catalog.tsx` renders `bundle-view.tsx` via pure `bundle-catalog-inspector.tsx`; neither adds an Action Offer or Projection selector.
 - `harness-catalog.tsx` opens exact focus for the selected row and rehydrates only rows the list already marks checked, retaining those accessors for search;
   `harness-view.tsx` keeps list opening spawn-free, `harness-format.ts` owns shared wording, and the inspector renders normalized facts with no Actions.

@@ -19,6 +19,7 @@ import type {
 } from "../application/projection-port.js";
 import { BundleCatalog } from "./bundle-catalog.js";
 import { useBundleCatalogView } from "./bundle-view.js";
+import { isCheckingModels } from "./harness-format.js";
 import { useHarnessCatalogView } from "./harness-view.js";
 import { useRunLaunchView, type LaunchOutcome } from "./run-launch-view.js";
 import {
@@ -196,12 +197,16 @@ export function StartRun(props: {
     setChosenHarnessId(id);
   };
 
+  // Continue past the Harness step only once the chosen Harness's check has
+  // settled available: never while its models are still being checked.
+  const canContinueHarness = () => {
+    const focus = chosenHarnessFocus();
+    return !isCheckingModels(focus) && focus.unavailable === undefined;
+  };
+
   const continueFromHarness = () => {
     const bundle = focusBundle();
-    const focus = chosenHarnessFocus();
-    if (bundle === undefined || focus === undefined || focus.unavailable) {
-      return;
-    }
+    if (bundle === undefined || !canContinueHarness()) return;
     setChooserProblem(undefined);
     setStep(nextDraftStep(bundle));
   };
@@ -379,6 +384,7 @@ export function StartRun(props: {
               problem={chooserProblem}
               notice={notice}
               onDismissNotice={() => setNotice(undefined)}
+              canContinue={canContinueHarness}
               onContinue={continueFromHarness}
               onBack={() => setStep("choose")}
             />

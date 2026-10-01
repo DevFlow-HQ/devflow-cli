@@ -43,8 +43,9 @@ export type { TimelineScroll } from "./run-timeline.js";
 export { clip } from "./clip.js";
 // The display-column word wrap, exposed for its unit test for the same reason.
 export { wrap } from "./wrap.js";
-// The Harness catalog row's model line, exposed for its unit test (#285).
-export { harnessModelLine } from "./harness-format.js";
+// The Harness catalog row's model line (#285) and Start a Run's chosen-Harness
+// status (#286), exposed for their unit tests.
+export { harnessFocusStatus, harnessModelLine } from "./harness-format.js";
 // The working scanner's frame table and leaf (#292), exposed for its unit and
 // render tests for the same reason.
 export {

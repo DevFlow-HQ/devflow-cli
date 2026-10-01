@@ -29,9 +29,7 @@ export function qualificationObservation(
   return isQualified(qualification) ? qualification.observation : undefined;
 }
 
-export function qualificationWord(
-  qualification: HarnessQualificationView,
-): string {
+function qualificationWord(qualification: HarnessQualificationView): string {
   return qualificationLabel(qualification.state);
 }
 
@@ -41,11 +39,6 @@ export function qualificationLabel(state: HarnessQualificationState): string {
 
 export function capabilityLabel(state: HarnessCapabilityState): string {
   return titleCase(state);
-}
-
-export function discoveryWord(discovery: HarnessDiscoveryView): string {
-  const words = discoveryLabel(discovery);
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
 export function discoveryLabel(discovery: HarnessDiscoveryView): string {
@@ -66,6 +59,25 @@ export function harnessRowStatus(harness: HarnessSummary): string {
     return "Unavailable · unsupported shim";
   }
   return qualificationWord(harness.qualification);
+}
+
+/**
+ * Whether Start a Run is still checking the chosen Harness's models: no focus
+ * snapshot yet, or one still `not-checked`. An opened focus always publishes one
+ * settled result (a failed check settles `not-ready`), so this always ends.
+ */
+export function isCheckingModels(
+  focus: HarnessFocus | undefined,
+): focus is
+  undefined | (HarnessFocus & { qualification: { state: "not-checked" } }) {
+  return focus === undefined || focus.qualification.state === "not-checked";
+}
+
+/** Start a Run's status for the chosen Harness: the checking words until its
+ *  focus settles, then the words its catalog row uses. */
+export function harnessFocusStatus(focus: HarnessFocus | undefined): string {
+  if (isCheckingModels(focus)) return "Checking models…";
+  return harnessRowStatus(focus);
 }
 
 export const FREE_TEXT_MODEL_ENTRY = "Free-text model entry";
