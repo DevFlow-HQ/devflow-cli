@@ -271,7 +271,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
         selectedHarness,
         prepared.failure,
       );
-      return { outcome: "halted", harnessFailure };
+      return { outcome: "harness-unavailable", harnessFailure };
     }
     observeSteer?.(prepared.harness.profile.steer);
     const harness: HarnessExecutionDeps = {

@@ -166,8 +166,10 @@ export type {
 /** How composition drives one acquired Run to rest. It constructs the Run
  *  execution (the `{asset}` resolver, host platform, and bounds) and calls the
  *  execution Interface; a fenced owner or publication fault throws (composition
- *  owns it). The Application wraps the owner it is handed to observe each
- *  publication, so this signature stays execution-agnostic. */
+ *  owns it). A selected Harness that refuses preparation is not thrown: it returns
+ *  the `harness-unavailable` report before any Step runs or Run state is written,
+ *  and the Application owns resting the Run. The Application wraps the owner it is
+ *  handed to observe each publication, so this signature stays execution-agnostic. */
 export type RunExecution = (context: {
   readonly routing: readonly RoutingNode[];
   readonly digest: string;
@@ -186,14 +188,23 @@ export type RunExecution = (context: {
   readonly observeSteer?: (capability: RunSteerCapability) => void;
 }) => Promise<RunExecutionReport>;
 
-interface RunExecutionReport extends RunReport {
+/** Either the routing ran to a rest, or the selected Harness refused preparation
+ *  before anything ran. The refusal is its own outcome, never an ordinary `halted`
+ *  rest, so a reader must narrow it away before reaching the executed report (#304). */
+type RunExecutionReport = ExecutedRunReport | HarnessUnavailableReport;
+
+interface ExecutedRunReport extends RunReport {
   /** An already-qualified Harness whose ownership transfers to the Application
    *  when execution rests at an interactive Step. The Application treats it as
    *  opaque and closes it when that Step ends or the Run releases ownership. */
   readonly interactiveStep?: RunInteractiveStep;
+}
+
+interface HarnessUnavailableReport {
+  readonly outcome: "harness-unavailable";
   /** A selected Adapter's typed preparation failure, normalized by composition.
    * No Adapter object, native protocol value, or executable target crosses. */
-  readonly harnessFailure?: RunHarnessPreparationFailure;
+  readonly harnessFailure: RunHarnessPreparationFailure;
 }
 
 /** The opaque Step-scoped interactive driver composition transfers to a tracked
@@ -729,7 +740,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }
 
   async function adoptInteractiveStep(
-    report: RunExecutionReport,
+    report: ExecutedRunReport,
     tracking: TrackedRun,
     owner: RunOwner,
     runId: string,
@@ -853,7 +864,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         params.tracking.steer = capability;
       },
     });
-    if (report.harnessFailure !== undefined) {
+    if (report.outcome === "harness-unavailable") {
       return {
         outcome: haltForHarnessFailure(
           params.runId,
