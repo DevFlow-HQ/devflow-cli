@@ -73,6 +73,7 @@ import {
 } from "./run-timeline.js";
 import { buildTimelineRows, type TimelineRow } from "./run-timeline-rows.js";
 import { wrapRows } from "./wrap.js";
+import { WorkingScanner } from "./working-scanner.js";
 import { useExit } from "./vendor/exit.js";
 import { useDialog } from "./vendor/dialog.js";
 import { useTheme } from "./vendor/theme-context.js";
@@ -160,6 +161,8 @@ export function RunWorkbench(props: {
   runId: string;
   knownBundleName?: string;
   renderer: RendererPort;
+  /** Draw the working scanner as the static `[⋯]` (#292). */
+  reducedMotion: boolean;
   onLeave: () => void;
   onDeleted: (name: string) => void;
 }) {
@@ -1293,6 +1296,7 @@ export function RunWorkbench(props: {
               onGateInput={gateControl.onInput}
               gatePending={gateControl.pending}
               gateRefusal={gateControl.refusal}
+              reducedMotion={props.reducedMotion}
               theme={theme}
             />
           )}
@@ -1400,6 +1404,7 @@ function Workbench(props: {
   onGateInput: (value: string) => void;
   gatePending: Accessor<boolean>;
   gateRefusal: Accessor<Problem | undefined>;
+  reducedMotion: boolean;
   theme: Theme;
 }) {
   const { theme } = props;
@@ -1574,16 +1579,23 @@ function Workbench(props: {
           </Show>
           {/* Interrupt (Esc twice) and Steer, shown only while an agent Turn is live
               and no interactive Step owns the interaction (its input hint carries the
-              Interrupt instead, #219).
+              Interrupt instead, #219). The working scanner leads the interrupt row,
+              which says "working" in words because the rail has no label (#292).
               A Harness with native steer (Codex) names the `s` key; one without
               (Claude Code) names its unavailable reason and never opens (story 19). */}
           <Show
             when={!props.interactiveActive() && props.actionOffers().interrupt}
           >
             {(offer) => (
-              <text fg={theme.text} flexShrink={0}>
-                {clip(`  esc esc interrupt — ${offer().consequence}`, w())}
-              </text>
+              <WorkingScanner
+                label="working · esc esc interrupt"
+                detail={offer().consequence}
+                labelColor={theme.text}
+                reducedMotion={props.reducedMotion}
+                width={w()}
+                accent={theme.accent}
+                muted={theme.textMuted}
+              />
             )}
           </Show>
           <Show when={!props.interactiveActive() && props.actionOffers().steer}>
@@ -1759,6 +1771,7 @@ function Workbench(props: {
               refusal={props.interactiveRefusal}
               focused={() => props.focus() === "interactive"}
               width={props.innerW}
+              reducedMotion={props.reducedMotion}
               theme={theme}
             />
           </Show>

@@ -413,6 +413,51 @@ What was taken and changed:
              every edit rather than on submit, so Review and the launch never
              see a placeholder, and back-navigation shows the full text.
 
+Added 2026-10-01 for the M7 working indicator (#292). Rebuilt against OpenCode
+at 228e9095ba, whose ui/spinner.ts matches the 1ead9e3d7f pin and whose prompt
+differs only in three `...`→`…` string edits; no OpenCode source crosses and
+`opentui-spinner` is not a dependency.
+
+  src/tui/working-scanner.tsx   block scanner rebuilt against
+                                packages/tui/src/ui/spinner.ts and the busy
+                                status row of
+                                packages/tui/src/component/prompt/index.tsx
+  src/tui/run-workbench-views.tsx
+                                the interactive input's hint line it leads
+  src/tui/run-workbench.tsx     the rail's interrupt row it leads
+
+What was taken and changed:
+
+  frames (from ui/spinner.ts createFrames, getScannerState):
+    Taken:   the `blocks` style's bidirectional sweep with its default
+             constants: 8 cells, a 6-step trail, 9 frames held at the far end
+             and 30 at the start (54 frames), `■` for a lit cell and `⬝` for
+             an inactive one, at the prompt's 40 ms interval.
+    Changed: the frames are a pure table of cells (trail step and fade), not
+             strings; the `diamonds` style and the one-way directions are not
+             rebuilt.
+  colours (from ui/spinner.ts createColors, deriveTrailColors,
+  deriveInactiveColor, and the prompt's spinnerDef):
+    Taken:   the trail's alpha falloff (lead solid, a 1.15 bloom at 0.9, then
+             0.65 decay), inactive cells at 0.6 alpha, and their fade to a 0.3
+             floor while held and back while moving.
+    Changed: the colour is the theme accent (spec #276), not the agent colour;
+             each cell is its own OpenTUI `<text>` in a row box, not the
+             `opentui-spinner` Renderable; its timer is a Solid-owned
+             unref'd interval that unmounts with the live Turn.
+  status row (from component/prompt/index.tsx):
+    Taken:   the scanner shows only while a Turn works, beside the interrupt
+             key; with animations off it is a muted `[⋯]`; a permission
+             prompt replaces it.
+    Changed: it leads the interactive input's `esc esc interrupt` hint, or the
+             rail's interrupt row as `working · esc esc interrupt`, with no
+             new row; in a row too narrow for both, the mark yields before
+             those words; the armed confirm replaces the interactive line; an
+             approval request or free-text gate hides it;
+             `SECANT_REDUCED_MOTION=1`, read once by composition, stands in
+             for the `animations_enabled` toggle until ADR 0037's stored
+             setting exists.
+
 THEME ASSETS (25 vendored, unmodified palettes)
 -----------------------------------------------
 

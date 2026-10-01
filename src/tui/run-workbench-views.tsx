@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { For, Show, type Accessor } from "solid-js";
+import { createMemo, For, Match, Show, Switch, type Accessor } from "solid-js";
 import type {
   AnswerHumanGateOffer,
   CancelRunOffer,
@@ -15,6 +15,7 @@ import type {
 import { clip } from "./clip.js";
 import type { Openable } from "./run-inspection.js";
 import type { Theme } from "./vendor/theme.js";
+import { WorkingScanner } from "./working-scanner.js";
 
 // Pure presentational leaves for the Run Workbench. State, effects, focus, and the
 // interleaved key dispatcher stay in run-workbench.tsx; these views receive only
@@ -24,7 +25,9 @@ import type { Theme } from "./vendor/theme.js";
  *  native OpenTUI text field (D9 — the field draws its own caret), and a hint/status
  *  line — the live Turn's Interrupt, the Enter/End Step controls at a boundary, or the
  *  End Step confirm. The label reads the live Turn from its interrupt Offer (#290): the
- *  agent is working while one is offered, else it is the human's move. Every line is
+ *  agent is working while one is offered, else it is the human's move. While it works,
+ *  the working scanner leads the Interrupt hint (#292); the label above already says
+ *  so in words, and the armed confirm replaces the whole line. Every line is
  *  plain text so who holds the Turn reads without colour (AC2). The field is blurred
  *  while an answer is in flight (until the send is admitted) and while the End Step
  *  confirm is armed, so a confirming `y` never types into it (D9 freeze). */
@@ -45,6 +48,7 @@ export function InteractiveInput(props: {
   refusal: Accessor<Problem | undefined>;
   focused: Accessor<boolean>;
   width: Accessor<number>;
+  reducedMotion: boolean;
   theme: Theme;
 }) {
   const { theme } = props;
@@ -57,33 +61,53 @@ export function InteractiveInput(props: {
     !props.endArmed() &&
     !props.continueArmed() &&
     !props.endStageArmed();
-  const hint = () => {
-    if (props.endArmed())
-      return "  ⚠ End this interactive Step? Press y to confirm · esc to keep";
-    // The confirm leads with its keys so a narrow clip keeps them (#217).
-    const continueOffer = props.continueOffer();
-    if (props.continueArmed() && continueOffer !== undefined)
-      return `  ⚠ y continue · esc keep — ${continueOffer.consequence}`;
-    // End Stage's confirm (#218) names that the tracker was not checked right after
-    // its keys, so the warning survives a narrow clip.
-    const endStageOffer = props.endStageOffer();
-    if (props.endStageArmed() && endStageOffer !== undefined)
-      return `  ⚠ y end stage · esc keep — ${endStageOffer.consequence}`;
-    // Pending lasts only until Secant admits the Turn (#290), never the whole Turn.
-    if (props.pending()) return "  … sending…";
-    // The live Turn's Interrupt (#219) leads with its key so a narrow clip keeps it.
-    const interrupt = props.interrupt();
-    if (interrupt !== undefined)
-      return props.interruptArmed()
-        ? "  ⚠ Press esc again to interrupt · any other key cancels"
-        : `  esc esc interrupt — ${interrupt.consequence}`;
-    if (props.sendOffered())
-      return continueOffer !== undefined
-        ? endStageOffer !== undefined
-          ? "  enter send Turn · ^N continue · ^E end stage · esc back"
-          : "  enter send Turn · ^N continue · esc back"
-        : "  enter send Turn · ^E end step · esc back";
-    return "  esc back";
+  // A plain hint line, or the unarmed live-Turn Interrupt the scanner leads (#292).
+  const hint = createMemo(
+    ():
+      | { readonly text: string }
+      | { readonly interrupt: InterruptTurnOffer } => {
+      const text = (line: string) => ({ text: line });
+      if (props.endArmed())
+        return text(
+          "  ⚠ End this interactive Step? Press y to confirm · esc to keep",
+        );
+      // The confirm leads with its keys so a narrow clip keeps them (#217).
+      const continueOffer = props.continueOffer();
+      if (props.continueArmed() && continueOffer !== undefined)
+        return text(`  ⚠ y continue · esc keep — ${continueOffer.consequence}`);
+      // End Stage's confirm (#218) names that the tracker was not checked right after
+      // its keys, so the warning survives a narrow clip.
+      const endStageOffer = props.endStageOffer();
+      if (props.endStageArmed() && endStageOffer !== undefined)
+        return text(
+          `  ⚠ y end stage · esc keep — ${endStageOffer.consequence}`,
+        );
+      // Pending lasts only until Secant admits the Turn (#290), never the whole Turn.
+      if (props.pending()) return text("  … sending…");
+      // The live Turn's Interrupt (#219) leads with its key so a narrow clip keeps it.
+      const interrupt = props.interrupt();
+      if (interrupt !== undefined)
+        return props.interruptArmed()
+          ? text("  ⚠ Press esc again to interrupt · any other key cancels")
+          : { interrupt };
+      if (props.sendOffered())
+        return text(
+          continueOffer !== undefined
+            ? endStageOffer !== undefined
+              ? "  enter send Turn · ^N continue · ^E end stage · esc back"
+              : "  enter send Turn · ^N continue · esc back"
+            : "  enter send Turn · ^E end step · esc back",
+        );
+      return text("  esc back");
+    },
+  );
+  const hintText = () => {
+    const line = hint();
+    return "text" in line ? line.text : undefined;
+  };
+  const workingInterrupt = () => {
+    const line = hint();
+    return "interrupt" in line ? line.interrupt : undefined;
   };
   return (
     <box flexDirection="column" flexShrink={0}>
@@ -113,9 +137,28 @@ export function InteractiveInput(props: {
       <Show
         when={props.refusal()}
         fallback={
-          <text fg={theme.textMuted} flexShrink={0}>
-            {clip(hint(), w())}
-          </text>
+          <Switch>
+            <Match when={workingInterrupt()}>
+              {(interrupt) => (
+                <WorkingScanner
+                  label="esc esc interrupt"
+                  detail={interrupt().consequence}
+                  labelColor={theme.textMuted}
+                  reducedMotion={props.reducedMotion}
+                  width={w()}
+                  accent={theme.accent}
+                  muted={theme.textMuted}
+                />
+              )}
+            </Match>
+            <Match when={hintText()}>
+              {(line) => (
+                <text fg={theme.textMuted} flexShrink={0}>
+                  {clip(line(), w())}
+                </text>
+              )}
+            </Match>
+          </Switch>
         }
       >
         {(problem) => (

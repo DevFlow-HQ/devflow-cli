@@ -117,6 +117,9 @@ async function launchTui(): Promise<number> {
       await mountTui(renderer, {
         projectionPort,
         rendererPort: port,
+        // Read once here, never by the presentation: `1` draws the working scanner
+        // as the static `[⋯]` (#292), until a stored setting exists (ADR 0037).
+        reducedMotion: process.env.SECANT_REDUCED_MOTION === "1",
         exit: (reason) => finish(reason),
       });
       // Mounted: the renderer holds the terminal in raw mode and Home's quit

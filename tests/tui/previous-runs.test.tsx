@@ -341,6 +341,7 @@ async function mountHome(options: MountOptions = {}) {
         )}
         actions={okActions(options.onRemove)}
         renderer={renderer.port}
+        reducedMotion={false}
         exit={(reason) => exits.push(reason)}
       />
     ),

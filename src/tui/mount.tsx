@@ -23,6 +23,9 @@ export interface MountOptions {
   /** The lifecycle Renderer Port the composition root owns; the Run Workbench is
    *  its first production caller of `size`/`onKey`/`onResize` (A13, #91). */
   readonly rendererPort: RendererPort;
+  /** Draw motion as static marks: the working scanner becomes `[⋯]` (#292).
+   *  Composition reads it from the environment; the presentation never does. */
+  readonly reducedMotion: boolean;
   readonly exit: Exit;
 }
 
@@ -42,6 +45,7 @@ export function mountTui(
         runList={createLiveRunListView(options.projectionPort)}
         actions={createLiveRunActionsView(options.projectionPort)}
         renderer={options.rendererPort}
+        reducedMotion={options.reducedMotion}
         exit={options.exit}
       />
     ),

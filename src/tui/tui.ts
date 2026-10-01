@@ -45,3 +45,10 @@ export { clip } from "./clip.js";
 export { wrap } from "./wrap.js";
 // The Harness catalog row's model line, exposed for its unit test (#285).
 export { harnessModelLine } from "./harness-format.js";
+// The working scanner's frame table and leaf (#292), exposed for its unit and
+// render tests for the same reason.
+export {
+  SCANNER_FRAMES,
+  scannerGlyphs,
+  WorkingScanner,
+} from "./working-scanner.js";

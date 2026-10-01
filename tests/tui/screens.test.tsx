@@ -138,6 +138,7 @@ async function mount(width = 60, height = 16) {
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
+        reducedMotion={false}
         exit={(reason) => exits.push(reason)}
       />
     ),
@@ -186,6 +187,7 @@ async function mountApproved(
         runList={runList}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
+        reducedMotion={false}
         exit={(reason) => exits.push(reason)}
       />
     ),

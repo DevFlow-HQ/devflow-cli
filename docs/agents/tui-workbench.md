@@ -33,6 +33,11 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   Turn settle and a tab away within the same Step; a refused send keeps it (the refusal surfaces beside it, A9), and only an applied send
   clears it. A send applies at Turn admission (#290), so the draft clears while the agent works; the `… sending…` hint and the blurred field last only until then.
   The label reads the live Turn from the `interrupt-turn` Offer, never a missing send Offer: the agent is working while one is offered, else it is the human's move.
+- The working scanner (`working-scanner.tsx`, #292) mounts only while that same Offer is present, so its one timer stops when the Turn ends. It leads
+  existing rows and adds none: the interactive hint line (`<scanner> esc esc interrupt — …`) and the rail's interrupt row
+  (`<scanner> working · esc esc interrupt — …`), whose words carry the meaning without motion or colour, so in a row too narrow for both the mark
+  yields and the words stay whole. The armed interactive confirm replaces its line,
+  and a request or gate (`modalControl`) hides both. `reducedMotion` arrives as a mount option, never an environment read, and draws a static `[⋯]`.
 
 ## Modal stack and composes
 

@@ -36,6 +36,8 @@ Approve the folder, choose **Start a Run** → **Matt Front Spec**, pick your co
 
 Run `secant --help` to see other commands, including how to install your own workflows and revisit earlier runs.
 
+To turn off the animated working indicator, set `SECANT_REDUCED_MOTION=1` before running `secant`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md). Coding agents working in this repository start with [AGENTS.md](./AGENTS.md).

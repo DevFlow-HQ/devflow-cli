@@ -261,6 +261,7 @@ async function mount(rows = ROWS, width = 80, height = 40) {
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
+        reducedMotion={false}
         exit={(reason) => exits.push(reason)}
       />
     ),
@@ -422,6 +423,7 @@ test("a trusted Bundle uses the shared Trust wording in its inspector", async ()
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
+        reducedMotion={false}
         exit={() => {}}
       />
     ),
@@ -508,6 +510,7 @@ test("a list whose managed bytes are gone shows the Problem, not rows (#74 A3)",
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
+        reducedMotion={false}
         exit={() => {}}
       />
     ),
@@ -566,6 +569,7 @@ test("a focused Bundle whose managed bytes are gone shows its Problem", async ()
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
+        reducedMotion={false}
         exit={() => {}}
       />
     ),

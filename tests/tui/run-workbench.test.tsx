@@ -19,7 +19,11 @@ import type {
   TRunViewFreshness,
   WorkspaceView,
 } from "../../src/tui/tui.js";
-import { makeFakeRenderer, type FakeRenderer } from "./renderer-fixture.js";
+import {
+  makeFakeRenderer,
+  until,
+  type FakeRenderer,
+} from "./renderer-fixture.js";
 import type {
   AnswerHumanGateOffer,
   BundleCatalogSnapshot,
@@ -430,6 +434,7 @@ async function mountApp(
   width: number,
   height: number,
   actions?: RunActionsView,
+  reducedMotion = false,
 ) {
   const exits: unknown[] = [];
   const t = await testRender(
@@ -444,6 +449,7 @@ async function mountApp(
         runList={inertRunListView()}
         actions={actions ?? inertRunActionsView()}
         renderer={renderer.port}
+        reducedMotion={reducedMotion}
         exit={(reason) => exits.push(reason)}
       />
     ),
@@ -463,6 +469,7 @@ async function mountWorkbench(
   width = 100,
   height = 40,
   actions?: RunActionsView,
+  reducedMotion = false,
 ) {
   const control = makeRunView(snapshotOf(run));
   const renderer = makeFakeRenderer(width, height);
@@ -473,6 +480,7 @@ async function mountWorkbench(
     width,
     height,
     actions,
+    reducedMotion,
   );
   await t.waitForFrame((f) => f.includes("Timeline"));
   return { t, control, renderer, exits };
@@ -3308,6 +3316,160 @@ test("who holds the Turn reads in words and glyphs at any width and across a res
   frame = wb.t.captureCharFrame();
   assert.match(frame, /◇ Your move — the agent is waiting for your next Turn/);
   assert.doesNotMatch(frame, /The agent is working/);
+  noOverflow(frame, 100);
+});
+
+// --- working scanner (#292) ------------------------------------------------
+
+/** The scanner's eight cells on a frame's working line (the Workbench's one-column
+ *  margin, then the row's two-space indent), or undefined when none shows. */
+function scannerOf(frame: string): string | undefined {
+  return /^ {3}([■⬝]{8}) /m.exec(frame)?.[1];
+}
+
+test("a live interactive Turn leads its interrupt hint with a moving scanner beside the working words (#292)", async () => {
+  const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 40, okActions());
+  const frame = wb.t.captureCharFrame();
+  assert.match(
+    frame,
+    /◆ The agent is working — wait for its reply or interrupt it/,
+  );
+  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop this Turn/m);
+  // It moves on its own 40 ms clock: a later frame shows the cells changed.
+  const first = scannerOf(frame);
+  await until(() => {
+    const next = scannerOf(wb.t.captureCharFrame());
+    return next !== undefined && next !== first;
+  });
+  // The field keeps the keys while it moves, and the armed Esc replaces its line.
+  await type(wb.t, "next");
+  assert.match(wb.t.captureCharFrame(), /> next/);
+  await press(wb.t, wb.renderer, "escape");
+  const armed = wb.t.captureCharFrame();
+  assert.match(armed, /⚠ Press esc again to interrupt/);
+  assert.equal(scannerOf(armed), undefined);
+  assert.match(armed, /◆ The agent is working/);
+});
+
+test("an Agent-step live Turn leads the rail's interrupt row with the scanner and the word working (#292)", async () => {
+  const wb = await mountWorkbench(liveTurnRunOf(), 100, 40, okActions());
+  const frame = wb.t.captureCharFrame();
+  assert.match(
+    frame,
+    /^ {3}[■⬝]{8} working · esc esc interrupt — stop this Turn/m,
+  );
+  assert.equal(frame.match(/[■⬝]{8}/g)?.length, 1);
+  const first = scannerOf(frame);
+  await until(() => {
+    const next = scannerOf(wb.t.captureCharFrame());
+    return next !== undefined && next !== first;
+  });
+  // Arming keeps the working row and adds the confirm beneath it.
+  await press(wb.t, wb.renderer, "escape");
+  const armed = wb.t.captureCharFrame();
+  assert.match(armed, /working · esc esc interrupt/);
+  assert.match(armed, /⚠ Press esc again to interrupt/);
+});
+
+test("the scanner stops when the Turn ends, leaving the boundary's words (#292)", async () => {
+  const interactive = await mountWorkbench(
+    liveInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+  );
+  assert.notEqual(scannerOf(interactive.t.captureCharFrame()), undefined);
+  interactive.control.setRun(interactiveRunOf());
+  await interactive.t.renderOnce();
+  let frame = interactive.t.captureCharFrame();
+  assert.doesNotMatch(frame, /[■⬝]|\[⋯\]/);
+  assert.match(frame, /◇ Your move/);
+  assert.match(frame, /enter send Turn/);
+
+  const agent = await mountWorkbench(liveTurnRunOf(), 100, 40, okActions());
+  assert.notEqual(scannerOf(agent.t.captureCharFrame()), undefined);
+  agent.control.setRun(
+    liveTurnRunOf({ state: "halted", actionOffers: [RESUME_OFFER] }),
+  );
+  await agent.t.renderOnce();
+  frame = agent.t.captureCharFrame();
+  assert.doesNotMatch(frame, /[■⬝]|\[⋯\]|working ·/);
+  assert.match(frame, /r resume/);
+});
+
+test("with reduced motion the scanner is a static [⋯] and the working words stay (#292)", async () => {
+  const interactive = await mountWorkbench(
+    liveInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+    true,
+  );
+  let frame = interactive.t.captureCharFrame();
+  assert.match(frame, /◆ The agent is working/);
+  assert.match(frame, /^ {3}\[⋯\] esc esc interrupt — stop this Turn/m);
+  assert.doesNotMatch(frame, /[■⬝]/);
+
+  const agent = await mountWorkbench(
+    liveTurnRunOf(),
+    40,
+    16,
+    okActions(),
+    true,
+  );
+  frame = agent.t.captureCharFrame();
+  assert.match(frame, /^ {3}\[⋯\] working · esc esc interrupt/m);
+  assert.doesNotMatch(frame, /[■⬝]/);
+  noOverflow(frame, 40);
+  agent.control.setRun(
+    liveTurnRunOf({ state: "halted", actionOffers: [RESUME_OFFER] }),
+  );
+  await agent.t.renderOnce();
+  assert.doesNotMatch(agent.t.captureCharFrame(), /\[⋯\]/);
+});
+
+test("a request owns the bottom region, so no scanner shows while the agent waits on the human (#292)", async () => {
+  const interactive = await mountWorkbench(
+    liveInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+  );
+  interactive.control.setLive(requestOverlay());
+  await interactive.t.renderOnce();
+  assert.doesNotMatch(interactive.t.captureCharFrame(), /[■⬝]/);
+
+  const agent = await mountWorkbench(liveTurnRunOf(), 100, 40, okActions());
+  agent.control.setLive(requestOverlay());
+  await agent.t.renderOnce();
+  assert.doesNotMatch(agent.t.captureCharFrame(), /[■⬝]|working ·/);
+});
+
+test("the scanner and its words fit a small terminal, long history, and a resize (#292)", async () => {
+  const agent = await mountWorkbench(
+    liveTurnRunOf({ timeline: wrappingEvents(200) }),
+    40,
+    16,
+    okActions(),
+  );
+  // At 40 columns the rail's words and the cells do not both fit, so the cells
+  // yield and the words stay whole: meaning never rides on the scanner.
+  let frame = agent.t.captureCharFrame();
+  assert.match(frame, /^ {3}working · esc esc interrupt — /m);
+  assert.doesNotMatch(frame, /[■⬝]/);
+  noOverflow(frame, 40);
+
+  const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 24, okActions());
+  wb.renderer.resize(40, 16);
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — /m);
+  assert.match(frame, /◆ The agent is working/);
+  noOverflow(frame, 40);
+  wb.renderer.resize(100, 24);
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop this Turn/m);
   noOverflow(frame, 100);
 });
 

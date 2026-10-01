@@ -607,6 +607,7 @@ async function mountFlow(
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer(width, height).port}
+        reducedMotion={false}
         exit={(reason) => exits.push(reason)}
       />
     ),

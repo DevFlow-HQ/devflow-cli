@@ -77,7 +77,7 @@ type Screen =
       readonly from: "start-run" | "previous-runs";
     };
 
-function Route(props: { renderer: RendererPort }) {
+function Route(props: { renderer: RendererPort; reducedMotion: boolean }) {
   const view = useWorkspaceView();
   const dialog = useDialog();
   const exit = useExit();
@@ -167,6 +167,7 @@ function Route(props: { renderer: RendererPort }) {
               runId={active().runId}
               knownBundleName={active().knownBundleName}
               renderer={props.renderer}
+              reducedMotion={props.reducedMotion}
               onLeave={back}
               onDeleted={(name) => {
                 setDeletedRunNotice(`${name} was deleted`);
@@ -336,6 +337,8 @@ export function App(props: {
   runList: RunListView;
   actions: RunActionsView;
   renderer: RendererPort;
+  /** Draw motion as static marks (#292); a mount option, never an environment read. */
+  reducedMotion: boolean;
   exit: Exit;
 }) {
   const keymap = createTuiKeymap();
@@ -358,7 +361,10 @@ export function App(props: {
                                   <Fallback error={error} exit={props.exit} />
                                 )}
                               >
-                                <Route renderer={props.renderer} />
+                                <Route
+                                  renderer={props.renderer}
+                                  reducedMotion={props.reducedMotion}
+                                />
                               </ErrorBoundary>
                             </GuardedExitProvider>
                           </DialogProvider>

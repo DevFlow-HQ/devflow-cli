@@ -248,6 +248,7 @@ async function mount(options: TMountOptions = {}) {
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
+        reducedMotion={false}
         exit={() => {}}
       />
     ),

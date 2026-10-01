@@ -233,6 +233,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={fakeRenderer.port}
+        reducedMotion={false}
         exit={() => {}}
       />
     ),
@@ -373,6 +374,7 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={fakeRenderer.port}
+        reducedMotion={false}
         exit={() => {}}
       />
     ),
