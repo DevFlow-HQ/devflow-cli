@@ -25,12 +25,12 @@ import { awaitSettled } from "../helpers/settleOperation.js";
 // tracker (#220), over the shared Projection Port with the real Application and Run
 // Store on a temporary home and a fake Harness under each v1 Harness selection.
 // After the grill and the tracker choice, write-spec runs with no approval Gate in
-// the same planning Session, reads the original to-spec folder through its bundled
+// the same `spec` Session, reads the original to-spec folder through its bundled
 // path, is told the Run's exact working area, and writes the spec there — never in
 // the Workspace. The spec reference is captured only from its Output receipt and is
 // retained as the `spec-ref` Run output; a completed Turn without a receipt fails the Run.
-// [matt-local-tickets] (#222) Ticket review then continues that Session with the
-// original to-tickets folder: the breakdown is revised across verbatim human Turns
+// [matt-local-tickets] (#222) Ticket review opens a fresh `tickets` Session with
+// the original to-tickets folder: the breakdown is revised across verbatim human Turns
 // with no file written, End Step approves it, and only then does the publish Turn
 // write one file per ticket in the working area. Secant stores no ticket list.
 
@@ -91,6 +91,7 @@ const COMPLETED: FakeScript["turns"][number] = {
 function planningAgent(harness: HarnessId, writeReceipt: boolean) {
   const granted: (string | undefined)[] = [];
   const inputs: string[] = [];
+  const resumes: boolean[] = [];
   const receipts: string[] = [];
   const adapter: HarnessAdapter = {
     async prepare(options) {
@@ -107,6 +108,7 @@ function planningAgent(harness: HarnessId, writeReceipt: boolean) {
           profile: inner.profile,
           startTurn(request) {
             inputs.push(request.input.text);
+            resumes.push(request.resume !== undefined);
             const receipt = RECEIPT_LINE.exec(request.input.text)?.[1];
             const area = options.writableDirectory;
             if (receipt !== undefined && area !== undefined) {
@@ -138,7 +140,7 @@ function planningAgent(harness: HarnessId, writeReceipt: boolean) {
       };
     },
   };
-  return { adapter, granted, inputs, receipts };
+  return { adapter, granted, inputs, resumes, receipts };
 }
 
 function wire(
@@ -315,8 +317,9 @@ for (const harness of ["claude-code", "codex"] as const) {
         ["implement", "pending"],
       ],
     );
-    // The grill's planning Session is retained for the spec and review Turns.
-    assert.deepEqual(turnSessions(wired, runId), ["spec", "spec", "spec"]);
+    // Ticket planning starts a fresh Session, with no recovery coordinate.
+    assert.deepEqual(turnSessions(wired, runId), ["spec", "spec", "tickets"]);
+    assert.deepEqual(agent.resumes, [false, true, false]);
 
     const area = workingArea(wired, runId);
     const prompt = agent.inputs.find((input) => RECEIPT_LINE.test(input))!;
@@ -380,7 +383,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     const area = agent.granted.at(-1)!;
     const spec = join(area, "spec.md");
 
-    // Ticket planning opens on an entry Turn in the planning Session that reads the
+    // Ticket planning opens on an entry Turn in a fresh Session that reads the
     // published spec through the original to-tickets folder, and rests for the human.
     const planning = readRun(wired, runId);
     assert.equal(planning.state, "blocked");
@@ -392,6 +395,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     assert.match(entry, /Do not publish any ticket in this Step/);
     assert.match(entry, /End\s+Step control/);
     assert.deepEqual(planningFiles(area), ["spec.md"]);
+    assert.deepEqual(agent.resumes, [false, true, false]);
 
     // The human revises the breakdown in a later verbatim Turn; still nothing lands.
     await settle(wired, {
@@ -439,9 +443,9 @@ for (const harness of ["claude-code", "codex"] as const) {
     assert.deepEqual(turnSessions(wired, runId), [
       "spec",
       "spec",
-      "spec",
-      "spec",
-      "spec",
+      "tickets",
+      "tickets",
+      "tickets",
       "implement-0.0:implement",
     ]);
     assert.deepEqual(planningFiles(area), [

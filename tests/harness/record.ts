@@ -60,6 +60,8 @@ const SESSION_IDS = {
   "protocol-corruption": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   "matt-front": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 } as const;
+/** Ticket planning opens its own Session before implementation Sessions (#295). */
+const MATT_FRONT_TICKETS_SESSION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb0";
 /** The matt-front implementation Sessions (#224): one fresh id per ticket. */
 const MATT_FRONT_IMPLEMENT_SESSION_IDS = [
   "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
@@ -823,12 +825,12 @@ function splitAroundCalls(
   return { files, steps };
 }
 
-/** Record the Matt front Bundle's Harness Turns (#123, #222, #224): a two-Turn
- *  interactive grill, the autonomous spec Turn, a two-Turn interactive ticket
- *  review, and the autonomous ticket-publish Turn, all in one Session, then two
- *  implementation Sessions of their own. The grill's
- *  first Turn mints the Session (`--session-id`); every later Turn resumes it
- *  (`--resume`). Every launch carries the Run working area as `--add-dir`, as the
+/** Record the Matt front Bundle's Harness Turns (#123, #222, #224, #295): a
+ *  two-Turn interactive grill and autonomous spec in one Session, a two-Turn
+ *  ticket review and autonomous publish in a fresh tickets Session, then two
+ *  implementation Sessions of their own. The first Turn in each Session mints
+ *  it with `--session-id`; later Turns resume it with `--resume`. Every launch
+ *  carries the Run working area as `--add-dir`, as the
  *  Adapter forwards it, and the Local spec and ticket files are written there —
  *  never in the Workspace (#220). Each writing Turn's files are its
  *  `workingAreaPatch`, which the replayer applies in its `--add-dir` directory. */
@@ -897,15 +899,18 @@ async function recordMattFront(): Promise<void> {
       bridge.calls.slice(callsBefore),
     );
 
-    // The ticket review: a proposed breakdown, then one revision. No files.
+    // Ticket review opens a fresh Session and reads the published spec file.
+    // Its proposed breakdown and later revision write no files.
+    const ticketsResume = ["--resume", MATT_FRONT_TICKETS_SESSION_ID];
     const tickets1 = await turn(
-      resume,
-      "Now break the spec into tracer-bullet tickets. Propose exactly two as a " +
+      ["--session-id", MATT_FRONT_TICKETS_SESSION_ID],
+      `This is a fresh conversation. Read the published spec at ${join(area, "spec.md")}. ` +
+        "Break it into tracer-bullet tickets. Propose exactly two as a " +
         "numbered list, each with its title, what blocks it, and one line on " +
         "what it delivers, in under 80 words. Do not write any files.",
     );
     const tickets2 = await turn(
-      resume,
+      ticketsResume,
       "Rename ticket 2 to 'Theme toggle control' and show the revised list in " +
         "under 60 words. Do not write any files.",
     );
@@ -913,7 +918,7 @@ async function recordMattFront(): Promise<void> {
     // The publish Turn writes one Local file per approved ticket.
     callsBefore = bridge.calls.length;
     const publish = await turn(
-      resume,
+      ticketsResume,
       "The breakdown is approved. Using the Write tool, create one file per " +
         `ticket in ${join(area, "issues")}, named 01-<slug>.md and ` +
         "02-<slug>.md. Each file has a `# <NN>: <title>` heading, a " +
@@ -982,9 +987,9 @@ async function recordMattFront(): Promise<void> {
         { name: "question.stdout", bytes: question.stdout },
         { name: "next.stdout", bytes: next.stdout },
       ],
-      // Secant holds one process across an interactive Step's Turns and resumes
-      // the Session in a fresh process per Step, so the grill's two Turns share
-      // the first launch and each ticket-review Turn follows the spec's resume.
+      // Interactive Turns share their Step's process. The spec and publish
+      // Steps each resume their own Session in a fresh process; the replayer's
+      // shared resume block follows those two launches in order.
       caseJson: {
         exitCode: grill1.exitCode,
         turns: [{ stdout: "grill-1.stdout" }, { stdout: "grill-2.stdout" }],
@@ -992,13 +997,18 @@ async function recordMattFront(): Promise<void> {
           exitCode: publish.exitCode,
           turns: [
             { steps: specSplit.steps, workingAreaPatch: "spec.patch" },
-            { stdout: "tickets-1.stdout" },
-            { stdout: "tickets-2.stdout" },
             { steps: publishSplit.steps, workingAreaPatch: "tickets.patch" },
           ],
         },
-        // Each ticket Session is its own fresh launch, held across its Turns.
+        // Ticket planning and each implementation ticket open fresh Sessions.
         sessions: [
+          {
+            exitCode: tickets2.exitCode,
+            turns: [
+              { stdout: "tickets-1.stdout" },
+              { stdout: "tickets-2.stdout" },
+            ],
+          },
           {
             exitCode: question.exitCode,
             turns: [

@@ -1,31 +1,30 @@
 diff --git a/spec.md b/spec.md
 new file mode 100644
-index 0000000..45237c9
+index 0000000..8cc0bc9
 --- /dev/null
 +++ b/spec.md
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,24 @@
 +# Spec: Dark-Mode Toggle
 +
 +Status: ready-for-agent
 +
 +## Summary
-+Add a theme control to the Settings page so users can choose between light and dark modes, or follow their OS setting.
++Add a theme control to the Settings page that lets users choose Light, Dark, or System appearance.
 +
-+## Options
-+- **System** (default): follows `prefers-color-scheme` and updates live when the OS setting changes.
-+- **Light**: always light.
-+- **Dark**: always dark.
++## Requirements
++- **Options:** `system` (default), `light`, `dark`.
++- **Default:** New and existing users start on `system`, which follows the OS `prefers-color-scheme` setting.
++- **Persistence:** Store the choice per user in their profile (e.g. `profile.theme_preference`) so it follows them across devices and sessions.
++- **Live updates:** Changing the setting applies the theme right away, with no page reload. In `system` mode, the app reacts when the OS preference changes.
++- **No flash:** Apply the resolved theme before first paint, using a cached value until the profile loads.
 +
-+## Behavior
-+- The selection is saved per user in their profile (e.g., `themePreference: "system" | "light" | "dark"`).
-+- New and existing users with no saved value default to **System**.
-+- Changing the setting applies immediately, with no page reload.
-+- The preference follows the user across devices and sessions.
-+- Apply the theme before first paint (for example, from a cached value) so the page doesn't flash the wrong theme.
++## Implementation Notes
++- Add a nullable `theme_preference` field to the user profile, where null means `system`.
++- Expose it through the existing profile read/update API.
++- Drive styling with a `data-theme` attribute on `<html>` and CSS variables.
 +
 +## Acceptance Criteria
-+1. The Settings page shows a three-option theme control.
-+2. The selection persists to the user profile and survives logout/login.
-+3. System mode tracks OS changes in real time.
-+4. All pages meet WCAG AA contrast in both themes.
-+5. If saving fails, show an error and revert the control.
++- The toggle shows the saved value when the Settings page loads.
++- The selection survives logout/login and works on other devices.
++- In `system` mode, the theme follows the OS setting.
++- Both themes meet WCAG AA contrast.

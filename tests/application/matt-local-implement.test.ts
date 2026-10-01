@@ -480,15 +480,15 @@ for (const harness of ["claude-code", "codex"] as const) {
         ),
       ["repeat-continued", "stage-ended"],
     );
-    // History keeps every ticket Session's Turns apart from the planning Session.
+    // History keeps the spec, ticket planning, and implementation Sessions apart.
     assert.deepEqual(
       durableTurns(wired, runId).map((turn) => [turn.origin, turn.session]),
       [
-        // The grill, spec, ticket-review and publish Turns.
+        // The grill and spec Turns, then ticket review and publish.
         ["managed", "spec"],
         ["managed", "spec"],
-        ["managed", "spec"],
-        ["managed", "spec"],
+        ["managed", "tickets"],
+        ["managed", "tickets"],
         ["managed", entry.session],
         ["human", entry.session],
         ["managed", second.session],
@@ -579,7 +579,7 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
   assert.deepEqual(trackerFiles(area), published);
   assert.deepEqual(
     durableTurns(wired, runId)
-      .filter((turn) => turn.session !== "spec")
+      .filter((turn) => turn.session !== "spec" && turn.session !== "tickets")
       .map((turn) => [turn.origin, turn.session, turn.resultKind]),
     [
       ["managed", entry.session, "interrupted"],
@@ -622,7 +622,9 @@ test("[matt-local-implement] an Entry Turn that finds no ready ticket rests in i
     );
   }
   assert.equal(
-    durableTurns(wired, runId).filter((turn) => turn.session !== "spec").length,
+    durableTurns(wired, runId).filter(
+      (turn) => turn.session !== "spec" && turn.session !== "tickets",
+    ).length,
     1,
   );
 });

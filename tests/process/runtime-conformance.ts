@@ -68,10 +68,11 @@ const LOCKED_COORDINATION_WORKER = fileURLToPath(
 // id the Adapter mints, so the recording's own id gives a verbatim transcript.
 const MATT_FRONT_SESSION_IDS = [
   "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb0",
   "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
   "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
 ];
-const MATT_FRONT_REPLAYER_VERSION = "2.1.281 (Claude Code)";
+const MATT_FRONT_REPLAYER_VERSION = "2.1.286 (Claude Code)";
 const MATT_FRONT_IDEA = "Add a dark-mode toggle to the settings page.";
 
 function commandOptions(
@@ -383,7 +384,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
     harnessAdapter: createClaudeCodeAdapter({
       path: replayer.path,
       env: {},
-      // The planning Session, then one fresh Session per implementation ticket.
+      // The spec Session, ticket-planning Session, then one per implementation ticket.
       sessionId: () => {
         const id = MATT_FRONT_SESSION_IDS[minted++];
         assert.ok(id, "the recording has no further fresh Session");
@@ -490,7 +491,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
       .join("\n");
     // The recorded grill: a question on the entry Turn, a confirmation on the second.
     assert.match(assistantText, /match system setting/);
-    assert.match(assistantText, /That's everything I need/);
+    assert.match(assistantText, /That's (?:everything|all) I need/);
     // A detached Session that recorded human Turns still advertises its transcript
     // page/export References alongside its availability (#124).
     assert.deepEqual(afterGrill.sessions, [
@@ -531,8 +532,12 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
     // receipt (#221, #223) at a per-Attempt path the recording cannot know, so at
     // the Turn's first approval the scenario writes the receipt on the agent's
     // behalf from the admitted prompt. Returns the number of approvals answered.
-    const userTurns = (): string[] => {
-      const read = wired.projectionPort.readTranscript(transcriptReference);
+    const userTurns = (session = "spec"): string[] => {
+      const reference = readRun().sessions?.find(
+        (candidate) => candidate.session === session,
+      )?.transcriptPage;
+      assert.ok(reference, `no transcript for Session ${session}`);
+      const read = wired.projectionPort.readTranscript(reference);
       assert.ok(read.found);
       if (!read.found) throw new Error("unreachable");
       return read.entries
@@ -572,7 +577,9 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
         for (const offer of update.overlay.offers) {
           if (pending.has(offer.requestId)) continue;
           if (allowedCount === 0) {
-            const prompt = userTurns().at(-1) ?? "";
+            const prompt =
+              userTurns(output === "spec-ref" ? "spec" : "tickets").at(-1) ??
+              "";
             const receiptPath = new RegExp(
               `Write the required output "${output}" as UTF-8 text to (.+) before you finish;`,
             ).exec(prompt)?.[1];
@@ -604,8 +611,8 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
 
     // Choose the Local suggestion — the same `text` answer a typed Other sends. The
     // spec Agent Step resumes the Session, and its one write approval puts the spec
-    // in the working area; ticket review then opens on its entry Turn in the same
-    // Session and rests for the human. The answer-gate drive settles at that rest.
+    // in the working area; ticket review opens a fresh Session from the spec
+    // reference and rests for the human. The answer-gate drive settles at that rest.
     const gate = atGate.pendingGate!.gate;
     assert.equal(
       await driveAllowing(
@@ -641,7 +648,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
     const specRefRead = wired.projectionPort.readResource(specRef.reference);
     assert.ok(specRefRead.found);
     assert.equal(specRefRead.found && specRefRead.content, specFile);
-    const reviewPrompt = userTurns().at(-1) ?? "";
+    const reviewPrompt = userTurns("tickets").at(-1) ?? "";
     assert.ok(reviewPrompt.includes(specFile), reviewPrompt);
     assert.match(reviewPrompt, /[\\/]to-tickets[\\/]SKILL\.md/);
     assert.doesNotMatch(reviewPrompt, /required output/);
@@ -667,7 +674,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
     assert.equal(existsSync(join(area, "issues")), false);
 
     // Ending the Step approves the breakdown (#222). The publish Turn resumes the
-    // Session and raises one file-write approval per ticket.
+    // tickets Session and raises one file-write approval per ticket.
     assert.equal(
       await driveAllowing(
         "matt-front-approve-tickets",
@@ -684,7 +691,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
       3,
     );
 
-    const [revision, publishPrompt] = userTurns().slice(-2);
+    const [revision, publishPrompt] = userTurns("tickets").slice(-2);
     assert.equal(revision, "Rename ticket 2 to Theme toggle control.");
     assert.equal(areaOf(publishPrompt ?? ""), area);
     assert.match(publishPrompt ?? "", /"tickets-ref"/);
@@ -814,7 +821,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
     );
     assert.deepEqual(
       done.sessions?.map((session) => session.session),
-      ["spec", firstTicket, nextTicket],
+      ["spec", "tickets", firstTicket, nextTicket],
     );
     // No ticket-status mirror: the kept ticket reference is still the issues
     // directory, and the working area holds only the agent's tracker files.

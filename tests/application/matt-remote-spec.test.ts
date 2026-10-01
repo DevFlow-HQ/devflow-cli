@@ -18,7 +18,7 @@ import { awaitSettled } from "../helpers/settleOperation.js";
 // [matt-remote-spec] The maintained Matt Bundle's spec stage for a remote tracker
 // (#221), over the shared Projection Port with the real Application and Run Store on
 // a temporary home and a fake Harness under each v1 Harness selection. After the grill
-// and the tracker gate, the spec Step continues the same planning Session with the
+// and the tracker gate, the spec Step continues the same `spec` Session with the
 // original to-spec skill and the chosen tracker in its prompt. GitHub and a typed
 // Other go through the same generic Agent Step contract: the agent publishes with its
 // own tools (Secant has no tracker Adapter) and writes the reference to its Output
@@ -322,7 +322,7 @@ for (const harness of ["claude-code", "codex"] as const) {
 }
 
 // [matt-remote-tickets] Ticket planning for a remote tracker (#223). The original
-// to-tickets skill continues the same planning Session: the review Step proposes and
+// to-tickets skill opens a fresh `tickets` Session: the review Step proposes and
 // revises the breakdown across Turns; its prompt forbids publication, it asks for no
 // receipt, and agent prose never ends it. (Secant has no tracker Adapter, so the
 // prompt is the only guard against an agent publishing early with its own tools.) The human's End Step is the approval;
@@ -420,9 +420,9 @@ for (const harness of ["claude-code", "codex"] as const) {
       assert.deepEqual(turnSessions(wired, runId), [
         ["interactive-agent", "spec"],
         ["agent", "spec"],
-        ["interactive-agent", "spec"],
-        ["interactive-agent", "spec"],
-        ["agent", "spec"],
+        ["interactive-agent", "tickets"],
+        ["interactive-agent", "tickets"],
+        ["agent", "tickets"],
         ["interactive-agent", "implement-0.0:implement"],
       ]);
     });

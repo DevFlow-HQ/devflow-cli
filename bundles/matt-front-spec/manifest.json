@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "bundle": {
     "id": "dev.secant.matt-front",
-    "version": "2.6.0",
+    "version": "2.7.0",
     "name": "Matt Front Spec",
-    "description": "Grill the human about their launch idea, let them choose the tracker, write the spec and plan the tickets in the same Session, then implement one ready ticket per fresh Session."
+    "description": "Grill and write the spec in one conversation, plan and publish tickets in a fresh conversation from the published spec, then implement one ready ticket per fresh conversation."
   },
   "platforms": ["windows", "macos", "linux"],
   "inputs": {
@@ -123,7 +123,7 @@
     {
       "id": "plan-tickets",
       "kind": "interactive-agent",
-      "session": "spec",
+      "session": "tickets",
       "requires": ["tracker", "spec-ref"],
       "entryTurn": true,
       "prompt": {
@@ -139,7 +139,7 @@
       "id": "publish-tickets",
       "kind": "agent",
       "retry": 0,
-      "session": "spec",
+      "session": "tickets",
       "requires": ["tracker", "spec-ref"],
       "prompt": {
         "asset": "prompts/publish-tickets.md"

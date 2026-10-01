@@ -31,7 +31,8 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **shipped-bundles-embedded**: this OS's binary rebuilds each allow-listed folder to its `bundles/builtin.lock.json` digest and embeds those exact
   bytes, and not the External Proof Bundle's.
 - **shipped-bundles-startup** (#227): a fresh home's first startup installs exactly the locked built-ins with origin `built-in` and app-release trust, a
-  second startup changes no Catalog row, a byte-different import collides naming the built-in, another version installs beside it, and a home whose
+  second startup changes no Catalog row, a byte-different import collides naming the built-in, a source-CLI-seeded Matt 2.6.0 remains beside 2.7.0
+  after first and second startup, another version installs beside it, and a home whose
   built-in identity is already held (seeded through the source CLI) gets a stderr notice while the command succeeds.
 - **matt-front-refusal**: the built-in the startup ensure installed, refused headlessly with `interactive-step-needs-tui` and its remediation.
 - **launch-preparation-headless** (#189): a not-ready draft (missing input, untrusted digest) `run launch` prints every finding in text and JSON,

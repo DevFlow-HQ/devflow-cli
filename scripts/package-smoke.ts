@@ -1026,8 +1026,8 @@ await withCleanup(
         (entry) => entry.id === "dev.secant.matt-front",
       );
       if (matt === undefined) throw new Error("The Matt Bundle is not locked.");
-      const catalogRows = (): string => {
-        const database = new Database(join(home, "catalog.db"));
+      const catalogRows = (catalogHome = home): string => {
+        const database = new Database(join(catalogHome, "catalog.db"));
         try {
           return JSON.stringify([
             database.query("SELECT * FROM catalog_entries").all(),
@@ -1145,6 +1145,66 @@ await withCleanup(
           `A byte-different import of the built-in's identity was not the collision naming the built-in: ${collision.stdout}\n${collision.stderr}`,
         );
       }
+      // Upgrade path: an earlier Matt identity installed by the source CLI is
+      // already in the Catalog when the new binary first starts. The shallow CI
+      // checkout cannot rebuild the historical 2.6.0 bytes, so this copy proves
+      // version coexistence and preservation through the ordinary ensure path.
+      const coexistHome = join(smokeRoot, "matt-upgrade-home");
+      const coexistEnv = homeEnv(coexistHome);
+      const previous = await variant("matt-previous", "2.6.0");
+      run(
+        process.execPath,
+        [
+          join(projectRoot, "src", "cli", "main.ts"),
+          "bundle",
+          "install",
+          previous,
+        ],
+        { cwd: smokeRoot, env: coexistEnv },
+      );
+      const seeded = JSON.parse(
+        run(
+          process.execPath,
+          [
+            join(projectRoot, "src", "cli", "main.ts"),
+            "bundle",
+            "list",
+            "--json",
+          ],
+          { cwd: smokeRoot, env: coexistEnv },
+        ),
+      ).result.bundles as Row[];
+      if (
+        seeded.length !== 1 ||
+        seeded[0]?.version !== "2.6.0" ||
+        seeded[0]?.origin.kind !== "local-file"
+      ) {
+        throw new Error(
+          `The prior Matt version was not seeded: ${JSON.stringify(seeded)}`,
+        );
+      }
+      const upgraded = list(coexistEnv).filter((row) => row.id === matt.id);
+      if (
+        upgraded.length !== 2 ||
+        upgraded[0]?.version !== matt.version ||
+        upgraded[0]?.digest !== matt.digest ||
+        upgraded[0]?.origin.kind !== "built-in" ||
+        upgraded[1]?.version !== "2.6.0" ||
+        upgraded[1]?.digest !== seeded[0]?.digest ||
+        upgraded[1]?.origin.kind !== "local-file"
+      ) {
+        throw new Error(
+          `The new Matt version did not install beside 2.6.0: ${JSON.stringify(upgraded)}`,
+        );
+      }
+      const coexistBefore = catalogRows(coexistHome);
+      list(coexistEnv);
+      if (catalogRows(coexistHome) !== coexistBefore) {
+        throw new Error(
+          "A second startup changed the coexisting Matt Catalog rows.",
+        );
+      }
+
       run(binary, ["bundle", "install", await variant("matt-older", "0.9.0")], {
         cwd: smokeRoot,
         env,

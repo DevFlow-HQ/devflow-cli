@@ -1,30 +1,24 @@
-diff --git a/issues/01-theme-end-to-end-system-mode.md b/issues/01-theme-end-to-end-system-mode.md
+diff --git a/issues/01-theme-preference-end-to-end.md b/issues/01-theme-preference-end-to-end.md
 new file mode 100644
-index 0000000..6e5c457
+index 0000000..1dd9c18
 --- /dev/null
-+++ b/issues/01-theme-end-to-end-system-mode.md
-@@ -0,0 +1,9 @@
-+# 01: Theme end-to-end: System mode with profile field
++++ b/issues/01-theme-preference-end-to-end.md
+@@ -0,0 +1,6 @@
++# 01: Theme preference end to end
 +
 +**Blocked by:** None
 +**Status:** ready-for-agent
 +
-+Add a `themePreference` profile field (default "system"), a theme control on the Settings page, and live OS tracking applied before first paint.
-+
-+## Acceptance Criteria
-+- [ ] A user with no saved preference sees the theme that matches their OS, with no flash on load, and it updates live when the OS setting changes.
++- [ ] The Settings toggle shows the saved value on load, applies the theme live without reload, and the selection survives logout/login and works on other devices.
 diff --git a/issues/02-theme-toggle-control.md b/issues/02-theme-toggle-control.md
 new file mode 100644
-index 0000000..7765411
+index 0000000..48ea7c1
 --- /dev/null
 +++ b/issues/02-theme-toggle-control.md
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,6 @@
 +# 02: Theme toggle control
 +
 +**Blocked by:** 01
 +**Status:** ready-for-agent
 +
-+Add Light/Dark overrides that save to the profile and apply instantly, sync across devices, revert on save errors, and meet WCAG AA contrast.
-+
-+## Acceptance Criteria
-+- [ ] Choosing Light or Dark applies immediately, persists across logout/login and devices, and reverts with an error message if the save fails.
++- [ ] In `system` mode the theme follows OS `prefers-color-scheme` changes live, a cached theme applies before first paint with no flash, and both themes meet WCAG AA contrast.
