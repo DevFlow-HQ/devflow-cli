@@ -16,8 +16,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Receipt paths reach the Agent only as appended prompt text — one `receiptInstruction` line per declared output after the rendered prompt — never as an env var
   or Harness option. A prompt-renderer or `produces` change that drops those lines fails every Agent Step that declares an output.
 - Execution never hands the working area to the Harness; composition's prepare does (#214). Here it only fills the `{{run:working-area}}` prompt slot
-  (`WORKING_AREA_SLOT`) and gates receipts when `produces` is non-empty, each an unusable area typed `working-area-unavailable`/`not-started`; Command steps never
-  see it — their `cwd` resolves against the Workspace.
+  (`WORKING_AREA_SLOT`), typing an unusable area `working-area-unavailable`/`not-started`; Command steps never see it — their `cwd` resolves against the
+  Workspace. A producing Step consumes `outputReceiptDirectory`'s typed result once, with no separate area check: its Problem kind becomes the
+  `not-started` category (dropped with the rest of the detail until ADR 0041's evidence lands), so the failed Attempt admits and sends no Turn and
+  follows the ordinary retry policy (#305).
 - Every Command-step spawn passes its resolved authored environment through the Run Store entry's `isolatedGitEnvironment`; the helper appends
   non-interactive signing, hook, credential, and editor overrides after authored Git config entries, without changing user files or hiding ordinary
   system/global config (#166). `GIT_CONFIG_PARAMETERS` is removed because Git applies it after the counted entries and could undo the hardening.

@@ -9,7 +9,10 @@ import {
   type HarnessProfile,
   type TurnResult,
 } from "../../src/harness/harness.js";
-import type { RunView } from "../../src/application/projection-port.js";
+import type {
+  OperationOutcome,
+  RunView,
+} from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import { createFake } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
@@ -22,7 +25,8 @@ import { awaitSettled } from "../helpers/settleOperation.js";
 // Store with the fake Harness Adapter. Success: the agent writes the receipt file
 // its prompt names, the reference binds as a Run output, reads back through the
 // Port, and substitutes into a later Step's prompt. Failure: a completed Turn with no
-// receipt fails the Step and the Run, while the earlier binding stays readable.
+// receipt fails the Step and the Run, while the earlier binding stays readable; a
+// receipt root the Store cannot prepare fails each Attempt before any Turn (#305).
 
 const sharedGit = createFakeGitProcess();
 
@@ -80,8 +84,13 @@ const RECEIPT_LINE =
   /Write the required output "spec-ref" as UTF-8 text to (.+) before you finish;/;
 
 /** A fake Adapter whose Turns play the agent: Turn `n` writes `receipts[n]` to the
- *  receipt path its prompt names (nothing when undefined). Every Turn input is kept. */
-function receiptAgent(receipts: readonly (string | undefined)[]): {
+ *  receipt path its prompt names (nothing when undefined). Every Turn input is kept.
+ *  `squatReceiptRoot` leaves a file where the granted working area's receipt root
+ *  belongs, so only receipt preparation — not the area — is unusable. */
+function receiptAgent(
+  receipts: readonly (string | undefined)[],
+  options: { readonly squatReceiptRoot?: boolean } = {},
+): {
   adapter: HarnessAdapter;
   inputs: string[];
 } {
@@ -93,8 +102,17 @@ function receiptAgent(receipts: readonly (string | undefined)[]): {
   return {
     inputs,
     adapter: {
-      async prepare(options) {
-        const prepared = await inner.prepare(options);
+      async prepare(prepareOptions) {
+        if (
+          options.squatReceiptRoot === true &&
+          prepareOptions.writableDirectory !== undefined
+        ) {
+          writeFileSync(
+            join(prepareOptions.writableDirectory, ".receipts"),
+            "squatter",
+          );
+        }
+        const prepared = await inner.prepare(prepareOptions);
         if (!prepared.ok) return prepared;
         const harness = prepared.harness;
         return {
@@ -118,9 +136,12 @@ function receiptAgent(receipts: readonly (string | undefined)[]): {
   };
 }
 
-/** publish (produces spec-ref) → then either a consumer that reads spec-ref, or a
- *  second producer that republishes spec-ref. */
-function writeBundle(second: "consume" | "republish"): {
+/** publish (produces spec-ref) → then either a consumer that reads spec-ref, a
+ *  second producer that republishes spec-ref, or nothing. */
+function writeBundle(
+  second: "consume" | "republish" | "none",
+  publishRetry = 0,
+): {
   folder: string;
   id: string;
 } {
@@ -150,28 +171,32 @@ function writeBundle(second: "consume" | "republish"): {
       {
         id: "publish",
         kind: "agent",
-        retry: 0,
+        retry: publishRetry,
         session: "planning",
         prompt: { asset: "prompts/publish.md" },
         produces: [{ name: "spec-ref", type: "text" }],
       },
-      second === "consume"
-        ? {
-            id: "tickets",
-            kind: "agent",
-            retry: 0,
-            session: "planning",
-            requires: ["spec-ref"],
-            prompt: { asset: "prompts/tickets.md" },
-          }
-        : {
-            id: "republish",
-            kind: "agent",
-            retry: 0,
-            session: "planning",
-            prompt: { asset: "prompts/publish.md" },
-            produces: [{ name: "spec-ref", type: "text" }],
-          },
+      ...(second === "none"
+        ? []
+        : [
+            second === "consume"
+              ? {
+                  id: "tickets",
+                  kind: "agent",
+                  retry: 0,
+                  session: "planning",
+                  requires: ["spec-ref"],
+                  prompt: { asset: "prompts/tickets.md" },
+                }
+              : {
+                  id: "republish",
+                  kind: "agent",
+                  retry: 0,
+                  session: "planning",
+                  prompt: { asset: "prompts/publish.md" },
+                  produces: [{ name: "spec-ref", type: "text" }],
+                },
+          ]),
     ],
   };
   writeFileSync(
@@ -187,7 +212,7 @@ async function launch(
   t: TestContext,
   adapter: HarnessAdapter,
   bundle: { folder: string; id: string },
-): Promise<{ wired: Wiring; runId: string }> {
+): Promise<{ wired: Wiring; runId: string; launched: OperationOutcome }> {
   const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
   process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
   t.after(() => {
@@ -229,8 +254,8 @@ async function launch(
   });
   assert.ok(admission.admitted, JSON.stringify(admission));
   assert.ok(admission.runId);
-  await awaitSettled(wired.projectionPort, "op-launch");
-  return { wired, runId: admission.runId };
+  const launched = await awaitSettled(wired.projectionPort, "op-launch");
+  return { wired, runId: admission.runId, launched };
 }
 
 function readRun(wired: Wiring, runId: string): RunView {
@@ -307,4 +332,36 @@ test("[agent-output-receipt] a completed Turn with no receipt fails the Run and 
       .map((event) => event.detail),
     ["succeeded", "failed"],
   );
+});
+
+test("[agent-output-receipt] a receipt root the Store cannot prepare fails each Attempt before any Turn and binds nothing (#305)", async (t) => {
+  const agent = receiptAgent(["never-written", "never-written"], {
+    squatReceiptRoot: true,
+  });
+  const { wired, runId, launched } = await launch(
+    t,
+    agent.adapter,
+    writeBundle("none", 1),
+  );
+  // The launch Operation itself applied; only the Run's Step failed.
+  assert.equal(launched.status, "applied", JSON.stringify(launched));
+
+  const run = readRun(wired, runId);
+  // The existing failed-Attempt policy: retried within budget, then the Run fails.
+  assert.equal(run.state, "failed");
+  assert.deepEqual(
+    run.timeline
+      .filter((event) => event.event === "attempt-settled")
+      .map((event) => event.detail),
+    ["failed", "failed"],
+  );
+  // No Turn was sent or recorded, and no output was bound.
+  assert.deepEqual(agent.inputs, []);
+  assert.deepEqual(
+    run.timeline.filter((event) => event.event.startsWith("turn-")),
+    [],
+  );
+  assert.deepEqual(run.outputs, []);
+  // The failed Attempts ran under the qualified Harness, so its identity projects.
+  assert.equal(run.harness?.name, "Claude Code");
 });

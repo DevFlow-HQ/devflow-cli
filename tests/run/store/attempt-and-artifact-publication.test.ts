@@ -1,12 +1,22 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
-import test from "node:test";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import test, { type TestContext } from "node:test";
 import { Database } from "bun:sqlite";
 import type { ProducedArtifact } from "../../../src/workflow/workflow.js";
 import {
+  type OutputReceiptDirectoryResult,
   type PublishAttemptResult,
   type RunGroup,
+  type RunOwner,
 } from "../../../src/run/store/store.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
 import { openFakeRunGroup as openRunGroup } from "./fake-git-process.js";
@@ -619,6 +629,117 @@ test("a partial persisted steer capability is rejected at the Harness-identity r
   assert.throws(() => corrupted.harnessEvidence());
 });
 
+/** The prepared receipt directory, asserting preparation succeeded. */
+function receiptDirOf(owner: RunOwner, attemptId: string): string {
+  const prepared = owner.outputReceiptDirectory(attemptId);
+  assert.ok(prepared.ok, JSON.stringify(prepared));
+  return prepared.path;
+}
+
+/** The typed Problem of a refused receipt preparation. */
+function receiptProblemOf(
+  owner: RunOwner,
+  attemptId: string,
+): Extract<OutputReceiptDirectoryResult, { ok: false }>["problem"] {
+  const prepared = owner.outputReceiptDirectory(attemptId);
+  assert.equal(prepared.ok, false, JSON.stringify(prepared));
+  if (prepared.ok) throw new Error("unreachable");
+  return prepared.problem;
+}
+
+function acquiredOwner(t: TestContext): RunOwner {
+  const group = openRunGroup(makeTempDir("secant-store-"), WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-1");
+  assert.ok(created.outcome === "created");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  return owner;
+}
+
+test("a file squatting a usable working area's receipt root is a typed Problem, not a throw (#305)", (t) => {
+  const owner = acquiredOwner(t);
+  const area = owner.workingArea();
+  assert.ok(area.ok);
+  const root = join(area.path, ".receipts");
+  writeFileSync(root, "squatter");
+
+  const problem = receiptProblemOf(owner, "0.0:publish");
+
+  assert.equal(problem.kind, "output-receipt-directory-unavailable");
+  assert.equal(problem.path, root);
+  assert.ok(problem.cause instanceof Error, String(problem.cause));
+  // The working area itself stays usable, and the squatter is never replaced.
+  assert.ok(owner.workingArea().ok);
+  assert.equal(readFileSync(root, "utf8"), "squatter");
+  // Clearing the conflict lets the same Attempt prepare an empty directory.
+  rmSync(root);
+  assert.deepEqual(readdirSync(receiptDirOf(owner, "0.0:publish")), []);
+});
+
+test("a receipt root redirected outside the working area is refused without emptying its target (#305)", (t) => {
+  const owner = acquiredOwner(t);
+  const dir = receiptDirOf(owner, "0.0:publish");
+  const root = dirname(dir);
+  // A link the agent could plant where the Store expects its own directory; a
+  // junction needs no privilege on Windows and is an ordinary link elsewhere.
+  const elsewhere = makeTempDir("secant-store-elsewhere-");
+  mkdirSync(join(elsewhere, basename(dir)));
+  writeFileSync(
+    join(elsewhere, basename(dir), "keep"),
+    "not candidate storage",
+  );
+  rmSync(root, { recursive: true });
+  symlinkSync(elsewhere, root, "junction");
+
+  const problem = receiptProblemOf(owner, "0.0:publish");
+
+  assert.equal(problem.kind, "output-receipt-directory-unavailable");
+  assert.equal(problem.path, root);
+  assert.equal(
+    readFileSync(join(elsewhere, basename(dir), "keep"), "utf8"),
+    "not candidate storage",
+  );
+});
+
+test("a link planted at an Attempt's own receipt path is replaced, never emptied through (#305)", (t) => {
+  const owner = acquiredOwner(t);
+  const dir = receiptDirOf(owner, "0.0:publish");
+  const elsewhere = makeTempDir("secant-store-elsewhere-");
+  writeFileSync(join(elsewhere, "keep"), "not candidate storage");
+  rmSync(dir, { recursive: true });
+  symlinkSync(elsewhere, dir, "junction");
+
+  assert.equal(receiptDirOf(owner, "0.0:publish"), dir);
+
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(
+    readFileSync(join(elsewhere, "keep"), "utf8"),
+    "not candidate storage",
+  );
+});
+
+// Named gap: a removal or creation that fails after the root check (EPERM/EBUSY on
+// the per-Attempt directory) shares the conflict's catch-and-type path, but no
+// deterministic, portable fault can be injected there without a production
+// test-only Seam, so it is not exercised here.
+
+test("an unusable working area fails receipt preparation typed with its cause (#305)", (t) => {
+  const owner = acquiredOwner(t);
+  const area = owner.workingArea();
+  assert.ok(area.ok);
+  rmSync(area.path, { recursive: true });
+  writeFileSync(area.path, "squatter");
+
+  const problem = receiptProblemOf(owner, "0.0:publish");
+
+  assert.equal(problem.kind, "working-area-unavailable");
+  assert.equal(basename(problem.path), "working");
+  assert.ok(problem.cause instanceof Error, String(problem.cause));
+  assert.equal(readFileSync(area.path, "utf8"), "squatter");
+});
+
 test("an Attempt's output receipt directory is a fresh, Run-owned directory per Attempt (#215)", async (t) => {
   const home = makeTempDir("secant-store-");
   const group = openRunGroup(home, WORKSPACE);
@@ -631,7 +752,7 @@ test("an Attempt's output receipt directory is a fresh, Run-owned directory per 
 
   // Execution's Attempt ids carry a `:` that is not a legal Windows file name, so
   // the directory must still be created on every OS.
-  const first = owner.outputReceiptDirectory("0.0:publish");
+  const first = receiptDirOf(owner, "0.0:publish");
   assert.ok(isAbsolute(first));
   // Inside the working area, the one directory a Harness is granted (#220), so
   // the agent can write its receipt under a sandbox.
@@ -643,12 +764,12 @@ test("an Attempt's output receipt directory is a fresh, Run-owned directory per 
 
   // Each Attempt receives its own directory, so a retry never reads the receipt a
   // previous Attempt left behind.
-  const second = owner.outputReceiptDirectory("0.1:publish");
+  const second = receiptDirOf(owner, "0.1:publish");
   assert.notEqual(second, first);
 
   // Preparing the same Attempt again empties it: a stale receipt cannot satisfy it.
   writeFileSync(join(first, "spec-ref"), "stale");
-  assert.equal(owner.outputReceiptDirectory("0.0:publish"), first);
+  assert.equal(receiptDirOf(owner, "0.0:publish"), first);
   assert.deepEqual(readdirSync(first), []);
 
   // The receipts share the Run's lifecycle: deleting the Run removes them.

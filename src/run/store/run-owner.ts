@@ -879,11 +879,40 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       // Inside the working area, so the one writable directory the Harness was
       // granted (#214) covers the receipt the agent must write (#220).
       const area = workingArea();
-      if (!area.ok) throw area.problem.cause;
-      const dir = join(area.path, ".receipts", name);
-      rmSync(dir, { recursive: true, force: true });
-      mkdirSync(dir, { recursive: true });
-      return dir;
+      if (!area.ok) return area;
+      const root = join(area.path, ".receipts");
+      const dir = join(root, name);
+      const unavailable = (path: string, cause: unknown) =>
+        ({
+          ok: false,
+          problem: {
+            kind: "output-receipt-directory-unavailable",
+            path,
+            cause,
+          },
+        }) as const;
+      try {
+        // Throws when anything but a directory occupies the root.
+        mkdirSync(root, { recursive: true });
+        // The area is canonical, so a root that resolves anywhere else is a link
+        // the agent planted; emptying through it would delete outside the area.
+        if (realpathSync(root) !== root) {
+          return unavailable(
+            root,
+            new Error(`'${root}' resolves outside the Run working area.`),
+          );
+        }
+      } catch (cause) {
+        return unavailable(root, cause);
+      }
+      try {
+        // A link planted at `dir` itself is removed, never followed.
+        rmSync(dir, { recursive: true, force: true });
+        mkdirSync(dir, { recursive: true });
+      } catch (cause) {
+        return unavailable(dir, cause);
+      }
+      return { ok: true, path: dir };
     },
     workingArea,
     readDiagnostic(diagnosticId) {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
 import type {
@@ -708,24 +708,50 @@ test("a producing Step whose working area is unusable fails typed before any Tur
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, () => undefined);
   // Receipts live in the working area; a squatted area is typed, never a throw.
-  const owner: RunOwner = {
-    ...f.owner,
-    workingArea: () => ({
-      ok: false,
-      problem: {
-        kind: "working-area-unavailable",
-        path: "/squatted",
-        cause: undefined,
-      },
-    }),
-  };
+  const area = f.owner.workingArea();
+  assert.ok(area.ok);
+  rmSync(area.path, { recursive: true });
+  writeFileSync(area.path, "squatter");
 
-  const report = await executeWith(
-    { ...f, owner },
-    producingStep(),
-    agent.harness,
-  );
+  const report = await executeWith(f, producingStep(), agent.harness);
 
   assert.deepEqual(report, { outcome: "failed" });
   assert.deepEqual(agent.inputs, []);
+  assert.deepEqual(f.owner.turns(), []);
+});
+
+test("a receipt root conflict in a usable working area fails each Attempt before any Turn and binds nothing (#305)", async (t) => {
+  const f = fixture(t);
+  const prepared = await preparedHarness(profile(), [
+    { result: COMPLETED },
+    { result: COMPLETED },
+  ]);
+  t.after(() => prepared.close());
+  const agent = receiptWriting(prepared, () => undefined);
+  // The area itself is a usable directory, so only receipt preparation can fail.
+  const area = f.owner.workingArea();
+  assert.ok(area.ok);
+  writeFileSync(join(area.path, ".receipts"), "squatter");
+
+  const report = await executeWith(
+    f,
+    producingStep({ retry: 1 }),
+    agent.harness,
+  );
+
+  // The existing failed-Attempt policy: retried within budget, then the Run fails.
+  assert.deepEqual(report, { outcome: "failed" });
+  assert.deepEqual(
+    f.owner.attemptLog().map((attempt) => attempt.outcome),
+    ["failed", "failed"],
+  );
+  assert.equal(f.state(), "failed");
+  // No Turn was admitted or sent, and no output moved.
+  assert.deepEqual(agent.inputs, []);
+  assert.deepEqual(f.owner.turns(), []);
+  assert.equal(f.owner.currentVersion("spec-ref"), undefined);
+  // The failed Attempt still ran under a qualified Harness, so it keeps the identity.
+  const evidence = f.owner.harnessEvidence();
+  assert.equal(evidence?.identity?.harness, "fake");
+  assert.equal(evidence?.effectiveModel, undefined);
 });

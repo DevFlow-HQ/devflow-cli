@@ -15,9 +15,9 @@ import type {
   AgentAttemptEvidence,
   CandidateOutput,
   HarnessIdentityRecord,
+  OutputReceiptDirectoryResult,
   RunOwner,
   TurnKind,
-  WorkingAreaResult,
 } from "../store/store.js";
 import type {
   DurableTurnRecorder,
@@ -223,15 +223,17 @@ export async function runAgent(
   }
 
   // Each declared output is captured only from a receipt file at a fresh per-Attempt
-  // path the prompt names (#215) — never parsed from assistant prose.
-  // Receipts live in the working area (#220); an unusable one is typed, not thrown.
-  if ((step.produces ?? []).length > 0) {
-    const area = owner.workingArea();
-    if (!area.ok) {
-      return mapTurnResult(workingAreaFailure(area), harness.prepared.profile);
-    }
+  // path the prompt names (#215) — never parsed from assistant prose. Receipts live
+  // in the working area (#220); preparing them is the one typed check (#305), so a
+  // failure admits and sends no Turn.
+  const prepared = prepareReceipts(step, owner, attemptId);
+  if (!prepared.ok) {
+    return mapTurnResult(
+      unusableDirectoryFailure(prepared.problem),
+      harness.prepared.profile,
+    );
   }
-  const receipts = prepareReceipts(step, owner, attemptId);
+  const receipts = prepared.receipts;
   const prompt =
     receipts.length === 0
       ? rendered.prompt
@@ -284,14 +286,20 @@ function prepareReceipts(
   step: AgentStep,
   owner: RunOwner,
   attemptId: string,
-): readonly Receipt[] {
+):
+  | { readonly ok: true; readonly receipts: readonly Receipt[] }
+  | Extract<OutputReceiptDirectoryResult, { ok: false }> {
   const produces = step.produces ?? [];
-  if (produces.length === 0) return [];
+  if (produces.length === 0) return { ok: true, receipts: [] };
   const dir = owner.outputReceiptDirectory(attemptId);
-  return produces.map((produced) => ({
-    name: produced.name,
-    path: join(dir, produced.name),
-  }));
+  if (!dir.ok) return dir;
+  return {
+    ok: true,
+    receipts: produces.map((produced) => ({
+      name: produced.name,
+      path: join(dir.path, produced.name),
+    })),
+  };
 }
 
 function receiptInstruction(receipt: Receipt): string {
@@ -679,7 +687,9 @@ function renderAgentPrompt(
   if (base.includes(WORKING_AREA_SLOT)) {
     // The exact directory composition granted the Harness at prepare (#214).
     const area = context.owner.workingArea();
-    if (!area.ok) return { ok: false, result: workingAreaFailure(area) };
+    if (!area.ok) {
+      return { ok: false, result: unusableDirectoryFailure(area.problem) };
+    }
     base = base.replaceAll(WORKING_AREA_SLOT, area.path);
   }
   const filled = base.replace(promptSlotPattern(), (_match, name: string) =>
@@ -708,19 +718,24 @@ function renderAgentPrompt(
   };
 }
 
-/** The not-started result for an unusable Run working area (#214): no Turn ran. */
-function workingAreaFailure(
-  area: Extract<WorkingAreaResult, { ok: false }>,
+/** The not-started result for an unusable Run working area (#214) or receipt
+ *  directory (#305): no Turn ran, and the Problem's kind is the category. */
+function unusableDirectoryFailure(
+  problem: Extract<OutputReceiptDirectoryResult, { ok: false }>["problem"],
 ): TurnResult {
+  const what =
+    problem.kind === "working-area-unavailable"
+      ? "Run working area"
+      : "output receipt directory";
   return {
     kind: "not-started",
     detail: {
       failure: {
         phase: "launch",
-        category: "working-area-unavailable",
+        category: problem.kind,
         possibleEffects: "none",
-        diagnostics: `The Run working area '${area.problem.path}' is not a usable directory.`,
-        cause: area.problem.cause,
+        diagnostics: `The ${what} '${problem.path}' is not a usable directory.`,
+        cause: problem.cause,
       },
     },
   };

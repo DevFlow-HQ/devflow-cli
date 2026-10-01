@@ -170,6 +170,21 @@ export type WorkingAreaResult =
       };
     };
 
+/** An Agent Attempt's prepared, empty output-receipt directory (#215), or a typed
+ *  Problem with its original cause: the working area is unusable, or the receipt
+ *  path is occupied by something other than a directory or cannot be emptied and
+ *  recreated. Never a throw for an operational filesystem failure. */
+export type OutputReceiptDirectoryResult =
+  | WorkingAreaResult
+  | {
+      readonly ok: false;
+      readonly problem: {
+        readonly kind: "output-receipt-directory-unavailable";
+        readonly path: string;
+        readonly cause: unknown;
+      };
+    };
+
 /** A legacy Run's one-time semantic Harness upgrade. `already-selected` proves an
  *  idempotent retry observed the same immutable value and performed no write. */
 export type SelectHarnessResult =
@@ -514,13 +529,15 @@ export interface RunOwner {
   workingArea(): WorkingAreaResult;
   /**
    * Prepare the empty directory an Agent Attempt's output receipts are written to
-   * (#215) and return its absolute path. One directory per Attempt id under the
-   * Run's own directory — never the Workspace, the database, or the Artifact
+   * (#215) and return its absolute path. One directory per Attempt id inside the
+   * Run's working area — never the Workspace, the database, or the Artifact
    * repository — emptied on every call so a stale receipt cannot satisfy a later
    * Attempt, and removed with the Run. Receipt files are candidate input only;
-   * nothing is canonical until `publishAttempt` binds the validated bytes.
+   * nothing is canonical until `publishAttempt` binds the validated bytes. An
+   * unusable working area or receipt path is a typed Problem (#305), so a caller
+   * needs no separate working-area check first.
    */
-  outputReceiptDirectory(attemptId: string): string;
+  outputReceiptDirectory(attemptId: string): OutputReceiptDirectoryResult;
   /**
    * Record a durable Human Gate answer as a bound Artifact (#85): stage its bytes
    * as one commit, then a single `run.db` transaction records the version, moves
