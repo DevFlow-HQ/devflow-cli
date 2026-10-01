@@ -495,10 +495,12 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
     assert.match(assistantText, /match system setting/);
     assert.match(assistantText, /That's (?:everything|all) I need/);
     // A detached Session that recorded human Turns still advertises its transcript
-    // page/export References alongside its availability (#124).
+    // page/export References alongside its availability (#124), under its plain
+    // name (#289): `spec` is shared, so it keeps its authored name.
     assert.deepEqual(afterGrill.sessions, [
       {
         session: "spec",
+        name: "spec",
         availability: "detached",
         transcriptPage: { runId, session: "spec", type: "transcript-page" },
         transcriptExport: {
