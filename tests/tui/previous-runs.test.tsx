@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
+import stringWidth from "string-width";
 import { App } from "../../src/tui/tui.js";
 import type {
   BundleCatalogView,
@@ -497,6 +498,47 @@ test("a small width keeps rows on one line, truncating the Bundle name, and resi
       `overflows ${SMALLEST_SUPPORTED_WIDTH}: ${JSON.stringify(line)}`,
     );
   }
+});
+
+test("a clipped row of keycap emoji keeps its trailing ellipsis visible at a narrow width and on resize", async () => {
+  // Each keycap draws two columns. Counted as one, the clipped row ran past the
+  // width, so the renderer wrapped the overflow — keycaps and the "…" that
+  // advertises the cut — onto a second line instead of ending the row (#307).
+  const { t } = await openList({
+    all: [
+      row({
+        runId: "run-k",
+        activityAt: "today",
+        bundleName: "1️⃣".repeat(20),
+        group: "today",
+      }),
+    ],
+    width: 40,
+    height: 20,
+  });
+  const assertRowEndsInEllipsis = (width: number) => {
+    const lines = t.captureCharFrame().split("\n");
+    const at = lines.findIndex((line) => line.includes("run-k"));
+    const line = lines[at]?.trimEnd() ?? "";
+    assert.ok(
+      line.endsWith("1️⃣…"),
+      `ellipsis not ending the row: ${JSON.stringify(line)}`,
+    );
+    assert.ok(
+      stringWidth(line) <= width,
+      `overflows ${width}: ${JSON.stringify(line)}`,
+    );
+    assert.doesNotMatch(
+      lines[at + 1] ?? "",
+      /1️⃣/,
+      "the row wrapped onto a second line",
+    );
+  };
+  assertRowEndsInEllipsis(40);
+
+  t.resize(SMALLEST_SUPPORTED_WIDTH, 16);
+  await t.renderOnce();
+  assertRowEndsInEllipsis(SMALLEST_SUPPORTED_WIDTH);
 });
 
 test("previous-runs-verified: focus, state-free rows, and guarded quit", async () => {

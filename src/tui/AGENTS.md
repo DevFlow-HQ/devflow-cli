@@ -39,9 +39,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - A refused launch routes only by `correction`, clears only the invalidated draft field, preserves every other choice, and keeps its inline finding after the dismissible
   `Run not started` notice leaves. A typed preparation failure after admission still rides the Run Projection into the Workbench (#146).
 - `paddingLeft` on a `<text>` does not indent it; wrap the text in a `paddingLeft` `<box>`, which also keeps its wrapped lines indented (#285).
-- `clip()` (`clip.ts`) is not the horizontal-overflow guard — a container's `overflow="hidden"` already clips at width. It is the ellipsis affordance:
-  call it only on a row that should _advertise_ its truncation with a trailing `…` (a name, path, or status that can exceed the inner width), not on
-  every row. It measures **display columns** with `string-width`, not `.length` (D5): a wide glyph is two columns, so a code-unit count would overflow.
+- `clip()` (`clip.ts`) is the ellipsis affordance, not an overflow guard: call it only on a row that should _advertise_ its cut with a trailing `…` (a
+  name, path, or status that can exceed the inner width). It measures **display columns** per whole grapheme (`string-width` over `Intl.Segmenter`, D5),
+  and its budget is exact: a `<text>` wraps even a one-column overrun onto a second line, ellipsis and all, despite `overflow="hidden"` (#307).
 - A launch resolves at **admission** (`run-launch-view.tsx`): the Run id is known and the Run is observable `running` at once (#98 A7), so the flow reaches
   the Workbench before the Run rests and the Workbench follows the live `run` Projection. Every _other_ write (answer, resume, cancel, delete) follows the
   operation stream to settlement through `submit-and-settle.ts`, because a Run — and a cancel-as-abort of a live Run — settles asynchronously now (#98).
