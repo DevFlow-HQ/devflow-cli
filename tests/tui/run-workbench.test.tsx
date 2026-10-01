@@ -3843,6 +3843,124 @@ test("the scanner and its words fit a small terminal, long history, and a resize
   noOverflow(frame, 100);
 });
 
+// --- working scanner colours and narrow rows (#308) -------------------------
+
+// The scanner's drawing is a private leaf, so its colours are asserted against the
+// Workbench's own colours rather than the theme it is handed: below 80 columns the
+// compact header draws a running Run in the accent the trail derives from, and the
+// full header's position line is in the muted colour.
+
+type TRendered = Awaited<ReturnType<typeof mountWorkbench>>["t"];
+
+const rgb = (color: { r: number; g: number; b: number }) =>
+  [color.r, color.g, color.b].map((v) => Math.round(v * 255)).join(",");
+
+/** The styled spans of the rail's working row, the line naming `working ·`. */
+function railSpans(t: TRendered) {
+  const line = t
+    .captureSpans()
+    .lines.find((candidate) =>
+      candidate.spans.some((span) => span.text.includes("working ·")),
+    );
+  assert.ok(line, "no working row");
+  return line.spans;
+}
+
+/** The colour of the first span whose own text matches `text`. */
+function colorOf(spans: ReturnType<typeof railSpans>, text: RegExp): string {
+  const span = spans.find((candidate) => text.test(candidate.text));
+  assert.ok(span, `no span matching ${String(text)}`);
+  return rgb(span.fg);
+}
+
+/** The colour of the first span anywhere in the frame whose text matches `text`. */
+function frameColorOf(t: TRendered, text: RegExp): string {
+  return colorOf(
+    t.captureSpans().lines.flatMap((line) => line.spans),
+    text,
+  );
+}
+
+/** Each scanner cell on the working row, in order, with the colour it draws in. */
+function scannerCells(t: TRendered) {
+  return railSpans(t).flatMap((span) =>
+    [...span.text]
+      .filter((glyph) => glyph === "■" || glyph === "⬝")
+      .map((glyph) => ({ glyph, color: rgb(span.fg) })),
+  );
+}
+
+/** The frame line holding the rail's working row, trailing blanks trimmed. */
+function workingLine(frame: string): string {
+  const line = frame
+    .split("\n")
+    .find((candidate) => candidate.includes("working ·"));
+  assert.ok(line !== undefined, "no working row");
+  return line.trimEnd();
+}
+
+test("the scanner's lead draws in the running accent, its trail and inactive cells dimmer, its words apart (#292, #308)", async () => {
+  const wb = await mountWorkbench(liveTurnRunOf(), 60, 24, okActions());
+  const accent = frameColorOf(wb.t, /— RUNNING ·/);
+  // Over half the cycle lights no cell, so wait for a frame whose lead and at
+  // least one trail step are lit; a cycle is 2.16 s, inside the budget.
+  let cells = scannerCells(wb.t);
+  const lit = () => cells.filter((cell) => cell.glyph === "■");
+  await until(() => {
+    cells = scannerCells(wb.t);
+    const colors = lit().map((cell) => cell.color);
+    return colors.includes(accent) && new Set(colors).size >= 2;
+  }, 3000);
+  assert.equal(cells.length, 8);
+  // One lead in the accent itself; every other lit step and every inactive cell
+  // falls off from it, so the trail reads as a sweep, not a flat bar.
+  assert.equal(lit().filter((cell) => cell.color === accent).length, 1);
+  for (const cell of cells.filter((cell) => cell.glyph === "⬝"))
+    assert.notEqual(cell.color, accent);
+  assert.notEqual(colorOf(railSpans(wb.t), /working ·/), accent);
+});
+
+test("with reduced motion the static [⋯] draws in the muted colour, apart from the rail's words (#292, #308)", async () => {
+  const wb = await mountWorkbench(liveTurnRunOf(), 100, 40, okActions(), true);
+  const muted = frameColorOf(wb.t, /^step 1 of 1$/);
+  const spans = railSpans(wb.t);
+  assert.equal(colorOf(spans, /^\[⋯\]$/), muted);
+  assert.notEqual(colorOf(spans, /working ·/), muted);
+  // The mark replaces the cells rather than leading them.
+  const frame = wb.t.captureCharFrame();
+  assert.match(workingLine(frame), /^ {3}\[⋯\] working · esc esc interrupt — /);
+  assert.doesNotMatch(frame, /[■⬝]/);
+});
+
+test("on a narrow row the detail clips first, then the mark yields so the interrupt words stay whole (#292, #308)", async () => {
+  // The rail row is 38 columns inside a 40-column terminal's one-column margins:
+  // indent, eight cells, a space, the 27-column words, and the clip's ellipsis is
+  // 39, so the next column up is the last width the cells keep.
+  const wb = await mountWorkbench(liveTurnRunOf(), 41, 16, okActions());
+  const line = () => workingLine(wb.t.captureCharFrame());
+  // Exact, not just within width: a one-column overrun would wrap the ellipsis.
+  assert.match(line(), /^ {3}[■⬝]{8} working · esc esc interrupt…$/);
+  wb.renderer.resize(40, 16);
+  await wb.t.renderOnce();
+  assert.equal(line(), "   working · esc esc interrupt — stop …");
+  wb.renderer.resize(41, 16);
+  await wb.t.renderOnce();
+  assert.match(line(), /^ {3}[■⬝]{8} working · esc esc interrupt…$/);
+
+  // The static mark is narrower, so it holds on at widths the cells cannot.
+  const reduced = await mountWorkbench(
+    liveTurnRunOf(),
+    40,
+    16,
+    okActions(),
+    true,
+  );
+  assert.equal(
+    workingLine(reduced.t.captureCharFrame()),
+    "   [⋯] working · esc esc interrupt — s…",
+  );
+});
+
 test("an applied send clears the draft at Turn admission with no sending state while the agent works (#290)", async () => {
   const wb = await mountWorkbench(interactiveRunOf(), 100, 40, okActions());
   await type(wb.t, "hi there");

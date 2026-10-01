@@ -46,10 +46,8 @@ export { wrap } from "./wrap.js";
 // The Harness catalog row's model line (#285) and Start a Run's chosen-Harness
 // status (#286), exposed for their unit tests.
 export { harnessFocusStatus, harnessModelLine } from "./harness-format.js";
-// The working scanner's frame table and leaf (#292), exposed for its unit and
-// render tests for the same reason.
-export {
-  SCANNER_FRAMES,
-  scannerGlyphs,
-  WorkingScanner,
-} from "./working-scanner.js";
+// The working scanner's plain frame table and glyph helper (#292), exposed for
+// their unit tests for the same reason. Its drawing leaf stays private: it takes
+// OpenTUI's native colour type, so its rendering is tested through the Workbench
+// (#308).
+export { SCANNER_FRAMES, scannerGlyphs } from "./working-scanner.js";
