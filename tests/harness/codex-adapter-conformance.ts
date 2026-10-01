@@ -693,6 +693,57 @@ test("later fresh Turns reuse one private thread and continue RPC ids", async ()
   await prepared.close();
 });
 
+test("a second human Turn uses the live Codex thread without a redundant resume", async () => {
+  const installed = installCodexReplayer("two-turns");
+  const prepared = await prepareCodex(installed.path);
+  const firstTurn = prepared.startTurn(
+    turnRequest(undefined, { text: CODEX_RECORDING_INPUT.completion }),
+  );
+  const events = observeEvents(firstTurn);
+  const first = await firstTurn.result();
+  assert.equal(first.kind, "completed");
+  const coordinate = events.flatMap((event) =>
+    event.kind === "session" && event.facts?.recoveryCoordinate !== undefined
+      ? [event.facts.recoveryCoordinate]
+      : [],
+  )[0];
+  assert.ok(coordinate !== undefined);
+
+  const second = await prepared
+    .startTurn({
+      ...turnRequest(undefined, {
+        text: CODEX_RECORDING_INPUT.secondCompletion,
+      }),
+      resume: coordinate,
+    })
+    .result();
+  assert.equal(second.kind, "completed");
+
+  const appServer = installed
+    .invocations()
+    .find((invocation) => invocation.args.join(" ") === "app-server");
+  assert.ok(appServer !== undefined);
+  const requests = appServer.stdinLines
+    .map((line) => JSON.parse(line))
+    .filter((message) => message.id !== undefined);
+  assert.deepEqual(
+    requests.map((message) => [
+      message.id,
+      message.method,
+      message.params?.threadId,
+    ]),
+    [
+      [1, "initialize", undefined],
+      [2, "account/read", undefined],
+      [3, "model/list", undefined],
+      [4, "thread/start", undefined],
+      [5, "turn/start", coordinate.opaque],
+      [6, "turn/start", coordinate.opaque],
+    ],
+  );
+  await prepared.close();
+});
+
 // --- Steer and interrupt -----------------------------------------------------
 
 test("codex-live-controls steers the exact active native Turn", async () => {

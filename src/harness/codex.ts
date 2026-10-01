@@ -680,7 +680,10 @@ class CodexSession {
     }
     const recoveryCoordinate =
       turn.request.resume ?? (this.detached ? this.coordinate : undefined);
-    if (recoveryCoordinate !== undefined) {
+    if (
+      recoveryCoordinate !== undefined &&
+      (this.detached || this.coordinate === undefined)
+    ) {
       turn.recovering();
       try {
         const result = await boundedCodexExchange({
