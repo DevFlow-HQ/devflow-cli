@@ -799,6 +799,28 @@ export function createApplication(deps: ApplicationDependencies): Application {
     }
   }
 
+  // Rest the Run `halted` on a selected Harness's typed preparation failure and
+  // settle the Operation with its normalized Problem (#304). The one translation
+  // for every drive: launch, resume, a Gate answer, an interactive ending, and a
+  // reopened human Turn. The Problem is set before the write so the pushed halted
+  // snapshot carries it; a fenced write leaves a replacement owner's Run untouched.
+  function haltForHarnessFailure(
+    runId: string,
+    tracking: TrackedRun,
+    observed: RunOwner,
+    failure: RunHarnessPreparationFailure,
+  ): OperationOutcome {
+    const problem = selectedHarnessUnavailable(runId, failure);
+    const previous = tracking.problem;
+    tracking.problem = problem;
+    if (!observed.writeState("halted").ok) tracking.problem = previous;
+    return { status: "not-applied", problem };
+  }
+
+  // Drive the routing once and decide the Operation's outcome and whether the
+  // owner stays held, so every drive rests a refused Harness preparation the same
+  // way (#304). Work an advancing control committed before this call stays
+  // committed; a refusal only rests the Run halted after it.
   async function executeTrackedRouting(params: {
     readonly runId: string;
     readonly tracking: TrackedRun;
@@ -806,7 +828,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
     readonly executionOwner: RunOwner;
     readonly routing: readonly RoutingNode[];
     readonly digest: string;
-  }): Promise<RunExecutionReport> {
+  }): Promise<{
+    readonly outcome: OperationOutcome;
+    readonly retainOwner: boolean;
+  }> {
     if (
       upgradeLegacyHarnessSelection(
         params.owner,
@@ -828,13 +853,27 @@ export function createApplication(deps: ApplicationDependencies): Application {
         params.tracking.steer = capability;
       },
     });
+    if (report.harnessFailure !== undefined) {
+      return {
+        outcome: haltForHarnessFailure(
+          params.runId,
+          params.tracking,
+          params.executionOwner,
+          report.harnessFailure,
+        ),
+        retainOwner: false,
+      };
+    }
     await adoptInteractiveStep(
       report,
       params.tracking,
       params.owner,
       params.runId,
     );
-    return report;
+    return {
+      outcome: { status: "applied" },
+      retainOwner: report.outcome === "blocked",
+    };
   }
 
   // Acquire the Run and drive it through the injected execution. The launch
@@ -891,7 +930,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       tracking,
       owner,
       drive: async () => {
-        const report = await executeTrackedRouting({
+        const driven = await executeTrackedRouting({
           runId,
           tracking,
           owner,
@@ -899,20 +938,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
           routing: tracking.routing,
           digest: tracking.digest,
         });
-        if (report.harnessFailure !== undefined) {
-          const problem = selectedHarnessUnavailable(
-            runId,
-            report.harnessFailure,
-          );
-          tracking.problem = problem;
-          observed.writeState("halted");
-          return {
-            status: "not-applied",
-            problem,
-          };
-        }
-        leaveClaimLive = report.outcome === "blocked";
-        return { status: "applied" };
+        leaveClaimLive = driven.retainOwner;
+        return driven.outcome;
       },
       retainOwner: () => leaveClaimLive,
       setRetainOwner: (retain) => {
@@ -1764,7 +1791,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
             }
           }
           // approve or free-text: drive the resumed Run to its next rest in this process.
-          const report = await executeTrackedRouting({
+          const driven = await executeTrackedRouting({
             runId: input.runId,
             tracking: activeTracking,
             owner: activeOwner,
@@ -1772,8 +1799,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
             routing: facts.routing,
             digest: record.bundleSnapshotDigest,
           });
-          leaveClaimLive = report.outcome === "blocked";
-          return { status: "applied" };
+          leaveClaimLive = driven.retainOwner;
+          return driven.outcome;
         }
 
         // A derived Review checkpoint: the M2 continue/stop path (unchanged, #85).
@@ -1807,7 +1834,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           return { status: "applied" };
         }
         // `continue`: the answering process drives the granted interval to rest.
-        const report = await executeTrackedRouting({
+        const driven = await executeTrackedRouting({
           runId: input.runId,
           tracking: activeTracking,
           owner: activeOwner,
@@ -1815,8 +1842,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
           routing: facts.routing,
           digest: record.bundleSnapshotDigest,
         });
-        leaveClaimLive = report.outcome === "blocked";
-        return { status: "applied" };
+        leaveClaimLive = driven.retainOwner;
+        return driven.outcome;
       },
       retainOwner: () => leaveClaimLive,
       setRetainOwner: (retain) => {
@@ -2343,14 +2370,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
             owner,
           });
           if (!prepared.ok) {
-            const problem = selectedHarnessUnavailable(
+            leaveClaimLive = false;
+            return haltForHarnessFailure(
               input.runId,
+              tracking,
+              observed,
               prepared.failure,
             );
-            tracking.problem = problem;
-            observed.writeState("halted");
-            leaveClaimLive = false;
-            return { status: "not-applied", problem };
           }
           tracking.interactiveStep = prepared.interactiveStep;
           tracking.steer = tracking.interactiveStep.steer;
@@ -2515,7 +2541,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
             ...(endsStage ? { endsStage: true as const } : {}),
           }),
         );
-        const report = await executeTrackedRouting({
+        const driven = await executeTrackedRouting({
           runId: input.runId,
           tracking,
           owner,
@@ -2523,8 +2549,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
           routing: facts.routing,
           digest: record.bundleSnapshotDigest,
         });
-        leaveClaimLive = report.outcome === "blocked";
-        return { status: "applied" };
+        leaveClaimLive = driven.retainOwner;
+        return driven.outcome;
       },
       retainOwner: () => leaveClaimLive,
       setRetainOwner: (retain) => {

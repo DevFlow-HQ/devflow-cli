@@ -46,8 +46,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The closed registry and prepared Harnesses live in composition, not Application (#116, #146): the Port sees normalized choices/availability, while selected-only
   Preflight sees normalized discovery and capabilities. `makeRunExecution` resolves the durable id and prepares only that Adapter; if it reaches an interactive Step,
   composition transfers an opaque Step driver onto the tracked Run. Every human Turn reuses it, and End, interrupt, cancel, or shutdown closes it exactly once. Preflight
-  refuses discovery/capability failures before creation. A typed qualification/authentication/protocol `prepare` failure writes the created Run `halted` before content
-  and settles the Operation with `selected-harness-unavailable`. `supportsInteractiveTurns` remains the client fact Application forwards to Preflight.
+  refuses discovery/capability failures before creation. `supportsInteractiveTurns` remains the client fact Application forwards to Preflight.
+- A typed `prepare` failure is translated in one place, `haltForHarnessFailure` (#304): every drive reaches it — `executeTrackedRouting` for launch, resume, both
+  Gate answers, End Step, Continue, and End Stage, and the reopened human Turn directly. It rests the Run `halted` through `observedOwner`, settles the Operation
+  `selected-harness-unavailable`, and releases the owner; an answer or Attempt committed before the drive stays committed. A caller never reads `harnessFailure`.
 - `harness-catalog` caches one qualification promise/result per semantic Harness id for the Application lifetime (#188). List calls discovery only; focus initially
   reports `not-checked`, then publishes one durable normalized result. Qualification diagnostics are process-held Resources addressed by semantic id and checked time.
 - `launch-preparation` and `submitLaunch` share one create-time evaluator (`LaunchPreparation.evaluate`, `launch-preparation.ts`) so both admit under identical rules (#189):

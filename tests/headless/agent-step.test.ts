@@ -703,3 +703,125 @@ test("the rendered prompt carries the file's absolute path and the skill's SKILL
   assert.match(input, /SKILL\.md/);
   assert.ok(!input.includes("@"), input);
 });
+
+test("run answer settles a refused Harness preparation after the Gate as a non-success with the selected-Harness Problem (#304)", async (t) => {
+  // The Harness prepares at launch and refuses on the drive the answer starts.
+  let prepares = 0;
+  const fake = createFake(plainScript());
+  const adapter: HarnessAdapter = {
+    prepare(options) {
+      prepares += 1;
+      return prepares === 2
+        ? Promise.resolve({
+            ok: false,
+            failure: {
+              phase: "prepare",
+              category: "protocol-incompatible",
+              possibleEffects: "none",
+              diagnostics: "The pinned protocol subset did not qualify.",
+            },
+          })
+        : fake().prepare(options);
+    },
+  };
+  const workspace = makeTempDir("secant-agent-gate-ws-");
+  const wired = wireApplication({
+    secantHome: makeTempDir("secant-agent-gate-home-"),
+    launchCwd: workspace,
+    process: createFakeBundleProcess(),
+    harnessAdapter: adapter,
+    discoverClaudeCode: () => ({
+      kind: "found",
+      attempt: { source: "configured", name: "fake-claude", description: "" },
+    }),
+  });
+  t.after(() => {
+    wired.runGroup.close();
+    wired.catalog.close();
+  });
+  const folder = makeTempDir("secant-agent-gate-bundle-");
+  mkdirSync(join(folder, "prompts"), { recursive: true });
+  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
+  writeFileSync(
+    join(folder, "manifest.json"),
+    JSON.stringify({
+      formatVersion: 1,
+      bundle: {
+        id: "dev.secant.agent-gate",
+        version: "1.0.0",
+        name: "Agent Gate",
+        description: "An approve-reject gate before an Agent Step.",
+      },
+      platforms: ["windows", "macos", "linux"],
+      inputs: {},
+      assets: [{ path: "prompts/go.md", kind: "prompt" }],
+      routing: [
+        {
+          id: "gate",
+          kind: "human-gate",
+          shape: "approve-reject",
+          message: "proceed?",
+        },
+        {
+          id: "work",
+          kind: "agent",
+          session: "s",
+          prompt: { asset: "prompts/go.md" },
+        },
+      ],
+    }),
+  );
+  assert.ok(wired.bundleManagement.build(folder, { noInstall: false }).ok);
+  const entry = wired.catalog
+    .listEntries()
+    .find((candidate) => candidate.id === "dev.secant.agent-gate");
+  assert.ok(entry);
+  wired.catalog.approveWorkspace(workspace, new Date());
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: HeadlessIO = {
+    out: (text) => out.push(text),
+    err: (text) => err.push(text),
+    cwd: () => workspace,
+  };
+
+  assert.equal(
+    await runHeadless(
+      wired,
+      [
+        "run",
+        "launch",
+        entry.id,
+        "--trust",
+        entry.digest,
+        "--harness",
+        "claude-code",
+      ],
+      io,
+    ),
+    2,
+    err.join(""),
+  );
+  const runId = /^Run (\S+)$/m.exec(out.join(""))![1]!;
+  out.length = 0;
+  err.length = 0;
+
+  assert.equal(
+    await runHeadless(
+      wired,
+      ["run", "answer", runId, "--continue", "--json"],
+      io,
+    ),
+    1,
+  );
+  const problem = JSON.parse(out.join(""));
+  assert.equal(problem.code, "selected-harness-unavailable");
+  assert.equal(problem.details.harness, "claude-code");
+  assert.equal(problem.details.category, "protocol-incompatible");
+  assert.equal(problem.details.runId, runId);
+  out.length = 0;
+
+  assert.equal(await runHeadless(wired, ["run", "show", runId], io), 0);
+  assert.match(out.join(""), /^State: halted$/m);
+  assert.equal(prepares, 2);
+});
