@@ -62,6 +62,7 @@ import {
   restingProse,
   SteerInput,
   type DetailsRow,
+  type InteractiveRefusal,
 } from "./run-workbench-views.js";
 import {
   AT_LIVE,
@@ -281,8 +282,8 @@ export function RunWorkbench(props: {
         (offer): offer is DeleteRunOffer => offer.action === "delete-run",
       ),
       // Turn-scoped controls (#118), present only while a Turn is live in this
-      // process: interrupt is a real dispatch; steer is offered unavailable and
-      // never dispatches.
+      // process: interrupt is a real dispatch; steer dispatches only when offered
+      // available (#148), from the `s` compose or the interactive input (#294).
       interrupt: list.find(
         (offer): offer is InterruptTurnOffer =>
           offer.action === "interrupt-turn",
@@ -338,9 +339,11 @@ export function RunWorkbench(props: {
     setActionFlight({ op: "interrupt", outcome: actions.interrupt(offer) });
   };
   // The two-press Esc Interrupt, shared by the rail and the interactive input: the
-  // first press arms, the second dispatches.
+  // first press arms, the second dispatches. Arming clears the input's refusal line,
+  // so the armed confirm that replaces the hint line is never hidden (#294).
   const armOrDispatchInterrupt = () => {
     if (!interruptArmed()) {
+      setInteractiveRefusal(undefined);
       setInterruptArmed(true);
       return;
     }
@@ -454,7 +457,7 @@ export function RunWorkbench(props: {
   const [interactiveOutcome, setInteractiveOutcome] =
     createSignal<Accessor<AnswerOutcome>>();
   const [interactiveRefusal, setInteractiveRefusal] = createSignal<
-    Problem | undefined
+    InteractiveRefusal | undefined
   >();
   const interactivePending = () => {
     const accessor = interactiveOutcome();
@@ -463,7 +466,9 @@ export function RunWorkbench(props: {
 
   const dispatchSend = () => {
     const offer = interactiveOffers().send;
-    if (offer === undefined || interactivePending()) return;
+    // A Steer still settling after its Turn ended holds the send back, so its late
+    // outcome can never act on the draft a send is holding.
+    if (offer === undefined || interactivePending() || steerPending()) return;
     // Secant authors nothing: a blank or whitespace-only Turn is not sent (AC1).
     if (draft().trim() === "") return;
     setInteractiveRefusal(undefined);
@@ -474,6 +479,27 @@ export function RunWorkbench(props: {
     setInteractiveOutcome(() =>
       view.sendInteractiveTurn(offer.runId, offer.stepId, draft()),
     );
+  };
+  // Enter during a live interactive Turn steers it (#294) through the same
+  // `steer-turn` Operation as the `s` compose, reading the input's draft. Nothing is
+  // pending in view: the field keeps its keys, and a second Enter while one is in
+  // flight is ignored. An unavailable Steer dispatches nothing; its Offer's reason
+  // takes the refusal line and the draft stays.
+  const dispatchInputSteer = () => {
+    const offer = offers().steer;
+    if (offer === undefined || steerPending()) return;
+    if (draft().trim() === "") return;
+    if (!offer.available) {
+      setInteractiveRefusal({ kind: "unavailable-steer", offer });
+      return;
+    }
+    setInteractiveRefusal(undefined);
+    const text = draft();
+    setSteerFlight({
+      from: "interactive",
+      text,
+      outcome: view.steer(offer.runId, offer.turnId, text),
+    });
   };
   const confirmEndStep = () => {
     const offer = interactiveOffers().end;
@@ -504,13 +530,22 @@ export function RunWorkbench(props: {
   const steerAvailable = () => offers().steer?.available === true;
   const [steerComposing, setSteerComposing] = createSignal(false);
   const [steerDraft, setSteerDraft] = createSignal("");
-  const [steerOutcome, setSteerOutcome] =
-    createSignal<Accessor<AnswerOutcome>>();
+  // A dispatched Steer and the input it came from: the `s` compose, or the
+  // interactive input during a live Turn (#294), which keeps its keys while the Steer
+  // settles and so records the text it sent. Its settlement clears or keeps that draft.
+  const [steerFlight, setSteerFlight] = createSignal<
+    | {
+        readonly from: "compose";
+        readonly outcome: Accessor<AnswerOutcome>;
+      }
+    | {
+        readonly from: "interactive";
+        readonly text: string;
+        readonly outcome: Accessor<AnswerOutcome>;
+      }
+  >();
   const [steerRefusal, setSteerRefusal] = createSignal<Problem | undefined>();
-  const steerPending = () => {
-    const accessor = steerOutcome();
-    return accessor !== undefined && accessor().kind === "pending";
-  };
+  const steerPending = () => steerFlight()?.outcome().kind === "pending";
   const pendingOperation = () => {
     const flight = actionFlight();
     if (flight !== undefined && flight.outcome().kind === "pending") {
@@ -536,17 +571,17 @@ export function RunWorkbench(props: {
     // into this fresh compose (a `… steering…` pending would blur the reopened field
     // and swallow every key). Steer is fire-and-forget: an abandoned in-flight steer
     // may still land at the Harness, but the UI stops tracking it.
-    setSteerOutcome(undefined);
+    setSteerFlight(undefined);
     setSteerComposing(true);
     setFocus("steer");
   };
   const leaveSteer = () => {
     setSteerComposing(false);
     // Stop tracking an in-flight submission on the way out, for the same reason: the
-    // settlement effect keys off `steerOutcome`, so clearing it here means an abandoned
+    // settlement effect keys off `steerFlight`, so clearing it here means an abandoned
     // steer's applied/refused result cannot reach — and mis-attribute onto — a later
     // compose. A refused settlement keeps the compose open, so it clears this itself.
-    setSteerOutcome(undefined);
+    setSteerFlight(undefined);
     setSteerRefusal(undefined);
     if (focus() === "steer") setFocus("timeline");
   };
@@ -559,7 +594,10 @@ export function RunWorkbench(props: {
     // Hold the draft until the steer applies: a refused steer (the Turn settled, a
     // stale turnId) keeps the typed text; the settlement effect below clears it only
     // on an applied send.
-    setSteerOutcome(() => view.steer(offer.runId, offer.turnId, steerDraft()));
+    setSteerFlight({
+      from: "compose",
+      outcome: view.steer(offer.runId, offer.turnId, steerDraft()),
+    });
   };
 
   // One transcript openable per Session that has a recorded transcript (#124),
@@ -836,6 +874,16 @@ export function RunWorkbench(props: {
     lastInteractiveStep = active ? stepId : "";
   });
 
+  // A settled interactive write: a refusal surfaces and keeps the draft (A9); an
+  // applied one clears it, since the sent text is now with the agent.
+  const settleInteractive = (
+    settled: Exclude<AnswerOutcome, { kind: "pending" }>,
+  ) => {
+    if (settled.kind === "refused")
+      setInteractiveRefusal({ kind: "refused", problem: settled.problem });
+    else setDraft("");
+  };
+
   // Follow a sent Turn / End Step to settlement: a refusal (a Turn still live, a
   // stale Step) surfaces in the input and re-enables it; an applied outcome just
   // clears local state — a send applies at Turn admission, and the Run snapshot then
@@ -845,10 +893,7 @@ export function RunWorkbench(props: {
     if (accessor === undefined) return;
     const settled = accessor();
     if (settled.kind === "pending") return;
-    // A refusal surfaces and keeps the draft (A9); an applied send clears it, since
-    // the sent Turn is now in the transcript and the input awaits the next Turn.
-    if (settled.kind === "refused") setInteractiveRefusal(settled.problem);
-    else setDraft("");
+    settleInteractive(settled);
     setInteractiveOutcome(undefined);
   });
 
@@ -860,20 +905,36 @@ export function RunWorkbench(props: {
   });
 
   // Follow a dispatched Steer to settlement (#148): a refusal (the Turn settled, a
-  // stale turnId, an unavailable Harness) surfaces in the input and keeps the draft;
-  // an applied steer clears the draft and closes the compose — the Turn keeps working
-  // and the live snapshot carries its progress in.
+  // stale turnId, an unavailable Harness) surfaces in the input it came from and keeps
+  // that draft; an applied steer clears the draft — closing the compose, or leaving
+  // the interactive input for the next Steer (#294). The Turn keeps working either
+  // way and the live snapshot carries its progress in.
   createEffect(() => {
-    const accessor = steerOutcome();
-    if (accessor === undefined) return;
-    const settled = accessor();
+    const flight = steerFlight();
+    if (flight === undefined) return;
+    const settled = flight.outcome();
     if (settled.kind === "pending") return;
-    if (settled.kind === "refused") setSteerRefusal(settled.problem);
+    if (flight.from === "interactive") {
+      // Text typed after Enter is the human's next guidance, not the sent Steer, so an
+      // applied Steer clears the draft only while it still holds the sent text.
+      if (settled.kind === "refused" || draft() === flight.text)
+        settleInteractive(settled);
+    } else if (settled.kind === "refused") setSteerRefusal(settled.problem);
     else {
       setSteerDraft("");
       leaveSteer();
     }
-    setSteerOutcome(undefined);
+    setSteerFlight(undefined);
+  });
+
+  // The unavailable Steer's reason speaks for the live Turn only: when the Turn ends
+  // it leaves, so the boundary's hint shows and Enter sends the kept draft (#294).
+  createEffect(() => {
+    if (
+      interactiveInterrupt() === undefined &&
+      interactiveRefusal()?.kind === "unavailable-steer"
+    )
+      setInteractiveRefusal(undefined);
   });
 
   // Tab cycles the focusable regions in a stable order: the checkpoint or interactive
@@ -977,8 +1038,11 @@ export function RunWorkbench(props: {
       }
       return;
     }
-    if (name === "return") dispatchSend();
-    else if (name === "escape") props.onLeave();
+    // Enter sends a Turn at a boundary and steers the live one (#294).
+    if (name === "return") {
+      if (interactiveInterrupt() !== undefined) dispatchInputSteer();
+      else dispatchSend();
+    } else if (name === "escape") props.onLeave();
     // Every other key falls through to the focused native <input>.
   };
 
@@ -1267,6 +1331,9 @@ export function RunWorkbench(props: {
               actionPending={railPending}
               interactiveActive={interactiveStepActive}
               interactiveInterrupt={interactiveInterrupt}
+              interactiveSteerOffered={() =>
+                interactiveInterrupt() !== undefined && steerAvailable()
+              }
               interactiveEndOffered={() =>
                 interactiveOffers().end !== undefined
               }
@@ -1379,6 +1446,7 @@ function Workbench(props: {
   actionPending: Accessor<"takeover" | "acknowledge" | undefined>;
   interactiveActive: Accessor<boolean>;
   interactiveInterrupt: Accessor<InterruptTurnOffer | undefined>;
+  interactiveSteerOffered: Accessor<boolean>;
   interactiveEndOffered: Accessor<boolean>;
   interactiveContinue: Accessor<ContinueRepeatOffer | undefined>;
   continueArmed: Accessor<boolean>;
@@ -1389,7 +1457,7 @@ function Workbench(props: {
   onDraftInput: (value: string) => void;
   endStepArmed: Accessor<boolean>;
   interactivePending: Accessor<boolean>;
-  interactiveRefusal: Accessor<Problem | undefined>;
+  interactiveRefusal: Accessor<InteractiveRefusal | undefined>;
   steerActive: Accessor<boolean>;
   steerDraft: Accessor<string>;
   onSteerInput: (value: string) => void;
@@ -1761,6 +1829,7 @@ function Workbench(props: {
               draft={props.draft}
               onInput={props.onDraftInput}
               interrupt={props.interactiveInterrupt}
+              steerOffered={props.interactiveSteerOffered}
               interruptArmed={props.interruptArmed}
               endOffered={props.interactiveEndOffered}
               sendOffered={props.interactiveSendOffered}

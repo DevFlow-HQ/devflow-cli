@@ -11,6 +11,7 @@ import type {
   RunCheckpointView,
   RunStateName,
   RunView,
+  SteerTurnOffer,
 } from "../application/projection-port.js";
 import { clip } from "./clip.js";
 import type { Openable } from "./run-inspection.js";
@@ -21,10 +22,20 @@ import { WorkingScanner } from "./working-scanner.js";
 // interleaved key dispatcher stay in run-workbench.tsx; these views receive only
 // Accessors and callbacks from that owner.
 
+/** What the interactive input's refusal line shows: an Application refusal, or the
+ *  live Turn's unavailable Steer Offer at Enter (#294), whose reason is the Harness
+ *  profile's evidence word for word. The presentation adds only the prefix. */
+export type InteractiveRefusal =
+  | { readonly kind: "refused"; readonly problem: Problem }
+  | {
+      readonly kind: "unavailable-steer";
+      readonly offer: Extract<SteerTurnOffer, { available: false }>;
+    };
+
 /** The interactive-agent human input (#122): a label saying who holds the Turn, a
  *  native OpenTUI text field (D9 — the field draws its own caret), and a hint/status
- *  line — the live Turn's Interrupt, the Enter/End Step controls at a boundary, or the
- *  End Step confirm. The label reads the live Turn from its interrupt Offer (#290): the
+ *  line — the live Turn's Interrupt (and Enter to Steer it, when offered, #294), the
+ *  Enter/End Step controls at a boundary, or the End Step confirm. The label reads the live Turn from its interrupt Offer (#290): the
  *  agent is working while one is offered, else it is the human's move. While it works,
  *  the working scanner leads the Interrupt hint (#292); the label above already says
  *  so in words, and the armed confirm replaces the whole line. Every line is
@@ -36,6 +47,8 @@ export function InteractiveInput(props: {
   onInput: (value: string) => void;
   /** The live Turn's interrupt Offer: present exactly while the agent holds the Turn. */
   interrupt: Accessor<InterruptTurnOffer | undefined>;
+  /** Whether Enter steers the live Turn: its Steer Offer is available (#294). */
+  steerOffered: Accessor<boolean>;
   interruptArmed: Accessor<boolean>;
   endOffered: Accessor<boolean>;
   sendOffered: Accessor<boolean>;
@@ -45,7 +58,7 @@ export function InteractiveInput(props: {
   endStageOffer: Accessor<EndStageOffer | undefined>;
   endStageArmed: Accessor<boolean>;
   pending: Accessor<boolean>;
-  refusal: Accessor<Problem | undefined>;
+  refusal: Accessor<InteractiveRefusal | undefined>;
   focused: Accessor<boolean>;
   width: Accessor<number>;
   reducedMotion: boolean;
@@ -141,7 +154,11 @@ export function InteractiveInput(props: {
             <Match when={workingInterrupt()}>
               {(interrupt) => (
                 <WorkingScanner
-                  label="esc esc interrupt"
+                  label={
+                    props.steerOffered()
+                      ? "enter steer · esc esc interrupt"
+                      : "esc esc interrupt"
+                  }
                   detail={interrupt().consequence}
                   labelColor={theme.textMuted}
                   reducedMotion={props.reducedMotion}
@@ -161,14 +178,20 @@ export function InteractiveInput(props: {
           </Switch>
         }
       >
-        {(problem) => (
+        {(refusal) => (
           <text fg={theme.error} flexShrink={0}>
-            {clip(`  ✗ ${problem().explanation}`, w())}
+            {clip(`  ✗ ${refusalText(refusal())}`, w())}
           </text>
         )}
       </Show>
     </box>
   );
+}
+
+function refusalText(refusal: InteractiveRefusal): string {
+  return refusal.kind === "refused"
+    ? refusal.problem.explanation
+    : `steer unavailable · ${refusal.offer.reason}`;
 }
 
 /** The Steer compose input (#148): a label, a native OpenTUI text field (D9 — the

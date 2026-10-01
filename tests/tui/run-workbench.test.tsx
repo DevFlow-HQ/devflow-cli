@@ -4402,6 +4402,305 @@ test("the Steer compose stays within a narrow terminal and relays out on resize 
   noOverflow(t.captureCharFrame(), 80);
 });
 
+// --- Steer from the interactive input (#294) -------------------------------
+
+/** A live human Turn in the interactive Step under a Harness that declares steer. */
+function steerableInteractiveRunOf(over: Partial<RunView> = {}): RunView {
+  return liveInteractiveRunOf({
+    actionOffers: [INTERRUPT_OFFER, AVAILABLE_STEER_OFFER, CANCEL_OFFER],
+    ...over,
+  });
+}
+
+/** Claude Code's real steer evidence (`claude-code.ts`), 170 columns long. */
+const CLAUDE_STEER_REASON =
+  "Claude Code's stream-json print mode has no same-Turn guidance frame: a further user message queues as the next Turn, so steer is rejected unsupported and never emulated.";
+
+test("Enter in the interactive input steers a live Turn with the draft, with no pending state (#294)", async () => {
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+  );
+  let frame = wb.t.captureCharFrame();
+  // The hint names Enter beside the Interrupt, led by the scanner; the rail stays
+  // without a Steer row, since the input carries the controls.
+  assert.match(
+    frame,
+    /^ {3}[■⬝]{8} enter steer · esc esc interrupt — stop this Turn/m,
+  );
+  assert.doesNotMatch(frame, /s steer —|Steer — guide/);
+
+  await type(wb.t, "focus on the tests");
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.steers, [
+    { runId: "run-1", turnId: "turn-7", text: "focus on the tests" },
+  ]);
+  assert.equal(wb.control.sends.length, 0);
+  // In flight, nothing lingers: no steering hint, and a second Enter is ignored
+  // rather than sending the draft again.
+  frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /steering|sending/);
+  assert.match(frame, /enter steer · esc esc interrupt/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.steers.length, 1);
+
+  // Applied: the sent draft clears and the Turn keeps working.
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /focus on the tests/);
+  assert.match(frame, /◆ The agent is working/);
+  assert.match(frame, /enter steer · esc esc interrupt/);
+});
+
+test("text typed while an interactive Steer settles survives its applied outcome (#294)", async () => {
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+  );
+  await type(wb.t, "check the logs");
+  await press(wb.t, wb.renderer, "return");
+  // The field keeps its keys in flight, so the human can draft more guidance...
+  await type(wb.t, " and then");
+  assert.match(wb.t.captureCharFrame(), /> check the logs and then/);
+  // ...which is theirs, not the sent Steer's, so the applied outcome leaves it.
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /> check the logs and then/);
+  assert.deepEqual(wb.control.steers, [
+    { runId: "run-1", turnId: "turn-7", text: "check the logs" },
+  ]);
+});
+
+test("a Steer still settling when its Turn ends holds back the send until it settles (#294)", async () => {
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+  );
+  await type(wb.t, "late guidance");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setRun(interactiveRunOf());
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /◇ Your move/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends.length, 0);
+
+  // The late Steer is refused against the ended Turn: the draft stays, and Enter now
+  // sends it as the next Turn.
+  wb.control.setSteerOutcome({
+    kind: "refused",
+    problem: {
+      code: "turn-control-rejected",
+      explanation: "The Turn had already ended.",
+      remediation: "Send it as the next Turn.",
+      possibleEffects: "none",
+    },
+  });
+  await wb.t.renderOnce();
+  let frame = wb.t.captureCharFrame();
+  assert.match(frame, /✗ The Turn had already ended/);
+  assert.match(frame, /> late guidance/);
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends, [
+    { runId: "run-1", stepId: "discuss", text: "late guidance" },
+  ]);
+  frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /already ended/);
+});
+
+test("a blank draft is not steered and a bare `s` types into the interactive input (#294)", async () => {
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+  );
+  await press(wb.t, wb.renderer, "return");
+  await type(wb.t, "   ");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.steers.length, 0);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /✗/);
+
+  // `s` is text here: it never opens the Agent step's Steer box.
+  wb.renderer.key("s");
+  await type(wb.t, "s");
+  const frame = wb.t.captureCharFrame();
+  assert.match(frame, />\s+s/);
+  assert.doesNotMatch(frame, /Steer — guide the running Turn/);
+});
+
+test("a refused interactive Steer keeps the draft, and arming the Interrupt clears the refusal (#294)", async () => {
+  let interrupted: typeof INTERRUPT_OFFER | undefined;
+  const actions = okActions({
+    interrupt: (offer) => {
+      interrupted = offer;
+      return () => ({ kind: "ok" });
+    },
+  });
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    40,
+    actions,
+  );
+  wb.control.setSteerOutcome({
+    kind: "refused",
+    problem: {
+      code: "steer-rejected",
+      explanation: "The live Turn rejected the guidance.",
+      remediation: "Steer the next live Turn.",
+      possibleEffects: "none",
+    },
+  });
+  await type(wb.t, "keep going");
+  await press(wb.t, wb.renderer, "return");
+  let frame = wb.t.captureCharFrame();
+  assert.match(frame, /✗ The live Turn rejected the guidance/);
+  assert.match(frame, /> keep going/);
+
+  // The Interrupt stays reachable: the first Esc arms, clearing the refusal so the
+  // confirm shows, and the second dispatches.
+  await press(wb.t, wb.renderer, "escape");
+  frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /✗/);
+  assert.match(frame, /⚠ Press esc again to interrupt/);
+  await press(wb.t, wb.renderer, "escape");
+  assert.deepEqual(interrupted, INTERRUPT_OFFER);
+});
+
+test("an unavailable Steer shows its reason at Enter, sends nothing, and keeps the draft (#294)", async () => {
+  let interrupted: typeof INTERRUPT_OFFER | undefined;
+  const actions = okActions({
+    interrupt: (offer) => {
+      interrupted = offer;
+      return () => ({ kind: "ok" });
+    },
+  });
+  const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 40, actions);
+  // Unavailable, the hint never names Enter; the reason waits for the attempt.
+  let frame = wb.t.captureCharFrame();
+  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop this Turn/m);
+  assert.doesNotMatch(frame, /enter steer|unavailable/);
+
+  await type(wb.t, "wrap up");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.steers.length, 0);
+  assert.equal(wb.control.sends.length, 0);
+  frame = wb.t.captureCharFrame();
+  // The refusal line carries the Offer's reason word for word, in words and a glyph.
+  assert.match(
+    frame,
+    /^ {3}✗ steer unavailable · Claude Code has no same-Turn steer/m,
+  );
+  assert.match(frame, /> wrap up/);
+  assert.match(frame, /◆ The agent is working/);
+  assert.equal(scannerOf(frame), undefined);
+
+  // Esc arms the Interrupt over the reason, and the second Esc dispatches it.
+  await press(wb.t, wb.renderer, "escape");
+  frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /steer unavailable/);
+  assert.match(frame, /⚠ Press esc again to interrupt/);
+  await press(wb.t, wb.renderer, "escape");
+  assert.deepEqual(interrupted, INTERRUPT_OFFER);
+});
+
+test("the unavailable reason leaves when the Turn ends, and Enter then sends the kept draft (#294)", async () => {
+  const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 40, okActions());
+  await type(wb.t, "wrap up");
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /steer unavailable/);
+
+  wb.control.setRun(interactiveRunOf());
+  await wb.t.renderOnce();
+  const frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /steer unavailable/);
+  assert.match(frame, /◇ Your move/);
+  assert.match(frame, /enter send Turn/);
+  assert.match(frame, /> wrap up/);
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends, [
+    { runId: "run-1", stepId: "discuss", text: "wrap up" },
+  ]);
+});
+
+test("a long unavailable reason clips to a small terminal and relays out on resize (#294)", async () => {
+  const claude = { ...STEER_OFFER, reason: CLAUDE_STEER_REASON };
+  const wb = await mountWorkbench(
+    liveInteractiveRunOf({
+      actionOffers: [INTERRUPT_OFFER, claude, CANCEL_OFFER],
+      timeline: wrappingEvents(200),
+    }),
+    100,
+    24,
+    okActions(),
+  );
+  await type(wb.t, "please wrap up the current change before anything else");
+  await press(wb.t, wb.renderer, "return");
+  let frame = wb.t.captureCharFrame();
+  assert.match(
+    frame,
+    /✗ steer unavailable · Claude Code's stream-json print mode has no same-Turn guidance frame.*…/,
+  );
+  noOverflow(frame, 100);
+
+  // Narrow, the reason clips with its ellipsis; the prefix and the draft's field stay.
+  wb.renderer.resize(40, 16);
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.match(frame, /^ {3}✗ steer unavailable · Claude Code's[^\n]*…/m);
+  assert.match(frame, /◆ The agent is working/);
+  noOverflow(frame, 40);
+  wb.renderer.resize(100, 24);
+  await wb.t.renderOnce();
+  noOverflow(wb.t.captureCharFrame(), 100);
+});
+
+test("with reduced motion the Steer cue follows a static [⋯] (#294)", async () => {
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    40,
+    okActions(),
+    true,
+  );
+  const frame = wb.t.captureCharFrame();
+  assert.match(
+    frame,
+    /^ {3}\[⋯\] enter steer · esc esc interrupt — stop this Turn/m,
+  );
+  assert.doesNotMatch(frame, /[■⬝]/);
+});
+
+test("the Steer cue keeps its words in a small terminal, the scanner yielding first (#294)", async () => {
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    24,
+    okActions(),
+  );
+  wb.renderer.resize(40, 16);
+  await wb.t.renderOnce();
+  let frame = wb.t.captureCharFrame();
+  assert.match(frame, /^ {3}enter steer · esc esc interrupt/m);
+  assert.doesNotMatch(frame, /[■⬝]/);
+  noOverflow(frame, 40);
+  wb.renderer.resize(100, 24);
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.match(
+    frame,
+    /^ {3}[■⬝]{8} enter steer · esc esc interrupt — stop this Turn/m,
+  );
+  noOverflow(frame, 100);
+});
+
 test("Esc from Details returns focus to the timeline during a live Turn, never arming interrupt (A7) — fails at HEAD", async () => {
   // With a live agent Turn the interrupt Offer stands, so at HEAD the two-press Esc arm
   // sat above the focused-region branches and shadowed Details' own Esc: opening Details

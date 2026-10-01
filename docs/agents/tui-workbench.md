@@ -22,7 +22,8 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   5 with suggestions, else 4 — so the bottom-region accounting reads it rather than a constant.
 - The interactive-agent input (`run-workbench.tsx`, #122) is a native OpenTUI `<input>` (D9): while `focus` is `interactive` the field owns text, so `q`/`r`/`c`/`x`/`t`
   type into it rather than fire their bare-letter commands (only Ctrl+C still exits, and the dispatcher gates those commands on not typing). The field carries capitals,
-  punctuation, paste and word delete verbatim. Enter dispatches `send-interactive-turn` (blank/whitespace refused before dispatch, and a refused send keeps the draft, A9);
+  punctuation, paste and word delete verbatim. Enter dispatches `send-interactive-turn` at a Turn boundary and `steer-turn` against the Offer's `turnId` during a live
+  Turn (#294; blank/whitespace refused before dispatch either way, and a refused send or Steer keeps the draft, A9);
   Ctrl+E arms `end-interactive-step`, offered — and so armable — only at a Turn boundary (no live Turn), reusing the same `pending` arm-and-confirm;
   in a human-controlled Repeat Ctrl+N arms `continue-repeat` the same way instead (#217), its confirm leading with `y`/`esc` before the Offer's consequence,
   and Ctrl+E arms `end-stage` (#218), whose consequence opens with "Secant has not checked the tracker" so a narrow clip keeps the warning; `esc` declines
@@ -32,9 +33,15 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
 - Typed-but-unsent interactive text (the `draft` signal) clears only on a **fresh** interactive Step (the focus effect keyed on the Step id), so it survives a
   Turn settle and a tab away within the same Step; a refused send keeps it (the refusal surfaces beside it, A9), and only an applied send
   clears it. A send applies at Turn admission (#290), so the draft clears while the agent works; the `… sending…` hint and the blurred field last only until then.
+  An input Steer (#294) follows the same rule with no pending state at all: the field keeps its keys, a second Enter in flight is ignored, and a send waits
+  until it settles. Its settlement rides the compose's Steer path (`steerFlight`, tagged with its source and the sent text), and an applied Steer clears the
+  draft only while it still holds that text, so guidance typed in flight survives. An unavailable Steer shows its reason only at Enter, as
+  `✗ steer unavailable · <reason>` on the refusal line (`InteractiveRefusal`, which also carries an Application refusal), since a standing copy beside the
+  scanner would clip at any usual width. Arming the Interrupt clears that line, so the armed confirm is never hidden, and the reason leaves when the Turn ends.
   The label reads the live Turn from the `interrupt-turn` Offer, never a missing send Offer: the agent is working while one is offered, else it is the human's move.
 - The working scanner (`working-scanner.tsx`, #292) mounts only while that same Offer is present, so its one timer stops when the Turn ends. It leads
-  existing rows and adds none: the interactive hint line (`<scanner> esc esc interrupt — …`) and the rail's interrupt row
+  existing rows and adds none: the interactive hint line (`<scanner> esc esc interrupt — …`, or `<scanner> enter steer · esc esc interrupt — …` while
+  Steer is offered available, #294) and the rail's interrupt row
   (`<scanner> working · esc esc interrupt — …`), whose words carry the meaning without motion or colour, so in a row too narrow for both the mark
   yields and the words stay whole. The armed interactive confirm replaces its line,
   and a request or gate (`modalControl`) hides both. `reducedMotion` arrives as a mount option, never an environment read, and draws a static `[⋯]`.
@@ -45,15 +52,16 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   while either is up the Run Actions rail (r/c/x) and the two-press Esc interrupt are suppressed (`modalControl()` gates `anyActionOffer`/`actionLines` and the
   interrupt disarm). `interrupt-turn`/`steer-turn` offers stay present through an `awaiting-approval` Turn (run-projection derives them from liveness, not
   `TurnPhase`), so without this guard the request control and the "esc esc interrupt" hint collide over Esc. The rail's interrupt/steer rows are also hidden while an
-  interactive Step owns the input (#122); during a live human Turn the input's hint line carries the Interrupt instead (#219) and `handleInteractiveKey` runs the shared
-  two-press `armOrDispatchInterrupt` (disarming on any other key first), so Esc leaves only at a Turn boundary. `anyActionOffer` and `actionLines` must agree on this, or
-  an empty `Actions:` heading steals the hint row.
+  interactive Step owns the input (#122); during a live human Turn the input's hint line carries the Interrupt (#219) and an available Steer's Enter (#294) instead,
+  and `handleInteractiveKey` runs the shared two-press `armOrDispatchInterrupt` (disarming on any other key first), so Esc leaves only at a Turn boundary.
+  `anyActionOffer` and `actionLines` must agree on this, or an empty `Actions:` heading steals the hint row.
 - Native Steer (#148) is an on-demand compose, not a blocked-state modal like the gate/interactive inputs: while an agent Turn is live under a Harness that declares native
   steer (Codex offers `steer-turn` `available`, Claude Code `available:false`), the Actions rail names the `s` key; `s` opens a native `<input>` (`SteerInput`) in the bottom
-  region with `focus === "steer"`, Enter dispatches `steer-turn` (blank refused, a refused steer keeps the draft), Escape backs out — the Turn keeps working either way. It is
-  mutually exclusive with the interactive input (a Turn is live vs. the Run is blocked) and yields to a request/gate modal (`modalControl` wins `bottomHeight`; an effect
-  closes the compose when the offer leaves or a modal appears). The `s`-open and steer-typing key routing sit beside the interactive `typing` branch (gated so
-  `q`/`t`/Run-Actions type as text while composing). An unavailable steer shows `steer — unavailable · <reason>` and `s` opens nothing.
+  region with `focus === "steer"`, Enter dispatches `steer-turn` (blank refused, a refused steer keeps the draft), Escape backs out — the Turn keeps working either way. It
+  belongs to Agent steps only: in an interactive Step `s` types into the input, whose own Enter steers the live Turn (#294). It yields to a request/gate modal
+  (`modalControl` wins `bottomHeight`; an effect closes the compose when the offer leaves or a modal appears). The `s`-open and steer-typing key routing sit beside the
+  interactive `typing` branch (gated so `q`/`t`/Run-Actions type as text while composing). An unavailable steer shows `steer — unavailable · <reason>` on the rail and `s`
+  opens nothing.
 - A stale approval answer keeps its inline refusal while the offer re-renders: a genuinely new request (a fresh `requestId`) resets the decision to `allow`
   and clears the refusal, but a stale answer keeps the same id, so its refusal survives while the bumped-generation offer re-renders (`onIdentityChange` on
   the request id).

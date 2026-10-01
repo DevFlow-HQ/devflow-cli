@@ -869,6 +869,143 @@ test("an interrupted interactive Turn halts without advancing and resume returns
   assert.equal(after.sessions?.[0]?.session, "s");
 });
 
+/** Send one human Turn that stays live, and return the Run read once admission
+ *  settles the send applied, with the live Turn's interrupt and steer Offers. */
+async function sendLiveTurn(wired: Wiring, runId: string, operationId: string) {
+  const sent = wired.projectionPort.submit({
+    operationId,
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "work on this for a while" },
+  });
+  assert.ok(sent.admitted, JSON.stringify(sent));
+  const outcome = await awaitSettled(wired.projectionPort, operationId);
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  const live = readRun(wired, runId);
+  assert.equal(live.state, "running");
+  const interrupt = offer(live, "interrupt-turn");
+  const steer = offer(live, "steer-turn");
+  assert.ok(interrupt, JSON.stringify(live.actionOffers));
+  assert.ok(steer, JSON.stringify(live.actionOffers));
+  return { interrupt, steer };
+}
+
+/** Steer the live Turn and return the settled outcome. */
+async function steerTurn(
+  wired: Wiring,
+  runId: string,
+  turnId: string,
+  operationId: string,
+) {
+  const steered = wired.projectionPort.submit({
+    operationId,
+    operation: "steer-turn",
+    input: { runId, turnId, text: "focus on the tests first" },
+  });
+  assert.ok(steered.admitted, JSON.stringify(steered));
+  return awaitSettled(wired.projectionPort, operationId);
+}
+
+/** Interrupt the live Turn so the test leaves no Turn running. */
+async function interruptTurn(
+  wired: Wiring,
+  runId: string,
+  turnId: string,
+  operationId: string,
+) {
+  const interrupted = wired.projectionPort.submit({
+    operationId,
+    operation: "interrupt-turn",
+    input: { runId, turnId },
+  });
+  assert.ok(interrupted.admitted, JSON.stringify(interrupted));
+  await awaitSettled(wired.projectionPort, interrupted.operationId);
+  return awaitRunRest(wired.projectionPort, runId);
+}
+
+test("a live interactive Turn accepts a Steer and keeps working under a Harness that declares steer (#294)", async (t) => {
+  const steerProfile: HarnessProfile = {
+    ...profile(),
+    steer: { available: true, evidence: "scripted fake" },
+  };
+  const { wired, runId } = await launchInteractive(t, {
+    profile: steerProfile,
+    turns: [BLOCKING_TURN],
+  });
+  const { interrupt, steer } = await sendLiveTurn(
+    wired,
+    runId,
+    "op-send-steerable",
+  );
+  // Offered beside the Interrupt, against the same live Turn.
+  assert.equal(steer.available, true);
+  assert.equal(steer.turnId, interrupt.turnId);
+
+  const outcome = await steerTurn(wired, runId, steer.turnId, "op-steer-live");
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+
+  // A Steer never ends the Turn: the Run still runs it, with the same controls.
+  const after = readRun(wired, runId);
+  assert.equal(after.state, "running");
+  assert.equal(offer(after, "interrupt-turn")?.turnId, interrupt.turnId);
+  assert.equal(offer(after, "steer-turn")?.available, true);
+  assert.equal(offer(after, "send-interactive-turn"), undefined);
+
+  assert.equal(
+    (
+      await interruptTurn(
+        wired,
+        runId,
+        interrupt.turnId,
+        "op-interrupt-steerable",
+      )
+    ).state,
+    "halted",
+  );
+});
+
+test("a live interactive Turn offers Steer unavailable with the profile's reason and refuses it as a value (#294)", async (t) => {
+  const { wired, runId } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [BLOCKING_TURN],
+  });
+  const { interrupt, steer } = await sendLiveTurn(
+    wired,
+    runId,
+    "op-send-unsteerable",
+  );
+  // The reason is the profile's steer evidence, word for word.
+  assert.equal(steer.available, false);
+  if (steer.available) throw new Error("unreachable");
+  assert.equal(steer.reason, profile().steer.evidence);
+
+  const outcome = await steerTurn(
+    wired,
+    runId,
+    steer.turnId,
+    "op-steer-refused",
+  );
+  assert.equal(outcome.status, "not-applied", JSON.stringify(outcome));
+  if (outcome.status !== "not-applied") throw new Error("unreachable");
+  assert.equal(outcome.problem.code, "steer-unavailable");
+
+  // The refusal changes nothing: the Turn is still live and still interruptible.
+  const after = readRun(wired, runId);
+  assert.equal(after.state, "running");
+  assert.equal(offer(after, "interrupt-turn")?.turnId, interrupt.turnId);
+
+  assert.equal(
+    (
+      await interruptTurn(
+        wired,
+        runId,
+        interrupt.turnId,
+        "op-interrupt-unsteerable",
+      )
+    ).state,
+    "halted",
+  );
+});
+
 test("end-interactive-step mid-Turn is rejected with a precise Problem (#122)", async (t) => {
   // A Turn that blocks after admission until it is interrupted or the Harness closes,
   // so a real "mid-Turn" window exists to submit End Step into.
