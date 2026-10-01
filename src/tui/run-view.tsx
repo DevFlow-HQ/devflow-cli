@@ -36,9 +36,11 @@ import { submitAndSettle, type SettleOutcome } from "./submit-and-settle.js";
 // large output is fetched only when the user opens it and never inlined into the
 // snapshot (#91 AC4). Built over the Projection Port for production and
 // hand-driven with fake `run` snapshots in renderer tests, so the same screens
-// serve both. The Workbench's one write is `answer` (#92): it dispatches the
-// `answer-human-gate` Operation while the same screen keeps following the `run`
-// snapshot live, so the checkpoint interaction disappears as the answer applies.
+// serve both. Beside those reads it owns the Workbench's Step-interaction writes
+// (Gate answers, interactive-Step controls, steer, Harness Request answers), each
+// submitted through submit-and-settle while the same screen keeps following the
+// `run` snapshot live, so each write's effect arrives as a durable update.
+// Run-lifecycle Actions go through run-actions-view.tsx instead.
 
 /** An answer as the Workbench observes it: `pending` until it settles, then
  *  `applied` (the open snapshot then drops the checkpoint and its offer) or a
@@ -81,8 +83,9 @@ export interface RunWorkbenchView {
   ): Accessor<AnswerOutcome>;
   /** Sends one human Turn to the interactive-agent Step the Run is blocked at (#122):
    *  the verbatim text becomes the Turn's transcript input. The accessor starts
-   *  `pending` and settles once the Operation resolves; the open snapshot follows the
-   *  new transcript in. */
+   *  `pending` and settles at the Turn's durable admission (#290), not at Turn end:
+   *  `applied` once admitted, refused when the send or its Turn is not admitted. The open
+   *  snapshot follows the Turn and its new transcript in. */
   sendInteractiveTurn(
     runId: string,
     stepId: string,
@@ -150,7 +153,7 @@ export function createLiveRunWorkbenchView(
       followRunProjection(() => port.openProjection({ family: "run", runId })),
     readResource: (reference) => port.readResource(reference),
     readTranscript: (reference) => port.readTranscript(reference),
-    // The one Workbench write: the same submit-and-settle protocol headless `run
+    // The Gate answer: the same submit-and-settle protocol headless `run
     // answer` runs (A23), minus the read-back — submit against the snapshot's Gate
     // and follow the Operation to settlement. A `continue` answer drives execution
     // asynchronously now, so this awaits the operation stream rather than reading an

@@ -16,10 +16,11 @@ import { submitAndSettle } from "./submit-and-settle.js";
 // The submit seam the Run Workbench's Run Actions dispatch through (#92),
 // mirroring workspace-view.tsx's `approve` and headless `endRunOperation` /
 // `resumeRun` (headless.ts): submit the Operation and follow it to settlement,
-// reporting ok or the refusal Problem. Distinct from the `run` read seam
-// (run-view.tsx), which is read-only — Run Actions are writes, so they need their
-// own seam. Built over the Projection Port for production and hand-driven with a
-// fake in renderer tests, so the same Workbench serves both.
+// reporting ok or the refusal Problem. It owns the Run-lifecycle Actions (resume,
+// cancel, delete, interrupt) and reads no Run state; the `run` seam (run-view.tsx) owns
+// the Run reads plus the Step-interaction writes (Gate answers, interactive-Step
+// controls, steer, request answers). Built over the Projection Port for production
+// and hand-driven with a fake in renderer tests, so the same Workbench serves both.
 //
 // Each action returns a reactive outcome that starts `pending` and settles once
 // the Operation resolves: resume drives execution and a cancel-as-abort aborts a
@@ -76,7 +77,8 @@ export function useRunActionsView(): RunActionsView {
  * A live Run Actions seam over the Projection Port. Each action submits its
  * Operation through the shared submit-and-settle helper (A23) and maps the settled
  * outcome to this seam's shape: `applied` is `ok`, anything else is the refusal.
- * All three Operations key on the Run id alone.
+ * Resume, cancel, and delete key on the Run id (resume adds its Offer's takeover);
+ * interrupt keys on the Run and the live Turn its Offer names.
  */
 export function createLiveRunActionsView(port: ProjectionPort): RunActionsView {
   const end = (

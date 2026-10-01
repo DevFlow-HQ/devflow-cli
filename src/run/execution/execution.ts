@@ -127,8 +127,11 @@ export interface ExecutionDeps {
   readonly now?: () => Date;
 }
 
-/** How a Run came to rest. `blocked` is a durable pause at a Review checkpoint,
- *  derived (never written) from the current Step Attempt (#84, #85). `halted` is
+/** How a Run came to rest. `blocked` is a durable pause awaiting a human: an
+ *  authored Human Gate, an interactive-agent Step, or a Review checkpoint. The
+ *  stored `blocked` state is always written; a Review checkpoint's Gate facts are
+ *  derived evidence, re-derived from the Attempt log, Verdict binding, and Gate
+ *  answers (#84, #85, #108). `halted` is
  *  a resumable rest a Materialization conflict leaves the Run in (#88, ADR 0023). */
 type RunOutcome = "succeeded" | "failed" | "blocked" | "halted";
 
@@ -159,10 +162,10 @@ export const TRUNCATION_MARKER = `\n[secant: output truncated at ${MAX_CAPTURE_B
 /** A durable pause an executor returns instead of an Attempt (#108, #122): the Step
  *  did not run to a settled outcome — it rests the Run `blocked` and waits for a
  *  human. A Human Gate pause carries the gate the scheduler records (with the minted
- *  Attempt id); an interactive-agent pause records nothing durable — the block is
- *  derived from the current Step being interactive-agent, and its Attempt settles
- *  later through `end-interactive-step`. The scheduler branches on this shape, not
- *  on the Step kind (#13 rule 6). */
+ *  Attempt id); an interactive-agent pause records no gate — the Run's stored state
+ *  is still `blocked`, its controls are derived from the current Step being
+ *  interactive-agent, and its Attempt settles later through `end-interactive-step`.
+ *  The scheduler branches on this shape, not on the Step kind (#13 rule 6). */
 type StepPause = GatePause | InteractivePause;
 interface GatePause {
   readonly pause: true;
@@ -246,9 +249,9 @@ const STEP_EXECUTORS: Readonly<Partial<Record<StepKindName, StepExecutor>>> = {
  *  and settles the Step through `end-interactive-step` (#122). A Step opting into
  *  `entryTurn` first sends its authored prompt as the Session's first Turn (#212);
  *  an interrupted or lost entry Turn rests the Run `halted` instead. Like a Human
- *  Gate it is a durable pause, but it records no gate — the block is derived from
- *  the current Step being interactive-agent, and no Attempt is published until the
- *  human ends the Step. */
+ *  Gate it is a durable pause with the Run stored `blocked`, but it records no gate
+ *  — its basis is derived from the current Step being interactive-agent, and no
+ *  Attempt is published until the human ends the Step. */
 async function runInteractiveAgent(
   step: AgentStep,
   context: StepContext,
@@ -286,8 +289,8 @@ interface WalkContext {
  * dispatching each Step through the closed table, retrying a `failed` Attempt
  * within its bound, and looping a Repeat group on its `until` Verdict. Rests the
  * Run `succeeded` (every node ran to completion), `failed` (a Step's retry budget
- * was exhausted), or `blocked` (a Repeat group reached its review cadence without
- * a pass). A fenced owner or a publication Problem is a coordination/environment
+ * was exhausted), or `blocked` (a Step paused for a human, or a Repeat group
+ * reached its review cadence without a pass). A fenced owner or a publication Problem is a coordination/environment
  * fault and throws — the caller (composition) owns it.
  */
 export async function executeRouting(
@@ -370,8 +373,9 @@ async function runStep(
   );
   if (outcome === "halted") return "halted";
   if (outcome === "failed") return "failed";
-  // A Human Gate paused: the pending gate is recorded and the Run rests `blocked`
-  // durably; executeRouting writes the `blocked` state so open clients update (#108).
+  // The Step paused (an authored Human Gate, its pending gate recorded, or an
+  // interactive-agent Step): executeRouting writes the `blocked` state so open
+  // clients update (#108, #122).
   if (outcome === "blocked") return "blocked";
   // A skipped Step (already settled on a prior run) rested nothing this run, so it
   // is `succeeded-open`; executeRouting's final rest covers an all-skipped Run.
@@ -384,18 +388,22 @@ async function runStep(
  * condition is evaluated before every iteration, so an already-`pass` Verdict
  * runs zero iterations. On completing the review cadence — the authored interval,
  * clamped to the engine ceiling so a Bundle cannot disable review — without a
- * pass, the Run rests `blocked`. This Review-checkpoint block is the *derived*
- * mechanism: nothing is written, so a reopened home re-derives it from the current
- * Step Attempt with no new Attempt. (An authored Human Gate is the other, durable
- * mechanism — `recordPendingGate` writes `state = "blocked"` in one transaction,
- * #108 — so `blocked` is not a single mechanism; A63.)
+ * pass, the Run rests `blocked`. executeRouting stores that `blocked` state, but
+ * this Review checkpoint records no Gate and no Attempt: its Gate facts are derived
+ * evidence, so a reopened home re-derives them from the Attempt log, Verdict
+ * binding, and Gate answers with no new Attempt. (An authored Human Gate is the
+ * other mechanism — `recordPendingGate` writes its pending gate with
+ * `state = "blocked"` in one transaction, #108 — so `blocked` is not a single
+ * mechanism; A63.)
  *
- * A `continue`-answered Run resumes here in the answering process (#85): the block
- * released its Workspace claim, so a fresh process re-walks the Routing. Iterations
- * run in absolute order from zero and each Step instance is skipped by identity, so
- * the already-completed iterations replay without re-running (never touching the
- * shared counter file or moving a binding) and only newly-run iterations count
- * toward the cadence — one grant buys exactly one more interval (ADR 0020, A1).
+ * A `continue`-answered Run resumes here in the answering process (#85), which
+ * re-walks the Routing through the Run's owner: the per-Run owner this process
+ * still holds through `blocked`, or one freshly re-acquired for a reopened Run.
+ * Iterations run in absolute order from zero and each Step instance is skipped by
+ * identity, so the already-completed iterations replay without re-running (never
+ * touching the shared counter file or moving a binding) and only newly-run
+ * iterations count toward the cadence — one grant buys exactly one more interval
+ * (ADR 0020, A1).
  */
 async function runRepeatGroup(
   repeat: RepeatGroup["repeat"],

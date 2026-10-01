@@ -22,8 +22,8 @@ import type {
 // delete this seam never awaits the operation outcome — a launch that Preflight or
 // Trust refuses surfaces as a not-admitted admission, before any Run exists.
 
-/** The launch as the flow observes it: `pending` until it settles, then either a
- *  receipt (the created Run's id and state) or a refusal Problem. */
+/** The launch as the flow observes it: `pending` until admission resolves, then
+ *  either a receipt (the created Run's id and state) or a refusal Problem. */
 export type LaunchOutcome =
   | { readonly kind: "pending" }
   | { readonly kind: "refused"; readonly problem: Problem }
@@ -34,9 +34,11 @@ export type LaunchOutcome =
     };
 
 export interface RunLaunchView {
-  /** Submit `launch-run` and follow it to a receipt or a refusal. The accessor
-   *  starts `pending` and settles once the Operation outcome and the created Run
-   *  resolve. */
+  /** Submit `launch-run` and resolve at admission. An admitted launch returns its
+   *  Run receipt before execution settles, without awaiting the Operation outcome
+   *  (which settles only once the Run rests); a refused admission returns its
+   *  Problem, and no Run exists. An admitted Run that cannot be read back also
+   *  resolves `refused`, with that read's Problem. */
   launch(input: LaunchRunInput): Accessor<LaunchOutcome>;
 }
 

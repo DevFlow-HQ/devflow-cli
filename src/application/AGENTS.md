@@ -12,8 +12,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `answer-human-gate` serves two gate mechanisms off one Port operation (#108). The Projection derivation decides which: `derived.pendingGate` present is an
   **authored** gate, answered by settling its producing Attempt through `observedOwner.publishAttempt` (into `attempt_log`, so the resumed walk skips the gate) —
   `free-text` publishes the `text` answer as the gate's declared output and re-drives execution in this process, approve advances `running` and re-drives, reject
-  settles `failed` and rests. Otherwise `derived.checkpoint` is a **derived Review checkpoint**, answered by `recordGateAnswer` exactly as M2 did (no `attempt_log`,
-  `blocked` stays derived). The live Gate is `derived.pendingGate?.gate ?? derived.checkpoint?.gate` (a blocked Run has exactly one), and the answer form must match
+  settles `failed` and rests. Otherwise `derived.checkpoint` is a **derived Review checkpoint**, answered by `recordGateAnswer` exactly as M2 did (no `attempt_log`;
+  the checkpoint stays derived). The live Gate is `derived.pendingGate?.gate ?? derived.checkpoint?.gate` (a blocked Run has exactly one), and the answer form must match
   `gate.shape` (`free-text` ⇒ `text`, `approve-reject` ⇒ `continue`/`stop`) or it is a `gate-shape-mismatch` Problem that changes nothing. Idempotency is keyed on the
   operation id (`gate_answer` row for a checkpoint; the in-process operations map for both) — never on whether the gate settled, so a _different_ operation answering an
   already-answered gate falls through to the staleness check and is refused, not silently masked as `applied`.
@@ -79,8 +79,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - App-release trust is a recorded Trust grant (operation id `app-release`) that the startup ensure (`shipped-bundles.ts`) writes only on an Entry whose
   origin is `built-in`, re-checked every startup, so launch, resume, and the timeline read it like any grant; `trustState` shows a grant on a built-in as
   `app-release`. Equal bytes a user imported first keep their own origin and trust (#227).
-- `createApplication` stays one closure on purpose: its regions share the mutable `runs` map, operations map, and observer sets, it has one caller
-  (composition), and no second adapter exists, so extracting a block would only pass a wide context object across a shallow Seam (#199 A1).
+- `createApplication` stays one closure for cohesion, not size: its regions share the mutable `runs` map, operations map, and observer Sets, and keep
+  settlement, owner-release, and shutdown ordering visible in one place (#303 A3). Blocks that earned their own ownership already live privately beside it
+  (`launch-preparation`, `harness-catalog`, `live-overlay`, `subscription-lifecycle`); the extraction rule is [module design's](../../docs/agents/module-design.md).
 
 ## Read next
 
