@@ -353,6 +353,13 @@ export function buildDetailsRows(params: {
     rows.push({ text, tone, bold });
 
   push(`${params.focused ? "› " : "  "}Details`, "text", params.focused);
+  // The Run id and owner process the everyday header leaves out (#293); the
+  // owner shows only while the Run is live, worded as headless `run show` words it.
+  push(`  Run ${run.runId}`, "text");
+  if (run.liveness.state !== "not-live")
+    push(
+      `  Live · ${run.liveness.state === "live-here" ? "in this instance" : "in another instance"} (process ${run.liveness.ownerPid})`,
+    );
   push(
     `  ${run.bundle.id}@${run.bundle.version} · sha256:${run.bundle.digest}`,
     "text",

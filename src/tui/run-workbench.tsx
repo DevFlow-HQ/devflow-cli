@@ -1314,15 +1314,9 @@ function positionText(run: RunView): string {
     : `step ${run.position + 1} of ${run.progress.length}`;
 }
 
-function livenessText(run: RunView): string {
-  switch (run.liveness.state) {
-    case "not-live":
-      return "not live";
-    case "live-here":
-      return `live in this instance (process ${run.liveness.ownerPid})`;
-    case "live-elsewhere":
-      return `live in another instance (process ${run.liveness.ownerPid})`;
-  }
+/** Whether the Run is in one of the glossary's live states. */
+function inLiveState(run: RunView): boolean {
+  return run.state === "running" || run.state === "blocked";
 }
 
 function formatConfirmedAt(confirmedAt: string): string {
@@ -1444,6 +1438,14 @@ function Workbench(props: {
     props.blockedBasis() === undefined
       ? displayState()
       : `${displayState()} · ${props.blockedBasis()}`;
+  // A Run in a live state names no Run id in the header; the id rejoins the
+  // compact line and the wide second line once the Run rests (#293).
+  const compactLead = () =>
+    inLiveState(run()) ? run().bundle.name : `Run ${run().runId}`;
+  const positionLine = () =>
+    inLiveState(run())
+      ? positionText(run())
+      : `Run ${run().runId} · ${positionText(run())}`;
   const freshnessToken = () => {
     switch (props.freshness().kind) {
       case "current":
@@ -1458,15 +1460,16 @@ function Workbench(props: {
   };
   return (
     <box flexDirection="column" flexGrow={1} overflow="hidden">
-      {/* Compact header: Bundle name, Run id, state in words as well as colour.
-          The Harness/model facts moved to the details panel (#194 story 35). */}
+      {/* Compact header: Bundle name, state in words as well as colour. The
+          Harness/model facts (#194 story 35) and the owner process (#293) live in
+          the details panel. */}
       <box flexDirection="column" flexShrink={0}>
         <Show
           when={!props.compactHeader()}
           fallback={
             <text fg={stateColor(theme, run().state)}>
               {clip(
-                `Run ${run().runId} — ${stateWithBasis()} · ${freshnessToken()} · ${livenessText(run())}`,
+                `${compactLead()} — ${stateWithBasis()} · ${freshnessToken()}`,
                 w(),
               )}
             </text>
@@ -1478,12 +1481,7 @@ function Workbench(props: {
               w(),
             )}
           </text>
-          <text fg={theme.textMuted}>
-            {clip(
-              `Run ${run().runId} · ${positionText(run())} · ${livenessText(run())}`,
-              w(),
-            )}
-          </text>
+          <text fg={theme.textMuted}>{clip(positionLine(), w())}</text>
         </Show>
         {/* One line of resting prose beside the state word (#194 story 38, AC4),
             so colour and the state word are never the only signal. */}

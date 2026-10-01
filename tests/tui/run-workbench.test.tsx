@@ -488,6 +488,14 @@ async function type(
   await t.renderOnce();
 }
 
+/** The frame's first `count` non-blank lines: the Workbench header. */
+function headerLines(frame: string, count: number): string[] {
+  return frame
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .slice(0, count);
+}
+
 function noOverflow(frame: string, width: number) {
   for (const line of frame.split("\n")) {
     assert.ok(
@@ -524,7 +532,7 @@ test("header, progress, and timeline render the facts headless run show prints",
   );
   const frame = t.captureCharFrame();
   assert.match(frame, /Alpha Flow/); // Bundle name
-  assert.match(frame, /run-77/); // Run id
+  assert.doesNotMatch(frame, /run-77/); // an active Run's id lives in the panel
   assert.match(frame, /RUNNING/); // state in words
   assert.match(frame, /plan/); // every progress step, always visible
   assert.match(frame, /build/);
@@ -736,6 +744,7 @@ test("the details panel toggles and shows identity, position, and resources", as
   await press(t, renderer, "d");
   const frame = t.captureCharFrame();
   assert.match(frame, /Details/);
+  assert.match(frame, /Run run-9/); // the id the active header leaves out
   assert.match(frame, /dev\.alpha@1\.0\.0/); // identity
   assert.match(frame, /sha256:abc123/);
   assert.match(frame, /Workspace: \/tmp\/ws/);
@@ -1724,16 +1733,26 @@ test("small width compacts the header before hiding the details panel, without o
     30,
   );
   await press(t, renderer, "d");
-  assert.match(t.captureCharFrame(), /Details/);
-  assert.match(t.captureCharFrame(), /Alpha Flow/);
+  const wide = t.captureCharFrame();
+  assert.match(wide, /Details/);
+  const wideHeader = headerLines(wide, 3);
+  assert.match(wideHeader[0] ?? "", /Alpha Flow — RUNNING/);
+  assert.match(wideHeader[1] ?? "", /^\s*step 1 of 3\s*$/); // wide second line
+  assert.match(wideHeader[2] ?? "", /^\s*Progress:/);
 
   // The header compacts first while the inspection affordance remains available.
+  // A live-state Run's compact line leads with the Bundle name and state, like
+  // the wide first line, and never with its Run id.
   renderer.resize(70, 30);
   await t.renderOnce();
   const compact = t.captureCharFrame();
   assert.match(compact, /Workspace:/);
-  assert.doesNotMatch(compact, /Alpha Flow/);
-  assert.match(compact, /Run run-1/);
+  const compactHeader = headerLines(compact, 2);
+  assert.match(
+    compactHeader[0] ?? "",
+    /^\s*Alpha Flow — RUNNING · View current\s*$/,
+  );
+  assert.match(compactHeader[1] ?? "", /^\s*Progress:/); // one header row
   noOverflow(compact, 70);
 
   // Below the details breakpoint the panel is hidden too.
@@ -1741,9 +1760,94 @@ test("small width compacts the header before hiding the details panel, without o
   await t.renderOnce();
   const narrow = t.captureCharFrame();
   assert.doesNotMatch(narrow, /Workspace:/);
-  assert.doesNotMatch(narrow, /Alpha Flow/);
-  assert.match(narrow, /Run run-1/);
+  assert.match(headerLines(narrow, 1)[0] ?? "", /Alpha Flow — RUNNING/);
+  assert.doesNotMatch(narrow, /run-1/);
   noOverflow(narrow, 50);
+});
+
+test("a live-state Run's header carries no Run id or process at any width; the id shows once the Run rests", async () => {
+  for (const state of ["running", "blocked"] as const) {
+    const { t, control, renderer } = await mountWorkbench(
+      runOf({
+        state,
+        progress: PROGRESS,
+        position: 1,
+        timeline: events(60),
+        liveness: { state: "live-here", ownerPid: 4101 },
+      }),
+    );
+    // The panel is closed, so the whole frame stands for the header here.
+    for (const width of [100, 70, 50]) {
+      renderer.resize(width, 40);
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      assert.doesNotMatch(frame, /run-1/, `${state} at ${width}: no Run id`);
+      assert.doesNotMatch(frame, /4101|process/, `${state} at ${width}`);
+      assert.doesNotMatch(frame, /live in|not live/, `${state} at ${width}`);
+      assert.match(frame, new RegExp(state.toUpperCase())); // state in words
+    }
+
+    // Leaving the live state brings the Run id back, wide and compact. The header
+    // grows by the resting-prose row, and headerRows counts it: the full timeline
+    // still leaves the footer on screen.
+    control.setRun(
+      runOf({
+        state: "halted",
+        progress: PROGRESS,
+        position: 1,
+        timeline: events(60),
+      }),
+    );
+    renderer.resize(100, 40);
+    await t.waitForFrame((f) => f.includes("HALTED"));
+    const resting = t.captureCharFrame();
+    const wide = headerLines(resting, 4);
+    assert.match(wide[0] ?? "", /Alpha Flow — HALTED/);
+    assert.match(wide[1] ?? "", /^\s*Run run-1 · step 2 of 3\s*$/);
+    assert.match(wide[2] ?? "", /Execution stopped outside the Workflow\./);
+    assert.match(wide[3] ?? "", /^\s*Progress:/);
+    assert.match(resting, /esc back · q quit/);
+    renderer.resize(70, 40);
+    await t.renderOnce();
+    const compact = headerLines(t.captureCharFrame(), 1);
+    assert.match(compact[0] ?? "", /Run run-1 — HALTED/);
+  }
+
+  for (const state of ["failed", "succeeded", "cancelled"] as const) {
+    const { t, renderer } = await mountWorkbench(runOf({ state }));
+    assert.match(headerLines(t.captureCharFrame(), 2)[1] ?? "", /Run run-1/);
+    renderer.resize(60, 40);
+    await t.renderOnce();
+    const compact = headerLines(t.captureCharFrame(), 1)[0] ?? "";
+    assert.match(compact, /Run run-1/, `${state} compact`);
+    assert.match(compact, new RegExp(state.toUpperCase())); // never colour alone
+  }
+});
+
+test("a resting Run's long id clips with an ellipsis in the header and the details panel", async () => {
+  const runId = `run-${"x".repeat(120)}`;
+  const { t, renderer } = await mountWorkbench(
+    runOf({ runId, state: "failed" }),
+    100,
+    30,
+  );
+  assert.match(
+    headerLines(t.captureCharFrame(), 2)[1] ?? "",
+    /^\s*Run run-x+…\s*$/,
+  );
+  await press(t, renderer, "d");
+  const panel = t.captureCharFrame();
+  noOverflow(panel, 100);
+  const clipped = panel
+    .split("\n")
+    .filter((line) => /^\s*Run run-x+…\s*$/.test(line));
+  assert.equal(clipped.length, 2); // the wide second line and the panel's Run row
+
+  renderer.resize(50, 30);
+  await t.renderOnce();
+  const narrow = t.captureCharFrame();
+  noOverflow(narrow, 50);
+  assert.match(headerLines(narrow, 1)[0] ?? "", /^\s*Run run-x+…\s*$/);
 });
 
 test("resize relayouts the timeline without overflow and keeps every state readable without colour", async () => {
@@ -1760,21 +1864,50 @@ test("resize relayouts the timeline without overflow and keeps every state reada
   assert.match(t.captureCharFrame(), /FAILED/);
 });
 
-test("the header names whether the Run is live here or in another owner process", async () => {
+test("the details panel carries the Run id and names whether the Run is live here or in another owner process", async () => {
   const here = await mountWorkbench(
     runOf({ liveness: { state: "live-here", ownerPid: 4101 } }),
   );
-  assert.match(
-    here.t.captureCharFrame(),
-    /live in this instance \(process 4101\)/,
-  );
+  assert.doesNotMatch(here.t.captureCharFrame(), /process 4101/); // not the header
+  await press(here.t, here.renderer, "d");
+  const hereFrame = here.t.captureCharFrame();
+  assert.match(hereFrame, /^\s*Run run-1\s*$/m);
+  assert.match(hereFrame, /Live · in this instance \(process 4101\)/);
 
   const elsewhere = await mountWorkbench(
     runOf({ liveness: { state: "live-elsewhere", ownerPid: 5202 } }),
   );
+  await press(elsewhere.t, elsewhere.renderer, "d");
   assert.match(
     elsewhere.t.captureCharFrame(),
-    /live in another instance \(process 5202\)/,
+    /Live · in another instance \(process 5202\)/,
+  );
+
+  // A Run that is not live has no owner to name, so the panel says nothing of one;
+  // its id, digest, and recovery evidence stay.
+  const rested = await mountWorkbench(
+    runOf({
+      state: "halted",
+      conflict: {
+        artifactName: "plan",
+        path: "docs/plan.md",
+        reference: {
+          runId: "run-1",
+          diagnosticId: "diag-1",
+          type: "diagnostic",
+        },
+      },
+    }),
+  );
+  await press(rested.t, rested.renderer, "d");
+  const restedFrame = rested.t.captureCharFrame();
+  assert.match(restedFrame, /^\s*Run run-1\s*$/m);
+  assert.doesNotMatch(restedFrame, /Live ·|process/);
+  assert.match(restedFrame, /sha256:abc123/);
+  assert.match(restedFrame, /Resting reason · A required file changed/);
+  assert.match(
+    restedFrame,
+    /Materialization conflict · restore docs\/plan\.md/,
   );
 });
 
