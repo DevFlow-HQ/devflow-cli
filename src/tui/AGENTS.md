@@ -20,9 +20,13 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   renderer in tests. Every other screen keeps the keymap/`useTerminalDimensions` path. Drawing still goes through OpenTUI elements — the Port never carries it.
 - `follow.ts` alone owns Projection observer health and reconnect ordering. A terminal update preserves last-known state as `disconnected`; explicit reconnect
   crosses `loading` and `catching-up` before `current`. Workbench Operation controls read only current offers, while timeline live-edge remains a separate scroll fact.
-- The timeline's scroll/live-edge/anchor/new-activity is a pure index reducer (`run-timeline.ts`), not OpenTUI's `<scrollbox>` (which OpenCode's session
-  timeline uses). `run-timeline-rows.ts` joins append-only durable history with stable-key replaceable live tail rows; an absolute `top` keeps naming the
-  same first-visible row while new rows land, and the new-activity count is `total − viewportBottom`. Neither invariant exists in the scrollbox.
+- The timeline's scroll/live-edge/anchor/new-activity is a pure reducer over row heights (`run-timeline.ts`), not OpenTUI's `<scrollbox>` (which OpenCode's
+  session timeline uses). `run-timeline-rows.ts` joins append-only durable history with stable-key replaceable live tail rows. The Seam takes each row's
+  display-line count: it scrolls display lines (a page is half the viewport, OpenCode's), but a paused anchor is a `row` plus a line `offset`, so it keeps
+  naming the same first-visible row while rows land and across a resize that rewraps them, and the new-activity count is rows with a line below the viewport.
+  Neither invariant exists in the scrollbox.
+- Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
+  `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.
 - Exactly one screen mounts at a time (`app.tsx`), so a screen's key bindings exist only while it is active and cannot conflict with another's. And
   `useBindings({ enabled })` must be gated off while a dialog overlays a screen (the approval dialog over Home, `home.tsx`), or the overlaid screen's
   bindings fire under the dialog.
@@ -76,5 +80,5 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `start-run-views.tsx` holds Start a Run's step components and leaves; the draft signal, step transitions, and refusal routing stay in `start-run.tsx` (A3).
   Each step owns its transient UI state and its own `useBindings`, and `ReviewStep` opens the `launch-preparation` Projection directly (#231 A16).
 - `previous-runs.tsx` is the Previous Runs screen reached from Home.
-- `clip.ts` is the ellipsis affordance above, and `bundle-format.ts` holds the Bundle-catalog status wording — keep it matching `headless/render.ts` so
-  the TUI and headless surfaces say the same thing about the same fact.
+- `clip.ts` is the ellipsis affordance above, `wrap.ts` its wrapping counterpart, and `bundle-format.ts` holds the Bundle-catalog status wording — keep
+  it matching `headless/render.ts` so the TUI and headless surfaces say the same thing about the same fact.

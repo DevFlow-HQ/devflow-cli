@@ -354,6 +354,20 @@ function events(count: number): RunTimelineEvent[] {
   }));
 }
 
+/** Rows whose detail is wider than a 60-column Workbench, so each wraps. */
+function wrappingEvents(count: number): RunTimelineEvent[] {
+  return events(count).map((event, index) => ({
+    ...event,
+    detail: `e${index} ${"lorem ipsum ".repeat(5).trim()}`,
+  }));
+}
+
+/** The timeline viewport's lines, from the one under the timeline label. */
+function timelineLines(frame: string): string[] {
+  const lines = frame.split("\n");
+  return lines.slice(lines.findIndex((line) => /› Timeline/.test(line)) + 1);
+}
+
 // --- blocked-Run fixtures (#92) --------------------------------------------
 
 const GATE: RunGateReference = {
@@ -1254,6 +1268,182 @@ test("workbench-timeline-inspection: the bounded window marks its beginning and 
   noOverflow(narrowBeginning, 40);
 });
 
+test("timeline rows wrap at the width instead of clipping and rewrap on resize (#288)", async () => {
+  const words =
+    "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa";
+  const { t, renderer } = await mountWorkbench(
+    runOf({
+      timeline: [{ at: "T000", event: "assistant-content", detail: words }],
+    }),
+    100,
+    20,
+  );
+  // The row's display lines: the non-blank run under the label.
+  const rowLines = () => {
+    const lines = timelineLines(t.captureCharFrame());
+    return lines.slice(
+      0,
+      lines.findIndex((line) => line.trim() === ""),
+    );
+  };
+  const counts: number[] = [];
+  for (const width of [100, 60, 40]) {
+    renderer.resize(width, 20);
+    await t.renderOnce();
+    noOverflow(t.captureCharFrame(), width);
+    const text = rowLines().join(" ");
+    for (const word of words.split(" ")) {
+      assert.match(text, new RegExp(`\\b${word}\\b`), `${word} at ${width}`);
+    }
+    // Continuation lines hang under the row's first line.
+    for (const line of rowLines().slice(1)) assert.match(line, /^ {5}\S/);
+    counts.push(rowLines().length);
+  }
+  assert.ok(
+    counts[0]! < counts[1]! && counts[1]! < counts[2]!,
+    `a narrower width wraps over more lines: ${counts.join(", ")}`,
+  );
+});
+
+test("scrolling over wrapped rows steps by line, keeps its anchor under append and resize, and counts rows (#288)", async () => {
+  // Mount at the widest size the test draws (the captured frame keeps its mount
+  // size), then narrow to 60 so every row wraps over two lines.
+  const { t, control, renderer } = await mountWorkbench(
+    runOf({ timeline: wrappingEvents(30) }),
+    100,
+    14,
+  );
+  renderer.resize(60, 14);
+  await t.renderOnce();
+  // One line above the live edge hides only the newest row's last line: the badge
+  // counts that one row, not lines.
+  await press(t, renderer, "up");
+  const scrolled = t.captureCharFrame();
+  noOverflow(scrolled, 60);
+  assert.match(scrolled, /Timeline · 1 · Jump to latest/);
+  const first = timelineLines(scrolled)[0];
+
+  // Three two-line rows append: the first visible line holds, and the count rises
+  // by three rows (six lines would read 7).
+  control.setRun(runOf({ timeline: wrappingEvents(33) }));
+  await t.renderOnce();
+  const appended = t.captureCharFrame();
+  assert.equal(timelineLines(appended)[0], first);
+  assert.match(appended, /Timeline · 4 · Jump to latest/);
+
+  // From the top, down steps one display line at a time: reach row e1's first
+  // line, then one more step shows its continuation line first.
+  await press(t, renderer, "home");
+  for (let i = 0; i < 6; i++) {
+    if (/ e1 /.test(timelineLines(t.captureCharFrame())[0]!)) break;
+    await press(t, renderer, "down");
+  }
+  assert.match(timelineLines(t.captureCharFrame())[0]!, / e1 /);
+  await press(t, renderer, "down");
+  const continuation = timelineLines(t.captureCharFrame())[0]!;
+  assert.match(continuation, /^ {5}\S/);
+  assert.doesNotMatch(continuation, / e\d+ /);
+
+  // Widening rewraps each row onto one line, and e1 stays the first visible row.
+  renderer.resize(100, 14);
+  await t.renderOnce();
+  const widened = t.captureCharFrame();
+  noOverflow(widened, 100);
+  assert.match(timelineLines(widened)[0]!, / e1 /);
+  // Narrowing again restores the exact line: the anchor kept its offset in e1.
+  renderer.resize(60, 14);
+  await t.renderOnce();
+  assert.equal(timelineLines(t.captureCharFrame())[0], continuation);
+});
+
+test("a long live preview wraps in full at the live edge (#288)", async () => {
+  const { t, control } = await mountWorkbench(
+    runOf({ timeline: events(3) }),
+    60,
+    20,
+  );
+  const preview = Array.from({ length: 30 }, (_, i) => `w${i}`).join(" ");
+  control.setLive({
+    runId: "run-1",
+    generation: 1,
+    phase: "working",
+    outstanding: [],
+    offers: [],
+    preview,
+  });
+  await t.renderOnce();
+  const frame = t.captureCharFrame();
+  noOverflow(frame, 60);
+  const text = timelineLines(frame).join(" ");
+  for (const word of preview.split(" ")) {
+    assert.match(text, new RegExp(`\\b${word}\\b`));
+  }
+});
+
+test("a streamed preview longer than the viewport wraps in full and scrolls (#288)", async () => {
+  const { t, control, renderer } = await mountWorkbench(
+    runOf({ timeline: events(2) }),
+    60,
+    14,
+  );
+  const preview = Array.from({ length: 200 }, (_, i) => `w${i}`).join(" ");
+  control.setLive({
+    runId: "run-1",
+    generation: 1,
+    phase: "working",
+    outstanding: [],
+    offers: [],
+    preview,
+  });
+  await t.renderOnce();
+  // The live edge shows the newest streamed words; the row runs past the top.
+  const live = t.captureCharFrame();
+  noOverflow(live, 60);
+  assert.match(live, /\bw199\b/);
+  assert.doesNotMatch(live, /Assistant preview/);
+
+  // Home reaches the row's first line; every word is reachable by scrolling down.
+  await press(t, renderer, "home");
+  const seen = new Set<string>();
+  for (let i = 0; i < 80; i++) {
+    for (const word of timelineLines(t.captureCharFrame())
+      .join(" ")
+      .match(/\bw\d+\b/g) ?? []) {
+      seen.add(word);
+    }
+    if (seen.has("w199")) break;
+    await press(t, renderer, "pagedown");
+  }
+  assert.equal(seen.size, 200);
+});
+
+test("rows that advertise truncation still clip with an ellipsis beside wrapped content (#288)", async () => {
+  const timeline = await mountWorkbench(
+    runOf({ timeline: wrappingEvents(30) }),
+    24,
+    14,
+  );
+  await press(timeline.t, timeline.renderer, "up");
+  const frame = timeline.t.captureCharFrame();
+  noOverflow(frame, 24);
+  assert.match(frame, /› Timeline · 1 · Jump…/);
+  // The rows beneath it wrap: the lorem words are whole, never cut by "…".
+  const rows = timelineLines(frame).filter((line) => /lorem|ipsum/.test(line));
+  assert.ok(rows.length > 0);
+  for (const line of rows) assert.doesNotMatch(line, /…/);
+
+  const overlay = await mountWorkbench(transcriptRun(), 14, 24);
+  overlay.control.setTranscript("", {
+    found: true,
+    type: "transcript-page",
+    entries: txEntries("user", "hello"),
+  });
+  await press(overlay.t, overlay.renderer, "t");
+  const opened = overlay.t.captureCharFrame();
+  noOverflow(opened, 14);
+  assert.match(opened, /Session tra…/);
+});
+
 test("an empty timeline shows the no-activity placeholder", async () => {
   const { t } = await mountWorkbench(runOf({ timeline: [] }));
   assert.match(t.captureCharFrame(), /no activity yet/);
@@ -1372,8 +1562,9 @@ test("paging older upward preserves the first visible entry (#124)", async () =>
   assert.match(f, /N1/);
   assert.doesNotMatch(f, /N4/);
 
-  // Paging further up reaches the just-loaded older entries.
-  await press(t, renderer, "pageup");
+  // Paging further up reaches the just-loaded older entries: each page is half
+  // the 6-line viewport, so the 12 prepended lines take a few presses.
+  for (let i = 0; i < 4; i++) await press(t, renderer, "pageup");
   assert.match(t.captureCharFrame(), /O1/);
 });
 
@@ -1412,6 +1603,9 @@ test("workbench-timeline-inspection: a failed older-page read is visible and kee
     entries: txEntries("user", "O1", "O2"),
   });
   await press(t, renderer, "up");
+  // The retried older page loads beneath the cleared Notice, keeping N1 in view.
+  assert.match(t.captureCharFrame(), /N1/);
+  await press(t, renderer, "pageup");
   await press(t, renderer, "pageup");
   assert.match(t.captureCharFrame(), /O1/);
   assert.doesNotMatch(t.captureCharFrame(), /transcript-page-stale/);
@@ -1438,37 +1632,113 @@ test("a large transcript entry scrolls without truncation (#124)", async () => {
   assert.match(t.captureCharFrame(), /line-0\b/);
 });
 
-test("the transcript inspection stays within small widths and relays out on resize (#124)", async () => {
+test("the transcript inspection wraps long lines at the view width and rewraps on resize (#124, #288)", async () => {
   const { t, control, renderer } = await mountWorkbench(
     transcriptRun(),
     100,
     24,
   );
+  const long = "a very long single line that exceeds forty columns easily";
   control.setTranscript("", {
     found: true,
     type: "transcript-page",
-    entries: [
-      {
-        session: "s",
-        role: "user",
-        content: "a very long single line that exceeds forty columns easily",
-      },
-    ],
+    entries: [{ session: "s", role: "user", content: long }],
   });
 
   await press(t, renderer, "t");
-  assert.match(t.captureCharFrame(), /Session transcript/);
+  assert.match(t.captureCharFrame(), new RegExp(long));
 
-  // Narrow the terminal: the inspection clips each line to width, no overflow.
+  // Narrow the terminal: the line wraps at a word boundary and nothing is cut.
   renderer.resize(40, 24);
   await t.renderOnce();
-  noOverflow(t.captureCharFrame(), 40);
+  const narrow = t.captureCharFrame();
+  noOverflow(narrow, 40);
+  assert.match(narrow, /^ a very long single line that exceeds\s*$/m);
+  assert.match(narrow, /^ forty columns easily\s*$/m);
 
-  // Widen it again: it relays out and stays within the new width.
+  // Widen it again: it rewraps back onto one line.
   renderer.resize(80, 24);
   await t.renderOnce();
-  noOverflow(t.captureCharFrame(), 80);
-  assert.match(t.captureCharFrame(), /Session transcript/);
+  const wide = t.captureCharFrame();
+  noOverflow(wide, 80);
+  assert.match(wide, new RegExp(long));
+});
+
+test("paging older over wrapped transcript entries preserves the first visible entry (#124, #288)", async () => {
+  // Height 10 → a 6-line viewport; at width 40 each entry wraps over three lines,
+  // so a page holds more display lines than logical ones.
+  const { t, control, renderer } = await mountWorkbench(
+    transcriptRun(),
+    40,
+    10,
+  );
+  const words = "lorem ipsum dolor sit amet ".repeat(3).trim();
+  const entries = (...ids: string[]) =>
+    txEntries("user", ...ids.map((id) => `${id} ${words}`));
+  control.setTranscript("", {
+    found: true,
+    type: "transcript-page",
+    entries: entries("N1", "N2", "N3", "N4"),
+    older: "c1",
+  });
+  control.setTranscript("c1", {
+    found: true,
+    type: "transcript-page",
+    entries: entries("O1", "O2", "O3", "O4"),
+  });
+
+  await press(t, renderer, "t");
+  await press(t, renderer, "home");
+  assert.match(t.captureCharFrame(), /N1 lorem/);
+
+  // Up at the top prepends the older page and moves one line up: N1 stays in view,
+  // and none of the prepended entries' text above the separator shows.
+  await press(t, renderer, "up");
+  const anchored = t.captureCharFrame();
+  noOverflow(anchored, 40);
+  assert.match(anchored, /N1 lorem/);
+  assert.doesNotMatch(anchored, /O\d/);
+
+  await press(t, renderer, "pageup");
+  await press(t, renderer, "pageup");
+  assert.match(t.captureCharFrame(), /O4 lorem/);
+});
+
+test("a paused transcript keeps its first visible line across a resize that rewraps it (#288)", async () => {
+  const { t, control, renderer } = await mountWorkbench(
+    transcriptRun(),
+    100,
+    12,
+  );
+  const words = "lorem ipsum dolor sit amet ".repeat(3).trim();
+  control.setTranscript("", {
+    found: true,
+    type: "transcript-page",
+    entries: txEntries(
+      "user",
+      ...["A", "B", "C", "D", "E", "F", "G", "H"].map(
+        (id) => `${id}1 ${words}`,
+      ),
+    ),
+  });
+  await press(t, renderer, "t");
+  // Line by line from the top until C1's entry leads the view, well above the
+  // live edge so the paused anchor is what holds it.
+  await press(t, renderer, "home");
+  const firstContent = () => t.captureCharFrame().split("\n")[2]!; // under the padding and title rows
+  for (let i = 0; i < 12 && !/C1 lorem/.test(firstContent()); i++) {
+    await press(t, renderer, "down");
+  }
+  assert.match(firstContent(), /^ C1 lorem/);
+
+  // Narrowing rewraps every entry over more lines; C1 still leads the view.
+  renderer.resize(40, 12);
+  await t.renderOnce();
+  noOverflow(t.captureCharFrame(), 40);
+  assert.match(firstContent(), /^ C1 lorem/);
+  renderer.resize(100, 12);
+  await t.renderOnce();
+  assert.match(firstContent(), /^ C1 lorem/);
 });
 
 test("opening a large text output shows bounded content with a truncation marker and scrolls", async () => {
@@ -1527,8 +1797,12 @@ test("workbench-timeline-inspection: timeline and inspection end truncated conte
     100,
     30,
   );
+  // The capped row wraps rather than clipping: every kept character shows, and the
+  // marker ends the row's last display line.
   const timelineFrame = timeline.t.captureCharFrame();
-  assert.match(timelineFrame, /Assistant.*… output truncated/);
+  const kept = (timelineFrame.match(/x{10,}/g) ?? []).join("");
+  assert.equal(kept.length, 157);
+  assert.match(timelineFrame, /^ {5}x+ … output truncated\s*$/m);
   assert.match(timelineFrame, /Still thinking…/);
   assert.doesNotMatch(timelineFrame, /Still thinking … output truncated/);
 

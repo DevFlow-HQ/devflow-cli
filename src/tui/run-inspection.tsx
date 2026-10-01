@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { createSignal, For, type Accessor } from "solid-js";
+import { createMemo, createSignal, For, type Accessor } from "solid-js";
 import stripAnsi from "strip-ansi";
 import type {
   DiagnosticReference,
@@ -14,13 +14,14 @@ import { RUN_TIMELINE_TRUNCATION_MARKER } from "../application/projection-port.j
 import { clip } from "./clip.js";
 import {
   AT_LIVE,
+  AT_TOP,
   SCROLL_KEYS,
   scrollTimeline,
   timelineWindow,
   type TimelineScroll,
 } from "./run-timeline.js";
-import { clipRunContent } from "./run-timeline-rows.js";
 import { useTheme } from "./vendor/theme-context.js";
+import { wrapRows } from "./wrap.js";
 
 // The Run Workbench's reference-inspection overlay, split out of run-workbench.tsx
 // (A26): its state, its self-contained modal key branch, and its view interleave
@@ -33,7 +34,11 @@ import { useTheme } from "./vendor/theme-context.js";
 // bounded page through a `page` Resource Reference, and pages older upward on
 // demand — never materializing the whole export to inspect a page. Scrolling up at
 // the top loads the next older page and preserves the first visible entry by
-// bumping the pinned top by the number of lines prepended.
+// bumping the pinned row by the number of lines prepended.
+//
+// Every line wraps at the view width and is never cut (#288): the Projection
+// already carries full content. The reducer anchors on a logical line, so a
+// resize that rewraps keeps the same first visible line.
 
 type Theme = ReturnType<typeof useTheme>["theme"];
 
@@ -146,7 +151,8 @@ export interface InspectionController {
   /** Handle a key while the overlay is open. Returns true if it consumed the
    *  key (the overlay is open), so the Workbench stops dispatching it further. */
   handleKey(name: string): boolean;
-  /** The display lines, including a truncation marker or a Problem's text. */
+  /** The display lines, wrapped at the width, including a truncation marker or a
+   *  Problem's text. */
   readonly lines: Accessor<readonly string[]>;
   /** The scrolled window over `lines`. */
   readonly window: Accessor<ReturnType<typeof timelineWindow>>;
@@ -155,19 +161,18 @@ export interface InspectionController {
 /** The Workbench's inspection overlay controller. `readResource` resolves an
  *  output/diagnostic reference to its bytes; `readTranscript` resolves a bounded
  *  transcript page; `interiorH` is the Workbench's interior height, which the
- *  overlay windows its content over (title + footer subtracted). */
+ *  overlay windows its content over (title + footer subtracted); `width` is the
+ *  interior width every line wraps at. */
 export function createInspection(deps: {
   readResource: (
     reference: ResourceReference | DiagnosticReference,
   ) => ResourceRead;
   readTranscript: (reference: TranscriptPageReference) => TranscriptRead;
   interiorH: Accessor<number>;
+  width: Accessor<number>;
 }): InspectionController {
   const [inspecting, setInspecting] = createSignal<Inspection | undefined>();
-  const [scroll, setScroll] = createSignal<TimelineScroll>({
-    mode: "paused",
-    top: 0,
-  });
+  const [scroll, setScroll] = createSignal<TimelineScroll>(AT_TOP);
 
   const open = (target: Openable): void => {
     if (target.transcript !== undefined) {
@@ -199,7 +204,7 @@ export function createInspection(deps: {
         truncated,
       });
     }
-    setScroll({ mode: "paused", top: 0 });
+    setScroll(AT_TOP);
   };
 
   const openTranscript = (
@@ -215,7 +220,7 @@ export function createInspection(deps: {
         entries: [],
         problem: read.problem,
       });
-      setScroll({ mode: "paused", top: 0 });
+      setScroll(AT_TOP);
       return;
     }
     setInspecting({
@@ -232,8 +237,9 @@ export function createInspection(deps: {
   };
 
   // Load the next older page and prepend it, preserving the first visible entry:
-  // every existing line shifts down by the number of lines prepended, so the
-  // pinned top is bumped by the same amount (#124 AC3).
+  // every existing logical line shifts down by the number prepended, so the pinned
+  // row is bumped by the same amount (#124 AC3). The anchor is a logical line, so
+  // the bump holds at any wrap width.
   const loadOlder = (): void => {
     const current = inspecting();
     if (
@@ -267,7 +273,7 @@ export function createInspection(deps: {
     }
     // transcriptLines is a per-entry concatenation, so the prepended line count is
     // exactly the older page's lines — no need to re-render the whole transcript.
-    const oldTop = window().top;
+    const old = window();
     const prepended = transcriptLines(read.entries).length;
     setInspecting(
       transcriptInspection({
@@ -277,12 +283,16 @@ export function createInspection(deps: {
         older: read.older,
       }),
     );
-    setScroll({ mode: "paused", top: oldTop + prepended });
+    setScroll({
+      mode: "paused",
+      row: old.row + prepended,
+      offset: old.offset,
+    });
   };
 
   // Display lines include an explicit truncation marker as the final row when a
   // blob was capped, so it scrolls into view like any other line (#91 AC4).
-  const lines = (): readonly string[] => {
+  const logicalLines = (): readonly string[] => {
     const current = inspecting();
     if (current === undefined) return [];
     if (current.problem !== undefined) {
@@ -306,8 +316,10 @@ export function createInspection(deps: {
       .slice(0, -1)
       .concat(`${last} ${RUN_TIMELINE_TRUNCATION_MARKER}`);
   };
+  const wrapped = createMemo(() => wrapRows(logicalLines(), deps.width()));
+  const lines = () => wrapped().lines;
   const viewportH = () => Math.max(1, deps.interiorH() - 2); // title + footer
-  const window = () => timelineWindow(scroll(), lines().length, viewportH());
+  const window = () => timelineWindow(scroll(), wrapped().heights, viewportH());
 
   const handleKey = (name: string): boolean => {
     const current = inspecting();
@@ -329,7 +341,7 @@ export function createInspection(deps: {
       loadOlder();
     }
     setScroll((prev) =>
-      scrollTimeline(prev, action, lines().length, viewportH()),
+      scrollTimeline(prev, action, wrapped().heights, viewportH()),
     );
     return true;
   };
@@ -382,8 +394,8 @@ export function InspectionView(props: {
       <box flexDirection="column" flexGrow={1} overflow="hidden">
         <For each={visible()}>
           {(line) => (
-            <text fg={theme.text} flexShrink={0}>
-              {clipRunContent(line, w())}
+            <text fg={theme.text} flexShrink={0} wrapMode="none">
+              {line}
             </text>
           )}
         </For>

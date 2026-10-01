@@ -36,13 +36,10 @@ export type { RunListView, RunListState } from "./run-list-view.js";
 export type { RunActionsView, RunActionOutcome } from "./run-actions-view.js";
 // The Workbench's pure timeline model, exposed for #91's unit tests across the
 // boundary, for the same reason.
-export {
-  AT_LIVE,
-  scrollTimeline,
-  timelineWindow,
-  TIMELINE_PAGE,
-} from "./run-timeline.js";
+export { AT_LIVE, scrollTimeline, timelineWindow } from "./run-timeline.js";
 export type { TimelineScroll } from "./run-timeline.js";
 // The display-column truncation helper, exposed for its unit test across the
 // boundary (D5), like the timeline model above.
 export { clip } from "./clip.js";
+// The display-column word wrap, exposed for its unit test for the same reason.
+export { wrap } from "./wrap.js";

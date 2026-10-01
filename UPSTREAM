@@ -193,6 +193,14 @@ What was taken and changed:
              new-activity count and the append-only prepend anchor are net-new
              (they don't exist upstream) and need event-index control the
              scrollbox's pixel offset does not give (#91 AC3).
+    #288 (studied at 228e9095ba): rows wrap instead of clipping, as OpenCode's
+             user and assistant text does (OpenTUI `wrapMode` `word`). Taken:
+             display lines as the scroll unit, a one-line step, and the page as
+             `height / 2`. Changed: the wrap is computed in `wrap.ts` and each
+             line drawn with `wrapMode="none"`, so the reducer counts exactly
+             what renders; the anchor and new-activity count stay in rows, which
+             the scrollbox has no notion of; continuation lines hang by a fixed
+             indent rather than OpenCode's icon column.
 
   keymap.ts (from keymap.tsx):
     Taken:   nothing copied. The upstream ~760-line adapter is not vendored.

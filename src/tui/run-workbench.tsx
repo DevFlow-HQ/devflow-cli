@@ -71,11 +71,8 @@ import {
   type TimelineAction,
   type TimelineScroll,
 } from "./run-timeline.js";
-import {
-  buildTimelineRows,
-  clipRunContent,
-  type TimelineRow,
-} from "./run-timeline-rows.js";
+import { buildTimelineRows, type TimelineRow } from "./run-timeline-rows.js";
+import { wrapRows } from "./wrap.js";
 import { useExit } from "./vendor/exit.js";
 import { useDialog } from "./vendor/dialog.js";
 import { useTheme } from "./vendor/theme-context.js";
@@ -103,6 +100,9 @@ import { useTheme } from "./vendor/theme-context.js";
 
 const HEADER_COMPACT_WIDTH = 80;
 const DETAILS_MIN_WIDTH = 60;
+/** Columns a wrapped timeline row's continuation lines indent by, two past the
+ *  row's own indent, so a row's lines read as one activity (#288). */
+const TIMELINE_HANG = 4;
 /** Rows the Review checkpoint interaction occupies when it replaces the footer
  *  (#92): the heading, the latest-verdict-and-evidence line, two controls each with
  *  their consequence line (four rows), and a status/hint line — seven rows. Fixed so
@@ -620,6 +620,7 @@ export function RunWorkbench(props: {
     readResource: view.readResource,
     readTranscript: view.readTranscript,
     interiorH,
+    width: innerW,
   });
   const hasConflict = () => run()?.conflict !== undefined;
   const hasRunProblem = () => run()?.problem !== undefined;
@@ -892,17 +893,30 @@ export function RunWorkbench(props: {
     if (current === undefined) return [];
     return buildTimelineRows(current, live(), preview());
   });
+  // Each row wraps at the interior width (#288), so the reducer windows display
+  // lines while holding its anchor and badge in rows. The beginning marker always
+  // leads the first row: it shows exactly when that row's first line is in view.
+  const timelineWrapped = createMemo(() =>
+    wrapRows(
+      timelineRows().map(
+        (row, index) =>
+          `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
+      ),
+      innerW(),
+      TIMELINE_HANG,
+    ),
+  );
   const win = () =>
-    timelineWindow(scroll(), timelineRows().length, viewportH());
+    timelineWindow(scroll(), timelineWrapped().heights, viewportH());
   const beginningVisible = () => win().top === 0;
-  const visibleRows = () => {
+  const visibleLines = () => {
     const w = win();
-    return timelineRows().slice(w.top, w.top + w.visible);
+    return timelineWrapped().lines.slice(w.top, w.top + w.visible);
   };
 
   const scrollBy = (action: TimelineAction) =>
     setScroll((prev) =>
-      scrollTimeline(prev, action, timelineRows().length, viewportH()),
+      scrollTimeline(prev, action, timelineWrapped().heights, viewportH()),
     );
 
   const moveSelection = (delta: number) => {
@@ -1228,7 +1242,7 @@ export function RunWorkbench(props: {
               innerW={innerW}
               win={win}
               beginningVisible={beginningVisible}
-              visibleRows={visibleRows}
+              visibleLines={visibleLines}
               blockedBasis={blockedBasis}
               focus={focus}
               transcriptAvailable={() => transcriptTarget() !== undefined}
@@ -1337,7 +1351,7 @@ function Workbench(props: {
   innerW: Accessor<number>;
   win: Accessor<ReturnType<typeof timelineWindow>>;
   beginningVisible: Accessor<boolean>;
-  visibleRows: Accessor<readonly TimelineRow[]>;
+  visibleLines: Accessor<readonly string[]>;
   blockedBasis: Accessor<string | undefined>;
   focus: Accessor<Focus>;
   transcriptAvailable: Accessor<boolean>;
@@ -1403,14 +1417,6 @@ function Workbench(props: {
           : `  ▼ ${activity.newActivity} ${activity.newActivity === 1 ? "new activity" : "new activities"} · Jump to latest`
         : "";
     return `${marker}Timeline${badge}`;
-  };
-
-  const timelineRowText = (row: TimelineRow, index: number) => {
-    const beginning =
-      props.beginningVisible() && index === 0
-        ? "Beginning of Run history · "
-        : "";
-    return `  ${beginning}${row.text}`;
   };
 
   const footer = () => {
@@ -1635,10 +1641,9 @@ function Workbench(props: {
         {clip(timelineLabel(), w())}
       </text>
 
-      {/* The timeline viewport: exactly `viewportH` single-line rows, windowed by
-          the pure model. ponytail: one line per event — M2 timeline events are
-          single-line facts; variable-height rows arrive when an event grows a
-          body worth wrapping. */}
+      {/* The timeline viewport: exactly `viewportH` display lines, windowed by
+          the pure model over the wrapped rows. Each line is already wrapped to
+          the width, so OpenTUI must not wrap it again (#288). */}
       <box
         flexDirection="column"
         height={props.viewportH()}
@@ -1646,7 +1651,7 @@ function Workbench(props: {
         overflow="hidden"
       >
         <Show
-          when={props.visibleRows().length > 0}
+          when={props.visibleLines().length > 0}
           fallback={
             <text fg={theme.textMuted} flexShrink={0}>
               {props.beginningVisible()
@@ -1655,10 +1660,10 @@ function Workbench(props: {
             </text>
           }
         >
-          <For each={props.visibleRows()}>
-            {(row, index) => (
-              <text fg={theme.text} flexShrink={0}>
-                {clipRunContent(timelineRowText(row, index()), w())}
+          <For each={props.visibleLines()}>
+            {(line) => (
+              <text fg={theme.text} flexShrink={0} wrapMode="none">
+                {line}
               </text>
             )}
           </For>
