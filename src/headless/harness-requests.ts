@@ -50,20 +50,23 @@ export function parseHarnessRequestPolicy(
  *  Operation's settlement, and on each `live` overlay submits `answer-harness-request`
  *  (as `client-policy`) for every offer not yet attempted at its generation — a
  *  request re-offered at a later generation (a prior answer went stale) is retried.
- *  The answer reaches the live Turn and unblocks it, so the Run can rest. `stop`
- *  closes the follower once the Run settles. Harmless for a Command-only Run: it
- *  sees no overlay and answers nothing. */
+ *  The answer reaches the live Turn and unblocks it, so the Run can rest. An
+ *  `observer-lagged` end loses only this observer, not the Run, so the follower
+ *  reopens and the reopen's live catch-up re-offers any request raised meanwhile
+ *  (#306); any other end stops it. `stop` closes the follower once the Run settles.
+ *  Harmless for a Command-only Run: it sees no overlay and answers nothing. */
 function followHarnessRequests(
   port: ProjectionPort,
   runId: string,
   policy: HarnessRequestPolicy,
 ): { stop: () => void } {
-  const opened = port.openProjection({ family: "run", runId });
+  let opened = port.openProjection({ family: "run", runId });
   const attempted = new Set<string>();
   let stopped = false;
-  const loop = async (): Promise<void> => {
+  const followUntilLagged = async (): Promise<boolean> => {
     for await (const update of opened.updates) {
-      if (stopped) break;
+      if (stopped) return false;
+      if (update.kind === "closed") return update.reason === "observer-lagged";
       if (update.kind !== "live") continue;
       for (const offer of update.overlay.offers) {
         const key = `${offer.generation}:${offer.requestId}`;
@@ -83,6 +86,14 @@ function followHarnessRequests(
           },
         });
       }
+    }
+    return false;
+  };
+  const loop = async (): Promise<void> => {
+    while (await followUntilLagged()) {
+      opened.close();
+      if (stopped) return;
+      opened = port.openProjection({ family: "run", runId });
     }
   };
   const done = loop();

@@ -624,9 +624,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function pushRunClosed(runId: string): void {
     const observers = runObservers.get(runId);
     if (observers === undefined) return;
-    for (const observer of observers) {
-      observer.push({ kind: "closed", reason: "subject-gone" });
-    }
+    for (const observer of observers) observer.end("subject-gone");
   }
 
   // Wrap the acquired owner so each canonical write pushes a fresh Run snapshot

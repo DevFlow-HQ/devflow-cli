@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { testRender } from "@opentui/solid";
-import { createSignal } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import stringWidth from "string-width";
-import { App } from "../../src/tui/tui.js";
+import { App, createLiveRunListView } from "../../src/tui/tui.js";
 import type {
   BundleCatalogView,
   RunActionsView,
@@ -20,7 +20,11 @@ import {
 import { makeFakeRenderer, until } from "./renderer-fixture.js";
 import type {
   BundleCatalogSnapshot,
+  ProjectionPort,
+  ProjectionSelector,
+  ProjectionUpdate,
   RunListRow,
+  RunListSnapshot,
   RunSnapshot,
   RunView,
   WorkspaceSnapshot,
@@ -695,4 +699,61 @@ test("a Run deleted between list selection and initial open uses the row name in
   await t.waitForFrame((frame) => frame.includes("was deleted"));
   assert.match(t.captureCharFrame(), /Alpha Flow was deleted/);
   assert.doesNotMatch(t.captureCharFrame(), /Run run-doomed not found/);
+});
+
+test("a Previous Runs page whose stream lags reopens in place from a fresh snapshot (#306)", async () => {
+  const page = (runIds: readonly string[]): RunListSnapshot => ({
+    family: "run-list",
+    filter: "all",
+    rows: runIds.map((runId) => row({ runId })),
+    beginningOfHistory: true,
+    empty: runIds.length === 0,
+  });
+  async function* lagged(): AsyncGenerator<ProjectionUpdate<RunListSnapshot>> {
+    yield { kind: "closed", reason: "observer-lagged" };
+  }
+  // A reopened page that stays open and quiet: its next update never arrives.
+  const quiet = (): AsyncIterable<ProjectionUpdate<RunListSnapshot>> => ({
+    [Symbol.asyncIterator]: () => ({
+      next: () => new Promise(() => undefined),
+    }),
+  });
+
+  const opens: ProjectionSelector[] = [];
+  const closed: number[] = [];
+  const snapshots = [page(["run-1"]), page(["run-2", "run-1"])];
+  const port = {
+    openProjection(selector: ProjectionSelector) {
+      const index = opens.length;
+      opens.push(selector);
+      const snapshot = snapshots[index];
+      if (snapshot === undefined) throw new Error("unexpected third open");
+      return {
+        snapshot,
+        catchUp: "fresh" as const,
+        updates: index === 0 ? lagged() : quiet(),
+        close: () => closed.push(index),
+      };
+    },
+  } as unknown as ProjectionPort;
+
+  let state!: () => RunListState;
+  const dispose = createRoot((dispose) => {
+    state = createLiveRunListView(port).openRunList().state;
+    return dispose;
+  });
+  assert.deepEqual(
+    state().rows.map((r) => r.runId),
+    ["run-1"],
+  );
+  await until(() => opens.length === 2);
+  // The lagged page was closed and reopened with the same selector, and its rows
+  // now come from the fresh snapshot rather than standing stale.
+  assert.deepEqual(opens, [{ family: "run-list" }, { family: "run-list" }]);
+  assert.deepEqual(closed, [0]);
+  assert.deepEqual(
+    state().rows.map((r) => r.runId),
+    ["run-2", "run-1"],
+  );
+  dispose();
 });

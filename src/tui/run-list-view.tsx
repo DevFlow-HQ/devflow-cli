@@ -82,25 +82,45 @@ export function createLiveRunListView(port: ProjectionPort): RunListView {
         hasMore: false,
       });
 
-      const openPage = (before?: string): void => {
-        const opened = port.openProjection({
+      const openRunListPage = (
+        before?: string,
+      ): OpenedProjection<RunListSnapshot> =>
+        port.openProjection({
           family: "run-list",
           ...(resumable ? { resumable: true } : {}),
           ...(before !== undefined ? { before } : {}),
         });
-        const page = { before, opened, snapshot: opened.snapshot };
-        pages.push(page);
-        publish();
+
+      const followPage = (page: (typeof pages)[number]): void => {
         const openedGeneration = generation;
+        const opened = page.opened;
         void (async () => {
           for await (const update of opened.updates) {
-            if (openedGeneration !== generation) break;
+            if (openedGeneration !== generation) return;
             if (update.kind === "durable") {
               page.snapshot = update.snapshot;
               publish();
+            } else if (update.kind === "closed") {
+              if (update.reason !== "observer-lagged") return;
+              // Only this page's observer fell behind (#306): reopen it in place
+              // from a fresh snapshot so its rows never stand stale.
+              opened.close();
+              page.opened = openRunListPage(page.before);
+              page.snapshot = page.opened.snapshot;
+              publish();
+              followPage(page);
+              return;
             }
           }
         })();
+      };
+
+      const openPage = (before?: string): void => {
+        const opened = openRunListPage(before);
+        const page = { before, opened, snapshot: opened.snapshot };
+        pages.push(page);
+        publish();
+        followPage(page);
       };
 
       const publish = (): void => {

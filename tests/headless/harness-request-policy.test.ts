@@ -14,6 +14,7 @@ import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { writeCommandBundle } from "../helpers/commandBundle.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import { previewEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 
 // #117 AC3/AC5 and the `--harness-requests` flag: the permission bridge is started
 // only for Runs whose routing needs a Harness (an Agent Step), so a Command-only
@@ -193,14 +194,17 @@ function writeAgentBundle(): { folder: string; id: string } {
  *  Process, install the Agent Bundle in a fresh Workspace, and approve it. Harness
  *  discovery is stubbed `found`, so `--harness claude-code` passes Preflight with no
  *  executable and no spawn. */
-function wireAgent(t: TestContext): {
+function wireAgent(
+  t: TestContext,
+  script: FakeScript = agentScript(),
+): {
   wired: Wiring;
   bundleId: string;
   digest: string;
   spy: ReturnType<typeof spyAdapter>;
 } {
   const workspace = makeTempDir("secant-reqp-ws-");
-  const spy = spyAdapter(createFake(agentScript())());
+  const spy = spyAdapter(createFake(script)());
   const wired = wireApplication({
     secantHome: makeTempDir("secant-reqp-home-"),
     launchCwd: workspace,
@@ -359,6 +363,40 @@ test("the default --harness-requests policy is deny and an agent Run still termi
   assert.match(
     shown.out,
     /request-answered.*answered by client policy \(deny\)/,
+  );
+});
+
+test("the follower reopens after observer-lagged and still answers the approval, so the Run rests (#306)", async (t) => {
+  const script = agentScript();
+  // One synchronous burst of more previews than a subscription retains unread ends
+  // the follower's stream observer-lagged before the Turn raises its approval. A
+  // follower that stopped there would strand the Turn.
+  const { wired, bundleId, digest } = wireAgent(t, {
+    ...script,
+    turns: [
+      {
+        ...script.turns[0]!,
+        events: previewEvents(UNREAD_UPDATE_BOUND + 50),
+      },
+    ],
+  });
+  const launched = await headless(wired, [
+    "run",
+    "launch",
+    bundleId,
+    "--trust",
+    digest,
+    "--harness",
+    "claude-code",
+    "--harness-requests",
+    "allow",
+  ]);
+  assert.equal(launched.code, 0, launched.out + launched.err);
+  assert.match(launched.out, /State: succeeded/);
+  const shown = await headless(wired, ["run", "show", runIdOf(launched.out)]);
+  assert.match(
+    shown.out,
+    /request-answered.*answered by client policy \(allow\)/,
   );
 });
 

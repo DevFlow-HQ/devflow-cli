@@ -21,6 +21,7 @@ import {
   openFakeRunGroup as openRunGroup,
 } from "../run/store/fake-git-process.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import { previewEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
 
 // #117 AC2: through the Port, the live overlay of a Run executing an Agent Turn
@@ -175,7 +176,10 @@ function writeAgentBundle(): { folder: string; id: string } {
   return { folder, id: manifest.bundle.id };
 }
 
-function wire(t: TestContext): {
+function wire(
+  t: TestContext,
+  script: FakeScript = overlayScript(),
+): {
   wired: Wiring;
   bundleId: string;
   digest: string;
@@ -185,7 +189,7 @@ function wire(t: TestContext): {
     secantHome: makeTempDir("secant-ovl-home-"),
     launchCwd: workspace,
     process: fakeProcess(),
-    harnessAdapter: createFake(overlayScript())(),
+    harnessAdapter: createFake(script)(),
     discoverClaudeCode: () => ({
       kind: "found",
       attempt: {
@@ -439,4 +443,135 @@ test("an indeterminate request-answer receipt settles not-applied with unknown e
   finish();
   await awaitSettled(app.projectionPort, launched.operationId);
   opened.close();
+});
+
+test("a slow Run observer ends observer-lagged while a healthy one follows the same Turn; the Run continues and a reopen sees current truth (#306)", async (t) => {
+  // More previews than any one subscription retains unread.
+  const previews = UNREAD_UPDATE_BOUND + 50;
+  const healthyPreviews: string[] = [];
+  const previewWaiters: (() => void)[] = [];
+  let observersOpen!: () => void;
+  const opened = new Promise<void>((resolve) => {
+    observersOpen = resolve;
+  });
+  // Emit each preview only once the healthy observer read the one before it, so
+  // the healthy backlog stays near-empty while the slow observer never reads.
+  const healthyRead = (count: number): Promise<void> =>
+    healthyPreviews.length >= count
+      ? Promise.resolve()
+      : new Promise((resolve) => previewWaiters.push(resolve));
+  const script = overlayScript();
+  const turn = script.turns[0]!;
+  const { wired, bundleId, digest } = wire(t, {
+    ...script,
+    turns: [
+      {
+        ...turn,
+        events: previewEvents(previews),
+        pace: async (index) => {
+          await opened;
+          await healthyRead(index);
+        },
+      },
+    ],
+  });
+  const port: ProjectionPort = wired.projectionPort;
+  const admission = port.submit({
+    operationId: "op-launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: bundleId },
+      launchInputs: {},
+      trustDigest: digest,
+      harness: "claude-code",
+    },
+  });
+  assert.ok(admission.admitted, JSON.stringify(admission));
+  const runId = admission.runId!;
+
+  const slow = port.openProjection({ family: "run", runId });
+  t.after(() => slow.close());
+  const healthy = port.openProjection({ family: "run", runId });
+  t.after(() => healthy.close());
+  let raisedOnHealthy!: (overlay: RunLiveOverlay) => void;
+  const healthyRaised = new Promise<RunLiveOverlay>((resolve) => {
+    raisedOnHealthy = resolve;
+  });
+  const healthyEnded = (async () => {
+    for await (const update of healthy.updates) {
+      if (update.kind === "preview") {
+        healthyPreviews.push(update.text);
+        while (previewWaiters.length > 0) previewWaiters.shift()?.();
+      } else if (update.kind === "live" && update.overlay.outstanding.length) {
+        raisedOnHealthy(update.overlay);
+      } else if (update.kind === "closed") {
+        return update.reason;
+      }
+    }
+    return "done";
+  })();
+  observersOpen();
+
+  // The healthy observer followed every preview in order and reached the request.
+  const raised = await healthyRaised;
+  assert.equal(healthyPreviews.length, previews);
+  assert.deepEqual(
+    healthyPreviews,
+    Array.from({ length: previews }, (_, index) => `p${index}`),
+  );
+  assert.equal(raised.outstanding[0]?.requestId, "req-edit");
+
+  // The slow observer, which never read, ends observer-lagged and completes.
+  const slowUpdates = slow.updates[Symbol.asyncIterator]();
+  assert.deepEqual(await slowUpdates.next(), {
+    done: false,
+    value: { kind: "closed", reason: "observer-lagged" },
+  });
+  assert.deepEqual(await slowUpdates.next(), { done: true, value: undefined });
+  slow.close();
+
+  // Reopening reads canonical truth (the Run is still running) and the current
+  // live overlay: the outstanding request and the latest preview.
+  const reopened = port.openProjection({ family: "run", runId });
+  t.after(() => reopened.close());
+  assert.ok(reopened.snapshot.result.found);
+  if (reopened.snapshot.result.found) {
+    assert.equal(reopened.snapshot.result.run.state, "running");
+  }
+  const current = await nextOverlay(reopened.updates, () => true);
+  assert.equal(current.generation, raised.generation);
+  assert.deepEqual(
+    current.outstanding.map((request) => request.requestId),
+    ["req-edit"],
+  );
+  assert.equal(current.preview, `p${previews - 1}`);
+
+  // The reopened Offer still answers the live Turn, and the Run rests succeeded.
+  const offer = current.offers[0]!;
+  const answer = port.submit({
+    operationId: "op-answer",
+    operation: "answer-harness-request",
+    input: {
+      runId,
+      requestId: offer.requestId,
+      generation: offer.generation,
+      decision: "allow",
+      by: "human",
+    },
+  });
+  assert.ok(answer.admitted);
+  assert.equal((await awaitSettled(port, "op-answer")).status, "applied");
+  const outcome = await awaitSettled(port, "op-launch");
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  healthy.close();
+  assert.equal(await healthyEnded, "done");
+  const final = port.openProjection({ family: "run", runId });
+  try {
+    assert.ok(final.snapshot.result.found);
+    if (final.snapshot.result.found) {
+      assert.equal(final.snapshot.result.run.state, "succeeded");
+    }
+  } finally {
+    final.close();
+  }
 });

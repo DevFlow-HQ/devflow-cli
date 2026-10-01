@@ -16,6 +16,7 @@ import {
   type TRunViewFreshness,
   type RunWorkbenchProjection,
 } from "../../src/tui/tui.js";
+import { openLiveRun, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 
 class UpdateQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -99,6 +100,14 @@ const WORKING: RunLiveOverlay = {
 async function flushUpdates(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+/** Drain microtasks until `reached` holds, bounded so a regression fails fast
+ *  rather than hanging; no timer is involved. */
+async function microtasksUntil(reached: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 50 && !reached(); turn += 1) {
+    await Promise.resolve();
+  }
 }
 
 function healthKind(projection: RunWorkbenchProjection): string {
@@ -250,6 +259,51 @@ test("the Run follow seam reports loss and reopens through loading and catching-
   dispose();
   first.end();
   second.end();
+});
+
+test("a real Run stream that lags reports loss, and reconnect restores the current snapshot and live overlay (#306)", async (t) => {
+  const run = await openLiveRun(t);
+  let projection!: RunWorkbenchProjection;
+  const dispose = createRoot((dispose) => {
+    projection = createLiveRunWorkbenchView(run.port).openRun(run.runId);
+    return dispose;
+  });
+  t.after(dispose);
+  run.channel.raised({
+    requestId: "req-edit",
+    tool: "Edit",
+    input: "change file",
+    decisions: ["allow", "deny"],
+  });
+  await flushUpdates();
+  assert.equal(projection.live()?.outstanding.length, 1);
+
+  // One synchronous burst past the unread bound overflows the view's subscription
+  // before its follow loop can read.
+  const burst = UNREAD_UPDATE_BOUND + 100;
+  for (let index = 0; index < burst; index += 1) {
+    run.channel.observe({ preview: `p${index}` });
+  }
+  await microtasksUntil(() => healthKind(projection) === "disconnected");
+  const lost = projection.freshness();
+  assert.equal(lost.kind, "disconnected");
+  if (lost.kind === "disconnected")
+    assert.equal(lost.reason, "observer-lagged");
+  // The lost overlay leaves no dead request control standing.
+  assert.equal(projection.live(), undefined);
+
+  projection.reconnect();
+  await microtasksUntil(() => projection.live() !== undefined);
+  assert.equal(healthKind(projection), "current");
+  const result = projection.snapshot().result;
+  assert.ok(result.found);
+  if (result.found) assert.equal(result.run.state, "running");
+  assert.deepEqual(
+    projection.live()?.outstanding.map((request) => request.requestId),
+    ["req-edit"],
+  );
+  assert.equal(projection.preview(), `p${burst - 1}`);
+  await run.finish();
 });
 
 test("a pending Operation receipt survives stream loss and settles from the reopened Projection", async () => {

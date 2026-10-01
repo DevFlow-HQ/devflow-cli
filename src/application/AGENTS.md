@@ -51,6 +51,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Gate answers, End Step, Continue, and End Stage, and the reopened human Turn directly. It rests the Run `halted` through `observedOwner`, settles the Operation
   `selected-harness-unavailable`, and releases the owner; an answer or Attempt committed before the drive stays committed. Composition reports the
   refusal as its own `harness-unavailable` outcome, never `halted`, so the type forces narrowing before the executed report is read.
+- Every opened Projection owns one `UpdateStream` (#306): a FIFO that never coalesces or evicts, bounded at 1,000 unread updates and 8 Mi payload units (T3 Code's
+  limits). Overflow ends only that subscription through `end("observer-lagged")`, which releases the backlog and delivers one `closed` ahead of it; `pushRunClosed`
+  uses the same `end`. The producer never waits or fails, so the Run and its other observers continue, and a reopen reads a fresh snapshot and live catch-up.
 - `harness-catalog` caches one qualification promise/result per semantic Harness id for the Application lifetime (#188). List calls discovery only; focus initially
   reports `not-checked`, then publishes one durable normalized result. Qualification diagnostics are process-held Resources addressed by semantic id and checked time.
 - `launch-preparation` and `submitLaunch` share one create-time evaluator (`LaunchPreparation.evaluate`, `launch-preparation.ts`) so both admit under identical rules (#189):

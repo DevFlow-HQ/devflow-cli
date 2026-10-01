@@ -40,6 +40,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   re-offered at a later generation (a prior answer went stale) is retried. `--harness-requests` defaults to **`deny`** (`parseHarnessRequestPolicy`): an
   unattended Run denies every approval unless the operator opts into `allow` (the only other value; Claude Code offers no "always"). `withHarnessRequests` starts
   the follower before settlement is awaited, so an Agent Turn that pauses on approval is unblocked and the Run can rest; it is harmless for a Command-only Run.
+- Observer loss never strands headless work (#306): `followHarnessRequests` and `settledOutcome` reopen after `observer-lagged`. Any other end stops the follower, and
+  `settledOutcome` returns `operation-observation-ended` (unknown effects) instead of the still-pending snapshot, so neither reopens into a spin at shutdown.
 - `run launch --harness claude-code|codex` forwards the semantic choice through `LaunchRunInput`; Application owns required/unknown/irrelevant refusal. Resume accepts
   no Harness flag and reuses the durable id. The option changes no frozen JSON field or exit code; selected-Harness Problems use the existing renderer (#146).
 - `run launch` reads the `launch-preparation` assessment before submitting (`assessDraft`, #189). A `not-ready` draft prints every finding (text through the

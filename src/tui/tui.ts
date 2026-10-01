@@ -33,6 +33,9 @@ export {
   type TRunViewFreshness,
 } from "./run-view.js";
 export type { RunListView, RunListState } from "./run-list-view.js";
+// The live Previous Runs factory is exported so its paging and observer-loss reopen
+// are tested through the seam the screen reads (#306).
+export { createLiveRunListView } from "./run-list-view.js";
 export type { RunActionsView, RunActionOutcome } from "./run-actions-view.js";
 // The Workbench's pure timeline model, exposed for #91's unit tests across the
 // boundary, for the same reason.

@@ -8,7 +8,15 @@ import {
 import { type HeadlessIO, runHeadless } from "../../src/headless/headless.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
+import type {
+  ObserverEnd,
+  OpenedProjection,
+  ProjectionPort,
+  ProjectionSelector,
+  ProjectionUpdate,
+} from "../../src/application/projection-port.js";
 import { createApplication } from "../helpers/application.js";
+import { awaitSettled } from "../helpers/settleOperation.js";
 import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import {
@@ -94,6 +102,98 @@ test("[headless-on-doubles] run launch --trust runs to succeeded, and a second l
   h.reset();
   assert.equal(await runHeadless(h.clients, ["run", "launch", id], h.io), 0);
   assert.match(h.stdout(), /^State: succeeded$/m);
+});
+
+/** A Projection Port over `inner` whose first opened `operation` stream, while its
+ *  Operation is still pending, ends with `reason` instead of delivering the settled
+ *  outcome — the loss the Port signals when that observer falls behind (#306). The
+ *  real Application pushes an Operation's stream only once, so it never lags it. */
+function losingOperationStream(
+  inner: ProjectionPort,
+  reason: ObserverEnd,
+): {
+  port: ProjectionPort;
+  lost: () => readonly string[];
+  operationOpens: () => number;
+} {
+  const lost: string[] = [];
+  let operationOpens = 0;
+  const open = (selector: ProjectionSelector): OpenedProjection => {
+    const opened = inner.openProjection(selector);
+    if (selector.family !== "operation") return opened;
+    operationOpens += 1;
+    if (
+      opened.snapshot.family !== "operation" ||
+      opened.snapshot.outcome.status !== "pending" ||
+      lost.length > 0
+    ) {
+      return opened;
+    }
+    lost.push(selector.operationId);
+    opened.close();
+    const updates: AsyncIterable<ProjectionUpdate> = (async function* () {
+      yield { kind: "closed", reason } as const;
+    })();
+    return {
+      snapshot: opened.snapshot,
+      catchUp: opened.catchUp,
+      updates,
+      close: () => undefined,
+    };
+  };
+  return {
+    port: {
+      ...inner,
+      openProjection: open as ProjectionPort["openProjection"],
+    },
+    lost: () => lost,
+    operationOpens: () => operationOpens,
+  };
+}
+
+test("run launch reopens a pending Operation lost observer-lagged and reports the settled Run (#306)", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  const losing = losingOperationStream(
+    h.clients.projectionPort,
+    "observer-lagged",
+  );
+
+  const code = await runHeadless(
+    { ...h.clients, projectionPort: losing.port },
+    ["run", "launch", id, "--trust", digest],
+    h.io,
+  );
+  // The lost receipt was reopened, not read as the still-pending snapshot.
+  assert.equal(losing.lost().length, 1);
+  assert.equal(losing.operationOpens(), 2);
+  assert.equal(code, 0, h.stdout() + h.stderr());
+  assert.match(h.stdout(), /^State: succeeded$/m);
+});
+
+test("run launch reports an unrecoverable observer end as a Problem, never the pending Run (#306)", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  const losing = losingOperationStream(
+    h.clients.projectionPort,
+    "application-shutdown",
+  );
+
+  const code = await runHeadless(
+    { ...h.clients, projectionPort: losing.port },
+    ["run", "launch", id, "--trust", digest],
+    h.io,
+  );
+  assert.equal(code, 1);
+  assert.match(h.stderr(), /operation-observation-ended/);
+  assert.doesNotMatch(h.stdout(), /^State:/m);
+  // The admitted launch still runs to its own settlement.
+  const [operationId] = losing.lost();
+  assert.ok(operationId);
+  const outcome = await awaitSettled(h.clients.projectionPort, operationId);
+  assert.equal(outcome.status, "applied");
 });
 
 test("run launch --input accepts a multi-line text value unchanged, line endings included (#287)", async (t) => {

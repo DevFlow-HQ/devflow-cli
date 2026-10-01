@@ -1289,6 +1289,10 @@ export type ProjectionUpdate<
   // clears the current preview.
   | { readonly kind: "preview"; readonly text: string }
   | { readonly kind: "closed"; readonly reason: ObserverEnd };
+/** Why the Application ended an open subscription: its one `closed` update, after
+ *  which the iterator completes. `observer-lagged` means only this subscription
+ *  stopped reading past a private retained bound (#306) — the Run and every other
+ *  observer continue, and reopening reads current state. */
 export type ObserverEnd =
   | "subject-gone"
   | "observer-lagged"

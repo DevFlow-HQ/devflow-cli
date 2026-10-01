@@ -57,6 +57,10 @@ export interface FakeTurnScript {
   /** Events emitted in order before requests are awaited. Request lifecycle
    *  events are managed by the fake and must not appear here. */
   readonly events?: readonly TurnEvent[];
+  /** When set, awaited before each scripted event is emitted, so a test can let an
+   *  observer read between events instead of receiving them as one synchronous
+   *  burst. Without it the events emit synchronously, in order. */
+  readonly pace?: (index: number) => Promise<void>;
   readonly requests?: readonly FakeRequestSpec[];
   /** When set with no awaited requests, the Turn blocks after its events until it
    *  is interrupted or the Harness is closed — the request-free "blocks mid-Turn"
@@ -335,7 +339,12 @@ class FakeTurn {
     }
 
     if (!this.terminal) {
-      for (const event of this.liveEvents()) this.emit(event);
+      const pace = this.script.pace;
+      if (pace === undefined) {
+        for (const event of this.liveEvents()) this.emit(event);
+      } else {
+        await this.emitPaced(pace);
+      }
       if (this.script.requests?.length) {
         await this.raiseAndAwaitRequests();
       } else if (this.script.block) {
@@ -349,6 +358,16 @@ class FakeTurn {
       return;
     }
     this.settle(withCheckpoint(this.script.result, checkpoint));
+  }
+
+  private async emitPaced(
+    pace: (index: number) => Promise<void>,
+  ): Promise<void> {
+    for (const [index, event] of this.liveEvents().entries()) {
+      await pace(index);
+      if (this.terminal) return;
+      this.emit(event);
+    }
   }
 
   /** The scripted events to emit live. On a load-with-replay resume the recorded
