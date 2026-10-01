@@ -776,7 +776,13 @@ test("run answer settles a refused Harness preparation after the Gate as a non-s
     .listEntries()
     .find((candidate) => candidate.id === "dev.secant.agent-gate");
   assert.ok(entry);
-  wired.catalog.approveWorkspace(workspace, new Date());
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "op-approve-agent-gate",
+      operation: "approve-workspace",
+      input: { path: workspace },
+    }).admitted,
+  );
   const out: string[] = [];
   const err: string[] = [];
   const io: HeadlessIO = {
