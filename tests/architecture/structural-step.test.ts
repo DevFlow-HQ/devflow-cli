@@ -831,9 +831,9 @@ test("vendor/shell-spawn", async () => {
   assert.equal(
     await reportOf("vendor/shell-spawn", {
       "src/process/process.ts":
-        'declare function spawnSync(file: string, options: object): void;\nspawnSync("ls", { shell: true });',
+        'import { spawnSync } from "node:child_process";\nexport const r = spawnSync("ls", { shell: true });',
     }),
-    "src/process/process.ts:2:19  vendor/shell-spawn  spawns with shell: true, which runs the command through a shell\n" +
+    "src/process/process.ts:2:36  vendor/shell-spawn  spawns with shell: true, which runs the command through a shell\n" +
       "fix: remove shell: true and spawn the resolved executable with its arguments directly\n" +
       "see: docs/agents/topology.md#interfaces-and-imports",
   );

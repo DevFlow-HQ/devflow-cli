@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import test from "node:test";
+import ts from "typescript";
 
 const root = process.cwd();
 const testsRoot = join(root, "tests");
 const ledgerPath = join(root, "docs", "subprocess-test-migration-ledger.md");
 
 const PROCESS_FREE_MARKER_EXCEPTIONS = new Set([
-  "tests/architecture/evidence-ledger.test.ts",
   // Production composition is present, but the fake Harness scenario reaches no
   // Command, Git probe, or recorded Harness child.
   "tests/tui/live-run-workbench.test.tsx",
@@ -82,9 +82,60 @@ function testFiles(directory: string): string[] {
   });
 }
 
+const LITERAL_KINDS = new Set([
+  ts.SyntaxKind.StringLiteral,
+  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts.SyntaxKind.TemplateHead,
+  ts.SyntaxKind.TemplateMiddle,
+  ts.SyntaxKind.TemplateTail,
+  ts.SyntaxKind.RegularExpressionLiteral,
+]);
+
+/** An import or export's module specifier is the one literal the patterns read. */
+function isModuleSpecifier(node: ts.Node): boolean {
+  const parent = node.parent;
+  return (
+    (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) &&
+    parent.moduleSpecifier === node
+  );
+}
+
+/** The source as the patterns should read it: every comment and every literal
+ *  but a module specifier is blanked to spaces, keeping offsets and line breaks,
+ *  so the spawning words count only as code. A template's substitutions are code
+ *  and stay, and so does JSX text, which errs toward discovery. The TypeScript
+ *  parser decides what is a literal, a regular expression, or a comment (#301). */
+function codeOf(path: string, source: string): string {
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const code = source.split("");
+  const blank = (from: number, to: number) => {
+    for (let index = from; index < to; index += 1) {
+      if (code[index] !== "\n" && code[index] !== "\r") code[index] = " ";
+    }
+  };
+  const visit = (node: ts.Node) => {
+    // A JSDoc block is part of the next token's leading trivia.
+    const children = node
+      .getChildren(file)
+      .filter((child) => !ts.isJSDoc(child));
+    if (children.length > 0) {
+      children.forEach(visit);
+      return;
+    }
+    // Between a token's full start and its start lie only whitespace and comments.
+    blank(node.getFullStart(), node.getStart(file));
+    if (LITERAL_KINDS.has(node.kind) && !isModuleSpecifier(node)) {
+      blank(node.getStart(file), node.getEnd());
+    }
+  };
+  visit(file);
+  return code.join("");
+}
+
 function discoversSubprocess(path: string, source: string): boolean {
   if (PROCESS_FREE_MARKER_EXCEPTIONS.has(path)) return false;
-  return SUBPROCESS_SOURCE_PATTERNS.some((pattern) => pattern.test(source));
+  const code = codeOf(path, source);
+  return SUBPROCESS_SOURCE_PATTERNS.some((pattern) => pattern.test(code));
 }
 
 function ledgerRows(markdown: string): LedgerRow[] {
@@ -118,7 +169,11 @@ function missingLedgerFiles(
 test("[evidence-ledger] discovery finds direct and indirect children without matching process-free tests", () => {
   const spawningSources = [
     'import { spawn } from "node:child_process";',
+    'import type { ChildProcess } from "child_process";',
+    'export { spawn } from "child_process";',
+    'export * from "node:child_process";',
     "spawnCommand(options);",
+    "const label = `run ${spawnCommand(options)}`;",
     "spawnOwnedProcess(options);",
     'installCodexReplayer("completion");',
     "installSyntheticCodexReplayer();",
@@ -133,6 +188,7 @@ test("[evidence-ledger] discovery finds direct and indirect children without mat
     "wireApplication(options);",
     "executeRouting(routing, options);",
     "emitEntryDeclarations(root);",
+    "fixture.wireApplication(options);",
   ];
   for (const source of spawningSources) {
     assert.equal(
@@ -145,6 +201,30 @@ test("[evidence-ledger] discovery finds direct and indirect children without mat
     discoversSubprocess("tests/example/values.test.ts", "makeTempDir('x');"),
     false,
   );
+  // A bare-only helper reached as a method is some other object's method.
+  assert.equal(
+    discoversSubprocess(
+      "tests/example/values.test.ts",
+      "harness.spawnCommand(options);",
+    ),
+    false,
+  );
+  // The same words as data or prose are not code, so they spawn nothing (#301).
+  const literalSources = [
+    `const fixture = 'import { spawnSync } from "node:child_process";';`,
+    "const fixture = `spawnCommand(options);\n${name}\nwireApplication(options);`;",
+    'const pattern = /from "node:child_process"|createApplication(?=\\()/u;',
+    '// spawnOwnedProcess(options);\n/* import { spawn } from "child_process"; */\n' +
+      "/** Calls executeRouting(routing, options). */\nexport function run() {}\n" +
+      "// openRunGroup(home, workspace);",
+  ];
+  for (const source of literalSources) {
+    assert.equal(
+      discoversSubprocess("tests/example/fixture.test.ts", source),
+      false,
+      source,
+    );
+  }
   assert.equal(
     discoversSubprocess(
       "tests/tui/live-run-workbench.test.tsx",
