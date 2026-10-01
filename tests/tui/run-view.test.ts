@@ -374,6 +374,68 @@ test("a pending Operation receipt survives stream loss and settles from the reop
   third.end();
 });
 
+test("shutdown disconnects the Run view, clears live controls, and ends a pending TUI Operation without reopening", async () => {
+  const live = openLiveProjection(snapshotOf(runOf()));
+  live.updates.push({ kind: "live", overlay: REQUESTING });
+  await flushUpdates();
+  assert.ok(live.projection.live());
+  live.updates.push({ kind: "closed", reason: "application-shutdown" });
+  await flushUpdates();
+  const freshness = live.projection.freshness();
+  assert.equal(freshness.kind, "disconnected");
+  if (freshness.kind === "disconnected")
+    assert.equal(freshness.reason, "application-shutdown");
+  assert.equal(live.projection.live(), undefined);
+  assert.equal(live.projection.preview(), undefined);
+  live.dispose();
+  live.updates.end();
+
+  const updates = new UpdateQueue<ProjectionUpdate<OperationSnapshot>>();
+  let opens = 0;
+  let closes = 0;
+  const port = {
+    submit: () => ({ admitted: true, operationId: "shutdown-answer" }),
+    openProjection() {
+      opens++;
+      assert.equal(opens, 1, "a shutdown stream must never reopen");
+      return {
+        snapshot: {
+          family: "operation",
+          operationId: "shutdown-answer",
+          outcome: { status: "pending" },
+        },
+        catchUp: "fresh",
+        updates,
+        close() {
+          closes++;
+        },
+      };
+    },
+  } as unknown as ProjectionPort;
+  const outcome = createLiveRunWorkbenchView(port).answer(
+    {
+      runId: "run-1",
+      stepId: "review",
+      attemptId: "attempt-1",
+      shape: "approve-reject",
+    },
+    "continue",
+  );
+  assert.equal(outcome().kind, "pending");
+  updates.push({ kind: "closed", reason: "application-shutdown" });
+  await flushUpdates();
+  const ended = outcome();
+  assert.equal(ended.kind, "refused");
+  if (ended.kind === "refused") {
+    assert.equal(ended.problem.code, "operation-observation-ended");
+    assert.equal(ended.problem.possibleEffects, "unknown");
+    assert.match(ended.problem.explanation, /application-shutdown/);
+  }
+  assert.equal(opens, 1);
+  assert.equal(closes, 1);
+  updates.end();
+});
+
 test("a durable update whose liveness leaves live-here drops the live overlay (A8) — fails at HEAD", async () => {
   const { projection, updates, dispose } = openLiveProjection(
     snapshotOf(runOf()),

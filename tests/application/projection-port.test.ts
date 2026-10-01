@@ -6,9 +6,11 @@ import { createApplication } from "../helpers/application.js";
 import type {
   OperationSnapshot,
   ProjectionPort,
+  ProjectionSelector,
   WorkspaceSnapshot,
 } from "../../src/application/projection-port.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
+import { UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
 async function fixture(
@@ -314,4 +316,144 @@ test("closing a projection twice is a no-op", async (t) => {
   const opened = port.openProjection({ family: "workspace" });
   opened.close();
   opened.close();
+});
+
+test("shutdown ends every idle Projection branch, releases pending readers, and permits later explicit opens", async (t) => {
+  const catalog = openCatalog(makeTempDir("secant-shutdown-home-"));
+  t.after(() => catalog.close());
+  const workspace = realpathSync.native(makeTempDir("secant-shutdown-ws-"));
+  const held: (() => void | Promise<void>)[] = [];
+  const app = createApplication({
+    catalog,
+    launchWorkspacePath: workspace,
+    scheduleSettlement: (settle) => {
+      held.push(settle);
+    },
+  });
+  const port = app.projectionPort;
+  port.submit({
+    operationId: "pending",
+    operation: "approve-workspace",
+    input: { path: workspace },
+  });
+  const selectors: ProjectionSelector[] = [
+    { family: "workspace" },
+    { family: "run", runId: "unsupported" },
+    { family: "run-list" },
+    { family: "run-list", resumable: true, before: "2026-01-01" },
+    { family: "bundle-catalog" },
+    { family: "bundle-catalog", focus: { id: "missing" } },
+    { family: "harness-catalog" },
+    { family: "harness-catalog", focus: { id: "missing" } },
+    {
+      family: "launch-preparation",
+      draft: { bundle: { id: "missing" }, launchInputs: {} },
+    },
+    { family: "operation", operationId: "pending" },
+    { family: "operation", operationId: "unknown" },
+  ];
+  const opened = selectors.map((selector) => port.openProjection(selector));
+  const readers = opened.map((view) => view.updates[Symbol.asyncIterator]());
+  const waiting = readers.map((reader) => reader.next());
+  await app.shutdown();
+  await app.shutdown();
+  for (const [index, next] of waiting.entries()) {
+    assert.deepEqual(await next, {
+      done: false,
+      value: { kind: "closed", reason: "application-shutdown" },
+    });
+    assert.deepEqual(await readers[index]!.next(), {
+      done: true,
+      value: undefined,
+    });
+  }
+  // Observation ending does not cancel this admitted Operation.
+  await held.shift()!();
+  const settled = port.openProjection({
+    family: "operation",
+    operationId: "pending",
+  });
+  assert.equal(settled.snapshot.outcome.status, "applied");
+  // Shutdown ends existing observation. Explicit later opens create new streams.
+  const reopened = selectors.map((selector) => port.openProjection(selector));
+  const reopenedReaders = reopened.map((view) =>
+    view.updates[Symbol.asyncIterator](),
+  );
+  const reopenedWaiting = reopenedReaders.map((reader) => reader.next());
+  port.submit({
+    operationId: "after-shutdown",
+    operation: "approve-workspace",
+    input: { path: workspace },
+  });
+  const newOperation = port.openProjection({
+    family: "operation",
+    operationId: "after-shutdown",
+  });
+  assert.equal(newOperation.snapshot.outcome.status, "pending");
+  const operationReader = newOperation.updates[Symbol.asyncIterator]();
+  const settlement = operationReader.next();
+  await held.shift()!();
+  const update = await settlement;
+  assert.ok(!update.done && update.value.kind === "durable");
+  assert.equal(update.value.snapshot.outcome.status, "applied");
+  const workspaceUpdate = await reopenedWaiting[0]!;
+  assert.ok(!workspaceUpdate.done && workspaceUpdate.value.kind === "durable");
+  const workspaceTerminal = reopenedReaders[0]!.next();
+  const settledReader = settled.updates[Symbol.asyncIterator]();
+  const settledWaiting = settledReader.next();
+  await app.shutdown();
+  for (const [index, reader] of reopenedReaders.entries()) {
+    assert.deepEqual(
+      await (index === 0 ? workspaceTerminal : reopenedWaiting[index]),
+      {
+        done: false,
+        value: { kind: "closed", reason: "application-shutdown" },
+      },
+    );
+    assert.equal((await reader.next()).done, true);
+  }
+  for (const next of [settledWaiting, operationReader.next()]) {
+    assert.deepEqual(await next, {
+      done: false,
+      value: { kind: "closed", reason: "application-shutdown" },
+    });
+  }
+  assert.equal((await settledReader.next()).done, true);
+  assert.equal((await operationReader.next()).done, true);
+  for (const view of [...opened, ...reopened, settled, newOperation]) {
+    view.close();
+    view.close();
+  }
+});
+
+test("caller-closed and observer-lagged streams retain their original ending across shutdown", async (t) => {
+  const catalog = openCatalog(makeTempDir("secant-shutdown-ended-home-"));
+  t.after(() => catalog.close());
+  const workspace = realpathSync.native(
+    makeTempDir("secant-shutdown-ended-ws-"),
+  );
+  const app = createApplication({ catalog, launchWorkspacePath: workspace });
+  const closed = app.projectionPort.openProjection({ family: "workspace" });
+  const lagged = app.projectionPort.openProjection({ family: "workspace" });
+  const reader = closed.updates[Symbol.asyncIterator]();
+  const pending = reader.next();
+  closed.close();
+  assert.equal((await pending).done, true);
+  for (let index = 0; index <= UNREAD_UPDATE_BOUND; index++) {
+    app.projectionPort.submit({
+      operationId: `approval-${index}`,
+      operation: "approve-workspace",
+      input: { path: workspace },
+    });
+  }
+  await app.shutdown();
+  const updates = lagged.updates[Symbol.asyncIterator]();
+  assert.deepEqual(await updates.next(), {
+    done: false,
+    value: { kind: "closed", reason: "observer-lagged" },
+  });
+  assert.equal((await updates.next()).done, true);
+  assert.equal((await reader.next()).done, true);
+  closed.close();
+  lagged.close();
 });

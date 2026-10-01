@@ -586,6 +586,109 @@ test("a requested model in the Harness's declared list assesses ready", async (t
   assert.equal(qualificationCalls, 1);
 });
 
+test("shutdown ends assessing, qualifying, cached and idle subscriptions and ignores late qualification callbacks", async (t) => {
+  let release!: (result: ApplicationHarnessQualification) => void;
+  const qualification = new Promise<ApplicationHarnessQualification>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = fixture(t, [
+    registeredHarness({
+      id: "codex",
+      name: "Codex",
+      qualify: () => qualification,
+    }),
+  ]);
+  approve(f);
+  const { id, digest } = installAgent(f);
+  const draft: LaunchRunInput = {
+    bundle: { id },
+    launchInputs: {},
+    trustDigest: digest,
+    harness: "codex",
+    requestedModel: "m1",
+  };
+  const port = f.app.projectionPort;
+  const list = port.openProjection({ family: "harness-catalog" });
+  const focus = port.openProjection({
+    family: "harness-catalog",
+    focus: { id: "codex" },
+  });
+  const assessment = port.openProjection({
+    family: "launch-preparation",
+    draft,
+  });
+  assert.equal(assessment.snapshot.status, "assessing");
+  const callerClosed = port.openProjection({
+    family: "launch-preparation",
+    draft,
+  });
+  callerClosed.close();
+  const readers = [list, focus, assessment, callerClosed].map((view) =>
+    view.updates[Symbol.asyncIterator](),
+  );
+  const pending = readers.slice(0, 3).map((reader) => reader.next());
+  await f.app.shutdown();
+  for (const next of pending)
+    assert.deepEqual(await next, {
+      done: false,
+      value: { kind: "closed", reason: "application-shutdown" },
+    });
+  release({ ok: true, profile: listProfile(["m1"]) });
+  await qualification;
+  // Wait on the observable cached qualification, bounding microtasks rather than time.
+  let cached = port.openProjection({
+    family: "harness-catalog",
+    focus: { id: "codex" },
+  });
+  for (
+    let turn = 0;
+    turn < 50 &&
+    cached.snapshot.result.found &&
+    cached.snapshot.result.harness.qualification.state === "not-checked";
+    turn++
+  ) {
+    cached.close();
+    await Promise.resolve();
+    cached = port.openProjection({
+      family: "harness-catalog",
+      focus: { id: "codex" },
+    });
+  }
+  assert.ok(cached.snapshot.result.found);
+  assert.notEqual(
+    cached.snapshot.result.harness.qualification.state,
+    "not-checked",
+  );
+  const cachedReader = cached.updates[Symbol.asyncIterator]();
+  const cachedWaiting = cachedReader.next();
+  const reassessed = port.openProjection({
+    family: "launch-preparation",
+    draft,
+  });
+  const reassessedReader = reassessed.updates[Symbol.asyncIterator]();
+  const ready = await reassessedReader.next();
+  assert.ok(!ready.done && ready.value.kind === "durable");
+  assert.equal(ready.value.snapshot.status, "ready");
+  // Explicit new observation works; a later shutdown ends these new streams.
+  await f.app.shutdown();
+  assert.deepEqual(await cachedWaiting, {
+    done: false,
+    value: { kind: "closed", reason: "application-shutdown" },
+  });
+  assert.equal((await cachedReader.next()).done, true);
+  assert.deepEqual(await reassessedReader.next(), {
+    done: false,
+    value: { kind: "closed", reason: "application-shutdown" },
+  });
+  assert.equal((await reassessedReader.next()).done, true);
+  cached.close();
+  reassessed.close();
+  for (const reader of readers) assert.equal((await reader.next()).done, true);
+  for (const view of [list, focus, assessment, callerClosed]) view.close();
+});
+
 test("a requested model outside the declared list is a not-ready model finding after qualifying", async (t) => {
   const f = fixture(t, [
     registeredHarness({

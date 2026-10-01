@@ -196,6 +196,80 @@ test("run launch reports an unrecoverable observer end as a Problem, never the p
   assert.equal(outcome.status, "applied");
 });
 
+test("headless shutdown ends the request follower and pending wait without reopening or reporting success", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  const inner = h.clients.projectionPort;
+  let followerEnded!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    followerEnded = resolve;
+  });
+  let runOpens = 0;
+  let operationOpens = 0;
+  let readAfterEnd = false;
+  let answers = 0;
+  let operationId = "";
+  const open = (selector: ProjectionSelector): OpenedProjection => {
+    const view = inner.openProjection(selector);
+    if (selector.family === "run") {
+      runOpens++;
+      view.close();
+      return {
+        ...view,
+        updates: (async function* () {
+          try {
+            yield { kind: "closed", reason: "application-shutdown" } as const;
+            readAfterEnd = true;
+            throw new Error("follower read past shutdown");
+          } finally {
+            followerEnded();
+          }
+        })(),
+      };
+    }
+    if (selector.family === "operation") {
+      operationOpens++;
+      operationId = selector.operationId;
+      assert.ok(
+        view.snapshot.family === "operation" &&
+          view.snapshot.outcome.status === "pending",
+      );
+      view.close();
+      return {
+        ...view,
+        updates: (async function* () {
+          await ended;
+          yield { kind: "closed", reason: "application-shutdown" } as const;
+        })(),
+      };
+    }
+    return view;
+  };
+  const port: ProjectionPort = {
+    ...inner,
+    openProjection: open as ProjectionPort["openProjection"],
+    submit(submission) {
+      if (submission.operation === "answer-harness-request") answers++;
+      return inner.submit(submission);
+    },
+  };
+  const code = await runHeadless(
+    { ...h.clients, projectionPort: port },
+    ["run", "launch", id, "--trust", digest],
+    h.io,
+  );
+  assert.equal(code, 1);
+  assert.match(h.stderr(), /operation-observation-ended/);
+  assert.match(h.stderr(), /application-shutdown/);
+  assert.doesNotMatch(h.stdout(), /State:|succeeded/);
+  assert.equal(runOpens, 1);
+  assert.equal(operationOpens, 1);
+  assert.equal(readAfterEnd, false);
+  assert.equal(answers, 0);
+  assert.equal((await awaitSettled(inner, operationId)).status, "applied");
+});
+
 test("run launch --input accepts a multi-line text value unchanged, line endings included (#287)", async (t) => {
   const h = await harness(t);
   const { id, digest } = await h.install({

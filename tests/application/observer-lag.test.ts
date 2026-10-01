@@ -68,6 +68,19 @@ const REQUEST = {
   decisions: ["allow", "deny"] as const,
 };
 
+test("closing the last Run observer and reopening still follows live updates", async (t) => {
+  const run = await openLiveRun(t);
+  const first = openRun(t, run);
+  first.opened.close();
+  const reopened = openRun(t, run);
+  run.channel.raised({ ...REQUEST });
+  const update = await reopened.next();
+  assert.ok(!update.done && update.value.kind === "live");
+  if (!update.done && update.value.kind === "live")
+    assert.equal(update.value.overlay.outstanding[0]?.requestId, "req-edit");
+  await run.finish();
+});
+
 test("a slow observer retains every update up to the bound in order, uncoalesced, across all three lanes", async (t) => {
   const run = await openLiveRun(t);
   const slow = openRun(t, run);

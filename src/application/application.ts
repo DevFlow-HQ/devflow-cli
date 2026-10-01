@@ -89,7 +89,8 @@ import {
   turnControlRejected,
   type InteractiveControl,
 } from "./problems.js";
-import { UpdateStream } from "./update-stream.js";
+import type { UpdateStream } from "./update-stream.js";
+import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import { listRunsSnapshot } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
 // Re-exported through the Module entry so clients and tests reach the page size
@@ -350,7 +351,8 @@ export interface Application {
    *  install, which the `workspace` Projection also carries. Composition calls it
    *  once, before either client reads. */
   ensureShippedBundles(files: readonly string[]): readonly Problem[];
-  /** Release Runs already blocked without changing their rest, then abort every
+  /** End all opened subscriptions with application-shutdown, release Runs
+   *  already blocked without changing their rest, then abort every
    *  running Run and await settlement. Composition calls this from its OS-signal
    *  handler before teardown, so no prepared Harness or child is left running. */
   shutdown(): Promise<void>;
@@ -371,12 +373,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
     deps.scheduleSettlement ??
     ((settle: () => void | Promise<void>) => settle());
   const now = deps.now ?? (() => new Date());
-  const harnessCatalog = createHarnessCatalog(deps.harnessRegistry ?? [], now);
+  const subscriptions = new SubscriptionLifecycle();
+  const harnessCatalog = createHarnessCatalog(
+    deps.harnessRegistry ?? [],
+    now,
+    subscriptions,
+  );
   const budgets = deps.bundleBudgets ?? DEFAULT_BUDGETS;
   // The launch-draft evaluator both `submitLaunch` (first failing check) and the
   // `launch-preparation` Projection (every finding) read, so both clients admit a
   // launch under identical rules and route a refusal to the same step (#189).
   const launchPreparation = createLaunchPreparation({
+    subscriptions,
     catalog,
     budgets,
     process,
@@ -1023,7 +1031,6 @@ export function createApplication(deps: ApplicationDependencies): Application {
       return openRunProjection(selector.runId);
     }
     if (selector.family === "run-list") {
-      const updates = new UpdateStream();
       const snapshot: RunListSnapshot =
         runProjection === undefined
           ? {
@@ -1040,18 +1047,22 @@ export function createApplication(deps: ApplicationDependencies): Application {
                 ? { before: selector.before }
                 : {}),
             });
-      const observer = {
-        updates,
-        resumable: selector.resumable ?? false,
-        ...(selector.before !== undefined ? { before: selector.before } : {}),
-      };
-      runListObservers.add(observer);
+      const updates = subscriptions.open((updates) => {
+        const observer = {
+          updates,
+          resumable: selector.resumable ?? false,
+          ...(selector.before !== undefined ? { before: selector.before } : {}),
+        };
+        runListObservers.add(observer);
+        return () => {
+          runListObservers.delete(observer);
+        };
+      });
       return {
         snapshot,
         catchUp: "fresh",
         updates,
         close() {
-          runListObservers.delete(observer);
           updates.close();
         },
       };
@@ -1059,7 +1070,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (selector.family === "bundle-catalog") {
       if (selector.focus !== undefined) {
         // A focus is a settled point-in-time inspection; no updates arrive.
-        const updates = new UpdateStream();
+        const updates = subscriptions.open();
         return {
           snapshot: focusSnapshot(bundleCatalog, selector.focus),
           catchUp: "fresh",
@@ -1069,14 +1080,17 @@ export function createApplication(deps: ApplicationDependencies): Application {
           },
         };
       }
-      const updates = new UpdateStream();
-      bundleCatalogObservers.add(updates);
+      const updates = subscriptions.open((updates) => {
+        bundleCatalogObservers.add(updates);
+        return () => {
+          bundleCatalogObservers.delete(updates);
+        };
+      });
       return {
         snapshot: listSnapshot(bundleCatalog),
         catchUp: "fresh",
         updates,
         close() {
-          bundleCatalogObservers.delete(updates);
           updates.close();
         },
       };
@@ -1091,21 +1105,30 @@ export function createApplication(deps: ApplicationDependencies): Application {
       return launchPreparation.open(selector.draft);
     }
     if (selector.family === "workspace") {
-      const updates = new UpdateStream();
-      workspaceObservers.add(updates);
+      const updates = subscriptions.open((updates) => {
+        workspaceObservers.add(updates);
+        return () => {
+          workspaceObservers.delete(updates);
+        };
+      });
       return {
         snapshot: workspaceSnapshot(),
         catchUp: "fresh",
         updates,
         close() {
-          workspaceObservers.delete(updates);
           updates.close();
         },
       };
     }
     const operationId = selector.operationId;
     const operation = operations.get(operationId);
-    const updates = new UpdateStream();
+    const updates = subscriptions.open((updates) => {
+      if (operation?.outcome.status !== "pending") return () => {};
+      operation.observers.add(updates);
+      return () => {
+        operation.observers.delete(updates);
+      };
+    });
     if (operation === undefined) {
       // An id Secant never saw is a Problem snapshot, not a throw (#77).
       return {
@@ -1129,35 +1152,21 @@ export function createApplication(deps: ApplicationDependencies): Application {
       operationId,
       outcome: operation.outcome,
     };
-    if (operation.outcome.status !== "pending") {
-      // Already settled: no further update will arrive, so nothing to register.
-      return {
-        snapshot,
-        catchUp: "fresh",
-        updates,
-        close() {
-          updates.close();
-        },
-      };
-    }
-    // Still pending: register for the settled durable update. The stream stays
-    // open after that update until the observer closes it.
-    const { observers } = operation;
-    observers.add(updates);
+    // Pending Operations deliver settlement; settled receipts remain idle.
+    // Both subscriptions stay open until their caller or Application ends them.
     return {
       snapshot,
       catchUp: "fresh",
       updates,
       close() {
-        observers.delete(updates);
         updates.close();
       },
     };
   }
 
   function openRunProjection(runId: string): OpenedProjection {
-    const updates = new UpdateStream();
     if (runProjection === undefined) {
+      const updates = subscriptions.open();
       // No Run support wired: a Problem snapshot, not a throw, like an unknown id.
       return {
         snapshot: {
@@ -1221,9 +1230,15 @@ export function createApplication(deps: ApplicationDependencies): Application {
     // Every existing Run joins its Run-scoped observer set, even while rested: an
     // Operation may drive it later, and opening a Projection promises future
     // updates for the Projection's lifetime (ADR 0024).
-    if (snapshot.result.found) {
+    const updates = subscriptions.open((updates) => {
+      if (!snapshot.result.found) return () => {};
       const observers = observersForRun(runId);
       observers.add(updates);
+      return () => {
+        observers.delete(updates);
+      };
+    });
+    if (snapshot.result.found) {
       // A late-joining observer catches up on the current live overlay at once, so
       // a headless follower that opens after a request was raised still sees it
       // (#117). No-op when the Run has no live Turn to describe.
@@ -1235,7 +1250,6 @@ export function createApplication(deps: ApplicationDependencies): Application {
         catchUp: "fresh",
         updates,
         close() {
-          observers.delete(updates);
           updates.close();
         },
       };
@@ -2912,7 +2926,15 @@ export function createApplication(deps: ApplicationDependencies): Application {
     },
   };
 
-  async function shutdown(): Promise<void> {
+  let shutdownPromise: Promise<void> | undefined;
+  function shutdown(): Promise<void> {
+    subscriptions.shutdown();
+    return (shutdownPromise ??= shutdownRuns().finally(() => {
+      shutdownPromise = undefined;
+    }));
+  }
+
+  async function shutdownRuns(): Promise<void> {
     // Abort every Run live in this process, then await each settlement so its child
     // is dead and its store is consistent before teardown. Each aborts with the
     // signal reason, so runAndSettle leaves the claim live for the next open to

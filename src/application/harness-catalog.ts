@@ -22,7 +22,9 @@ import type {
   Problem,
   ResourceRead,
 } from "./projection-port.js";
-import { UpdateStream } from "./update-stream.js";
+import type { UpdateStream } from "./update-stream.js";
+
+import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 
 interface HeldQualification {
   readonly checkedAt: string;
@@ -48,6 +50,7 @@ export interface HarnessCatalog {
 export function createHarnessCatalog(
   registrations: readonly ApplicationHarnessRegistration[],
   now: () => Date,
+  subscriptions: Pick<SubscriptionLifecycle, "open">,
 ): HarnessCatalog {
   const held = new Map<string, HeldQualification>();
   const qualifications = new Map<string, Promise<HeldQualification>>();
@@ -101,14 +104,17 @@ export function createHarnessCatalog(
 
   return {
     openList(): OpenedProjection<HarnessCatalogSnapshot> {
-      const updates = new UpdateStream<HarnessCatalogSnapshot>();
-      listObservers.add(updates);
+      const updates = subscriptions.open<HarnessCatalogSnapshot>((updates) => {
+        listObservers.add(updates);
+        return () => {
+          listObservers.delete(updates);
+        };
+      });
       return {
         snapshot: listSnapshot(),
         catchUp: "fresh",
         updates,
         close() {
-          listObservers.delete(updates);
           updates.close();
         },
       };
@@ -116,7 +122,7 @@ export function createHarnessCatalog(
     openFocus(
       selection: HarnessFocusSelector,
     ): OpenedProjection<HarnessFocusSnapshot> {
-      const updates = new UpdateStream<HarnessFocusSnapshot>();
+      const updates = subscriptions.open<HarnessFocusSnapshot>();
       const registration = registrationFor(selection.id);
       if (registration === undefined) {
         return openedFocus(

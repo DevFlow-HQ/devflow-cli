@@ -84,6 +84,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Two private helpers back those seams: `follow.ts` (`followProjection`) owns the read seams' follow, health, and reconnect loop (A22); `submit-and-settle.ts`
   (`submitAndSettle`) owns submit-then-follow and reopens a lost pending Operation receipt (A23).
   The Previous Runs seam (`run-list-view.tsx`) reopens an `observer-lagged` page in place, keeping older loaded pages (#306).
+- `submitAndSettle` recovers lag and temporary disconnection, but shutdown/subject loss ends a pending receipt with unknown effects (#310), never a reopen or success.
 - Read [tui-workbench](../../docs/agents/tui-workbench.md) before changing the Run Workbench's key routing, modal stack, steer compose, interactive input,
   destructive confirms, or details panel.
 - `start-run-views.tsx` holds Start a Run's step components and leaves; the draft signal, step transitions, and refusal routing stay in `start-run.tsx` (A3).

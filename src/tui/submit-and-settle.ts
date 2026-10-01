@@ -1,6 +1,7 @@
 import { createSignal, type Accessor } from "solid-js";
 import type {
   OperationOutcome,
+  ObserverEnd,
   Problem,
   ProjectionPort,
   Submission,
@@ -28,8 +29,8 @@ export type SettleOutcome =
  * delete, a cancel of a Run not live in this process) is already settled on the
  * opened snapshot; an async one (launch/resume/answer driving execution, or a
  * cancel-as-abort of a live Run) settles on the operation stream's first durable
- * update — no sleep, no poll. Observer loss reopens the same Operation receipt;
- * the pending outcome never disappears. Call from an event handler; the
+ * update — no sleep, no poll. Recoverable observer loss reopens the same receipt;
+ * shutdown or subject loss reports unknown effects. Call from an event handler; the
  * Projection closes itself once settled, so no reactive owner is required.
  */
 export function submitAndSettle(
@@ -66,19 +67,34 @@ export function submitAndSettle(
         opened.close();
         break;
       }
-      let lost = false;
+      let end: ObserverEnd | undefined;
       for await (const update of opened.updates) {
         if (update.kind === "durable" && settle(update.snapshot.outcome)) {
           settled = true;
           break;
         }
         if (update.kind === "closed") {
-          lost = true;
+          end = update.reason;
           break;
         }
       }
       opened.close();
-      if (!lost) break;
+      if (settled) break;
+      // Keep the existing temporary-disconnection recovery and lag recovery;
+      // terminal loss must never reopen into a shutting-down Application.
+      if (end !== "observer-lagged" && end !== "temporarily-unavailable") {
+        setOutcome({
+          kind: "refused",
+          problem: {
+            code: "operation-observation-ended",
+            explanation: `Secant stopped reporting Operation ${admission.operationId} before it settled (${end ?? "stream ended"}).`,
+            remediation:
+              "Reconnect to the Run to read whether the Operation took effect.",
+            possibleEffects: "unknown",
+          },
+        });
+        break;
+      }
     }
   })();
   return outcome;

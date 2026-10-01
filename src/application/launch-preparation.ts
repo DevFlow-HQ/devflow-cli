@@ -18,7 +18,7 @@ import {
   trustDigestMismatch,
   workspaceNotApproved,
 } from "./problems.js";
-import { UpdateStream } from "./update-stream.js";
+import type { UpdateStream } from "./update-stream.js";
 import type {
   ActionOffer,
   ExecutionSummary,
@@ -40,7 +40,10 @@ import type {
 // Harness immediately (composition's qualify path closes it). Changing any draft
 // field opens a new Projection — the selector is the draft.
 
+import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
+
 export interface LaunchPreparationDeps {
+  readonly subscriptions: Pick<SubscriptionLifecycle, "open">;
   readonly catalog: Catalog;
   readonly budgets: Budgets;
   readonly process: ProcessAdapter;
@@ -183,7 +186,7 @@ export function createLaunchPreparation(
   function open(
     draft: LaunchRunInput,
   ): OpenedProjection<LaunchPreparationSnapshot> {
-    const updates = new UpdateStream<LaunchPreparationSnapshot>();
+    const updates = deps.subscriptions.open<LaunchPreparationSnapshot>();
     const evaluation = evaluate(draft);
     const resolution = evaluation.resolution;
     const syncFindings = evaluation.findings;

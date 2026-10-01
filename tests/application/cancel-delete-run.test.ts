@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { realpathSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   createApplication,
   type Application,
 } from "../../src/application/application.js";
-import type { OperationOutcome } from "../../src/application/projection-port.js";
+import type {
+  OperationOutcome,
+  ProjectionSelector,
+} from "../../src/application/projection-port.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
 import type {
@@ -15,7 +19,12 @@ import type {
   SpawnResult,
 } from "../../src/process/process.js";
 import type { RunGroup } from "../../src/run/store/store.js";
-import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
+import {
+  hostPlatform,
+  writeCommandBundle,
+  writeGateBundle,
+} from "../helpers/commandBundle.js";
+import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
@@ -404,4 +413,223 @@ test("a malformed coordination row settles cancel and delete not-applied, never 
       assert.equal(outcome.problem.code, "run-store-damaged");
     }
   }
+});
+
+test("CI: all Projection families end before blocked ownership releases and running work finishes cleanup", async (t) => {
+  const catalog = openCatalog(makeTempDir("secant-shutdown-active-home-"));
+  const workspace = realpathSync.native(
+    makeTempDir("secant-shutdown-active-ws-"),
+  );
+  const storeHome = makeTempDir("secant-shutdown-active-store-");
+  const runGroup = openRunGroup(storeHome, workspace);
+  t.after(() => {
+    runGroup.close();
+    catalog.close();
+  });
+  const process = createFakeBundleProcess();
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let aborted!: () => void;
+  const stopping = new Promise<void>((resolve) => {
+    aborted = resolve;
+  });
+  let release!: () => void;
+  const cleanup = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let cleaned = false;
+  let aborts = 0;
+  let blockedId = "";
+  const app = createApplication({
+    catalog,
+    process,
+    launchWorkspacePath: workspace,
+    runGroup,
+    hostPlatform: hostPlatform(),
+    runExecution: async ({ routing, owner, cancelSignal }) => {
+      if (
+        routing.some((step) => "kind" in step && step.kind === "human-gate")
+      ) {
+        return executeRouting(routing, {
+          owner,
+          platform: hostPlatform(),
+          resolveAsset: () => undefined,
+          process,
+        });
+      }
+      owner.writeState("running");
+      assert.ok(cancelSignal);
+      const stopped = new Promise<void>((resolve) => {
+        cancelSignal.addEventListener(
+          "abort",
+          () => {
+            aborts++;
+            // A running Run is aborted only after the blocked Run released ownership.
+            assert.equal(
+              runGroup.listRuns().find((run) => run.runId === blockedId)?.live,
+              false,
+            );
+            assert.equal(cancelSignal.reason, "secant:process-signal");
+            resolve();
+            aborted();
+          },
+          { once: true },
+        );
+      });
+      started();
+      await stopped;
+      await cleanup; // injected Harness/child cleanup is deliberately held
+      cleaned = true;
+      throw new Error("injected execution unwinds after signal-abort cleanup");
+    },
+  });
+  t.after(() => {
+    release();
+  });
+  catalog.approveWorkspace(workspace, new Date());
+  function launch(
+    bundle: ReturnType<typeof writeCommandBundle>,
+    operationId: string,
+  ) {
+    assert.ok(
+      app.bundleManagement.build(bundle.folder, { noInstall: false }).ok,
+    );
+    const entry = catalog
+      .listEntries()
+      .find((entry) => entry.id === bundle.id)!;
+    const admission = app.projectionPort.submit({
+      operationId,
+      operation: "launch-run",
+      input: {
+        bundle: { id: bundle.id },
+        launchInputs: {},
+        trustDigest: entry.digest,
+      },
+    });
+    assert.ok(admission.admitted);
+    return admission.runId!;
+  }
+  blockedId = launch(
+    writeGateBundle({
+      id: "dev.secant.shutdown-gate",
+      shape: "approve-reject",
+    }),
+    "blocked-launch",
+  );
+  assert.equal(
+    (await awaitSettled(app.projectionPort, "blocked-launch")).status,
+    "applied",
+  );
+  const runningId = launch(
+    writeCommandBundle({ id: "dev.secant.shutdown-running" }),
+    "running-launch",
+  );
+  await running;
+  const damagedId = runGroup.createRun({
+    bundleSnapshotDigest: catalog.listEntries()[0]!.digest,
+    operationId: "damaged-seed",
+    launch: {},
+    at: new Date(),
+  }).runId;
+  const damagedDir = readdirSync(storeHome, {
+    recursive: true,
+    withFileTypes: true,
+  }).find((entry) => entry.isDirectory() && entry.name === damagedId);
+  assert.ok(damagedDir);
+  writeFileSync(
+    join(damagedDir.parentPath, damagedId, "run.db"),
+    "damaged database",
+  );
+  const selectors: ProjectionSelector[] = [
+    { family: "workspace" },
+    { family: "run", runId: blockedId },
+    { family: "run", runId: runningId },
+    { family: "run", runId: "unknown" },
+    { family: "run", runId: damagedId },
+    { family: "run-list" },
+    { family: "run-list", resumable: true },
+    { family: "bundle-catalog" },
+    { family: "bundle-catalog", focus: { id: "dev.secant.shutdown-gate" } },
+    { family: "harness-catalog" },
+    { family: "harness-catalog", focus: { id: "unknown" } },
+    {
+      family: "launch-preparation",
+      draft: { bundle: { id: "dev.secant.shutdown-gate" }, launchInputs: {} },
+    },
+    { family: "operation", operationId: "blocked-launch" },
+    { family: "operation", operationId: "running-launch" },
+    { family: "operation", operationId: "unknown" },
+  ];
+  const views = selectors.map((selector) =>
+    app.projectionPort.openProjection(selector),
+  );
+  for (const [index, code] of [
+    [3, "run-not-found"],
+    [4, "run-store-damaged"],
+  ] as const) {
+    const snapshot = views[index]!.snapshot;
+    assert.ok(snapshot.family === "run" && !snapshot.result.found);
+    assert.equal(snapshot.result.problem.code, code);
+  }
+  for (const view of views) t.after(() => view.close());
+  const readers = views.map((view) => view.updates[Symbol.asyncIterator]());
+  const pending = readers[13]!.next();
+  // This Workspace stream has a stale durable backlog at shutdown.
+  app.projectionPort.submit({
+    operationId: "another-approval",
+    operation: "approve-workspace",
+    input: { path: workspace },
+  });
+  let complete = false;
+  const shutdown = app.shutdown().then(() => {
+    complete = true;
+  });
+  const repeated = app.shutdown();
+  await stopping;
+  assert.equal(complete, false);
+  assert.equal(cleaned, false);
+  for (const [index, reader] of readers.entries()) {
+    assert.deepEqual(await (index === 13 ? pending : reader.next()), {
+      done: false,
+      value: { kind: "closed", reason: "application-shutdown" },
+    });
+    assert.equal((await reader.next()).done, true);
+  }
+  const blocked = app.projectionPort.openProjection({
+    family: "run",
+    runId: blockedId,
+  });
+  assert.ok(blocked.snapshot.result.found);
+  assert.equal(blocked.snapshot.result.run.state, "blocked");
+  assert.ok(
+    blocked.snapshot.result.run.actionOffers.some(
+      (offer) => offer.action === "answer-human-gate",
+    ),
+  );
+  blocked.close();
+  release();
+  await Promise.all([shutdown, repeated]);
+  assert.equal(cleaned, true);
+  assert.equal(complete, true);
+  assert.equal(
+    runGroup.listRuns().find((run) => run.runId === runningId)?.live,
+    true,
+  );
+  assert.equal(aborts, 1);
+  const laterRun = launch(
+    writeCommandBundle({ id: "dev.secant.shutdown-later" }),
+    "later-launch",
+  );
+  await app.shutdown();
+  assert.equal(aborts, 2);
+  assert.equal(
+    (await awaitSettled(app.projectionPort, "later-launch")).status,
+    "applied",
+  );
+  assert.equal(
+    runGroup.listRuns().find((run) => run.runId === laterRun)?.live,
+    true,
+  );
 });

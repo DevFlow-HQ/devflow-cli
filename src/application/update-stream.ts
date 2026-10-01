@@ -48,6 +48,8 @@ export class UpdateStream<
   private terminal?: ClosedUpdate;
   private finished = false;
 
+  constructor(private onFinish?: () => void) {}
+
   push(update: DeliveredUpdate<S>): void {
     if (this.finished) return;
     const waiting = this.waiting;
@@ -117,9 +119,13 @@ export class UpdateStream<
   }
 
   private finish(): void {
+    if (this.finished) return;
     this.finished = true;
     this.queue = [];
     this.retainedUnits = 0;
+    const onFinish = this.onFinish;
+    this.onFinish = undefined;
+    onFinish?.();
   }
 }
 
