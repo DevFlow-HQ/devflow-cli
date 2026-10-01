@@ -25,6 +25,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   (from the `send-interactive-turn` Offer's `basis`), and the ephemeral Harness Request. The first two are durable `RunView` fields renderRun prints; the ephemeral
   request is never durable, so `showRun` peeks the live overlay (`peekLiveOverlay` — a bounded first-update read that returns the overlay buffered at open while a
   Turn is live here, else nothing) and names the outstanding request. All of it is additive to the frozen `--json`, whose shape is the durable snapshot alone.
+- `run show` keeps raw event kinds and ids (it is the diagnostic surface) and ends each Step-scoped timeline line with ` · step <id>` (#289); the TUI shows
+  plain labels instead. The Step and plain Session fields are additive to `--json` (`projection-port.ts` documents them).
 - `run show` labels the immutable `run.selectedHarness` as `Selected Harness:` and the latest Agent-step Attempt's `run.harness`/`effectiveModel` facts as
   `Observed Harness:`/`Observed executable:`/`Observed version:`/`Observed effective model:` (#125, #147). The version prints unadorned since it may contain
   parentheses. `selectedHarness` is additive, the existing observed JSON fields stay unchanged, and Command-only Runs omit all of them so their frozen shape is unchanged.

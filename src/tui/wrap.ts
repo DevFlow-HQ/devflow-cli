@@ -81,6 +81,35 @@ function tokens(text: string): string[] {
     .concat(" ", RUN_TIMELINE_TRUNCATION_MARKER);
 }
 
+/** A divider: a run of one `glyph` across the line with `title` centred in it. */
+export interface Rule {
+  readonly glyph: string;
+  readonly title: string;
+}
+
+/** Draw `rule` across `width` display columns. It fits on one line while at least
+ *  two glyphs flank each side of the title; narrower, the title's words wrap and
+ *  the glyph leads each line, so the words are never lost (#289). */
+function ruleLines(rule: Rule, width: number): string[] {
+  const columns = Math.max(1, width);
+  const room = columns - stringWidth(rule.title) - 2;
+  if (room >= 4) {
+    const left = Math.floor(room / 2);
+    return [
+      `${rule.glyph.repeat(left)} ${rule.title} ${rule.glyph.repeat(room - left)}`,
+    ];
+  }
+  if (columns < 3) return wrap(`${rule.glyph} ${rule.title}`, columns);
+  return wrap(rule.title, columns - 2).map((line) => `${rule.glyph} ${line}`);
+}
+
+/** A row laid out under the rules that lead it: each rule's lines, then the row's
+ *  wrapped text, counted as one row. */
+export interface RuledRow {
+  readonly rules: readonly Rule[];
+  readonly text: string;
+}
+
 /** Rows wrapped at one width: every row's display lines in order, and each row's
  *  line count — the `heights` the scroll reducer windows over. */
 interface WrappedRows {
@@ -88,16 +117,23 @@ interface WrappedRows {
   readonly heights: readonly number[];
 }
 
-/** Wrap each row with `wrap`, laying the results out top to bottom. */
+/** Wrap each row with `wrap`, laying the results out top to bottom. A row's rules
+ *  are drawn at the same width above it and count toward its height, so a divider
+ *  scrolls, anchors, and counts as part of the row it leads. */
 export function wrapRows(
-  rows: readonly string[],
+  rows: readonly (string | RuledRow)[],
   width: number,
   hang = 0,
 ): WrappedRows {
   const lines: string[] = [];
   const heights: number[] = [];
   for (const row of rows) {
-    const wrapped = wrap(row, width, hang);
+    const { rules, text } =
+      typeof row === "string" ? { rules: [], text: row } : row;
+    const wrapped = [
+      ...rules.flatMap((rule) => ruleLines(rule, width)),
+      ...wrap(text, width, hang),
+    ];
     for (const line of wrapped) lines.push(line);
     heights.push(wrapped.length);
   }

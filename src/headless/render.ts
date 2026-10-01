@@ -397,10 +397,13 @@ export function renderRun(run: RunView): string {
   for (const event of run.timeline) {
     // The recorded Turn kind (#126) distinguishes a historical Agent Turn from an
     // Interactive Turn in the plain-text timeline, in the same order; a legacy row
-    // with no kind prints without it. Additive to the frozen `--json`.
+    // with no kind prints without it. Additive to the frozen `--json`. A Step-scoped
+    // event ends naming its Step (#289); the raw kind and detail stay, since this is
+    // the diagnostic surface.
     const kind = event.turnKind !== undefined ? ` ${event.turnKind}` : "";
     const detail = event.detail !== undefined ? ` ${event.detail}` : "";
-    lines.push(`  ${event.at} ${event.event}${kind}${detail}`);
+    const step = event.step !== undefined ? ` · step ${event.step}` : "";
+    lines.push(`  ${event.at} ${event.event}${kind}${detail}${step}`);
   }
 
   if (run.conflict !== undefined) {

@@ -762,6 +762,19 @@ export interface RunTimelineEvent {
    *  `repeat-continued` a human-controlled Repeat's Continue (#217), and
    *  `stage-ended` its confirmed End Stage (#218). */
   readonly turnKind?: RunTurnKind;
+  /** The Step this event belongs to (#289), additive to the frozen `--json`: set on
+   *  every Attempt settle and Turn-scoped event, decoded from its stored Attempt id.
+   *  Absent on Run-scoped events (`run-created`, `trust-granted`), Repeat-group
+   *  events (`iteration`, `checkpoint-blocked`, `gate-answered`), and a
+   *  `materialization-conflict`. One Step's events are contiguous at an equal `at`. */
+  readonly step?: string;
+  /** The Harness Session a Turn-scoped event ran in (#289): the same identifier as
+   *  `RunSessionView.session`. Compare it to tell one conversation from another;
+   *  show `sessionName` instead. Absent on every event that is not Turn-scoped. */
+  readonly session?: string;
+  /** The plain name of `session` (#289), as `RunSessionView.name`. Present exactly
+   *  when `session` is. */
+  readonly sessionName?: string;
 }
 
 /** A Materialization conflict currently resting a Run `halted`: a `home: workspace`
@@ -830,6 +843,11 @@ export interface RunPendingGateView {
  *  native Session id, database key, or path crosses the Port. */
 export interface RunSessionView {
   readonly session: string;
+  /** The Session's plain name (#289), additive to the frozen `--json`: the authored
+   *  name for a shared Session, and the authored name with its one-based Iteration
+   *  ("implement, iteration 2") for a per-Iteration or `fresh` one. Show this, never
+   *  `session`, which is the recorded identifier. */
+  readonly name: string;
   readonly availability: "open" | "detached" | "unusable";
   /** The newest transcript page reference; absent when the Session has no
    *  recorded transcript. `readResource` bounds and orders the page. */
@@ -856,6 +874,10 @@ export interface RunTranscriptEntryView {
   readonly session: string;
   readonly role: "user" | "assistant";
   readonly content: string;
+  /** The Step whose Turn wrote this entry (#289), additive to the frozen `--json`,
+   *  decoded from the Turn's stored Attempt id. Absent only for an entry whose Turn
+   *  is unknown. */
+  readonly step?: string;
 }
 
 /** A Run's bounded snapshot. Outputs carry references, not bytes. */

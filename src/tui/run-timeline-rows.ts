@@ -3,12 +3,27 @@ import type {
   RunTimelineEvent,
   RunView,
 } from "../application/projection-port.js";
+import type { Rule } from "./wrap.js";
 
 /** One row in the Workbench's combined durable + live timeline: one logical line,
- *  which the Workbench wraps at its width (#288). */
+ *  which the Workbench wraps at its width (#288), under the dividers that lead it
+ *  (#289). */
 export interface TimelineRow {
   readonly key: string;
   readonly text: string;
+  /** Live rows have none: they carry no Step or Session of their own. */
+  readonly dividers?: readonly Rule[];
+}
+
+/** Where a Step begins: a thin rule naming the Step (#289). */
+export function stepDivider(step: string): Rule {
+  return { glyph: "─", title: `Step · ${step}` };
+}
+
+/** Where a Harness Session begins: a double rule naming the conversation in plain
+ *  words. It differs from the Step divider in glyph and wording, not only colour. */
+export function sessionDivider(name: string): Rule {
+  return { glyph: "═", title: `Conversation · ${name}` };
 }
 
 /** Join authoritative history with replaceable live Turn rows. Durable tool rows
@@ -20,19 +35,45 @@ export function buildTimelineRows(
   preview: string | undefined,
 ): readonly TimelineRow[] {
   return [
-    ...run.timeline.map(durableTimelineRow),
+    ...durableTimelineRows(run.timeline),
     ...liveTimelineRows(run, overlay, preview),
   ];
 }
 
-/** Durable rows retain their event vocabulary while giving the interactive
- * categories explicit glyph-and-word labels that survive colour removal. */
-function durableTimelineRow(
-  event: RunTimelineEvent,
-  index: number,
-): TimelineRow {
+/** Durable rows under their dividers (#289). A Session divider leads a row whose
+ *  Session differs from the last row that named one, so a return to an earlier
+ *  conversation is marked too; a Step divider leads a row whose Step differs from
+ *  the last Step-scoped row, or follows a completed Iteration. When both begin at
+ *  once the Session divider comes first. The Step and Session come from the
+ *  Application; nothing here parses a name or an id. */
+function durableTimelineRows(
+  timeline: readonly RunTimelineEvent[],
+): TimelineRow[] {
+  let step: string | undefined;
+  let session: string | undefined;
+  return timeline.map((event, index) => {
+    const dividers: Rule[] = [];
+    if (event.session !== undefined && event.session !== session) {
+      dividers.push(sessionDivider(event.sessionName ?? event.session));
+      session = event.session;
+    }
+    if (event.step !== undefined && event.step !== step) {
+      dividers.push(stepDivider(event.step));
+    }
+    step = event.event === "iteration" ? undefined : (event.step ?? step);
+    return {
+      key: `durable:${event.at}:${event.event}:${index}`,
+      text: `${event.at} ${durableLabel(event)}`,
+      dividers,
+    };
+  });
+}
+
+/** A durable event in plain words, each with a glyph so its category survives
+ * colour removal. The raw kinds and ids stay on headless `run show`, the
+ * diagnostic surface. */
+function durableLabel(event: RunTimelineEvent): string {
   const detail = event.detail !== undefined ? ` · ${event.detail}` : "";
-  const prefix = `${event.at} `;
   // The durable Turn label is driven by the recorded Turn kind (#126), so reopened
   // history distinguishes an Interactive Turn from an Agent Turn by words alone
   // (colour removed). A legacy row with no kind reads a neutral "Turn" — truthful
@@ -43,36 +84,48 @@ function durableTimelineRow(
       : event.turnKind === "agent"
         ? "Agent Turn"
         : "Turn";
-  const label = (() => {
-    switch (event.event) {
-      case "assistant-content":
-        return `◆ Assistant${detail}`;
-      case "tool-activity":
-        return `↳ Tool activity${detail}`;
-      case "turn-started":
-        return `● ${turnLabel} started${detail}`;
-      case "turn-settled":
-        return `● ${turnLabel} settled${detail}`;
-      case "request-raised":
-        return `? Harness Request raised${detail}`;
-      case "request-answered":
-        return `? Harness Request answered${detail}`;
-      case "request-expired":
-        return `? Harness Request expired${detail}`;
-      case "checkpoint-blocked":
-        return `◆ Human Gate · review checkpoint${detail}`;
-      case "gate-answered":
-        return `◆ Human Gate answered${detail}`;
-      default:
-        return `${event.event}${
-          event.detail !== undefined ? ` ${event.detail}` : ""
-        }`;
-    }
-  })();
-  return {
-    key: `durable:${event.at}:${event.event}:${index}`,
-    text: prefix + label,
-  };
+  // A human control's settle reads only an unexpected outcome.
+  const unusual =
+    event.detail !== undefined && event.detail !== "succeeded"
+      ? ` · ${event.detail}`
+      : "";
+  switch (event.event) {
+    case "run-created":
+      return "○ Run created";
+    case "trust-granted":
+      return "✓ Trust granted";
+    case "attempt-settled":
+      return `▸ Step Attempt ${event.detail ?? "settled"}`;
+    case "iteration":
+      return `↻ Iteration ${event.detail ?? ""} complete`;
+    case "interactive-step-ended":
+      return `▸ Step ended${unusual}`;
+    case "repeat-continued":
+      return `↻ Continued to the next Iteration${unusual}`;
+    case "stage-ended":
+      return `▸ Stage ended${unusual}`;
+    case "materialization-conflict":
+      return `! Materialization conflict${detail}`;
+    case "assistant-content":
+      return `◆ Assistant${detail}`;
+    case "tool-activity":
+      return `↳ Tool activity${detail}`;
+    // The Session names the conversation, so a divider carries it, not the row.
+    case "turn-started":
+      return `● ${turnLabel} started`;
+    case "turn-settled":
+      return `● ${turnLabel} settled${detail}`;
+    case "request-raised":
+      return `? Harness Request raised${detail}`;
+    case "request-answered":
+      return `? Harness Request answered${detail}`;
+    case "request-expired":
+      return "? Harness Request expired";
+    case "checkpoint-blocked":
+      return `◆ Human Gate · review checkpoint${detail}`;
+    case "gate-answered":
+      return `◆ Human Gate answered${detail}`;
+  }
 }
 
 function liveTimelineRows(

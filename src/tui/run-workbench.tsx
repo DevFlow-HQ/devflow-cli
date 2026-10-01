@@ -569,12 +569,12 @@ export function RunWorkbench(props: {
     const withTranscript = sessions.filter(
       (s) => s.transcriptPage !== undefined,
     );
+    // The title names the conversation in plain words (#289), since its Session
+    // divider shows only once the transcript's start is loaded.
     return withTranscript.map((s) => ({
-      label:
-        withTranscript.length > 1
-          ? `Session transcript · ${s.session}`
-          : "Session transcript",
+      label: `Session transcript · ${s.name}`,
       transcript: s.transcriptPage!,
+      sessionName: s.name,
     }));
   });
   // The `t` shortcut and transcript-available hint follow the first Session.
@@ -900,12 +900,14 @@ export function RunWorkbench(props: {
   // Each row wraps at the interior width (#288), so the reducer windows display
   // lines while holding its anchor and badge in rows. The beginning marker always
   // leads the first row: it shows exactly when that row's first line is in view.
+  // A row's dividers (#289) are laid out above it in the same step, so they scroll
+  // with it and never count as new activity.
   const timelineWrapped = createMemo(() =>
     wrapRows(
-      timelineRows().map(
-        (row, index) =>
-          `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
-      ),
+      timelineRows().map((row, index) => ({
+        rules: row.dividers ?? [],
+        text: `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
+      })),
       innerW(),
       TIMELINE_HANG,
     ),

@@ -25,6 +25,7 @@ import type {
   TurnRecord,
 } from "../run/store/store.js";
 import {
+  attemptIteration,
   attemptStepId,
   interactiveStepTarget,
 } from "../run/execution/execution.js";
@@ -199,6 +200,7 @@ function runResult(
         : undefined;
     const turnEvents = owner?.turnEvents() ?? [];
     const sessions = owner?.harnessSessions() ?? [];
+    const names = sessionNames(facts.routing, turns);
     const harnessEvidence = owner?.harnessEvidence();
     const effectiveModel = harnessEvidence?.effectiveModel;
     // The normalized Harness identity of the latest Agent-step Attempt (#125): durable
@@ -263,6 +265,7 @@ function runResult(
           turns,
           turnEvents,
           facts.routing,
+          names,
         ),
         outputs,
         ...(derivedRun.checkpoint !== undefined
@@ -340,6 +343,7 @@ function runResult(
                 sessionView(
                   runId,
                   s,
+                  names.get(s.session) ?? s.session,
                   (owner?.transcriptPage({ session: s.session, limit: 1 })
                     .entries.length ?? 0) > 0,
                 ),
@@ -760,6 +764,14 @@ function toRunState(state: string): RunStateName {
   }
 }
 
+/** One completed Repeat-group Iteration on the timeline, with the log index of the
+ *  Attempt that completed it, so an equal-instant sort keeps the mark beside that
+ *  Attempt rather than after the next Step's events (#289). */
+interface IterationMark {
+  readonly event: RunTimelineEvent;
+  readonly logIndex: number;
+}
+
 export interface DerivedRun {
   /** The effective state, including the `blocked` a checkpoint pause derives from
    *  the attempt log here (execution also stores `blocked` durably, so a killed Run
@@ -767,8 +779,8 @@ export interface DerivedRun {
   readonly state: RunStateName;
   readonly statuses: RunStepProgress[];
   readonly position: number;
-  /** One event per completed Repeat-group iteration, for the timeline. */
-  readonly iterationEvents: readonly RunTimelineEvent[];
+  /** One mark per completed Repeat-group iteration, for the timeline. */
+  readonly iterationEvents: readonly IterationMark[];
   /** The Review checkpoint facts, present only when the state derives to `blocked`
    *  at a derived Review checkpoint. */
   readonly checkpoint?: RunCheckpointView;
@@ -838,7 +850,7 @@ export function deriveRun(
     };
   }
 
-  const iterationEvents: RunTimelineEvent[] = [];
+  const iterationEvents: IterationMark[] = [];
   // The status of the Step the walk is currently paused at (log exhausted): a
   // failed Run's current Step failed; a running Run's is running; a `halted` Run's
   // (a Materialization conflict, #88) or a durably `blocked` Run's (an authored
@@ -911,9 +923,12 @@ export function deriveRun(
       cursor = iteration.next;
       iterations++;
       iterationEvents.push({
-        at: iteration.at,
-        event: "iteration",
-        detail: String(iterations),
+        event: {
+          at: iteration.at,
+          event: "iteration",
+          detail: String(iterations),
+        },
+        logIndex: iteration.next - 1,
       });
       for (const spanStep of span) mark(spanStep, "succeeded");
       // A confirmed End Stage (#218) exits a human-controlled group after this
@@ -1034,7 +1049,7 @@ function finishTerminalGroup(
   statuses: RunStepProgress[],
   flatIndex: Map<Step, number>,
   mark: (step: Step, status: RunStepStatus) => void,
-  iterationEvents: readonly RunTimelineEvent[],
+  iterationEvents: readonly IterationMark[],
   runId: string,
   owner: RunOwner | undefined,
   log: readonly AttemptLogEntry[],
@@ -1129,7 +1144,7 @@ function finishTerminalGroup(
 function trailingGroupIterations(
   routing: readonly RoutingNode[],
   log: readonly AttemptLogEntry[],
-): RunTimelineEvent[] {
+): IterationMark[] {
   const last = routing[routing.length - 1];
   if (last === undefined || !("repeat" in last)) return [];
   // Consume the preceding nodes to find where the group's Attempts begin.
@@ -1148,7 +1163,7 @@ function trailingGroupIterations(
     }
   }
   const span = last.repeat.steps;
-  const events: RunTimelineEvent[] = [];
+  const events: IterationMark[] = [];
   let iterations = 0;
   while (cursor < log.length) {
     const iteration = consumeSpan(log, cursor, span);
@@ -1156,9 +1171,12 @@ function trailingGroupIterations(
     cursor = iteration.next;
     iterations++;
     events.push({
-      at: iteration.at,
-      event: "iteration",
-      detail: String(iterations),
+      event: {
+        at: iteration.at,
+        event: "iteration",
+        detail: String(iterations),
+      },
+      logIndex: iteration.next - 1,
     });
   }
   return events;
@@ -1181,6 +1199,7 @@ function readVerdict(
 function sessionView(
   runId: string,
   record: HarnessSessionRecord,
+  name: string,
   hasTranscript: boolean,
 ): RunSessionView {
   const availability =
@@ -1191,6 +1210,7 @@ function sessionView(
       : "unusable";
   return {
     session: record.session,
+    name,
     availability,
     ...(hasTranscript
       ? {
@@ -1216,15 +1236,31 @@ function toTurnKind(kind: string | undefined): RunTurnKind | undefined {
   return kind === "agent" || kind === "interactive-agent" ? kind : undefined;
 }
 
-/** Narrow a stored transcript entry to the client view. Shared with the
- *  transcript-resource resolver so page/export output matches the inline view. */
+/** Each Turn's Step, decoded from its stored Attempt id (#289), keyed by Turn id. */
+export function turnSteps(
+  turns: readonly TurnRecord[],
+): ReadonlyMap<string, string> {
+  const steps = new Map<string, string>();
+  for (const turn of turns) {
+    const step = attemptStepId(turn.attemptId);
+    if (step !== undefined) steps.set(turn.turnId, step);
+  }
+  return steps;
+}
+
+/** Narrow a stored transcript entry to the client view, naming the Step whose Turn
+ *  wrote it (`turnSteps`). Shared with the transcript-resource resolver so
+ *  page/export output matches the inline view. */
 export function transcriptView(
   record: TranscriptEntryRecord,
+  steps: ReadonlyMap<string, string>,
 ): RunTranscriptEntryView {
+  const step = steps.get(record.turnId);
   return {
     session: record.session,
     role: record.role === "assistant" ? "assistant" : "user",
     content: record.content,
+    ...(step !== undefined ? { step } : {}),
   };
 }
 
@@ -1316,15 +1352,33 @@ function buildTimeline(
   createdAt: string,
   log: readonly AttemptLogEntry[],
   digest: string,
-  iterationEvents: readonly RunTimelineEvent[],
+  iterationEvents: readonly IterationMark[],
   checkpoint: RunCheckpointView | undefined,
   conflicts: readonly MaterializationConflict[],
   gateAnswers: readonly GateAnswerRecord[],
   turns: readonly TurnRecord[],
   turnEvents: readonly TurnEventRecord[],
   routing: readonly RoutingNode[],
+  names: ReadonlyMap<string, string>,
 ): RunTimelineEvent[] {
-  const events: RunTimelineEvent[] = [{ at: createdAt, event: "run-created" }];
+  // Each event is keyed by the Step instance it belongs to (#289): the log index of
+  // its Attempt, so at an equal instant one Step's events stay together instead of
+  // interleaving by category with the next Step's. An Attempt still running (or
+  // never settled) has Turns but no log entry yet, so it ranks after every settled
+  // Attempt, in admission order. Run-scoped events rank first.
+  const attemptOrder = new Map<string, number>();
+  log.forEach((attempt, index) => attemptOrder.set(attempt.attemptId, index));
+  for (const turn of turns) {
+    if (!attemptOrder.has(turn.attemptId)) {
+      attemptOrder.set(turn.attemptId, attemptOrder.size);
+    }
+  }
+  // An event with no Attempt of its own ranks after every Attempt that settled at or
+  // before its instant.
+  const afterSettled = (at: string): number =>
+    log.filter((attempt) => attempt.at <= at).length - 0.5;
+  const events: { readonly event: RunTimelineEvent; readonly order: number }[] =
+    [{ event: { at: createdAt, event: "run-created" }, order: -1 }];
   const entry = deps.catalog.listEntries().find((e) => e.digest === digest);
   if (entry !== undefined) {
     const grant = deps.catalog.getTrustGrant(
@@ -1333,9 +1387,12 @@ function buildTimeline(
     );
     if (grant !== undefined) {
       events.push({
-        at: grant.grantedAt,
-        event: "trust-granted",
-        detail: grant.operationId,
+        event: {
+          at: grant.grantedAt,
+          event: "trust-granted",
+          detail: grant.operationId,
+        },
+        order: -1,
       });
     }
   }
@@ -1347,48 +1404,61 @@ function buildTimeline(
       .filter((step) => step.kind === "interactive-agent")
       .map((step) => step.id),
   );
-  for (const attempt of log) {
+  log.forEach((attempt, index) => {
     const stepId = attemptStepId(attempt.attemptId);
     events.push({
-      at: attempt.at,
-      event:
-        stepId === undefined || !interactiveSteps.has(stepId)
-          ? "attempt-settled"
-          : attempt.endsStage === true
-            ? "stage-ended"
-            : inHumanRepeat(routing, stepId)
-              ? "repeat-continued"
-              : "interactive-step-ended",
-      detail: attempt.outcome,
+      event: {
+        at: attempt.at,
+        event:
+          stepId === undefined || !interactiveSteps.has(stepId)
+            ? "attempt-settled"
+            : attempt.endsStage === true
+              ? "stage-ended"
+              : inHumanRepeat(routing, stepId)
+                ? "repeat-continued"
+                : "interactive-step-ended",
+        detail: attempt.outcome,
+        ...(stepId !== undefined ? { step: stepId } : {}),
+      },
+      order: index,
     });
-  }
+  });
   // Each completed Repeat-group iteration, then the block when the Run rests at a
   // Review checkpoint (#84). ponytail: per-Attempt Verdict *values* still are not
   // tied to their Attempt through the Store Interface (no attempt→version link),
   // so the Verdict is reached as an output; add Verdict values here when it lands.
-  for (const iteration of iterationEvents) events.push(iteration);
+  // Both belong to the group, not one Step, so they name none.
+  for (const iteration of iterationEvents) {
+    events.push({ event: iteration.event, order: iteration.logIndex });
+  }
   if (checkpoint !== undefined) {
     events.push({
-      at: log[log.length - 1]?.at ?? createdAt,
-      event: "checkpoint-blocked",
-      detail: String(checkpoint.completedIterations),
+      event: {
+        at: log[log.length - 1]?.at ?? createdAt,
+        event: "checkpoint-blocked",
+        detail: String(checkpoint.completedIterations),
+      },
+      order: log.length - 1,
     });
   }
   // Each durable Human Gate answer, in the order it was recorded (#85), so the
   // grant/stop history stays readable after the Run resumes or ends.
   for (const answer of gateAnswers) {
     events.push({
-      at: answer.at,
-      event: "gate-answered",
-      detail: answer.answer,
+      event: { at: answer.at, event: "gate-answered", detail: answer.answer },
+      order: attemptOrder.get(answer.gateAttemptId) ?? afterSettled(answer.at),
     });
   }
-  // Each conflict names its declared Workspace path (AC5).
+  // Each conflict names its declared Workspace path (AC5). It is recorded before
+  // the Step it stops runs, so it has no Attempt and names no Step.
   for (const conflict of conflicts) {
     events.push({
-      at: conflict.at,
-      event: "materialization-conflict",
-      detail: conflict.path,
+      event: {
+        at: conflict.at,
+        event: "materialization-conflict",
+        detail: conflict.path,
+      },
+      order: afterSettled(conflict.at),
     });
   }
   // Each Harness Turn (#116): admitted (naming its Session), then — once settled —
@@ -1396,40 +1466,103 @@ function buildTimeline(
   // read ingress (D7) so a client labels reopened Agent and Interactive Turns
   // without inferring from `progress[position]`; a legacy row with no kind omits it.
   // The authoritative assistant content and tool activity in between come from the
-  // normalized durable events.
+  // normalized durable events. Every Turn-scoped event names its Step and its
+  // Session, with the Session's plain name (#289).
+  const scope = (turn: TurnRecord) => {
+    const step = attemptStepId(turn.attemptId);
+    return {
+      ...(step !== undefined ? { step } : {}),
+      session: turn.session,
+      sessionName: names.get(turn.session) ?? turn.session,
+    };
+  };
+  const turnsById = new Map(turns.map((turn) => [turn.turnId, turn]));
   for (const turn of turns) {
     const turnKind = toTurnKind(turn.kind);
     const kindField = turnKind !== undefined ? { turnKind } : {};
+    const order = attemptOrder.get(turn.attemptId)!;
     events.push({
-      at: turn.admittedAt,
-      event: "turn-started",
-      detail: turn.session,
-      ...kindField,
+      event: {
+        at: turn.admittedAt,
+        event: "turn-started",
+        detail: turn.session,
+        ...kindField,
+        ...scope(turn),
+      },
+      order,
     });
     if (turn.settledAt !== undefined && turn.resultKind !== undefined) {
       events.push({
-        at: turn.settledAt,
-        event: "turn-settled",
-        detail: turn.resultKind,
-        ...kindField,
+        event: {
+          at: turn.settledAt,
+          event: "turn-settled",
+          detail: turn.resultKind,
+          ...kindField,
+          ...scope(turn),
+        },
+        order,
       });
     }
   }
   for (const turnEvent of turnEvents) {
     const entry = turnEventEntry(turnEvent);
-    if (entry !== undefined) events.push(entry);
+    if (entry === undefined) continue;
+    const turn = turnsById.get(turnEvent.turnId);
+    events.push(
+      turn === undefined
+        ? { event: entry, order: afterSettled(entry.at) }
+        : {
+            event: { ...entry, ...scope(turn) },
+            order: attemptOrder.get(turn.attemptId)!,
+          },
+    );
   }
-  // Order the timeline by `at` (ISO 8601 sorts lexicographically), category as the
-  // tiebreak so events at the same instant keep a stable, meaningful order (#98 A2).
-  // Sorting by time — rather than emitting category by category — means a later
-  // Attempt never reorders the events that preceded it.
-  return events.sort((a, b) =>
-    a.at < b.at
-      ? -1
-      : a.at > b.at
-        ? 1
-        : TIMELINE_CATEGORY_RANK[a.event] - TIMELINE_CATEGORY_RANK[b.event],
-  );
+  // Order the timeline by `at` (ISO 8601 sorts lexicographically), then by Step
+  // instance, then by category, so events at the same instant keep a stable,
+  // meaningful order (#98 A2, #289). Sorting by time — rather than emitting category
+  // by category — means a later Attempt never reorders the events that preceded it.
+  return events
+    .sort((a, b) =>
+      a.event.at < b.event.at
+        ? -1
+        : a.event.at > b.event.at
+          ? 1
+          : a.order !== b.order
+            ? a.order - b.order
+            : TIMELINE_CATEGORY_RANK[a.event.event] -
+              TIMELINE_CATEGORY_RANK[b.event.event],
+    )
+    .map((keyed) => keyed.event);
+}
+
+/** Each recorded Session's plain name (#289), read from the Turns that ran in it:
+ *  the authored name when the Session is shared, and the authored name with its
+ *  one-based Iteration when the Run scoped it to one Attempt (a per-Iteration or
+ *  `fresh` Session). A Session no Turn names, or whose Step the Snapshot lacks, keeps
+ *  its recorded name. */
+function sessionNames(
+  routing: readonly RoutingNode[],
+  turns: readonly TurnRecord[],
+): ReadonlyMap<string, string> {
+  const authored = new Map<string, string>();
+  for (const step of flattenSteps(routing)) {
+    if (step.kind === "agent" || step.kind === "interactive-agent") {
+      authored.set(step.id, step.session);
+    }
+  }
+  const names = new Map<string, string>();
+  for (const turn of turns) {
+    if (names.has(turn.session)) continue;
+    const stepId = attemptStepId(turn.attemptId);
+    const name = stepId !== undefined ? authored.get(stepId) : undefined;
+    const iteration = attemptIteration(turn.attemptId);
+    if (name === undefined || iteration === undefined) continue;
+    names.set(
+      turn.session,
+      turn.session === name ? name : `${name}, iteration ${iteration + 1}`,
+    );
+  }
+  return names;
 }
 
 /** The tiebreak order for timeline events sharing an `at` (#98 A2): the same

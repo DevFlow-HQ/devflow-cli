@@ -463,7 +463,7 @@ export function buildDetailsRows(params: {
     });
   for (const session of run.sessions ?? [])
     recovery.push({
-      text: `  Session ${session.session} · ${session.availability}`,
+      text: `  Session ${session.name} · ${session.availability}`,
       tone: session.availability === "unusable" ? "warning" : "muted",
       bold: false,
     });

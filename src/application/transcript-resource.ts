@@ -1,6 +1,6 @@
 import type { RunOwner } from "../run/store/store.js";
 import { runSessionNotFound, runTranscriptCursorInvalid } from "./problems.js";
-import { transcriptView } from "./run-projection.js";
+import { transcriptView, turnSteps } from "./run-projection.js";
 import type {
   TranscriptExportReference,
   TranscriptPageReference,
@@ -35,11 +35,13 @@ export function readTranscriptResource(
     };
   }
 
+  // Each entry names the Step whose Turn wrote it (#289).
+  const steps = turnSteps(owner.turns());
   if (reference.type === "transcript-export") {
     const entries = owner
       .transcript()
       .filter((entry) => entry.session === reference.session)
-      .map(transcriptView);
+      .map((entry) => transcriptView(entry, steps));
     return { found: true, type: "transcript-export", entries };
   }
 
@@ -61,7 +63,7 @@ export function readTranscriptResource(
   return {
     found: true,
     type: "transcript-page",
-    entries: page.entries.map(transcriptView),
+    entries: page.entries.map((entry) => transcriptView(entry, steps)),
     // The next older page starts before this page's oldest entry; only emit a
     // cursor when older retained entries actually exist.
     ...(page.hasOlder && page.entries[0] !== undefined

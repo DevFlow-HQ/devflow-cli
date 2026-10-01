@@ -9,7 +9,10 @@ import {
   type HarnessProfile,
 } from "../../src/harness/harness.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
-import type { RunView } from "../../src/application/projection-port.js";
+import type {
+  RunTranscriptEntryView,
+  RunView,
+} from "../../src/application/projection-port.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
@@ -585,6 +588,102 @@ test("run show --json gains additive Harness-identity fields (#125)", async (t) 
   assert.match(run.harness.executableVersion, /2\.1\.273/);
   assert.ok(typeof run.harness.executable === "string");
   assert.match(run.effectiveModel, /^claude-/);
+});
+
+test("run show prints each event's Step; run show --json and run read --transcript --json gain the Step and plain Session name additively (#289)", async (t) => {
+  const { wired, runId } = await launchAgentRun(t);
+  const shown = await runShow(wired, runId);
+  const timeline = shown
+    .slice(shown.indexOf("Timeline:"))
+    .split("\n")
+    .slice(1)
+    .filter((line) => line.startsWith("  "));
+  // The raw kinds stay (headless is the diagnostic surface); each Step-scoped line
+  // ends naming its Step, and a Run-scoped line names none.
+  assert.match(timeline[0] ?? "", /^ {2}\S+ run-created$/);
+  for (const [kind, step] of [
+    ["attempt-settled succeeded", "before"],
+    ["turn-started agent s", "fix"],
+    ["assistant-content", "fix"],
+    ["turn-settled agent completed", "fix"],
+    ["attempt-settled succeeded", "after"],
+  ] as const) {
+    assert.ok(
+      timeline.some(
+        (line) => line.includes(` ${kind}`) && line.endsWith(` · step ${step}`),
+      ),
+      `${kind} names step ${step}:\n${timeline.join("\n")}`,
+    );
+  }
+
+  const read = async (args: readonly string[]): Promise<unknown> => {
+    const out: string[] = [];
+    const io: HeadlessIO = {
+      out: (text) => out.push(text),
+      err: () => {},
+      cwd: () => process.cwd(),
+    };
+    const code = await runHeadless(
+      {
+        projectionPort: wired.projectionPort,
+        bundleManagement: wired.bundleManagement,
+      },
+      args,
+      io,
+    );
+    assert.equal(code, 0);
+    return JSON.parse(out.join(""));
+  };
+  // `--json` keeps every existing field and value and only gains new ones.
+  const snapshot = (await read(["run", "show", runId, "--json"])) as {
+    result: { run: RunView };
+  };
+  const json = snapshot.result.run;
+  const started = json.timeline.find((event) => event.event === "turn-started");
+  assert.deepEqual(started, {
+    at: started?.at,
+    event: "turn-started",
+    detail: "s",
+    turnKind: "agent",
+    step: "fix",
+    session: "s",
+    sessionName: "s",
+  });
+  assert.deepEqual(json.timeline[0], {
+    at: json.timeline[0]?.at,
+    event: "run-created",
+  });
+  assert.deepEqual(
+    json.sessions?.map(({ session, name, availability }) => ({
+      session,
+      name,
+      availability,
+    })),
+    [{ session: "s", name: "s", availability: "open" }],
+  );
+  const transcript = (await read([
+    "run",
+    "read",
+    runId,
+    "--transcript",
+    "--json",
+  ])) as {
+    page: { entries: RunTranscriptEntryView[] };
+    export: { entries: RunTranscriptEntryView[] };
+  };
+  for (const entries of [transcript.page.entries, transcript.export.entries]) {
+    assert.ok(entries.length > 0);
+    for (const entry of entries) {
+      assert.deepEqual(Object.keys(entry), [
+        "session",
+        "role",
+        "content",
+        "step",
+      ]);
+      assert.equal(entry.session, "s");
+      assert.equal(entry.step, "fix");
+    }
+  }
 });
 
 test("the rendered prompt carries the file's absolute path and the skill's SKILL.md, no @ (#116)", async (t) => {

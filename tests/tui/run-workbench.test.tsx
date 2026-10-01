@@ -559,8 +559,8 @@ test("header, progress, and timeline render the facts headless run show prints",
   assert.match(frame, /plan/); // every progress step, always visible
   assert.match(frame, /build/);
   assert.match(frame, /ship/);
-  assert.match(frame, /run-created/); // timeline events with detail
-  assert.match(frame, /attempt-settled passed/);
+  assert.match(frame, /○ Run created/); // timeline events in plain words
+  assert.match(frame, /▸ Step Attempt passed/);
 });
 
 test("workbench-view-freshness: four stream-health tokens replace scroll-live and gate Operations", async () => {
@@ -643,11 +643,17 @@ test("reopened history renders End Step distinctly from a settled Command Attemp
       ],
     }),
   );
-  // A confirmed End Stage reads as its own row, apart from Continue (#218).
-  assert.match(t.captureCharFrame(), /stage-ended succeeded/);
-  assert.match(t.captureCharFrame(), /interactive-step-ended succeeded/);
+  // A confirmed End Stage reads as its own row, apart from Continue (#218), each in
+  // plain words rather than its raw kind (#289).
+  const frame = t.captureCharFrame();
+  assert.match(frame, /▸ Stage ended/);
+  assert.match(frame, /▸ Step ended/);
   // A human-controlled Repeat's Continue reads as its own history row (#217).
-  assert.match(t.captureCharFrame(), /repeat-continued succeeded/);
+  assert.match(frame, /↻ Continued to the next Iteration/);
+  assert.doesNotMatch(
+    frame,
+    /stage-ended|interactive-step-ended|repeat-continued|succeeded/,
+  );
 });
 
 test("the details panel shows the observed Harness, executable, version, and model, and the header no longer does (#194 story 35)", async () => {
@@ -1002,11 +1008,13 @@ test("reopened durable Turn rows label kind by words, colour removed, legacy neu
     24,
   );
   const frame = t.captureCharFrame();
-  assert.match(frame, /Interactive Turn started · shared/);
+  // The recorded Session name never labels a row (#289); dividers name it.
+  assert.match(frame, /Interactive Turn started/);
   assert.match(frame, /Interactive Turn settled · completed/);
-  assert.match(frame, /Agent Turn started · shared/);
+  assert.match(frame, /Agent Turn started/);
   assert.match(frame, /Agent Turn settled · completed/);
-  assert.match(frame, /● Turn started · shared/); // legacy: neither kind claimed
+  assert.match(frame, /● Turn started/); // legacy: neither kind claimed
+  assert.doesNotMatch(frame, /shared/);
 });
 
 test("context and usage appear only when the live overlay reports them", async () => {
@@ -1364,6 +1372,342 @@ test("scrolling over wrapped rows steps by line, keeps its anchor under append a
   assert.equal(timelineLines(t.captureCharFrame())[0], continuation);
 });
 
+// --- Step and Session dividers (#289) ---------------------------------------
+
+/** One Turn-scoped event as the Application names it: its Step, its recorded
+ *  Session, and the Session's plain name. */
+function turnEvent(
+  at: string,
+  step: string,
+  session: string,
+  sessionName: string,
+  event: RunTimelineEvent["event"] = "turn-started",
+): RunTimelineEvent {
+  return {
+    at,
+    event,
+    detail: event === "turn-started" ? session : "completed",
+    turnKind: "agent",
+    step,
+    session,
+    sessionName,
+  };
+}
+
+/** A reopened Run crossing Steps and Sessions: grill and write-spec share the
+ *  `spec` conversation, a Command step has none, and each Iteration of implement
+ *  opens a `fresh` one the Application names with its Iteration. */
+function dividedRun(): RunView {
+  return runOf({
+    state: "succeeded",
+    timeline: [
+      { at: "T00", event: "run-created" },
+      { at: "T01", event: "trust-granted", detail: "op-trust-1" },
+      turnEvent("T02", "grill", "spec", "spec"),
+      {
+        at: "T03",
+        event: "assistant-content",
+        detail: "Questions answered",
+        step: "grill",
+        session: "spec",
+        sessionName: "spec",
+      },
+      {
+        at: "T04",
+        event: "attempt-settled",
+        detail: "succeeded",
+        step: "grill",
+      },
+      turnEvent("T05", "write-spec", "spec", "spec"),
+      {
+        at: "T06",
+        event: "attempt-settled",
+        detail: "succeeded",
+        step: "write-spec",
+      },
+      {
+        at: "T07",
+        event: "attempt-settled",
+        detail: "succeeded",
+        step: "baseline",
+      },
+      turnEvent(
+        "T08",
+        "implement",
+        "fresh-0.1:implement",
+        "fresh, iteration 1",
+      ),
+      {
+        at: "T09",
+        event: "attempt-settled",
+        detail: "succeeded",
+        step: "implement",
+      },
+      { at: "T10", event: "iteration", detail: "1" },
+      turnEvent(
+        "T11",
+        "implement",
+        "fresh-1.1:implement",
+        "fresh, iteration 2",
+      ),
+      {
+        at: "T12",
+        event: "request-expired",
+        detail: "req-42",
+        step: "implement",
+        session: "fresh-1.1:implement",
+        sessionName: "fresh, iteration 2",
+      },
+      { at: "T13", event: "materialization-conflict", detail: "docs/spec.md" },
+    ],
+  });
+}
+
+/** Each divider line in `lines` as `<glyph> <title>`: a rule of one glyph with the
+ *  title centred in it. */
+function dividers(lines: readonly string[]): string[] {
+  return lines.flatMap((line) => {
+    const match = /^\s*([─═])\1* (.+?) \1+\s*$/.exec(line);
+    return match === null ? [] : [`${match[1]} ${match[2]}`];
+  });
+}
+
+test("[step-session-dividers] the timeline marks each Step and Harness Session with distinct plain-word dividers (#289)", async () => {
+  // #23 evidence for this slice: meaning without colour (every assertion reads the
+  // colourless character frame: the two dividers differ by glyph and words), large
+  // content and small terminals in the tests below, and renderer and platform
+  // evidence through the fake Renderer Port in the three-OS canonical suite.
+  const { t } = await mountWorkbench(dividedRun(), 100, 50);
+  const frame = t.captureCharFrame();
+  noOverflow(frame, 100);
+  const lines = timelineLines(frame);
+  // A Session divider on every change of conversation, before the Step divider
+  // when both begin at once; a Step divider on every change of Step, and again
+  // after an Iteration completes. A shared Session draws no second Session divider.
+  assert.deepEqual(dividers(lines), [
+    "═ Conversation · spec",
+    "─ Step · grill",
+    "─ Step · write-spec",
+    "─ Step · baseline",
+    "═ Conversation · fresh, iteration 1",
+    "─ Step · implement",
+    "═ Conversation · fresh, iteration 2",
+    "─ Step · implement",
+  ]);
+  // Each divider sits directly above the event row that begins its Step.
+  const grill = lines.findIndex((line) => /Step · grill/.test(line));
+  assert.match(lines[grill - 1]!, /Conversation · spec/);
+  assert.match(lines[grill + 1]!, /● Agent Turn started/);
+  const baseline = lines.findIndex((line) => /Step · baseline/.test(line));
+  assert.match(lines[baseline + 1]!, /▸ Step Attempt succeeded/);
+
+  // Everyday rows read in plain words: no raw event kind, no recorded Session
+  // name, no Session label, no ids, and no Session availability word.
+  const text = lines.join("\n");
+  for (const label of [
+    /○ Run created/,
+    /✓ Trust granted/,
+    /◆ Assistant · Questions answered/,
+    /↻ Iteration 1 complete/,
+    /\? Harness Request expired/,
+    /! Materialization conflict · docs\/spec\.md/,
+  ]) {
+    assert.match(text, label);
+  }
+  assert.doesNotMatch(
+    text,
+    /run-created|trust-granted|attempt-settled|request-expired|materialization-conflict|iteration 1 1/,
+  );
+  assert.doesNotMatch(text, /fresh-\d|op-trust-1|req-42|session/);
+  assert.doesNotMatch(text, /\b(?:open|detached|unusable)\b/);
+});
+
+test("[step-session-dividers] a divider wraps its words behind its glyph on a narrow terminal and rewraps on resize (#289)", async () => {
+  const { t, renderer } = await mountWorkbench(dividedRun(), 100, 50);
+  for (const width of [30, 22, 100]) {
+    renderer.resize(width, 50);
+    await t.renderOnce();
+    const frame = t.captureCharFrame();
+    noOverflow(frame, width);
+    const lines = timelineLines(frame).map((line) => line.trim());
+    // Every word of each title survives, on lines the divider's glyph leads.
+    const words = (glyph: string) =>
+      lines
+        .filter((line) => line.startsWith(glyph))
+        .join(" ")
+        .split(/[\s─═]+/);
+    for (const word of ["Conversation", "fresh,", "iteration", "2"]) {
+      assert.ok(words("═").includes(word), `${word} at ${width}`);
+    }
+    for (const word of ["Step", "write-spec", "baseline", "implement"]) {
+      assert.ok(words("─").includes(word), `${word} at ${width}`);
+    }
+  }
+  // Narrow, the title wraps over lines that each begin with the glyph.
+  renderer.resize(22, 50);
+  await t.renderOnce();
+  const narrow = timelineLines(t.captureCharFrame()).map((line) => line.trim());
+  const at = narrow.indexOf("═ fresh, iteration 1");
+  assert.ok(at > 0, narrow.join("\n"));
+  assert.equal(narrow[at - 1], "═ Conversation ·");
+});
+
+test("[step-session-dividers] dividers scroll with their rows: the anchor holds and the new-activity count counts events (#289)", async () => {
+  // Every row begins a new Step, so each is a divider line plus its event line.
+  const stepped = (count: number): RunTimelineEvent[] =>
+    events(count).map((event, index) => ({ ...event, step: `s${index}` }));
+  const { t, control, renderer } = await mountWorkbench(
+    runOf({ timeline: stepped(30) }),
+    100,
+    14,
+  );
+  // One line above the live edge hides only the newest row's last line.
+  await press(t, renderer, "up");
+  const scrolled = t.captureCharFrame();
+  assert.match(scrolled, /▼ 1 new activity · Jump to latest/);
+  const first = timelineLines(scrolled)[0];
+
+  // Three rows append, each led by its divider: the first visible line holds, and
+  // the count rises by three events (six lines would read 7).
+  control.setRun(runOf({ timeline: stepped(33) }));
+  await t.renderOnce();
+  const appended = t.captureCharFrame();
+  assert.equal(timelineLines(appended)[0], first);
+  assert.match(appended, /▼ 4 new activities · Jump to latest/);
+
+  // From the top, a divider scrolls one line at a time like any row's line.
+  await press(t, renderer, "home");
+  const top = timelineLines(t.captureCharFrame());
+  assert.deepEqual(dividers(top.slice(0, 1)), ["─ Step · s0"]);
+  await press(t, renderer, "down");
+  assert.match(timelineLines(t.captureCharFrame())[0]!, /Step Attempt e0/);
+  await press(t, renderer, "end");
+  assert.doesNotMatch(t.captureCharFrame(), /new activit/);
+});
+
+test("[step-session-dividers] the transcript marks its conversation and each Step once the start is loaded, with plain headers and title (#289)", async () => {
+  const run = runOf({
+    sessions: [
+      {
+        session: "spec",
+        name: "spec",
+        availability: "open",
+        transcriptPage: {
+          runId: "run-1",
+          session: "spec",
+          type: "transcript-page",
+        },
+      },
+      {
+        session: "fresh-0.1:implement",
+        name: "fresh, iteration 1",
+        availability: "open",
+        transcriptPage: {
+          runId: "run-1",
+          session: "fresh-0.1:implement",
+          type: "transcript-page",
+        },
+      },
+    ],
+  });
+  const { t, control, renderer } = await mountWorkbench(run, 100, 30);
+  const entry = (
+    role: "user" | "assistant",
+    content: string,
+    step: string,
+  ) => ({ session: "spec", role, content, step });
+  // The newest page holds write-spec; the older page reaches the Session's start.
+  control.setTranscript("", {
+    found: true,
+    type: "transcript-page",
+    entries: [
+      entry("user", "Write the spec", "write-spec"),
+      entry("assistant", "Spec written", "write-spec"),
+    ],
+    older: "c1",
+  });
+  control.setTranscript("c1", {
+    found: true,
+    type: "transcript-page",
+    entries: [
+      entry("user", "Grill me", "grill"),
+      entry("assistant", "First question", "grill"),
+    ],
+  });
+
+  await press(t, renderer, "t");
+  const newest = t.captureCharFrame();
+  noOverflow(newest, 100);
+  // The title names the conversation in plain words, never its recorded name.
+  assert.match(newest, /Session transcript · spec/);
+  // Older entries remain, so where the conversation and its Step began is unknown:
+  // no divider is drawn yet.
+  assert.deepEqual(dividers(newest.split("\n")), []);
+
+  await press(t, renderer, "home"); // loads the older page, the Session's start
+  const full = t.captureCharFrame();
+  noOverflow(full, 100);
+  const lines = full.split("\n");
+  assert.deepEqual(dividers(lines), [
+    "═ Conversation · spec",
+    "─ Step · grill",
+    "─ Step · write-spec",
+  ]);
+  const writeSpec = lines.findIndex((line) => /Step · write-spec/.test(line));
+  assert.match(lines[writeSpec + 1]!, /◇ User Turn\s*$/);
+  assert.match(lines[writeSpec + 2]!, /Write the spec/);
+  assert.doesNotMatch(full, /session|fresh-0/);
+  assert.doesNotMatch(full, /\b(?:open|detached|unusable)\b/);
+});
+
+test("[step-session-dividers] paging older across a Step boundary keeps the first visible transcript entry under its new divider (#289)", async () => {
+  // Height 10 → a 6-line viewport, so the anchor, not the whole page, holds N1.
+  const { t, control, renderer } = await mountWorkbench(
+    transcriptRun(),
+    40,
+    10,
+  );
+  const entries = (step: string, ...ids: string[]) =>
+    ids.map((id) => ({
+      session: "s",
+      role: "user" as const,
+      content: `${id} text`,
+      step,
+    }));
+  control.setTranscript("", {
+    found: true,
+    type: "transcript-page",
+    entries: entries("write-spec", "N1", "N2", "N3"),
+    older: "c1",
+  });
+  control.setTranscript("c1", {
+    found: true,
+    type: "transcript-page",
+    entries: entries("grill", "O1", "O2", "O3"),
+  });
+
+  await press(t, renderer, "t");
+  await press(t, renderer, "home");
+  assert.match(t.captureCharFrame(), /Session transcript · s/);
+  assert.match(t.captureCharFrame(), /N1 text/);
+
+  // Up at the top prepends the older page: N1's header row gains its Step divider,
+  // and one line up shows that divider with N1 still in view, no older entry yet.
+  await press(t, renderer, "up");
+  const anchored = t.captureCharFrame();
+  noOverflow(anchored, 40);
+  assert.match(anchored, /N1 text/);
+  assert.match(anchored, /─ Step · write-spec ─/);
+  assert.doesNotMatch(anchored, /O\d text/);
+
+  // Above it, the older Step and the conversation's start.
+  await press(t, renderer, "home");
+  assert.deepEqual(dividers(t.captureCharFrame().split("\n")).slice(0, 2), [
+    "═ Conversation · s",
+    "─ Step · grill",
+  ]);
+});
+
 test("a long live preview wraps in full at the live edge (#288)", async () => {
   const { t, control } = await mountWorkbench(
     runOf({ timeline: events(3) }),
@@ -1487,6 +1831,7 @@ function transcriptRun() {
     sessions: [
       {
         session: "s",
+        name: "s",
         availability: "open",
         transcriptPage: {
           runId: "run-1",
@@ -1526,10 +1871,13 @@ test("the Session transcript opens the newest page and restores timeline focus (
   await press(t, renderer, "t");
   const opened = t.captureCharFrame();
   assert.match(opened, /Session transcript/);
-  assert.match(opened, /User Turn · session s/);
+  // The role headers name no Session (#289): the overlay holds one conversation,
+  // which its Session divider names.
+  assert.match(opened, /◇ User Turn\s*$/m);
   assert.match(opened, /Fix the failing test/);
-  assert.match(opened, /Assistant · session s/);
+  assert.match(opened, /◆ Assistant\s*$/m);
   assert.match(opened, /Working on it/);
+  assert.doesNotMatch(opened, /session/);
 
   await press(t, renderer, "escape");
   assert.match(t.captureCharFrame(), /› Timeline/);
@@ -2757,13 +3105,34 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
   // Windows, macOS, and Linux.
   const run = runOf({
     state: "halted",
-    sessions: [{ session: "main", availability: "unusable" }],
-    timeline: [{ at: "T0", event: "turn-settled", detail: "interrupted" }],
+    sessions: [
+      {
+        session: "main-0.1:work",
+        name: "main, iteration 1",
+        availability: "unusable",
+      },
+    ],
+    timeline: [
+      {
+        at: "T0",
+        event: "turn-settled",
+        detail: "interrupted",
+        step: "work",
+        session: "main-0.1:work",
+        sessionName: "main, iteration 1",
+      },
+    ],
     actionOffers: [RESUME_UNAVAILABLE_OFFER, DELETE_OFFER],
   });
   const { t, renderer } = await mountWorkbench(run, 100, 40, okActions());
   // Header: resting prose beside the state word (story 38, AC4).
   const header = t.captureCharFrame();
+  // Everyday rows carry neither the recorded Session name nor its availability
+  // (#289 story 84); the Session divider names the conversation in plain words.
+  const everyday = timelineLines(header).join("\n");
+  assert.match(everyday, /Conversation · main, iteration 1/);
+  assert.doesNotMatch(everyday, /\b(?:open|detached|unusable)\b/);
+  assert.doesNotMatch(everyday, /main-0\.1|session/);
   assert.match(header, /Execution stopped outside the Workflow\./);
   // Rail: resume is truthfully unavailable, not hidden (story 40); delete is off it.
   assert.match(header, /resume — unavailable · .*no longer usable/);
@@ -2777,7 +3146,8 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
     /Resting reason · Execution stopped outside the Workflow\./,
   );
   assert.match(panel, /Latest activity · turn-settled interrupted · T0/);
-  assert.match(panel, /Session main · unusable/);
+  // Session availability stays in the panel, under the plain name (#289 story 85).
+  assert.match(panel, /Session main, iteration 1 · unusable/);
   // Nothing invented when absent (story 36, AC2): no conflict line here.
   assert.doesNotMatch(panel, /Materialization conflict/);
   assert.match(panel, /x delete — remove the Run/);
@@ -4163,7 +4533,7 @@ test("interrupt rests the Run halted with the Attempt cancelled and offers resum
   await press(t, renderer, "escape"); // interrupt
   const frame = t.captureCharFrame();
   assert.match(frame, /HALTED/);
-  assert.match(frame, /attempt-settled cancelled/);
+  assert.match(frame, /▸ Step Attempt cancelled/);
   assert.match(frame, /r resume/); // resumable
 });
 

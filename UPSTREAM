@@ -201,6 +201,15 @@ What was taken and changed:
              what renders; the anchor and new-activity count stay in rows, which
              the scrollbox has no notion of; continuation lines hang by a fixed
              indent rather than OpenCode's icon column.
+    #289 (studied at 228e9095ba, routes/session/index.tsx L1456-L1464): the
+             compaction rule, a top-bordered `<box>` titled " Compaction " in
+             `theme.borderActive`, is the only transcript divider upstream.
+             Taken: a rule across the line with its title centred. Changed:
+             nothing copied; the Step (`─`) and Session (`═`) dividers are plain
+             text lines from `wrap.ts`, because a box title vanishes below about
+             18 columns, while ours wrap their words behind the glyph. They lead
+             the row that begins the Step or Session, so the reducer counts them
+             in that row's height and never as new activity.
 
   keymap.ts (from keymap.tsx):
     Taken:   nothing copied. The upstream ~760-line adapter is not vendored.

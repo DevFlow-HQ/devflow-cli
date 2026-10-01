@@ -21,7 +21,8 @@ import {
   type TimelineScroll,
 } from "./run-timeline.js";
 import { useTheme } from "./vendor/theme-context.js";
-import { wrapRows } from "./wrap.js";
+import { sessionDivider, stepDivider } from "./run-timeline-rows.js";
+import { wrapRows, type Rule, type RuledRow } from "./wrap.js";
 
 // The Run Workbench's reference-inspection overlay, split out of run-workbench.tsx
 // (A26): its state, its self-contained modal key branch, and its view interleave
@@ -63,6 +64,8 @@ export type Openable =
   | {
       readonly label: string;
       readonly transcript: TranscriptPageReference;
+      /** The Session's plain name, which its divider shows (#289). */
+      readonly sessionName: string;
       readonly reference?: never;
       readonly content?: never;
     };
@@ -78,6 +81,7 @@ interface BlobInspection {
 interface TranscriptInspection {
   readonly kind: "transcript";
   readonly title: string;
+  readonly sessionName: string;
   readonly pageRef: TranscriptPageReference;
   readonly entries: readonly RunTranscriptEntryView[];
   /** The opaque cursor for the next older page, absent once the oldest is loaded. */
@@ -92,6 +96,7 @@ type Inspection = BlobInspection | TranscriptInspection;
 
 type TTranscriptInspectionParams = {
   readonly title: string;
+  readonly sessionName: string;
   readonly pageRef: TranscriptPageReference;
   readonly entries: readonly RunTranscriptEntryView[];
   readonly older?: string;
@@ -101,39 +106,16 @@ type TTranscriptInspectionParams = {
 function transcriptInspection(
   params: TTranscriptInspectionParams,
 ): TranscriptInspection {
-  if (params.older !== undefined && params.olderProblem !== undefined) {
-    return {
-      kind: "transcript",
-      title: params.title,
-      pageRef: params.pageRef,
-      entries: params.entries,
-      older: params.older,
-      olderProblem: params.olderProblem,
-    };
-  }
-  if (params.older !== undefined) {
-    return {
-      kind: "transcript",
-      title: params.title,
-      pageRef: params.pageRef,
-      entries: params.entries,
-      older: params.older,
-    };
-  }
-  if (params.olderProblem !== undefined) {
-    return {
-      kind: "transcript",
-      title: params.title,
-      pageRef: params.pageRef,
-      entries: params.entries,
-      olderProblem: params.olderProblem,
-    };
-  }
   return {
     kind: "transcript",
     title: params.title,
+    sessionName: params.sessionName,
     pageRef: params.pageRef,
     entries: params.entries,
+    ...(params.older !== undefined ? { older: params.older } : {}),
+    ...(params.olderProblem !== undefined
+      ? { olderProblem: params.olderProblem }
+      : {}),
   };
 }
 
@@ -176,7 +158,7 @@ export function createInspection(deps: {
 
   const open = (target: Openable): void => {
     if (target.transcript !== undefined) {
-      openTranscript(target.label, target.transcript);
+      openTranscript(target.label, target.sessionName, target.transcript);
       return;
     }
     const read =
@@ -209,6 +191,7 @@ export function createInspection(deps: {
 
   const openTranscript = (
     label: string,
+    sessionName: string,
     pageRef: TranscriptPageReference,
   ): void => {
     const read = deps.readTranscript(pageRef);
@@ -216,6 +199,7 @@ export function createInspection(deps: {
       setInspecting({
         kind: "transcript",
         title: label,
+        sessionName,
         pageRef,
         entries: [],
         problem: read.problem,
@@ -226,6 +210,7 @@ export function createInspection(deps: {
     setInspecting({
       kind: "transcript",
       title: label,
+      sessionName,
       pageRef,
       entries: read.entries,
       ...(read.type === "transcript-page" && read.older !== undefined
@@ -260,6 +245,7 @@ export function createInspection(deps: {
       setInspecting(
         transcriptInspection({
           title: current.title,
+          sessionName: current.sessionName,
           pageRef: current.pageRef,
           entries: current.entries,
           older: current.older,
@@ -271,13 +257,19 @@ export function createInspection(deps: {
     if (read.type !== "transcript-page") {
       return;
     }
-    // transcriptLines is a per-entry concatenation, so the prepended line count is
-    // exactly the older page's lines — no need to re-render the whole transcript.
+    // transcriptRows is a per-entry concatenation whose dividers ride on header
+    // rows, so the prepended row count is exactly the older page's rows — no need
+    // to re-render the whole transcript.
     const old = window();
-    const prepended = transcriptLines(read.entries).length;
+    const prepended = transcriptRows(
+      read.entries,
+      current.sessionName,
+      false,
+    ).length;
     setInspecting(
       transcriptInspection({
         title: current.title,
+        sessionName: current.sessionName,
         pageRef: current.pageRef,
         entries: read.entries.concat(current.entries),
         older: read.older,
@@ -292,7 +284,7 @@ export function createInspection(deps: {
 
   // Display lines include an explicit truncation marker as the final row when a
   // blob was capped, so it scrolls into view like any other line (#91 AC4).
-  const logicalLines = (): readonly string[] => {
+  const logicalLines = (): readonly (string | RuledRow)[] => {
     const current = inspecting();
     if (current === undefined) return [];
     if (current.problem !== undefined) {
@@ -302,12 +294,17 @@ export function createInspection(deps: {
       ];
     }
     if (current.kind === "transcript") {
-      const content = transcriptLines(current.entries);
+      const content = transcriptRows(
+        current.entries,
+        current.sessionName,
+        current.older === undefined,
+      );
       if (current.olderProblem === undefined) return content;
       return [
         `Notice [${current.olderProblem.code}]: ${current.olderProblem.explanation}`,
         current.olderProblem.remediation,
-      ].concat(content);
+        ...content,
+      ];
     }
     if (!current.truncated) return current.lines;
     const last = current.lines.at(-1);
@@ -349,23 +346,35 @@ export function createInspection(deps: {
   return { inspecting, open, handleKey, lines, window };
 }
 
-/** Render transcript entries as display lines: a role header per entry, then its
+/** Render transcript entries as display rows: a role header per entry, then its
  *  content split on `\r?\n` with escapes stripped (captured content can carry
  *  colour), then a blank separator. Whole-entry blocks, so a prepend adds only
- *  leading lines and the anchor bump is exact. */
-function transcriptLines(
+ *  leading rows and the anchor bump is exact. Dividers (#289) lead header rows:
+ *  the Session divider on the first entry and a Step divider wherever the
+ *  Application-supplied Step changes, drawn only where the start is known — the
+ *  first entry is the Session's start only once no older page remains. */
+function transcriptRows(
   entries: readonly RunTranscriptEntryView[],
-): readonly string[] {
-  const out: string[] = [];
-  for (const entry of entries) {
-    out.push(
-      entry.role === "user"
-        ? `◇ User Turn · session ${entry.session}`
-        : `◆ Assistant · session ${entry.session}`,
-    );
+  sessionName: string,
+  fromStart: boolean,
+): readonly (string | RuledRow)[] {
+  const out: (string | RuledRow)[] = [];
+  let step: string | undefined;
+  entries.forEach((entry, index) => {
+    const known = index > 0 || fromStart;
+    const rules: Rule[] = [];
+    if (index === 0 && fromStart) rules.push(sessionDivider(sessionName));
+    if (known && entry.step !== undefined && entry.step !== step) {
+      rules.push(stepDivider(entry.step));
+    }
+    step = entry.step ?? step;
+    out.push({
+      rules,
+      text: entry.role === "user" ? "◇ User Turn" : "◆ Assistant",
+    });
     for (const line of stripAnsi(entry.content).split(/\r?\n/)) out.push(line);
     out.push("");
-  }
+  });
   return out;
 }
 

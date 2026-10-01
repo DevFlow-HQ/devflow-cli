@@ -883,6 +883,12 @@ export function attemptStepId(attemptId: string): string | undefined {
   return decodeAttemptId(attemptId)?.stepId;
 }
 
+/** The zero-based Iteration an Attempt id names (0 outside a Repeat group), or
+ *  undefined for an id this Module did not mint. */
+export function attemptIteration(attemptId: string): number | undefined {
+  return decodeAttemptId(attemptId)?.iteration;
+}
+
 // --- Command step (an executable dispatch entry) ---------------------------
 
 async function runCommand(
