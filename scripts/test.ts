@@ -4,8 +4,10 @@
 // Raising the worker count is safe because the semantic suite is spawn-free: every
 // suite that reached a real child under the runner moved to standalone runtime
 // conformance (the last two, the Claude Code and Codex Harness suites, in #198),
-// so the Bun 1.4.2 child-lifecycle defect (#149, #150) — and the #172 three-worker
-// rejection it caused on the Windows runner — can no longer fire.
+// so the Bun 1.4.2 child-lifecycle defect (#149, #150) can no longer fire. #172's
+// three-worker rejection on the Windows runner was one run, attributed to that
+// defect but never traced; its 30s timeouts are also the signature of the
+// system-disk stalls below.
 //
 // Three workers remain the calibrated count. #274 traced intermittent Windows
 // stalls to temp-file and SQLite writes on the runner's system disk. The Windows
