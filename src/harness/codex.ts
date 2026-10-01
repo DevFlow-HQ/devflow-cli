@@ -820,7 +820,6 @@ type TControlFailure = {
   readonly category: string;
   readonly diagnostics: string;
   readonly cause: unknown;
-  readonly nativeCode?: string;
 };
 
 type TInterruptControlState =
@@ -1097,20 +1096,18 @@ class CodexTurn implements HarnessTurn {
   ): ControlReceipt {
     const expected = expectedControlRejection(cause);
     if (expected !== undefined) return expected;
-    if (cause instanceof CodexRpcResponseError) {
-      this.controlFailure({
-        category: "native-control",
-        diagnostics,
-        cause,
-        nativeCode: String(cause.code),
+    if (
+      cause instanceof CodexRpcResponseError ||
+      cause instanceof CodexExchangeTimeoutError
+    ) {
+      this.emit({
+        kind: "activity",
+        description: `${diagnostics} ${cause.message}`,
       });
       return { outcome: "rejected", reason: "expired" };
     }
     this.controlFailure({
-      category:
-        cause instanceof CodexExchangeTimeoutError
-          ? "control-timeout"
-          : "control-transport",
+      category: "control-transport",
       diagnostics,
       cause,
     });
@@ -1121,23 +1118,13 @@ class CodexTurn implements HarnessTurn {
     if (this.settled) return;
     this.session.markDetached();
     const interruptionUnknown = this.interruptionOutcomeUnknown();
-    const failure: HarnessFailure =
-      params.nativeCode === undefined
-        ? {
-            phase: "control",
-            category: params.category,
-            possibleEffects: this.submitted ? "possible" : "none",
-            diagnostics: params.diagnostics,
-            cause: params.cause,
-          }
-        : {
-            phase: "control",
-            category: params.category,
-            possibleEffects: this.submitted ? "possible" : "none",
-            diagnostics: params.diagnostics,
-            cause: params.cause,
-            nativeCode: params.nativeCode,
-          };
+    const failure: HarnessFailure = {
+      phase: "control",
+      category: params.category,
+      possibleEffects: this.submitted ? "possible" : "none",
+      diagnostics: params.diagnostics,
+      cause: params.cause,
+    };
     this.settle({
       kind: "lost",
       detail: {

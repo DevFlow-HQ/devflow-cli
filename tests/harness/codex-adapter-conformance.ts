@@ -893,51 +893,69 @@ test("codex-live-controls native Interrupt mismatch is expired", async () => {
   await prepared.close();
 });
 
-test("codex-live-controls does not downgrade a near-miss Interrupt error", async () => {
+test("codex-live-controls refuses a near-miss Interrupt error without losing the Turn", async () => {
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
     interruptRpcError: "near-miss",
+    steerTerminal: "completed",
   });
   const prepared = await prepareCodex(installed.path);
   const turn = prepared.startTurn(turnRequest());
+  const events = observeEvents(turn);
   await waitForSession(turn);
 
   assert.deepEqual(await turn.interrupt(), {
     outcome: "rejected",
     reason: "expired",
   });
-  const result = await turn.result();
-  assert.equal(result.kind, "lost");
-  if (result.kind !== "lost") throw new Error("unreachable");
-  assert.equal(result.detail.failure?.phase, "control");
-  assert.equal(result.detail.failure?.category, "native-control");
-  assert.equal(result.detail.failure?.nativeCode, "-32600");
+  assert.deepEqual(
+    events.filter((event) => event.kind === "activity"),
+    [
+      {
+        kind: "activity",
+        description:
+          "Codex turn/interrupt control failed. turn/interrupt returned RPC error -32600: expected active turn id turn-1 but found turn-2 unexpectedly",
+      },
+    ],
+  );
+  assert.deepEqual(await turn.steer({ text: "continue after refusal" }), {
+    outcome: "accepted",
+  });
+  assert.equal((await turn.result()).kind, "completed");
   await prepared.close();
 });
 
-test("codex-live-controls native internal control error stays distinct and preserves its code", async () => {
+test("codex-live-controls native internal control error preserves its diagnostic and permits later input", async () => {
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
     interruptRpcError: "internal",
+    steerTerminal: "completed",
   });
   const prepared = await prepareCodex(installed.path);
   const turn = prepared.startTurn(turnRequest());
+  const events = observeEvents(turn);
   await waitForSession(turn);
 
   assert.deepEqual(await turn.interrupt(), {
     outcome: "rejected",
     reason: "expired",
   });
-  const result = await turn.result();
-  assert.equal(result.kind, "lost");
-  if (result.kind !== "lost") throw new Error("unreachable");
-  assert.equal(result.detail.unknown, "completion");
-  assert.equal(result.detail.failure?.phase, "control");
-  assert.equal(result.detail.failure?.category, "native-control");
-  assert.equal(result.detail.failure?.nativeCode, "-32603");
-  assert.ok(result.detail.failure?.cause instanceof Error);
+  assert.deepEqual(
+    events.filter((event) => event.kind === "activity"),
+    [
+      {
+        kind: "activity",
+        description:
+          "Codex turn/interrupt control failed. turn/interrupt returned RPC error -32603: internal error",
+      },
+    ],
+  );
+  assert.deepEqual(await turn.steer({ text: "continue after refusal" }), {
+    outcome: "accepted",
+  });
+  assert.equal((await turn.result()).kind, "completed");
   await prepared.close();
 });
 
@@ -1045,26 +1063,34 @@ for (const controlCase of [
   });
 }
 
-test("codex-live-controls does not downgrade a near-miss native error", async () => {
+test("codex-live-controls refuses a near-miss Steer error until native interruption", async () => {
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
     steerRpcError: "near-miss",
+    interruptTerminal: "interrupted",
   });
   const prepared = await prepareCodex(installed.path);
   const turn = prepared.startTurn(turnRequest());
+  const events = observeEvents(turn);
   await waitForSession(turn);
 
-  assert.deepEqual(await turn.steer({ text: "must fail closed" }), {
+  assert.deepEqual(await turn.steer({ text: "refused guidance" }), {
     outcome: "rejected",
     reason: "expired",
   });
-  const result = await turn.result();
-  assert.equal(result.kind, "lost");
-  if (result.kind !== "lost") throw new Error("unreachable");
-  assert.equal(result.detail.failure?.phase, "control");
-  assert.equal(result.detail.failure?.category, "native-control");
-  assert.equal(result.detail.failure?.nativeCode, "-32600");
+  assert.deepEqual(
+    events.filter((event) => event.kind === "activity"),
+    [
+      {
+        kind: "activity",
+        description:
+          "Codex turn/steer control failed. turn/steer returned RPC error -32600: expected active turn id `turn-1` but found `turn-2` unexpectedly",
+      },
+    ],
+  );
+  assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
+  assert.equal((await turn.result()).kind, "interrupted");
   await prepared.close();
 });
 
@@ -1091,11 +1117,12 @@ test("codex-live-controls malformed Steer response fails closed without throwing
   await prepared.close();
 });
 
-test("codex-live-controls control timeout preserves its cause on the Turn", async () => {
+test("codex-live-controls Steer timeout keeps the Turn until native interruption", async () => {
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
     stallSteerResponse: true,
+    interruptTerminal: "interrupted",
   });
   const preparedResult = await createCodexAdapter({
     path: installed.path,
@@ -1106,60 +1133,288 @@ test("codex-live-controls control timeout preserves its cause on the Turn", asyn
   if (!preparedResult.ok) throw new Error("unreachable");
   const prepared = preparedResult.harness;
   const turn = prepared.startTurn(turnRequest());
+  const events = observeEvents(turn);
   await waitForSession(turn);
 
   assert.deepEqual(await turn.steer({ text: "will time out" }), {
     outcome: "rejected",
     reason: "expired",
   });
-  const result = await turn.result();
-  assert.equal(result.kind, "lost");
-  if (result.kind !== "lost") throw new Error("unreachable");
-  assert.equal(result.detail.failure?.category, "control-timeout");
-  assert.equal(result.detail.failure?.phase, "control");
-  assert.match(
-    result.detail.failure?.cause instanceof Error
-      ? result.detail.failure.cause.message
-      : "",
-    /turn\/steer control exchange timed out/,
+  assert.deepEqual(
+    events.filter((event) => event.kind === "activity"),
+    [
+      {
+        kind: "activity",
+        description:
+          "Codex turn/steer control failed. turn/steer control exchange timed out",
+      },
+    ],
   );
+  assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
+  assert.equal((await turn.result()).kind, "interrupted");
   await prepared.close();
 });
 
-for (const failure of ["malformed", "timeout"] as const) {
-  test(`codex-live-controls Interrupt ${failure} is a control failure with interruption unknown`, async () => {
+test("codex-live-controls malformed Interrupt stays protocol corruption with interruption unknown", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({
+    withholdTerminal: true,
+    malformedInterruptResponse: true,
+  });
+  const prepared = await prepareCodex(installed.path);
+  const turn = prepared.startTurn(turnRequest());
+  await waitForSession(turn);
+
+  assert.deepEqual(await turn.interrupt(), {
+    outcome: "rejected",
+    reason: "expired",
+  });
+  const result = await turn.result();
+  assert.equal(result.kind, "lost");
+  if (result.kind !== "lost") throw new Error("unreachable");
+  assert.equal(result.detail.unknown, "interruption");
+  assert.equal(result.detail.session.state, "detached");
+  assert.equal(result.detail.failure?.phase, "control");
+  assert.equal(result.detail.failure?.category, "protocol-corruption");
+  assert.ok(result.detail.failure?.cause instanceof Error);
+  await prepared.close();
+});
+
+for (const control of ["steer", "interrupt"] as const) {
+  for (const refusal of ["native-error", "timeout"] as const) {
+    for (const terminal of [
+      "completed",
+      "failed",
+      "interrupted",
+      "exit",
+      "close",
+    ] as const) {
+      test(`codex-live-controls refused ${control} ${refusal} waits for native ${terminal}`, async () => {
+        const installed = installSyntheticCodexReplayer();
+        installed.configureTurn({
+          approvals: [
+            {
+              id: "finish",
+              kind: "command",
+              itemId: "command-1",
+              command: "bun test",
+            },
+          ],
+          approvalTerminal: terminal === "close" ? "completed" : terminal,
+          steerRpcError:
+            control === "steer" && refusal === "native-error"
+              ? "near-miss"
+              : undefined,
+          interruptRpcError: "internal",
+          stallSteerResponse: control === "steer" && refusal === "timeout",
+          stallInterruptResponse:
+            control === "interrupt" && refusal === "timeout",
+          respondToStalledControlsOnCompletion: refusal === "timeout",
+        });
+        const preparedResult = await createCodexAdapter({
+          path: installed.path,
+          env: {},
+          controlTimeoutMs: 1_000,
+        }).prepare({ workspace: process.cwd() });
+        assert.equal(preparedResult.ok, true);
+        if (!preparedResult.ok) throw new Error("unreachable");
+        const prepared = preparedResult.harness;
+        const turn = prepared.startTurn({ ...turnRequest(), origin: "human" });
+        const events = observeEvents(turn);
+        await waitForRequestCount(turn, events, 1);
+        let settled = false;
+        void turn.result().then(() => {
+          settled = true;
+        });
+        turn.subscribe(() =>
+          assert.equal(settled, false, "no event follows the result"),
+        );
+
+        assert.deepEqual(
+          await (control === "steer"
+            ? turn.steer({ text: "refused guidance" })
+            : turn.interrupt()),
+          { outcome: "rejected", reason: "expired" },
+        );
+        assert.equal(
+          settled,
+          false,
+          "the refused call must not settle the Turn",
+        );
+        const activities = events.filter((event) => event.kind === "activity");
+        assert.equal(activities.length, 1);
+        assert.equal(
+          activities[0]?.description,
+          refusal === "timeout"
+            ? `Codex turn/${control} control failed. turn/${control} control exchange timed out`
+            : control === "steer"
+              ? "Codex turn/steer control failed. turn/steer returned RPC error -32600: expected active turn id `turn-1` but found `turn-2` unexpectedly"
+              : "Codex turn/interrupt control failed. turn/interrupt returned RPC error -32603: internal error",
+        );
+        if (control === "interrupt" && refusal === "timeout") {
+          assert.deepEqual(await turn.interrupt(), {
+            outcome: "rejected",
+            reason: "already-settled",
+          });
+          assert.deepEqual(
+            await turn.steer({ text: "cannot race the pending stop" }),
+            { outcome: "rejected", reason: "expired" },
+          );
+        }
+
+        if (terminal === "close") await prepared.close();
+        else await answerControlApproval(turn, events);
+        const result = await turn.result();
+        const eventCount = events.length;
+        assert.equal(
+          result.kind,
+          terminal === "exit" || terminal === "close" ? "lost" : terminal,
+        );
+        if (result.kind === "lost") {
+          assert.equal(result.detail.session.state, "detached");
+          assert.equal(
+            result.detail.unknown,
+            control === "interrupt" && refusal === "timeout"
+              ? "interruption"
+              : "completion",
+          );
+          assert.equal(result.detail.failure?.phase, "turn");
+          assert.equal(
+            result.detail.failure?.category,
+            control === "interrupt" && refusal === "timeout"
+              ? "interruption-unknown"
+              : "app-server-closed",
+          );
+        } else if (result.kind === "failed") {
+          assert.equal(result.detail.failure.category, "execution");
+          assert.equal(
+            result.detail.failure.diagnostics,
+            "scripted terminal failure",
+          );
+        } else if (result.kind === "interrupted") {
+          assert.equal(result.detail.session.state, "detached");
+        } else if (result.kind === "completed") {
+          assert.equal(result.detail.session.state, "open");
+          const coordinate = events.flatMap((event) =>
+            event.kind === "session" &&
+            event.facts?.recoveryCoordinate !== undefined
+              ? [event.facts.recoveryCoordinate]
+              : [],
+          )[0];
+          assert.ok(coordinate !== undefined);
+          const next = prepared.startTurn({
+            ...turnRequest(),
+            origin: "human",
+            resume: coordinate,
+          });
+          const nextEvents = observeEvents(next);
+          await answerControlApproval(next, nextEvents);
+          assert.equal((await next.result()).kind, "completed");
+          const appServer = installed
+            .invocations()
+            .find((invocation) => invocation.args.join(" ") === "app-server");
+          assert.ok(appServer !== undefined);
+          assert.deepEqual(
+            appServer.stdinLines
+              .map((line) => JSON.parse(line).method)
+              .filter((method) => method !== undefined),
+            [
+              "initialize",
+              "initialized",
+              "account/read",
+              "model/list",
+              "thread/start",
+              "turn/start",
+              `turn/${control}`,
+              "turn/start",
+            ],
+          );
+        }
+        await prepared.close();
+        assert.strictEqual(await turn.result(), result);
+        assert.equal(
+          events.length,
+          eventCount,
+          "late responses and close cannot publish after the result",
+        );
+      });
+    }
+  }
+}
+
+async function answerControlApproval(
+  turn: ReturnType<PreparedHarness["startTurn"]>,
+  events: readonly TurnEvent[],
+): Promise<void> {
+  await waitForRequestCount(turn, events, 1);
+  const request = events.find((event) => event.kind === "request-raised");
+  assert.ok(request?.kind === "request-raised");
+  assert.deepEqual(
+    await turn.answerRequest({
+      requestId: request.request.requestId,
+      kind: "approval",
+      decision: "allow",
+    }),
+    { outcome: "accepted" },
+  );
+}
+
+for (const control of ["steer", "interrupt"] as const) {
+  test(`codex-live-controls ${control} transport write failure still loses and detaches the Turn`, async () => {
     const installed = installSyntheticCodexReplayer();
-    installed.configureTurn({
-      withholdTerminal: true,
-      malformedInterruptResponse: failure === "malformed",
-      stallInterruptResponse: failure === "timeout",
-    });
-    const preparedResult = await createCodexAdapter({
-      path: installed.path,
-      env: {},
-      controlTimeoutMs: 1_000,
-    }).prepare({ workspace: process.cwd() });
+    const controlled = approvalRaceProcess();
+    const cause = new Error(`scripted turn/${control} write failure`);
+    const preparedResult = await createCodexAdapter(
+      { path: installed.path, env: {} },
+      processWithSpawn(() =>
+        Promise.resolve({
+          ok: true,
+          process: {
+            ...controlled.process,
+            writeStdin(bytes) {
+              const message = JSON.parse(new TextDecoder().decode(bytes));
+              return message.method === `turn/${control}`
+                ? Promise.reject(cause)
+                : controlled.process.writeStdin(bytes);
+            },
+          },
+        }),
+      ),
+    ).prepare({ workspace: process.cwd() });
     assert.equal(preparedResult.ok, true);
     if (!preparedResult.ok) throw new Error("unreachable");
     const prepared = preparedResult.harness;
     const turn = prepared.startTurn(turnRequest());
-    await waitForSession(turn);
+    const events = observeEvents(turn);
+    await waitForRequestCount(turn, events, 1);
 
-    assert.deepEqual(await turn.interrupt(), {
-      outcome: "rejected",
-      reason: "expired",
-    });
+    assert.deepEqual(
+      await (control === "steer"
+        ? turn.steer({ text: "unwritable guidance" })
+        : turn.interrupt()),
+      { outcome: "rejected", reason: "expired" },
+    );
     const result = await turn.result();
     assert.equal(result.kind, "lost");
     if (result.kind !== "lost") throw new Error("unreachable");
-    assert.equal(result.detail.unknown, "interruption");
-    assert.equal(result.detail.failure?.phase, "control");
     assert.equal(
-      result.detail.failure?.category,
-      failure === "malformed" ? "protocol-corruption" : "control-timeout",
+      result.detail.unknown,
+      control === "interrupt" ? "interruption" : "completion",
     );
-    assert.ok(result.detail.failure?.cause instanceof Error);
+    assert.equal(result.detail.session.state, "detached");
+    assert.equal(result.detail.failure?.phase, "control");
+    assert.equal(result.detail.failure?.category, "control-transport");
+    assert.strictEqual(result.detail.failure?.cause, cause);
+    assert.equal(
+      events.filter((event) => event.kind === "request-expired").length,
+      1,
+    );
+    assert.equal(events.filter((event) => event.kind === "activity").length, 0);
+    const eventCount = events.length;
+    controlled.emitTerminal();
     await prepared.close();
+    assert.strictEqual(await turn.result(), result);
+    assert.equal(events.length, eventCount);
   });
 }
 

@@ -478,7 +478,7 @@ export function runInterruptRecoveryCases(
   );
 
   register(
-    name("a process that ignores the graceful signal is force-killed and lost"),
+    name("an unconfirmed interruption stays unknown after the process ends"),
     async () => {
       const prepared = await prepare(scenarios.unresponsiveInterrupt());
       const turn = prepared.startTurn(
@@ -486,7 +486,21 @@ export function runInterruptRecoveryCases(
       );
       const events = observe(turn);
       await events.waitForSession();
-      await turn.interrupt();
+      const receipt = await turn.interrupt();
+      if (receipt.outcome === "rejected") {
+        assert.equal(receipt.reason, "expired");
+        let settled = false;
+        void turn.result().then(() => {
+          settled = true;
+        });
+        await Promise.resolve();
+        assert.equal(
+          settled,
+          false,
+          "a refused interrupt leaves the Turn live",
+        );
+        await prepared.close();
+      }
       const result = await turn.result();
       assert.equal(result.kind, "lost");
       if (result.kind !== "lost") throw new Error("unreachable");

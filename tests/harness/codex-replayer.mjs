@@ -55,6 +55,7 @@ let turnNumber = 0;
 let activeTurnId;
 const outstandingApprovals = new Map();
 let steerNumber = 0;
+const stalledControls = [];
 
 function replayLine(line) {
   return replayRecordedLine(line, requestedWorkspace ?? process.cwd());
@@ -373,6 +374,7 @@ for await (const line of lines) {
       scenario.turn?.stallSteerResponse === true ||
       (scenario.turn?.stallSecondSteerResponse === true && steerNumber === 2)
     ) {
+      stalledControls.push(request);
       continue;
     }
     if (scenario.turn?.steerRpcError !== undefined) {
@@ -410,7 +412,10 @@ for await (const line of lines) {
         scenario.turn.interruptTerminalBeforeResponse,
       );
     }
-    if (scenario.turn?.stallInterruptResponse === true) continue;
+    if (scenario.turn?.stallInterruptResponse === true) {
+      stalledControls.push(request);
+      continue;
+    }
     if (scenario.turn?.interruptRpcError !== undefined) {
       const errors = {
         stale: { code: -32600, message: "no active turn to interrupt" },
@@ -638,6 +643,23 @@ function emitApprovalRequest(approval, turnId) {
 
 function completeActiveTurn() {
   if (activeTurnId === undefined) return;
-  emitTurnCompleted(activeTurnId, "completed");
+  if (scenario.turn?.approvalTerminal === "exit") process.exit(0);
+  emitTurnCompleted(
+    activeTurnId,
+    scenario.turn?.approvalTerminal ?? "completed",
+  );
   activeTurnId = undefined;
+  if (scenario.turn?.respondToStalledControlsOnCompletion === true) {
+    for (const request of stalledControls.splice(0)) {
+      process.stdout.write(
+        `${JSON.stringify({
+          id: request.id,
+          result:
+            request.method === "turn/steer"
+              ? { turnId: request.params.expectedTurnId }
+              : {},
+        })}\n`,
+      );
+    }
+  }
 }

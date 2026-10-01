@@ -101,6 +101,8 @@ interface CodexTurnReplayOptions {
   readonly malformedItem?: boolean;
   readonly malformedTerminal?: boolean;
   readonly approvals?: readonly CodexApprovalReplay[];
+  readonly approvalTerminal?: "completed" | "failed" | "interrupted" | "exit";
+  readonly respondToStalledControlsOnCompletion?: boolean;
   readonly resolveFirstApproval?: boolean;
   readonly completeWithOutstandingApproval?: boolean;
   readonly duplicateFirstApproval?: boolean;

@@ -47,6 +47,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ### Interrupt, recovery, and cleanup
 
+- Codex control timeouts and native RPC errors refuse the call while native terminal truth owns the Turn; unexpected refusals emit a live activity diagnostic.
+  A timed-out Interrupt stays sent: retries and Steer are refused, and later connection loss leaves interruption unknown. A native RPC error resets it to idle.
+  Refusal alone preserves attachment; malformed responses and transport failures still lose and detach the Turn.
 - A Turn settles `interrupted` only on confirmed interruption; a force-kill, lost connection, or unconfirmed termination settles it `lost` with
   `interruption-unknown`. Windows has no graceful stage ([process notes](../process/AGENTS.md)), so a live-child interrupt there truthfully settles
   `lost`; the profile's interruption evidence states what each Harness delivers per OS, and the conformance `interruptOutcome` option (interrupt/recovery
