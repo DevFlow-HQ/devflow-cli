@@ -7,6 +7,7 @@ import type {
   BundleCatalogSnapshot,
   HarnessCatalogSnapshot,
   HarnessFocus,
+  HarnessFocusResult,
   HarnessFocusSelector,
   HarnessFocusSnapshot,
   HarnessSummary,
@@ -267,6 +268,58 @@ async function mount(options: TMountOptions = {}) {
   return { t, focused: catalog.focused, closed: catalog.closed };
 }
 
+// A catalog whose list never changes; `result` answers each focus it opens.
+function staticCatalog(
+  list: readonly HarnessSummary[],
+  result: (id: HarnessFocusSelector["id"]) => HarnessFocusResult,
+) {
+  const [snapshot] = createSignal<HarnessCatalogSnapshot>({
+    family: "harness-catalog",
+    view: "list",
+    harnesses: list,
+  });
+  const focused: HarnessFocusSelector[] = [];
+  const closed: HarnessFocusSelector[] = [];
+  return {
+    view: {
+      openList: () => snapshot,
+      openFocus(selector: HarnessFocusSelector) {
+        focused.push(selector);
+        onCleanup(() => closed.push(selector));
+        const [focus] = createSignal<HarnessFocusSnapshot>({
+          family: "harness-catalog",
+          view: "focus",
+          selection: selector,
+          result: result(selector.id),
+        });
+        return focus;
+      },
+    },
+    focused,
+    closed,
+  };
+}
+
+// Side by side, a panel row reads `│ results │ │ inspector │`. The results
+// pane is the first bordered column only on lines that open with its border;
+// the inspector is always the last bordered column.
+function resultsPane(frame: string): string {
+  return frame
+    .split("\n")
+    .map((line) => (line.trimStart().startsWith("│") ? line.split("│")[1] : ""))
+    .join("\n");
+}
+
+function inspectorPane(frame: string): string {
+  return frame
+    .split("\n")
+    .map((line) => {
+      const columns = line.split("│");
+      return columns.length >= 3 ? columns[columns.length - 2] : "";
+    })
+    .join("\n");
+}
+
 test("harness-catalog-screen renders normalized rows and every inspector section", async () => {
   const { t, focused } = await mount();
   await t.waitForFrame((frame) => frame.includes("2 discovered"));
@@ -275,9 +328,16 @@ test("harness-catalog-screen renders normalized rows and every inspector section
   assert.deepEqual(focused, [{ id: "codex" }]);
   assert.match(frame, /2 discovered · 1 qualified on this system/);
   assert.match(frame, /Find a Harness/);
-  assert.match(frame, /Codex.*Qualified with limits/s);
-  assert.match(frame, /found via PATH name 'codex'/i);
-  assert.match(frame, /2 models observed/);
+  // The everyday row names status and models; discovery evidence stays in
+  // the inspector.
+  const results = resultsPane(frame);
+  assert.match(
+    results,
+    /› Codex · Qualified with\s+limits\s+2 models observed/,
+  );
+  assert.match(results, /Claude Code · Not checked\s+Models not yet observed/);
+  assert.doesNotMatch(results, /found via|PATH name/);
+  assert.match(frame, /Discovery · found via PATH name 'codex'/);
   assert.match(frame, /Harness · codex/);
   assert.match(frame, /Executable · PATH name 'codex' -> \/tools\/codex/);
   assert.match(frame, /Version · 1\.2\.3/);
@@ -288,8 +348,12 @@ test("harness-catalog-screen renders normalized rows and every inspector section
   assert.match(frame, /gpt-5-mini · Available for Run selection/);
   assert.match(frame, /Capabilities/);
   assert.match(frame, /Session recovery · Available with limits/);
-  assert.match(frame, /Limits · Reloads retained history/);
-  assert.match(frame, /Structured questions · Not checked/);
+  // Each capability's description and limits sit indented under its name,
+  // with a blank line before the next capability.
+  assert.match(
+    inspectorPane(frame),
+    /^ Session recovery · Available with limits *\n {3}Resume a Harness Session after process loss\. *\n {3}Limits · Reloads retained history before live activity\. *\n *\n Same-Turn steering · Unavailable *\n {3}Send guidance/m,
+  );
   assert.doesNotMatch(
     frame,
     /Adapter|native payload|credential|Action Offers/i,
@@ -303,6 +367,10 @@ test("harness-catalog-screen renders normalized rows and every inspector section
   assert.match(
     t.captureCharFrame(),
     /Harness-owned settings stay with the Harness/,
+  );
+  assert.match(
+    inspectorPane(t.captureCharFrame()),
+    /^ Structured questions · Not checked *\n {3}Answer structured questions/m,
   );
 });
 
@@ -430,31 +498,10 @@ test("a fully qualified Harness counts and renders without a limits suffix", asy
     capabilities: QUALIFIED_CODEX.capabilities,
     configurationPosture: QUALIFIED_CODEX.configurationPosture,
   };
-  const [list] = createSignal<HarnessCatalogSnapshot>({
-    family: "harness-catalog",
-    view: "list",
-    harnesses: [qualified],
-  });
-  const focused: HarnessFocusSelector[] = [];
-  const closed: HarnessFocusSelector[] = [];
-  const catalog = {
-    view: {
-      openList: () => list,
-      openFocus(selector: HarnessFocusSelector) {
-        focused.push(selector);
-        onCleanup(() => closed.push(selector));
-        const [focus] = createSignal<HarnessFocusSnapshot>({
-          family: "harness-catalog",
-          view: "focus",
-          selection: selector,
-          result: { found: true, harness: qualified },
-        });
-        return focus;
-      },
-    },
-    focused,
-    closed,
-  };
+  const catalog = staticCatalog([qualified], () => ({
+    found: true,
+    harness: qualified,
+  }));
 
   const { t } = await mount({ catalog });
   await t.waitForFrame((frame) => frame.includes("1 qualified on this system"));
@@ -491,57 +538,105 @@ test("unchecked discovery variants, free-text models, and a focus Problem remain
     },
     qualification: { state: "not-checked" },
   };
-  const [list] = createSignal<HarnessCatalogSnapshot>({
-    family: "harness-catalog",
-    view: "list",
-    harnesses: [unsupported, missing],
-  });
-  const focused: HarnessFocusSelector[] = [];
-  const closed: HarnessFocusSelector[] = [];
-  const catalog = {
-    view: {
-      openList: () => list,
-      openFocus(selector: HarnessFocusSelector) {
-        const [focus] = createSignal<HarnessFocusSnapshot>({
-          family: "harness-catalog",
-          view: "focus",
-          selection: selector,
-          result:
-            selector.id === "codex"
-              ? { found: true, harness: unsupported }
-              : {
-                  found: false,
-                  problem: {
-                    code: "harness-not-found",
-                    explanation: "The selected Harness is unavailable.",
-                    remediation: "Inspect another Harness.",
-                    possibleEffects: "none",
-                  },
-                },
-        });
-        return focus;
-      },
-    },
-    focused,
-    closed,
-  };
+  const catalog = staticCatalog([unsupported, missing], (id) =>
+    id === "codex"
+      ? { found: true, harness: unsupported }
+      : {
+          found: false,
+          problem: {
+            code: "harness-not-found",
+            explanation: "The selected Harness is unavailable.",
+            remediation: "Inspect another Harness.",
+            possibleEffects: "none",
+          },
+        },
+  );
 
   const { t } = await mount({ catalog });
   await t.waitForFrame((frame) => frame.includes("0 qualified on this system"));
   const unchecked = t.captureCharFrame();
-  assert.match(unchecked, /unsupported shim \/tools\/codex\.cmd/);
+  // A Harness that cannot run says so in words on its row; the path and the
+  // searched locations stay in the inspector.
+  const results = resultsPane(unchecked);
+  assert.match(
+    results,
+    /› Codex · Unavailable ·\s+unsupported shim\s+Models not yet observed/,
+  );
+  assert.match(
+    results,
+    /Claude Code · Unavailable ·\s+not found on PATH\s+Models not yet observed/,
+  );
+  assert.doesNotMatch(results, /codex\.cmd|searched|Free-text/);
+  assert.match(
+    inspectorPane(unchecked),
+    /Discovery · unsupported shim \/tools\/codex\.cmd/,
+  );
   assert.match(unchecked, /Checked · Not checked/);
   assert.match(unchecked, /Authentication · Not checked/);
-  assert.match(unchecked, /Free-text model entry/);
+  assert.match(inspectorPane(unchecked), /Free-text model entry/);
 
   t.mockInput.pressArrow("down");
   await t.waitForFrame((frame) =>
     frame.includes("selected Harness is unavailable"),
   );
   assert.match(
-    t.captureCharFrame(),
-    /not found; searched PATH.*name 'claude'/s,
+    resultsPane(t.captureCharFrame()),
+    /› Claude Code · Unavailable ·\s+not found on PATH/,
   );
+
+  // Stacked on a small terminal, the longer status words wrap inside the row
+  // rather than overflowing it.
+  t.resize(40, 24);
+  await t.renderOnce();
+  const narrow = t.captureCharFrame();
+  assert.match(
+    resultsPane(narrow),
+    /› Claude Code · Unavailable ·\s+not found on PATH/,
+  );
+  for (const line of narrow.split("\n")) {
+    assert.ok(line.length <= 40, `line overflows: ${JSON.stringify(line)}`);
+  }
+});
+
+test("qualified rows name free-text entry, and a Harness without model selection shows no model line", async () => {
+  const qualification = QUALIFIED_CODEX.qualification;
+  if (!("observation" in qualification)) {
+    throw new Error("qualified fixture lost its observation");
+  }
+  const freeText: HarnessFocus = {
+    id: "codex",
+    name: "Codex",
+    discovery: QUALIFIED_CODEX.discovery,
+    qualification: {
+      state: "qualified",
+      observation: qualification.observation,
+    },
+    supportedModels: { kind: "free-text" },
+    capabilities: QUALIFIED_CODEX.capabilities,
+  };
+  const noModels: HarnessFocus = {
+    id: "claude-code",
+    name: "Claude Code",
+    discovery: UNAVAILABLE_CLAUDE.discovery,
+    qualification: {
+      state: "qualified",
+      observation: qualification.observation,
+    },
+    capabilities: QUALIFIED_CODEX.capabilities,
+  };
+  const catalog = staticCatalog([freeText, noModels], (id) => ({
+    found: true,
+    harness: id === "codex" ? freeText : noModels,
+  }));
+
+  const { t } = await mount({ catalog });
+  await t.waitForFrame((frame) => frame.includes("Free-text model entry"));
+  const frame = t.captureCharFrame();
+  assert.match(
+    resultsPane(frame),
+    /› Codex · Qualified *\n {3}Free-text model entry *\n {3}Claude Code · Qualified *\n *\n/,
+  );
+  assert.doesNotMatch(frame, /Models not yet observed/);
 });
 
 test("Harness catalog stacks and resizes without horizontal overflow", async () => {

@@ -34,6 +34,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   fresh `launch-preparation` Projection for the complete draft, offers Start only while ready, and submits that Projection's exact `launch-run` draft (#191/#192).
 - A refused launch routes only by `correction`, clears only the invalidated draft field, preserves every other choice, and keeps its inline finding after the dismissible
   `Run not started` notice leaves. A typed preparation failure after admission still rides the Run Projection into the Workbench (#146).
+- `paddingLeft` on a `<text>` does not indent it; wrap the text in a `paddingLeft` `<box>`, which also keeps its wrapped lines indented (#285).
 - `clip()` (`clip.ts`) is not the horizontal-overflow guard — a container's `overflow="hidden"` already clips at width. It is the ellipsis affordance:
   call it only on a row that should _advertise_ its truncation with a trailing `…` (a name, path, or status that can exceed the inner width), not on
   every row. It measures **display columns** with `string-width`, not `.length` (D5): a wide glyph is two columns, so a code-unit count would overflow.
@@ -73,6 +74,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `bundle-catalog.tsx` renders `bundle-view.tsx` via pure `bundle-catalog-inspector.tsx`; neither adds an Action Offer or Projection selector.
 - `harness-catalog.tsx` opens exact focus for the selected row and rehydrates only rows the list already marks checked, retaining those accessors for search;
   `harness-view.tsx` keeps list opening spawn-free, `harness-format.ts` owns shared wording, and the inspector renders normalized facts with no Actions.
+  The row reads `harnessRowStatus` (Start a Run's words) and `harnessModelLine`; discovery evidence lives in the inspector (#285).
 - Two private helpers back those seams: `follow.ts` (`followProjection`) owns the read seams' follow, health, and reconnect loop (A22); `submit-and-settle.ts`
   (`submitAndSettle`) owns submit-then-follow and reopens a lost pending Operation receipt (A23).
 - Read [tui-workbench](../../docs/agents/tui-workbench.md) before changing the Run Workbench's key routing, modal stack, steer compose, interactive input,

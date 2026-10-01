@@ -25,7 +25,8 @@ import {
 } from "./catalog-navigation.js";
 import { HarnessCatalogInspector } from "./harness-catalog-inspector.js";
 import {
-  discoveryLabel,
+  harnessModelLine,
+  harnessRowStatus,
   isQualified,
   qualificationLabel,
 } from "./harness-format.js";
@@ -258,16 +259,17 @@ function ResultRow(props: {
   focused: boolean;
   onSelect: () => void;
 }) {
-  const modelCount = () => {
-    const declaration = props.focusedHarness()?.supportedModels;
-    return declaration?.kind === "list"
-      ? `${declaration.models.length} models observed`
-      : "Models not yet observed";
+  const details = () => {
+    const line = harnessModelLine(
+      props.harness.qualification,
+      props.focusedHarness()?.supportedModels,
+    );
+    return line === undefined ? [] : [line];
   };
   return (
     <CatalogRow
-      title={`${props.harness.name} · ${qualificationLabel(props.harness.qualification.state)}`}
-      details={[discoveryLabel(props.harness.discovery), modelCount()]}
+      title={`${props.harness.name} · ${harnessRowStatus(props.harness)}`}
+      details={details()}
       selected={props.selected}
       focused={props.focused}
       onSelect={props.onSelect}

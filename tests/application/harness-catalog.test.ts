@@ -160,6 +160,67 @@ test("harness catalog list discovers every registration without qualification or
   assert.equal(qualificationCalls(), 0);
 });
 
+test("a harness focus qualifies only the selected id, and listing qualifies none", async (t) => {
+  const catalog = await openCatalog(makeTempDir("secant-harness-select-home-"));
+  t.after(() => catalog.close());
+  const workspace = realpathSync.native(
+    makeTempDir("secant-harness-select-workspace-"),
+  );
+  const qualifyCalls = { "claude-code": 0, codex: 0 };
+  const application = createApplication({
+    catalog,
+    launchWorkspacePath: workspace,
+    now: () => new Date("2026-09-22T00:00:00.000Z"),
+    harnessRegistry: [
+      {
+        choice: {
+          id: "claude-code",
+          name: "Claude Code",
+          availability: "available",
+        },
+        servedCapabilities: ["agent-turn", "interactive-turns"],
+        discover: () => ({
+          kind: "found",
+          source: "path",
+          description: "PATH name 'claude'",
+        }),
+        qualify: async () => {
+          qualifyCalls["claude-code"]++;
+          throw new Error("an unselected Harness must not qualify");
+        },
+      },
+      {
+        choice: { id: "codex", name: "Codex", availability: "available" },
+        servedCapabilities: ["agent-turn", "interactive-turns"],
+        discover: () => ({
+          kind: "found",
+          source: "path",
+          description: "PATH name 'codex'",
+        }),
+        qualify: async () => {
+          qualifyCalls.codex++;
+          return { ok: true, profile: PROFILE };
+        },
+      },
+    ],
+  });
+  t.after(() => application.shutdown());
+  const port = application.projectionPort;
+
+  const list = port.openProjection({ family: "harness-catalog" });
+  t.after(() => list.close());
+  assert.deepEqual(qualifyCalls, { "claude-code": 0, codex: 0 });
+
+  const focus = port.openProjection({
+    family: "harness-catalog",
+    focus: { id: "codex" },
+  });
+  t.after(() => focus.close());
+  const qualified = await focus.updates[Symbol.asyncIterator]().next();
+  assert.equal(qualified.done, false);
+  assert.deepEqual(qualifyCalls, { "claude-code": 0, codex: 1 });
+});
+
 async function portWithRegistration(
   t: TestContext,
   qualify: () => Promise<ApplicationHarnessQualification>,

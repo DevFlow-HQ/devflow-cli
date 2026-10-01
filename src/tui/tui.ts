@@ -43,3 +43,5 @@ export type { TimelineScroll } from "./run-timeline.js";
 export { clip } from "./clip.js";
 // The display-column word wrap, exposed for its unit test for the same reason.
 export { wrap } from "./wrap.js";
+// The Harness catalog row's model line, exposed for its unit test (#285).
+export { harnessModelLine } from "./harness-format.js";

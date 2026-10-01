@@ -146,6 +146,8 @@ export function renderHarnessFocus(harness: HarnessFocus): string {
   }
 
   lines.push("", "Capabilities:");
+  // The TUI inspector adds a blank line between capabilities on purpose;
+  // headless text stays compact.
   for (const capability of harness.capabilities) {
     const state = capability.state
       .split("-")

@@ -1,6 +1,7 @@
 import type {
   HarnessCapabilityState,
   HarnessDiscoveryView,
+  HarnessFocus,
   HarnessObservationView,
   HarnessQualificationState,
   HarnessQualificationView,
@@ -65,6 +66,23 @@ export function harnessRowStatus(harness: HarnessSummary): string {
     return "Unavailable · unsupported shim";
   }
   return qualificationWord(harness.qualification);
+}
+
+export const FREE_TEXT_MODEL_ENTRY = "Free-text model entry";
+
+/**
+ * The Harness catalog row's model line: what a qualified Harness observed, or
+ * nothing when it offers no model selection. An unqualified Harness has not
+ * shown its models yet, whatever its registration declares.
+ */
+export function harnessModelLine(
+  qualification: HarnessQualificationView,
+  declaration: HarnessFocus["supportedModels"],
+): string | undefined {
+  if (!isQualified(qualification)) return "Models not yet observed";
+  if (declaration === undefined) return undefined;
+  if (declaration.kind === "free-text") return FREE_TEXT_MODEL_ENTRY;
+  return `${declaration.models.length} models observed`;
 }
 
 function titleCase(value: string): string {

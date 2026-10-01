@@ -7,6 +7,7 @@ import type {
 import {
   capabilityLabel,
   discoveryLabel,
+  FREE_TEXT_MODEL_ENTRY,
   qualificationLabel,
   qualificationObservation,
 } from "./harness-format.js";
@@ -73,9 +74,11 @@ export function HarnessCatalogInspector(props: {
         <SupportedModels harness={harness} />
       </Section>
       <Section title="Capabilities">
-        <For each={harness().capabilities}>
-          {(capability) => <Capability capability={capability} />}
-        </For>
+        <box flexDirection="column" gap={1} flexShrink={0}>
+          <For each={harness().capabilities}>
+            {(capability) => <Capability capability={capability} />}
+          </For>
+        </box>
       </Section>
       <Section title="Configuration">
         <text fg={theme.text}>
@@ -122,7 +125,7 @@ function SupportedModels(props: { harness: Accessor<HarnessFocus> }) {
           fg={models()?.kind === "free-text" ? theme.text : theme.textMuted}
         >
           {models()?.kind === "free-text"
-            ? "Free-text model entry"
+            ? FREE_TEXT_MODEL_ENTRY
             : "Models not available yet"}
         </text>
       }
@@ -147,16 +150,20 @@ function Capability(props: { capability: HarnessCapabilityView }) {
       <text fg={theme.text}>
         {`${props.capability.name} · ${capabilityLabel(props.capability.state)}`}
       </text>
-      <text fg={theme.textMuted}>{props.capability.description}</text>
-      <Show
-        when={
-          props.capability.state === "available-with-limits"
-            ? props.capability.limits
-            : undefined
-        }
-      >
-        {(limits) => <text fg={theme.textMuted}>{`Limits · ${limits()}`}</text>}
-      </Show>
+      <box flexDirection="column" paddingLeft={2} flexShrink={0}>
+        <text fg={theme.textMuted}>{props.capability.description}</text>
+        <Show
+          when={
+            props.capability.state === "available-with-limits"
+              ? props.capability.limits
+              : undefined
+          }
+        >
+          {(limits) => (
+            <text fg={theme.textMuted}>{`Limits · ${limits()}`}</text>
+          )}
+        </Show>
+      </box>
     </box>
   );
 }
