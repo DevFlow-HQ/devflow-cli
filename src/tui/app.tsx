@@ -58,8 +58,9 @@ import {
 // snapshot and clears it. Once approved, a small screen signal navigates Home →
 // the task screens and read-only catalogs: exactly one screen mounts at a time,
 // so each screen's key bindings exist only while it is active and cannot conflict.
-// Catalog selection lives here so a Home round-trip restores the same row. The
-// Previous Runs list (#92) works the same way, and a Run opened
+// Each catalog owns its selection, so arriving from Home always starts on search
+// with nothing selected (#284). The Previous Runs list's selected row lives here
+// so a Home round-trip restores it (#92), and a Run opened
 // from it records that origin so Escape (and a delete) returns to the list, while
 // a Run opened from Start a Run returns to Home.
 
@@ -84,10 +85,8 @@ function Route(props: { renderer: RendererPort }) {
 
   const [screen, setScreen] = createSignal<Screen>({ name: "home" });
   const [homeSelected, setHomeSelected] = createSignal(0);
-  const [selected, setSelected] = createSignal(0);
-  const [harnessSelected, setHarnessSelected] = createSignal(0);
   // The Previous Runs list's selected row, kept here so Escape from a Run restores
-  // it (like the Bundle catalog's `selected`).
+  // it.
   const [runSelected, setRunSelected] = createSignal(0);
   const [deletedRunNotice, setDeletedRunNotice] = createSignal<string>();
   // The same narrowing for the Workbench, so its Run id reaches the child typed.
@@ -195,18 +194,10 @@ function Route(props: { renderer: RendererPort }) {
         />
       </Match>
       <Match when={screen().name === "bundle-catalog"}>
-        <BundleCatalog
-          selected={selected}
-          setSelected={setSelected}
-          onBack={() => setScreen({ name: "home" })}
-        />
+        <BundleCatalog onBack={() => setScreen({ name: "home" })} />
       </Match>
       <Match when={screen().name === "harness-catalog"}>
-        <HarnessCatalog
-          selected={harnessSelected}
-          setSelected={setHarnessSelected}
-          onBack={() => setScreen({ name: "home" })}
-        />
+        <HarnessCatalog onBack={() => setScreen({ name: "home" })} />
       </Match>
     </Switch>
   );

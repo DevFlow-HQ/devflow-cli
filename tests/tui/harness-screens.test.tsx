@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { TextAttributes } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
 import type {
@@ -226,6 +227,8 @@ type TMountOptions = {
   width?: number;
   height?: number;
   catalog?: ReturnType<typeof harnesses>;
+  /** Down from search selects the top row, as most tests need; default true. */
+  selectTop?: boolean;
 };
 
 async function mount(options: TMountOptions = {}) {
@@ -255,6 +258,12 @@ async function mount(options: TMountOptions = {}) {
   t.mockInput.pressArrow("down");
   t.mockInput.pressArrow("down");
   t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("Find a Harness"));
+  await t.renderOnce();
+  if (options.selectTop ?? true) {
+    t.mockInput.pressArrow("down");
+    await t.waitForFrame((frame) => frame.includes("│ › "));
+  }
   return { t, focused: catalog.focused, closed: catalog.closed };
 }
 
@@ -331,6 +340,8 @@ test("Harness search uses held names, models, and capabilities and explains no m
   t.mockInput.pressArrow("down");
   await t.waitForFrame((frame) => frame.includes("requires authentication"));
 
+  t.mockInput.pressKey("/");
+  await t.waitForFrame((frame) => frame.includes("› Find a Harness"));
   await t.mockInput.typeText("gpt-5-mini");
   await t.waitForFrame((frame) => !frame.includes("Claude Code · Not ready"));
   assert.match(t.captureCharFrame(), /Codex/);
@@ -353,20 +364,32 @@ test("Harness search uses held names, models, and capabilities and explains no m
   );
 });
 
-// Pane switching, printable keys reaching search, and Ctrl+C from either pane
-// are the shared catalog navigation (`catalog-navigation.tsx`); their assertions
-// live once in bundle-screens.test.tsx.
+// Printable keys reaching search, ←/→ pane moves, inspector scrolling, and
+// Ctrl+C from any pane are the shared catalog navigation
+// (`catalog-navigation.tsx`); their assertions live once in
+// bundle-screens.test.tsx. The arrival and focus test below repeats only the
+// moves the Harness catalog's acceptance names.
 test("Harness keymap exposes focus without colour and restores Home", async () => {
   const { t, closed } = await mount();
   await t.waitForFrame((frame) => frame.includes("2 discovered"));
   assert.match(t.captureCharFrame(), /│ › Codex/);
-  assert.match(t.captureCharFrame(), /› Find a Harness/);
+  assert.match(t.captureCharFrame(), /› Results/);
+  // The selection keeps its glyph while the inspector has focus.
+  t.mockInput.pressTab();
+  await t.waitForFrame((frame) => frame.includes("› Inspector"));
+  assert.match(t.captureCharFrame(), /│ › Codex/);
 
   t.mockInput.pressEscape();
   await until(() => /^ Secant\s*$/m.test(t.captureCharFrame()));
   assert.deepEqual(closed, [{ id: "codex" }]);
   assert.match(t.captureCharFrame(), /› Harnesses/);
   assert.match(t.captureCharFrame(), /Codex qualified/);
+
+  // Selection does not survive the Home round-trip.
+  t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("› Find a Harness"));
+  assert.doesNotMatch(t.captureCharFrame(), /│ › /);
+  assert.match(t.captureCharFrame(), /No Harness selected/);
 });
 
 test("reopening Harnesses preserves held model search for a non-selected row", async () => {
@@ -541,4 +564,78 @@ test("Harness catalog stacks and resizes without horizontal overflow", async () 
   t.resize(38, 20);
   await t.renderOnce();
   assertWidth(38);
+});
+
+test("Harnesses open on search with nothing selected and move focus like the Bundle catalog", async () => {
+  const { t, focused } = await mount({ selectTop: false });
+  await t.waitForFrame((frame) => frame.includes("2 discovered"));
+  const pane = () => {
+    const frame = t.captureCharFrame();
+    return ["Find a Harness", "Results", "Inspector"].filter((title) =>
+      frame.includes(`› ${title}`),
+    );
+  };
+  const selectedRow = () =>
+    t
+      .captureCharFrame()
+      .split("\n")
+      .find((line) => line.includes("│ › ")) ?? "";
+
+  // Arrival: search focused, nothing selected, an empty details pane, and no
+  // Harness focus opened.
+  const arrival = t.captureCharFrame().split("\n");
+  assert.deepEqual(pane(), ["Find a Harness"]);
+  assert.equal(selectedRow(), "");
+  assert.match(t.captureCharFrame(), /No Harness selected/);
+  assert.deepEqual(focused, []);
+  // The search pane's own bottom edge separates it from the results.
+  const search = arrival.findIndex((line) => line.includes("Find a Harness"));
+  const results = arrival.findIndex((line) => line.includes("Results"));
+  assert.equal(results, search + 3);
+  assert.match(arrival[results - 1] ?? "", /└─+┘/);
+
+  // ←, →, Home, End, and / edit the query without leaving search.
+  await t.mockInput.typeText("ode");
+  t.mockInput.pressKey("HOME");
+  await t.mockInput.typeText("c");
+  t.mockInput.pressArrow("right");
+  t.mockInput.pressArrow("left");
+  t.mockInput.pressKey("END");
+  await t.mockInput.typeText("/");
+  await t.waitForFrame((frame) => frame.includes("code/"));
+  assert.deepEqual(pane(), ["Find a Harness"]);
+  for (let index = 0; index < "code/".length; index += 1) {
+    t.mockInput.pressBackspace();
+  }
+  await t.waitForFrame((frame) => !frame.includes("code/"));
+
+  // Down selects the top result, which is what opens its focus.
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame(() => selectedRow().includes("Codex"));
+  assert.deepEqual(pane(), ["Results"]);
+  assert.deepEqual(focused, [{ id: "codex" }]);
+  const row = t
+    .captureSpans()
+    .lines.flatMap((line) => line.spans)
+    .find((span) => span.text.includes("› Codex"));
+  assert.ok(row !== undefined);
+  assert.ok(row.attributes & TextAttributes.BOLD);
+  assert.ok(!row.bg.equals(t.captureSpans().lines[0]?.spans[0]?.bg));
+
+  // Up on the top result returns to search; PgDn comes back to the top result.
+  t.mockInput.pressArrow("up");
+  await t.waitForFrame(() => pane()[0] === "Find a Harness");
+  assert.match(selectedRow(), /Codex/);
+  t.mockInput.pressKey("\u001B[6~");
+  await t.waitForFrame(() => pane()[0] === "Results");
+  // Tab cycles to the inspector and back to search; `/` focuses search.
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => pane()[0] === "Inspector");
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => pane()[0] === "Find a Harness");
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => pane()[0] === "Results");
+  t.mockInput.pressKey("/");
+  await t.waitForFrame(() => pane()[0] === "Find a Harness");
+  assert.match(t.captureCharFrame(), /name, model, or capability/);
 });

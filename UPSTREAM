@@ -132,7 +132,8 @@ studied for architecture and behaviour.
                                      rebuilt against packages/tui/src/feature-plugins/system/diff-viewer.tsx
   src/tui/catalog-navigation.tsx     rebuilt against packages/tui/src/ui/dialog-select.tsx (#205: the
                                      selection/search half of bundle-catalog.tsx, lifted out unchanged
-                                     and shared with harness-catalog.tsx; internal reuse, no new study)
+                                     and shared with harness-catalog.tsx; internal reuse, no new study;
+                                     #284 restudied its selected-row fill, recorded below)
 
 (`app.tsx` carried a "rebuilt against packages/tui/src/app.tsx" line that never cited
 OpenCode in the source and was never actually studied against it — #127 audit A47 —
@@ -283,7 +284,7 @@ were studied against OpenCode at 1ead9e3d7f; no OpenCode source crosses.
   src/tui/harness-format.ts     worded status studied
                                 packages/tui/src/component/dialog-mcp.tsx
   src/tui/catalog-navigation.tsx
-                                two-pane focus glyph studied the leading-marker
+                                focus glyph studied the leading-marker
                                 active row of packages/tui/src/ui/dialog-select.tsx
   src/tui/harness-catalog.tsx   adapted from src/tui/bundle-catalog.tsx (internal
                                 reuse, #197), not extracted from OpenCode; it
@@ -311,8 +312,34 @@ What was taken and changed:
   status glyph (from dialog-mcp.tsx and dialog-select.tsx):
     Taken:   a glyph paired with a word so colour is never the only signal, and
              a leading marker on the active row.
-    Changed: the marker is the `› ` focus glyph, shown only while its pane is
-             focused; Harness status is a word shared with headless rendering.
+    Changed: the marker is the `› ` glyph: on a pane title only while that
+             pane is focused, and on a catalog's selected row in every pane
+             (#284); Harness status is a word shared with headless rendering.
+
+Added 2026-10-01 for the M7 catalog arrival and focus moves (#284). Studied
+against OpenCode at 228e9095ba, where packages/tui/src/ui/dialog-select.tsx is
+byte-identical to 1ead9e3d7f; no OpenCode source crosses.
+
+  src/tui/catalog-navigation.tsx
+                                selected row studied packages/tui/src/ui/dialog-select.tsx
+
+What was taken and changed:
+
+  selected row (from dialog-select.tsx):
+    Taken:   a `theme.primary` fill behind the selected title line, its text
+             in the selected-foreground colour and bold, and the dialog's muted
+             `backgroundElement` fill while focus is on its action row.
+    Changed: the text uses the vendored `selectedListItemText` (the dropped
+             `selectedForeground` gives the same value for the shipped opaque
+             theme); the muted fill marks a kept selection while another pane
+             has focus; and the row keeps the `› ` glyph so selection never
+             depends on colour.
+  search and list (from dialog-select.tsx):
+    Taken:   a filter input above the result list.
+    Changed: OpenCode keeps its input focused and moves the list with
+             Up/Down/Home/End. Secant gives search its own bordered pane, opens
+             on it with nothing selected, leaves ←, →, Home, End, and `/` to its
+             text cursor, and moves focus with Down/PgDn/Up/Tab/`/` (spec #276).
 
 Added 2026-09-23 for the M6 live Interactive interrupt (#219). Studied against
 OpenCode at 1ead9e3d7f; no OpenCode source crosses.

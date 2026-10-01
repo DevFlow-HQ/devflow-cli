@@ -20,6 +20,7 @@ import type {
 import {
   CatalogEmptyState,
   CatalogRow,
+  CatalogSearchAndResults,
   useCatalogNavigation,
 } from "./catalog-navigation.js";
 import { HarnessCatalogInspector } from "./harness-catalog-inspector.js";
@@ -45,11 +46,7 @@ type THeldHarnessFocus = {
   dispose: () => void;
 };
 
-export function HarnessCatalog(props: {
-  selected: Accessor<number>;
-  setSelected: (index: number) => void;
-  onBack: () => void;
-}) {
+export function HarnessCatalog(props: { onBack: () => void }) {
   const { theme } = useTheme();
   const dimensions = useTerminalDimensions();
   const componentOwner = getOwner();
@@ -83,20 +80,17 @@ export function HarnessCatalog(props: {
   onCleanup(() => {
     for (const held of openedFocus().values()) held.dispose();
   });
-  const { query, pane, matching, activeEntry, updateQuery } =
-    useCatalogNavigation({
-      filter: (value) =>
-        filterHarnesses({ harnesses: rows(), query: value, heldHarness }),
-      selected: props.selected,
-      setSelected: props.setSelected,
-      onBack: props.onBack,
-      group: "Harnesses",
-      item: "Harness",
-      inspector: () => inspectorScroll,
-    });
+  const nav = useCatalogNavigation({
+    filter: (value) =>
+      filterHarnesses({ harnesses: rows(), query: value, heldHarness }),
+    onBack: props.onBack,
+    group: "Harnesses",
+    item: "Harness",
+    inspector: () => inspectorScroll,
+  });
 
   const focus = createMemo(() => {
-    const entry = activeEntry();
+    const entry = nav.activeEntry();
     if (entry === undefined) return undefined;
     return ensureFocus(entry.harness.id).snapshot;
   });
@@ -105,7 +99,7 @@ export function HarnessCatalog(props: {
 
   let scrolledHarness: string | undefined;
   createEffect(() => {
-    const id = activeEntry()?.harness.id;
+    const id = nav.activeEntry()?.harness.id;
     if (id === scrolledHarness) return;
     scrolledHarness = id;
     inspectorScroll?.scrollTo(0);
@@ -147,53 +141,37 @@ export function HarnessCatalog(props: {
         overflow="hidden"
         gap={1}
       >
-        <Panel
+        <CatalogSearchAndResults
           title="Find a Harness"
-          focused={pane() === "list"}
-          width={stacked() ? undefined : 34}
-          height={stacked() ? 10 : undefined}
-          flexShrink={0}
-          paddingLeft={1}
-          paddingRight={1}
-          overflow="hidden"
+          placeholder="name, model, or capability"
+          pane={nav.pane()}
+          query={nav.query()}
+          onInput={nav.updateQuery}
+          width={34}
+          stacked={stacked()}
+          hasResults={nav.matching().length > 0}
+          empty={
+            <CatalogEmptyState
+              title="No matching Harnesses"
+              hint="Try a different name, capability, model, or qualification state."
+            />
+          }
         >
-          <input
-            focused={pane() === "list"}
-            value={query()}
-            onInput={updateQuery}
-            placeholder="name, model, or capability"
-            placeholderColor={theme.textMuted}
-            cursorColor={theme.accent}
-            focusedBackgroundColor={theme.backgroundElement}
-            focusedTextColor={theme.text}
-          />
-          <Show
-            when={matching().length > 0}
-            fallback={
-              <CatalogEmptyState
-                title="No matching Harnesses"
-                hint="Try a different name, capability, model, or qualification state."
+          <For each={nav.matching()}>
+            {(entry) => (
+              <ResultRow
+                harness={entry.harness}
+                focusedHarness={() => heldHarness(entry.harness.id)}
+                selected={entry.index === nav.activeEntry()?.index}
+                focused={nav.pane() === "list"}
+                onSelect={() => nav.focusRow(entry.index)}
               />
-            }
-          >
-            <box flexDirection="column" flexGrow={1} overflow="hidden">
-              <For each={matching()}>
-                {(entry) => (
-                  <ResultRow
-                    harness={entry.harness}
-                    focusedHarness={() => heldHarness(entry.harness.id)}
-                    selected={entry.index === activeEntry()?.index}
-                    focused={pane() === "list"}
-                    onSelect={() => props.setSelected(entry.index)}
-                  />
-                )}
-              </For>
-            </box>
-          </Show>
-        </Panel>
+            )}
+          </For>
+        </CatalogSearchAndResults>
         <Panel
           title="Inspector"
-          focused={pane() === "inspector"}
+          focused={nav.pane() === "inspector"}
           flexGrow={1}
           overflow="hidden"
         >
@@ -201,7 +179,7 @@ export function HarnessCatalog(props: {
             when={focusedResult()}
             fallback={
               <text fg={theme.textMuted} paddingLeft={1}>
-                Clear or change the search to inspect a Harness.
+                {nav.emptyInspector()}
               </text>
             }
           >
@@ -235,7 +213,7 @@ export function HarnessCatalog(props: {
         </Panel>
       </PanelGroup>
       <text fg={theme.textMuted} flexShrink={0}>
-        tab/←/→ switch pane · ↑/↓ move or scroll · esc back · ctrl+c quit
+        {nav.hint()}
       </text>
     </box>
   );

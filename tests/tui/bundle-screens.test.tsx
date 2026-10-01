@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { TextAttributes } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import { App } from "../../src/tui/tui.js";
@@ -268,21 +269,51 @@ async function mount(rows = ROWS, width = 80, height = 40) {
   return { t, exits };
 }
 
-/** The single list line carrying the focus glyph identifies the selected row. */
+/** The single list line carrying the selection glyph identifies the selected row. */
 function selectedLine(frame: string): string {
   return frame.split("\n").find((line) => line.includes("│ › ")) ?? "";
 }
 
-test("bundle-catalog-two-pane: one catalog shows installed count, sorted rows, and visible focus", async () => {
-  const { t } = await mount();
+type TRendered = Awaited<ReturnType<typeof mount>>["t"];
+
+/** Home → Workflow Bundles, waiting for the catalog's arrival frame. */
+async function openCatalog(t: TRendered) {
   await t.waitForFrame((f) => f.includes("Workflow Bundles"));
   t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
   t.mockInput.pressEnter();
   await t.waitForFrame((f) => f.includes("Proof Bundle"));
+}
+
+/** The styled span of the list row titled `title`, and the screen background. */
+function rowSpan(t: TRendered, title: string) {
+  const frame = t.captureSpans();
+  const background = frame.lines[0]?.spans[0]?.bg;
+  for (const line of frame.lines) {
+    const span = line.spans.find((candidate) =>
+      [`› ${title}`, `  ${title}`].includes(candidate.text.trimEnd()),
+    );
+    if (span !== undefined) return { span, background };
+  }
+  throw new Error(`no row titled '${title}'`);
+}
+
+test("bundle-catalog-two-pane: one catalog shows installed count, sorted rows, and visible focus", async () => {
+  const { t } = await mount();
+  await openCatalog(t);
+  const arrival = t.captureCharFrame();
+  assert.match(arrival, /3 installed/);
+  assert.match(arrival, /› Find an installed Bundle/);
+  assert.match(arrival, / {2}Results/);
+  assert.match(arrival, /Inspector/);
+  // Arriving from Home focuses search with nothing selected and no details.
+  assert.equal(selectedLine(arrival), "");
+  assert.match(arrival, /No Bundle selected/);
+  assert.doesNotMatch(arrival, /No launch inputs/);
+
+  t.mockInput.pressArrow("down"); // search -> list, selecting the top result
+  await t.waitForFrame((f) => f.includes("No launch inputs"));
   const frame = t.captureCharFrame();
-  assert.match(frame, /3 installed/);
-  assert.match(frame, /Find an installed Bundle/);
-  assert.match(frame, /Inspector/);
+  assert.match(frame, /› Results/);
   assert.match(frame, /Alpha Flow/);
   assert.match(frame, /com\.example\.alpha@1\.0\.0/);
   assert.match(frame, /local-file/);
@@ -294,16 +325,13 @@ test("bundle-catalog-two-pane: one catalog shows installed count, sorted rows, a
     frame.indexOf("com.example.proof@2.0.0") <
       frame.indexOf("com.example.proof@1.0.0"),
   );
-  // Focus indicator on the first row, readable without colour.
+  // Selection glyph on the first row, readable without colour.
   assert.match(selectedLine(frame), /Alpha Flow/);
 });
 
 test("Workflow Bundles searches the existing list snapshot and keeps the inspector on one screen", async () => {
   const { t } = await mount();
-  await t.waitForFrame((frame) => frame.includes("Workflow Bundles"));
-  t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Find an installed Bundle"));
+  await openCatalog(t);
 
   const initial = t.captureCharFrame();
   assert.match(initial, /Find an installed Bundle/);
@@ -314,8 +342,11 @@ test("Workflow Bundles searches the existing list snapshot and keeps the inspect
   await t.waitForFrame((frame) => !frame.includes("Alpha Flow"));
   const filtered = t.captureCharFrame();
   assert.match(filtered, /Proof Bundle/);
-  assert.match(filtered, /Proof of the pipeline/);
   assert.doesNotMatch(filtered, /Alpha Flow/);
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((frame) => frame.includes("Proof of the pipeline"));
+  t.mockInput.pressArrow("up"); // the top result returns to search
+  await t.waitForFrame((frame) => frame.includes("› Find an installed Bundle"));
 
   const replaceQuery = async (current: string, next: string) => {
     for (let index = 0; index < current.length; index += 1) {
@@ -400,6 +431,7 @@ test("a trusted Bundle uses the shared Trust wording in its inspector", async ()
   t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
   t.mockInput.pressEnter();
   await t.waitForFrame((f) => f.includes("Trusted Flow"));
+  t.mockInput.pressArrow("down"); // select the top result
   await t.waitForFrame((f) => f.includes("A trusted pipeline"));
   assert.match(t.captureCharFrame(), /trusted \(granted 2026-09-12/);
 });
@@ -421,6 +453,8 @@ test("a built-in reads its Secant release, the shipped marker, and app-release t
   await t.waitForFrame((f) => f.includes("Workflow Bundles"));
   t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
   t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Shipped Flow"));
+  t.mockInput.pressArrow("down"); // select the top result
   await t.waitForFrame((f) => f.includes("trusted (app release)"));
   assert.match(
     t.captureCharFrame(),
@@ -540,6 +574,8 @@ test("a focused Bundle whose managed bytes are gone shows its Problem", async ()
   await t.waitForFrame((frame) => frame.includes("Workflow Bundles"));
   t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
   t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("Missing Bytes"));
+  t.mockInput.pressArrow("down"); // select the top result
   await t.waitForFrame(
     (frame) =>
       frame.includes("The selected Bundle's managed bytes are") &&
@@ -550,10 +586,8 @@ test("a focused Bundle whose managed bytes are gone shows its Problem", async ()
 
 test("moving the result focus updates the inspector with numbered Workflow commands and allowed facts", async () => {
   const { t } = await mount();
-  await t.waitForFrame((f) => f.includes("Workflow Bundles"));
-  t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
-  t.mockInput.pressEnter(); // Home -> list
-  await t.waitForFrame((f) => f.includes("Proof Bundle"));
+  await openCatalog(t);
+  t.mockInput.pressArrow("down"); // search -> list, selecting Alpha Flow
   t.mockInput.pressArrow("down"); // select the second row (Proof Bundle 2.0.0)
   await t.waitForFrame(() =>
     selectedLine(t.captureCharFrame()).includes("Proof Bundle"),
@@ -585,21 +619,20 @@ test("moving the result focus updates the inspector with numbered Workflow comma
 
 test("pane focus is visible and inspector scrolling clamps at both ends", async () => {
   const { t } = await mount(ROWS, 80, 18);
-  await t.waitForFrame((frame) => frame.includes("Workflow Bundles"));
-  t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Alpha Flow"));
+  await openCatalog(t);
+  t.mockInput.pressArrow("down"); // search -> list, selecting Alpha Flow
   t.mockInput.pressArrow("down");
   await t.waitForFrame((frame) => frame.includes("Proof of the pipeline"));
 
-  assert.match(t.captureCharFrame(), /› Find an installed Bundle/);
+  assert.match(t.captureCharFrame(), /› Results/);
   t.mockInput.pressTab();
   await t.waitForFrame((frame) => frame.includes("› Inspector"));
   const top = t.captureCharFrame();
-  assert.doesNotMatch(selectedLine(top), /Proof Bundle/);
+  // The selection keeps its glyph while another pane has focus.
+  assert.match(selectedLine(top), /Proof Bundle/);
   t.mockInput.pressArrow("left");
-  await t.waitForFrame((frame) => frame.includes("› Find an installed Bundle"));
-  t.mockInput.pressTab();
+  await t.waitForFrame((frame) => frame.includes("› Results"));
+  t.mockInput.pressArrow("right");
   await t.waitForFrame((frame) => frame.includes("› Inspector"));
   t.mockInput.pressKey("\u001B[6~");
   await t.renderOnce();
@@ -630,6 +663,199 @@ test("pane focus is visible and inspector scrolling clamps at both ends", async 
   assert.equal(t.captureCharFrame(), top);
 });
 
+// The tests from here to "search owns printable keys…" are the one home for the
+// shared catalog navigation (`catalog-navigation.tsx`); the Harness catalog test
+// proves the same moves once over its own screen.
+test("a drawn separator divides the search pane from the results", async () => {
+  for (const [width, height] of [
+    [80, 40],
+    [50, 30],
+  ] as const) {
+    const { t } = await mount(ROWS, width, height);
+    await openCatalog(t);
+    const lines = t.captureCharFrame().split("\n");
+    const search = lines.findIndex((line) =>
+      line.includes("Find an installed Bundle"),
+    );
+    const results = lines.findIndex((line) => line.includes("Results"));
+    assert.ok(search >= 0 && results > search);
+    assert.match(lines[search + 1] ?? "", /name, id, description/);
+    // The search pane's own bottom edge is drawn before the results pane opens.
+    assert.match(lines[results - 1] ?? "", /└─+┘/);
+    assert.equal(results, search + 3);
+  }
+});
+
+test("arriving from Home clears the selection, so it does not survive a Home round-trip", async () => {
+  const { t } = await mount();
+  await openCatalog(t);
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame(() =>
+    selectedLine(t.captureCharFrame()).includes("Proof Bundle"),
+  );
+  t.mockInput.pressEscape();
+  await until(() => /^ Secant\s*$/m.test(t.captureCharFrame()));
+  t.mockInput.pressEnter(); // Workflow Bundles stays highlighted on Home
+  await t.waitForFrame((f) => f.includes("Proof Bundle"));
+  const arrival = t.captureCharFrame();
+  assert.equal(selectedLine(arrival), "");
+  assert.match(arrival, /› Find an installed Bundle/);
+  assert.match(arrival, /No Bundle selected/);
+  assert.doesNotMatch(arrival, /Proof of the pipeline/);
+});
+
+test("search owns ←, →, Home, End, and / as text-cursor keys", async () => {
+  const { t } = await mount();
+  await openCatalog(t);
+  await t.mockInput.typeText("lpha");
+  t.mockInput.pressKey("HOME");
+  await t.mockInput.typeText("a");
+  t.mockInput.pressKey("END");
+  await t.mockInput.typeText("!");
+  t.mockInput.pressArrow("left");
+  t.mockInput.pressArrow("left");
+  t.mockInput.pressArrow("right");
+  await t.mockInput.typeText("/");
+  await t.waitForFrame((f) => f.includes("alpha/!"));
+  const frame = t.captureCharFrame();
+  // Every key edited the query; none moved focus off search.
+  assert.match(frame, /› Find an installed Bundle/);
+  assert.match(frame, / {2}Results/);
+  assert.match(frame, / {2}Inspector/);
+  assert.match(frame, /No matching Workflow/);
+});
+
+test("Down, PgDn, Up, Tab, and / move focus between search, results, and inspector", async () => {
+  const { t } = await mount();
+  await openCatalog(t);
+  const focusedPane = () => {
+    const frame = t.captureCharFrame();
+    return ["Find an installed Bundle", "Results", "Inspector"].filter(
+      (title) => frame.includes(`› ${title}`),
+    );
+  };
+
+  // PgDn, like Down, moves search to the list and selects the top result.
+  t.mockInput.pressKey("\u001B[6~");
+  await t.waitForFrame(() =>
+    selectedLine(t.captureCharFrame()).includes("Alpha"),
+  );
+  assert.deepEqual(focusedPane(), ["Results"]);
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame(() =>
+    selectedLine(t.captureCharFrame()).includes("Proof Bundle"),
+  );
+  t.mockInput.pressArrow("up");
+  await t.waitForFrame(() =>
+    selectedLine(t.captureCharFrame()).includes("Alpha"),
+  );
+  assert.deepEqual(focusedPane(), ["Results"]);
+  // Up on the top result returns to search and keeps the selection.
+  t.mockInput.pressArrow("up");
+  await t.waitForFrame(() => focusedPane()[0] === "Find an installed Bundle");
+  assert.match(selectedLine(t.captureCharFrame()), /Alpha Flow/);
+  assert.match(t.captureCharFrame(), /No launch inputs/);
+
+  // Tab cycles search → results → inspector → search, keeping the selection.
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => focusedPane()[0] === "Results");
+  assert.match(selectedLine(t.captureCharFrame()), /Alpha Flow/);
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => focusedPane()[0] === "Inspector");
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => focusedPane()[0] === "Find an installed Bundle");
+
+  // `/` focuses search from the inspector and from the results.
+  t.mockInput.pressTab();
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => focusedPane()[0] === "Inspector");
+  t.mockInput.pressKey("/");
+  await t.waitForFrame(() => focusedPane()[0] === "Find an installed Bundle");
+  t.mockInput.pressTab();
+  await t.waitForFrame(() => focusedPane()[0] === "Results");
+  t.mockInput.pressKey("/");
+  await t.waitForFrame(() => focusedPane()[0] === "Find an installed Bundle");
+  // Neither `/` reached the query.
+  assert.match(t.captureCharFrame(), /name, id, description/);
+
+  // Down from search selects the top result even over a kept selection, and a
+  // query that filters the selection out clears it.
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame(() =>
+    selectedLine(t.captureCharFrame()).includes("Proof Bundle"),
+  );
+  t.mockInput.pressKey("/");
+  await t.waitForFrame(() => focusedPane()[0] === "Find an installed Bundle");
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame(() =>
+    selectedLine(t.captureCharFrame()).includes("Alpha"),
+  );
+  t.mockInput.pressKey("/");
+  await t.waitForFrame(() => focusedPane()[0] === "Find an installed Bundle");
+  await t.mockInput.typeText("pipeline");
+  await t.waitForFrame((f) => !f.includes("Alpha Flow"));
+  assert.equal(selectedLine(t.captureCharFrame()), "");
+  assert.match(t.captureCharFrame(), /No Bundle selected/);
+});
+
+test("Tab from search takes the top result only when nothing is kept, and a click selects a row", async () => {
+  const { t } = await mount();
+  await openCatalog(t);
+  t.mockInput.pressTab();
+  await t.waitForFrame((f) => f.includes("› Results"));
+  assert.match(selectedLine(t.captureCharFrame()), /Alpha Flow/);
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("Proof of the pipeline"));
+  t.mockInput.pressKey("/");
+  await t.waitForFrame((f) => f.includes("› Find an installed Bundle"));
+  t.mockInput.pressTab();
+  await t.waitForFrame((f) => f.includes("› Results"));
+  assert.match(t.captureCharFrame(), /Proof of the pipeline/);
+  assert.match(
+    t.captureCharFrame(),
+    /│ › Proof Bundle[^\n]*\n[^\n]*com\.example\.proof@2\.0\.0/,
+  );
+
+  // A click from search selects that row and focuses the results.
+  t.mockInput.pressKey("/");
+  await t.waitForFrame((f) => f.includes("› Find an installed Bundle"));
+  const lines = t.captureCharFrame().split("\n");
+  const y = lines.findIndex((line) => line.includes("│   Alpha Flow"));
+  assert.ok(y >= 0);
+  await t.mockMouse.click(lines[y]!.indexOf("Alpha Flow"), y);
+  await t.waitForFrame((f) => f.includes("No launch inputs"));
+  assert.match(selectedLine(t.captureCharFrame()), /Alpha Flow/);
+  assert.match(t.captureCharFrame(), /› Results/);
+});
+
+test("the selected row is filled and bold, and keeps its glyph with colour off", async () => {
+  const { t } = await mount();
+  await openCatalog(t);
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame(() =>
+    selectedLine(t.captureCharFrame()).includes("Alpha"),
+  );
+
+  const selected = rowSpan(t, "Alpha Flow");
+  const other = rowSpan(t, "Proof Bundle");
+  assert.ok(selected.span.text.includes("› Alpha Flow"));
+  assert.ok(!other.span.text.includes("›"));
+  assert.ok(selected.span.attributes & TextAttributes.BOLD);
+  assert.equal(other.span.attributes & TextAttributes.BOLD, 0);
+  assert.ok(!selected.span.bg.equals(selected.background));
+  assert.ok(!selected.span.bg.equals(other.span.bg));
+
+  // With focus elsewhere the kept selection stays filled, bold, and marked.
+  t.mockInput.pressTab();
+  await t.waitForFrame((f) => f.includes("› Inspector"));
+  const kept = rowSpan(t, "Alpha Flow");
+  assert.ok(kept.span.text.includes("› Alpha Flow"));
+  assert.ok(kept.span.attributes & TextAttributes.BOLD);
+  assert.ok(!kept.span.bg.equals(kept.background));
+});
+
 test("small terminals stack the result and inspector panes without overflow", async () => {
   const { t } = await mount(ROWS, 50, 24);
   await t.waitForFrame((frame) => frame.includes("Workflow Bundles"));
@@ -658,12 +884,7 @@ test("small terminals stack the result and inspector panes without overflow", as
 
 test("Back returns to Home or the originating Start a Run Bundle step", async () => {
   const homeRun = await mount();
-  await homeRun.t.waitForFrame((frame) => frame.includes("Workflow Bundles"));
-  homeRun.t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
-  homeRun.t.mockInput.pressEnter();
-  await homeRun.t.waitForFrame((frame) =>
-    frame.includes("Find an installed Bundle"),
-  );
+  await openCatalog(homeRun.t);
   homeRun.t.mockInput.pressEscape();
   await until(
     () => !homeRun.t.captureCharFrame().includes("Find an installed Bundle"),
@@ -681,46 +902,49 @@ test("Back returns to Home or the originating Start a Run Bundle step", async ()
   await startRun.t.waitForFrame((frame) =>
     frame.includes("Find an installed Bundle"),
   );
-  assert.match(startRun.t.captureCharFrame(), /Proof of the pipeline/);
+  // View Bundle Details arrives on the results with the chooser's Bundle selected.
+  const details = startRun.t.captureCharFrame();
+  assert.match(details, /Proof of the pipeline/);
+  assert.match(details, /› Results/);
+  assert.match(selectedLine(details), /Proof Bundle/);
+  // A move in the catalog carries back to the chooser.
+  startRun.t.mockInput.pressArrow("up");
+  await startRun.t.waitForFrame(() =>
+    selectedLine(startRun.t.captureCharFrame()).includes("Alpha Flow"),
+  );
   startRun.t.mockInput.pressEscape();
   await until(
     () => !startRun.t.captureCharFrame().includes("Find an installed Bundle"),
   );
   await startRun.t.waitForFrame((frame) => /^ Start a Run\s*$/m.test(frame));
-  assert.match(startRun.t.captureCharFrame(), /› Proof Bundle/);
+  assert.match(startRun.t.captureCharFrame(), /› Alpha Flow/);
 });
 
-// With "pane focus is visible…" above, this is the one home for the shared catalog
-// navigation (`catalog-navigation.tsx`) that the Harness catalog also uses.
-test("search owns printable keys while Ctrl+C quits from either pane", async () => {
-  const listRun = await mount();
-  await listRun.t.waitForFrame((f) => f.includes("Workflow Bundles"));
-  listRun.t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
-  listRun.t.mockInput.pressEnter();
-  await listRun.t.waitForFrame((f) => f.includes("Proof Bundle"));
-  listRun.t.mockInput.pressKey("q");
-  await listRun.t.waitForFrame((frame) =>
+test("search owns printable keys while Ctrl+C quits from any pane", async () => {
+  const searchRun = await mount();
+  await openCatalog(searchRun.t);
+  searchRun.t.mockInput.pressKey("q");
+  await searchRun.t.waitForFrame((frame) =>
     frame.includes("No matching Workflow"),
   );
-  assert.equal(listRun.exits.length, 0);
-  listRun.t.mockInput.pressCtrlC();
-  await listRun.t.waitFor(() => listRun.exits.length > 0);
-  assert.equal(listRun.exits.length, 1);
+  assert.equal(searchRun.exits.length, 0);
+  searchRun.t.mockInput.pressCtrlC();
+  await searchRun.t.waitFor(() => searchRun.exits.length > 0);
+  assert.equal(searchRun.exits.length, 1);
 
   const inspectRun = await mount();
-  await inspectRun.t.waitForFrame((f) => f.includes("Workflow Bundles"));
-  inspectRun.t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
-  inspectRun.t.mockInput.pressEnter();
-  await inspectRun.t.waitForFrame((f) => f.includes("Proof Bundle"));
+  await openCatalog(inspectRun.t);
   inspectRun.t.mockInput.pressArrow("down");
-  await inspectRun.t.waitForFrame((f) => f.includes("Proof of the pipeline"));
+  await inspectRun.t.waitForFrame((f) => f.includes("› Results"));
+  inspectRun.t.mockInput.pressKey("q");
+  await inspectRun.t.renderOnce();
   inspectRun.t.mockInput.pressArrow("right");
   await inspectRun.t.waitForFrame((f) => f.includes("› Inspector"));
   inspectRun.t.mockInput.pressKey("q");
   await inspectRun.t.renderOnce();
   assert.equal(inspectRun.exits.length, 0);
-  // Back on the list pane after the round-trip, printable keys reach search again.
-  inspectRun.t.mockInput.pressArrow("left");
+  // Back on search after `/`, printable keys reach the query again.
+  inspectRun.t.mockInput.pressKey("/");
   await inspectRun.t.waitForFrame((f) =>
     f.includes("› Find an installed Bundle"),
   );
@@ -733,12 +957,10 @@ test("search owns printable keys while Ctrl+C quits from either pane", async () 
 });
 
 test("long catalog content stays bounded at 80×24 without corrupting visible rows", async () => {
-  async function openCatalog(height: number) {
+  async function openAt(height: number) {
     const { t } = await mount(ROWS, 80, height);
-    await t.waitForFrame((f) => f.includes("Workflow Bundles"));
-    t.mockInput.pressArrow("down"); // select Workflow Bundles (index 1)
-    t.mockInput.pressEnter(); // Home -> list
-    await t.waitForFrame((f) => f.includes("Proof Bundle"));
+    await openCatalog(t);
+    t.mockInput.pressArrow("down"); // search -> list, selecting Alpha Flow
     t.mockInput.pressArrow("down"); // select Proof Bundle 2.0.0
     await t.waitForFrame(() =>
       selectedLine(t.captureCharFrame()).includes("Proof Bundle"),
@@ -754,8 +976,8 @@ test("long catalog content stays bounded at 80×24 without corrupting visible ro
     if (lines.at(-1) === "") lines.pop();
     return lines;
   };
-  const full = rows((await openCatalog(40)).captureCharFrame());
-  const clipped = rows((await openCatalog(24)).captureCharFrame());
+  const full = rows((await openAt(40)).captureCharFrame());
+  const clipped = rows((await openAt(24)).captureCharFrame());
 
   // No horizontal overflow, and no rows past the box height.
   for (const line of clipped) {

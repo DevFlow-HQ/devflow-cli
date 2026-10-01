@@ -421,8 +421,8 @@ export function StartRun(props: {
       }
     >
       <BundleCatalog
-        selected={active}
-        setSelected={setSelected}
+        selected={selectedSummary() === undefined ? undefined : active()}
+        onSelect={setSelected}
         onBack={() => setCatalogOpen(false)}
       />
     </Show>
