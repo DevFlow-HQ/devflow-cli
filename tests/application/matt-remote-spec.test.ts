@@ -13,7 +13,7 @@ import type { RunView } from "../../src/application/projection-port.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // [matt-remote-spec] The maintained Matt Bundle's spec stage for a remote tracker
 // (#221), over the shared Projection Port with the real Application and Run Store on
@@ -339,6 +339,7 @@ async function sendTurn(wired: Wiring, runId: string, text: string) {
     operation: "send-interactive-turn",
     input: { runId, stepId: "plan-tickets", text },
   });
+  await awaitRunRest(wired.projectionPort, runId);
 }
 
 /** The prompt points at the complete, unedited to-tickets folder. */
@@ -548,6 +549,7 @@ for (const harness of ["claude-code", "codex"] as const) {
         operation: "send-interactive-turn",
         input: { runId, stepId: "implement", text: "Where are the tests?" },
       });
+      await awaitRunRest(wired.projectionPort, runId);
       assert.equal(agent.inputs[5], "Where are the tests?");
 
       // Continue opens a fresh Session with the same rereading Entry Turn.

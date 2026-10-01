@@ -17,7 +17,7 @@ import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // The maintained Matt Bundle's grill launched from a launch idea (#212), over the
 // shared Projection Port with the real Application and Run Store on a temporary
@@ -313,7 +313,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       input: { runId, stepId: "grill", text: "Each user; store it." },
     });
     assert.equal(sent.status, "applied", JSON.stringify(sent));
-    const afterTurn = readRun(wired, runId);
+    const afterTurn = await awaitRunRest(wired.projectionPort, runId);
     assert.equal(afterTurn.state, "blocked");
     assert.equal(afterTurn.turnPosition, 2);
     assert.deepEqual(userEntries(wired, afterTurn).slice(1), [
@@ -420,7 +420,7 @@ test("an interrupted entry Turn halts, and resume returns to the same Session wi
     input: { runId, stepId: "grill", text: "Please continue." },
   });
   assert.equal(sent.status, "applied", JSON.stringify(sent));
-  const after = readRun(wired, runId);
+  const after = await awaitRunRest(wired.projectionPort, runId);
   assert.equal(after.state, "blocked");
   assert.deepEqual(userEntries(wired, after).slice(1), ["Please continue."]);
   assert.deepEqual(
@@ -449,12 +449,17 @@ test("an unusable planning Session is reported, never replaced by a fresh conver
   assert.equal(run.state, "blocked");
   assert.equal(run.sessions?.[0]?.availability, "unusable");
 
-  // A later human Turn cannot open a fresh conversation in its place.
-  await submitAndSettle(wired, "op-after-unusable", {
+  // A later human Turn cannot open a fresh conversation in its place, and the send
+  // is not applied: its Turn was never admitted (#290).
+  const refused = await submitAndSettle(wired, "op-after-unusable", {
     operationId: "op-after-unusable",
     operation: "send-interactive-turn",
     input: { runId, stepId: "grill", text: "Are you still there?" },
   });
+  assert.equal(refused.status, "not-applied", JSON.stringify(refused));
+  if (refused.status === "not-applied") {
+    assert.equal(refused.problem.code, "interactive-turn-not-admitted");
+  }
   assert.equal(readRun(wired, runId).sessions?.[0]?.availability, "unusable");
   assert.deepEqual(
     turns(wired, runId).map((turn) => [turn.origin, turn.resultKind]),

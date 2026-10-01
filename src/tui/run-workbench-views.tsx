@@ -20,16 +20,18 @@ import type { Theme } from "./vendor/theme.js";
 // interleaved key dispatcher stay in run-workbench.tsx; these views receive only
 // Accessors and callbacks from that owner.
 
-/** The interactive-agent human input (#122): a label, a native OpenTUI text field
- *  (D9 — the field draws its own caret), and a hint/status line — a Turn in progress,
- *  the Enter/End Step controls at a boundary, or the End Step confirm. Every line is
- *  plain text so interactive Turns read distinctly from an agent's without colour
- *  (AC2). The field is blurred while an answer is in flight and while the End Step
+/** The interactive-agent human input (#122): a label saying who holds the Turn, a
+ *  native OpenTUI text field (D9 — the field draws its own caret), and a hint/status
+ *  line — the live Turn's Interrupt, the Enter/End Step controls at a boundary, or the
+ *  End Step confirm. The label reads the live Turn from its interrupt Offer (#290): the
+ *  agent is working while one is offered, else it is the human's move. Every line is
+ *  plain text so who holds the Turn reads without colour (AC2). The field is blurred
+ *  while an answer is in flight (until the send is admitted) and while the End Step
  *  confirm is armed, so a confirming `y` never types into it (D9 freeze). */
 export function InteractiveInput(props: {
   draft: Accessor<string>;
   onInput: (value: string) => void;
-  turnLive: Accessor<boolean>;
+  /** The live Turn's interrupt Offer: present exactly while the agent holds the Turn. */
   interrupt: Accessor<InterruptTurnOffer | undefined>;
   interruptArmed: Accessor<boolean>;
   endOffered: Accessor<boolean>;
@@ -67,15 +69,14 @@ export function InteractiveInput(props: {
     const endStageOffer = props.endStageOffer();
     if (props.endStageArmed() && endStageOffer !== undefined)
       return `  ⚠ y end stage · esc keep — ${endStageOffer.consequence}`;
+    // Pending lasts only until Secant admits the Turn (#290), never the whole Turn.
     if (props.pending()) return "  … sending…";
-    if (props.turnLive()) {
-      // The live Turn's Interrupt (#219) leads with its key so a narrow clip keeps it.
-      const interrupt = props.interrupt();
-      if (interrupt === undefined) return "  … a Turn is running";
+    // The live Turn's Interrupt (#219) leads with its key so a narrow clip keeps it.
+    const interrupt = props.interrupt();
+    if (interrupt !== undefined)
       return props.interruptArmed()
         ? "  ⚠ Press esc again to interrupt · any other key cancels"
         : `  esc esc interrupt — ${interrupt.consequence}`;
-    }
     if (props.sendOffered())
       return continueOffer !== undefined
         ? endStageOffer !== undefined
@@ -91,7 +92,12 @@ export function InteractiveInput(props: {
         attributes={props.focused() ? TextAttributes.BOLD : 0}
         flexShrink={0}
       >
-        {clip("◇ Your Turn — you are driving this Session", w())}
+        {clip(
+          props.interrupt() !== undefined
+            ? "◆ The agent is working — wait for its reply or interrupt it"
+            : "◇ Your move — the agent is waiting for your next Turn",
+          w(),
+        )}
       </text>
       <box flexDirection="row" flexShrink={0}>
         <text fg={theme.text} flexShrink={0}>

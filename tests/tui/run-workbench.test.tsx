@@ -3005,22 +3005,22 @@ test("the armed End Step confirms on y over the Port and no y lands in the field
   assert.deepEqual(wb.control.ends, [{ runId: "run-1", stepId: "discuss" }]);
 });
 
-test("the interactive field is blurred while a send is in flight so no key types (D9)", async () => {
+test("the interactive field is blurred until the send is admitted so no key types (D9, #290)", async () => {
   const wb = await mountWorkbench(interactiveRunOf());
   await type(wb.t, "hi");
   await press(wb.t, wb.renderer, "return"); // send → outcome pending → field blurs
-  assert.match(wb.t.captureCharFrame(), /… sending…/); // the in-flight hint
+  assert.match(wb.t.captureCharFrame(), /… sending…/); // the pre-admission hint
   await type(wb.t, "X"); // the field is blurred, so this does not land
   assert.match(wb.t.captureCharFrame(), /> hi/);
   assert.doesNotMatch(wb.t.captureCharFrame(), /> hiX/);
 });
 
 test("End Step is not offered mid-Turn (#122)", async () => {
-  // No send/end offers means a Turn is live: End Step cannot arm and Enter sends
-  // nothing, so the human waits (or interrupts) rather than ending mid-Turn.
-  const wb = await mountWorkbench(interactiveRunOf({ actionOffers: [] }));
+  // A live Turn offers its interrupt, not send/end: End Step cannot arm and Enter
+  // sends nothing, so the human waits (or interrupts) rather than ending mid-Turn.
+  const wb = await mountWorkbench(liveInteractiveRunOf());
   const frame = wb.t.captureCharFrame();
-  assert.match(frame, /a Turn is running/);
+  assert.match(frame, /◆ The agent is working/);
   await press(wb.t, wb.renderer, "e", { ctrl: true });
   assert.equal(wb.control.ends.length, 0);
   assert.doesNotMatch(wb.t.captureCharFrame(), /End this interactive Step\?/);
@@ -3071,7 +3071,7 @@ test("Escape backs out of an armed Continue, and Continue cannot arm mid-Turn (#
   assert.doesNotMatch(wb.t.captureCharFrame(), /y continue/);
   assert.equal(wb.control.continues.length, 0);
 
-  const live = await mountWorkbench(interactiveRunOf({ actionOffers: [] }));
+  const live = await mountWorkbench(liveInteractiveRunOf());
   await press(live.t, live.renderer, "n", { ctrl: true });
   assert.doesNotMatch(live.t.captureCharFrame(), /y continue/);
   await press(live.t, live.renderer, "y");
@@ -3122,7 +3122,7 @@ test("^E arms End Stage beside Continue with a confirm saying the tracker is unc
 });
 
 test("End Stage cannot arm mid-Turn (#218)", async () => {
-  const live = await mountWorkbench(interactiveRunOf({ actionOffers: [] }));
+  const live = await mountWorkbench(liveInteractiveRunOf());
   await press(live.t, live.renderer, "e", { ctrl: true });
   assert.doesNotMatch(live.t.captureCharFrame(), /y end stage/);
   await press(live.t, live.renderer, "y");
@@ -3165,9 +3165,10 @@ test("a live interactive Turn shows its Interrupt and two Esc presses dispatch i
   const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 40, actions);
   await type(wb.t, "next");
   const frame = wb.t.captureCharFrame();
-  assert.match(frame, /Your Turn/);
+  // The agent holds the Turn, so the label says it is working, never the human's move.
+  assert.match(frame, /◆ The agent is working/);
+  assert.doesNotMatch(frame, /Your move|Your Turn/);
   assert.match(frame, /esc esc interrupt/);
-  assert.doesNotMatch(frame, /a Turn is running — interrupt it to stop/);
 
   await press(wb.t, wb.renderer, "escape"); // arm, never leave
   assert.equal(interrupted, undefined);
@@ -3261,11 +3262,11 @@ test("an interrupted interactive Turn rests halted and resume returns to the sam
   const halted = t.captureCharFrame();
   assert.match(halted, /HALTED/);
   assert.match(halted, /r resume/);
-  assert.doesNotMatch(halted, /Your Turn/);
+  assert.doesNotMatch(halted, /Your move|The agent is working/);
   await press(t, renderer, "r");
   const back = t.captureCharFrame();
   assert.match(back, /BLOCKED · interactive Turn/);
-  assert.match(back, /Your Turn/);
+  assert.match(back, /◇ Your move/);
   assert.match(back, /enter send Turn/);
 });
 
@@ -3280,30 +3281,121 @@ test("the live interactive Interrupt reads without colour and fits a small termi
   noOverflow(frame, 40);
 });
 
+test("who holds the Turn reads in words and glyphs at any width and across a resize (#290)", async () => {
+  const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 24, okActions());
+  let frame = wb.t.captureCharFrame();
+  assert.match(
+    frame,
+    /◆ The agent is working — wait for its reply or interrupt it/,
+  );
+  noOverflow(frame, 100);
+
+  // Clipped narrow, the working label still names the agent before its ellipsis;
+  // its glyph and words differ from the human's move, so colour is never the signal.
+  wb.renderer.resize(40, 16);
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.match(frame, /◆ The agent is working/);
+  noOverflow(frame, 40);
+
+  // The Turn ends: the Run is back at the boundary, and the label hands the move over.
+  wb.control.setRun(interactiveRunOf());
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /◇ Your move/);
+  noOverflow(wb.t.captureCharFrame(), 40);
+  wb.renderer.resize(100, 24);
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.match(frame, /◇ Your move — the agent is waiting for your next Turn/);
+  assert.doesNotMatch(frame, /The agent is working/);
+  noOverflow(frame, 100);
+});
+
+test("an applied send clears the draft at Turn admission with no sending state while the agent works (#290)", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 100, 40, okActions());
+  await type(wb.t, "hi there");
+  await press(wb.t, wb.renderer, "return");
+  // Between Enter and admission the field is blurred under a short pending hint.
+  assert.match(wb.t.captureCharFrame(), /… sending…/);
+  assert.match(wb.t.captureCharFrame(), /> hi there/);
+
+  // Admission: the Run push carries the live Turn first, then the send settles applied.
+  wb.control.setRun(liveInteractiveRunOf());
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /◆ The agent is working/);
+  wb.control.setInteractiveOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  let frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /hi there/); // the draft went with the admitted Turn
+  assert.doesNotMatch(frame, /sending/); // nothing lingers for the Turn's length
+  assert.match(frame, /◆ The agent is working/);
+  assert.match(frame, /esc esc interrupt/);
+
+  // The field is live again during the Turn, so the next Turn can be drafted...
+  await type(wb.t, "next");
+  assert.match(wb.t.captureCharFrame(), /> next/);
+  // ...and when the Turn ends the move returns to the human with that draft intact.
+  wb.control.setRun(interactiveRunOf());
+  await wb.t.renderOnce();
+  frame = wb.t.captureCharFrame();
+  assert.match(frame, /◇ Your move/);
+  assert.match(frame, /enter send Turn/);
+  assert.match(frame, /> next/);
+  assert.equal(wb.control.sends.length, 1);
+});
+
 test("at a Turn boundary the interactive Esc still leaves the Workbench (#219)", async () => {
   const wb = await mountWorkbench(interactiveRunOf());
   await press(wb.t, wb.renderer, "escape");
   assert.match(wb.t.captureCharFrame(), /Secant/);
 });
 
-test("a refused send surfaces the refusal and keeps the typed draft (#122, A9)", async () => {
-  const wb = await mountWorkbench(interactiveRunOf());
+test("a draft longer than a narrow input stays in bounds and clears at admission (#290)", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 48, 24, okActions());
+  const long = "draft ".repeat(40).trim(); // far wider than the 48-column input
+  await type(wb.t, long);
+  noOverflow(wb.t.captureCharFrame(), 48);
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends, [
+    { runId: "run-1", stepId: "discuss", text: long },
+  ]);
+
+  wb.control.setRun(liveInteractiveRunOf());
+  wb.control.setInteractiveOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  const frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /draft/);
+  assert.doesNotMatch(frame, /sending/);
+  assert.match(frame, /◆ The agent is working/);
+  noOverflow(frame, 48);
+});
+
+test("a refused send surfaces the refusal and keeps the typed draft (#122, A9, #290)", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 48, 24);
   await type(wb.t, "hi");
   await press(wb.t, wb.renderer, "return");
   wb.control.setInteractiveOutcome({
     kind: "refused",
     problem: {
-      code: "interactive-turn-busy",
-      explanation: "a Turn is already live",
-      remediation: "wait for it",
+      code: "interactive-turn-not-admitted",
+      explanation:
+        "Run run-1 did not admit the interactive Turn; the text was not sent to the agent.",
+      remediation: "send it again",
       possibleEffects: "none",
     },
   });
   await wb.t.renderOnce();
-  assert.match(wb.t.captureCharFrame(), /a Turn is already live/);
-  // A9 (fails at HEAD): the refusal re-enables the field with the draft intact — a long
-  // Turn typed at the wrong moment is not lost. HEAD cleared the draft before dispatch.
-  assert.match(wb.t.captureCharFrame(), /> hi/);
+  const frame = wb.t.captureCharFrame();
+  // The reason is said in words, clipped to the width rather than overflowing it.
+  assert.match(frame, /✗ Run run-1 did not admit the/);
+  noOverflow(frame, 48);
+  // The refusal re-enables the field with the draft intact (A9), no sending state
+  // lingers, and the move stays the human's since no Turn was admitted.
+  assert.match(frame, /> hi/);
+  assert.doesNotMatch(frame, /sending/);
+  assert.match(frame, /◇ Your move/);
+  await type(wb.t, "!");
+  assert.match(wb.t.captureCharFrame(), /> hi!/);
 });
 
 test("the interactive input reads without colour and fits a narrow terminal (#122)", async () => {
@@ -3311,7 +3403,7 @@ test("the interactive input reads without colour and fits a narrow terminal (#12
   const frame = wb.t.captureCharFrame();
   // The Step and its controls read from glyphs and words, not colour.
   assert.match(frame, /BLOCKED · interactive Turn/);
-  assert.match(frame, /Your Turn/);
+  assert.match(frame, /◇ Your move/);
   assert.match(frame, /enter send Turn · \^E end step/);
   noOverflow(frame, 48);
 });

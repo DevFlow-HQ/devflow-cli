@@ -19,7 +19,7 @@ import type { RunView } from "../../src/application/projection-port.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // [matt-local-spec] The maintained Matt Bundle publishes its spec to the Local
 // tracker (#220), over the shared Projection Port with the real Application and Run
@@ -407,6 +407,7 @@ for (const harness of ["claude-code", "codex"] as const) {
         text: "Merge the last two tickets.",
       },
     });
+    await awaitRunRest(wired.projectionPort, runId);
     assert.equal(agent.inputs.at(-1), "Merge the last two tickets.");
     assert.equal(readRun(wired, runId).state, "blocked");
     assert.deepEqual(planningFiles(area), ["spec.md"]);

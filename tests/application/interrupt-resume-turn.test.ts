@@ -18,7 +18,7 @@ import type {
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitSettled, followRun } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
 // Interrupt a live Turn through the Port, resume the same Session, and reject the
@@ -287,33 +287,20 @@ function wire(
   return { wired, bundleId: bundle.id, digest: entry.digest };
 }
 
-/** Poll the run Projection until a live Turn offers `interrupt-turn`, so a control
- *  is issued only once the Turn is admitted (await observable readiness, no sleep —
- *  admission pushes no durable update). Returns the live Turn's offer. */
-async function awaitLiveTurn(
+/** Follow the run Projection until a live Turn offers `interrupt-turn`, so a control
+ *  is issued only once the Turn is admitted. The Turn's durable admission pushes a
+ *  snapshot to open observers (#290), so this awaits the stream, never a poll or
+ *  sleep: an Agent-step Turn reaches a followed client while it is live. */
+function awaitLiveTurn(
   port: ProjectionPort,
   runId: string,
 ): Promise<InterruptTurnOffer> {
-  // The Turn admits asynchronously (prepare, the driver's first microtasks), so poll
-  // on a short real interval up to a generous ceiling. This is a bounded readiness
-  // condition, not a fixed sleep — it returns the instant the live Turn's offer appears.
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    const opened = port.openProjection({ family: "run", runId });
-    try {
-      if (opened.snapshot.result.found) {
-        const offer = opened.snapshot.result.run.actionOffers.find(
-          (candidate): candidate is InterruptTurnOffer =>
-            candidate.action === "interrupt-turn",
-        );
-        if (offer !== undefined) return offer;
-      }
-    } finally {
-      opened.close();
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("the Agent Turn never went live");
+  return followRun(port, runId, (run) =>
+    run.actionOffers.find(
+      (candidate): candidate is InterruptTurnOffer =>
+        candidate.action === "interrupt-turn",
+    ),
+  );
 }
 
 function runView(port: ProjectionPort, runId: string): RunView {

@@ -5,9 +5,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Invariants
 
 - Every canonical write to a Run must go through `observedOwner`, not the raw `RunOwner`, or an open client's live `run` Projection never updates.
-  `observedOwner` spreads `...owner` and intercepts only six methods — `selectHarness`, `writeState`, `publishAttempt`, `recordMaterializationConflict`,
-  `recordGateAnswer`, and `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own transaction) — pushing a fresh snapshot
-  after each commits. A `run` Projection registers in the Run-scoped observer set even while rested; every later tracking entry reuses that set, so
+  `observedOwner` spreads `...owner` and intercepts only seven methods — `selectHarness`, `writeState`, `publishAttempt`, `recordMaterializationConflict`,
+  `recordGateAnswer`, `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own transaction), and `admitTurn` (#290) — pushing a
+  fresh snapshot after each commits. A `run` Projection registers in the Run-scoped observer set even while rested; every later tracking entry reuses that set, so
   resume, gate-answer, and interactive drivers cannot orphan the stream. A new `RunOwner` write method compiles and silently pushes nothing (A3).
 - `answer-human-gate` serves two gate mechanisms off one Port operation (#108). The Projection derivation decides which: `derived.pendingGate` present is an
   **authored** gate, answered by settling its producing Attempt through `observedOwner.publishAttempt` (into `attempt_log`, so the resumed walk skips the gate) —
@@ -51,8 +51,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `submitLaunch` takes its first finding; the Projection collects all in launch order, each with a `correction` target. Composition-corruption is a single hard-stop `bundle`
   finding like missing/invalid bytes. The model check is assessment-only — the Projection qualifies the selected Harness (`harnessCatalog.qualify`, which spawns) only when the
   draft is otherwise ready and a model is requested; a direct `submitLaunch` skips it, so a bad model surfaces at `prepare`, not as a pre-create refusal.
-- The Agent executor's Turn writes (`admitTurn`/`appendTurnEvent`/`settleTurn`) go through the raw owner (not intercepted by `observedOwner`), so they push no **durable**
-  snapshot; the Turn's durable timeline, Session availability, and effective model surface on the next intercepted write (the Attempt's `publishAttempt`). The live lane is
+- The executor's `appendTurnEvent`/`settleTurn` go through the raw owner and push no **durable** snapshot (only `admitTurn` pushes, above); the Turn's durable
+  timeline, Session availability, and effective model surface on the next intercepted write (`publishAttempt`, or the interactive `blocked` write). The live lane is
   separate — Turn activity reaches an open client through the live overlay (#117, [run-control](../../docs/agents/run-control.md)), not through this durable write.
   Decided, not yet built: ADR 0039 publishes each stored Turn row to the per-Session history family during the Turn, keeping the three admitted writes.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and

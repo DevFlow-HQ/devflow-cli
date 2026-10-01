@@ -31,7 +31,8 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   Step and returns to the timeline when it ends.
 - Typed-but-unsent interactive text (the `draft` signal) clears only on a **fresh** interactive Step (the focus effect keyed on the Step id), so it survives a
   Turn settle and a tab away within the same Step; a refused send keeps it (the refusal surfaces beside it, A9), and only an applied send
-  clears it.
+  clears it. A send applies at Turn admission (#290), so the draft clears while the agent works; the `… sending…` hint and the blurred field last only until then.
+  The label reads the live Turn from the `interrupt-turn` Offer, never a missing send Offer: the agent is working while one is offered, else it is the human's move.
 
 ## Modal stack and composes
 

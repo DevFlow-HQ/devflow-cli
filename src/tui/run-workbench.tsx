@@ -442,12 +442,11 @@ export function RunWorkbench(props: {
       ),
     };
   });
-  // A Turn is live (working) when the Step is active but the boundary offers are gone.
-  const interactiveTurnLive = () =>
-    interactiveStepActive() && interactiveOffers().send === undefined;
-  // The live-Turn interrupt Offer while a human Turn runs in the interactive Step.
+  // The Projection's live Turn in the interactive Step, read from its interrupt Offer
+  // (which carries the live turnId), never from a missing send Offer (#290): present
+  // exactly while the agent holds the Turn, so the input says it is working.
   const interactiveInterrupt = () =>
-    interactiveTurnLive() ? offers().interrupt : undefined;
+    interactiveStepActive() ? offers().interrupt : undefined;
   const [draft, setDraft] = createSignal("");
   const [interactiveOutcome, setInteractiveOutcome] =
     createSignal<Accessor<AnswerOutcome>>();
@@ -467,7 +466,8 @@ export function RunWorkbench(props: {
     setInteractiveRefusal(undefined);
     // The draft is held, not cleared, until the send applies: a refused send (a Turn
     // still live, a Step that moved) keeps the typed text in the input (A9). The
-    // settlement effect below clears it only on an applied send.
+    // settlement effect below clears it only on an applied send, which settles when
+    // Secant admits the Turn, not when the Turn ends (#290).
     setInteractiveOutcome(() =>
       view.sendInteractiveTurn(offer.runId, offer.stepId, draft()),
     );
@@ -835,7 +835,8 @@ export function RunWorkbench(props: {
 
   // Follow a sent Turn / End Step to settlement: a refusal (a Turn still live, a
   // stale Step) surfaces in the input and re-enables it; an applied outcome just
-  // clears local state — the live snapshot carries the new transcript / advance in.
+  // clears local state — a send applies at Turn admission, and the Run snapshot then
+  // carries the working Turn and, later, its transcript / advance in (#290).
   createEffect(() => {
     const accessor = interactiveOutcome();
     if (accessor === undefined) return;
@@ -1260,7 +1261,6 @@ export function RunWorkbench(props: {
               // Actions box never sees those pending states.
               actionPending={railPending}
               interactiveActive={interactiveStepActive}
-              interactiveTurnLive={interactiveTurnLive}
               interactiveInterrupt={interactiveInterrupt}
               interactiveEndOffered={() =>
                 interactiveOffers().end !== undefined
@@ -1372,7 +1372,6 @@ function Workbench(props: {
   actionRefusal: Accessor<Problem | undefined>;
   actionPending: Accessor<"takeover" | "acknowledge" | undefined>;
   interactiveActive: Accessor<boolean>;
-  interactiveTurnLive: Accessor<boolean>;
   interactiveInterrupt: Accessor<InterruptTurnOffer | undefined>;
   interactiveEndOffered: Accessor<boolean>;
   interactiveContinue: Accessor<ContinueRepeatOffer | undefined>;
@@ -1747,7 +1746,6 @@ function Workbench(props: {
             <InteractiveInput
               draft={props.draft}
               onInput={props.onDraftInput}
-              turnLive={props.interactiveTurnLive}
               interrupt={props.interactiveInterrupt}
               interruptArmed={props.interruptArmed}
               endOffered={props.interactiveEndOffered}

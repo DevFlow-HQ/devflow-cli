@@ -18,7 +18,11 @@ import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import {
+  awaitRunRest,
+  awaitSettled,
+  followRun,
+} from "../helpers/settleOperation.js";
 
 // The first Interactive agent Step end to end (#122): a synthesized Bundle
 // `interactive-agent (session "s") -> agent (session "s")` launched through the
@@ -261,6 +265,8 @@ async function send(
   assert.ok(admission.admitted, JSON.stringify(admission));
   const outcome = await awaitSettled(wired.projectionPort, operationId);
   assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  // `applied` means the Turn was admitted; its result arrives on the Run (#290).
+  await awaitRunRest(wired.projectionPort, runId);
 }
 
 async function awaitInterruptOffer(wired: Wiring, runId: string) {
@@ -443,6 +449,226 @@ test("a blank interactive Turn is refused before any stdin is sent (#122)", asyn
   const run = readRun(wired, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.turnPosition, undefined);
+});
+
+/** A human Turn that stays live after admission until it is interrupted or the
+ *  Harness closes, so a test can observe the window between admission and Turn end. */
+const BLOCKING_TURN: FakeScript["turns"][number] = {
+  block: true,
+  result: COMPLETED_DETACHED.result,
+};
+
+test("an interactive send settles applied at Turn admission while the Turn is still live (#290)", async (t) => {
+  const { wired, runId } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [BLOCKING_TURN],
+  });
+  // A followed client, opened before the send: a fresh read already shows a live
+  // Turn, so this proves admission also pushes it to an open Projection.
+  const pushedInterrupt = followRun(wired.projectionPort, runId, (run) =>
+    run.state === "running" ? offer(run, "interrupt-turn") : undefined,
+  );
+
+  const sent = wired.projectionPort.submit({
+    operationId: "op-send-admitted",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "think about this" },
+  });
+  assert.ok(sent.admitted, JSON.stringify(sent));
+  const outcome = await awaitSettled(wired.projectionPort, sent.operationId);
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+
+  // Settled while the Turn is live: the Run is durably `running`, the Turn is
+  // admitted with no result, and only the live-Turn controls are offered.
+  const live = readRun(wired, runId);
+  assert.equal(live.state, "running");
+  const interrupt = offer(live, "interrupt-turn");
+  assert.ok(interrupt, JSON.stringify(live.actionOffers));
+  assert.equal(offer(live, "send-interactive-turn"), undefined);
+  assert.equal(offer(live, "end-interactive-step"), undefined);
+
+  // The followed client sees the live Turn too: admission pushed its interrupt Offer.
+  assert.equal((await pushedInterrupt).turnId, interrupt.turnId);
+
+  // A second send while that Turn is live is refused as a value and changes nothing.
+  const busy = wired.projectionPort.submit({
+    operationId: "op-send-busy",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "and another thing" },
+  });
+  assert.ok(busy.admitted, JSON.stringify(busy));
+  const refused = await awaitSettled(wired.projectionPort, busy.operationId);
+  assert.equal(refused.status, "not-applied");
+  if (refused.status !== "not-applied") throw new Error("unreachable");
+  assert.equal(refused.problem.code, "interactive-turn-busy");
+
+  // The Turn's own outcome arrives through the Run Projection, not the Operation.
+  const interrupted = wired.projectionPort.submit({
+    operationId: "op-interrupt-admitted",
+    operation: "interrupt-turn",
+    input: { runId, turnId: interrupt.turnId },
+  });
+  assert.ok(interrupted.admitted);
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, interrupted.operationId)).status,
+    "applied",
+  );
+  assert.equal(
+    (await awaitRunRest(wired.projectionPort, runId)).state,
+    "halted",
+  );
+});
+
+test("a send whose Turn is never admitted settles not-applied and leaves the boundary (#290)", async (t) => {
+  // The first Turn fails and leaves its Session unusable, so the next Turn can never
+  // be admitted (ADR 0022): the send must not read as applied.
+  const { wired, runId } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [
+      {
+        result: {
+          kind: "failed",
+          detail: {
+            failure: {
+              phase: "recovery",
+              category: "session-unusable",
+              possibleEffects: "none",
+              cause: undefined,
+              diagnostics: "scripted unusable Session",
+            },
+            effectiveModel: { known: false },
+            session: { state: "unusable", reason: "scripted" },
+          },
+        },
+      },
+    ],
+  });
+  await send(wired, runId, "op-send-fails", "discuss", "first attempt");
+  assert.equal(readRun(wired, runId).sessions?.[0]?.availability, "unusable");
+
+  const sent = wired.projectionPort.submit({
+    operationId: "op-send-unadmitted",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "try again" },
+  });
+  assert.ok(sent.admitted, JSON.stringify(sent));
+  const outcome = await awaitSettled(wired.projectionPort, sent.operationId);
+  assert.equal(outcome.status, "not-applied", JSON.stringify(outcome));
+  if (outcome.status !== "not-applied") throw new Error("unreachable");
+  assert.equal(outcome.problem.code, "interactive-turn-not-admitted");
+  assert.equal(outcome.problem.possibleEffects, "none");
+
+  // Nothing was admitted: one Turn on record, and the Run is back at the boundary.
+  const run = readRun(wired, runId);
+  assert.equal(run.state, "blocked");
+  assert.equal(run.turnPosition, 1);
+  assert.ok(offer(run, "send-interactive-turn"));
+});
+
+test("a fault after admission reaches the Run, since the send already settled applied (#290)", async (t) => {
+  // The scripted Turn is admitted and settles, then the Adapter faults: the Turn
+  // driver throws after the send's Operation was already recorded `applied`.
+  const fake = createFake({
+    profile: profile(),
+    turns: [COMPLETED_DETACHED],
+  })();
+  const faulting: HarnessAdapter = {
+    async prepare(options) {
+      const prepared = await fake.prepare(options);
+      if (!prepared.ok) return prepared;
+      const harness = prepared.harness;
+      return {
+        ok: true,
+        harness: {
+          profile: harness.profile,
+          close: () => harness.close(),
+          startTurn(request) {
+            const turn = harness.startTurn(request);
+            return {
+              subscribe: (listener) => turn.subscribe(listener),
+              steer: (input) => turn.steer(input),
+              interrupt: () => turn.interrupt(),
+              answerRequest: (answer) => turn.answerRequest(answer),
+              async result() {
+                await turn.result();
+                throw new Error("scripted Adapter fault after admission");
+              },
+            };
+          },
+        },
+      };
+    },
+  };
+  const { wired, runId } = await launchInteractive(t, faulting);
+
+  const sent = wired.projectionPort.submit({
+    operationId: "op-send-faults",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "go" },
+  });
+  assert.ok(sent.admitted, JSON.stringify(sent));
+  const outcome = await awaitSettled(wired.projectionPort, sent.operationId);
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+
+  const problem = await followRun(
+    wired.projectionPort,
+    runId,
+    (run) => run.problem,
+  );
+  assert.equal(problem.code, "run-execution-fault");
+  assert.match(problem.explanation, /scripted Adapter fault after admission/);
+});
+
+test("a Turn that rejects after admission puts its fault on the Run (#290)", async (t) => {
+  // The interrupted Turn releases the Step's Harness, whose close fails: the Turn's
+  // promise rejects long after the send settled applied at admission.
+  const fake = createFake({ profile: profile(), turns: [BLOCKING_TURN] })();
+  const failingClose: HarnessAdapter = {
+    async prepare(options) {
+      const prepared = await fake.prepare(options);
+      if (!prepared.ok) return prepared;
+      const harness = prepared.harness;
+      return {
+        ok: true,
+        harness: {
+          profile: harness.profile,
+          startTurn: (request) => harness.startTurn(request),
+          async close() {
+            await harness.close();
+            throw new Error("scripted Harness close failure");
+          },
+        },
+      };
+    },
+  };
+  const { wired, runId } = await launchInteractive(t, failingClose);
+  const sent = wired.projectionPort.submit({
+    operationId: "op-send-rejects",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "go" },
+  });
+  assert.ok(sent.admitted, JSON.stringify(sent));
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, sent.operationId)).status,
+    "applied",
+  );
+  const interrupt = offer(readRun(wired, runId), "interrupt-turn");
+  assert.ok(interrupt);
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "op-interrupt-rejects",
+      operation: "interrupt-turn",
+      input: { runId, turnId: interrupt.turnId },
+    }).admitted,
+  );
+
+  const problem = await followRun(
+    wired.projectionPort,
+    runId,
+    (run) => run.problem,
+  );
+  assert.equal(problem.code, "run-execution-fault");
+  assert.match(problem.explanation, /scripted Harness close failure/);
 });
 
 test("shutdown closes the Step-scoped Harness once and leaves the interactive rest blocked (#134 A17/A21)", async (t) => {
@@ -706,8 +932,12 @@ test("end-interactive-step mid-Turn is rejected with a precise Problem (#122)", 
   assert.ok(cancel.admitted, JSON.stringify(cancel));
   const cancelOutcome = await awaitSettled(wired.projectionPort, "op-cancel");
   assert.equal(cancelOutcome.status, "applied", JSON.stringify(cancelOutcome));
-  await awaitSettled(wired.projectionPort, "op-send");
+  // The send settled at admission, but cancel still awaited the whole Turn (#290).
   assert.equal(readRun(wired, runId).state, "cancelled");
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "op-send")).status,
+    "applied",
+  );
   assert.equal(counts.prepares, 1);
   assert.deepEqual(counts.closes, [1]);
 });
@@ -802,6 +1032,8 @@ async function endStep(
   assert.ok(admission.admitted, JSON.stringify(admission));
   const outcome = await awaitSettled(wired.projectionPort, operationId);
   assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  // `applied` means the Turn was admitted; its result arrives on the Run (#290).
+  await awaitRunRest(wired.projectionPort, runId);
 }
 
 function sessionsOf(run: RunView): string[] {

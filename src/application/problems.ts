@@ -463,6 +463,20 @@ export function interactiveTurnBusy(runId: string): Problem {
   };
 }
 
+/** An interactive send whose Turn ended without a durable admission (#290): the
+ *  Session cannot take a Turn (ADR 0022), the admission was fenced, or the Run was
+ *  stopped first. No text reached the agent, so the send is not applied. */
+export function interactiveTurnNotAdmitted(runId: string): Problem {
+  return {
+    code: "interactive-turn-not-admitted",
+    explanation: `Run ${runId} did not admit the interactive Turn; the text was not sent to the agent.`,
+    remediation:
+      "Open the Run to read its current state and Session, then send the Turn again or resume the Run.",
+    possibleEffects: "none",
+    details: { runId },
+  };
+}
+
 /** An interactive-agent Step cannot be ended: the Run is not blocked at that Step
  *  (it never reached it, or it has already advanced past it) (#122). */
 export function interactiveStepNotActive(

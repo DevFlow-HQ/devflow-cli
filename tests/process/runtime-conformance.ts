@@ -47,7 +47,7 @@ import {
 import { registerClaudeCodeAdapterConformance } from "../harness/claude-code-adapter-conformance.js";
 import { registerCodexAdapterConformance } from "../harness/codex-adapter-conformance.js";
 import { writeCommandBundle } from "../helpers/commandBundle.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 import { installReplayer } from "../harness/replayer.js";
 import { runMain, withTimeout } from "../helpers/standalone.js";
 
@@ -452,8 +452,9 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
       }
     };
 
-    // Each human grill Turn over the real Port; the launch (and each prior send)
-    // settles the Run back to the Turn boundary first, so each send is admitted there.
+    // Each human grill Turn over the real Port; the launch (and each prior Turn) rests
+    // the Run back at the Turn boundary first, so each send is admitted there. A send
+    // settles at the Turn's admission, so the Turn's result is read off the Run (#290).
     let grillTurn = 0;
     const sendGrillTurn = async (text: string): Promise<void> => {
       const operationId = `matt-front-grill-${++grillTurn}`;
@@ -466,6 +467,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
       );
       const outcome = await awaitSettled(wired.projectionPort, operationId);
       assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+      await awaitRunRest(wired.projectionPort, runId);
     };
 
     await sendGrillTurn("That is enough context.");
@@ -670,7 +672,10 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
       (await awaitSettled(wired.projectionPort, reviseOp)).status,
       "applied",
     );
-    assert.equal(readRun().state, "blocked");
+    assert.equal(
+      (await awaitRunRest(wired.projectionPort, runId)).state,
+      "blocked",
+    );
     assert.equal(existsSync(join(area, "issues")), false);
 
     // Ending the Step approves the breakdown (#222). The publish Turn resumes the
@@ -785,6 +790,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
       operation: "send-interactive-turn",
       input: { ...implementStep, text: question },
     });
+    await awaitRunRest(wired.projectionPort, runId);
     assert.deepEqual(sessionTurns(firstTicket).user.slice(1), [question]);
     assert.match(sessionTurns(firstTicket).assistant, /done/);
 

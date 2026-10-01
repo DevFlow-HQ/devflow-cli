@@ -68,6 +68,7 @@ import {
   interactiveStepNotActive,
   interactiveTurnBlank,
   interactiveTurnBusy,
+  interactiveTurnNotAdmitted,
   operationIdReused,
   operationNotFound,
   pathNotFound,
@@ -669,6 +670,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
           tracking.state = request.advanceState;
           pushRunUpdate(runId);
         }
+        return result;
+      },
+      admitTurn(request) {
+        const result = owner.admitTurn(request);
+        // A durable Turn admission makes the Turn live (#290): push it so an open
+        // client sees the Turn's controls at once, not only when the Turn ends.
+        if (result.ok) pushRunUpdate(runId);
         return result;
       },
       recordPendingGate(request) {
@@ -2240,6 +2248,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // setting `tracking.promise`, so it never clobbers a genuinely live Turn's promise —
   // the signal cancel-run/interrupt-turn read to know when the Run has actually rested.
   // Only the going-live path records the promise, mirroring `startRun`'s guard.
+  // The send settles at the Turn's durable admission (#290), while `tracking.promise`
+  // still spans the whole Turn; a Turn that ends unadmitted settles not-applied.
   function startSendInteractiveTurn(
     operationId: string,
     input: SendInteractiveTurnInput,
@@ -2266,15 +2276,50 @@ export function createApplication(deps: ApplicationDependencies): Application {
         problem: interactiveTurnBusy(input.runId),
       });
     }
-    const promise = runInteractiveSend(operationId, input, begun);
-    begun.tracking.promise = promise;
-    return promise;
+    let admitted = false;
+    let settleAdmitted: (outcome: OperationOutcome) => void = () => {};
+    const admission = new Promise<OperationOutcome>((resolve) => {
+      settleAdmitted = resolve;
+    });
+    const turn = runInteractiveSend(operationId, input, begun, () => {
+      admitted = true;
+      settleAdmitted({ status: "applied" });
+    });
+    begun.tracking.promise = turn;
+    // After admission the Operation has already settled, so a later fault reaches
+    // clients on the Run instead.
+    const faultOnRun = (problem: Problem): OperationOutcome => {
+      begun.tracking.problem = problem;
+      pushRunUpdate(input.runId);
+      return { status: "applied" };
+    };
+    const turnEnd = turn.then(
+      (outcome): OperationOutcome => {
+        if (admitted) {
+          return outcome.status === "not-applied"
+            ? faultOnRun(outcome.problem)
+            : { status: "applied" };
+        }
+        return outcome.status === "not-applied"
+          ? outcome
+          : {
+              status: "not-applied",
+              problem: interactiveTurnNotAdmitted(input.runId),
+            };
+      },
+      (error: unknown): OperationOutcome => {
+        if (!admitted) throw error;
+        return faultOnRun(runExecutionFault(input.runId, error, operationId));
+      },
+    );
+    return Promise.race([admission, turnEnd]);
   }
 
   async function runInteractiveSend(
     operationId: string,
     input: SendInteractiveTurnInput,
     begun: InteractiveContext,
+    onAdmitted: () => void,
   ): Promise<OperationOutcome> {
     const { tracking, owner, step } = begun;
     const { attemptId, session } = interactiveStepTarget(
@@ -2284,6 +2329,15 @@ export function createApplication(deps: ApplicationDependencies): Application {
     );
     const turnId = `${attemptId}#human:${operationId}`;
     const observed = observedOwner(owner, input.runId);
+    // The Turn admits through this owner, so its durable admission settles the send.
+    const turnOwner: RunOwner = {
+      ...observed,
+      admitTurn(request) {
+        const result = observed.admitTurn(request);
+        if (result.ok) onAdmitted();
+        return result;
+      },
+    };
     // The Run stays `blocked` between Turns, so the claim is retained on the normal
     // path; only an interrupt/cancel releases it.
     let leaveClaimLive = true;
@@ -2317,7 +2371,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         observed.writeState("running");
         const report = await tracking.interactiveStep.turn({
           runId: input.runId,
-          owner,
+          owner: turnOwner,
           session,
           attemptId,
           turnId,
@@ -2334,7 +2388,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         }
         // completed or failed: the Turn is recorded; back to the boundary for the next
         // Turn. `writeState` pushes the fresh snapshot (with the new transcript entry),
-        // which the Turn's own writes bypass observedOwner and would not push.
+        // which the Turn's event and settle writes bypass observedOwner and would not push.
         observed.writeState("blocked");
         return { status: "applied" };
       },

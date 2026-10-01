@@ -9,6 +9,7 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 
 - Run settlement is deferred (#98 S1): `runAndSettle`/the answer-continue branch start the execution promise and `submit` returns `admitted` synchronously; the
   `finally` releases the owner only after a resting outcome and settlement publishes after it. A `blocked` Run keeps its owner with no execution promise until answered.
+  `send-interactive-turn` is the exception: it settles at the Turn's admission, not at rest (Interactive-Step drive below).
 - One `AbortController` per live Run lives in the `runs` map. The Application never imports the execution `RunCancelledError`: it aborts its own controller, so
   `tracking.abort.signal.aborted` in the catch is exactly "our cancel/signal fired", and the reason decides the rest
   ([execution's mapping](../../src/run/execution/AGENTS.md)): only `RUN_CANCEL_ABORT` throws (`RunCancelledError`, so cancel-run writes the rest through the
@@ -48,12 +49,15 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   is derived from the current Step being `interactive-agent` (the same signal the TUI blocked-basis reads), and no Attempt settles until End.
 - `beginInteractive` reuses the held owner (a blocked Run keeps it) or resumes+acquires a reopened one, then re-derives to confirm the Run is blocked at the named Step.
 - `send` drives one human Turn (origin `human`, verbatim text as the transcript input) through the opaque Step driver against that owner and stays `blocked` between
-  Turns (owner held, no execution promise, ADR 0031); the Turn's writes bypass `observedOwner`, so it `pushRunUpdate`s the new transcript itself.
+  Turns (owner held, no execution promise, ADR 0031); its `blocked` write pushes the new transcript.
+- `send` settles `applied` at the Turn's durable admission (#290), the Run already `running`, while `tracking.promise` still spans the whole Turn for cancel,
+  interrupt, and shutdown. A Turn ending unadmitted (unusable Session, fenced admission, stopped first) settles `not-applied` (`interactive-turn-not-admitted`, or its
+  own earlier Problem); a fault after admission lands on the Run's `problem`, since the Operation already settled.
 - `interactiveStepTarget` derives the resting iteration's Attempt id and Session from the attempt log (a Step inside a Repeat group, or `fresh`, gets a
   per-Attempt Session). `end` publishes that Attempt (empty, succeeded, stages no commit) with `advanceState: "running"` and re-drives execution, which
   re-walks from the top, replays settled iterations, and skips the settled Step (#216).
 - Both set `tracking.promise` (via a `start*` helper) so cancel-run/interrupt-turn find and abort a live human Turn; the abort reason decides the rest as the answer path
-  does. `send` is refused blank at admission (before any stdin); `end` mid-Turn (a live Turn) is refused as a value.
+  does, and reaches clients through the Run Projection. `send` is refused blank at admission (before any stdin); `end` mid-Turn (a live Turn) is refused as a value.
 - `continue-repeat` (#217) is `end` for a Step inside a human-controlled Repeat, which the scheduler re-walks into the next iteration; the Projection offers it
   in End Step's place. Each control is refused as a value on the other's Step (`inHumanRepeat`), so one iteration is never settled by both.
 - `end-stage` (#218) is `continue-repeat` whose published Attempt carries `endsStage`, one durable `attempt_log` mark: the re-walk finishes that iteration and exits

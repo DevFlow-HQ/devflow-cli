@@ -19,7 +19,7 @@ import {
 } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // [matt-local-implement] The maintained Matt Bundle implements one Local ticket per
 // fresh Session (#224), over the shared Projection Port with the real Application
@@ -436,6 +436,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       operation: "send-interactive-turn",
       input: { runId, stepId: "implement", text: "Which test covers this?" },
     });
+    await awaitRunRest(wired.projectionPort, runId);
     assert.deepEqual(agent.turns.at(-1), {
       text: "Which test covers this?",
       session: entry.session,
@@ -555,6 +556,7 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
     operation: "send-interactive-turn",
     input: { runId, stepId: "implement", text: "Please carry on." },
   });
+  await awaitRunRest(wired.projectionPort, runId);
   assert.equal(readRun(wired, runId).state, "halted");
   await resume("op-resume-2");
 
@@ -564,6 +566,7 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
     operation: "send-interactive-turn",
     input: { runId, stepId: "implement", text: "Which ticket did you choose?" },
   });
+  await awaitRunRest(wired.projectionPort, runId);
   const rested = readRun(wired, runId);
   assert.equal(rested.state, "blocked");
   assert.equal(rested.progress[rested.position]?.id, "implement");
