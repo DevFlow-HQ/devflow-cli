@@ -335,6 +335,49 @@ What was taken and changed:
              not only recoloured; an approval request or free-text gate owns Esc
              first; at a Turn boundary Esc still leaves the Workbench.
 
+Added 2026-10-01 for M7 multi-line launch inputs (#287). Rebuilt against
+OpenCode at 228e9095ba, whose prompt files match the 1ead9e3d7f pin apart from
+three `...`→`…` string edits; no OpenCode source crosses.
+
+  src/tui/launch-text-box.tsx   text Launch input box rebuilt against
+                                packages/tui/src/component/prompt/index.tsx,
+                                packages/tui/src/prompt/part.ts, and
+                                packages/tui/src/config/keybind.ts
+  src/tui/start-run-views.tsx   the inputs step's Up/Down hand-off to that box
+
+What was taken and changed:
+
+  textarea, keys, and height (from component/prompt/index.tsx, keybind.ts):
+    Taken:   OpenTUI's native textarea with word wrap, `minHeight` 1 and
+             `maxHeight` max(6, a third of the terminal rows) then internal
+             scroll; Enter submits, and Shift+Enter, Ctrl+Enter, Alt+Enter,
+             and Ctrl+J insert a newline (`input_submit`/`input_newline`).
+    Changed: the keys are the textarea's own `keyBindings` plus the step's
+             existing `return` binding, not the managed textarea keymap layer;
+             keypad Enter also submits; Up/Down leave the box for the previous
+             or next input only from its first or last visual line; no IME
+             double-defer on submit, since Continue reads the draft, not the
+             buffer; no autocomplete, leader, stash, or shell mode.
+  paste (from component/prompt/index.tsx onPaste and pasteInputText):
+    Taken:   CRLF then lone CR normalised to LF at the paste boundary; a paste
+             of three or more lines or over 150 characters (measured trimmed)
+             shows as a virtual-extmark `[Pasted ~N lines]` placeholder.
+    Changed: the stored paste is not trimmed, so a placeholder expands to the
+             exact pasted text; ANSI sequences are stripped as the textarea's
+             default paste does; no file, image, or URL attachment paths and no
+             trailing space after the placeholder; the paste rides on the
+             extmark's `data` (kept by its undo history), not a side store;
+             the placeholder is unstyled, its words alone marking it; an empty
+             or whitespace-only paste is inserted as is, not re-read from the
+             clipboard; there is no configurable height cap.
+  expansion (from prompt/part.ts expandTrackedPastedText):
+    Taken:   the value is the box text with each placeholder's extmark range
+             replaced by its paste.
+    Changed: ranges are sliced by the textarea's own `getTextRange`, not a
+             display-width re-measure; the full value reaches the draft on
+             every edit rather than on submit, so Review and the launch never
+             see a placeholder, and back-navigation shows the full text.
+
 THEME ASSETS (25 vendored, unmodified palettes)
 -----------------------------------------------
 

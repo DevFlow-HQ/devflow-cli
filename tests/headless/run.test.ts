@@ -96,6 +96,31 @@ test("[headless-on-doubles] run launch --trust runs to succeeded, and a second l
   assert.match(h.stdout(), /^State: succeeded$/m);
 });
 
+test("run launch --input accepts a multi-line text value unchanged, line endings included (#287)", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install({
+    inputs: { note: { type: "text", description: "a note" } },
+  });
+  h.approve();
+  const note = "line one\nline two\r\nline three\r";
+
+  assert.equal(
+    await runHeadless(
+      h.clients,
+      ["run", "launch", id, "--trust", digest, "--input", `note=${note}`],
+      h.io,
+    ),
+    0,
+  );
+  assert.match(h.stdout(), /^State: succeeded$/m);
+  const runs = h.runGroup?.listRuns() ?? [];
+  assert.equal(runs.length, 1);
+  const read = h.runGroup?.readRun(runs[0]?.runId ?? "");
+  assert.ok(read?.ok);
+  // Byte-exact: headless values are never normalised, unlike a TUI paste.
+  assert.deepEqual(read.run.launch, { note });
+});
+
 test("[both-client-harness-selection] run launch rejects --harness for a Command-only Bundle", async (t) => {
   const h = await harness(t);
   const { id, digest } = await h.install();

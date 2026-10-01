@@ -590,6 +590,9 @@ async function mountFlow(
   runView: RunWorkbenchView = noRunView(),
   harnessesView: HarnessCatalogView = defaultHarnessCatalog(),
   preparationView: LaunchPreparationView = preparation(),
+  // Modified Enter keys (Shift/Ctrl/Alt) are distinguishable only under the kitty
+  // keyboard protocol, which the production renderer requests (#287).
+  kittyKeyboard = false,
 ) {
   const exits: unknown[] = [];
   const t = await testRender(
@@ -607,7 +610,7 @@ async function mountFlow(
         exit={(reason) => exits.push(reason)}
       />
     ),
-    { width, height },
+    { width, height, kittyKeyboard },
   );
   await t.waitForFrame((f) => f.includes("Secant"));
   // Start a Run is the first and default Home entry (#191), so Enter opens it.
@@ -1243,6 +1246,269 @@ test("renders exactly the declared inputs, carries the acknowledged trustDigest,
   assert.match(preserved, /target:/);
   assert.doesNotMatch(preserved, /target: hi/);
   assert.match(preserved, /mode: fast/);
+});
+
+// --- multi-line text inputs (#287) ----------------------------------------
+//
+// #287 slice coverage: keymap and focus (Enter continues, each newline key, Up/Down
+// inside a box versus between inputs, kitty and legacy key encodings), small
+// terminals and resize (the height cap recomputed at 60x24, 60x48, and 40x20),
+// large content (wrap, the cap with internal scroll, the paste placeholder, and a
+// multi-line value on Review), interaction tuning (the 3-line and 150-character
+// summary boundaries), meaning without colour (the worded `[Pasted ~N lines]`
+// placeholder and the `›` focus marker), and renderer evidence (frames from the
+// fake Renderer Port). Which modified Enter keys a real terminal delivers is
+// recorded human evidence (ADR 0027), not provable here.
+
+// A trusted Command-only Bundle, so Enter on the chooser lands on its inputs.
+const ZETA = focus({
+  id: "dev.zeta",
+  name: "Zeta",
+  description: "multi-line inputs",
+  digest: "zeta0000",
+  trust: { state: "app-release" },
+  launchInputs: [
+    { name: "brief", type: "text", description: "What to build" },
+    { name: "paths", type: "file-set", description: "Files to read" },
+    {
+      name: "mode",
+      type: "choice",
+      description: "How to run",
+      choices: ["fast", "slow"],
+    },
+  ],
+});
+
+async function openZetaInputs(
+  options: { width?: number; height?: number; kittyKeyboard?: boolean } = {},
+) {
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(
+    catalog([ZETA]),
+    launch.view,
+    options.width ?? 100,
+    options.height ?? 40,
+    noRunView(),
+    defaultHarnessCatalog(),
+    preparation(),
+    options.kittyKeyboard ?? true,
+  );
+  t.mockInput.pressEnter(); // Zeta (trusted, Command-only) → inputs
+  await t.waitForFrame((f) => f.includes("brief (text)"));
+  return { t, launch };
+}
+
+/** Continue to Review, Start, and return the launched draft's inputs. */
+async function launchFromInputs(
+  t: Awaited<ReturnType<typeof openZetaInputs>>["t"],
+  launch: ReturnType<typeof fakeLaunch>,
+) {
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Review"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Checking launch"));
+  return launch.calls[0]?.launchInputs ?? {};
+}
+
+const frameRows = (frame: string, pattern: RegExp) =>
+  frame.split("\n").filter((row) => pattern.test(row)).length;
+
+test("[launch-text-box] a text input wraps, grows to max(6, a third of the rows), scrolls inside, and recomputes the cap on resize", async () => {
+  const { t, launch } = await openZetaInputs({ width: 60, height: 24 });
+  // 30 words (119 characters, one line): a paste under the summary threshold.
+  const words = Array.from(
+    { length: 30 },
+    (_, i) => `w${String(i + 1).padStart(2, "0")}`,
+  );
+  await t.mockInput.pasteBracketedText(words.join(" "));
+  await t.waitForFrame((f) => f.includes("w30"));
+  const wrapped = t.captureCharFrame();
+  for (const word of words) assert.match(wrapped, new RegExp(word));
+  assert.equal(frameRows(wrapped, /w\d\d/), 3, "wraps at word boundaries");
+
+  // Twelve more lines: fifteen visual rows against a cap of max(6, 24/3) = 8.
+  for (let line = 1; line <= 12; line++) {
+    t.mockInput.pressKey("j", { ctrl: true });
+    await t.mockInput.typeText(`l${String(line).padStart(2, "0")}`);
+  }
+  await t.waitForFrame((f) => f.includes("l12"));
+  const capped = t.captureCharFrame();
+  assert.equal(frameRows(capped, /w\d\d|l\d\d/), 8, "capped at 8 rows");
+  assert.match(capped, /l05/);
+  assert.doesNotMatch(capped, /l04|w01/, "the top scrolled out of the box");
+  assert.match(capped, /paths \(file-set\)/, "the next input stays on screen");
+  assert.match(capped, /enter continue/, "the footer stays on screen");
+
+  // Scrolled inside: the cursor's row counts from the top of the text, not of the
+  // box, so Down from the last line leaves and Up from it moves within the box.
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› paths"));
+  t.mockInput.pressArrow("up");
+  await t.waitForFrame((f) => f.includes("› brief"));
+  t.mockInput.pressArrow("up");
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /› brief/, "Up stayed inside the box");
+  t.mockInput.pressArrow("down");
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /› brief/, "back on the last line");
+
+  // A taller terminal raises the cap to 16, so every row shows.
+  t.resize(60, 48);
+  await t.waitForFrame((f) => f.includes("w01") && f.includes("l01"));
+  assert.equal(frameRows(t.captureCharFrame(), /w\d\d|l\d\d/), 15);
+
+  // A small terminal floors the cap at 6 rows.
+  t.resize(40, 20);
+  await t.waitForFrame((f) => frameRows(f, /w\d\d|l\d\d/) === 6);
+  const small = t.captureCharFrame();
+  assert.match(small, /l12/, "the cursor row stays visible");
+  assert.match(small, /paths \(file-set\)/);
+  assert.match(small, /↑\/↓ input/, "the footer row stays on screen");
+
+  const inputs = await launchFromInputs(t, launch);
+  assert.equal(
+    inputs.brief,
+    [
+      words.join(" "),
+      ...Array.from(
+        { length: 12 },
+        (_, i) => `l${String(i + 1).padStart(2, "0")}`,
+      ),
+    ].join("\n"),
+  );
+});
+
+test("[launch-text-box] Enter continues while Shift+Enter, Ctrl+Enter, Alt+Enter, and Ctrl+J each insert a newline", async () => {
+  const { t, launch } = await openZetaInputs();
+  t.mockInput.pressKey("a");
+  t.mockInput.pressEnter({ shift: true });
+  t.mockInput.pressKey("b");
+  t.mockInput.pressEnter({ ctrl: true });
+  t.mockInput.pressKey("c");
+  t.mockInput.pressEnter({ meta: true }); // Alt+Enter: OpenTUI reports Alt as meta
+  t.mockInput.pressKey("d");
+  t.mockInput.pressKey("j", { ctrl: true });
+  t.mockInput.pressKey("e");
+  await t.waitForFrame((f) => /^\s*e\s*$/m.test(f));
+  const frame = t.captureCharFrame();
+  assert.match(frame, /brief \(text\)/, "no newline key continued");
+  for (const line of ["a", "b", "c", "d", "e"]) {
+    assert.match(frame, new RegExp(`^\\s*${line}\\s*$`, "m"));
+  }
+
+  // Keypad Enter (kitty `CSI 57414 u`) submits too, never a newline.
+  t.mockInput.pressKey("\x1b[57414u");
+  await t.waitForFrame((f) => f.includes("Review"));
+  const review = t.captureCharFrame();
+  assert.match(review, /brief: a\s*\n\s*b\s*\n\s*c\s*\n\s*d\s*\n\s*e/);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Checking launch"));
+  assert.equal(launch.calls[0]?.launchInputs.brief, "a\nb\nc\nd\ne");
+});
+
+test("[launch-text-box] without the kitty protocol, Ctrl+J still inserts a newline and Enter still continues", async () => {
+  const { t, launch } = await openZetaInputs({ kittyKeyboard: false });
+  t.mockInput.pressKey("x");
+  t.mockInput.pressKey("j", { ctrl: true }); // arrives as `linefeed`
+  t.mockInput.pressKey("y");
+  await t.waitForFrame((f) => /^\s*y\s*$/m.test(f));
+  assert.match(t.captureCharFrame(), /brief \(text\)/);
+  const inputs = await launchFromInputs(t, launch);
+  assert.equal(inputs.brief, "x\ny");
+});
+
+test("[launch-text-box] a short multi-line paste keeps its lines with CRLF and CR normalised, and a file-set keeps its single-line field", async () => {
+  const { t, launch } = await openZetaInputs();
+  await t.mockInput.pasteBracketedText("alpha\r\nbeta");
+  await t.mockInput.pasteBracketedText("\rgamma");
+  await t.waitForFrame((f) => f.includes("gamma"));
+  const frame = t.captureCharFrame();
+  assert.match(frame, /^\s*alpha\s*$/m);
+  assert.match(frame, /^\s*beta\s*$/m);
+  assert.match(frame, /^\s*gamma\s*$/m);
+  assert.doesNotMatch(frame, /\[Pasted/, "two lines stay under the summary");
+
+  t.mockInput.pressArrow("down"); // from the box's last line → the file-set
+  await t.waitForFrame((f) => f.includes("› paths"));
+  await t.mockInput.pasteBracketedText("p1\np2");
+  await t.waitForFrame((f) => f.includes("p1p2"));
+
+  const inputs = await launchFromInputs(t, launch);
+  assert.equal(inputs.brief, "alpha\nbeta\ngamma");
+  assert.equal(inputs.paths, "p1p2");
+});
+
+test("[launch-text-box] a paste of three or more lines shows as [Pasted ~N lines] and its full text reaches Review, back-navigation, and the launch", async () => {
+  const { t, launch } = await openZetaInputs();
+  await t.mockInput.typeText("see ");
+  await t.mockInput.pasteBracketedText("  one\r\ntwo\rthree\n");
+  await t.mockInput.typeText(" ok");
+  await t.waitForFrame((f) => f.includes("see [Pasted ~3 lines] ok"));
+  assert.doesNotMatch(t.captureCharFrame(), /two|three/);
+
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Review"));
+  const review = t.captureCharFrame();
+  assert.match(review, /brief: see {3}one\s*\n\s*two\s*\n\s*three\s*\n\s*ok/);
+  assert.doesNotMatch(review, /\[Pasted/);
+
+  // Back on the inputs step the box holds the full text, not the placeholder.
+  t.mockInput.pressEscape();
+  await t.waitForFrame((f) => f.includes("brief (text)") && f.includes("two"));
+  assert.doesNotMatch(t.captureCharFrame(), /\[Pasted/);
+
+  const inputs = await launchFromInputs(t, launch);
+  // Untrimmed: the paste's leading spaces and trailing newline survive.
+  assert.equal(inputs.brief, "see   one\ntwo\nthree\n ok");
+});
+
+test("[launch-text-box] a paste over 150 characters is summarised, 150 is not, and Backspace removes a placeholder with its text", async () => {
+  const { t, launch } = await openZetaInputs();
+  await t.mockInput.pasteBracketedText("x".repeat(151));
+  await t.waitForFrame((f) => f.includes("[Pasted ~1 lines]"));
+  t.mockInput.pressBackspace();
+  await t.waitForFrame((f) => !f.includes("[Pasted"));
+
+  await t.mockInput.pasteBracketedText("y".repeat(150));
+  await t.waitForFrame((f) => f.includes("yyyy"));
+  assert.doesNotMatch(t.captureCharFrame(), /\[Pasted/);
+
+  // A summarised paste as the last edit still lands in the draft whole.
+  await t.mockInput.pasteBracketedText("z".repeat(151));
+  await t.waitForFrame((f) => f.includes("[Pasted ~1 lines]"));
+  const inputs = await launchFromInputs(t, launch);
+  assert.equal(inputs.brief, "y".repeat(150) + "z".repeat(151));
+});
+
+test("[launch-text-box] Up/Down move inside a multi-line box and leave it only from its first or last line", async () => {
+  const { t, launch } = await openZetaInputs();
+  t.mockInput.pressKey("a");
+  t.mockInput.pressKey("j", { ctrl: true });
+  t.mockInput.pressKey("b");
+  await t.waitForFrame((f) => /^\s*b\s*$/m.test(f));
+
+  t.mockInput.pressArrow("up"); // line 2 → line 1, still in the box
+  t.mockInput.pressKey("Z");
+  await t.waitForFrame((f) => f.includes("aZ"));
+  assert.match(t.captureCharFrame(), /› brief/);
+  t.mockInput.pressArrow("up"); // first line of the first input: nowhere to go
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /› brief/);
+
+  t.mockInput.pressArrow("down"); // line 1 → line 2, still in the box
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /› brief/);
+  t.mockInput.pressArrow("down"); // last line → the next input
+  await t.waitForFrame((f) => f.includes("› paths"));
+  t.mockInput.pressArrow("up"); // back into the box, cursor still on line 2
+  await t.waitForFrame((f) => f.includes("› brief"));
+  t.mockInput.pressArrow("up"); // line 2 → line 1, the box keeps focus
+  t.mockInput.pressKey("Y");
+  await t.waitForFrame((f) => f.includes("aZY") || f.includes("aYZ"));
+  assert.match(t.captureCharFrame(), /› brief/);
+
+  const inputs = await launchFromInputs(t, launch);
+  assert.match(inputs.brief ?? "", /^a[ZY]{2}\nb$/);
 });
 
 test("an input draft does not leak into another Bundle's same-named input", async () => {

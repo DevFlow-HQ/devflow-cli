@@ -12,6 +12,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - A focused OpenTUI `<input>` and the `@opentui/keymap` layer divide keys by binding: any key the keymap binds fires its command even while an input is focused; only
   unbound printable keys and backspace reach the input. So never bind a bare letter key (e.g. `q` to quit) on a text-entry screen, and gate `left`/`right` with a reactive
   `enabled` so choice/verdict fields cycle without stealing a text field's cursor. Native `<input>`/`<select>`/`<textarea>` exist — no need to hand-roll a caret.
+- A focused `<textarea>` loses `up`/`down`/`return` to the keymap too, so Start a Run's text box (`launch-text-box.tsx`, #287) takes Up/Down through
+  its `moveLine` handle (visual row is `scrollY + visualCursor.visualRow`). It fires `onContentChange` on mount, so it reports only changed values,
+  and it owns its text after mount: never feed the draft back as `value`, or its paste placeholders (virtual extmarks) are wiped.
 - The Run Workbench (`run-workbench.tsx`) is the one screen that takes its keys, size, and resize from the injected Renderer Port (`size`/`onKey`/`onResize`,
   A13) instead of `@opentui/keymap` + `useTerminalDimensions`: a single raw-key pipeline drives every control, so its input and layout are driven by a fake
   renderer in tests. Every other screen keeps the keymap/`useTerminalDimensions` path. Drawing still goes through OpenTUI elements — the Port never carries it.

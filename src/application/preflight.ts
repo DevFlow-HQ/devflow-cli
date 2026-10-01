@@ -379,8 +379,9 @@ function invalidReason(input: LaunchInput, value: string): string | undefined {
         : `"${value}" is not an existing non-empty file.`;
     case "file-set": {
       // ponytail: a file-set value is newline-separated paths — the one encoding
-      // that never collides with a path character. The `--input` CLI cannot pass
-      // newlines yet; firm this up when a structured multi-file input surface lands.
+      // that never collides with a path character. The `--input` CLI passes
+      // newlines through unchanged (#287), but the TUI's file-set field is still
+      // single-line; firm this up when a structured multi-file input surface lands.
       const paths = value
         .split("\n")
         .map((line) => line.trim())

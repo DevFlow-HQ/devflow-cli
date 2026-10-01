@@ -25,6 +25,7 @@ import {
   qualificationWord,
 } from "./harness-format.js";
 import { useBindings } from "./keymap.js";
+import { LaunchTextBox, type LaunchTextBoxHandle } from "./launch-text-box.js";
 import { useLaunchPreparationView } from "./launch-preparation-view.js";
 import { useExit } from "./vendor/exit.js";
 import { useDialog } from "./vendor/dialog.js";
@@ -758,8 +759,10 @@ function ModelField(props: {
 
 // --- inputs ----------------------------------------------------------------
 
-function isTextLike(type: string): boolean {
-  return type === "text" || type === "file" || type === "file-set";
+// Only `text` takes the multi-line box (#287). A `file-set` value is
+// newline-separated paths, but it keeps the single-line field the spec leaves.
+function isPathLike(type: string): boolean {
+  return type === "file" || type === "file-set";
 }
 
 export function InputsStep(props: {
@@ -824,6 +827,15 @@ export function InputsStep(props: {
     if (count === 0) return;
     setField(Math.max(0, Math.min(field() + delta, count - 1)));
   };
+  // The keymap's Up/Down pre-empt a focused box, so they first offer the move to
+  // the focused text box; only from its first or last line do they change input.
+  const boxes = new Map<string, LaunchTextBoxHandle>();
+  const moveLineOrInput = (delta: -1 | 1) => {
+    const input = current();
+    if (input?.type === "text" && boxes.get(input.name)?.moveLine(delta))
+      return;
+    move(delta);
+  };
   const findingFor = (name: string): string | undefined =>
     props.findings()?.find((violation) => violation.field === name)
       ?.explanation;
@@ -835,13 +847,13 @@ export function InputsStep(props: {
         key: "up",
         desc: "Previous input",
         group: "Launch inputs",
-        cmd: () => move(-1),
+        cmd: () => moveLineOrInput(-1),
       },
       {
         key: "down",
         desc: "Next input",
         group: "Launch inputs",
-        cmd: () => move(1),
+        cmd: () => moveLineOrInput(1),
       },
       {
         key: "return",
@@ -864,7 +876,7 @@ export function InputsStep(props: {
     ],
   }));
   // Only when a choice/verdict input is focused do left/right cycle it; on a
-  // text-like input they stay unbound so they reach the focused <input> cursor.
+  // text or path input they stay unbound so they reach the focused field's cursor.
   useBindings(() => ({
     enabled: choiceLike() && dialog.stack.length === 0,
     bindings: [
@@ -925,8 +937,7 @@ export function InputsStep(props: {
                 {`${index() === field() ? "› " : "  "}${input.name} (${input.type})`}
               </text>
               <text fg={theme.textMuted}>{`  ${input.description}`}</text>
-              <Show
-                when={isTextLike(input.type)}
+              <Switch
                 fallback={
                   <text fg={theme.text}>
                     {`  ‹ ${props.values[input.name] ?? "(not set)"} › — ←/→ to choose from: ${options(
@@ -936,13 +947,25 @@ export function InputsStep(props: {
                   </text>
                 }
               >
-                <input
-                  focused={index() === field()}
-                  width={inputWidth()}
-                  value={props.values[input.name] ?? ""}
-                  onInput={(value) => props.setValue(input.name, value)}
-                />
-              </Show>
+                <Match when={input.type === "text"}>
+                  <LaunchTextBox
+                    ref={(handle) => boxes.set(input.name, handle)}
+                    initialValue={props.values[input.name] ?? ""}
+                    focused={index() === field()}
+                    width={inputWidth()}
+                    onValue={(value) => props.setValue(input.name, value)}
+                    onSubmit={() => props.onContinue()}
+                  />
+                </Match>
+                <Match when={isPathLike(input.type)}>
+                  <input
+                    focused={index() === field()}
+                    width={inputWidth()}
+                    value={props.values[input.name] ?? ""}
+                    onInput={(value) => props.setValue(input.name, value)}
+                  />
+                </Match>
+              </Switch>
               <Show when={findingFor(input.name)}>
                 {(explanation) => (
                   <text fg={theme.error}>{`  ${explanation()}`}</text>
@@ -953,7 +976,7 @@ export function InputsStep(props: {
         </For>
       </box>
       <text fg={theme.textMuted} flexShrink={0}>
-        ↑/↓ input · type to edit · enter continue · esc back
+        {`↑/↓ input · ${current()?.type === "text" ? "ctrl+j newline" : "type to edit"} · enter continue · esc back`}
       </text>
     </box>
   );
