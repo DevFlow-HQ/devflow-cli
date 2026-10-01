@@ -3,10 +3,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import type {
-  HarnessAdapter,
-  HarnessProfile,
-  TurnResult,
+import {
+  CLAUDE_CODE_EXECUTABLE_ENV,
+  type ControlReceipt,
+  type HarnessAdapter,
+  type HarnessProfile,
+  type TurnResult,
 } from "../../src/harness/harness.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import type {
@@ -18,8 +20,14 @@ import type {
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
-import { awaitSettled, followRun } from "../helpers/settleOperation.js";
+import {
+  awaitRunRest,
+  awaitSettled,
+  followRun,
+} from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 
 // Interrupt a live Turn through the Port, resume the same Session, and reject the
 // unavailable steer control (#118). Each test wires the Application against the
@@ -294,11 +302,13 @@ function wire(
 function awaitLiveTurn(
   port: ProjectionPort,
   runId: string,
+  previousTurnId?: string,
 ): Promise<InterruptTurnOffer> {
   return followRun(port, runId, (run) =>
     run.actionOffers.find(
       (candidate): candidate is InterruptTurnOffer =>
-        candidate.action === "interrupt-turn",
+        candidate.action === "interrupt-turn" &&
+        candidate.turnId !== previousTurnId,
     ),
   );
 }
@@ -518,4 +528,346 @@ test("a resume the Harness does not acknowledge fails the Attempt and never crea
   assert.equal(run.state, "failed");
   assert.equal(run.sessions?.[0]?.session, "s");
   assert.equal(run.sessions?.[0]?.availability, "unusable");
+});
+
+// A native-steer profile lets the test release an ineffective interrupt naturally.
+const INTERRUPT_PROFILE: HarnessProfile = {
+  ...claudeProfile(),
+  steer: { available: true, evidence: "scripted fake" },
+};
+
+async function failedInterruptScenario(
+  t: TestContext,
+  options: {
+    first: "human" | "agent";
+    next: "human" | "agent" | "command";
+    receipt?: ControlReceipt;
+    firstResult?: TurnResult;
+    blockNext?: boolean;
+  },
+) {
+  const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
+  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
+  t.after(() => {
+    if (saved === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
+    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
+  });
+  let interruptRequested!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    interruptRequested = resolve;
+  });
+  const interruptCalls: number[] = [];
+  const releases: Array<() => Promise<unknown>> = [];
+  let index = 0;
+  const adapter: HarnessAdapter = {
+    async prepare(prepareOptions) {
+      const prepared = await createFake({
+        profile: INTERRUPT_PROFILE,
+        turns:
+          index === 0
+            ? [
+                {
+                  block: true,
+                  settleOnSteer: true,
+                  result: options.firstResult ?? COMPLETED_OPEN,
+                },
+                {
+                  block: options.blockNext,
+                  settleOnSteer: true,
+                  result: COMPLETED_OPEN,
+                },
+              ]
+            : [
+                {
+                  block: options.blockNext,
+                  settleOnSteer: true,
+                  result: COMPLETED_OPEN,
+                },
+              ],
+      })().prepare(prepareOptions);
+      if (!prepared.ok) return prepared;
+      const harness = prepared.harness;
+      return {
+        ok: true,
+        harness: {
+          profile: harness.profile,
+          close: () => harness.close(),
+          startTurn(request) {
+            const turn = harness.startTurn(request);
+            const current = index++;
+            releases[current] = () => turn.steer({ text: "finish naturally" });
+            return {
+              subscribe: (listener) => turn.subscribe(listener),
+              answerRequest: (answer) => turn.answerRequest(answer),
+              steer: (input) => turn.steer(input),
+              result: () => turn.result(),
+              async interrupt() {
+                interruptCalls.push(current);
+                if (current !== 0) return turn.interrupt();
+                interruptRequested();
+                return options.receipt ?? { outcome: "accepted" };
+              },
+            };
+          },
+        },
+      };
+    },
+  };
+  const workspace = makeTempDir("secant-interrupt-ws-");
+  const bundleProcess = createFakeBundleProcess();
+  const commandSignals: boolean[] = [];
+  const wired = wireApplication({
+    secantHome: makeTempDir("secant-interrupt-home-"),
+    launchCwd: workspace,
+    supportsInteractiveTurns: true,
+    harnessAdapter: adapter,
+    process: createFakeProcess({
+      resolutionHandler: (name) => bundleProcess.resolveExecutable(name),
+      syncCommandHandler: (o) => bundleProcess.spawnCommandSync(o),
+      commandHandler: (o) => {
+        commandSignals.push(o.cancelSignal?.aborted === true);
+        return o.cancelSignal?.aborted === true
+          ? { kind: "cancelled" }
+          : { kind: "exited", status: 0, text: new Uint8Array() };
+      },
+    }),
+  });
+  t.after(async () => {
+    // Release any failed test's blocked Turn before shutdown (the first interrupt
+    // deliberately cannot stop it).
+    for (const release of releases) await release();
+    await wired.shutdown();
+    wired.runGroup.close();
+    wired.catalog.close();
+  });
+  const folder = makeTempDir("secant-interrupt-bundle-");
+  mkdirSync(join(folder, "prompts"));
+  writeFileSync(join(folder, "prompts", "go.md"), "Go.\n");
+  const agent = (id: string, kind = "agent") => ({
+    id,
+    kind,
+    session: "s",
+    prompt: { asset: "prompts/go.md" },
+  });
+  const routing = [
+    agent("first", options.first === "human" ? "interactive-agent" : "agent"),
+  ];
+  const next =
+    options.next === "command"
+      ? {
+          id: "next",
+          kind: "command",
+          command: {
+            executable: RUNTIME_NAME,
+            arguments: ["-e", "process.exit(0)"],
+          },
+        }
+      : agent("next");
+  writeFileSync(
+    join(folder, "manifest.json"),
+    JSON.stringify({
+      formatVersion: 1,
+      bundle: {
+        id: "dev.secant.turn-interrupt",
+        version: "1.0.0",
+        name: "Interrupt",
+        description: "Turn scoping",
+      },
+      platforms: ["windows", "macos", "linux"],
+      inputs: {},
+      assets: [{ path: "prompts/go.md", kind: "prompt" }],
+      routing: options.next === "human" ? routing : [...routing, next],
+    }),
+  );
+  const built = wired.bundleManagement.build(folder, { noInstall: false });
+  assert.ok(built.ok, JSON.stringify(built));
+  const entry = wired.catalog
+    .listEntries()
+    .find((e) => e.id === "dev.secant.turn-interrupt")!;
+  const port = wired.projectionPort;
+  assert.ok(
+    port.submit({
+      operationId: "approve",
+      operation: "approve-workspace",
+      input: { path: workspace },
+    }).admitted,
+  );
+  const launch = port.submit({
+    operationId: "launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: entry.id },
+      launchInputs: {},
+      trustDigest: entry.digest,
+      harness: "claude-code",
+    },
+  });
+  assert.ok(launch.admitted, JSON.stringify(launch));
+  const runId = launch.runId!;
+  if (options.first === "human") {
+    await awaitSettled(port, "launch");
+    send(port, runId, "send-first");
+    await awaitSettled(port, "send-first");
+  }
+  const live = await awaitLiveTurn(port, runId);
+  assert.ok(
+    port.submit({
+      operationId: "interrupt",
+      operation: "interrupt-turn",
+      input: { runId, turnId: live.turnId },
+    }).admitted,
+  );
+  await requested;
+  return {
+    port,
+    runId,
+    interruptCalls,
+    commandSignals,
+    release: (i: number) => releases[i]!(),
+    turnId: live.turnId,
+  };
+}
+
+function send(port: ProjectionPort, runId: string, operationId: string) {
+  assert.ok(
+    port.submit({
+      operationId,
+      operation: "send-interactive-turn",
+      input: { runId, stepId: "first", text: operationId },
+    }).admitted,
+  );
+}
+
+async function assertRejected(port: ProjectionPort, reason: string) {
+  const outcome = await awaitSettled(port, "interrupt");
+  assert.equal(outcome.status, "not-applied", JSON.stringify(outcome));
+  if (outcome.status === "not-applied") {
+    assert.equal(outcome.problem.code, "interrupt-rejected");
+    assert.equal(outcome.problem.details?.reason, reason);
+  }
+}
+
+test("a completed Turn despite interrupt leaves the next human Turn working (#298)", async (t) => {
+  const f = await failedInterruptScenario(t, { first: "human", next: "human" });
+  await f.release(0);
+  assert.equal((await awaitRunRest(f.port, f.runId)).state, "blocked");
+  send(f.port, f.runId, "send-next");
+  await awaitSettled(f.port, "send-next");
+  const run = await awaitRunRest(f.port, f.runId);
+  assert.equal(run.state, "blocked");
+  assert.deepEqual(f.interruptCalls, [0]);
+  assert.deepEqual(
+    run.timeline.filter((e) => e.event === "turn-settled").map((e) => e.detail),
+    ["completed", "completed"],
+  );
+  await assertRejected(f.port, "completed");
+});
+
+test("a completed Turn despite interrupt leaves the following Agent Turn working (#298)", async (t) => {
+  const f = await failedInterruptScenario(t, { first: "agent", next: "agent" });
+  await f.release(0);
+  await awaitSettled(f.port, "launch");
+  assert.equal(runView(f.port, f.runId).state, "succeeded");
+  assert.deepEqual(f.interruptCalls, [0]);
+  await assertRejected(f.port, "completed");
+});
+
+test("a completed Turn despite interrupt leaves the following Command signal unfired (#298)", async (t) => {
+  const f = await failedInterruptScenario(t, {
+    first: "agent",
+    next: "command",
+  });
+  await f.release(0);
+  await awaitSettled(f.port, "launch");
+  assert.equal(runView(f.port, f.runId).state, "succeeded");
+  assert.deepEqual(f.commandSignals, [false]);
+  await assertRejected(f.port, "completed");
+});
+
+test("a rejected interrupt receipt settles immediately and leaves the next human Turn working (#298)", async (t) => {
+  const f = await failedInterruptScenario(t, {
+    first: "human",
+    next: "human",
+    receipt: { outcome: "rejected", reason: "already-settled" },
+  });
+  await assertRejected(f.port, "already-settled");
+  assert.equal(runView(f.port, f.runId).state, "running");
+  await f.release(0);
+  await awaitRunRest(f.port, f.runId);
+  send(f.port, f.runId, "send-next");
+  await awaitSettled(f.port, "send-next");
+  assert.equal((await awaitRunRest(f.port, f.runId)).state, "blocked");
+  assert.deepEqual(f.interruptCalls, [0]);
+});
+
+test("interrupt settles on its own Turn while a following Agent Turn remains live (#298)", async (t) => {
+  const f = await failedInterruptScenario(t, {
+    first: "agent",
+    next: "agent",
+    blockNext: true,
+  });
+  await f.release(0);
+  await awaitLiveTurn(f.port, f.runId, f.turnId);
+  await assertRejected(f.port, "completed");
+  assert.equal(runView(f.port, f.runId).state, "running");
+  await f.release(1);
+  await awaitSettled(f.port, "launch");
+  assert.equal(runView(f.port, f.runId).state, "succeeded");
+});
+
+test("a failed Turn despite interrupt settles not-applied and permits the next human Turn (#298)", async (t) => {
+  const f = await failedInterruptScenario(t, {
+    first: "human",
+    next: "human",
+    firstResult: {
+      kind: "failed",
+      detail: {
+        failure: {
+          phase: "turn",
+          category: "native-failure",
+          possibleEffects: "possible",
+          diagnostics: "scripted failure",
+        },
+        effectiveModel: { known: false },
+        session: { state: "open" },
+      },
+    },
+  });
+  await f.release(0);
+  assert.equal((await awaitRunRest(f.port, f.runId)).state, "blocked");
+  await assertRejected(f.port, "failed");
+  send(f.port, f.runId, "send-next");
+  await awaitSettled(f.port, "send-next");
+  assert.equal((await awaitRunRest(f.port, f.runId)).state, "blocked");
+  assert.deepEqual(f.interruptCalls, [0]);
+});
+
+test("an accepted interrupt whose Turn ends lost applies and still rests halted (#298)", async (t) => {
+  const f = await failedInterruptScenario(t, {
+    first: "human",
+    next: "human",
+    firstResult: {
+      kind: "lost",
+      detail: {
+        failure: {
+          phase: "turn",
+          category: "transport-lost",
+          possibleEffects: "possible",
+          diagnostics: "Windows-style interrupted transport",
+        },
+        unknown: "interruption",
+        lastObservation: "interrupt requested before transport closed",
+        session: { state: "detached", coordinate: { opaque: "coord-s" } },
+      },
+    },
+  });
+  await f.release(0);
+  assert.equal((await awaitSettled(f.port, "interrupt")).status, "applied");
+  const run = await awaitRunRest(f.port, f.runId);
+  assert.equal(run.state, "halted");
+  assert.equal(run.sessions?.[0]?.availability, "detached");
+  assert.equal(
+    run.timeline.find((e) => e.event === "turn-settled")?.detail,
+    "lost",
+  );
 });

@@ -79,6 +79,13 @@ type LiveSteerOutcome =
  *  available `steer-turn`. */
 export type LiveSteerFn = (text: string) => Promise<LiveSteerOutcome>;
 
+/** Interrupt one live Turn and report whether it ended interrupted or lost.
+ *  Receipt rejection returns immediately; acceptance waits for this Turn's end. */
+export type LiveInterruptFn = () => Promise<
+  | { readonly outcome: "applied" }
+  | { readonly outcome: "rejected"; readonly reason: string }
+>;
+
 /** Coalesced live observations for the overlay (never durable). */
 export interface LiveObservation {
   readonly activity?: string;
@@ -102,6 +109,8 @@ export interface RequestChannel {
    *  (#148). Bound alongside the answer function and unbound when the Turn ends;
    *  the Application reaches it for an available `steer-turn`. */
   bindSteer(steer: LiveSteerFn | undefined): void;
+  /** Bind (or unbind) interrupt for this Turn only, alongside answer and steer. */
+  bindInterrupt(interrupt: LiveInterruptFn | undefined): void;
   /** Merge live overlay observations (activity / preview / context / usage). */
   observe(observation: LiveObservation): void;
 }
@@ -130,16 +139,10 @@ export class RunCancelledError extends Error {
   }
 }
 
-// The abort-reason vocabulary the cancel Seam carries, owned here because this is
-// the Module that interprets it — for a Command through the process Seam, and for
-// an Agent Turn at the Harness Seam (#118). All three stop a live Turn; they differ
-// only in the Run's resting state, which the Application decides from the reason:
-// `RUN_CANCEL_ABORT` ends the Run `cancelled` (the terminal cancel-run, #87/#98),
-// while `INTERRUPT_TURN_ABORT` (a Port control) and `SIGNAL_ABORT` (Ctrl+C / an OS
-// signal) rest it `halted`, resumable (ADR 0019). The Application imports these so
-// there is one source of truth for the sentinel strings.
+// Run-wide cancellation and process signals stop live work through the cancel
+// Seam. RUN_CANCEL_ABORT ends the Run cancelled; SIGNAL_ABORT leaves it halted
+// and resumable (ADR 0019). A Port interrupt is bound to its Turn separately.
 export const RUN_CANCEL_ABORT = "secant:cancel-run";
-export const INTERRUPT_TURN_ABORT = "secant:interrupt-turn";
 export const SIGNAL_ABORT = "secant:process-signal";
 
 /** One Step Attempt's outcome and, when it ran, the outputs to publish. */
@@ -366,8 +369,9 @@ async function driveHarnessTurn(
     readonly resume?: RecoveryCoordinate;
     readonly requestChannel?: RequestChannel;
     readonly cancelSignal?: AbortSignal;
-    /** True for an interactive human Turn, whose Harness is closed the moment the
-     *  Turn ends, so its Session settles `detached` for the next Turn to resume. */
+    /** True for an interactive human Turn: record its Session detached so a later
+     *  reopen or following Agent Step can resume it. The Harness is held for the
+     *  interactive Step and closed once when that Step is released. */
     readonly detachAfterTurn?: boolean;
   },
 ): Promise<TurnResult> {
@@ -421,49 +425,56 @@ async function driveHarnessTurn(
   // record.
   const channel = params.requestChannel;
   const answerSources = new Map<string, RequestAnswerBy>();
-  turn.subscribe((event) => {
-    recordTurnEvent(owner, turnId, event, answerSources);
-    if (channel !== undefined) notifyChannel(channel, event);
-  });
-  if (channel !== undefined) {
-    channel.bindAnswer(async (requestId, decision, by) => {
-      answerSources.set(requestId, by);
-      const answer: RequestAnswer = {
-        requestId: { opaque: requestId },
-        kind: "approval",
-        decision,
-      };
-      const receipt = await turn.answerRequest(answer);
-      return receipt.outcome === "accepted"
-        ? { outcome: "accepted" }
-        : { outcome: "rejected", reason: receipt.reason };
-    });
-    // Same-Turn guidance (#148): a Harness declaring native steer accepts it while
-    // the Turn is live and keeps working. Bound for every Turn — the Application
-    // only reaches it when the prepared profile declares steer available, so a
-    // Harness without it (Claude Code) is never asked here.
-    channel.bindSteer(async (text) => {
-      const receipt = await turn.steer({ text });
-      return receipt.outcome === "accepted"
-        ? { outcome: "accepted" }
-        : { outcome: "rejected", reason: receipt.reason };
-    });
-  }
-  // A cancel signal aborting mid-Turn interrupts the live Turn at the Harness Seam
-  // (interrupt-turn, Ctrl+C, story 38, #118): the Adapter's `interrupt` stops the
-  // native work and the Turn drains to an `interrupted` (or `lost`) result. Both
-  // cases map to a resumable rest; the Application decides `cancelled` vs `halted`
-  // from the abort reason.
   const signal = params.cancelSignal;
   const onAbort = (): void => {
     void turn.interrupt();
   };
-  if (signal !== undefined) {
-    if (signal.aborted) void turn.interrupt();
-    else signal.addEventListener("abort", onAbort, { once: true });
-  }
   try {
-    const result = await turn.result();
+    const resultPromise = turn.result();
+    turn.subscribe((event) => {
+      recordTurnEvent(owner, turnId, event, answerSources);
+      if (channel !== undefined) notifyChannel(channel, event);
+    });
+    if (channel !== undefined) {
+      channel.bindInterrupt(async () => {
+        const receipt = await turn.interrupt();
+        if (receipt.outcome === "rejected") {
+          return { outcome: "rejected", reason: receipt.reason };
+        }
+        const result = await resultPromise;
+        return result.kind === "interrupted" || result.kind === "lost"
+          ? { outcome: "applied" }
+          : { outcome: "rejected", reason: result.kind };
+      });
+      channel.bindAnswer(async (requestId, decision, by) => {
+        answerSources.set(requestId, by);
+        const answer: RequestAnswer = {
+          requestId: { opaque: requestId },
+          kind: "approval",
+          decision,
+        };
+        const receipt = await turn.answerRequest(answer);
+        return receipt.outcome === "accepted"
+          ? { outcome: "accepted" }
+          : { outcome: "rejected", reason: receipt.reason };
+      });
+      // Same-Turn guidance (#148): a Harness declaring native steer accepts it while
+      // the Turn is live and keeps working. Bound for every Turn — the Application
+      // only reaches it when the prepared profile declares steer available, so a
+      // Harness without it (Claude Code) is never asked here.
+      channel.bindSteer(async (text) => {
+        const receipt = await turn.steer({ text });
+        return receipt.outcome === "accepted"
+          ? { outcome: "accepted" }
+          : { outcome: "rejected", reason: receipt.reason };
+      });
+    }
+    // Cancel and shutdown remain Run-wide; a Port interrupt uses the Turn binding.
+    if (signal !== undefined) {
+      if (signal.aborted) void turn.interrupt();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+    const result = await resultPromise;
     settleTurnResult(
       owner,
       turnId,
@@ -487,6 +498,7 @@ async function driveHarnessTurn(
     if (signal !== undefined) signal.removeEventListener("abort", onAbort);
     channel?.bindAnswer(undefined);
     channel?.bindSteer(undefined);
+    channel?.bindInterrupt(undefined);
   }
 }
 
@@ -526,8 +538,8 @@ export async function driveInteractiveTurn(
     attemptId: request.attemptId,
     turnId: request.turnId,
     input: request.text,
-    // The interactive Harness is closed after each human Turn, so settle the Session
-    // `detached` for the next Turn (and the following Agent Step) to resume it (#122).
+    // The Harness stays held for the interactive Step. Record detached after each
+    // Turn so a later reopen or following Agent Step can resume the Session (#122).
     detachAfterTurn: true,
     ...(recovery.resume !== undefined ? { resume: recovery.resume } : {}),
     ...(request.requestChannel !== undefined
@@ -915,19 +927,12 @@ function recordTurnEvent(
  *  kind, the post-Turn Session availability, and any authoritative assistant
  *  content. Immutable in the Store; a fenced write is ignored (the walk unwinds).
  *
- *  `detachCoordinate` is set for a Turn whose Harness is closed the moment the Turn
- *  ends — an interactive human Turn, prepared fresh per Turn (#122, #123). Such a
- *  Turn reports its Session `open` (the Adapter's live-process view at result time,
- *  right for the autonomous held-Harness model), but the closed process leaves the
- *  Session `detached`; recording that, with the recovery coordinate, is what lets
- *  the next human Turn and the following Agent Step resume the same Session.
- *
- *  This settles `detached` before the caller's `finally` closes the Harness, which
- *  is safe: Claude Code recovery is resume-by-id from the Session's persisted state
- *  (native-reattach), not attachment to a live process, so the coordinate is valid
- *  the instant the Turn completes regardless of when the old process is reaped; and
- *  the next Turn/Step is a separate, later Operation (a human send or gate answer),
- *  never concurrent with this close. */
+ *  `detachCoordinate` records an interactive human Turn's Session as `detached`
+ *  even when the Adapter reports it `open`. The Harness is held across Turns for
+ *  the interactive Step and closed once on release; the persisted coordinate lets
+ *  a later reopen or the following Agent Step resume the same Session (#122).
+ *  Claude Code can resume by id from persisted native state, so the coordinate is
+ *  valid at Turn end while the Step still holds the prepared Harness. */
 function settleTurnResult(
   owner: RunOwner,
   turnId: string,

@@ -406,6 +406,22 @@ export function turnControlRejected(
   };
 }
 
+/** A live Turn's interrupt was refused or the Turn ended another way (#298). */
+export function interruptRejected(
+  runId: string,
+  turnId: string,
+  reason: string,
+): Problem {
+  return {
+    code: "interrupt-rejected",
+    explanation: `The live Turn ${turnId} on Run ${runId} was not interrupted (${reason}); the interrupt was not applied.`,
+    remediation:
+      "Re-read the Run; interrupt only its current live Turn, or let it finish.",
+    possibleEffects: "none",
+    details: { runId, turnId, reason },
+  };
+}
+
 /** Steering a live Turn is rejected because the Harness has no same-Turn steer
  *  (#118): the offer is marked unavailable and a submission never emulates it. */
 export function steerUnavailable(runId: string, reason: string): Problem {

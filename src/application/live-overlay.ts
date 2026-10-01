@@ -1,4 +1,5 @@
 import type {
+  LiveInterruptFn,
   LiveObservation,
   LiveRequestView,
   LiveSteerFn,
@@ -21,6 +22,7 @@ export interface LiveOverlayState {
   /** The live Turn's steer function, bound while a Turn is live (#148). The
    *  Application reaches it for an available `steer-turn`. */
   steer?: LiveSteerFn;
+  interrupt?: LiveInterruptFn;
   activity?: string;
   preview?: string;
   context?: { readonly usedTokens: number; readonly limitTokens: number };
@@ -110,6 +112,11 @@ export function createLiveOverlay(
         if (!tracking.live.outstanding.delete(requestId)) return;
         tracking.live.generation += 1;
         push(runId);
+      },
+      bindInterrupt(interrupt: LiveInterruptFn | undefined): void {
+        const tracking = trackingFor(runId);
+        if (tracking === undefined) return;
+        tracking.live.interrupt = interrupt;
       },
       bindSteer(steer: LiveSteerFn | undefined): void {
         const tracking = trackingFor(runId);

@@ -19,7 +19,6 @@ import {
   type RequestChannel,
   type RunReport,
   RUN_CANCEL_ABORT as CANCEL_ABORT,
-  INTERRUPT_TURN_ABORT,
   SIGNAL_ABORT,
 } from "../run/execution/execution.js";
 import type {
@@ -69,6 +68,7 @@ import {
   interactiveTurnBlank,
   interactiveTurnBusy,
   interactiveTurnNotAdmitted,
+  interruptRejected,
   operationIdReused,
   operationNotFound,
   pathNotFound,
@@ -233,13 +233,9 @@ export type InteractiveTurnReport = {
   readonly outcome: "completed" | "failed" | "interrupted" | "lost";
 };
 
-// Why a live Run's execution was aborted. A `cancel-run` (CANCEL_ABORT) rests the
-// Run `cancelled`; a process signal (SIGNAL_ABORT: SIGINT/SIGHUP/SIGTERM) or a
-// Turn-scoped interrupt (INTERRUPT_TURN_ABORT, #118) rests it `halted` — a Command
-// leaves the claim live for the next open to reconcile, while a live Agent Turn
-// interrupts at the Harness Seam and rests `halted` in-process. The reasons live at
-// the execution Seam that interprets them (#98, #118); the Application reads its own
-// AbortController's reason to tell the cases apart.
+// Run-wide cancel ends the Run cancelled; a process signal stops live work and
+// leaves it resumable. Turn interrupt uses its own live binding and never fires
+// the Run's controller. Execution owns the cancel/signal sentinel strings.
 
 /** A launched Run tracked in this process (#98): its routing and Bundle facts, the
  *  owner while live (so a snapshot read never fences the executing owner), the
@@ -1915,8 +1911,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }
 
   // Interrupt the live Turn of a running Run (#118). Admitted at once; the
-  // interrupt is relayed at settle time (deferred, since it must await the Run's
-  // `halted` rest). Idempotent per operation id.
+  // interrupt is relayed at settle time and awaits its own Turn's result.
+  // Idempotent per operation id.
   function submitInterruptTurn(
     operationId: string,
     input: InterruptTurnInput,
@@ -1942,40 +1938,36 @@ export function createApplication(deps: ApplicationDependencies): Application {
     return { admitted: true, operationId, runId: input.runId };
   }
 
-  // Relay the Harness Adapter's interrupt to the live Turn: abort the Run's
-  // execution (which the Agent executor translates into `turn.interrupt()`), then
-  // await the `halted` rest the interrupted Turn's `cancelled`/`indeterminate`
-  // Attempt writes through the still-held owner (#118). A Run that is not live in
-  // this process, or whose named Turn already settled, has no live control to make:
-  // it is rejected as a value, exactly the after-acceptance case the spec names.
+  // Reach only the named live Turn's bound interrupt. Execution maps the Harness
+  // receipt and this Turn's result; its outcome never waits on later Run work.
   function interruptTurnAndSettle(
     input: InterruptTurnInput,
   ): OperationOutcome | Promise<OperationOutcome> {
-    const rejected: OperationOutcome = {
-      status: "not-applied",
-      problem: turnControlRejected(input.runId, "interrupt-turn", input.turnId),
-    };
     const tracking = runs.get(input.runId);
     const owner =
       tracking !== undefined && !tracking.done ? tracking.owner : undefined;
-    const promise = tracking?.done === false ? tracking.promise : undefined;
+    const live = owner?.turns().find((turn) => turn.resultKind === undefined);
     if (
-      tracking === undefined ||
-      owner === undefined ||
-      promise === undefined
+      tracking?.live.interrupt === undefined ||
+      live === undefined ||
+      live.turnId !== input.turnId
     ) {
-      return rejected;
+      return {
+        status: "not-applied",
+        problem: turnControlRejected(
+          input.runId,
+          "interrupt-turn",
+          input.turnId,
+        ),
+      };
     }
-    // The Turn the control targets must be the one live generation: the single
-    // admitted Turn with no settled result. A control naming any other Turn is stale.
-    const live = owner.turns().find((turn) => turn.resultKind === undefined);
-    if (live === undefined || live.turnId !== input.turnId) {
-      return rejected;
-    }
-    tracking.abort.abort(INTERRUPT_TURN_ABORT);
-    return promise.then(() => {
-      // Execution rested the Run `halted` (the interrupted Turn's Attempt) and
-      // released the owner in its finally; the interrupt itself is applied.
+    return tracking.live.interrupt().then((result) => {
+      if (result.outcome === "rejected") {
+        return {
+          status: "not-applied",
+          problem: interruptRejected(input.runId, input.turnId, result.reason),
+        };
+      }
       return { status: "applied" };
     });
   }
@@ -2246,7 +2238,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // Decide send synchronously, then run the Turn asynchronously. A refusal (support
   // unavailable, not blocked at the Step, or a Turn already live) returns WITHOUT
   // setting `tracking.promise`, so it never clobbers a genuinely live Turn's promise —
-  // the signal cancel-run/interrupt-turn read to know when the Run has actually rested.
+  // the signal cancel-run and shutdown read to know when the Run has actually rested.
   // Only the going-live path records the promise, mirroring `startRun`'s guard.
   // The send settles at the Turn's durable admission (#290), while `tracking.promise`
   // still spans the whole Turn; a Turn that ends unadmitted settles not-applied.

@@ -13,23 +13,23 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 - One `AbortController` per live Run lives in the `runs` map. The Application never imports the execution `RunCancelledError`: it aborts its own controller, so
   `tracking.abort.signal.aborted` in the catch is exactly "our cancel/signal fired", and the reason decides the rest
   ([execution's mapping](../../src/run/execution/AGENTS.md)): only `RUN_CANCEL_ABORT` throws (`RunCancelledError`, so cancel-run writes the rest through the
-  held owner); the other two reasons throw nothing, so `runAndSettle` returns through its normal path, and a signal leaves the claim live for the next open to reconcile.
+  held owner); a signal throws nothing, so `runAndSettle` returns through its normal path, and a signal leaves the claim live for the next open to reconcile.
 - `cancel-run` is cancel-as-abort for active work in this process; a held blocked Run is rested directly, a non-live blocked Run is acquired and rested, and a Run live
   elsewhere takes the fresh-owner epoch-bump path. `shutdown()` has two phases: close and release blocked Runs without changing their state, then abort and await running
   work with `SIGNAL_ABORT`, leaving those ownership records live for startup reconciliation.
-- The one `AbortController` per Run means the three reasons race: a `cancel-run` and an `interrupt-turn` submitted concurrently for the same live Run both `abort()` it,
-  and whichever fires first sets the reason the executor reads, so the loser's Operation still settles `applied` while the Run rests in the winner's state. This is the
-  accepted extension of the two-way cancel-versus-signal race — both callers intend to stop the Run, and the append-only Attempt log records what actually happened — not
-  a new class of bug.
+- Cancel and shutdown race on the Run controller: whichever aborts first supplies its reason. Turn interrupt is bound separately; its Operation reports the
+  Harness receipt and its own Turn's result, while the Run's eventual rest still reflects cancel or shutdown when either stops the Run.
 
 ## Turn interrupt and steer
 
-- `interrupt-turn` (#118) reaches a live Agent Turn through the same one `AbortController`, aborting it with `INTERRUPT_TURN_ABORT` (imported from execution, which
-  translates it into `turn.interrupt()` at the Harness Seam).
+- `interrupt-turn` (#298) reaches only its named live Turn through `RequestChannel.bindInterrupt`, bound and unbound alongside answer and steer in execution's
+  Turn driver. A rejected Harness receipt settles `not-applied` immediately; an accepted receipt waits only for that Turn's result: `interrupted` or `lost` settles
+  `applied`, anything else `not-applied` with `interrupt-rejected` and a reason. An applied interrupt still rests the Run `halted`; ADR 0035's redesign is pending.
+  Interrupt never fires the Run's controller, so a refused or ineffective interrupt cannot stop a following human Turn, Agent Turn, or Command step.
 - Both `interrupt-turn` and `steer-turn` are offered only while a live (unsettled) Turn exists in this process; a control naming a settled Turn is rejected as a value.
 - The steer Offer is discriminated on the prepared profile's steer evidence (live first, then persisted with the Attempt), never Adapter prose above the Seam: a Harness
   with native steer (Codex) offers it `available` with the live turnId, one without (Claude Code) offers it `available:false` with the evidence as `reason` (#148).
-- Unlike interrupt, steer does **not** use the AbortController — it keeps the Turn working. `submitSteerTurn` refuses an unavailable profile with `steer-unavailable`
+- Steer keeps the Turn working. `submitSteerTurn` refuses an unavailable profile with `steer-unavailable`
   before any native call, else reaches the live Turn's `tracking.live.steer` (bound by `driveHarnessTurn` over `turn.steer` via the `RequestChannel.bindSteer` hook,
   unbound at Turn end alongside `bindAnswer`); a native control race settles `steer-rejected`, a stale/settled turnId `turn-control-rejected`, an accepted steer
   `applied`, Run still running.
@@ -50,14 +50,15 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 - `beginInteractive` reuses the held owner (a blocked Run keeps it) or resumes+acquires a reopened one, then re-derives to confirm the Run is blocked at the named Step.
 - `send` drives one human Turn (origin `human`, verbatim text as the transcript input) through the opaque Step driver against that owner and stays `blocked` between
   Turns (owner held, no execution promise, ADR 0031); its `blocked` write pushes the new transcript.
-- `send` settles `applied` at the Turn's durable admission (#290), the Run already `running`, while `tracking.promise` still spans the whole Turn for cancel,
-  interrupt, and shutdown. A Turn ending unadmitted (unusable Session, fenced admission, stopped first) settles `not-applied` (`interactive-turn-not-admitted`, or its
+- `send` settles `applied` at the Turn's durable admission (#290), the Run already `running`, while `tracking.promise` still spans the whole Turn for cancel
+  and shutdown. A Turn ending unadmitted (unusable Session, fenced admission, stopped first) settles `not-applied` (`interactive-turn-not-admitted`, or its
   own earlier Problem); a fault after admission lands on the Run's `problem`, since the Operation already settled.
 - `interactiveStepTarget` derives the resting iteration's Attempt id and Session from the attempt log (a Step inside a Repeat group, or `fresh`, gets a
   per-Attempt Session). `end` publishes that Attempt (empty, succeeded, stages no commit) with `advanceState: "running"` and re-drives execution, which
   re-walks from the top, replays settled iterations, and skips the settled Step (#216).
-- Both set `tracking.promise` (via a `start*` helper) so cancel-run/interrupt-turn find and abort a live human Turn; the abort reason decides the rest as the answer path
-  does, and reaches clients through the Run Projection. `send` is refused blank at admission (before any stdin); `end` mid-Turn (a live Turn) is refused as a value.
+- Both set `tracking.promise` (via a `start*` helper) so cancel-run and shutdown find and abort live work; interrupt reaches only the Turn's bound function.
+  The abort reason decides the rest as the answer path does, and reaches clients through the Run Projection. `send` is refused blank at admission (before any stdin);
+  `end` mid-Turn (a live Turn) is refused as a value.
 - `continue-repeat` (#217) is `end` for a Step inside a human-controlled Repeat, which the scheduler re-walks into the next iteration; the Projection offers it
   in End Step's place. Each control is refused as a value on the other's Step (`inHumanRepeat`), so one iteration is never settled by both.
 - `end-stage` (#218) is `continue-repeat` whose published Attempt carries `endsStage`, one durable `attempt_log` mark: the re-walk finishes that iteration and exits

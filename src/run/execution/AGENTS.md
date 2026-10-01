@@ -4,9 +4,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
-- The abort-reason vocabulary is owned here (the cancel Seam's sentinel strings, imported by the Application) and maps to the Run's resting state: all three
-  reasons stop a live Turn, and the reason decides the rest — `RUN_CANCEL_ABORT` ends the Run `cancelled` (the terminal cancel-run), while
-  `INTERRUPT_TURN_ABORT` (a Port control) and `SIGNAL_ABORT` (Ctrl+C or an OS signal) rest it `halted`, resumable (ADR 0019).
+- The cancel Seam's Run-wide sentinel strings are owned here: `RUN_CANCEL_ABORT` ends the Run `cancelled`, while `SIGNAL_ABORT` stops live work and
+  leaves it resumable (ADR 0019). Turn interrupt uses `RequestChannel.bindInterrupt`, unbound at Turn end; receipt/result mapping lives in that binding
+  ([run-control](../../../docs/agents/run-control.md#turn-interrupt-and-steer)), never on the Run's controller or routing promise.
 - The Harness-facing half publishes nothing durable except through the three admitted Turn writes (`admitTurn`, `appendTurnEvent`, `settleTurn`); every
   other durable Run fact surfaces on the Attempt's later `publishAttempt`, never from executing a Turn.
 - Every autonomous Agent Attempt publishes one co-sourced evidence value: qualified Harness identity plus its optional observed model. `attemptEvidence`

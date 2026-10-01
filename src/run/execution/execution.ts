@@ -44,13 +44,13 @@ import {
 
 export {
   driveInteractiveTurn,
-  INTERRUPT_TURN_ABORT,
   RUN_CANCEL_ABORT,
   RunCancelledError,
   SIGNAL_ABORT,
 } from "./agent.js";
 export type {
   HarnessExecutionDeps,
+  LiveInterruptFn,
   LiveObservation,
   LiveRequestView,
   LiveSteerFn,
