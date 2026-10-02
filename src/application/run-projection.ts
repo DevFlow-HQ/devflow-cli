@@ -877,7 +877,11 @@ export function deriveRun(
         // durable record, read through the owner.
         const pending =
           node.kind === "human-gate" ? owner?.pendingGate() : undefined;
-        if (pending !== undefined && pending.stepId === node.id) {
+        if (
+          state === "blocked" &&
+          pending !== undefined &&
+          pending.stepId === node.id
+        ) {
           mark(node, "blocked");
           return {
             state: "blocked",

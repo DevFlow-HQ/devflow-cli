@@ -17,6 +17,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `gate.shape` (`free-text` ⇒ `text`, `approve-reject` ⇒ `continue`/`stop`) or it is a `gate-shape-mismatch` Problem that changes nothing. Idempotency is keyed on the
   operation id (`gate_answer` row for a checkpoint; the in-process operations map for both) — never on whether the gate settled, so a _different_ operation answering an
   already-answered gate falls through to the staleness check and is refused, not silently masked as `applied`.
+- Cancelling an authored Human Gate retains its `pending_gate` record (#336); surface it as `derived.pendingGate` only while the stored Run state is
+  `blocked`, so a terminal Run projects its stored state and offers deletion.
 - The Trust grant is written only after `createRun` succeeds: any refusal reached before creation (a mismatching trust acknowledgement, a failed
   Preflight) returns without a grant, so it never leaves a dangling one. (`createRun` itself no longer refuses — ADR 0031 admits any number of live
   Runs.) Preflight runs before the Trust gate, so a Run whose preconditions fail is refused before trust is ever asked for.

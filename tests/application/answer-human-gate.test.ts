@@ -604,6 +604,37 @@ test("answering a Run that is not blocked is not applied (#85)", async (t) => {
 
 // --- Authored Human Gate (#108) --------------------------------------------
 
+test("cancelling a Run at an authored Human Gate projects cancelled and offers only deletion (#336)", async (t) => {
+  const f = fixture(t);
+  const runId = await launchGateBlocked(f, { shape: "approve-reject" });
+  const blocked = runOf(f.app, runId);
+  assert.equal(blocked.state, "blocked");
+  assert.ok(blocked.pendingGate);
+  assert.deepEqual(
+    blocked.actionOffers.map((offer) => offer.action),
+    ["answer-human-gate", "cancel-run"],
+  );
+
+  const admission = f.app.projectionPort.submit({
+    operationId: "cancel-authored-gate",
+    operation: "cancel-run",
+    input: { runId },
+  });
+  assert.ok(admission.admitted);
+  assert.deepEqual(await settleOutcome(f.app, admission.operationId), {
+    status: "applied",
+  });
+
+  const cancelled = runOf(f.app, runId);
+  assert.equal(cancelled.state, "cancelled");
+  assert.equal(cancelled.pendingGate, undefined);
+  assert.equal(cancelled.checkpoint, undefined);
+  assert.deepEqual(
+    cancelled.actionOffers.map((offer) => offer.action),
+    ["delete-run"],
+  );
+});
+
 test("an authored free-text gate blocks, then a text answer publishes the output, settles succeeded, and advances (#108)", async (t) => {
   const f = fixture(t);
   const runId = await launchGateBlocked(f, {

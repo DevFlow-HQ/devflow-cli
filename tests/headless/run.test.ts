@@ -14,6 +14,7 @@ import type {
   ProjectionPort,
   ProjectionSelector,
   ProjectionUpdate,
+  RunSnapshot,
 } from "../../src/application/projection-port.js";
 import { createApplication } from "../helpers/application.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
@@ -1241,6 +1242,34 @@ test("run show and --json carry the authored pending gate; blocked reads durable
   assert.equal(snapshot.result.run.pendingGate?.message, "name the release");
   assert.equal(snapshot.result.run.pendingGate?.outputArtifactName, "answer");
   assert.match(snapshot.result.run.pendingGate?.gate.attemptId ?? "", /\S/);
+});
+
+test("run show presents a cancelled authored-Gate Run without a gate or refused actions (#336)", async (t) => {
+  const h = await harness(t);
+  const runId = await launchGate(h, { shape: "free-text" });
+  assert.equal(await h.run(["run", "cancel", runId]), 0);
+  h.reset();
+
+  assert.equal(await h.run(["run", "show", runId]), 0);
+  const out = h.stdout();
+  assert.match(out, /^State: cancelled$/m);
+  assert.match(out, new RegExp(`run delete ${runId}`));
+  assert.doesNotMatch(
+    out,
+    /durable Human Gate|Answer the gate:|run answer|run cancel/,
+  );
+  h.reset();
+
+  assert.equal(await h.run(["run", "show", runId, "--json"]), 0);
+  const snapshot = JSON.parse(h.stdout()) as RunSnapshot;
+  assert.ok(snapshot.result.found);
+  if (!snapshot.result.found) throw new Error("unreachable");
+  assert.equal(snapshot.result.run.state, "cancelled");
+  assert.equal(snapshot.result.run.pendingGate, undefined);
+  assert.deepEqual(
+    snapshot.result.run.actionOffers.map((offer) => offer.action),
+    ["delete-run"],
+  );
 });
 
 test("a suggested free-text gate: run show names the suggestions, --json carries them, and --text answers with one (#213)", async (t) => {
