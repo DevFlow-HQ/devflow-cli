@@ -18,6 +18,11 @@ The gate separates three independently attributable, blocking layers (ADR 0027's
   terminal-lifecycle program share their runner helpers (timeouts, exit, temp-dir cleanup) in `tests/helpers/standalone.ts`.
 - **Compiled-binary acceptance** exercises Command, Harness, interruption, recovery, and Git through the copied binary in the consumer job.
 
+A real child under `bun test` fails its test. `bunfig.toml` preloads the spawn trap (`tests/helpers/spawnTrap.ts`, which documents the routes it
+covers) ahead of every file; it is the one `bun:test` import, because only Bun offers module mocks and preload hooks. Every child-process and Bun spawn
+throws, and a global hook fails the test that reached one even when the caller turned the throw into a value. The failure names the route and the test.
+There is no allowlist; the fix is a fake Process.
+
 The checked-in [subprocess migration ledger](../subprocess-test-migration-ledger.md) is complete: every row is `done` and stays as a historical coverage
 record. A new real-spawn assertion goes straight to standalone runtime conformance or compiled-binary acceptance, never into the semantic suite. Do not
 mask a failure with a retry, sleep, timeout increase, or silent assertion removal in any layer.

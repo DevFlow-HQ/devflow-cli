@@ -42,10 +42,15 @@ const PROCESS_FREE_MARKER_EXCEPTIONS = new Set([
   "tests/application/harness-catalog.test.ts",
   "tests/application/projection-port.test.ts",
   "tests/application/shipped-bundles.test.ts",
+  // Born process-free (#317): the spawn trap's own test reaches every spawn route,
+  // and each lands on the trap, which throws before any child exists.
+  "tests/helpers/spawnTrap.test.ts",
 ]);
 
 const SUBPROCESS_SOURCE_PATTERNS = [
-  /from\s+["'](?:node:)?child_process["']/,
+  // A module specifier is the one literal codeOf keeps, so this reads an import,
+  // an export, or a CommonJS require of the child-process module.
+  /["'`](?:node:)?child_process["'`]/,
   /(?<!\.)\bspawnCommand\(/,
   /(?<!\.)\bspawnOwnedProcess\(/,
   /\binstall(?:Synthetic)?CodexReplayer\(/,
@@ -93,12 +98,32 @@ const LITERAL_KINDS = new Set([
   ts.SyntaxKind.RegularExpressionLiteral,
 ]);
 
-/** An import or export's module specifier is the one literal the patterns read. */
+/** A module specifier is the one literal the patterns read: an import or export's,
+ *  or the module a CommonJS require names (#317). */
 function isModuleSpecifier(node: ts.Node): boolean {
   const parent = node.parent;
+  if (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) {
+    return parent.moduleSpecifier === node;
+  }
+  if (ts.isExternalModuleReference(parent)) return parent.expression === node;
   return (
-    (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) &&
-    parent.moduleSpecifier === node
+    ts.isCallExpression(parent) &&
+    parent.arguments[0] === node &&
+    isRequire(parent.expression)
+  );
+}
+
+/** A CommonJS require: `require`, a `.require` member such as `module.require`,
+ *  or the function a `createRequire(…)` call returns. */
+function isRequire(callee: ts.Expression): boolean {
+  if (ts.isIdentifier(callee)) return callee.text === "require";
+  if (ts.isPropertyAccessExpression(callee)) {
+    return callee.name.text === "require";
+  }
+  return (
+    ts.isCallExpression(callee) &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === "createRequire"
   );
 }
 
@@ -191,6 +216,17 @@ test("[evidence-ledger] discovery finds direct and indirect children without mat
     "executeRouting(routing, options);",
     "emitEntryDeclarations(root);",
     "fixture.wireApplication(options);",
+    // A CommonJS require of the child-process module (#317), in each form an ESM
+    // file can write it.
+    'const { spawnSync } = require("node:child_process");',
+    "const childProcess = require('child_process');",
+    "const childProcess = require(`child_process`);",
+    'import childProcess = require("child_process");',
+    'const require = createRequire(import.meta.url);\nrequire("node:child_process");',
+    'createRequire(import.meta.url)("node:child_process");',
+    'createRequire(new URL(import.meta.url))("child_process");',
+    'module.require("child_process");',
+    'const { spawn } = require(\n  "node:child_process",\n);',
   ];
   for (const source of spawningSources) {
     assert.equal(
@@ -219,6 +255,13 @@ test("[evidence-ledger] discovery finds direct and indirect children without mat
     '// spawnOwnedProcess(options);\n/* import { spawn } from "child_process"; */\n' +
       "/** Calls executeRouting(routing, options). */\nexport function run() {}\n" +
       "// openRunGroup(home, workspace);",
+    // A require in data or prose, as a fixture program's source carries it, spawns
+    // nothing; neither does a require of another module or the bare module name.
+    "const program = \"const{spawn}=require('node:child_process');\";",
+    '// const { spawn } = require("child_process");',
+    'const pattern = /require\\("child_process"\\)/;',
+    'const fs = require("node:fs");',
+    'console.log("child_process");',
   ];
   for (const source of literalSources) {
     assert.equal(
