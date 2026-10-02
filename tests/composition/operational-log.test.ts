@@ -18,7 +18,12 @@ import {
   withClients,
 } from "../../src/composition/main.js";
 import { runHeadless, runHeadlessCli } from "../../src/headless/headless.js";
-import type { HarnessProfile } from "../../src/harness/harness.js";
+import {
+  createClaudeCodeAdapter,
+  startPermissionBridge,
+  type HarnessProfile,
+} from "../../src/harness/harness.js";
+import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
@@ -846,6 +851,7 @@ function writeAgentBundle(kind: "agent" | "interactive-agent" = "agent"): {
         id: "fix",
         kind,
         session: "s",
+        retry: 0,
         prompt: { asset: "prompts/fix.md" },
       },
     ],
@@ -1071,4 +1077,110 @@ test("an interactive Step's Turn usage and its driver's CleanupReport reach the 
     count("harness-phase-start", "launch"),
   );
   assert.doesNotMatch(log.text, /seeded-/);
+});
+
+test("a Claude Code failure crosses the Harness Seam into the log with its redacted type and cause chain", async () => {
+  const { folder, overrides } = home();
+  const workspace = overrides.launchCwd!;
+  const bridge = await startPermissionBridge(async () => ({
+    decision: "deny",
+    message: "unused",
+  }));
+  const token = bridge.bearer;
+  const inner = new RangeError(`inner ${token}`);
+  inner.stack = `RangeError: inner ${token}`;
+  const error = new TypeError(`launch ${token}`, { cause: inner });
+  error.stack = `TypeError: launch ${token}`;
+  const bundleProcess = createFakeBundleProcess({ executables: ["claude"] });
+  const process = createFakeProcess({
+    resolutionHandler: (name) => bundleProcess.resolveExecutable(name),
+    commandHandler: (options) =>
+      options.role === "harness-probe"
+        ? {
+            kind: "exited",
+            status: 0,
+            text: new TextEncoder().encode("2.1.234 (Claude Code)"),
+          }
+        : bundleProcess.spawnCommand(options),
+    syncCommandHandler: (options) => bundleProcess.spawnCommandSync(options),
+    ownedProcesses: [
+      {
+        kind: "launch-failure",
+        failure: { ok: false, failure: { kind: "spawn-error", cause: error } },
+      },
+    ],
+  });
+  try {
+    const status = await withClients(
+      async (clients) => {
+        const bundle = writeAgentBundle();
+        const built = clients.bundleManagement.build(bundle.folder, {
+          noInstall: false,
+        });
+        assert.ok(built.ok, JSON.stringify(built));
+        const port = clients.projectionPort;
+        assert.ok(
+          port.submit({
+            operationId: "op-approve",
+            operation: "approve-workspace",
+            input: { path: workspace },
+          }).admitted,
+        );
+        await awaitSettled(port, "op-approve");
+        const admission = port.submit({
+          operationId: "op-launch",
+          operation: "launch-run",
+          input: {
+            bundle: { id: bundle.id },
+            launchInputs: {},
+            trustDigest: built.report.digest,
+            harness: "claude-code",
+          },
+        });
+        assert.ok(admission.admitted, JSON.stringify(admission));
+        await awaitSettled(port, "op-launch");
+        assert.equal(
+          (await awaitRunRest(port, admission.runId!)).state,
+          "failed",
+        );
+        return 0;
+      },
+      {
+        ...overrides,
+        process,
+        discoverClaudeCode,
+        harnessAdapter: (phases) =>
+          createClaudeCodeAdapter({ env: {} }, process, phases),
+      },
+    );
+    assert.equal(status, 0);
+  } finally {
+    await bridge.close();
+  }
+  const log = readLog(folder);
+  assertBase(log.records);
+  const failure = log.records.find(
+    (record) =>
+      record.event === "harness-phase-end" &&
+      record.phase === "launch" &&
+      record.status === "failed",
+  );
+  assert.ok(
+    failure,
+    "the native Adapter's failed launch reached the operational log",
+  );
+  assert.equal(failure.harness, "claude-code");
+  assert.equal(failure.session, "s");
+  assert.equal(failure.category, "spawn-error");
+  assert.deepEqual(failure.cause, {
+    type: "TypeError",
+    message: "launch «redacted-bearer-token»",
+    stack: "TypeError: launch «redacted-bearer-token»",
+    cause: {
+      type: "RangeError",
+      message: "inner «redacted-bearer-token»",
+      stack: "RangeError: inner «redacted-bearer-token»",
+    },
+  });
+  assert.equal(log.text.includes(token), false);
 });

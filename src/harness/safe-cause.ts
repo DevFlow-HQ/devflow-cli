@@ -9,14 +9,12 @@
 // escaping (a control character, a backslash-heavy Windows stack) cannot carry
 // a record past its total.
 
-import { redactText } from "./secrets.js";
+import { CAUSE_DEPTH, redactText } from "./secrets.js";
 
 /** Serialized bytes kept of a message, and of each other short field. */
 const MESSAGE_BOUND = 1024;
 /** Serialized bytes kept of a stack. */
 const STACK_BOUND = 4096;
-/** Nested causes kept beneath the top-level record. */
-const CAUSE_DEPTH = 4;
 /** Serialized bytes of the whole record. */
 const TOTAL_BOUND = 16 * 1024;
 

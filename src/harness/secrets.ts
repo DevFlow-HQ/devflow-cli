@@ -16,6 +16,9 @@ interface Registration {
 
 const registrations = new Set<Registration>();
 
+/** Nested causes kept by the Seam redactor and the safe cause translator. */
+export const CAUSE_DEPTH = 4;
+
 /** Error properties Node's `child_process` populates that can carry a launch
  *  argv (and thus a secret) into a diagnostic, including the non-enumerable
  *  `message` and `stack` that `Object.entries` skips. */
@@ -47,34 +50,70 @@ export function redactText(text: string): string {
   return out;
 }
 
-/** Scrub every registered secret from a value about to cross the Seam as a
- *  failure cause or diagnostic. An Error is cloned with its message, stack, and
- *  argv-bearing fields scrubbed so the failure keeps its shape without carrying
- *  the secret; a string is scrubbed; anything else passes through. */
+/** Scrub a failure cause before it crosses the Seam. Inspect the same bounded
+ *  Error chain as the translator; preserve identity if none of its fields change.
+ *  A changed chain keeps each Error's name, non-enumerable cause, and scrubbed
+ *  launch fields without mutating the original failure. */
 export function redactSecrets(value: unknown): unknown {
-  if (value instanceof Error) {
-    const source = value as unknown as Record<string, unknown>;
-    const clone = new Error(redactText(value.message));
-    const target = clone as unknown as Record<string, unknown>;
-    // Every enumerable own field (Node puts spawnargs/path/syscall/code here).
-    for (const [key, raw] of Object.entries(source)) {
-      target[key] = scrubValue(raw);
-    }
-    for (const key of ARGV_BEARING_KEYS) {
+  const links: Array<{
+    fields: Map<string, unknown>;
+    hasCause: boolean;
+  }> = [];
+  let current = value;
+  let changed = false;
+  for (
+    let depth = 0;
+    depth <= CAUSE_DEPTH && current instanceof Error;
+    depth += 1
+  ) {
+    const source = current as unknown as Record<string, unknown>;
+    const fields = new Map(Object.entries(source));
+    fields.delete("cause");
+    // Native names and launch fields may be inherited or non-enumerable.
+    for (const key of ["name", ...ARGV_BEARING_KEYS]) {
       const raw = source[key];
-      if (raw !== undefined) target[key] = scrubValue(raw);
+      if (raw !== undefined) fields.set(key, raw);
     }
-    return clone;
+    for (const [key, raw] of fields) {
+      const safe = scrubValue(raw);
+      changed ||= !Object.is(safe, raw);
+      fields.set(key, safe);
+    }
+    current = current.cause;
+    links.push({ fields, hasCause: current !== undefined });
+    if (current === undefined) break;
   }
-  return scrubValue(value);
+  // Never retain an uninspected Error below a redacted chain. The null cause
+  // still lets the translator mark its depth cut, without exposing that tail.
+  const beyondBound = current instanceof Error;
+  let safe = beyondBound ? null : scrubValue(current);
+  changed ||= !beyondBound && !Object.is(safe, current);
+  if (!changed) return value;
+
+  for (const { fields, hasCause } of links.reverse()) {
+    const clone = new Error();
+    Object.assign(clone, Object.fromEntries(fields));
+    if (hasCause) {
+      Object.defineProperty(clone, "cause", {
+        value: safe,
+        writable: true,
+        configurable: true,
+      });
+    }
+    safe = clone;
+  }
+  return safe;
 }
 
 function scrubValue(raw: unknown): unknown {
   if (typeof raw === "string") return redactText(raw);
   if (Array.isArray(raw)) {
-    return raw.map((item) =>
+    const safe = raw.map((item) =>
       typeof item === "string" ? redactText(item) : item,
     );
+    return safe.some((item, index) => !Object.is(item, raw[index]))
+      ? safe
+      : raw;
   }
   return raw;
 }

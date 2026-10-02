@@ -36,7 +36,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   content is Interface design, not generic secret redaction — a `HarnessFailure` still preserves all useful Harness-originated diagnostics and its cause.
   One private registry (`secrets.ts`) owns it: a minter registers a secret while live and releases it on teardown (the bridge: listen to `close`,
   which follows every Session's close and in-flight interrupt); nothing registers through the Interface. The Seam's `redactSecrets` keeps a cause an
-  Error; the translator redacts each string before cutting it. Its bounds are Interface facts pinned by its tests, in serialized UTF-8 bytes.
+  Error with its name and bounded cause chain; it returns secret-free values unchanged. Redactor and translator share one cause-depth bound;
+  a redacted tail beyond it becomes null so translation still marks the cut. The translator redacts each string before cutting it; its byte bounds
+  are Interface facts pinned by its tests, in serialized UTF-8 bytes.
 - Steer is a profile capability like the others (`HarnessProfile.steer`, evidence-bearing). An Adapter derives its `steer` receipt from it rather than
   hard-coding a second rejection; the Claude Code profile declares it unavailable (print mode has no same-Turn guidance frame) and the fake's script
   decides it through the profile it supplies.
@@ -73,8 +75,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Structured clarifications, after-acceptance checkpoint, load-with-replay, and caller-contract violations remain fake-only. The fake performs load-with-replay:
   resumed Turn re-emits the Session's transcript history (`assistant-content`, `tool-activity`), drops a scripted entry that repeats a replayed one, then
   emits `REPLAY_BARRIER` (an `activity`) before any live event — history is historical by position, inside the closed vocabulary.
-- Native Adapter and replayer conformance runs only in the standalone runtime-conformance program (#198), never under `bun test`; the layer rules are in
-  [testing](../../docs/agents/testing.md).
+- Native Adapter and replayer conformance that launches real children runs only in standalone runtime conformance (#198); scripted Process failure
+  cases through the Claude Code Seam run in the semantic suite (#332). The layer rules are in [testing](../../docs/agents/testing.md).
 - **Replayer startup-signal race:** a Bun child's `process.on("SIGTERM")` handler is only honoured once installed — a SIGTERM delivered before the
   child's top-level code runs hits the default disposition and kills it (this is a startup race, not a `bun test` limitation; plain `bun` shows the same
   window). So the replayer installs its SIGTERM handler at startup, and interrupt/close cases wait for the `session` event (init observed) before
