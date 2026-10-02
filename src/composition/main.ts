@@ -11,11 +11,7 @@ export { wireApplication, type Wiring } from "./wiring.js";
 export { describeFatal } from "./operational-log.js";
 // The standalone runner programs' operational log (#326): runtime conformance
 // and terminal lifecycle record their scenario and stage breadcrumbs through it.
-export {
-  runRunnerInvocation,
-  type RunnerBreadcrumb,
-  type RunnerLog,
-} from "./runner-log.js";
+export { runRunnerInvocation } from "./runner-log.js";
 
 // The composition entry: both surfaces reach the runtime through here.
 // `withClients` wires the Application (see wiring.ts) and hands its Ports to the

@@ -17,7 +17,7 @@ import type { WiringOverrides } from "./wiring.js";
 /** One scenario or stage lifecycle step a runner program reports. Names are the
  *  program's own scenario and stage labels; `elapsedMs` is the runner's own
  *  measure since the matching start. */
-export type RunnerBreadcrumb =
+type RunnerBreadcrumb =
   | { readonly kind: "scenario-start"; readonly scenario: string }
   | {
       readonly kind: "scenario-end";
@@ -39,7 +39,7 @@ export type RunnerBreadcrumb =
     };
 
 /** A runner program's view of its Secant invocation's log. */
-export interface RunnerLog {
+interface RunnerLog {
   breadcrumb(breadcrumb: RunnerBreadcrumb): void;
   /** The Process factory options that report each child fact to this log. */
   readonly processOptions: ProcessAdapterOptions;
