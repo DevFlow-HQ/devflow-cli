@@ -17,13 +17,22 @@ import {
   type HarnessDiscovery,
   type HarnessAdapter,
   type HarnessFailure,
+  type HarnessPhaseObserver,
 } from "../harness/harness.js";
 import type { ProcessAdapter } from "../process/process.js";
 import type { SelectedHarnessId } from "../run/store/store.js";
+import { harnessPhaseRecorder, recordingHarness } from "./harness-log.js";
+import type { OperationalLog } from "./operational-log.js";
+
+/** A test Adapter in place of a native one: an instance, or a factory that takes
+ *  the phase observer composition built for that Harness, so a double can report
+ *  phase facts as the native factory would. */
+export type HarnessAdapterOverride =
+  HarnessAdapter | ((phases: HarnessPhaseObserver) => HarnessAdapter);
 
 export interface HarnessRegistryOverrides {
-  readonly claudeCodeAdapter?: HarnessAdapter;
-  readonly codexAdapter?: HarnessAdapter;
+  readonly claudeCodeAdapter?: HarnessAdapterOverride;
+  readonly codexAdapter?: HarnessAdapterOverride;
   readonly discoverClaudeCode?: () => HarnessDiscovery;
   readonly discoverCodex?: () => HarnessDiscovery;
 }
@@ -45,12 +54,15 @@ export class HarnessRegistry {
   constructor(
     qualificationWorkspace: string,
     process: ProcessAdapter,
-    overrides: HarnessRegistryOverrides = {},
+    overrides: HarnessRegistryOverrides,
+    log: Pick<OperationalLog, "record"> | undefined,
   ) {
-    const claudeCodeAdapter =
-      overrides.claudeCodeAdapter === undefined
-        ? createClaudeCodeAdapter({}, process)
-        : overrides.claudeCodeAdapter;
+    const claudeCodeAdapter = observedAdapter(
+      "claude-code",
+      overrides.claudeCodeAdapter,
+      (phases) => createClaudeCodeAdapter({}, process, phases),
+      log,
+    );
     const claudeCode: THarnessRegistryEntry = {
       application: {
         choice: {
@@ -71,10 +83,12 @@ export class HarnessRegistry {
       },
       adapter: claudeCodeAdapter,
     };
-    const codexAdapter =
-      overrides.codexAdapter === undefined
-        ? createCodexAdapter({}, process)
-        : overrides.codexAdapter;
+    const codexAdapter = observedAdapter(
+      "codex",
+      overrides.codexAdapter,
+      (phases) => createCodexAdapter({}, process, phases),
+      log,
+    );
     const codex: THarnessRegistryEntry = {
       application: {
         choice: { id: "codex", name: "Codex", availability: "available" },
@@ -135,6 +149,27 @@ export class HarnessRegistry {
     }
     return entry;
   }
+}
+
+/** Builds one Harness's Adapter, native or overridden. With a log, it gets its
+ *  phase observer and is wrapped so every Harness it prepares records its
+ *  cleanup and usage; with none (a direct `wireApplication` caller), it reports
+ *  nowhere. */
+function observedAdapter(
+  harness: SelectedHarnessId,
+  override: HarnessAdapterOverride | undefined,
+  create: (phases: HarnessPhaseObserver | undefined) => HarnessAdapter,
+  log: Pick<OperationalLog, "record"> | undefined,
+): HarnessAdapter {
+  const phases =
+    log === undefined ? undefined : harnessPhaseRecorder(harness, log);
+  const adapter =
+    override === undefined
+      ? create(phases)
+      : typeof override === "function"
+        ? override(phases ?? (() => undefined))
+        : override;
+  return log === undefined ? adapter : recordingHarness(adapter, harness, log);
 }
 
 async function qualifyAdapter(

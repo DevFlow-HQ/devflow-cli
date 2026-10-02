@@ -26,7 +26,7 @@ import type {
   ControlReceipt,
   ControlRejection,
   HarnessAdapter,
-  HarnessAdapterFactory,
+  HarnessPhaseObserver,
   HarnessProfile,
   HarnessRequest,
   HarnessFailure,
@@ -114,16 +114,26 @@ const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
   "tool-activity",
 ]);
 
-/** Build a factory for the fake Adapter from a script. */
-export function createFake(script: FakeScript): HarnessAdapterFactory {
-  return () => new FakeAdapter(script);
+/** Build a factory for the fake Adapter from a script. Given a phase observer,
+ *  the fake reports what a native Adapter would around its scripted outcomes: a
+ *  launch and handshake on each `prepare` that passes validation (the handshake
+ *  failing with a scripted `prepareFailure`), and a cleanup on the first `close`
+ *  (failing with the report's failure). Elapsed time is always zero. */
+export function createFake(
+  script: FakeScript,
+): (phases?: HarnessPhaseObserver) => HarnessAdapter {
+  return (phases) => new FakeAdapter(script, phases);
 }
 
 class FakeAdapter implements HarnessAdapter {
-  constructor(private readonly script: FakeScript) {}
+  constructor(
+    private readonly script: FakeScript,
+    private readonly phases: HarnessPhaseObserver | undefined,
+  ) {}
 
   prepare(options: PrepareOptions): Promise<PrepareResult> {
     if (this.script.prepareFailure) {
+      this.reportOpen(this.script.prepareFailure);
       return Promise.resolve({
         ok: false,
         failure: this.script.prepareFailure,
@@ -164,10 +174,35 @@ class FakeAdapter implements HarnessAdapter {
         },
       });
     }
+    this.reportOpen();
     return Promise.resolve({
       ok: true,
-      harness: new FakePreparedHarness(this.script),
+      harness: new FakePreparedHarness(this.script, this.phases),
     });
+  }
+
+  /** The launch and handshake a native prepare reports; the handshake fails
+   *  with `failure` when one is given. */
+  private reportOpen(failure?: HarnessFailure): void {
+    this.phases?.({ kind: "phase-start", phase: "launch" });
+    this.phases?.({
+      kind: "phase-end",
+      phase: "launch",
+      elapsedMs: 0,
+      outcome: "ok",
+    });
+    this.phases?.({ kind: "phase-start", phase: "handshake" });
+    this.phases?.(
+      failure === undefined
+        ? { kind: "phase-end", phase: "handshake", elapsedMs: 0, outcome: "ok" }
+        : {
+            kind: "phase-end",
+            phase: "handshake",
+            elapsedMs: 0,
+            outcome: "failed",
+            failure,
+          },
+    );
   }
 }
 
@@ -189,7 +224,10 @@ class FakePreparedHarness implements PreparedHarness {
    *  a load-with-replay resume replays. */
   private readonly history = new Map<string, TurnEvent[]>();
 
-  constructor(private readonly script: FakeScript) {
+  constructor(
+    private readonly script: FakeScript,
+    private readonly phases: HarnessPhaseObserver | undefined,
+  ) {
     this.profile = script.profile;
     this.cleanup = script.cleanup ?? DEFAULT_CLEANUP;
   }
@@ -214,6 +252,21 @@ class FakePreparedHarness implements PreparedHarness {
   }
 
   close(): Promise<CleanupReport> {
+    if (!this.closed) {
+      this.phases?.({ kind: "phase-start", phase: "cleanup" });
+      const failure = this.cleanup.failure;
+      this.phases?.(
+        failure === undefined
+          ? { kind: "phase-end", phase: "cleanup", elapsedMs: 0, outcome: "ok" }
+          : {
+              kind: "phase-end",
+              phase: "cleanup",
+              elapsedMs: 0,
+              outcome: "failed",
+              failure,
+            },
+      );
+    }
     this.closed = true;
     // Graceful stop of a still-live Turn, so `close` mid-Turn does not leave it
     // hanging; the settled result cannot be rewritten by cleanup.

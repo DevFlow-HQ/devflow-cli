@@ -11,6 +11,7 @@ import {
   createClaudeCodeAdapter as createClaudeCodeAdapterWithProcess,
   createCodexAdapter as createCodexAdapterWithProcess,
   type HarnessAdapter,
+  type HarnessPhaseObserver,
 } from "../../src/harness/harness.js";
 import {
   createProcessAdapter,
@@ -25,13 +26,15 @@ type CodexOverrides = Parameters<typeof createCodexAdapterWithProcess>[0];
 export function createClaudeCodeAdapter(
   overrides: ClaudeCodeOverrides = {},
   processAdapter: ProcessAdapter = createProcessAdapter(),
+  phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
-  return createClaudeCodeAdapterWithProcess(overrides, processAdapter);
+  return createClaudeCodeAdapterWithProcess(overrides, processAdapter, phases);
 }
 
 export function createCodexAdapter(
   overrides: CodexOverrides = {},
   processAdapter: ProcessAdapter = createProcessAdapter(),
+  phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
-  return createCodexAdapterWithProcess(overrides, processAdapter);
+  return createCodexAdapterWithProcess(overrides, processAdapter, phases);
 }

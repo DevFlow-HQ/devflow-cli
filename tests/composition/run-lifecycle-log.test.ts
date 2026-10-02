@@ -210,8 +210,12 @@ async function invocation(
     status,
     text,
     records,
+    // The Run, Attempt, and Turn lifecycle alone: the invocation records and the
+    // Harness's phase, cleanup, and usage records (#322) are asserted elsewhere.
     lifecycle: records.filter(
-      (record) => !String(record.event).startsWith("invocation-"),
+      (record) =>
+        !String(record.event).startsWith("invocation-") &&
+        !String(record.event).startsWith("harness-"),
     ),
   };
 }

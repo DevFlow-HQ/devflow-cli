@@ -21,8 +21,14 @@ import {
   runHeadlessCli,
   type HeadlessIO,
 } from "../../src/headless/headless.js";
-import type { HarnessAdapter } from "../../src/harness/harness.js";
+import type {
+  HarnessAdapter,
+  HarnessProfile,
+} from "../../src/harness/harness.js";
+import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
+import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
 // The operational log (#318) through both client entries, read back from the
@@ -515,4 +521,476 @@ test("--help, --version, and parse errors leave stale operational logs untouched
   assert.deepEqual(readdirSync(folder), ["2026-01-01T00-00-00-000Z-1.jsonl"]);
   assert.equal(readFileSync(stale, "utf8"), "old evidence");
   assert.deepEqual(notices, []);
+});
+
+// --- Harness records (#322) ---------------------------------------------------
+
+const FAKE_PROFILE: HarnessProfile = {
+  harness: "claude-code",
+  executable: "/usr/bin/claude",
+  executableVersion: "2.1.273 (Claude Code)",
+  platform: "linux",
+  adapterRevision: "fake-claude-1",
+  configurationPosture: "user-compatible",
+  recovery: { mode: "native-reattach", evidence: "scripted fake" },
+  interruption: { mode: "process-only", evidence: "scripted fake" },
+  approvals: { available: true, evidence: "scripted fake" },
+  clarifications: { available: false, evidence: "scripted fake" },
+  steer: { available: false, evidence: "scripted fake" },
+  modelSelection: { at: "unavailable", evidence: "scripted fake" },
+  modelObservation: { available: true, evidence: "scripted fake" },
+  recoveryCoordinate: {
+    timing: "before-submission",
+    evidence: "scripted fake",
+  },
+  skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
+  fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
+};
+
+/** Deterministic discovery, so qualification and Preflight reach the double
+ *  without resolving an executable. */
+const discoverClaudeCode = () =>
+  ({
+    kind: "found",
+    attempt: {
+      source: "path",
+      name: "claude",
+      description: "PATH name 'claude'",
+    },
+  }) as const;
+
+/** The records a Harness reported, with the base fields every record carries
+ *  (already pinned by `assertBase`) dropped. */
+function harnessRecords(records: readonly Record<string, unknown>[]) {
+  return records
+    .filter((record) => String(record.event).startsWith("harness-"))
+    .map(({ time: _time, invocationId: _id, ...rest }) => rest);
+}
+
+test("a Harness qualification writes the double's phase facts and its CleanupReport, keeping only typed failure fields and a translated cause", async () => {
+  const { folder, overrides } = home();
+  // Every field a record must not carry is seeded, so its absence is checked.
+  const script: FakeScript = {
+    profile: FAKE_PROFILE,
+    turns: [],
+    cleanup: {
+      clean: false,
+      detail: "Session detached. stderr: seeded-detail-41c7",
+      failure: {
+        phase: "cleanup",
+        category: "cleanup-timeout",
+        possibleEffects: "possible",
+        nativeCode: "143",
+        partialOutput: "seeded-partial-9a20",
+        retryEvidence: "seeded-retry-55e1",
+        diagnostics: "seeded-diagnostics-c3d8",
+        cause: new Error("the child was not reaped"),
+      },
+      sessions: [
+        {
+          session: "planning",
+          availability: {
+            state: "detached",
+            coordinate: { opaque: "seeded-coordinate-7b3f" },
+          },
+        },
+        {
+          session: "review",
+          availability: { state: "unusable", reason: "seeded-reason-2e6a" },
+        },
+      ],
+    },
+  };
+  const status = await withClients(
+    async (clients) => {
+      const opened = clients.projectionPort.openProjection({
+        family: "harness-catalog",
+        focus: { id: "claude-code" },
+      });
+      await opened.updates[Symbol.asyncIterator]().next();
+      opened.close();
+      return 0;
+    },
+    { ...overrides, discoverClaudeCode, harnessAdapter: createFake(script) },
+  );
+  assert.equal(status, 0);
+
+  const log = readLog(folder);
+  assertBase(log.records);
+  const failure = {
+    failurePhase: "cleanup",
+    category: "cleanup-timeout",
+    possibleEffects: "possible",
+    nativeCode: "143",
+  };
+  const records = harnessRecords(log.records);
+  const cause = (record: Record<string, unknown>) =>
+    record.cause as Record<string, unknown>;
+  for (const record of records.filter((r) => r.cause !== undefined)) {
+    assert.equal(cause(record).type, "Error");
+    assert.equal(cause(record).message, "the child was not reaped");
+    assert.match(String(cause(record).stack), /the child was not reaped/);
+  }
+  assert.deepEqual(
+    records.map(({ cause: _cause, ...rest }) => rest),
+    [
+      {
+        level: "info",
+        event: "harness-phase-start",
+        harness: "claude-code",
+        phase: "launch",
+      },
+      {
+        level: "info",
+        event: "harness-phase-end",
+        harness: "claude-code",
+        phase: "launch",
+        status: "ok",
+        elapsedMs: 0,
+      },
+      {
+        level: "info",
+        event: "harness-phase-start",
+        harness: "claude-code",
+        phase: "handshake",
+      },
+      {
+        level: "info",
+        event: "harness-phase-end",
+        harness: "claude-code",
+        phase: "handshake",
+        status: "ok",
+        elapsedMs: 0,
+      },
+      {
+        level: "info",
+        event: "harness-phase-start",
+        harness: "claude-code",
+        phase: "cleanup",
+      },
+      {
+        level: "warn",
+        event: "harness-phase-end",
+        harness: "claude-code",
+        phase: "cleanup",
+        status: "failed",
+        elapsedMs: 0,
+        ...failure,
+      },
+      {
+        level: "warn",
+        event: "harness-cleanup",
+        harness: "claude-code",
+        status: "unclean",
+        sessions: [
+          { session: "planning", availability: "detached" },
+          { session: "review", availability: "unusable" },
+        ],
+        ...failure,
+      },
+    ],
+  );
+  assert.equal(
+    records.filter((record) => record.cause !== undefined).length,
+    2,
+  );
+  assert.doesNotMatch(log.text, /seeded-/);
+});
+
+test("a failed qualification handshake records the double's typed failure", async () => {
+  const { folder, overrides } = home();
+  await withClients(
+    async (clients) => {
+      const opened = clients.projectionPort.openProjection({
+        family: "harness-catalog",
+        focus: { id: "claude-code" },
+      });
+      await opened.updates[Symbol.asyncIterator]().next();
+      opened.close();
+      return 0;
+    },
+    {
+      ...overrides,
+      discoverClaudeCode,
+      harnessAdapter: createFake({
+        profile: FAKE_PROFILE,
+        turns: [],
+        prepareFailure: {
+          phase: "prepare",
+          category: "authentication",
+          possibleEffects: "none",
+          diagnostics: "seeded-diagnostics-0d4e",
+        },
+      }),
+    },
+  );
+
+  const records = harnessRecords(readLog(folder).records);
+  assert.deepEqual(records.at(-1), {
+    level: "warn",
+    event: "harness-phase-end",
+    harness: "claude-code",
+    phase: "handshake",
+    status: "failed",
+    elapsedMs: 0,
+    failurePhase: "prepare",
+    category: "authentication",
+    possibleEffects: "none",
+  });
+  // A prepare that failed has no Harness to close.
+  assert.equal(
+    records.some((record) => record.event === "harness-cleanup"),
+    false,
+  );
+});
+
+/** A one-Step Bundle folder: an Agent Step of `kind` in Session `s`. */
+function writeAgentBundle(kind: "agent" | "interactive-agent" = "agent"): {
+  folder: string;
+  id: string;
+} {
+  const folder = makeTempDir("secant-oplog-bundle-");
+  mkdirSync(join(folder, "prompts"), { recursive: true });
+  writeFileSync(join(folder, "prompts", "fix.md"), "seeded-prompt-8f2a\n");
+  const manifest = {
+    formatVersion: 1,
+    bundle: {
+      id: "dev.secant.oplog-agent",
+      version: "1.0.0",
+      name: "Oplog Agent",
+      description: "One Agent Step for the operational log.",
+    },
+    platforms: ["windows", "macos", "linux"],
+    inputs: {},
+    assets: [{ path: "prompts/fix.md", kind: "prompt" }],
+    routing: [
+      {
+        id: "fix",
+        kind,
+        session: "s",
+        prompt: { asset: "prompts/fix.md" },
+      },
+    ],
+  };
+  writeFileSync(join(folder, "manifest.json"), JSON.stringify(manifest));
+  return { folder, id: manifest.bundle.id };
+}
+
+test("an Agent Run records its completed Turn's usage and the Run Harness's CleanupReport", async () => {
+  const { folder, overrides } = home();
+  const workspace = overrides.launchCwd!;
+  const script: FakeScript = {
+    profile: FAKE_PROFILE,
+    turns: [
+      {
+        events: [{ kind: "assistant-content", content: "seeded-content-6c19" }],
+        result: {
+          kind: "completed",
+          detail: {
+            finalContent: "seeded-content-6c19",
+            effectiveModel: { known: true, model: "claude-opus-5" },
+            session: { state: "open" },
+            usage: {
+              estimate: true,
+              summary: "input 12, output 34 tokens; cost estimate USD 0.5",
+            },
+          },
+        },
+      },
+    ],
+  };
+  const status = await withClients(
+    async (clients) => {
+      const bundle = writeAgentBundle();
+      const built = clients.bundleManagement.build(bundle.folder, {
+        noInstall: false,
+      });
+      assert.ok(built.ok, JSON.stringify(built));
+      const port = clients.projectionPort;
+      assert.ok(
+        port.submit({
+          operationId: "op-approve",
+          operation: "approve-workspace",
+          input: { path: workspace },
+        }).admitted,
+      );
+      await awaitSettled(port, "op-approve");
+      const digest = built.report.digest;
+      const admission = port.submit({
+        operationId: "op-launch",
+        operation: "launch-run",
+        input: {
+          bundle: { id: bundle.id },
+          launchInputs: {},
+          trustDigest: digest,
+          harness: "claude-code",
+        },
+      });
+      assert.ok(admission.admitted, JSON.stringify(admission));
+      await awaitSettled(port, "op-launch");
+      const run = await awaitRunRest(port, admission.runId!);
+      assert.equal(run.state, "succeeded");
+      return 0;
+    },
+    {
+      ...overrides,
+      process: createFakeBundleProcess(),
+      discoverClaudeCode,
+      harnessAdapter: createFake(script),
+    },
+  );
+  assert.equal(status, 0);
+
+  const log = readLog(folder);
+  assertBase(log.records);
+  const records = harnessRecords(log.records);
+  assert.deepEqual(
+    records.filter((record) => record.event === "harness-usage"),
+    [
+      {
+        level: "info",
+        event: "harness-usage",
+        harness: "claude-code",
+        session: "s",
+        estimate: true,
+        summary: "input 12, output 34 tokens; cost estimate USD 0.5",
+      },
+    ],
+  );
+  // The Run's Harness closes after the Turn, and its report is recorded.
+  const usageAt = records.findIndex((r) => r.event === "harness-usage");
+  assert.deepEqual(records.slice(usageAt + 1), [
+    {
+      level: "info",
+      event: "harness-phase-start",
+      harness: "claude-code",
+      phase: "cleanup",
+    },
+    {
+      level: "info",
+      event: "harness-phase-end",
+      harness: "claude-code",
+      phase: "cleanup",
+      status: "ok",
+      elapsedMs: 0,
+    },
+    {
+      level: "info",
+      event: "harness-cleanup",
+      harness: "claude-code",
+      status: "clean",
+      sessions: [],
+    },
+  ]);
+  assert.doesNotMatch(log.text, /seeded-/);
+});
+
+test("an interactive Step's Turn usage and its driver's CleanupReport reach the log", async () => {
+  const { folder, overrides } = home();
+  const workspace = overrides.launchCwd!;
+  const script: FakeScript = {
+    profile: FAKE_PROFILE,
+    turns: [
+      {
+        result: {
+          kind: "completed",
+          detail: {
+            finalContent: "acknowledged",
+            effectiveModel: { known: true, model: "claude-opus-5" },
+            session: { state: "detached", coordinate: { opaque: "coord-s" } },
+            usage: { estimate: true, summary: "input 1, output 2 tokens" },
+          },
+        },
+      },
+    ],
+  };
+  await withClients(
+    async (clients) => {
+      const port = clients.projectionPort;
+      const bundle = writeAgentBundle("interactive-agent");
+      const built = clients.bundleManagement.build(bundle.folder, {
+        noInstall: false,
+      });
+      assert.ok(built.ok, JSON.stringify(built));
+      assert.ok(
+        port.submit({
+          operationId: "op-approve",
+          operation: "approve-workspace",
+          input: { path: workspace },
+        }).admitted,
+      );
+      await awaitSettled(port, "op-approve");
+      const admission = port.submit({
+        operationId: "op-launch",
+        operation: "launch-run",
+        input: {
+          bundle: { id: bundle.id },
+          launchInputs: {},
+          trustDigest: built.report.digest,
+          harness: "claude-code",
+        },
+      });
+      assert.ok(admission.admitted, JSON.stringify(admission));
+      const runId = admission.runId!;
+      await awaitSettled(port, "op-launch");
+      assert.equal((await awaitRunRest(port, runId)).state, "blocked");
+      assert.ok(
+        port.submit({
+          operationId: "op-turn",
+          operation: "send-interactive-turn",
+          input: { runId, stepId: "fix", text: "seeded-human-text-3b90" },
+        }).admitted,
+      );
+      await awaitSettled(port, "op-turn");
+      await awaitRunRest(port, runId);
+      assert.ok(
+        port.submit({
+          operationId: "op-end",
+          operation: "end-interactive-step",
+          input: { runId, stepId: "fix" },
+        }).admitted,
+      );
+      await awaitSettled(port, "op-end");
+      assert.equal((await awaitRunRest(port, runId)).state, "succeeded");
+      return 0;
+    },
+    {
+      ...overrides,
+      supportsInteractiveTurns: true,
+      process: createFakeBundleProcess(),
+      discoverClaudeCode,
+      harnessAdapter: createFake(script),
+    },
+  );
+
+  const log = readLog(folder);
+  assertBase(log.records);
+  const records = harnessRecords(log.records);
+  const usageAt = records.findIndex((r) => r.event === "harness-usage");
+  assert.deepEqual(records[usageAt], {
+    level: "info",
+    event: "harness-usage",
+    harness: "claude-code",
+    session: "s",
+    estimate: true,
+    summary: "input 1, output 2 tokens",
+  });
+  // Ending the Step closes the driver that served the Turn: its report follows.
+  assert.deepEqual(
+    records.slice(usageAt + 1, usageAt + 4).map((r) => [r.event, r.phase]),
+    [
+      ["harness-phase-start", "cleanup"],
+      ["harness-phase-end", "cleanup"],
+      ["harness-cleanup", undefined],
+    ],
+  );
+  // Every Harness prepared in this invocation recorded its report exactly once.
+  const count = (event: string, phase?: string) =>
+    records.filter((r) => r.event === event && r.phase === phase).length;
+  assert.ok(count("harness-phase-start", "launch") >= 2);
+  assert.equal(
+    count("harness-cleanup"),
+    count("harness-phase-start", "launch"),
+  );
+  assert.doesNotMatch(log.text, /seeded-/);
 });

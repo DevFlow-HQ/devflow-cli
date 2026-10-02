@@ -40,7 +40,25 @@ type ClientKind = "tui" | "headless";
  *  passed through. */
 export interface OperationalRecord {
   readonly event: string;
-  readonly [field: string]: string | number | SafeCause;
+  readonly [field: string]:
+    | string
+    | number
+    | boolean
+    | SafeCause
+    | readonly Readonly<Record<string, string>>[];
+}
+
+/** Each event's level, mapped here so no observer chooses one: a failed Harness
+ *  phase and an unclean Harness cleanup are warnings, every other record info. */
+function recordLevel(record: OperationalRecord): "info" | "warn" {
+  switch (record.event) {
+    case "harness-phase-end":
+      return record.status === "failed" ? "warn" : "info";
+    case "harness-cleanup":
+      return record.status === "clean" ? "info" : "warn";
+    default:
+      return "info";
+  }
 }
 
 /** One Secant invocation's log, as its client entry holds it. */
@@ -48,9 +66,9 @@ export interface OperationalLog {
   /** The active file, or undefined once logging is disabled for the Secant
    *  invocation. */
   file(): string | undefined;
-  /** Writes one lifecycle record. The level follows from the record, never the
-   *  caller: every lifecycle record is `info`. Like every write, it stops silently
-   *  after `end` or a log failure. */
+  /** Writes one lifecycle record. The level follows from the record's event,
+   *  never the caller (`recordLevel`). Like every write, it stops silently after
+   *  `end` or a log failure. */
   record(record: OperationalRecord): void;
   /** Writes the failure record, its cause translated safely, and flushes. Only
    *  the first call writes: the TUI records a render failure before it drains
@@ -152,7 +170,7 @@ function startOperationalLog(options: StartOptions): OperationalLog {
     );
   };
   const write = (
-    level: "info" | "fatal",
+    level: "info" | "warn" | "fatal",
     record: Readonly<Record<string, unknown>>,
   ) => {
     if (!enabled || ended || logger === undefined) return;
@@ -210,7 +228,7 @@ function startOperationalLog(options: StartOptions): OperationalLog {
 
   return {
     file: () => (enabled ? path : undefined),
-    record: (record) => write("info", record),
+    record: (record) => write(recordLevel(record), record),
     fatal(error) {
       if (failed) return;
       failed = true;

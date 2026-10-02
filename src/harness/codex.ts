@@ -9,6 +9,7 @@ import {
   type ControlReceipt,
   type HarnessAdapter,
   type HarnessFailure,
+  type HarnessPhaseObserver,
   type HarnessPlatform,
   type HarnessProfile,
   type HarnessRequest,
@@ -57,6 +58,7 @@ import {
   parseTurnStartResult,
 } from "./codex/runtime-protocol.js";
 import { writableDirectoryFailure } from "./writable-directory.js";
+import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
 
 export type { CodexRecordingObserver } from "./codex/qualification.js";
 
@@ -118,11 +120,14 @@ type TLiveQualification =
     }
   | { readonly ok: false; readonly failure: HarnessFailure };
 
+/** The factory a composition root calls, with the one Process instance it
+ *  constructs. `phases`, when given, receives each native phase fact (#322). */
 export function createCodexAdapter(
   overrides: CodexAdapterOverrides,
   processAdapter: ProcessAdapter,
+  phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
-  return new CodexAdapter(overrides, processAdapter);
+  return new CodexAdapter(overrides, processAdapter, phases);
 }
 
 class CodexAdapter implements HarnessAdapter {
@@ -131,6 +136,7 @@ class CodexAdapter implements HarnessAdapter {
   constructor(
     private readonly overrides: CodexAdapterOverrides,
     private readonly processAdapter: ProcessAdapter,
+    private readonly phases: HarnessPhaseObserver | undefined,
   ) {}
 
   async prepare(options: PrepareOptions): Promise<PrepareResult> {
@@ -202,6 +208,7 @@ class CodexAdapter implements HarnessAdapter {
         this.overrides.recordingObserver,
         requestedModel,
         options.writableDirectory,
+        this.phases,
       ),
     };
   }
@@ -332,6 +339,7 @@ class CodexAdapter implements HarnessAdapter {
     workspace: string,
     requestedModel: string | undefined,
   ): Promise<TLiveQualification> {
+    const launch = startPhase(this.phases, "launch");
     const spawned = await this.processAdapter.spawnOwnedProcess({
       executable: target.executable,
       args: target.prefixArgs.concat("app-server"),
@@ -341,23 +349,35 @@ class CodexAdapter implements HarnessAdapter {
         this.overrides.launchTimeoutMs ?? DEFAULT_LAUNCH_TIMEOUT_MS,
     });
     if (!spawned.ok) {
-      return {
-        ok: false,
-        failure: failureWithCause(
-          "app-server-launch",
-          "Could not launch Codex app-server.",
-          spawned.failure.cause,
-        ),
-      };
+      const launchFailure = failureWithCause(
+        "app-server-launch",
+        "Could not launch Codex app-server.",
+        spawned.failure.cause,
+      );
+      launch.failed(launchFailure);
+      return { ok: false, failure: launchFailure };
     }
+    launch.ok();
+    // Protocol initialization through the account and model reads is the open
+    // handshake; its sub-steps stay private.
+    const handshake = startPhase(this.phases, "handshake");
+    const live = await this.handshake(spawned.process, requestedModel);
+    if (live.ok) handshake.ok();
+    else handshake.failed(live.failure);
+    return live;
+  }
 
+  private async handshake(
+    child: OwnedProcess,
+    requestedModel: string | undefined,
+  ): Promise<TLiveQualification> {
     const connection = new CodexQualificationConnection(
-      spawned.process,
+      child,
       this.overrides.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS,
       this.overrides.recordingObserver,
     );
     const diagnosticCapture = new CodexDiagnosticCapture(
-      spawned.process.stderr,
+      child.stderr,
       this.overrides.recordingObserver,
     );
     try {
@@ -371,7 +391,7 @@ class CodexAdapter implements HarnessAdapter {
         return {
           ok: false,
           failure: await failedQualification({
-            process: spawned.process,
+            process: child,
             diagnostics: diagnosticCapture,
             failure: authFailure,
             cleanupTimeoutMs:
@@ -390,7 +410,7 @@ class CodexAdapter implements HarnessAdapter {
         return {
           ok: false,
           failure: await failedQualification({
-            process: spawned.process,
+            process: child,
             diagnostics: diagnosticCapture,
             failure: failure(
               "model-unavailable",
@@ -405,7 +425,7 @@ class CodexAdapter implements HarnessAdapter {
       }
       return {
         ok: true,
-        process: spawned.process,
+        process: child,
         diagnostics: diagnosticCapture,
         connection: connection.runtimeConnection(),
         models,
@@ -416,7 +436,7 @@ class CodexAdapter implements HarnessAdapter {
       return {
         ok: false,
         failure: await failedQualification({
-          process: spawned.process,
+          process: child,
           diagnostics: diagnosticCapture,
           failure: failureWithCause(
             "protocol-incompatible",
@@ -454,6 +474,7 @@ class CodexPreparedHarness implements PreparedHarness {
     /** The one additional writable directory each thread is started or resumed
      *  with (#214). */
     private readonly writableDirectory: string | undefined,
+    private readonly phases: HarnessPhaseObserver | undefined,
   ) {
     this.connection.startRuntime({
       message: (message) => this.acceptMessage(message),
@@ -485,6 +506,7 @@ class CodexPreparedHarness implements PreparedHarness {
         this.controlTimeoutMs,
         this.requestedModel,
         this.writableDirectory,
+        this.phases,
       );
       this.sessions.set(request.session, session);
     }
@@ -494,6 +516,7 @@ class CodexPreparedHarness implements PreparedHarness {
       steerCapability: this.profile.steer,
       connection: this.connection,
       controlTimeoutMs: this.controlTimeoutMs,
+      phases: this.phases,
       onSettled: () => {
         if (this.active === turn) this.active = undefined;
       },
@@ -506,7 +529,11 @@ class CodexPreparedHarness implements PreparedHarness {
   close(): Promise<CleanupReport> {
     if (this.closePromise === undefined) {
       this.closed = true;
-      this.closePromise = this.closeProcess();
+      const cleanup = startPhase(this.phases, "cleanup");
+      this.closePromise = this.closeProcess().then((report) => {
+        settleCleanup(cleanup, report);
+        return report;
+      });
     }
     return this.closePromise;
   }
@@ -605,6 +632,7 @@ class CodexSession {
     /** The additional writable directory (#214), sent as a per-thread config
      *  override and checked against the acknowledged sandbox. */
     private readonly writableDirectory: string | undefined,
+    private readonly phases: HarnessPhaseObserver | undefined,
   ) {}
 
   /** The per-thread config override adding the writable directory (#214). It
@@ -622,16 +650,23 @@ class CodexSession {
         };
   }
 
-  /** Refuse the Turn when the acknowledged sandbox cannot write the directory. */
-  private refusesWritableDirectory(turn: CodexTurn, result: unknown): boolean {
+  /** Refuse the Turn, failing the thread exchange's phase, when the
+   *  acknowledged sandbox cannot write the directory. */
+  private refusesWritableDirectory(
+    turn: CodexTurn,
+    result: unknown,
+    phase: PhaseSpan,
+  ): boolean {
     const directory = this.writableDirectory;
     if (directory === undefined || sandboxAdmitsDirectory(result, directory)) {
       return false;
     }
-    turn.settleNotStarted(
+    const refusal = notStartedFailure(
       "writable-directory-refused",
       `Codex acknowledged a workspace-write sandbox without the writable root '${directory}'; check the Codex sandbox configuration and retry.`,
     );
+    phase.failed(refusal);
+    turn.settleNotStartedWith(refusal);
     return true;
   }
 
@@ -685,6 +720,7 @@ class CodexSession {
       (this.detached || this.coordinate === undefined)
     ) {
       turn.recovering();
+      const recovery = startPhase(this.phases, "recovery", this.name);
       try {
         const result = await boundedCodexExchange({
           operation: () =>
@@ -701,17 +737,22 @@ class CodexSession {
             "thread/resume acknowledged a different Codex thread",
           );
         }
-        if (this.refusesWritableDirectory(turn, result)) return;
+        if (this.refusesWritableDirectory(turn, result, recovery)) return;
         this.coordinate = recoveryCoordinate;
         this.model = { known: true, model: resumed.model };
         this.detached = false;
         turn.recovered();
+        recovery.ok();
       } catch (cause) {
-        this.failRecovery(turn, recoveryFailureReason(cause), cause);
+        recovery.failed(
+          this.failRecovery(turn, recoveryFailureReason(cause), cause),
+        );
         return;
       }
     }
     if (this.coordinate === undefined) {
+      // A fresh thread's start is the Session's open handshake.
+      const handshake = startPhase(this.phases, "handshake", this.name);
       try {
         const result = await boundedCodexExchange({
           operation: () =>
@@ -723,15 +764,18 @@ class CodexSession {
           label: "thread/start runtime exchange",
         });
         const started = parseThreadStartResult(result);
-        if (this.refusesWritableDirectory(turn, result)) return;
+        if (this.refusesWritableDirectory(turn, result, handshake)) return;
         this.coordinate = { opaque: started.threadId };
         this.model = { known: true, model: started.model };
+        handshake.ok();
       } catch (cause) {
-        turn.settleNotStarted(
+        const threadFailure = notStartedFailure(
           "thread-start",
           "Codex did not create a fresh thread before Turn admission.",
           cause,
         );
+        handshake.failed(threadFailure);
+        turn.settleNotStartedWith(threadFailure);
         return;
       }
     }
@@ -774,7 +818,7 @@ class CodexSession {
     turn: CodexTurn,
     diagnostics: string,
     cause?: unknown,
-  ): void {
+  ): HarnessFailure {
     const failure: HarnessFailure = {
       phase: "recovery",
       category: "recovery-unacknowledged",
@@ -784,6 +828,7 @@ class CodexSession {
     };
     this.unusableFailure = failure;
     turn.settleRecoveryFailure(failure, this.model);
+    return failure;
   }
 }
 
@@ -808,6 +853,7 @@ type TCodexTurnParams = {
   readonly steerCapability: SteerCapability;
   readonly connection: CodexJsonlConnection;
   readonly controlTimeoutMs: number;
+  readonly phases: HarnessPhaseObserver | undefined;
   readonly onSettled: () => void;
 };
 
@@ -836,6 +882,7 @@ class CodexTurn implements HarnessTurn {
   private readonly steerCapability: SteerCapability;
   private readonly connection: CodexJsonlConnection;
   private readonly controlTimeoutMs: number;
+  private readonly phases: HarnessPhaseObserver | undefined;
   private readonly onSettled: () => void;
   private readonly listeners = new Set<TurnEventListener>();
   private readonly events: TurnEvent[] = [];
@@ -874,6 +921,7 @@ class CodexTurn implements HarnessTurn {
     this.steerCapability = params.steerCapability;
     this.connection = params.connection;
     this.controlTimeoutMs = params.controlTimeoutMs;
+    this.phases = params.phases;
     this.onSettled = params.onSettled;
     this.resultPromise = new Promise((resolve) => {
       this.resolveResult = resolve;
@@ -916,6 +964,7 @@ class CodexTurn implements HarnessTurn {
   ): Promise<ControlReceipt> {
     let acceptedWhileLive = false;
     let result: unknown;
+    const control = startPhase(this.phases, "control", this.request.session);
     try {
       result = await boundedCodexExchange({
         operation: () =>
@@ -934,6 +983,7 @@ class CodexTurn implements HarnessTurn {
         label: "turn/steer control exchange",
       });
     } catch (cause) {
+      this.settleControlPhase(control, cause);
       return this.rejectControlFailure(
         "Codex turn/steer control failed.",
         cause,
@@ -943,13 +993,16 @@ class CodexTurn implements HarnessTurn {
     try {
       steeredTurnId = parseTurnSteerResult(result);
     } catch (cause) {
-      this.controlFailure({
-        category: "protocol-corruption",
-        diagnostics: "Codex emitted an invalid turn/steer response.",
-        cause,
-      });
+      control.failed(
+        this.controlFailure({
+          category: "protocol-corruption",
+          diagnostics: "Codex emitted an invalid turn/steer response.",
+          cause,
+        }),
+      );
       return { outcome: "rejected", reason: "expired" };
     }
+    control.ok();
     if (!acceptedWhileLive || steeredTurnId !== target.turnId) {
       return { outcome: "rejected", reason: "expired" };
     }
@@ -1013,6 +1066,7 @@ class CodexTurn implements HarnessTurn {
     timeoutMs: number,
   ): Promise<ControlReceipt> {
     let result: unknown;
+    const control = startPhase(this.phases, "control", this.request.session);
     try {
       result = await boundedCodexExchange({
         operation: () =>
@@ -1024,6 +1078,7 @@ class CodexTurn implements HarnessTurn {
         label: "turn/interrupt control exchange",
       });
     } catch (cause) {
+      this.settleControlPhase(control, cause);
       if (cause instanceof CodexRpcResponseError) {
         this.interruptState = { kind: "idle" };
       }
@@ -1035,13 +1090,16 @@ class CodexTurn implements HarnessTurn {
     try {
       parseTurnInterruptResult(result);
     } catch (cause) {
-      this.controlFailure({
-        category: "protocol-corruption",
-        diagnostics: "Codex emitted an invalid turn/interrupt response.",
-        cause,
-      });
+      control.failed(
+        this.controlFailure({
+          category: "protocol-corruption",
+          diagnostics: "Codex emitted an invalid turn/interrupt response.",
+          cause,
+        }),
+      );
       return { outcome: "rejected", reason: "expired" };
     }
+    control.ok();
     const state = this.interruptState;
     if (state.kind === "confirmed") return { outcome: "accepted" };
     if (this.settled || state.kind !== "sent") {
@@ -1114,17 +1172,13 @@ class CodexTurn implements HarnessTurn {
     return { outcome: "rejected", reason: "expired" };
   }
 
-  private controlFailure(params: TControlFailure): void {
-    if (this.settled) return;
+  /** Lose the Turn to a control failure, unless it already settled; either way
+   *  return the failure, for the control phase to settle with. */
+  private controlFailure(params: TControlFailure): HarnessFailure {
+    const failure = this.controlFailureValue(params);
+    if (this.settled) return failure;
     this.session.markDetached();
     const interruptionUnknown = this.interruptionOutcomeUnknown();
-    const failure: HarnessFailure = {
-      phase: "control",
-      category: params.category,
-      possibleEffects: this.submitted ? "possible" : "none",
-      diagnostics: params.diagnostics,
-      cause: params.cause,
-    };
     this.settle({
       kind: "lost",
       detail: {
@@ -1137,6 +1191,42 @@ class CodexTurn implements HarnessTurn {
         session: this.session.availability(),
         failure,
       },
+    });
+    return failure;
+  }
+
+  private controlFailureValue(params: TControlFailure): HarnessFailure {
+    return {
+      phase: "control",
+      category: params.category,
+      possibleEffects: this.submitted ? "possible" : "none",
+      diagnostics: params.diagnostics,
+      cause: params.cause,
+    };
+  }
+
+  /** Settle a control phase whose exchange threw: an expected race (the Turn
+   *  ended natively first) abandons it; a refusal, timeout, or transport failure
+   *  fails it with the native code when the RPC returned one. */
+  private settleControlPhase(control: PhaseSpan, cause: unknown): void {
+    if (expectedControlRejection(cause) !== undefined) {
+      control.abandoned();
+      return;
+    }
+    control.failed({
+      ...this.controlFailureValue({
+        category:
+          cause instanceof CodexRpcResponseError
+            ? "control-refused"
+            : cause instanceof CodexExchangeTimeoutError
+              ? "control-timeout"
+              : "control-transport",
+        diagnostics: "Codex did not acknowledge the control.",
+        cause,
+      }),
+      ...(cause instanceof CodexRpcResponseError
+        ? { nativeCode: String(cause.code) }
+        : {}),
     });
   }
 
@@ -1389,18 +1479,11 @@ class CodexTurn implements HarnessTurn {
     diagnostics: string,
     cause?: unknown,
   ): void {
-    this.settle({
-      kind: "not-started",
-      detail: {
-        failure: {
-          phase: "turn",
-          category,
-          possibleEffects: "none",
-          diagnostics,
-          ...(cause !== undefined ? { cause } : {}),
-        },
-      },
-    });
+    this.settleNotStartedWith(notStartedFailure(category, diagnostics, cause));
+  }
+
+  settleNotStartedWith(failure: HarnessFailure): void {
+    this.settle({ kind: "not-started", detail: { failure } });
   }
 
   settleRecoveryFailure(
@@ -1635,6 +1718,21 @@ class CodexTurn implements HarnessTurn {
     this.nativeTargetResolved = true;
     this.resolveNativeTarget(target);
   }
+}
+
+/** The failure a Turn that never started carries. */
+function notStartedFailure(
+  category: string,
+  diagnostics: string,
+  cause?: unknown,
+): HarnessFailure {
+  return {
+    phase: "turn",
+    category,
+    possibleEffects: "none",
+    diagnostics,
+    ...(cause !== undefined ? { cause } : {}),
+  };
 }
 
 function nativeRequestKey(id: string | number): string {

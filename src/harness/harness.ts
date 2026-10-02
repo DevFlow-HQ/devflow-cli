@@ -548,6 +548,56 @@ export interface CleanupReport {
 }
 
 // ---------------------------------------------------------------------------
+// Native phases
+//
+// The timed mechanical steps ADR 0022 names, reported to an optional observer
+// for M8's operational log (#322). Only the semantic phase crosses: which frame,
+// RPC, or argv a phase used stays private to each Adapter, and no raw frame,
+// launch argument, or recovery coordinate is carried.
+// ---------------------------------------------------------------------------
+
+/** A native phase: spawning the protocol child, the open handshake (protocol
+ *  initialization, or a Session's first exchange), a control acknowledgement
+ *  (interrupt or steer), a recovery handshake (reattaching a detached Session),
+ *  and cleanup. */
+export type HarnessPhase =
+  "launch" | "handshake" | "control" | "recovery" | "cleanup";
+
+/** One phase fact. A start with no end marks the last stage reached. An end
+ *  settles the start of the same phase and Session: `ok` when the phase did what
+ *  it set out to do, `failed` with the typed failure it ended on, `abandoned`
+ *  when an interrupt or close ended it before it settled on its own. A failure's
+ *  own `phase` keeps its `FailurePhase` meaning (a failed handshake is a `launch`,
+ *  `prepare`, or `turn` failure; there is no `handshake` failure phase). */
+export type HarnessPhaseFact =
+  | {
+      readonly kind: "phase-start";
+      readonly phase: HarnessPhase;
+      /** The normalized Harness Session key, for a phase bound to one Session. */
+      readonly session?: string;
+    }
+  | {
+      readonly kind: "phase-end";
+      readonly phase: HarnessPhase;
+      readonly session?: string;
+      /** Monotonic milliseconds since the matching start. */
+      readonly elapsedMs: number;
+      readonly outcome: "ok" | "abandoned";
+    }
+  | {
+      readonly kind: "phase-end";
+      readonly phase: HarnessPhase;
+      readonly session?: string;
+      readonly elapsedMs: number;
+      readonly outcome: "failed";
+      readonly failure: HarnessFailure;
+    };
+
+/** Receives each phase fact as it happens. An Adapter ignores an observer that
+ *  throws, so observation never changes a Harness outcome. */
+export type HarnessPhaseObserver = (fact: HarnessPhaseFact) => void;
+
+// ---------------------------------------------------------------------------
 // The Interface
 // ---------------------------------------------------------------------------
 

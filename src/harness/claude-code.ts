@@ -33,6 +33,7 @@ import type {
   ControlReceipt,
   HarnessAdapter,
   HarnessFailure,
+  HarnessPhaseObserver,
   HarnessPlatform,
   HarnessProfile,
   HarnessRequest,
@@ -55,6 +56,7 @@ import type {
   TurnSubscription,
 } from "./harness.js";
 import { JsonlLineReader } from "./jsonl.js";
+import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
 import { writableDirectoryFailure } from "./writable-directory.js";
 import {
   EXPIRED_MESSAGE,
@@ -116,12 +118,13 @@ export interface ClaudeCodeAdapterOverrides {
 /** The factory a composition root calls. The caller supplies the Process
  *  Interface: composition injects the one real instance it constructs; tests
  *  inject a real or scripted Process implementation. The overrides exist only
- *  for tests. */
+ *  for tests. `phases`, when given, receives each native phase fact (#322). */
 export function createClaudeCodeAdapter(
   overrides: ClaudeCodeAdapterOverrides,
   processAdapter: ProcessAdapter,
+  phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
-  return new ClaudeCodeAdapter(overrides, processAdapter);
+  return new ClaudeCodeAdapter(overrides, processAdapter, phases);
 }
 
 /** A resolved, spawnable Claude Code target. */
@@ -139,6 +142,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
   constructor(
     private readonly overrides: ClaudeCodeAdapterOverrides,
     private readonly processAdapter: ProcessAdapter,
+    private readonly phases: HarnessPhaseObserver | undefined,
   ) {}
 
   async prepare(options: PrepareOptions): Promise<PrepareResult> {
@@ -182,6 +186,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
           spawn,
           requestedModel,
           options.writableDirectory,
+          this.phases,
         ),
       };
     }
@@ -201,6 +206,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
         spawn,
         requestedModel,
         options.writableDirectory,
+        this.phases,
       ),
     };
   }
@@ -333,6 +339,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
     private readonly requestedModel: string | undefined,
     /** The one additional writable directory, forwarded as --add-dir (#214). */
     private readonly writableDirectory: string | undefined,
+    private readonly phases: HarnessPhaseObserver | undefined,
   ) {}
 
   /** Memoized bridge start. Its router raises each permission prompt on whatever
@@ -385,6 +392,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
         this.spawn,
         this.requestedModel,
         this.writableDirectory,
+        this.phases,
       );
       this.sessions.set(request.session, session);
     }
@@ -404,10 +412,14 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
   close(): Promise<CleanupReport> {
     if (this.closePromise !== undefined) return this.closePromise;
     this.closed = true;
+    const cleanup = startPhase(this.phases, "cleanup");
     // Expire any prompt the active Turn is waiting on, so a blocked bridge caller
     // is answered `expired` before its transport is torn down under it.
     this.active?.expireForShutdown();
-    this.closePromise = this.closeSessions();
+    this.closePromise = this.closeSessions().then((report) => {
+      settleCleanup(cleanup, report);
+      return report;
+    });
     return this.closePromise;
   }
 
@@ -455,6 +467,11 @@ type SessionCloseOutcome = {
   | { readonly clean: false; readonly failure: HarnessFailure }
 );
 
+/** Whether a launch spawned the Session's child, or why it did not. */
+type LaunchOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly category: string; readonly cause: unknown };
+
 class ClaudeCodeSession {
   readonly coordinate: RecoveryCoordinate;
   private process: OwnedProcess | undefined;
@@ -462,16 +479,7 @@ class ClaudeCodeSession {
    *  child-close callback runs, so process ownership cannot be inferred from the
    *  Session's current `active` Turn (#134 A17). */
   private processTurn: ClaudeCodeTurn | undefined;
-  private launchPromise:
-    | Promise<
-        | { readonly ok: true }
-        | {
-            readonly ok: false;
-            readonly category: string;
-            readonly cause: unknown;
-          }
-      >
-    | undefined;
+  private launchPromise: Promise<LaunchOutcome> | undefined;
   private active: ClaudeCodeTurn | undefined;
   private closed = false;
   private initialized = false;
@@ -503,6 +511,7 @@ class ClaudeCodeSession {
     /** The additional writable directory, forwarded as --add-dir on every
      *  launch, fresh or resumed (#214). */
     private readonly writableDirectory: string | undefined,
+    private readonly phases: HarnessPhaseObserver | undefined,
   ) {
     this.coordinate = { opaque: sessionId };
   }
@@ -554,35 +563,29 @@ class ClaudeCodeSession {
     this.process = undefined;
     this.processTurn = undefined;
     this.active = undefined;
-    this.interrupting = this.settleInterruption(turn, owned);
+    this.interrupting = this.settleInterruption(
+      turn,
+      owned,
+      startPhase(this.phases, "control", this.name),
+    );
     await this.interrupting;
   }
 
+  /** The control phase is the process termination itself, so it settles on
+   *  the termination's outcome even when the Turn has already settled. */
   private async settleInterruption(
     turn: ClaudeCodeTurn,
     owned: OwnedProcess,
+    control: PhaseSpan,
   ): Promise<void> {
     const outcome = await owned.interrupt(DEFAULT_CLEANUP_TIMEOUT_MS);
-    if (turn.settled) return;
     const close = this.scrub(outcome.close);
-    if (close.kind === "cleanup-error" || close.kind === "cleanup-timeout") {
-      turn.settleLost("interruption", turn.lastObservation, {
-        phase: "control",
-        category: "interruption-unknown",
-        possibleEffects: "possible",
-        diagnostics: `Claude Code termination was not confirmed: ${describeProcessResult(close)}.`,
-        ...(close.kind === "cleanup-error" ? { cause: close.cause } : {}),
-      });
-      return;
-    }
-    if (outcome.escalated) {
-      turn.settleLost("interruption", turn.lastObservation, {
-        phase: "control",
-        category: "interruption-unknown",
-        possibleEffects: "possible",
-        diagnostics: `Claude Code did not stop on SIGTERM and was force-killed (${describeProcessResult(close)}).`,
-        ...processCode(close),
-      });
+    const failure = interruptionFailure(close, outcome.escalated);
+    if (failure === undefined) control.ok();
+    else control.failed(failure);
+    if (turn.settled) return;
+    if (failure !== undefined) {
+      turn.settleLost("interruption", turn.lastObservation, failure);
       return;
     }
     turn.settleInterrupted();
@@ -709,7 +712,18 @@ class ClaudeCodeSession {
       return;
     }
 
-    if (!this.initialized) turn.armHandshake(DEFAULT_HANDSHAKE_TIMEOUT_MS);
+    // A fresh process's init is its open handshake; a resumed process's init
+    // acknowledges the resume, so it is the recovery handshake.
+    if (!this.initialized) {
+      turn.armHandshake(
+        DEFAULT_HANDSHAKE_TIMEOUT_MS,
+        startPhase(
+          this.phases,
+          this.resuming ? "recovery" : "handshake",
+          this.name,
+        ),
+      );
+    }
     const acceptingProcess = this.process!;
     try {
       await acceptingProcess.writeStdin(encodeTurn(turn.request));
@@ -726,14 +740,16 @@ class ClaudeCodeSession {
     }
   }
 
-  private async launch(turn: ClaudeCodeTurn): Promise<
-    | { readonly ok: true }
-    | {
-        readonly ok: false;
-        readonly category: string;
-        readonly cause: unknown;
-      }
-  > {
+  private async launch(turn: ClaudeCodeTurn): Promise<LaunchOutcome> {
+    const span = startPhase(this.phases, "launch", this.name);
+    const launched = await this.spawnChild(turn);
+    if (launched.ok) span.ok();
+    else if (launched.category === "closed-before-launch") span.abandoned();
+    else span.failed(notStartedFailure(launched.category, launched.cause));
+    return launched;
+  }
+
+  private async spawnChild(turn: ClaudeCodeTurn): Promise<LaunchOutcome> {
     let bridge: PermissionBridge;
     try {
       bridge = await this.ensureBridge();
@@ -934,6 +950,8 @@ class ClaudeCodeTurn implements HarnessTurn {
   private readonly resultPromise: Promise<TurnResult>;
   private resolveResult!: (result: TurnResult) => void;
   private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The open handshake or recovery phase, awaiting init. */
+  private initPhase: PhaseSpan | undefined;
   private preview = "";
   private previewIndex: number | undefined;
   /** Outstanding approval prompts, keyed by their exact request id. Several may
@@ -1086,7 +1104,8 @@ class ClaudeCodeTurn implements HarnessTurn {
     }
   }
 
-  armHandshake(timeoutMs: number): void {
+  armHandshake(timeoutMs: number, phase: PhaseSpan): void {
+    this.initPhase = phase;
     this.handshakeTimer = setTimeout(() => {
       this.settleNotStarted(
         "init-timeout",
@@ -1147,18 +1166,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   ): void {
     this.settle({
       kind: "not-started",
-      detail: {
-        failure: {
-          phase:
-            category === "spawn-error" || category === "launch-timeout"
-              ? "launch"
-              : "turn",
-          category,
-          possibleEffects: "none",
-          cause,
-          ...(diagnostics !== undefined ? { diagnostics } : {}),
-        },
-      },
+      detail: { failure: notStartedFailure(category, cause, diagnostics) },
     });
   }
 
@@ -1252,6 +1260,8 @@ class ClaudeCodeTurn implements HarnessTurn {
         ? { known: false }
         : { known: true, model: modelName };
     this.session.observeInit(model);
+    this.initPhase?.ok();
+    this.initPhase = undefined;
     this.lastObservation = "Claude Code acknowledged the Session at init";
     const facts = sessionFacts(frame, this.session.coordinate);
     this.emit({ kind: "session", availability: { state: "open" }, facts });
@@ -1408,6 +1418,12 @@ class ClaudeCodeTurn implements HarnessTurn {
   private settle(result: TurnResult): void {
     if (this.settled) return;
     this.clearHandshake();
+    // A Turn that settles before init ends its init phase with the Turn's
+    // failure, or abandoned when it was interrupted.
+    const failure = resultFailure(result);
+    if (failure === undefined) this.initPhase?.abandoned();
+    else this.initPhase?.failed(failure);
+    this.initPhase = undefined;
     this.clearPreview();
     // Terminal ordering: expire every outstanding prompt (its events publish
     // here) before the producer closes and the one result settles.
@@ -1465,6 +1481,62 @@ function steerReceipt(capability: SteerCapability): ControlReceipt {
 function truncate(text: string, max = 200): string {
   const trimmed = text.trim();
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`;
+}
+
+/** The failure a Turn that never started carries. */
+function notStartedFailure(
+  category: string,
+  cause: unknown,
+  diagnostics?: string,
+): HarnessFailure {
+  return {
+    phase:
+      category === "spawn-error" || category === "launch-timeout"
+        ? "launch"
+        : "turn",
+    category,
+    possibleEffects: "none",
+    cause,
+    ...(diagnostics !== undefined ? { diagnostics } : {}),
+  };
+}
+
+/** The failure a Turn result carries, if any. */
+function resultFailure(result: TurnResult): HarnessFailure | undefined {
+  switch (result.kind) {
+    case "not-started":
+    case "failed":
+    case "lost":
+      return result.detail.failure;
+    case "completed":
+    case "interrupted":
+      return undefined;
+  }
+}
+
+/** Why a termination did not confirm a graceful stop, or undefined when it did:
+ *  an unconfirmed cleanup or a forced kill leaves the interruption unknown. */
+function interruptionFailure(
+  close: OwnedProcessClose,
+  escalated: boolean,
+): HarnessFailure | undefined {
+  if (close.kind === "cleanup-error" || close.kind === "cleanup-timeout") {
+    return {
+      phase: "control",
+      category: "interruption-unknown",
+      possibleEffects: "possible",
+      diagnostics: `Claude Code termination was not confirmed: ${describeProcessResult(close)}.`,
+      ...(close.kind === "cleanup-error" ? { cause: close.cause } : {}),
+    };
+  }
+  if (!escalated) return undefined;
+  return {
+    phase: "control",
+    category: "interruption-unknown",
+    possibleEffects: "possible",
+    diagnostics: `Claude Code did not stop on SIGTERM and was force-killed (${describeProcessResult(close)}).`,
+    ...processCode(close),
+  };
 }
 
 /** The native exit code or terminating signal of a close, as a diagnostic code.

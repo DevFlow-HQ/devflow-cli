@@ -29,6 +29,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   bypassing `SECANT_LOG_DIR`, so an injected clock cannot prune the real process's shared log folder.
 - `wireApplication`'s second argument is the Secant invocation's log, passed only by the two client entries; a direct caller logs no lifecycle.
   `runLifecycleObserver` pairs each start with its settlement on the host context's `logClock`, the one clock the sink also reads (#320).
+- `OperationalLog.record` maps each event to its level (`recordLevel`): a failed Harness phase or unclean cleanup warns. `harness-log.ts` builds
+  each Harness's phase observer and wraps its Adapter so every prepared Harness records its `CleanupReport` on first close and each completed
+  Turn's usage: one seam for the qualify, Run, and interactive close sites, a double included. A test Adapter override may be a factory taking
+  that observer (#322).
 - Startup prunes only matching regular log files strictly older than 30 days in the resolved folder (#323), before opening the active file:
   its real mtime can be stale against an injected future clock. Prune failures are silent; they never call the log-write failure fallback.
 

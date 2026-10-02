@@ -41,7 +41,10 @@ import {
   type Platform,
   routingNeedsHarness,
 } from "../workflow/workflow.js";
-import { HarnessRegistry } from "./harness-registry.js";
+import {
+  HarnessRegistry,
+  type HarnessAdapterOverride,
+} from "./harness-registry.js";
 import type { OperationalLog } from "./operational-log.js";
 import { runLifecycleObserver } from "./run-lifecycle-log.js";
 import {
@@ -114,10 +117,11 @@ export interface WiringOverrides {
    * while keeping child creation out of the semantic test runner. */
   readonly processFactory?: () => ProcessAdapter;
   /** The Claude Code Adapter registry entry (#116). Production constructs the
-   * native Adapter; tests inject one over the replayer. */
-  readonly harnessAdapter?: HarnessAdapter;
+   * native Adapter; tests inject one over the replayer, or a factory taking the
+   * phase observer composition built for it. */
+  readonly harnessAdapter?: HarnessAdapterOverride;
   /** A Codex Adapter test seam. Production constructs the native Adapter. */
-  readonly codexHarnessAdapter?: HarnessAdapter;
+  readonly codexHarnessAdapter?: HarnessAdapterOverride;
   /** Whether the launching client can relay human turn-taking (#116, #122). The TUI
    *  root sets this true; the headless root leaves it false so an interactive-agent
    *  Bundle is refused at Preflight. Defaults to false. */
@@ -202,7 +206,8 @@ function shippedBundleFiles(dir: string): string[] {
  *  running engine version and host platform, handing it the raw launch cwd. The
  *  caller owns `catalog` and `runGroup` and must close both. `log` is the Secant
  *  invocation's operational log, which both client entries pass; a direct caller
- *  passes none, and the Run lifecycle is then reported nowhere. */
+ *  passes none, and neither the Run lifecycle nor any Harness record is then
+ *  reported. */
 export function wireApplication(
   overrides: WiringOverrides = {},
   log?: Pick<OperationalLog, "record">,
@@ -249,6 +254,7 @@ export function wireApplication(
           discoverClaudeCode: overrides.discoverClaudeCode,
           discoverCodex: overrides.discoverCodex,
         },
+        log,
       );
       const application = createApplication({
         catalog,

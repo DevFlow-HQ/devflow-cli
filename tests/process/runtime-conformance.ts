@@ -46,6 +46,7 @@ import {
 } from "../harness/replayer-conformance.js";
 import { registerClaudeCodeAdapterConformance } from "../harness/claude-code-adapter-conformance.js";
 import { registerCodexAdapterConformance } from "../harness/codex-adapter-conformance.js";
+import { registerHarnessPhaseConformance } from "../harness/phase-conformance.js";
 import { writeCommandBundle } from "../helpers/commandBundle.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 import { installReplayer } from "../harness/replayer.js";
@@ -273,6 +274,9 @@ registerClaudeCodeAdapterConformance((name, body) =>
   cases.push({ name, body }),
 );
 registerCodexAdapterConformance((name, body) => cases.push({ name, body }));
+
+// Native-phase facts from both Adapters over their replayers (#322).
+registerHarnessPhaseConformance((name, body) => cases.push({ name, body }));
 
 async function applicationOnDoubles(): Promise<void> {
   const git = createFakeGitProcess();
