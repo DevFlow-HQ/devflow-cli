@@ -614,7 +614,9 @@ async function failedInterruptScenario(
     },
   };
   const workspace = makeTempDir("secant-interrupt-ws-");
-  const bundleProcess = createFakeBundleProcess();
+  const bundleProcess = createFakeBundleProcess({
+    executables: [process.execPath],
+  });
   const commandSignals: boolean[] = [];
   const wired = wireApplication({
     secantHome: makeTempDir("secant-interrupt-home-"),

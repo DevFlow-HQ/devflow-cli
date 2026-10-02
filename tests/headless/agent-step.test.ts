@@ -177,8 +177,8 @@ function wireAgent(t: TestContext): {
   digest: string;
   docPath: string;
 } {
-  // A resolvable executable so Agent-bearing Preflight discovery passes without a
-  // spawn (resolution is a stat, not a child); the fake Adapter is what runs.
+  // A configured executable, declared to the Process double, so Agent-bearing
+  // Preflight discovery passes without a spawn; the fake Adapter is what runs.
   const savedEnv = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
   process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
   t.after(() => {
@@ -192,7 +192,7 @@ function wireAgent(t: TestContext): {
     launchCwd: workspace,
     // A deterministic Process double: the Command bookends and the Run Store's Git
     // go through the fake, so no child spawns.
-    process: createFakeBundleProcess(),
+    process: createFakeBundleProcess({ executables: [process.execPath] }),
     // The fake Adapter reproduces the plain Turn's observed identity and events.
     harnessAdapter: createFake(plainScript())(),
   });

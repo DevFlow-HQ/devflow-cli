@@ -114,6 +114,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   const wired = wireApplication({
     secantHome: makeTempDir("secant-tui-live-home-"),
     launchCwd: workspace,
+    process: createFakeBundleProcess({ executables: [process.execPath] }),
     harnessAdapter: createFake({
       profile: profile(),
       turns: [
@@ -307,7 +308,7 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
     secantHome: makeTempDir("secant-tui-matt-home-"),
     launchCwd: workspace,
     supportsInteractiveTurns: true,
-    process: createFakeBundleProcess(),
+    process: createFakeBundleProcess({ executables: [process.execPath] }),
     harnessAdapter: createFake({
       profile: profile(),
       turns: [

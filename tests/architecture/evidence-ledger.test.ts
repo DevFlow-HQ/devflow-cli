@@ -9,8 +9,10 @@ const testsRoot = join(root, "tests");
 const ledgerPath = join(root, "docs", "subprocess-test-migration-ledger.md");
 
 const PROCESS_FREE_MARKER_EXCEPTIONS = new Set([
-  // Production composition is present, but the fake Harness scenario reaches no
-  // Command, Git probe, or recorded Harness child.
+  // Production composition is present, but every wiring injects the fake Bundle
+  // Process (#314): executable resolution (the default Codex Adapter's discovery
+  // included), Commands, and Git stay on the double, and the scripted Turns run on
+  // a fake Claude Code Adapter, so no wiring reaches the real Process.
   "tests/tui/live-run-workbench.test.tsx",
   // Born process-free (#187): wireApplication runs against the fake Process, fake
   // Git, and fake Harness Adapter, so no real child is ever reached.

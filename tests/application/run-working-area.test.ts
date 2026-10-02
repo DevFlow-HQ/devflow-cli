@@ -194,7 +194,9 @@ async function launch(
 }> {
   const home = makeTempDir("secant-working-area-home-");
   const workspace = makeTempDir("secant-working-area-ws-");
-  const process = createFakeBundleProcess();
+  const process = createFakeBundleProcess({
+    executables: [globalThis.process.execPath],
+  });
   const wired = wire(t, agent.adapter, home, workspace, process);
   assert.ok(
     wired.bundleManagement.build(writeBundle(), { noInstall: false }).ok,

@@ -191,7 +191,7 @@ async function launchInteractive(
     launchCwd: workspace,
     supportsInteractiveTurns: true,
     harnessAdapter: adapter,
-    process: createFakeBundleProcess(),
+    process: createFakeBundleProcess({ executables: [process.execPath] }),
   });
   t.after(() => {
     wired.runGroup.close();
