@@ -24,7 +24,8 @@
     "test:runtime-conformance": "bun tests/process/runtime-conformance.ts",
     "test:terminal": "bun tests/terminal/lifecycle.ts",
     "typecheck": "tsc --noEmit",
-    "prototype:workbench": "bun --preload @opentui/solid/preload prototypes/run-workbench-agent-screen/main.tsx"
+    "prototype:workbench": "bun --preload @opentui/solid/preload prototypes/run-workbench-agent-screen/main.tsx",
+    "prototype:model-choice": "bun --preload @opentui/solid/preload prototypes/start-run-model-choice/main.tsx"
   },
   "files": [
     "THIRD-PARTY-NOTICES.md"
