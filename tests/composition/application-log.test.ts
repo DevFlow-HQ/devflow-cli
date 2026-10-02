@@ -14,7 +14,7 @@ import {
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
-import { assertBase, home, io, readLog, type Home } from "./log-sink.js";
+import { assertBase, home, io, readLog, WALL, type Home } from "./log-sink.js";
 import {
   QUALIFICATION_PROFILE,
   qualificationAdapter,
@@ -83,6 +83,26 @@ function wiredHome(adapter: HarnessAdapter = qualificationAdapter([])): Home {
       }),
     },
   };
+}
+
+/** A monotonic clock that moves only when the test advances it. An Operation's
+ *  elapsed time is then exactly the time the test let pass between admission and
+ *  outcome, however many Run or Harness records read the clock meanwhile; a
+ *  synchronous stage reads 0 (the stepping clock times those). */
+function frozenClock() {
+  let reading = 1000;
+  return {
+    now: () => WALL,
+    monotonic: () => reading,
+    advance(ms: number) {
+      reading += ms;
+    },
+  };
+}
+
+/** `h`'s overrides with the log reading `clock`. */
+function withClock(h: Home, clock: ReturnType<typeof frozenClock>) {
+  return { ...h.overrides, logSink: { ...h.overrides.logSink, clock } };
 }
 
 async function focusHarness(port: ProjectionPort): Promise<void> {
@@ -285,30 +305,36 @@ test("headless `run launch` refused at its assessment leaves every finding's cod
 
 test("a launched Operation's admission and outcome share its id, and a replay is admitted without a second outcome", async () => {
   const h = wiredHome();
+  const clock = frozenClock();
   const cmd = writeCommandBundle();
-  await withClients(async (clients) => {
-    const port = clients.projectionPort;
-    assert.ok(
-      clients.bundleManagement.build(cmd.folder, { noInstall: false }).ok,
-    );
-    approve(port, h.overrides.launchCwd!);
-    const digest = port.openProjection({
-      family: "bundle-catalog",
-      focus: { id: cmd.id },
-    });
-    assert.ok(digest.snapshot.result.found);
-    const trustDigest = digest.snapshot.result.bundle.digest;
-    digest.close();
-    const launch = {
-      operationId: "op-launch",
-      operation: "launch-run",
-      input: { bundle: { id: cmd.id }, launchInputs: {}, trustDigest },
-    } as const;
-    assert.ok(port.submit(launch).admitted);
-    assert.equal((await awaitSettled(port, "op-launch")).status, "applied");
-    assert.ok(port.submit(launch).admitted);
-    return 0;
-  }, h.overrides);
+  await withClients(
+    async (clients) => {
+      const port = clients.projectionPort;
+      assert.ok(
+        clients.bundleManagement.build(cmd.folder, { noInstall: false }).ok,
+      );
+      approve(port, h.overrides.launchCwd!);
+      const digest = port.openProjection({
+        family: "bundle-catalog",
+        focus: { id: cmd.id },
+      });
+      assert.ok(digest.snapshot.result.found);
+      const trustDigest = digest.snapshot.result.bundle.digest;
+      digest.close();
+      const launch = {
+        operationId: "op-launch",
+        operation: "launch-run",
+        input: { bundle: { id: cmd.id }, launchInputs: {}, trustDigest },
+      } as const;
+      assert.ok(port.submit(launch).admitted);
+      // The Run settles asynchronously, so its outcome is read after this.
+      clock.advance(1500);
+      assert.equal((await awaitSettled(port, "op-launch")).status, "applied");
+      assert.ok(port.submit(launch).admitted);
+      return 0;
+    },
+    withClock(h, clock),
+  );
 
   const records = applicationRecords(h.folder).records;
   const launch = records.filter((record) => record.operationId === "op-launch");
@@ -324,8 +350,7 @@ test("a launched Operation's admission and outcome share its id, and a replay is
       operationId: "op-launch",
       operation: "launch-run",
       status: "applied",
-      // The Run's start, Attempt start and end, and end records read between.
-      elapsedMs: 625,
+      elapsedMs: 1500,
     }),
     info({
       event: "operation-admission",
@@ -339,7 +364,7 @@ test("a launched Operation's admission and outcome share its id, and a replay is
     level: "info",
     event: "launch-preparation-settle",
     status: "passed",
-    elapsedMs: 375,
+    elapsedMs: 0,
   });
 });
 
@@ -613,6 +638,7 @@ test("seeded prompts, typed text, launch inputs, command arguments, and environm
 
 test("a resume runs Preflight again and settles it before the resumed Operation is admitted", async () => {
   const h = wiredHome();
+  const clock = frozenClock();
   // The first Command cannot spawn, so the Run rests `failed`; the resumed one
   // passes.
   const base = wiringProcess();
@@ -652,10 +678,11 @@ test("a resume runs Preflight again and settles it before the resumed Operation 
         input: { runId: launched.runId },
       });
       assert.ok(resume.admitted, JSON.stringify(resume));
+      clock.advance(1500);
       assert.equal((await awaitSettled(port, "op-resume")).status, "applied");
       return 0;
     },
-    { ...h.overrides, process },
+    { ...withClock(h, clock), process },
   );
 
   const records = applicationRecords(h.folder).records;
@@ -664,7 +691,7 @@ test("a resume runs Preflight again and settles it before the resumed Operation 
   );
   assert.deepEqual(records.slice(resumed - 2), [
     info({ event: "preflight-start" }),
-    info({ event: "preflight-settle", status: "passed", elapsedMs: 125 }),
+    info({ event: "preflight-settle", status: "passed", elapsedMs: 0 }),
     info({
       event: "operation-admission",
       operationId: "op-resume",
@@ -676,7 +703,7 @@ test("a resume runs Preflight again and settles it before the resumed Operation 
       operationId: "op-resume",
       operation: "resume-run",
       status: "applied",
-      elapsedMs: 625,
+      elapsedMs: 1500,
     }),
   ]);
 });
