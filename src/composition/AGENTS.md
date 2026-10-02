@@ -26,3 +26,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 - `SECANT_HOME` and `SECANT_LOG_DIR` are read once, side by side, in `resolveHostContext` (`wiring.ts`); nothing below composition reads them.
   Records hold only allowlisted semantic fields and causes from `translateCause`; Pino's named-field redaction is a second layer. Tests reach the
   sink through the `logSink` wiring override and never set the environment names.
+- Startup prunes only matching regular log files strictly older than 30 days in the resolved folder (#323), before opening the active file:
+  its real mtime can be stale against an injected future clock. Prune failures are silent; they never call the log-write failure fallback.
+
+## Tests
+
+- Retention uses real files and injected clocks. Locked-file stat/delete failures have no deterministic, spawn-free fixture across all three OSes:
+  chmod is ineffective as root and on Windows; the suite covers the unreadable-folder fallback and preserves non-file entries instead.

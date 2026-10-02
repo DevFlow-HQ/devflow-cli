@@ -16,6 +16,7 @@ import {
   readdir,
   rename,
   rm,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -2619,6 +2620,43 @@ await withCleanup(
       ) {
         throw new Error(
           `A fatal error did not flush and name its log: ${fatal.stderr}\n${fatalLog.text}`,
+        );
+      }
+
+      // Startup retention (#323) uses last write, never the filename's date.
+      // Keep this separate from recordsIn: the fresh planted file survives beside
+      // the newly opened Secant invocation's file in the override folder.
+      const pruneFolder = join(logsRoot, "prune");
+      await mkdir(pruneFolder, { recursive: true });
+      const old = join(pruneFolder, "2099-01-01T00-00-00-000Z-1.jsonl");
+      const fresh = join(pruneFolder, "2000-01-01T00-00-00-000Z-2.jsonl");
+      const unrelated = join(pruneFolder, "unrelated.jsonl");
+      const outside = join(logsRoot, "2000-01-01T00-00-00-000Z-3.jsonl");
+      const now = Date.now();
+      const oldTime = new Date(now - 31 * 24 * 60 * 60 * 1000);
+      const freshTime = new Date(now - 10 * 24 * 60 * 60 * 1000);
+      for (const [path, time] of [
+        [old, oldTime],
+        [fresh, freshTime],
+        [unrelated, oldTime],
+        [outside, oldTime],
+      ] as const) {
+        await writeFile(path, "planted evidence");
+        await utimes(path, time, time);
+      }
+      run(binary, ["workspace", "--json"], {
+        cwd: workspaceDirectory,
+        env: envFor("prune"),
+      });
+      if (
+        existsSync(old) ||
+        readFileSync(fresh, "utf8") !== "planted evidence" ||
+        readFileSync(unrelated, "utf8") !== "planted evidence" ||
+        readFileSync(outside, "utf8") !== "planted evidence" ||
+        readdirSync(pruneFolder).length !== 3
+      ) {
+        throw new Error(
+          "Operational-log startup pruning did not retain fresh and unrelated files or removed evidence outside its folder.",
         );
       }
 

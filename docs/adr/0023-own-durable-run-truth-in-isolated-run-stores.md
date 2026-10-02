@@ -54,8 +54,8 @@ the initial Harnesses use the same dotfile convention. Recorded while
 
 Amended 2026-10-02 ([#318](https://github.com/secantdev/secant/issues/318)): the home also holds a `logs` folder of operational logs, one JSONL file
 per Secant invocation, which `SECANT_LOG_DIR` can move elsewhere. It is apart from every Run Store, and deleting a Run never touches it. Its lifecycle
-is separate too: spec [#313](https://github.com/secantdev/secant/issues/313) keeps each file for 30 days after its last write, pruned at startup once
-[#323](https://github.com/secantdev/secant/issues/323) lands.
+is separate too: spec [#313](https://github.com/secantdev/secant/issues/313) keeps each file for 30 days after its last write, pruned best-effort at startup
+([#323](https://github.com/secantdev/secant/issues/323), 2026-10-02).
 
 ## Amendment — Run ownership replaces the Workspace claim (2026-09-14, ADR 0031)
 

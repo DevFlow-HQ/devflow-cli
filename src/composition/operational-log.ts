@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import {
+  closeSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import pino, { type Logger } from "pino";
 import { translateCause } from "../harness/harness.js";
@@ -61,6 +68,32 @@ const PRODUCTION_CLOCK: LogClock = {
   now: () => new Date(),
   monotonic: () => performance.now(),
 };
+
+const LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const LOG_FILE_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-\d+\.jsonl$/;
+
+/** Startup housekeeping, separate from log writes: only matching regular files
+ *  strictly older than 30 days are removed, without following links or recursing.
+ *  An unreadable folder or a failed stat/delete is silent and retried next startup. */
+function pruneOperationalLogs(folder: string, now: Date): void {
+  const cutoff = now.getTime() - LOG_RETENTION_MS;
+  let entries: string[];
+  try {
+    entries = readdirSync(folder);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!LOG_FILE_NAME.test(entry)) continue;
+    const path = join(folder, entry);
+    try {
+      const file = lstatSync(path);
+      if (file.isFile() && file.mtimeMs < cutoff) rmSync(path, { force: true });
+    } catch {
+      // A locked/unreadable file or a racing delete never changes startup.
+    }
+  }
+}
 
 interface StartOptions {
   readonly client: ClientKind;
@@ -134,6 +167,9 @@ function startOperationalLog(options: StartOptions): OperationalLog {
     }
   };
 
+  // Prune before opening: the new file's real mtime can be stale against a
+  // future injected clock. Prune failures never disable logging or add a notice.
+  pruneOperationalLogs(folder, clock.now());
   try {
     // Owner-only where the OS supports it; Windows ignores the modes.
     mkdirSync(folder, { recursive: true, mode: 0o700 });

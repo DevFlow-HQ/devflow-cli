@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   statSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -224,11 +227,17 @@ test("a headless fatal error writes and flushes its failure record, and the fata
 
 test("the TUI's no-terminal rejection is a Secant invocation and is logged", async () => {
   const { folder, overrides } = home();
+  mkdirSync(folder);
+  const old = join(folder, "2026-01-01T00-00-00-000Z-1.jsonl");
+  writeFileSync(old, "old evidence");
+  const written = new Date("2026-09-01T00:00:00.000Z");
+  utimesSync(old, written, written);
   const status = await launchTui({
     ...overrides,
     terminal: { interactive: false, legacyConsole: () => false },
   });
   assert.equal(status, 1);
+  assert.equal(existsSync(old), false);
 
   const log = readLog(folder);
   assertBase(log.records);
@@ -360,4 +369,150 @@ test("--help, --version, and a parse error create no log file", async () => {
     );
   }
   assert.equal(existsSync(folder), false);
+});
+
+test("startup prunes logs by last write, keeping the 30-day boundary and fresh files", async () => {
+  const { folder, overrides, notices } = home();
+  mkdirSync(folder);
+  const day = 24 * 60 * 60 * 1000;
+  const planted = [
+    { name: "2099-01-01T00-00-00-000Z-1.jsonl", age: 31 * day, keep: false },
+    { name: "2000-01-01T00-00-00-000Z-2.jsonl", age: 10 * day, keep: true },
+    { name: "2026-01-01T00-00-00-000Z-3.jsonl", age: 30 * day, keep: true },
+    {
+      name: "2026-01-01T00-00-00-000Z-4.jsonl",
+      age: 30 * day + 1000,
+      keep: false,
+    },
+    {
+      name: "2026-01-01T00-00-00-000Z-5.jsonl",
+      age: 30 * day - 1000,
+      keep: true,
+    },
+  ];
+  for (const file of planted) {
+    const path = join(folder, file.name);
+    writeFileSync(path, "retained evidence");
+    const written = new Date(WALL.getTime() - file.age);
+    utimesSync(path, written, written);
+  }
+  const output = io();
+  const status = await withClients(
+    (clients) => runHeadless(clients, ["workspace", "--json"], output.io),
+    overrides,
+  );
+  assert.equal(status, 0);
+  assert.deepEqual(notices, []);
+  assert.deepEqual(output.err, []);
+  for (const file of planted) {
+    assert.equal(existsSync(join(folder, file.name)), file.keep, file.name);
+    if (file.keep) {
+      assert.equal(
+        readFileSync(join(folder, file.name), "utf8"),
+        "retained evidence",
+      );
+    }
+  }
+  const active = join(folder, `2026-10-02T09-08-07-006Z-${process.pid}.jsonl`);
+  const records = readFileSync(active, "utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(
+    records.map((record) => record.event),
+    ["invocation-start", "invocation-end"],
+  );
+});
+
+test("startup prunes only regular log files in the resolved folder, preserving shared-folder and Run Store contents", async () => {
+  const { folder, overrides, notices } = home();
+  mkdirSync(folder);
+  const oldTime = new Date("2026-09-01T00:00:00.000Z");
+  const unrelated = [
+    "notes.jsonl",
+    "2026-01-01T00-00-00-000Z-1.jsonl.backup",
+    "copy-2026-01-01T00-00-00-000Z-1.jsonl",
+    "2026-01-01T00-00Z-1.jsonl",
+  ];
+  // Matching names outside the override, including the default log folder and
+  // Run Store tree, are untouched. Matching directories are never traversed.
+  const directories = [
+    makeTempDir("secant-oplog-outside-"),
+    join(overrides.secantHome!, "logs"),
+    join(overrides.secantHome!, "runs"),
+    join(folder, "2026-01-01T00-00-00-000Z-2.jsonl"),
+  ];
+  const preserved = unrelated.map((name) => join(folder, name));
+  for (const directory of directories) {
+    mkdirSync(directory, { recursive: true });
+    preserved.push(join(directory, "2026-01-01T00-00-00-000Z-3.jsonl"));
+  }
+  for (const path of preserved) {
+    writeFileSync(path, "unrelated evidence");
+    utimesSync(path, oldTime, oldTime);
+  }
+  utimesSync(directories.at(-1)!, oldTime, oldTime);
+  // A directory junction works on Windows without symlink privileges. Even a
+  // matching link name must neither be removed nor expose the target to pruning.
+  const link = join(folder, "2026-01-01T00-00-00-000Z-4.jsonl");
+  symlinkSync(directories[0]!, link, "junction");
+  const stale = join(folder, "2026-01-01T00-00-00-000Z-5.jsonl");
+  writeFileSync(stale, "stale log");
+  utimesSync(stale, oldTime, oldTime);
+  const output = io();
+  const status = await withClients(
+    (clients) => runHeadless(clients, ["workspace", "--json"], output.io),
+    overrides,
+  );
+  assert.equal(status, 0);
+  assert.deepEqual(notices, []);
+  assert.deepEqual(output.err, []);
+  assert.equal(existsSync(stale), false);
+  assert.equal(existsSync(link), true);
+  for (const path of preserved) {
+    assert.equal(readFileSync(path, "utf8"), "unrelated evidence", path);
+  }
+});
+
+test("startup prunes the default log folder before opening the active file against a future injected clock", async () => {
+  const { overrides, notices } = home();
+  const folder = join(overrides.secantHome!, "logs");
+  mkdirSync(folder);
+  const stale = join(folder, "2026-01-01T00-00-00-000Z-1.jsonl");
+  writeFileSync(stale, "old evidence");
+  const written = new Date("2026-09-01T00:00:00.000Z");
+  utimesSync(stale, written, written);
+  const future = new Date("2099-10-02T09:08:07.006Z");
+  const clock = { ...steppingClock(), now: () => future };
+  const status = await withClients(() => 0, {
+    ...overrides,
+    logSink: { ...overrides.logSink, folder: undefined, clock },
+  });
+  assert.equal(status, 0);
+  assert.deepEqual(notices, []);
+  assert.equal(existsSync(stale), false);
+  const log = readLog(folder);
+  assert.equal(log.name, `2099-10-02T09-08-07-006Z-${process.pid}.jsonl`);
+  assert.deepEqual(
+    log.records.map((record) => record.event),
+    ["invocation-start", "invocation-end"],
+  );
+});
+
+test("--help, --version, and parse errors leave stale operational logs untouched", async () => {
+  const { folder, overrides, notices } = home();
+  mkdirSync(folder);
+  const stale = join(folder, "2026-01-01T00-00-00-000Z-1.jsonl");
+  writeFileSync(stale, "old evidence");
+  const written = new Date("2026-09-01T00:00:00.000Z");
+  utimesSync(stale, written, written);
+  for (const args of [["--help"], ["--version"], ["no-such-command"]]) {
+    const output = io();
+    await runHeadlessCli(args, output.io, "1.2.3", (run) =>
+      withClients(run, overrides),
+    );
+  }
+  assert.deepEqual(readdirSync(folder), ["2026-01-01T00-00-00-000Z-1.jsonl"]);
+  assert.equal(readFileSync(stale, "utf8"), "old evidence");
+  assert.deepEqual(notices, []);
 });
