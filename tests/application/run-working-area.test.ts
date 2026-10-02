@@ -20,6 +20,7 @@ import type { OperationOutcome } from "../../src/application/projection-port.js"
 import type { ProcessAdapter } from "../../src/process/process.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 
@@ -159,15 +160,8 @@ function wire(
   workspace: string,
   process: ProcessAdapter,
 ): Wiring {
-  const saved = globalThis.process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  globalThis.process.env[CLAUDE_CODE_EXECUTABLE_ENV] =
-    globalThis.process.execPath;
-  t.after(() => {
-    if (saved === undefined) {
-      delete globalThis.process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    } else {
-      globalThis.process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
-    }
+  setEnvironmentForTest(t, {
+    [CLAUDE_CODE_EXECUTABLE_ENV]: globalThis.process.execPath,
   });
   const wired = wireApplication({
     secantHome: home,

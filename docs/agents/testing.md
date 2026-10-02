@@ -32,6 +32,11 @@ load-bearing: each file runs in its own worker, so module-level helpers and envi
 sequential; do not replace file parallelism with `--concurrent`, which would race their shared fixtures. Should child-lifecycle flakiness return, keep
 the spawn out of the semantic suite — never a retry, sleep, or timeout increase.
 
+Within a file, a timed-out test's after hook can run once the next test has started. A test that changes an environment variable therefore makes the
+change through `setEnvironmentForTest` (`tests/helpers/environment.ts`), never its own save-and-restore hook: only the newest test's claim on a variable
+owns its value, so a late cleanup leaves the next test's value in place. Its returned restore ends a change early. A change for a whole file, such as
+`ensureRuntimeOnPath` putting the runtime on PATH, is already isolated by its worker and needs no claim.
+
 Package smoke tests exercise the compiled binary in an isolated location on each of the three operating systems; every scenario is enumerated
 once in [package smoke](./package-smoke.md), the CI acceptance seam for headless work.
 

@@ -25,6 +25,7 @@ import {
   awaitSettled,
   followRun,
 } from "../helpers/settleOperation.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
@@ -546,12 +547,7 @@ async function failedInterruptScenario(
     blockNext?: boolean;
   },
 ) {
-  const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (saved === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   let interruptRequested!: () => void;
   const requested = new Promise<void>((resolve) => {
     interruptRequested = resolve;

@@ -29,6 +29,7 @@ import {
 import { makeFakeRenderer } from "./renderer-fixture.js";
 import { createFake } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { inertRunActionsView, inertRunListView } from "./inert.js";
 
@@ -102,13 +103,7 @@ function catalogView(
 }
 
 test("a scripted fake Harness streams through the Port into the Run Workbench", async (t) => {
-  const savedExecutable = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (savedExecutable === undefined)
-      delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = savedExecutable;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
 
   const workspace = makeTempDir("secant-tui-live-ws-");
   const wired = wireApplication({
@@ -294,13 +289,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
 });
 
 test("the Matt grill takes its idea on the inputs screen and opens on the first Turn built from it (#212)", async (t) => {
-  const savedExecutable = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (savedExecutable === undefined)
-      delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = savedExecutable;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   const idea = "Add a dark-mode toggle";
   const question = "Q1 - Who can toggle it? Recommended: every user.";
   const workspace = makeTempDir("secant-tui-matt-ws-");

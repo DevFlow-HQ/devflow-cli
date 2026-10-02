@@ -13,6 +13,7 @@ import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 
@@ -351,17 +352,7 @@ async function launch(
   home: string,
   workspace: string,
 ): Promise<{ wired: Wiring; runId: string; run: RunView }> {
-  const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  const savedPath = process.env.PATH;
-  let environmentRestored = false;
-  const restoreEnvironment = (): void => {
-    if (environmentRestored) return;
-    environmentRestored = true;
-    if (saved === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
-    if (savedPath === undefined) delete process.env.PATH;
-    else process.env.PATH = savedPath;
-  };
+  let restoreEnvironment: () => void;
   if (bundle.isolateHarnessDiscovery === true) {
     // Keep the Command executable resolvable while making both Claude discovery
     // sources fail. If Command-only Preflight accidentally discovers a Harness,
@@ -370,17 +361,17 @@ async function launch(
     const isolatedRuntime = join(isolatedBin, RUNTIME_NAME);
     copyFileSync(process.execPath, isolatedRuntime);
     chmodSync(isolatedRuntime, 0o755);
-    process.env.PATH = isolatedBin;
-    process.env[CLAUDE_CODE_EXECUTABLE_ENV] = join(
-      isolatedBin,
-      "missing-claude",
-    );
+    restoreEnvironment = setEnvironmentForTest(t, {
+      PATH: isolatedBin,
+      [CLAUDE_CODE_EXECUTABLE_ENV]: join(isolatedBin, "missing-claude"),
+    });
   } else {
     // A resolvable executable so Agent-bearing Preflight passes; the fake Adapter
     // is what actually runs.
-    process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
+    restoreEnvironment = setEnvironmentForTest(t, {
+      [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath,
+    });
   }
-  t.after(restoreEnvironment);
 
   const adapter = createFake(script)();
   let prepareCount = 0;
@@ -447,7 +438,7 @@ async function launch(
   const runId = admission.runId;
   assert.ok(runId);
   // The isolated PATH is needed only during synchronous Preflight. Restore it
-  // before awaiting so concurrent test files and Command execution see the host.
+  // before awaiting so Command execution sees the host PATH.
   if (bundle.isolateHarnessDiscovery === true) restoreEnvironment();
 
   // Async execution has yielded at Harness preparation when submit returns. The

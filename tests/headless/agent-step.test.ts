@@ -17,6 +17,7 @@ import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
 // The first Agent Step executed headlessly (#116): a synthesized Bundle
@@ -179,12 +180,7 @@ function wireAgent(t: TestContext): {
 } {
   // A configured executable, declared to the Process double, so Agent-bearing
   // Preflight discovery passes without a spawn; the fake Adapter is what runs.
-  const savedEnv = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (savedEnv === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = savedEnv;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
 
   const workspace = makeTempDir("secant-agent-ws-");
   const wired = wireApplication({

@@ -17,6 +17,7 @@ import type { ProcessAdapter } from "../../src/process/process.js";
 import { createFake } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 
@@ -213,12 +214,7 @@ async function launch(
   adapter: HarnessAdapter,
   bundle: { folder: string; id: string },
 ): Promise<{ wired: Wiring; runId: string; launched: OperationOutcome }> {
-  const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (saved === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   const workspace = makeTempDir("secant-agent-receipt-ws-");
   const wired = wireApplication({
     secantHome: makeTempDir("secant-agent-receipt-home-"),

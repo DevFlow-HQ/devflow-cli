@@ -15,6 +15,7 @@ import type { ProcessAdapter } from "../../src/process/process.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 
@@ -242,12 +243,7 @@ async function launchToGate(
 function setUp(t: TestContext): { home: string; workspace: string } {
   // A resolvable executable so Agent-bearing Preflight passes; the fake Adapter is
   // what actually runs.
-  const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (saved === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   return {
     home: makeTempDir("secant-suggested-gate-home-"),
     workspace: makeTempDir("secant-suggested-gate-ws-"),

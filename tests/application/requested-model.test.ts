@@ -15,6 +15,7 @@ import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 
@@ -213,12 +214,7 @@ function wire(
   home: string,
   workspace: string,
 ): { wired: Wiring; digest: string } {
-  const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (saved === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   const wired = wireApplication({
     secantHome: home,
     launchCwd: workspace,

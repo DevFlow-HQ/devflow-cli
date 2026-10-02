@@ -17,6 +17,7 @@ import { createFake, type FakeTurnScript } from "../harness/fake-adapter.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 
@@ -197,12 +198,7 @@ async function launch(t: TestContext): Promise<{
   wired: Wiring;
   runId: string;
 }> {
-  const saved = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (saved === undefined) delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = saved;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   const adapter = createFake({
     profile: profile(),
     turns: [

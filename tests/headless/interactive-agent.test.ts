@@ -16,6 +16,7 @@ import type {
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import {
@@ -138,15 +139,9 @@ async function launchInteractive(
   },
   routing?: readonly unknown[],
 ): Promise<{ wired: Wiring; runId: string; run: RunView }> {
-  const savedExecutable = process.env[CLAUDE_CODE_EXECUTABLE_ENV];
   // A resolvable executable so Preflight's Harness discovery passes; the fake
   // Adapter is what actually runs, never this path.
-  process.env[CLAUDE_CODE_EXECUTABLE_ENV] = process.execPath;
-  t.after(() => {
-    if (savedExecutable === undefined)
-      delete process.env[CLAUDE_CODE_EXECUTABLE_ENV];
-    else process.env[CLAUDE_CODE_EXECUTABLE_ENV] = savedExecutable;
-  });
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
 
   const workspace = makeTempDir("secant-interactive-ws-");
   const fake = "prepare" in script ? script : createFake(script)();
