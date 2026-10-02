@@ -21,8 +21,10 @@ The gate separates three independently attributable, blocking layers (ADR 0027's
     operational log. Every real Process takes `withRunnerObserver()`.
   - A failed, timed-out, or crashed scenario prints a last-active-stage summary: scenario, open stage, open child roles and PIDs (a blocking sync spawn
     has none yet), elapsed time, and the log folder (`SECANT_LOG_DIR`, else `secant-runner-logs` under the OS temp folder). The supervisor then kills
-    the tree (the scenario's group or tree, then each reported PID's), removes the run's temp root (the scenario's `TMPDIR`), and resumes at the next
-    scenario. Its fixtures are runtime cases (`supervisor-conformance.ts`). Terminal lifecycle runs the same scenario side unsupervised.
+    the tree (each reported PID's group or tree, then the scenario's), removes the run's temp root, and resumes at the next scenario. Its fixtures
+    are runtime cases (`supervisor-conformance.ts`). Terminal lifecycle runs the same scenario side unsupervised.
+  - The temp root is the scenario's `TMPDIR` itself, one short name deep: on Windows the deepest Run Store paths sit within 13 characters of git's
+    260-character limit, so a deeper root fails `matt-front-replayer-workbench` there.
 - **Compiled-binary acceptance** exercises Command, Harness, interruption, recovery, and Git through the copied binary in the consumer job.
 
 A real child under `bun test` fails its test. `bunfig.toml` preloads the spawn trap (`tests/helpers/spawnTrap.ts`, which documents the routes it

@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createProcessAdapter } from "../../src/process/process.js";
 import type { RunnerCase } from "../helpers/scenario-runner.js";
@@ -11,7 +13,8 @@ import { runSupervised } from "../helpers/supervisor.js";
 // with a short bound, one fixture set per run, chosen by the first argument:
 //
 // - `fails`: a passing scenario, one that fails an assertion with an owned child
-//   open, and one more, which proves the run resumes after a failure;
+//   open, and one more, which proves the run resumes after a failure. The first
+//   writes the scenario's temp folder to the file the second argument names;
 // - `async-timeout`: a scenario awaiting a Command child that outlives the bound;
 // - `sync-block`: a scenario with an owned child open that then blocks its event
 //   loop in a synchronous spawn. That child writes its own PID to the file the
@@ -37,8 +40,9 @@ async function launchHolder(): Promise<void> {
 function fixtures(mode: string | undefined, marker: string | undefined) {
   switch (mode) {
     case "fails":
+      assert.ok(marker, "the fails fixture needs a temp-folder marker path");
       return [
-        { name: "passes-before", body: () => {} },
+        { name: "passes-before", body: () => writeFileSync(marker, tmpdir()) },
         {
           name: "fails-with-open-child",
           body: async () => {

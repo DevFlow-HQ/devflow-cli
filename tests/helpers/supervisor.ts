@@ -2,7 +2,6 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   fstatSync,
-  mkdirSync,
   mkdtempSync,
   openSync,
   readSync,
@@ -140,13 +139,13 @@ async function superviseOnce(
   logFolder: string,
   startIndex: number,
 ): Promise<SupervisedFailure | undefined> {
-  const root = mkdtempSync(
-    join(options.tempParent ?? tmpdir(), "secant-runner-"),
-  );
+  // The run's root is the scenario's temp folder itself, so every folder the
+  // scenario or its children make lands in it. Its name is short and it nests no
+  // deeper: the Matt-front case's artifact refs sit 214 characters below it, so
+  // under CI's Windows temp folder they reach 247 of git's 260-character path
+  // limit; a `secant-runner-*/tmp` root took them to 262 and failed the case.
+  const root = mkdtempSync(join(options.tempParent ?? tmpdir(), "sr-"));
   try {
-    // Every temp folder the scenario or its children make lands under `temp`.
-    const temp = join(root, "tmp");
-    mkdirSync(temp);
     const file = join(root, "breadcrumbs.jsonl");
     writeFileSync(file, "");
     const output = options.output ?? "inherit";
@@ -156,9 +155,9 @@ async function superviseOnce(
       {
         env: {
           ...process.env,
-          TMPDIR: temp,
-          TEMP: temp,
-          TMP: temp,
+          TMPDIR: root,
+          TEMP: root,
+          TMP: root,
           [RUNNER_ENV.breadcrumbs]: file,
           [RUNNER_ENV.logFolder]: logFolder,
           [RUNNER_ENV.startIndex]: String(startIndex),

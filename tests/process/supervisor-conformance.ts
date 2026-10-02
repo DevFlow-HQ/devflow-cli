@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ChildFact } from "../../src/process/process.js";
 import {
@@ -132,8 +132,15 @@ export function registerSupervisorConformance(register: Register): void {
   register(
     "[supervisor] a failed scenario is summarized with its open child, cleaned up, and the run resumes",
     async () => {
-      const run = await superviseFixture(["fails"]);
+      const marker = join(makeTempDir("secant-supervisor-marker-"), "tmpdir");
+      const run = await superviseFixture(["fails", marker]);
       const failure = await assertCleanFailure(run, "fails-with-open-child");
+      // The scenario's temp folder is the run's root itself, one short name below
+      // the parent: Windows' 260-character path limit leaves the deepest Run Store
+      // paths little room for a longer one.
+      const scenarioTemp = readFileSync(marker, "utf8");
+      assert.equal(dirname(scenarioTemp), run.tempParent);
+      assert.ok(basename(scenarioTemp).length <= 9, scenarioTemp);
       assert.deepEqual(failure.summary.cause, { kind: "failed" });
       const pid = pidOf(failure, "harness-runtime");
       assert.ok(run.text.includes("  open stage:     assert, open "), run.text);
