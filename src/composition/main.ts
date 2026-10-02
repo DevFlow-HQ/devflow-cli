@@ -9,6 +9,13 @@ import { wireApplication, type WiringOverrides } from "./wiring.js";
 export { wireApplication, type Wiring } from "./wiring.js";
 // The CLI host's fatal catch names the active operational log through this.
 export { describeFatal } from "./operational-log.js";
+// The standalone runner programs' operational log (#326): runtime conformance
+// and terminal lifecycle record their scenario and stage breadcrumbs through it.
+export {
+  runRunnerInvocation,
+  type RunnerBreadcrumb,
+  type RunnerLog,
+} from "./runner-log.js";
 
 // The composition entry: both surfaces reach the runtime through here.
 // `withClients` wires the Application (see wiring.ts) and hands its Ports to the

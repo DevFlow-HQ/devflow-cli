@@ -77,8 +77,9 @@ cluster that matches the task, followed by its related ADRs when the task needs 
 - **Preferences** — saved presentation choices shared across **Workspaces** within one Secant home: the theme and its dark or light appearance.
   They determine a TUI's initial appearance; its active appearance can differ during a preview or after an unsuccessful save.
 - **Secant invocation** — one process run of the `secant` command that reaches composition, through the TUI or a headless command. `--help`,
-  `--version`, and a command-line parse error never reach composition, so they are not Secant invocations. _Avoid_: invocation alone, which
-  collides with a **Command step**'s command invocation.
+  `--version`, and a command-line parse error never reach composition, so they are not Secant invocations. A standalone test runner program
+  (runtime conformance, terminal lifecycle) also runs as one, of the `runner` client, so its scenario breadcrumbs share the log. _Avoid_:
+  invocation alone, which collides with a **Command step**'s command invocation.
 - **Operational log** — the maintainer's private, local lifecycle record of one **Secant invocation**: one JSONL file of allowlisted semantic
   events, kept beside Run Stores in the Secant home but never inside one. It is never Run truth, and no **Projection** reads it.
 

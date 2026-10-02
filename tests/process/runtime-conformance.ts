@@ -36,7 +36,6 @@ import {
 import { openArtifactRepo } from "../../src/run/store/artifacts/artifacts.js";
 import {
   registerProcessConformanceCases,
-  type ProcessConformanceBody,
   type ProcessConformanceScenarios,
 } from "./conformance.js";
 import { createFakeProcess } from "./fake-adapter.js";
@@ -51,7 +50,10 @@ import { registerHarnessPhaseConformance } from "../harness/phase-conformance.js
 import { writeCommandBundle } from "../helpers/commandBundle.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 import { installReplayer } from "../harness/replayer.js";
-import { runMain, withTimeout } from "../helpers/standalone.js";
+import { stage, withRunnerObserver } from "../helpers/standalone.js";
+import { runSupervised } from "../helpers/supervisor.js";
+import type { RunnerCase } from "../helpers/scenario-runner.js";
+import { registerSupervisorConformance } from "./supervisor-conformance.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -127,7 +129,9 @@ function observedProcess(): {
 } {
   const facts: ChildFact[] = [];
   return {
-    process: createProcessAdapter({ observeChild: (fact) => facts.push(fact) }),
+    process: createProcessAdapter(
+      withRunnerObserver({ observeChild: (fact) => facts.push(fact) }),
+    ),
     facts,
   };
 }
@@ -239,62 +243,65 @@ const scenarios: ProcessConformanceScenarios = {
   }),
 };
 
-interface RegisteredCase {
-  readonly name: string;
-  readonly body: ProcessConformanceBody;
+// The case list is built only in the scenario process: registering the
+// replayer suites installs replayers, which the supervisor must not do.
+function registeredCases(): RunnerCase[] {
+  const cases: RunnerCase[] = [];
+  registerProcessConformanceCases(scenarios, (name, body) => {
+    cases.push({ name, body });
+  });
+  cases.push(
+    { name: "execution-real-command", body: executionRealCommand },
+    { name: "process-sync-command", body: processSyncCommand },
+    { name: "process-throwing-observer", body: processThrowingObserver },
+    { name: "process-owned-shutdown-facts", body: processOwnedShutdownFacts },
+    { name: "execution-real-nonzero", body: executionRealNonzero },
+    { name: "execution-real-cancellation", body: executionRealCancellation },
+    { name: "execution-real-group-reaping", body: executionRealGroupReaping },
+    { name: "preflight-git-worktree", body: preflightGitWorktree },
+    { name: "artifact-git-repository", body: artifactGitRepository },
+    { name: "store-owner-death-recovery", body: storeOwnerDeathRecovery },
+    { name: "store-concurrent-writer", body: storeConcurrentWriter },
+    { name: "store-locked-coordination", body: storeLockedCoordination },
+    { name: "process-worker-environment", body: processWorkerEnvironment },
+    {
+      name: "execution-store-on-fake-process",
+      body: executionStoreOnFakeProcess,
+    },
+    { name: "application-on-doubles", body: applicationOnDoubles },
+    {
+      name: "matt-front-replayer-workbench",
+      body: mattFrontReplayerWorkbench,
+    },
+    { name: "migration-generator-drift", body: migrationGeneratorDrift },
+  );
+
+  // The shared Harness conformance suite over the REAL replayers. Under the test
+  // runner it runs against the fake (tests/harness/conformance.test.ts); here it
+  // runs against both recorded-Harness replayers, each behaviour its own bounded
+  // runtime case, so the semantic suite never spawns while the replayers stay
+  // covered (#184, M5).
+  registerClaudeCodeReplayerConformance((name, body) =>
+    cases.push({ name, body }),
+  );
+  registerCodexReplayerConformance((name, body) => cases.push({ name, body }));
+
+  // The Adapter-specific cases relocated from the process-free semantic suite
+  // (#198): the Claude Code and Codex Harness suites no longer spawn under the
+  // test runner, so their redaction, frame-parsing, discovery, argv, control,
+  // and qualification cases run here as bounded runtime cases.
+  registerClaudeCodeAdapterConformance((name, body) =>
+    cases.push({ name, body }),
+  );
+  registerCodexAdapterConformance((name, body) => cases.push({ name, body }));
+
+  // Native-phase facts from both Adapters over their replayers (#322).
+  registerHarnessPhaseConformance((name, body) => cases.push({ name, body }));
+
+  // The runner supervisor itself over its fixture program (#326).
+  registerSupervisorConformance((name, body) => cases.push({ name, body }));
+  return cases;
 }
-
-const cases: RegisteredCase[] = [];
-registerProcessConformanceCases(scenarios, (name, body) => {
-  cases.push({ name, body });
-});
-cases.push(
-  { name: "execution-real-command", body: executionRealCommand },
-  { name: "process-sync-command", body: processSyncCommand },
-  { name: "process-throwing-observer", body: processThrowingObserver },
-  { name: "process-owned-shutdown-facts", body: processOwnedShutdownFacts },
-  { name: "execution-real-nonzero", body: executionRealNonzero },
-  { name: "execution-real-cancellation", body: executionRealCancellation },
-  { name: "execution-real-group-reaping", body: executionRealGroupReaping },
-  { name: "preflight-git-worktree", body: preflightGitWorktree },
-  { name: "artifact-git-repository", body: artifactGitRepository },
-  { name: "store-owner-death-recovery", body: storeOwnerDeathRecovery },
-  { name: "store-concurrent-writer", body: storeConcurrentWriter },
-  { name: "store-locked-coordination", body: storeLockedCoordination },
-  { name: "process-worker-environment", body: processWorkerEnvironment },
-  {
-    name: "execution-store-on-fake-process",
-    body: executionStoreOnFakeProcess,
-  },
-  { name: "application-on-doubles", body: applicationOnDoubles },
-  {
-    name: "matt-front-replayer-workbench",
-    body: mattFrontReplayerWorkbench,
-  },
-  { name: "migration-generator-drift", body: migrationGeneratorDrift },
-);
-
-// The shared Harness conformance suite over the REAL replayers. Under the test
-// runner it runs against the fake (tests/harness/conformance.test.ts); here it
-// runs against both recorded-Harness replayers, each behaviour its own bounded
-// runtime case, so the semantic suite never spawns while the replayers stay
-// covered (#184, M5).
-registerClaudeCodeReplayerConformance((name, body) =>
-  cases.push({ name, body }),
-);
-registerCodexReplayerConformance((name, body) => cases.push({ name, body }));
-
-// The Adapter-specific cases relocated from the process-free semantic suite
-// (#198): the Claude Code and Codex Harness suites no longer spawn under the test
-// runner, so their redaction, frame-parsing, discovery, argv, control, and
-// qualification cases run here as bounded runtime cases.
-registerClaudeCodeAdapterConformance((name, body) =>
-  cases.push({ name, body }),
-);
-registerCodexAdapterConformance((name, body) => cases.push({ name, body }));
-
-// Native-phase facts from both Adapters over their replayers (#322).
-registerHarnessPhaseConformance((name, body) => cases.push({ name, body }));
 
 async function applicationOnDoubles(): Promise<void> {
   const git = createFakeGitProcess();
@@ -880,7 +887,7 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
 }
 
 async function processWorkerEnvironment(): Promise<void> {
-  const processAdapter = createProcessAdapter();
+  const processAdapter = createProcessAdapter(withRunnerObserver());
   const probe =
     "console.log(JSON.stringify({bun:process.env.BUN_TEST_WORKER_ID," +
     "jest:process.env.JEST_WORKER_ID,visible:process.env.SECANT_VISIBLE}))";
@@ -920,12 +927,14 @@ function processSyncCommand(): void {
   // call can be seen by the child it names.
   const marker = join(runtimeTemp("secant-runtime-sync-marker-"), "started");
   const facts: ChildFact[] = [];
-  const processAdapter = createProcessAdapter({
-    observeChild: (fact) => {
-      facts.push(fact);
-      if (fact.kind === "spawn") writeFileSync(marker, "");
-    },
-  });
+  const processAdapter = createProcessAdapter(
+    withRunnerObserver({
+      observeChild: (fact) => {
+        facts.push(fact);
+        if (fact.kind === "spawn") writeFileSync(marker, "");
+      },
+    }),
+  );
   const exited = processAdapter.spawnCommandSync({
     role: "git",
     executable,
@@ -1037,12 +1046,14 @@ async function processOwnedShutdownFacts(): Promise<void> {
 /** An observer that throws changes no outcome on any spawn path. */
 async function processThrowingObserver(): Promise<void> {
   let observed = 0;
-  const processAdapter = createProcessAdapter({
-    observeChild: () => {
-      observed++;
-      throw new Error("observer exploded");
-    },
-  });
+  const processAdapter = createProcessAdapter(
+    withRunnerObserver({
+      observeChild: () => {
+        observed++;
+        throw new Error("observer exploded");
+      },
+    }),
+  );
   const sync = processAdapter.spawnCommandSync({
     role: "command",
     executable,
@@ -1131,7 +1142,7 @@ async function executionStoreOnFakeProcess(): Promise<void> {
 }
 
 function runtimeExecutionFixture(prefix: string) {
-  const processAdapter = createProcessAdapter();
+  const processAdapter = createProcessAdapter(withRunnerObserver());
   const workspace = runtimeTemp(`${prefix}-workspace-`);
   const group = openRunGroup(runtimeTemp(`${prefix}-home-`), workspace, {
     process: processAdapter,
@@ -1267,7 +1278,7 @@ function readBound(
 }
 
 async function executionRealCommand(): Promise<void> {
-  const processAdapter = createProcessAdapter();
+  const processAdapter = createProcessAdapter(withRunnerObserver());
   const home = runtimeTemp("secant-runtime-execution-home-");
   const workspace = classicWorktree(processAdapter);
   writeFileSync(join(workspace, "seed.txt"), "changed\n");
@@ -1355,72 +1366,88 @@ async function executionRealCommand(): Promise<void> {
 }
 
 function preflightGitWorktree(): void {
-  const processAdapter = createProcessAdapter();
-  const cases = [
-    {
-      workspace: classicWorktree(processAdapter),
-      expected: "bundle-trust-required",
-    },
-    {
-      workspace: linkedWorktree(processAdapter),
-      expected: "bundle-trust-required",
-    },
-    {
-      workspace: unbornWorktree(processAdapter),
-      expected: "bundle-trust-required",
-    },
-    {
-      workspace: bareRepo(processAdapter),
+  const processAdapter = createProcessAdapter(withRunnerObserver());
+  const cases = stage("make the Git workspaces", () => {
+    const shapes = [
+      {
+        shape: "classic",
+        workspace: classicWorktree(processAdapter),
+        expected: "bundle-trust-required",
+      },
+      {
+        shape: "linked",
+        workspace: linkedWorktree(processAdapter),
+        expected: "bundle-trust-required",
+      },
+      {
+        shape: "unborn",
+        workspace: unbornWorktree(processAdapter),
+        expected: "bundle-trust-required",
+      },
+      {
+        shape: "bare",
+        workspace: bareRepo(processAdapter),
+        expected: "workspace-prerequisite-failed",
+      },
+      {
+        shape: "plain",
+        workspace: runtimeTemp("secant-runtime-plain-"),
+        expected: "workspace-prerequisite-failed",
+      },
+    ];
+    const nestedRoot = classicWorktree(processAdapter);
+    const nested = join(nestedRoot, "nested");
+    mkdirSync(nested);
+    writeFileSync(join(nested, ".keep"), "");
+    shapes.push({
+      shape: "nested",
+      workspace: nested,
       expected: "workspace-prerequisite-failed",
-    },
-    {
-      workspace: runtimeTemp("secant-runtime-plain-"),
-      expected: "workspace-prerequisite-failed",
-    },
-  ];
-  const nestedRoot = classicWorktree(processAdapter);
-  const nested = join(nestedRoot, "nested");
-  mkdirSync(nested);
-  writeFileSync(join(nested, ".keep"), "");
-  cases.push({ workspace: nested, expected: "workspace-prerequisite-failed" });
+    });
+    return shapes;
+  });
 
   for (const scenario of cases) {
-    const wired = wireApplication({
-      secantHome: runtimeTemp("secant-runtime-preflight-home-"),
-      launchCwd: scenario.workspace,
-      process: processAdapter,
+    stage(`preflight the ${scenario.shape} workspace`, () => {
+      const wired = wireApplication({
+        secantHome: runtimeTemp("secant-runtime-preflight-home-"),
+        launchCwd: scenario.workspace,
+        process: processAdapter,
+      });
+      try {
+        const bundle = writeGitProbeBundle();
+        const built = wired.bundleManagement.build(bundle.folder, {
+          noInstall: false,
+        });
+        assert.ok(built.ok);
+        const approval = wired.projectionPort.submit({
+          operationId: `approve-${cases.indexOf(scenario)}`,
+          operation: "approve-workspace",
+          input: { path: scenario.workspace },
+        });
+        assert.equal(approval.admitted, true);
+        const admission = wired.projectionPort.submit({
+          operationId: `preflight-${cases.indexOf(scenario)}`,
+          operation: "launch-run",
+          input: { bundle: { id: bundle.id }, launchInputs: {} },
+        });
+        assert.equal(admission.admitted, false);
+        if (admission.admitted) {
+          throw new Error("unexpected preflight admission");
+        }
+        assert.equal(admission.problem.code, scenario.expected);
+      } finally {
+        wired.runGroup.close();
+        wired.catalog.close();
+      }
     });
-    try {
-      const bundle = writeGitProbeBundle();
-      const built = wired.bundleManagement.build(bundle.folder, {
-        noInstall: false,
-      });
-      assert.ok(built.ok);
-      const approval = wired.projectionPort.submit({
-        operationId: `approve-${cases.indexOf(scenario)}`,
-        operation: "approve-workspace",
-        input: { path: scenario.workspace },
-      });
-      assert.equal(approval.admitted, true);
-      const admission = wired.projectionPort.submit({
-        operationId: `preflight-${cases.indexOf(scenario)}`,
-        operation: "launch-run",
-        input: { bundle: { id: bundle.id }, launchInputs: {} },
-      });
-      assert.equal(admission.admitted, false);
-      if (admission.admitted) throw new Error("unexpected preflight admission");
-      assert.equal(admission.problem.code, scenario.expected);
-    } finally {
-      wired.runGroup.close();
-      wired.catalog.close();
-    }
   }
 }
 
 function artifactGitRepository(): void {
   const repo = openArtifactRepo(
     runtimeTemp("secant-runtime-artifact-"),
-    createProcessAdapter(),
+    createProcessAdapter(withRunnerObserver()),
   );
   const staged = repo.stageCommit(
     "runtime-attempt",
@@ -1559,7 +1586,7 @@ function executeGit(
 }
 
 async function storeOwnerDeathRecovery(): Promise<void> {
-  const processAdapter = createProcessAdapter();
+  const processAdapter = createProcessAdapter(withRunnerObserver());
   const home = runtimeTemp("secant-runtime-owner-home-");
   const workspace = runtimeTemp("secant-runtime-owner-ws-");
   const child = await startStoreWriter({
@@ -1620,7 +1647,7 @@ async function storeOwnerDeathRecovery(): Promise<void> {
 }
 
 async function storeConcurrentWriter(): Promise<void> {
-  const processAdapter = createProcessAdapter();
+  const processAdapter = createProcessAdapter(withRunnerObserver());
   const home = runtimeTemp("secant-runtime-concurrent-home-");
   const workspace = runtimeTemp("secant-runtime-concurrent-ws-");
   const first = await startStoreWriter({
@@ -1661,7 +1688,7 @@ async function storeConcurrentWriter(): Promise<void> {
 }
 
 async function storeLockedCoordination(): Promise<void> {
-  const processAdapter = createProcessAdapter();
+  const processAdapter = createProcessAdapter(withRunnerObserver());
   const home = runtimeTemp("secant-runtime-locked-home-");
   const workspace = runtimeTemp("secant-runtime-locked-workspace-");
   const group = openRunGroup(home, workspace, { process: processAdapter });
@@ -1876,21 +1903,11 @@ function migrationGeneratorDrift(): void {
   assert.match(result.stderr, /Run: bun run migrations:generate/);
 }
 
-async function main(): Promise<void> {
-  for (const scenario of cases) {
-    try {
-      await withTimeout(
-        Promise.resolve(scenario.body()),
-        SCENARIO_TIMEOUT_MS,
-        `${scenario.name} did not settle within 20 seconds`,
-      );
-      console.log(`  ok  ${scenario.name}`);
-    } catch (error) {
-      console.error(`FAILED ${scenario.name}`);
-      throw error;
-    }
-  }
-  console.log("Process runtime conformance passed.");
-}
-
-runMain(main);
+// The supervisor bounds each scenario from outside its event loop and reports
+// where a failed one stopped (tests/helpers/supervisor.ts).
+runSupervised({
+  program: "runtime-conformance",
+  entry: fileURLToPath(import.meta.url),
+  boundMs: SCENARIO_TIMEOUT_MS,
+  cases: registeredCases,
+});

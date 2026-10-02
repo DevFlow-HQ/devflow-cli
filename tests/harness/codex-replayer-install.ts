@@ -34,17 +34,24 @@ const fixtureRoot = join(
 );
 const qualificationFixtureDirectory = join(fixtureRoot, "codex-qualification");
 const SCHEMA_FILE = "stable-schema.generated.json";
-// Staged once per process on the temp volume. Node:test-free, so it is not
-// registered for test-runner cleanup; it is one small directory the OS reclaims.
-const sharedSchemaDirectory = mkdtempSync(
-  join(tmpdir(), "secant-codex-schema-source-"),
-);
-// Stage the immutable schema on the temp volume once. Normal qualification
-// cases then copy temp-to-temp; mutation cases still take an isolated copy.
-copyFileSync(
-  join(qualificationFixtureDirectory, SCHEMA_FILE),
-  join(sharedSchemaDirectory, SCHEMA_FILE),
-);
+// Staged once per process on the temp volume, on first install: a runner
+// supervisor that only imports this module must not make it. Node:test-free, so
+// it is not registered for test-runner cleanup; it is one small directory the OS
+// reclaims, or the runner's temp-folder clean-up removes.
+let stagedSchemaDirectory: string | undefined;
+function sharedSchemaDirectory(): string {
+  if (stagedSchemaDirectory !== undefined) return stagedSchemaDirectory;
+  stagedSchemaDirectory = mkdtempSync(
+    join(tmpdir(), "secant-codex-schema-source-"),
+  );
+  // Stage the immutable schema on the temp volume once. Normal qualification
+  // cases then copy temp-to-temp; mutation cases still take an isolated copy.
+  copyFileSync(
+    join(qualificationFixtureDirectory, SCHEMA_FILE),
+    join(stagedSchemaDirectory, SCHEMA_FILE),
+  );
+  return stagedSchemaDirectory;
+}
 
 interface CodexInvocation {
   readonly args: readonly string[];
@@ -253,7 +260,7 @@ export function installCodexReplayerAt(
   let versionExitCode: number | undefined;
   // Most cases only read the 689 KB schema. Share those bytes and copy lazily
   // only for drift cases, avoiding per-case Windows filesystem/AV contention.
-  let schemaDirectory = sharedSchemaDirectory;
+  let schemaDirectory = sharedSchemaDirectory();
   let schemaCopied = false;
   const writeRecording = (): void => {
     writeFileSync(
@@ -277,7 +284,7 @@ export function installCodexReplayerAt(
     const installedSchemaPath = join(installedFixtureDirectory, SCHEMA_FILE);
     if (!schemaCopied) {
       copyFileSync(
-        join(sharedSchemaDirectory, SCHEMA_FILE),
+        join(sharedSchemaDirectory(), SCHEMA_FILE),
         installedSchemaPath,
       );
       schemaDirectory = installedFixtureDirectory;

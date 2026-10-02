@@ -29,8 +29,8 @@ export async function cleanupTempDirsForTest(): Promise<void> {
 
 // Registered only under the test runner. The standalone runtime-conformance runner
 // (an ordinary Bun process) imports this helper transitively through the replayer
-// installers; there `after` throws, and its temp dirs are reclaimed by the OS
-// exactly as that runner's own `mkdtempSync` dirs already are.
+// installers; there `after` throws, and its temp dirs land under the temp root its
+// supervisor makes the scenario's temp folder and removes (supervisor.ts).
 try {
   after(async () => {
     await cleanupTempDirsForTest();

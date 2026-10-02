@@ -6,7 +6,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TARGETS, hostTargetKey } from "../../scripts/targets.js";
-import { removeTempDir, runMain, withTimeout } from "../helpers/standalone.js";
+import { runScenarios } from "../helpers/scenario-runner.js";
+import {
+  removeTempDir,
+  runMain,
+  stage,
+  withTimeout,
+} from "../helpers/standalone.js";
 
 // The real-terminal lifecycle suite (#56). It runs the compiled shell under a
 // throwaway pseudo-terminal driven by `Bun.Terminal` (ConPTY on Windows) and
@@ -21,6 +27,12 @@ import { removeTempDir, runMain, withTimeout } from "../helpers/standalone.js";
 // blocking three-OS CI job under the pinned Bun, against the cross-compiled
 // binary for that OS (ADR 0027, as amended by ADR 0030). `Bun.Terminal` lives
 // only here under `tests/`, which the runtime-neutrality allowlist does not gate.
+//
+// It records the same scenario and stage breadcrumbs as runtime conformance,
+// through the shared scenario runner (#326), to the operational log; a failure
+// prints the last-active-stage summary. It runs unsupervised: its own ready and
+// exit bounds already end a hung shell, and its children are the binary, never
+// Process children with a reported role.
 
 // `Bun.Terminal` is not typed in @types/bun@1.4.2 (ADR 0030); declare the shape
 // this suite touches locally and cast at the one spawn site.
@@ -164,31 +176,36 @@ async function runScenario(
   let output = "";
   let proc: PtyProcess | undefined;
   try {
-    approveWorkspace(binary, workspace, env);
+    stage("approve workspace", () => approveWorkspace(binary, workspace, env));
 
-    proc = spawnPty([binary], {
-      cwd: workspace,
-      env,
-      terminal: {
-        cols: 80,
-        rows: 24,
-        data: (_terminal, chunk) => {
-          // latin1 preserves the raw bytes so escape sequences match exactly.
-          output += Buffer.from(chunk).toString("latin1");
+    const pty = stage("spawn shell", () =>
+      spawnPty([binary], {
+        cwd: workspace,
+        env,
+        terminal: {
+          cols: 80,
+          rows: 24,
+          data: (_terminal, chunk) => {
+            // latin1 preserves the raw bytes so escape sequences match exactly.
+            output += Buffer.from(chunk).toString("latin1");
+          },
         },
-      },
-    });
+      }),
+    );
+    proc = pty;
 
-    await waitForReady(logPath, label);
+    await stage("await ready", () => waitForReady(logPath, label));
     // POSIX only: the shell holds the terminal in raw mode now, so ECHO is off.
-    const rawEchoOff = IS_WINDOWS || (proc.terminal.localFlags & ECHO) === 0;
+    const rawEchoOff = IS_WINDOWS || (pty.terminal.localFlags & ECHO) === 0;
 
-    drive(proc);
+    stage("drive", () => drive(pty));
 
-    const exitCode = await withTimeout(
-      proc.exited,
-      20_000,
-      `${label}: the shell did not exit after the ${label} signal`,
+    const exitCode = await stage("await exit", () =>
+      withTimeout(
+        pty.exited,
+        20_000,
+        `${label}: the shell did not exit after the ${label} signal`,
+      ),
     );
     assert.equal(
       exitCode,
@@ -196,35 +213,37 @@ async function runScenario(
       `${label}: expected exit code ${expectedExit}, got ${exitCode}`,
     );
 
-    await settleOutput(() => output);
+    await stage("settle output", () => settleOutput(() => output));
 
-    // Restored terminal modes. On POSIX we read them straight off the PTY's
-    // termios; the wire pair-invariant corroborates on every OS.
-    if (!IS_WINDOWS) {
-      assert.ok(
-        rawEchoOff,
-        `${label}: the shell never entered raw mode, so restoration is vacuous`,
+    stage("assert terminal restored", () => {
+      // Restored terminal modes. On POSIX we read them straight off the PTY's
+      // termios; the wire pair-invariant corroborates on every OS.
+      if (!IS_WINDOWS) {
+        assert.ok(
+          rawEchoOff,
+          `${label}: the shell never entered raw mode, so restoration is vacuous`,
+        );
+        assert.notEqual(
+          pty.terminal.localFlags & ECHO,
+          0,
+          `${label}: terminal left broken — ECHO was not restored`,
+        );
+      }
+      assertRestoredModes(label, output);
+    });
+
+    stage("assert one teardown", () => {
+      // Exactly one teardown across the exit path (the composition root's
+      // single teardown site, recorded once via the diagnostic side channel).
+      const teardownCount = readFileSync(logPath, "utf8")
+        .split("\n")
+        .filter((line) => line === "teardown").length;
+      assert.equal(
+        teardownCount,
+        1,
+        `${label}: expected exactly one teardown, saw ${teardownCount}`,
       );
-      assert.notEqual(
-        proc.terminal.localFlags & ECHO,
-        0,
-        `${label}: terminal left broken — ECHO was not restored`,
-      );
-    }
-    assertRestoredModes(label, output);
-
-    // Exactly one teardown across the exit path (the composition root's single
-    // teardown site, recorded once via the diagnostic side channel).
-    const teardownCount = readFileSync(logPath, "utf8")
-      .split("\n")
-      .filter((line) => line === "teardown").length;
-    assert.equal(
-      teardownCount,
-      1,
-      `${label}: expected exactly one teardown, saw ${teardownCount}`,
-    );
-
-    console.log(`  ok  ${label}`);
+    });
   } finally {
     try {
       proc?.terminal.close();
@@ -264,16 +283,18 @@ async function main(): Promise<void> {
   // The quit binding and Ctrl+C are keypresses (OpenTUI's raw mode disables
   // ISIG, so \x03 reaches the app as a key, not SIGINT); SIGHUP is a real OS
   // signal to the child. All three drive the one teardown site to a clean exit.
-  await runScenario("quit binding (q)", binary, (proc) =>
-    proc.terminal.write("q"),
+  const drives: [string, Drive][] = [
+    ["quit binding (q)", (proc) => proc.terminal.write("q")],
+    ["Ctrl+C", (proc) => proc.terminal.write("\x03")],
+  ];
+  // SIGHUP has no portable equivalent under ConPTY, so it is POSIX-only.
+  if (!IS_WINDOWS) drives.push(["SIGHUP", (proc) => proc.kill("SIGHUP")]);
+  await runScenarios("terminal-lifecycle", () =>
+    drives.map(([name, drive]) => ({
+      name,
+      body: () => runScenario(name, binary, drive),
+    })),
   );
-  await runScenario("Ctrl+C", binary, (proc) => proc.terminal.write("\x03"));
-  if (!IS_WINDOWS) {
-    // SIGHUP has no portable equivalent under ConPTY, so it is POSIX-only.
-    await runScenario("SIGHUP", binary, (proc) => proc.kill("SIGHUP"));
-  }
-
-  console.log("Real-terminal lifecycle suite passed.");
 }
 
 runMain(main);

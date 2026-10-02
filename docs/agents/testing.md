@@ -15,7 +15,14 @@ The gate separates three independently attributable, blocking layers (ADR 0027's
   `tests/process/fake-adapter.ts`.
 - **Standalone runtime conformance** runs real Process, Git, and recorded-Harness behavior in an ordinary Bun process outside the test runner: the
   `tests/process/runtime-conformance.ts` program, run by `bun run test:runtime-conformance` and CI's `Process runtime conformance` step. It and the
-  terminal-lifecycle program share their runner helpers (timeouts, exit, temp-dir cleanup) in `tests/helpers/standalone.ts`.
+  terminal-lifecycle program share their runner helpers (timeouts, exit, temp-dir cleanup, `stage`) in `tests/helpers/standalone.ts`.
+  - A supervisor parent (`tests/helpers/supervisor.ts`) runs the scenarios in one child process and enforces the 20-second bound from outside its event
+    loop. The scenario side (`scenario-runner.ts`) writes scenario, stage, and child-fact breadcrumbs synchronously to a breadcrumb file and the
+    operational log. Every real Process takes `withRunnerObserver()`.
+  - A failed, timed-out, or crashed scenario prints a last-active-stage summary: scenario, open stage, open child roles and PIDs (a blocking sync spawn
+    has none yet), elapsed time, and the log folder (`SECANT_LOG_DIR`, else `secant-runner-logs` under the OS temp folder). The supervisor then kills
+    the tree (the scenario's group or tree, then each reported PID's), removes the run's temp root (the scenario's `TMPDIR`), and resumes at the next
+    scenario. Its fixtures are runtime cases (`supervisor-conformance.ts`). Terminal lifecycle runs the same scenario side unsupervised.
 - **Compiled-binary acceptance** exercises Command, Harness, interruption, recovery, and Git through the copied binary in the consumer job.
 
 A real child under `bun test` fails its test. `bunfig.toml` preloads the spawn trap (`tests/helpers/spawnTrap.ts`, which documents the routes it

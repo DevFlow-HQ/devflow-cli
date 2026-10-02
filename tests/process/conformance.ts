@@ -59,7 +59,7 @@ export interface ProcessConformanceScenarios {
   };
 }
 
-export type ProcessConformanceBody = () => void | Promise<void>;
+type ProcessConformanceBody = () => void | Promise<void>;
 export type RegisterProcessConformanceCase = (
   name: string,
   body: ProcessConformanceBody,

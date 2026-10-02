@@ -5,7 +5,9 @@
 // default while still letting a suite inject a scripted Process double (e.g.
 // `processWithSpawn`). Keeping the default here, rather than in the shipped
 // factory, keeps the production interface honest: it never constructs a hidden
-// dependency of its own.
+// dependency of its own. The default reports its children to the running runner
+// program's breadcrumbs (a no-op outside one), so a Harness child shows in a
+// runtime-conformance failure summary.
 
 import {
   createClaudeCodeAdapter as createClaudeCodeAdapterWithProcess,
@@ -17,6 +19,7 @@ import {
   createProcessAdapter,
   type ProcessAdapter,
 } from "../../src/process/process.js";
+import { withRunnerObserver } from "../helpers/standalone.js";
 
 type ClaudeCodeOverrides = Parameters<
   typeof createClaudeCodeAdapterWithProcess
@@ -25,7 +28,7 @@ type CodexOverrides = Parameters<typeof createCodexAdapterWithProcess>[0];
 
 export function createClaudeCodeAdapter(
   overrides: ClaudeCodeOverrides = {},
-  processAdapter: ProcessAdapter = createProcessAdapter(),
+  processAdapter: ProcessAdapter = createProcessAdapter(withRunnerObserver()),
   phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
   return createClaudeCodeAdapterWithProcess(overrides, processAdapter, phases);
@@ -33,7 +36,7 @@ export function createClaudeCodeAdapter(
 
 export function createCodexAdapter(
   overrides: CodexOverrides = {},
-  processAdapter: ProcessAdapter = createProcessAdapter(),
+  processAdapter: ProcessAdapter = createProcessAdapter(withRunnerObserver()),
   phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
   return createCodexAdapterWithProcess(overrides, processAdapter, phases);

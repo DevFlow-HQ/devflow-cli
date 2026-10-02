@@ -18,7 +18,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   and the stored `requestedModel` identically, and an unusable area is a typed `working-area-unavailable` prepare failure, so the Run halts before any Turn rather
   than writing planning files anywhere else (#214). Execution never passes the area itself.
 - Composition owns the operational log (`operational-log.ts`, #318): Pino, fenced here by the import policy, writing through a synchronous
-  destination on a file opened owner-only through `node:fs`, never a transport or worker. Both client entries run as one Secant invocation under
+  destination on a file opened owner-only through `node:fs`, never a transport or worker. Both client entries (and the runner entry below) run as one Secant invocation under
   `runSecantInvocation`, which starts the sink before `wireApplication` (for the TUI, before the no-TTY rejection) and writes and flushes the
   failure record (write-once; the TUI writes a render failure before draining live Runs) before a throw reaches the CLI host, whose catch names
   the file through `describeFatal`. A log failure is one stderr notice (held until the TUI's terminal is restored) that disables logging and
@@ -40,6 +40,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 - Detail checkpoints (#325) map to `debug`: a Preflight check, a Run execution store write, and a phase record carrying a `step`. No observer
   learns whether detail is on; the Pino logger is built at `debug` only when it is, so detail-off drops them unserialized. They read no clock, so
   detail-off records, elapsed times included, are byte-identical to a build without them.
+- `runRunnerInvocation` (`runner-log.ts`, #326) is the standalone runner programs' log: one `runner` Secant invocation whose `RunnerBreadcrumb`s become
+  `runner-*` records (a failed scenario or stage warns) and whose Process options record child facts. The runner passes the folder: it reads
+  `SECANT_LOG_DIR` itself, because the folder must outlive the temp root it removes.
 - Startup prunes only matching regular log files strictly older than 30 days in the resolved folder (#323), before opening the active file:
   its real mtime can be stale against an injected future clock. Prune failures are silent; they never call the log-write failure fallback.
 

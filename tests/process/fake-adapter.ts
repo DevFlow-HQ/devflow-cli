@@ -15,6 +15,7 @@ import {
   type OwnedProcessOptions,
   type ProcessAdapterOptions,
 } from "../../src/process/process.js";
+import { withRunnerObserver } from "../helpers/standalone.js";
 
 /** A Process Interface that resolves and probes through the real Module, but
  *  launches owned processes through a scripted spawn. The Adapter conformance
@@ -24,7 +25,7 @@ import {
 export function processWithSpawn(
   spawnOwnedProcess: ProcessAdapter["spawnOwnedProcess"],
 ): ProcessAdapter {
-  const real = createProcessAdapter();
+  const real = createProcessAdapter(withRunnerObserver());
   return {
     resolveExecutable: (name, options) => real.resolveExecutable(name, options),
     spawnCommand: (options) => real.spawnCommand(options),

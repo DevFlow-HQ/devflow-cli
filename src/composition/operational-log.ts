@@ -32,8 +32,9 @@ import {
 // Each record is built from an allowlist of semantic fields; Pino's named-field
 // redaction below is a second layer, never the control.
 
-/** Which client the Secant invocation ran. */
-type ClientKind = "tui" | "headless";
+/** Which client the Secant invocation ran: a shell surface, or a standalone
+ *  runner program (`runner-log.ts`). */
+type ClientKind = "tui" | "headless" | "runner";
 
 /** One lifecycle record an observer mapping built: the event name and the
  *  allowlisted semantic fields it copied one by one, never a caller's object
@@ -62,8 +63,9 @@ const DETAIL_EVENTS = new Set([
 
 /** Each event's level, mapped here so no observer chooses one: a detail
  *  checkpoint is debug; a failed Harness phase, an unclean Harness cleanup, a
- *  not-ready Harness qualification, and a child that never ran, timed out, or
- *  needed a force kill are warnings; every other record is info. */
+ *  not-ready Harness qualification, a child that never ran, timed out, or
+ *  needed a force kill, and a failed runner scenario or stage are warnings;
+ *  every other record is info. */
 function recordLevel(record: OperationalRecord): "debug" | "info" | "warn" {
   if (DETAIL_EVENTS.has(record.event) || "step" in record) return "debug";
   switch (record.event) {
@@ -77,6 +79,9 @@ function recordLevel(record: OperationalRecord): "debug" | "info" | "warn" {
       return record.status === "failed" ? "warn" : "info";
     case "harness-cleanup":
       return record.status === "clean" ? "info" : "warn";
+    case "runner-scenario-end":
+    case "runner-stage-end":
+      return record.status === "failed" ? "warn" : "info";
     default:
       return "info";
   }
