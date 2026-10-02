@@ -17,15 +17,15 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 - `prepareRunHarness` (`wiring.ts`) is the one prepare site for launch, resume, and the interactive reopen: it threads `writableDirectory: owner.workingArea().path`
   and the stored `requestedModel` identically, and an unusable area is a typed `working-area-unavailable` prepare failure, so the Run halts before any Turn rather
   than writing planning files anywhere else (#214). Execution never passes the area itself.
-- Composition owns the operational log (`operational-log.ts`, #318): Pino, fenced here by the import policy, writing through a synchronous
-  destination on a file opened owner-only through `node:fs`, never a transport or worker. Both client entries (and the runner entry below) run as one Secant invocation under
-  `runSecantInvocation`, which starts the sink before `wireApplication` (for the TUI, before the no-TTY rejection) and writes and flushes the
+- Composition owns the operational log (`operational-log.ts`, #318, #328): builtin JSONL serialization and synchronous `node:fs` writes
+  on an owner-only file. Both client entries (and the runner entry below) run as one Secant invocation under
+  `runSecantInvocation`, which starts the sink before `wireApplication` (for the TUI, before the no-TTY rejection) and synchronously writes the
   failure record (write-once; the TUI writes a render failure before draining live Runs) before a throw reaches the CLI host, whose catch names
   the file through `describeFatal`. A log failure is one stderr notice (held until the TUI's terminal is restored) that disables logging and
-  changes no outcome, exit code, or stdout.
+  changes no outcome, exit code, or stdout. Serialization failures use that same fallback; a failed or zero-progress write is never retried.
 - `SECANT_HOME`, `SECANT_LOG_DIR`, and `SECANT_LOG_DETAIL` are read once, side by side, in `resolveHostContext` (`wiring.ts`); nothing below
   composition reads them.
-  Records hold only allowlisted semantic fields and causes from `translateCause`; Pino's named-field redaction is a second layer. Tests reach the
+  Records hold only allowlisted semantic fields and causes from `translateCause`; the recursive named-field scrub is a second layer. Tests reach the
   sink through the `logSink` wiring override and never set the environment names. An injected sink defaults to the injected home's `logs`,
   bypassing `SECANT_LOG_DIR`, so an injected clock cannot prune the real process's shared log folder, and reads detail only from its own `detail`.
 - `wireApplication`'s second argument is the Secant invocation's log, passed only by the two client entries; a direct caller logs no lifecycle.
@@ -38,7 +38,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   that observer (#322). The Process observer (`process-observer.ts`, #321) is built where the one Process is constructed, and
   `processFactory` receives the same options, so a double reports child facts too; a child that never ran, timed out, or was force-killed warns.
 - Detail checkpoints (#325) map to `debug`: a Preflight check, a Run execution store write, and a phase record carrying a `step`. No observer
-  learns whether detail is on; the Pino logger is built at `debug` only when it is, so detail-off drops them unserialized. They read no clock, so
+  learns whether detail is on; the sink drops detail-off records before serialization or reading the clock. They read no clock, so
   detail-off records, elapsed times included, are byte-identical to a build without them.
 - `runRunnerInvocation` (`runner-log.ts`, #326) is the standalone runner programs' log: one `runner` Secant invocation whose `RunnerBreadcrumb`s become
   `runner-*` records (a failed scenario or stage warns) and whose Process options record child facts. The runner passes the folder: it reads
@@ -50,3 +50,5 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 
 - Retention uses real files and injected clocks. Locked-file stat/delete failures have no deterministic, spawn-free fixture across all three OSes:
   chmod is ineffective as root and on Windows; the suite covers the unreadable-folder fallback and preserves non-file entries instead.
+- Short and zero-progress writes lack a deterministic regular-file fixture across the three OSes; review pins positive progress and immediate shutdown at zero.
+  Mocking the syscall would couple the Interface tests to the writer. Linux's `/dev/full` covers write-error shutdown; all OSes cover failed open.

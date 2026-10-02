@@ -56,14 +56,14 @@ An `index.ts` is valid for one cohesive Module after declaring it in that table.
   shared helper: the isolated-Git-environment hardening is extracted once, exported from the Run Store entry, and reused by Preflight on repeated use (A31).
 - Each Interface owns its exposed types. Import another owner's public contract when the meaning is identical; Application translates facts for
   clients. Extract a small common value only for demonstrated consumers. A central `types/`, `models/`, or utility barrel is not a default owner.
-- SQLite belongs to Catalog and Run Store; OpenTUI belongs to presentation/renderer; Harness-native dependencies belong to Harness; Pino, the
-  operational log's writer, belongs to composition. Target code
+- SQLite belongs to Catalog and Run Store; OpenTUI belongs to presentation/renderer; Harness-native dependencies belong to Harness;
+  the operational log's writer belongs to composition. Target code
   excludes OpenCode domain imports and PTY transport; Bun APIs (`Bun.*` calls and `bun:` imports) are confined to a named per-API allowlist of four
   target files — the CLI entry (`Bun.main`), the Catalog and Run Store SQLite adapters (`bun:sqlite`), and the Windows console guard (`bun:ffi`), each
   keyed to the one specifier it needs (D6). No target source spawns with `shell: true`; every spawn resolves its executable and runs it directly
   ([ADR 0030](../adr/0030-ship-the-shell-as-a-bun-compiled-single-file-executable.md#runtime-neutrality)). Renderer drawing may use OpenTUI directly;
   the Renderer Port covers lifecycle only.
-- A Module entry's emitted declarations never name a fenced package (OpenTUI, the MCP SDK, OpenCode, PTY transport, a Harness-native SDK, or Pino), so no
+- A Module entry's emitted declarations never name a fenced package (OpenTUI, the MCP SDK, OpenCode, PTY transport, a Harness-native SDK), so no
   inferred type carries one across the entry without an import. The renderer entry alone exposes `@opentui/core`, which it wraps by design.
 
 ## Enforcement And Tests

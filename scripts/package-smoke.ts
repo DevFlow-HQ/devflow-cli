@@ -2485,8 +2485,8 @@ await withCleanup(
     );
 
     async function operationalLogScenario(): Promise<void> {
-      // The operational log inside the compiled binary (#318): Pino's synchronous
-      // destination writes one JSONL file per Secant invocation, a seeded secret
+      // The operational log inside the compiled binary (#318): synchronous
+      // writes produce one JSONL file per Secant invocation, a seeded secret
       // never reaches it, and a fatal error flushes its failure record and names
       // the file. The only scenario that sets SECANT_LOG_DIR; each command gets
       // its own folder so its one file is unambiguous.

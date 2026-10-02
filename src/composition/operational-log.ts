@@ -6,9 +6,9 @@ import {
   openSync,
   readdirSync,
   rmSync,
+  writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import pino, { type Logger } from "pino";
 import { translateCause, type SafeCause } from "../harness/harness.js";
 import {
   resolveHostContext,
@@ -18,19 +18,15 @@ import {
 } from "./wiring.js";
 
 // The operational log (#318, spec #313): the maintainer's private, local JSONL
-// record of one Secant invocation. Composition owns the sink — Pino, its
-// configuration, the file, the Secant invocation id, and the single log-failure
-// fallback — and no Module below composition imports Pino or this file. It is
-// never Run truth, and the Projection never reads it.
+// record of one Secant invocation. Composition owns the writer, the file, the
+// Secant invocation id, and the single log-failure fallback. It is never Run
+// truth, and the Projection never reads it.
 //
-// Pino writes through a synchronous destination with no transport and no worker
-// thread: on the spec's Linux probe the asynchronous destination wrote nothing in
-// a compiled binary that exits at once, and the file transport hung it. The file
-// is opened here through `node:fs`, owner-only, so composition owns its lifetime
-// and closes it synchronously.
-//
-// Each record is built from an allowlist of semantic fields; Pino's named-field
-// redaction below is a second layer, never the control.
+// The writer surface is frozen by spec: one file per invocation, no rotation,
+// transport, or worker. Builtin serialization and synchronous writes keep every
+// record on disk before blocking work or termination (#328).
+// Each record is built from an allowlist of semantic fields; the named-field
+// scrub below is a second layer, never the control.
 
 /** Which client the Secant invocation ran: a shell surface, or a standalone
  *  runner program (`runner-log.ts`). */
@@ -96,18 +92,18 @@ export interface OperationalLog {
    *  never the caller (`recordLevel`). Like every write, it stops silently after
    *  `end` or a log failure. */
   record(record: OperationalRecord): void;
-  /** Writes the failure record, its cause translated safely, and flushes. Only
+  /** Writes the failure record synchronously, its cause translated safely. Only
    *  the first call writes: the TUI records a render failure before it drains
    *  live Runs, and the guard's own call then finds it written. */
   fatal(error: unknown): void;
-  /** Writes the invocation-end record, flushes, and closes the file. Only the
+  /** Writes the invocation-end record synchronously and closes the file. Only the
    *  first call writes: the signal path ends the log before it re-raises. */
   end(exitStatus: number, signal?: NodeJS.Signals): void;
 }
 
 // The second layer: named fields no record should carry, censored if one ever
 // does. The allowlist of fields each record is built from is the control.
-const REDACTED_FIELDS = [
+const REDACTED_FIELDS = new Set([
   "prompt",
   "text",
   "input",
@@ -118,7 +114,7 @@ const REDACTED_FIELDS = [
   "secret",
   "password",
   "authorization",
-].flatMap((name) => [name, `*.${name}`]);
+]);
 
 const LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const LOG_FILE_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-\d+\.jsonl$/;
@@ -152,8 +148,8 @@ interface StartOptions {
   readonly version: string;
   readonly platform: string;
   readonly clock: LogClock;
-  /** Whether detail records are written: the logger's level is `debug` when on
-   *  and `info` otherwise, so a dropped detail record is never serialized. */
+  /** Whether detail records are written: detail-off drops them before reading
+   *  the clock or serializing any fields. */
   readonly detail: boolean;
   /** The one fallback channel for a log-failure notice. */
   readonly notify: (text: string) => void;
@@ -171,8 +167,6 @@ function startOperationalLog(options: StartOptions): OperationalLog {
   const path = join(folder, name);
 
   let fd: number | undefined;
-  let logger: Logger | undefined;
-  let destination: ReturnType<typeof pino.destination> | undefined;
   let enabled = true;
   let ended = false;
   let failed = false;
@@ -202,20 +196,24 @@ function startOperationalLog(options: StartOptions): OperationalLog {
     level: "debug" | "info" | "warn" | "fatal",
     record: Readonly<Record<string, unknown>>,
   ) => {
-    if (!enabled || ended || logger === undefined) return;
+    if (!enabled || ended || fd === undefined || (level === "debug" && !detail))
+      return;
     try {
-      logger[level](record);
-    } catch (error) {
-      disable(error);
-    }
-  };
-  // Every write is already synchronous, so this forces the bytes to disk. It
-  // never runs after a failed write: sonic-boom's flushSync retries a buffered
-  // write forever on a non-EAGAIN error.
-  const flush = () => {
-    if (!enabled || destination === undefined) return;
-    try {
-      destination.flushSync();
+      const line = JSON.stringify(
+        { level, time: clock.now().toISOString(), invocationId, ...record },
+        (key, value: unknown) =>
+          REDACTED_FIELDS.has(key) ? "[redacted]" : value,
+      );
+      const bytes = Buffer.from(`${line}\n`, "utf8");
+      // A short write advances through this finite record. Zero progress or an
+      // error disables logging; no failed write is retried or left to flush.
+      let offset = 0;
+      while (offset < bytes.length) {
+        const written = writeSync(fd, bytes, offset, bytes.length - offset);
+        if (written === 0)
+          throw new Error("Operational log write made no progress");
+        offset += written;
+      }
     } catch (error) {
       disable(error);
     }
@@ -228,21 +226,6 @@ function startOperationalLog(options: StartOptions): OperationalLog {
     // Owner-only where the OS supports it; Windows ignores the modes.
     mkdirSync(folder, { recursive: true, mode: 0o700 });
     fd = openSync(path, "a", 0o600);
-    const stream = pino.destination({ fd, sync: true });
-    // A synchronous write failure is emitted here, inside the write call.
-    stream.on("error", disable);
-    destination = stream;
-    logger = pino(
-      {
-        level: detail ? "debug" : "info",
-        // Replaces Pino's default base: no hostname, and the PID once, below.
-        base: { invocationId },
-        timestamp: () => `,"time":"${clock.now().toISOString()}"`,
-        formatters: { level: (label) => ({ level: label }) },
-        redact: { paths: REDACTED_FIELDS, censor: "[redacted]" },
-      },
-      stream,
-    );
   } catch (error) {
     disable(error);
   }
@@ -266,7 +249,6 @@ function startOperationalLog(options: StartOptions): OperationalLog {
         event: "invocation-failure",
         cause: translateCause(error),
       });
-      flush();
     },
     end(exitStatus, signal) {
       if (ended) return;
@@ -279,7 +261,6 @@ function startOperationalLog(options: StartOptions): OperationalLog {
         ...(signal !== undefined ? { signal } : {}),
         elapsedMs: Math.round(clock.monotonic() - started),
       });
-      flush();
       ended = true;
       close();
     },

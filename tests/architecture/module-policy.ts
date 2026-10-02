@@ -137,12 +137,6 @@ const fencedDependencies: readonly {
   // `bun:sqlite` is the sole admitted SQLite driver (ADR 0030), fenced to the
   // Run Store and Catalog.
   { owners: sqliteOwners, matches: (s) => s === "bun:sqlite" },
-  // Pino is the operational log's writer, and composition owns that sink (#318):
-  // every other Module reports through an observer and never logs directly.
-  {
-    owners: ["composition"],
-    matches: (s) => s === "pino" || s.startsWith("pino/"),
-  },
   {
     owners: ["harness"],
     matches: (s) =>

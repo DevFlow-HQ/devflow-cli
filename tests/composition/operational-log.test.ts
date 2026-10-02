@@ -14,6 +14,7 @@ import test from "node:test";
 import {
   describeFatal,
   launchTui,
+  runRunnerInvocation,
   withClients,
 } from "../../src/composition/main.js";
 import { runHeadless, runHeadlessCli } from "../../src/headless/headless.js";
@@ -53,6 +54,11 @@ test("a headless Secant invocation writes its start and end records to one priva
   assertBase(log.records);
   const [start, end] = log.records;
   assert.equal(log.records.length, 2);
+  assert.deepEqual(Object.keys(start!).slice(0, 3), [
+    "level",
+    "time",
+    "invocationId",
+  ]);
   assert.deepEqual(start, {
     level: "info",
     time: WALL.toISOString(),
@@ -142,6 +148,166 @@ test("a headless fatal error writes and flushes its failure record, and the fata
     `Error: wiring exploded\nThe operational log for this Secant invocation is at ${log.path}\n`,
   );
 });
+
+test("an unserializable record disables logging once without changing the outcome", async () => {
+  const { folder, overrides, notices } = home();
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  // A malformed semantic field exercises the sink's last-resort serialization
+  // fallback through the same composition entry the standalone runners use.
+  const status = await runRunnerInvocation(
+    "runtime-conformance",
+    overrides.logSink!,
+    async (log) => {
+      log.breadcrumb({
+        kind: "scenario-start",
+        scenario: cyclic as unknown as string,
+      });
+      log.breadcrumb({ kind: "scenario-start", scenario: "after failure" });
+      return 7;
+    },
+  );
+  assert.equal(status, 7);
+  assert.equal(notices.length, 2, "one notice and its remediation");
+  assert.match(notices[0]!, /^Notice \[operational-log-unavailable\]/);
+  assert.match(notices[1]!, /^Remediation:/);
+  const log = readLog(folder);
+  assert.deepEqual(
+    log.records.map((record) => record.event),
+    ["invocation-start"],
+  );
+  assert.equal(describeFatal(new Error("unlogged")).includes(log.path), false);
+});
+
+test("the named-field scrub censors nested records and arrays without changing the caller's values", async () => {
+  const { folder, overrides, notices } = home();
+  const fields = {
+    prompt: "seeded-prompt",
+    text: "seeded-text",
+    input: "seeded-input",
+    args: "seeded-args",
+    argv: "seeded-argv",
+    env: "seeded-env",
+    token: "seeded-token",
+    secret: "seeded-secret",
+    password: "seeded-password",
+    authorization: "seeded-authorization",
+  };
+  const scenario = {
+    ...fields,
+    nested: { ...fields, rows: [{ ...fields, safe: "kept" }] },
+    safe: "Unicode: café 🐈\nsecond line",
+  };
+  assert.equal(
+    await runRunnerInvocation(
+      "runtime-conformance",
+      overrides.logSink!,
+      async (log) => {
+        // Intentional allowlist breach: the scrub is defence in depth if an
+        // observer ever puts a structured value in a semantic field.
+        log.breadcrumb({
+          kind: "scenario-start",
+          scenario: scenario as unknown as string,
+        });
+        return 0;
+      },
+    ),
+    0,
+  );
+  const log = readLog(folder);
+  const censored = {
+    prompt: "[redacted]",
+    text: "[redacted]",
+    input: "[redacted]",
+    args: "[redacted]",
+    argv: "[redacted]",
+    env: "[redacted]",
+    token: "[redacted]",
+    secret: "[redacted]",
+    password: "[redacted]",
+    authorization: "[redacted]",
+  };
+  assert.deepEqual(log.records[1]!.scenario, {
+    ...censored,
+    nested: { ...censored, rows: [{ ...censored, safe: "kept" }] },
+    safe: "Unicode: café 🐈\nsecond line",
+  });
+  assert.equal(
+    log.records.length,
+    3,
+    "embedded newlines stay within one record",
+  );
+  assert.doesNotMatch(log.text, /seeded-/);
+  assert.equal(scenario.token, "seeded-token");
+  assert.equal(scenario.nested.rows[0]!.authorization, "seeded-authorization");
+  assert.deepEqual(notices, []);
+});
+
+test("detail-off drops records before serialization or a wall-clock read", async () => {
+  const { folder, overrides, notices } = home();
+  let clockReads = 0;
+  let serialized = false;
+  const session = {
+    toJSON() {
+      serialized = true;
+      throw new Error("detail must not be serialized");
+    },
+  };
+  const status = await withClients(() => 0, {
+    ...overrides,
+    logSink: {
+      ...overrides.logSink,
+      clock: {
+        ...steppingClock(),
+        now: () => {
+          clockReads++;
+          return WALL;
+        },
+      },
+    },
+    harnessAdapter: (phases) => {
+      phases({
+        kind: "phase-start",
+        phase: "handshake",
+        step: "account-check",
+        session: session as unknown as string,
+      });
+      return {
+        prepare() {
+          throw new Error("this invocation prepares no Harness");
+        },
+      };
+    },
+  });
+  assert.equal(status, 0);
+  assert.equal(serialized, false);
+  assert.equal(clockReads, 4, "filename, pruning, start, and end only");
+  assert.deepEqual(notices, []);
+  assert.deepEqual(
+    readLog(folder).records.map((record) => record.event),
+    ["invocation-start", "invocation-end"],
+  );
+});
+
+test(
+  "a failed synchronous write disables logging once and never changes the outcome",
+  { skip: process.platform !== "linux" || !existsSync("/dev/full") },
+  async () => {
+    const { folder, overrides, notices } = home();
+    mkdirSync(folder);
+    // Linux's full device opens successfully but every write fails with ENOSPC,
+    // deterministically and without changing the real disk or the writer.
+    symlinkSync(
+      "/dev/full",
+      join(folder, `2026-10-02T09-08-07-006Z-${process.pid}.jsonl`),
+    );
+    assert.equal(await withClients(() => 7, overrides), 7);
+    assert.equal(notices.length, 2, "one notice and its remediation");
+    assert.match(notices[0]!, /operational-log-unavailable.*ENOSPC/);
+    const failure = new Error("unlogged after write failure");
+    assert.equal(describeFatal(failure), `${failure.stack}\n`);
+  },
+);
 
 test("the TUI's no-terminal rejection is a Secant invocation and is logged", async () => {
   const { folder, overrides } = home();
