@@ -37,7 +37,6 @@ import { createHarnessCatalog } from "./harness-catalog.js";
 import { createLaunchPreparation } from "./launch-preparation.js";
 import {
   guardedApplicationObserver,
-  problemCodes,
   type ApplicationObserver,
 } from "./observer.js";
 import type { BundleManagement } from "./bundle-management.js";
@@ -541,6 +540,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       operationId,
       operation: entry.operation,
       admission: "admitted",
+      ...(entry.runId !== undefined ? { runId: entry.runId } : {}),
     });
     scheduleSettlement(() => settleOperation(operationId));
   }
@@ -560,6 +560,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           operationId,
           operation: entry.operation,
           outcome: outcome.status,
+          ...(entry.runId !== undefined ? { runId: entry.runId } : {}),
           ...(outcome.status === "not-applied"
             ? { code: outcome.problem.code }
             : {}),
@@ -698,6 +699,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
       attemptId: request.attemptId,
       outcome: request.outcome,
     });
+  }
+
+  // Report only a rest this Application drive successfully commits. Execution
+  // receives observedOwner too, so its writes must keep their own observer.
+  function restRun(
+    owner: RunOwner,
+    runId: string,
+    outcome: "cancelled" | "halted" | "blocked",
+  ): ReturnType<RunOwner["writeState"]> {
+    const result = owner.writeState(outcome);
+    if (result.ok) observe({ kind: "run-rest", runId, outcome });
+    return result;
   }
 
   // Wrap the acquired owner so each canonical write pushes a fresh Run snapshot
@@ -849,7 +862,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     } catch (error) {
       if (tracking.abort.signal.aborted) {
         if (tracking.abort.signal.reason === CANCEL_ABORT) {
-          observedOwner(owner, runId).writeState("cancelled");
+          restRun(observedOwner(owner, runId), runId, "cancelled");
           params.setRetainOwner(false);
           return { status: "applied" };
         }
@@ -895,7 +908,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const problem = selectedHarnessUnavailable(runId, failure);
     const previous = tracking.problem;
     tracking.problem = problem;
-    if (!observed.writeState("halted").ok) tracking.problem = previous;
+    if (!restRun(observed, runId, "halted").ok) tracking.problem = previous;
     return { status: "not-applied", problem };
   }
 
@@ -1460,7 +1473,6 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const harnessSelection = routingNeedsHarness(manifest.routing)
       ? (storedHarness ?? "claude-code")
       : undefined;
-    observe({ kind: "preflight-start" });
     const pre = preflight(
       {
         manifest,
@@ -1476,10 +1488,6 @@ export function createApplication(deps: ApplicationDependencies): Application {
       process,
       observe,
     );
-    observe({
-      kind: "preflight-settle",
-      codes: problemCodes("problem" in pre ? [pre.problem] : []),
-    });
     if ("problem" in pre) return { problem: pre.problem };
     const grant = catalog.getTrustGrant(digest, entry.installationGeneration);
     if (grant === undefined) {
@@ -1868,6 +1876,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
               advanceState: reject ? "failed" : "running",
             });
             if (reject) {
+              observe({
+                kind: "run-rest",
+                runId: input.runId,
+                outcome: "failed",
+              });
               leaveClaimLive = false;
               return { status: "applied" };
             }
@@ -1912,6 +1925,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           );
         }
         if (answer === "stop") {
+          observe({ kind: "run-rest", runId: input.runId, outcome: "failed" });
           leaveClaimLive = false;
           return { status: "applied" };
         }
@@ -2474,14 +2488,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (report.outcome === "interrupted" || report.outcome === "lost") {
           // An interrupt-turn (or OS signal) stopped the human Turn: rest the Run
           // `halted`, resumable, through the held owner so observers see it (#118).
-          observed.writeState("halted");
+          restRun(observed, input.runId, "halted");
           leaveClaimLive = false;
           return { status: "applied" };
         }
         // completed or failed: the Turn is recorded; back to the boundary for the next
         // Turn. `writeState` pushes the fresh snapshot (with the new transcript entry),
         // which the Turn's event and settle writes bypass observedOwner and would not push.
-        observed.writeState("blocked");
+        restRun(observed, input.runId, "blocked");
         return { status: "applied" };
       },
       retainOwner: () => leaveClaimLive,
@@ -2727,7 +2741,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           return { status: "not-applied", problem: runStoreDamaged(runId) };
         }
         try {
-          observedOwner(owner, runId).writeState("cancelled");
+          restRun(observedOwner(owner, runId), runId, "cancelled");
           owner.release();
         } finally {
           owner.close();
@@ -2744,7 +2758,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         // Our epoch is the freshest, so this write is not fenced. A concurrent
         // second cancel is the only actor that could fence it, and it is resting the
         // same Run cancelled too, so the outcome is unchanged either way.
-        observedOwner(owner, runId).writeState("cancelled");
+        restRun(observedOwner(owner, runId), runId, "cancelled");
         owner.release();
       } finally {
         owner.close();
@@ -2764,7 +2778,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     tracking: TrackedRun,
     owner: RunOwner,
   ): Promise<OperationOutcome> {
-    observedOwner(owner, runId).writeState("cancelled");
+    restRun(observedOwner(owner, runId), runId, "cancelled");
     try {
       await closeInteractiveStep(tracking);
     } finally {
@@ -2923,7 +2937,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     openProjection,
     submit(submission: Submission): SubmissionAdmission {
       const { operationId, operation } = submission;
-      const replay = operations.has(operationId);
+      const replay = operations.get(operationId);
       const admission = dispatch(submission);
       // `admit` reported a new admission before scheduling its settlement; a
       // replay or a refusal settles nothing, so it is reported here.
@@ -2935,12 +2949,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
           admission: "not-admitted",
           code: admission.problem.code,
         });
-      } else if (replay) {
+      } else if (replay !== undefined) {
         observe({
           kind: "operation-admission",
           operationId,
           operation,
           admission: "replayed",
+          ...(replay.runId !== undefined ? { runId: replay.runId } : {}),
         });
       }
       return admission;

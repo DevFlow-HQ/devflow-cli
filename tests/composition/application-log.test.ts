@@ -304,6 +304,7 @@ test("headless `run launch` refused at its assessment leaves every finding's cod
 });
 
 test("a launched Operation's admission and outcome share its id, and a replay is admitted without a second outcome", async () => {
+  let runId = "";
   const h = wiredHome();
   const clock = frozenClock();
   const cmd = writeCommandBundle();
@@ -326,7 +327,9 @@ test("a launched Operation's admission and outcome share its id, and a replay is
         operation: "launch-run",
         input: { bundle: { id: cmd.id }, launchInputs: {}, trustDigest },
       } as const;
-      assert.ok(port.submit(launch).admitted);
+      const admitted = port.submit(launch);
+      assert.ok(admitted.admitted && admitted.runId !== undefined);
+      runId = admitted.runId;
       // The Run settles asynchronously, so its outcome is read after this.
       clock.advance(1500);
       assert.equal((await awaitSettled(port, "op-launch")).status, "applied");
@@ -343,12 +346,14 @@ test("a launched Operation's admission and outcome share its id, and a replay is
       event: "operation-admission",
       operationId: "op-launch",
       operation: "launch-run",
+      runId,
       status: "admitted",
     }),
     info({
       event: "operation-outcome",
       operationId: "op-launch",
       operation: "launch-run",
+      runId,
       status: "applied",
       elapsedMs: 1500,
     }),
@@ -356,6 +361,7 @@ test("a launched Operation's admission and outcome share its id, and a replay is
       event: "operation-admission",
       operationId: "op-launch",
       operation: "launch-run",
+      runId,
       status: "replayed",
     }),
   ]);
@@ -637,6 +643,7 @@ test("seeded prompts, typed text, launch inputs, command arguments, and environm
 });
 
 test("a resume runs Preflight again and settles it before the resumed Operation is admitted", async () => {
+  let runId = "";
   const h = wiredHome();
   const clock = frozenClock();
   // The first Command cannot spawn, so the Run rests `failed`; the resumed one
@@ -671,6 +678,7 @@ test("a resume runs Preflight again and settles it before the resumed Operation 
         input: { bundle: { id: cmd.id }, launchInputs: {}, trustDigest },
       });
       assert.ok(launched.admitted && launched.runId !== undefined);
+      runId = launched.runId;
       await awaitSettled(port, "op-launch");
       const resume = port.submit({
         operationId: "op-resume",
@@ -696,12 +704,14 @@ test("a resume runs Preflight again and settles it before the resumed Operation 
       event: "operation-admission",
       operationId: "op-resume",
       operation: "resume-run",
+      runId,
       status: "admitted",
     }),
     info({
       event: "operation-outcome",
       operationId: "op-resume",
       operation: "resume-run",
+      runId,
       status: "applied",
       elapsedMs: 1500,
     }),

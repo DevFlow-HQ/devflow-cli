@@ -9,7 +9,11 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
-import { wireApplication, type Wiring } from "../../src/composition/main.js";
+import {
+  wireApplication,
+  withClients,
+  type Wiring,
+} from "../../src/composition/main.js";
 import { buildBundle } from "../../src/bundle/bundle.js";
 import type { HarnessAdapter } from "../../src/harness/harness.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
@@ -25,6 +29,19 @@ import {
   qualificationAdapter,
   wiringProcess,
 } from "../helpers/wiringDoubles.js";
+
+import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+import { home, readLog } from "./log-sink.js";
+import {
+  profile,
+  writeBundle,
+  launch as launchLoggedRun,
+  applied,
+  readRun,
+  semantic,
+  agentStep,
+  COMPLETED,
+} from "../helpers/runLogFixture.js";
 
 /** Await a submitted Run Operation's settled outcome (execution settles async). */
 async function settled(wired: Wiring, operationId: string): Promise<void> {
@@ -804,3 +821,179 @@ for (const kind of ["agent", "interactive-agent"] as const) {
     );
   });
 }
+for (const ownership of ["released", "held-elsewhere"] as const) {
+  test(`cancelling a blocked Run whose prior owner is ${ownership} logs the committed rest`, async (t) => {
+    const h = home();
+    const overrides = {
+      ...h.overrides,
+      process: createFakeBundleProcess(),
+      harnessAdapter: createFake({
+        profile: profile(),
+        turns: [{ result: COMPLETED }],
+      })(),
+      discoverClaudeCode: () => ({
+        kind: "found" as const,
+        attempt: {
+          source: "path" as const,
+          name: "claude",
+          description: "fake",
+        },
+      }),
+    };
+    const first = wireApplication(overrides);
+    t.after(async () => {
+      await first.shutdown();
+      first.runGroup.close();
+      first.catalog.close();
+    });
+    const bundle = writeBundle([
+      agentStep("draft", 0),
+      {
+        id: "gate",
+        kind: "human-gate",
+        shape: "approve-reject",
+        message: "ok?",
+      },
+    ]);
+    const built = first.bundleManagement.build(bundle.folder, {
+      noInstall: false,
+    });
+    assert.ok(built.ok);
+    await applied(first.projectionPort, {
+      operationId: "op-approve",
+      operation: "approve-workspace",
+      input: { path: overrides.launchCwd! },
+    });
+    const runId = launchLoggedRun(first.projectionPort, built.report.digest);
+    await awaitSettled(first.projectionPort, "op-launch");
+    if (ownership === "released") await first.shutdown();
+    await withClients(async (clients) => {
+      await applied(clients.projectionPort, {
+        operationId: "op-cancel",
+        operation: "cancel-run",
+        input: { runId },
+      });
+      return 0;
+    }, overrides);
+    const records = readLog(h.folder).records;
+    assert.deepEqual(
+      records.filter((record) => record.event === "run-end").map(semantic),
+      [{ event: "run-end", runId, outcome: "cancelled" }],
+    );
+    assert.deepEqual(
+      records
+        .filter((record) => record.operationId === "op-cancel")
+        .map(semantic),
+      [
+        {
+          event: "operation-admission",
+          operationId: "op-cancel",
+          operation: "cancel-run",
+          runId,
+          status: "admitted",
+        },
+        {
+          event: "operation-outcome",
+          operationId: "op-cancel",
+          operation: "cancel-run",
+          runId,
+          status: "applied",
+          elapsedMs: 125,
+        },
+      ],
+    );
+  });
+}
+
+test("a preparation failure on a fenced owner records the refusal without claiming a halted Run rest", async (t) => {
+  const h = home();
+  const observer = wireApplication(h.overrides);
+  let replacement: ReturnType<typeof observer.runGroup.acquireRun>;
+  let runId = "";
+  let prepares = 0;
+  t.after(async () => {
+    replacement?.release();
+    replacement?.close();
+    await observer.shutdown();
+    observer.runGroup.close();
+    observer.catalog.close();
+  });
+  const adapter: HarnessAdapter = {
+    prepare(options) {
+      if (++prepares === 2) {
+        replacement = observer.runGroup.acquireRun(runId, { takeover: true });
+        assert.ok(replacement);
+        return Promise.resolve({
+          ok: false,
+          failure: {
+            phase: "prepare",
+            category: "protocol-incompatible",
+            possibleEffects: "none",
+          },
+        });
+      }
+      return createFake({
+        profile: profile(),
+        turns: [{ result: COMPLETED }],
+      })().prepare(options);
+    },
+  };
+  const bundle = writeBundle([
+    agentStep("draft", 0),
+    { id: "gate", kind: "human-gate", shape: "approve-reject", message: "ok?" },
+    agentStep("apply", 0),
+  ]);
+  await withClients(
+    async (clients) => {
+      const built = clients.bundleManagement.build(bundle.folder, {
+        noInstall: false,
+      });
+      assert.ok(built.ok);
+      const port = clients.projectionPort;
+      await applied(port, {
+        operationId: "op-approve",
+        operation: "approve-workspace",
+        input: { path: h.overrides.launchCwd! },
+      });
+      runId = launchLoggedRun(port, built.report.digest);
+      await awaitSettled(port, "op-launch");
+      const gate = readRun(port, runId).pendingGate?.gate;
+      assert.ok(gate);
+      assert.ok(
+        port.submit({
+          operationId: "op-continue",
+          operation: "answer-human-gate",
+          input: { runId, gate, answer: "continue" },
+        }).admitted,
+      );
+      const outcome = await awaitSettled(port, "op-continue");
+      assert.equal(outcome.status, "not-applied");
+      if (outcome.status !== "not-applied") throw new Error("unreachable");
+      assert.equal(outcome.problem.code, "selected-harness-unavailable");
+      return 0;
+    },
+    {
+      ...h.overrides,
+      process: createFakeBundleProcess(),
+      harnessAdapter: adapter,
+      discoverClaudeCode: () => ({
+        kind: "found",
+        attempt: { source: "path", name: "claude", description: "fake" },
+      }),
+    },
+  );
+  const records = readLog(h.folder).records;
+  assert.deepEqual(
+    records
+      .filter((record) => record.event === "run-end")
+      .map((record) => [record.runId, record.outcome]),
+    [[runId, "blocked"]],
+  );
+  const refusal = records.find(
+    (record) =>
+      record.event === "operation-outcome" &&
+      record.operationId === "op-continue",
+  );
+  assert.equal(refusal?.runId, runId);
+  assert.equal(refusal?.code, "selected-harness-unavailable");
+});

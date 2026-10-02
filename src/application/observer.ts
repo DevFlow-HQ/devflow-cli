@@ -1,5 +1,7 @@
-import type { EffectScope, FailurePhase } from "../harness/harness.js";
-import type { ExecutionEvent } from "../run/execution/execution.js";
+import type {
+  ExecutionEvent,
+  TurnFailureFacts,
+} from "../run/execution/execution.js";
 import type {
   HarnessQualificationView,
   Problem,
@@ -7,8 +9,8 @@ import type {
 } from "./projection-port.js";
 
 // The Application observer (#319, #320, spec #313): the semantic stages the
-// Application alone observes, before a Run exists and as it settles Attempts,
-// reported so a refused launch, a "not ready" Harness, and every Operation leave
+// Application alone observes, before a Run exists and as it rests Runs or
+// settles Attempts, reported so a refused launch, a "not ready" Harness, and every Operation leave
 // evidence. Composition turns each event into an operational-log record, the
 // sink picks its level, and a cause is translated when it is written; the
 // Application never depends on the logger.
@@ -17,15 +19,6 @@ import type {
 // Qualification states, Problem codes, and typed failure fields. No Submission or
 // launch input, Turn text, Problem prose, diagnostics, or retry evidence crosses.
 // A start with no settlement stands for the last stage Application reached.
-
-/** The typed facts a qualification failure carries; `cause` is untranslated. */
-interface ApplicationFailureFacts {
-  readonly phase: FailurePhase;
-  readonly category: string;
-  readonly possibleEffects: EffectScope;
-  readonly nativeCode?: string;
-  readonly cause?: unknown;
-}
 
 /** Problem codes in the order the stage found them; empty when it passed. */
 type ProblemCodes = readonly string[];
@@ -50,6 +43,12 @@ export type ApplicationEvent =
    *  Application settles: an answered authored gate, an ended interactive Step
    *  (#320). */
   | Extract<ExecutionEvent, { kind: "attempt-end" }>
+  /** A rest committed by Application itself, outside a Routing walk. */
+  | {
+      readonly kind: "run-rest";
+      readonly runId: string;
+      readonly outcome: "cancelled" | "failed" | "halted" | "blocked";
+    }
   /** An uncached qualification began; a cached read qualifies nothing. */
   | { readonly kind: "qualification-start"; readonly harness: string }
   | {
@@ -59,7 +58,7 @@ export type ApplicationEvent =
         HarnessQualificationView["state"],
         "not-checked"
       >;
-      readonly failure?: ApplicationFailureFacts;
+      readonly failure?: TurnFailureFacts;
     }
   /** The creation-free launch checks, shared by a launch and its assessment. */
   | { readonly kind: "launch-preparation-start" }
@@ -87,6 +86,7 @@ export type ApplicationEvent =
       readonly kind: "operation-admission";
       readonly operationId: string;
       readonly operation: Submission["operation"];
+      readonly runId?: string;
       readonly admission: "admitted" | "replayed" | "not-admitted";
       readonly code?: string;
     }
@@ -95,6 +95,7 @@ export type ApplicationEvent =
       readonly kind: "operation-outcome";
       readonly operationId: string;
       readonly operation: Submission["operation"];
+      readonly runId?: string;
       readonly outcome: "applied" | "not-applied";
       readonly code?: string;
     };

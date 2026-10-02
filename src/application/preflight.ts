@@ -95,34 +95,11 @@ export function preflight(
   process: ProcessAdapter,
   observe: ApplicationObserver,
 ): PreflightResult {
-  const steps = flattenSteps(request.manifest.routing);
-  const check = observedCheck(observe);
-
-  const composition = check("composition", () => checkComposition(request));
-  if (composition !== undefined) return { problem: composition };
-
-  const interactive = check("interactive", () =>
-    checkInteractive(request, steps),
-  );
-  if (interactive !== undefined) return { problem: interactive };
-
-  const harness = observedHarnessCheck(observe, request, steps);
-  if (harness.problems.length > 0) return { problem: harness.problems[0]! };
-
-  const inputs = check("inputs", () => checkInputs(request));
-  if (inputs !== undefined) return { problem: inputs };
-
-  const workspace = check("workspace-prerequisites", () =>
-    checkWorkspacePrerequisites(request, steps, process),
-  );
-  if (workspace !== undefined) return { problem: workspace };
-
-  const command = check("commands", () =>
-    checkCommands(request, steps, process),
-  );
-  if (command !== undefined) return { problem: command };
-
-  return okResult(harness.selectedHarness, request.requestedModel);
+  const assessment = evaluatePreflight(request, process, observe, true);
+  const problem = assessment.findings[0];
+  return problem === undefined
+    ? okResult(assessment.selectedHarness, assessment.requestedModel)
+    : { problem };
 }
 
 /** Run the same ordered checks as `preflight`, collecting every finding instead of
@@ -136,6 +113,28 @@ export function assessPreflight(
   process: ProcessAdapter,
   observe: ApplicationObserver,
 ): PreflightAssessment {
+  return evaluatePreflight(request, process, observe, false);
+}
+
+/** Both callers report one Preflight span, including short-circuited checks. */
+function evaluatePreflight(
+  request: PreflightRequest,
+  process: ProcessAdapter,
+  observe: ApplicationObserver,
+  stopAtFirst: boolean,
+): PreflightAssessment {
+  observe({ kind: "preflight-start" });
+  const result = collectFindings(request, process, observe, stopAtFirst);
+  observe({ kind: "preflight-settle", codes: problemCodes(result.findings) });
+  return result;
+}
+
+function collectFindings(
+  request: PreflightRequest,
+  process: ProcessAdapter,
+  observe: ApplicationObserver,
+  stopAtFirst: boolean,
+): PreflightAssessment {
   const steps = flattenSteps(request.manifest.routing);
   const check = observedCheck(observe);
 
@@ -146,23 +145,38 @@ export function assessPreflight(
   const interactive = check("interactive", () =>
     checkInteractive(request, steps),
   );
-  if (interactive !== undefined) findings.push(interactive);
+  if (interactive !== undefined) {
+    findings.push(interactive);
+    if (stopAtFirst) return { findings };
+  }
 
   const harness = observedHarnessCheck(observe, request, steps);
-  findings.push(...harness.problems);
+  findings.push(
+    ...(stopAtFirst ? harness.problems.slice(0, 1) : harness.problems),
+  );
+  if (stopAtFirst && findings.length > 0) return { findings };
 
   const inputs = check("inputs", () => checkInputs(request));
-  if (inputs !== undefined) findings.push(inputs);
+  if (inputs !== undefined) {
+    findings.push(inputs);
+    if (stopAtFirst) return { findings };
+  }
 
   const workspace = check("workspace-prerequisites", () =>
     checkWorkspacePrerequisites(request, steps, process),
   );
-  if (workspace !== undefined) findings.push(workspace);
+  if (workspace !== undefined) {
+    findings.push(workspace);
+    if (stopAtFirst) return { findings };
+  }
 
   const command = check("commands", () =>
     checkCommands(request, steps, process),
   );
-  if (command !== undefined) findings.push(command);
+  if (command !== undefined) {
+    findings.push(command);
+    if (stopAtFirst) return { findings };
+  }
 
   return {
     findings,

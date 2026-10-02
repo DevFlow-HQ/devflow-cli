@@ -147,7 +147,6 @@ export function createLaunchPreparation(
       return { findings };
     }
 
-    deps.observe({ kind: "preflight-start" });
     const pre = assessPreflight(
       {
         manifest,
@@ -164,10 +163,6 @@ export function createLaunchPreparation(
       deps.process,
       deps.observe,
     );
-    deps.observe({
-      kind: "preflight-settle",
-      codes: problemCodes(pre.findings),
-    });
     findings.push(...pre.findings);
 
     // Trust mirrors `submitLaunch` exactly, minus the grant write: an untrusted

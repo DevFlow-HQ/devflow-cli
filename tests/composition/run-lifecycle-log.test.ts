@@ -1,25 +1,42 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { withClients } from "../../src/composition/main.js";
 import type { HeadlessClients } from "../../src/headless/headless.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
-  type HarnessProfile,
+  type HarnessAdapter,
   type TurnEvent,
   type TurnResult,
 } from "../../src/harness/harness.js";
 import type {
   ActionOffer,
   ProjectionPort,
-  RunView,
 } from "../../src/application/projection-port.js";
 import { createFake, type FakeTurnScript } from "../harness/fake-adapter.js";
+import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
+
+import {
+  profile,
+  writeBundle,
+  launch,
+  applied,
+  readRun,
+  semantic,
+  agentStep,
+  COMPLETED,
+  SEEDED_PROMPT,
+  SEEDED_TEXT,
+  SEEDED_CONTENT,
+  SEEDED_DIAGNOSTICS,
+  SEEDED_PARTIAL,
+  SEEDED_COORDINATE,
+} from "../helpers/runLogFixture.js";
 
 // Run, Step Attempt, and Turn lifecycle in the operational log (#320), driven
 // through the headless client entry and the Projection Port with Process and
@@ -34,48 +51,6 @@ function steppingClock(wall: () => Date = () => WALL) {
   let reading = 1000;
   return { now: wall, monotonic: () => (reading += 125) };
 }
-
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
-// Payloads seeded into prompts, Turn input, transcript, and failure detail; none
-// may reach the log.
-const SEEDED_PROMPT = "seeded-prompt-3f9a1c";
-const SEEDED_TEXT = "seeded-human-text-7b2e44";
-const SEEDED_CONTENT = "seeded-transcript-c0ffee";
-const SEEDED_DIAGNOSTICS = "seeded-diagnostics-51d0aa";
-const SEEDED_PARTIAL = "seeded-partial-output-9e8d7c";
-const SEEDED_COORDINATE = "seeded-coordinate-a1b2c3";
-
-const COMPLETED: TurnResult = {
-  kind: "completed",
-  detail: {
-    finalContent: SEEDED_CONTENT,
-    effectiveModel: { known: false },
-    session: { state: "detached", coordinate: { opaque: SEEDED_COORDINATE } },
-  },
-};
 
 const FAILED: TurnResult = {
   kind: "failed",
@@ -108,39 +83,6 @@ function streamed(count: number): TurnEvent[] {
   });
 }
 
-function writeBundle(routing: readonly unknown[]): {
-  folder: string;
-  id: string;
-} {
-  const folder = makeTempDir("secant-runlog-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "work.md"), `${SEEDED_PROMPT}\n`);
-  const id = "dev.secant.run-lifecycle-log";
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id,
-      version: "1.0.0",
-      name: "Run Lifecycle Log",
-      description: "A Bundle the operational-log lifecycle tests launch.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/work.md", kind: "prompt" }],
-    routing,
-  };
-  writeFileSync(join(folder, "manifest.json"), JSON.stringify(manifest));
-  return { folder, id };
-}
-
-const agentStep = (id: string, retry: number) => ({
-  id,
-  kind: "agent",
-  retry,
-  session: "planning",
-  prompt: { asset: "prompts/work.md" },
-});
-
 interface Logged {
   readonly status: number;
   readonly text: string;
@@ -172,6 +114,7 @@ async function invocation(
     readonly routing: readonly unknown[];
     readonly turns: readonly FakeTurnScript[];
     readonly clock?: ReturnType<typeof steppingClock>;
+    readonly adapter?: HarnessAdapter;
     readonly supportsInteractiveTurns?: boolean;
   },
   body: (port: ProjectionPort, digest: string) => Promise<void>,
@@ -202,10 +145,12 @@ async function invocation(
       engineVersion: "9.8.7",
       hostPlatform: "linux",
       process: createFakeBundleProcess({ executables: [process.execPath] }),
-      harnessAdapter: createFake({
-        profile: profile(),
-        turns: options.turns,
-      })(),
+      harnessAdapter:
+        options.adapter ??
+        createFake({
+          profile: profile(),
+          turns: options.turns,
+        })(),
       supportsInteractiveTurns: options.supportsInteractiveTurns ?? false,
       logSink: {
         folder,
@@ -237,43 +182,10 @@ async function invocation(
   };
 }
 
-function launch(port: ProjectionPort, digest: string): string {
-  const admission = port.submit({
-    operationId: "op-launch",
-    operation: "launch-run",
-    input: {
-      bundle: { id: "dev.secant.run-lifecycle-log" },
-      launchInputs: {},
-      trustDigest: digest,
-      harness: "claude-code",
-    },
-  });
-  assert.ok(admission.admitted, JSON.stringify(admission));
-  assert.ok(admission.runId);
-  return admission.runId;
-}
-
-async function applied(
-  port: ProjectionPort,
-  submission: Parameters<ProjectionPort["submit"]>[0],
-): Promise<void> {
-  const admission = port.submit(submission);
-  assert.ok(admission.admitted, JSON.stringify(admission));
-  const outcome = await awaitSettled(port, submission.operationId);
-  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
-}
-
-function readRun(port: ProjectionPort, runId: string): RunView {
-  const opened = port.openProjection({ family: "run", runId });
-  try {
-    if (!opened.snapshot.result.found) throw new Error("the Run is not found");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
-function offered(run: RunView, action: ActionOffer["action"]): boolean {
+function offered(
+  run: ReturnType<typeof readRun>,
+  action: ActionOffer["action"],
+): boolean {
   return run.actionOffers.some((offer) => offer.action === action);
 }
 
@@ -299,12 +211,6 @@ function assertNoPayload(text: string): void {
   ]) {
     assert.equal(text.includes(seeded), false, `${seeded} reached the log`);
   }
-}
-
-/** A record with the base fields dropped, for exact comparison. */
-function semantic(record: Record<string, unknown>): Record<string, unknown> {
-  const { level: _level, time: _time, invocationId: _id, ...rest } = record;
-  return rest;
 }
 
 test("a retried Agent Step logs the Run, two Attempts with distinct ids, and each Turn with its Session, and no streamed event", async (t) => {
@@ -498,6 +404,7 @@ test("an interactive Step and an authored gate log their pauses, the human Turn,
       // The human Turn reaches the Session outside any Routing walk.
       ["turn-start", "0.0:discuss", "s"],
       ["turn-end", "0.0:discuss", "completed"],
+      ["run-end", true, "blocked"],
       // End Step settles the paused Attempt, then re-walks to the gate.
       ["attempt-end", "0.0:discuss", "succeeded"],
       ["run-start", true, undefined],
@@ -520,13 +427,13 @@ test("an interactive Step and an authored gate log their pauses, the human Turn,
     const settles = String(record.event).endsWith("-end");
     assert.equal(
       typeof record.elapsedMs === "number",
-      settles,
+      settles && record !== logged.lifecycle[6],
       String(record.event),
     );
   }
 });
 
-test("a cancelled Run logs the interrupted Turn and unwinds its Attempt and Run without claiming an outcome", async (t) => {
+test("a live cancel logs the interrupted Turn and execution unwind before Application rests the Run cancelled", async (t) => {
   let runId = "";
   const logged = await invocation(
     t,
@@ -567,6 +474,326 @@ test("a cancelled Run logs the interrupted Turn and unwinds its Attempt and Run 
       ["turn-end", "interrupted", "number"],
       ["attempt-unwind", undefined, "number"],
       ["run-unwind", undefined, "number"],
+      ["run-end", "cancelled", "undefined"],
     ],
   );
 });
+
+test("cancelling a held blocked Run correlates the Operation and logs its cancelled rest once", async (t) => {
+  let runId = "";
+  const logged = await invocation(
+    t,
+    {
+      routing: [
+        agentStep("draft", 0),
+        {
+          id: "gate",
+          kind: "human-gate",
+          shape: "approve-reject",
+          message: "ok?",
+        },
+      ],
+      turns: [{ result: COMPLETED }],
+    },
+    async (port, digest) => {
+      runId = launch(port, digest);
+      await awaitSettled(port, "op-launch");
+      assert.equal(readRun(port, runId).state, "blocked");
+      const cancel = {
+        operationId: "op-cancel",
+        operation: "cancel-run",
+        input: { runId },
+      } as const;
+      await applied(port, cancel);
+      await applied(port, cancel);
+    },
+  );
+  assert.deepEqual(
+    logged.lifecycle
+      .filter((record) => record.event === "run-end")
+      .map(semantic),
+    [
+      { event: "run-end", runId, outcome: "blocked", elapsedMs: 750 },
+      { event: "run-end", runId, outcome: "cancelled" },
+    ],
+  );
+  assert.deepEqual(
+    logged.records
+      .filter((record) => record.operationId === "op-cancel")
+      .map(semantic),
+    [
+      {
+        event: "operation-admission",
+        operationId: "op-cancel",
+        operation: "cancel-run",
+        runId,
+        status: "admitted",
+      },
+      {
+        event: "operation-outcome",
+        operationId: "op-cancel",
+        operation: "cancel-run",
+        runId,
+        status: "applied",
+        elapsedMs: 125,
+      },
+      {
+        event: "operation-admission",
+        operationId: "op-cancel",
+        operation: "cancel-run",
+        runId,
+        status: "replayed",
+      },
+    ],
+  );
+});
+
+for (const gateKind of ["authored", "checkpoint"] as const) {
+  test(`a stop answer at a ${gateKind} Gate logs the Run failed after the answer commits`, async (t) => {
+    let runId = "";
+    const gate =
+      gateKind === "authored"
+        ? {
+            id: "gate",
+            kind: "human-gate",
+            shape: "approve-reject",
+            message: "ok?",
+          }
+        : {
+            repeat: {
+              until: "passing",
+              reviewCheckpoint: { interval: 1, message: "review" },
+              steps: [
+                {
+                  id: "check",
+                  kind: "command",
+                  produces: [{ name: "passing", type: "verdict" }],
+                  command: {
+                    executable: RUNTIME_NAME,
+                    arguments: ["-e", "process.exit(1)"],
+                  },
+                },
+              ],
+            },
+          };
+    const logged = await invocation(
+      t,
+      {
+        routing: [
+          agentStep("draft", 0),
+          ...(gateKind === "checkpoint"
+            ? [
+                {
+                  id: "initial",
+                  kind: "command",
+                  produces: [{ name: "passing", type: "verdict" }],
+                  command: {
+                    executable: RUNTIME_NAME,
+                    arguments: ["-e", "process.exit(1)"],
+                  },
+                },
+              ]
+            : []),
+          gate,
+        ],
+        turns: [{ result: COMPLETED }],
+      },
+      async (port, digest) => {
+        runId = launch(port, digest);
+        await awaitSettled(port, "op-launch");
+        const run = readRun(port, runId);
+        const gate = run.pendingGate?.gate ?? run.checkpoint?.gate;
+        assert.ok(gate);
+        await applied(port, {
+          operationId: "op-stop",
+          operation: "answer-human-gate",
+          input: { runId, gate, answer: "stop" },
+        });
+        assert.equal(readRun(port, runId).state, "failed");
+      },
+    );
+    const rests = logged.lifecycle.filter(
+      (record) => record.event === "run-end",
+    );
+    assert.deepEqual(
+      rests.map((record) => record.outcome),
+      ["blocked", "failed"],
+    );
+    assert.deepEqual(semantic(rests[1]!), {
+      event: "run-end",
+      runId,
+      outcome: "failed",
+    });
+    assert.ok(
+      logged.records
+        .filter((record) => record.operationId === "op-stop")
+        .every((record) => record.runId === runId),
+    );
+  });
+}
+
+test("a preparation refusal after Continue logs the committed halted rest and correlated refusal", async (t) => {
+  let runId = "";
+  let prepares = 0;
+  const adapter: HarnessAdapter = {
+    prepare(options) {
+      if (++prepares === 2)
+        return Promise.resolve({
+          ok: false,
+          failure: {
+            phase: "prepare",
+            category: "protocol-incompatible",
+            possibleEffects: "none",
+          },
+        });
+      return createFake({
+        profile: profile(),
+        turns: [{ result: COMPLETED }],
+      })().prepare(options);
+    },
+  };
+  const logged = await invocation(
+    t,
+    {
+      routing: [
+        agentStep("draft", 0),
+        {
+          id: "gate",
+          kind: "human-gate",
+          shape: "approve-reject",
+          message: "ok?",
+        },
+        agentStep("apply", 0),
+      ],
+      turns: [],
+      adapter,
+    },
+    async (port, digest) => {
+      runId = launch(port, digest);
+      await awaitSettled(port, "op-launch");
+      const gate = readRun(port, runId).pendingGate?.gate;
+      assert.ok(gate);
+      assert.ok(
+        port.submit({
+          operationId: "op-continue",
+          operation: "answer-human-gate",
+          input: { runId, gate, answer: "continue" },
+        }).admitted,
+      );
+      const outcome = await awaitSettled(port, "op-continue");
+      assert.equal(outcome.status, "not-applied");
+      assert.equal(readRun(port, runId).state, "halted");
+    },
+  );
+  const rests = logged.lifecycle.filter((record) => record.event === "run-end");
+  assert.deepEqual(
+    rests.map((record) => record.outcome),
+    ["blocked", "halted"],
+  );
+  assert.deepEqual(semantic(rests[1]!), {
+    event: "run-end",
+    runId,
+    outcome: "halted",
+  });
+  const records = logged.records.filter(
+    (record) => record.operationId === "op-continue",
+  );
+  assert.deepEqual(
+    records.map((record) => [
+      record.event,
+      record.runId,
+      record.status,
+      record.code,
+    ]),
+    [
+      ["operation-admission", runId, "admitted", undefined],
+      [
+        "operation-outcome",
+        runId,
+        "not-applied",
+        "selected-harness-unavailable",
+      ],
+    ],
+  );
+});
+
+for (const result of ["interrupted", "lost"] as const) {
+  test(`a ${result} human Turn logs the Application's halted Run rest`, async (t) => {
+    let runId = "";
+    const logged = await invocation(
+      t,
+      {
+        routing: [
+          {
+            id: "discuss",
+            kind: "interactive-agent",
+            session: "s",
+            prompt: { asset: "prompts/work.md" },
+          },
+        ],
+        turns: [
+          result === "interrupted"
+            ? { block: true, result: COMPLETED }
+            : {
+                result: {
+                  kind: "lost",
+                  detail: {
+                    unknown: "completion",
+                    lastObservation: SEEDED_CONTENT,
+                    session: {
+                      state: "detached",
+                      coordinate: { opaque: SEEDED_COORDINATE },
+                    },
+                  },
+                },
+              },
+        ],
+        supportsInteractiveTurns: true,
+      },
+      async (port, digest) => {
+        runId = launch(port, digest);
+        await awaitSettled(port, "op-launch");
+        await applied(port, {
+          operationId: "op-human",
+          operation: "send-interactive-turn",
+          input: { runId, stepId: "discuss", text: SEEDED_TEXT },
+        });
+        if (result === "interrupted") {
+          for (
+            let tick = 0;
+            !offered(readRun(port, runId), "interrupt-turn");
+            tick++
+          ) {
+            assert.ok(tick < 1000, "the human Turn never went live");
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          const turn = readRun(port, runId).actionOffers.find(
+            (offer) => offer.action === "interrupt-turn",
+          );
+          assert.ok(turn);
+          assert.equal(turn.action, "interrupt-turn");
+          if (turn.action !== "interrupt-turn") throw new Error("unreachable");
+          await applied(port, {
+            operationId: "op-interrupt",
+            operation: "interrupt-turn",
+            input: { runId, turnId: turn.turnId },
+          });
+        }
+        assert.equal((await awaitRunRest(port, runId)).state, "halted");
+      },
+    );
+    assertNoPayload(logged.text);
+    const rests = logged.lifecycle.filter(
+      (record) => record.event === "run-end",
+    );
+    assert.deepEqual(
+      rests.map((record) => record.outcome),
+      ["blocked", "halted"],
+    );
+    assert.deepEqual(semantic(rests[1]!), {
+      event: "run-end",
+      runId,
+      outcome: "halted",
+    });
+  });
+}

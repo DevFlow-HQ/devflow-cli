@@ -10,13 +10,14 @@ import type { LogClock } from "./wiring.js";
 // The Application's facts in the operational log (#319, spec #313 stories 10–12,
 // 22, 23): Harness qualification, launch preparation and Preflight with each of
 // its checks as a detail checkpoint (#325), and Operation admission and
-// outcome. Each event maps to an allowlisted record, its fields copied one by
-// one and its cause translated here. Elapsed time is measured on
+// outcome, plus the Run rests Application commits itself (#331). Each event maps
+// to an allowlisted record, its fields copied one by one and its cause translated
+// here. Elapsed time is measured on
 // the log's monotonic clock by pairing each start with its settlement in this
 // Secant invocation. The Attempt outcomes the Application settles go to the Run
 // lifecycle observer (#320), which holds those Attempts' starts.
 
-type PreRunEvent = Exclude<ApplicationEvent, { kind: "attempt-end" }>;
+type MappedEvent = Exclude<ApplicationEvent, { kind: "attempt-end" }>;
 
 /** The stage an event opens or settles, keyed so a settlement finds its start,
  *  or undefined for an event that opens no stage.
@@ -26,7 +27,7 @@ type PreRunEvent = Exclude<ApplicationEvent, { kind: "attempt-end" }>;
  *  await one cached qualification and settle in start order, so each key holds a
  *  queue. A replayed or refused admission settles nothing and opens no stage. */
 function stageOf(
-  event: PreRunEvent,
+  event: MappedEvent,
 ):
   | { readonly key: string; readonly opens: boolean; readonly sync?: true }
   | undefined {
@@ -61,6 +62,7 @@ function stageOf(
     // record's elapsed time is unchanged.
     case "preflight-check-start":
     case "preflight-check-settle":
+    case "run-rest":
       return undefined;
     case "operation-admission":
       return event.admission === "admitted"
@@ -71,8 +73,12 @@ function stageOf(
   }
 }
 
-function recordOf(event: PreRunEvent): OperationalRecord {
+function recordOf(event: MappedEvent): OperationalRecord {
   switch (event.kind) {
+    case "run-rest":
+      // No Routing walk starts this Application-owned rest, so it carries no
+      // invented duration. Execution's run-unwind remains a separate fact.
+      return { event: "run-end", runId: event.runId, outcome: event.outcome };
     case "qualification-start":
     case "model-check-start":
       return { event: event.kind, harness: event.harness };
@@ -119,6 +125,7 @@ function recordOf(event: PreRunEvent): OperationalRecord {
         event: event.kind,
         operationId: event.operationId,
         operation: event.operation,
+        ...(event.runId !== undefined ? { runId: event.runId } : {}),
         status: event.admission,
         ...(event.code !== undefined ? { code: event.code } : {}),
       };
@@ -127,6 +134,7 @@ function recordOf(event: PreRunEvent): OperationalRecord {
         event: event.kind,
         operationId: event.operationId,
         operation: event.operation,
+        ...(event.runId !== undefined ? { runId: event.runId } : {}),
         status: event.outcome,
         ...(event.code !== undefined ? { code: event.code } : {}),
       };
