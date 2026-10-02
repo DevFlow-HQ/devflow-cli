@@ -248,6 +248,30 @@ test("the bun: spelling of a driver obeys the same ownership as its node: spelli
   );
 });
 
+test("Pino stays with composition, which owns the operational log", async () => {
+  const result = await audit({
+    // A lower Module logging directly would bypass composition's sink and its
+    // allowlist; it reports through an observer instead (#318).
+    "src/run/execution/execution.ts": 'import pino from "pino";',
+    "src/harness/harness.ts": 'import { destination } from "pino/file";',
+    "src/composition/main.ts": 'import pino from "pino";',
+  });
+  assert.ok(
+    reports(
+      result,
+      "module/dependency-owner",
+      "src/run/execution/execution.ts",
+    ),
+  );
+  assert.ok(
+    reports(result, "module/dependency-owner", "src/harness/harness.ts"),
+  );
+  // The synthetic tree installs no package, so only ownership is asserted here.
+  assert.ok(
+    !reports(result, "module/dependency-owner", "src/composition/main.ts"),
+  );
+});
+
 test("native mechanisms stay with their owners and uncheckable loaders fail visibly", async () => {
   const result = await audit({
     "src/workflow/workflow.ts":

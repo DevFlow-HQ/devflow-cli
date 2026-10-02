@@ -55,3 +55,7 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **windows-app-execution-alias**: when the runner exposes a `pwsh` or `winget` alias that `where.exe` finds after the primary PATH walk misses, a
   Command naming it passes Preflight and runs; a runner without such an alias records the reasoned gap.
 - **no-interactive-terminal** (#55): with piped stdio the TUI launch rejects with the `no-interactive-terminal` Problem before any renderer exists.
+- **operational-log** (#318): the only scenario that sets `SECANT_LOG_DIR`. `--help`, `--version`, and a parse error write no log; a successful
+  and a refused headless command each write one valid JSONL file with matching start and end records (Secant invocation id, client, version, platform,
+  exit status, elapsed time) and no trace of a seeded environment value or argument; a Secant home that is a file fails fatally, flushes its failure
+  record, and names the file on stderr; and the no-TTY TUI launch is logged as a `tui` Secant invocation.

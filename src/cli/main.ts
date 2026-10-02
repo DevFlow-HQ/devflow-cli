@@ -15,11 +15,23 @@ declare const __SECANT_VERSION__: string;
 const version =
   typeof __SECANT_VERSION__ === "string" ? __SECANT_VERSION__ : "0.0.0-dev";
 
+// The composition entry, once a path has loaded it. The fatal catch reads it to
+// name the active operational log; `--help`, `--version`, and parse errors never
+// load it, so they are never logged.
+let composition: typeof import("../composition/main.js") | undefined;
+
+async function loadComposition(): Promise<
+  typeof import("../composition/main.js")
+> {
+  composition ??= await import("../composition/main.js");
+  return composition;
+}
+
 async function main(argv: readonly string[]): Promise<void> {
   if (argv.length === 0) {
     // No subcommand launches the interactive shell. Loaded lazily so Solid and
     // OpenTUI's native library are never reached on the headless paths.
-    const { launchTui } = await import("../composition/main.js");
+    const { launchTui } = await loadComposition();
     process.exitCode = await launchTui();
     return;
   }
@@ -32,7 +44,7 @@ async function main(argv: readonly string[]): Promise<void> {
   // --help/--version and unknown-command errors never reach the Catalog's SQLite
   // driver (the lazy import stays behind this callback).
   process.exitCode = await runHeadlessCli(argv, io, version, async (run) => {
-    const { withClients } = await import("../composition/main.js");
+    const { withClients } = await loadComposition();
     return withClients(run);
   });
 }
@@ -54,9 +66,11 @@ function isMainEntry(): boolean {
 
 if (isMainEntry()) {
   void main(process.argv.slice(2)).catch((error: unknown) => {
-    const message =
+    // Composition has already recorded and flushed the failure; its text names
+    // the log file. Before composition loads, the stack is the only record.
+    const fallback =
       error instanceof Error ? (error.stack ?? error.message) : String(error);
-    process.stderr.write(`${message}\n`);
+    process.stderr.write(composition?.describeFatal(error) ?? `${fallback}\n`);
     process.exitCode = 1;
   });
 }

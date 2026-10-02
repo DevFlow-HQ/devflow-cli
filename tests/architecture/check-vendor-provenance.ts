@@ -326,7 +326,7 @@ export function checkNoticesCoverage(root: string): Finding[] {
 // without an import — the module-boundary check sees no import, so only the emitted
 // declaration catches it. The list mirrors the fenced specifiers `module-policy`
 // bans (OpenTUI, the MCP SDK, OpenCode packages, PTY transport, the Harness-native
-// SDKs).
+// SDKs, Pino).
 const BANNED_ENTRY_SPECIFIERS = [
   "@opentui/",
   "@modelcontextprotocol/",
@@ -336,6 +336,7 @@ const BANNED_ENTRY_SPECIFIERS = [
   "@agentclientprotocol/",
   "@google/genai",
   "@openai/",
+  "pino",
 ];
 
 // The one sanctioned exception: the renderer wraps `@opentui/core` and exposes its

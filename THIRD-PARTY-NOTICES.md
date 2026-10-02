@@ -342,6 +342,39 @@ SOFTWARE.
 
 ---
 
+## Pino (`pino`)
+
+`pino` is **not** vendored. It is a real npm dependency pinned at `10.3.1`. It is
+listed here because the operational log's writer is bundled into the shipped
+single-file executable. Its embedded transitive packages are listed under
+Bundled Transitive Runtime Components below.
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2016-2025 Matteo Collina, David Mark Clements and the Pino contributors listed at <https://github.com/pinojs/pino#the-team> and in the README file.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
 ## Drizzle (`drizzle-orm`, `drizzle-kit`)
 
 `drizzle-orm` is a runtime dependency and `drizzle-kit` is a development
@@ -594,7 +627,7 @@ SOFTWARE.
 ## Bundled Transitive Runtime Components
 
 The components below are pulled transitively (chiefly by `@modelcontextprotocol/sdk`,
-`@opentui/core`, `string-width`, and `strip-ansi`) and admitted by the compiler
+`@opentui/core`, `pino`, `string-width`, and `strip-ansi`) and admitted by the compiler
 into the shipped executable's module graph. The M4 release legal-closure gate
 (spec #137) inventories this closure from the actual build inputs and verifies
 their coverage here; their versions are the exact bytes shipped, which for a
@@ -603,13 +636,21 @@ nested duplicate can differ from a declared top-level pin.
 MIT-licensed (the MIT licence text above applies):
 
 - `@hono/node-server` `1.19.17`
+- `@pinojs/redact` `0.4.0`
 - `ajv` `8.20.0`
 - `ajv-formats` `3.0.1`
 - `ansi-regex` `6.3.0`
+- `atomic-sleep` `1.0.0`
 - `emoji-regex` `10.6.0`
 - `fast-deep-equal` `3.1.3`
 - `get-east-asian-width` `1.6.0`
 - `json-schema-traverse` `1.0.0`
+- `on-exit-leak-free` `2.1.2`
+- `pino-std-serializers` `7.1.0`
+- `quick-format-unescaped` `4.0.4`
+- `safe-stable-stringify` `2.5.0`
+- `sonic-boom` `4.2.1`
+- `thread-stream` `4.2.0`
 
 ISC-licensed (the ISC licence text above applies):
 

@@ -34,6 +34,18 @@ Checks that need an installed Harness, network access, or a real terminal are op
 - Engineering policy: the line in `AGENTS.md` that matches your change, then the file it names.
 - Work in progress: GitHub issues. Both wayfinding decisions and implementation tickets carry a "Starting context" comment. Read it before the code.
 
+## Find the logs
+
+Every Secant invocation that does real work (the TUI, or any headless command other than `--help`, `--version`, or a mistyped command) writes one
+operational log file to `logs/` in the Secant home: `~/.secant/logs` by default, or `$SECANT_HOME/logs`.
+
+- Each file is named `<UTC timestamp>-<pid>.jsonl`, for example `2026-10-02T09-08-07-006Z-4242.jsonl`, so the newest sorts last.
+- Each line is one JSON object: `level`, `time`, `invocationId`, `event`, and that event's own fields. Read them with `jq` or any JSON tool.
+- Set `SECANT_LOG_DIR` to write the files somewhere else, such as a CI folder that outlives a throwaway home.
+- A fatal error names its file on stderr. If the folder cannot be written, Secant says so once on stderr and carries on unlogged.
+- Logs hold lifecycle facts, never prompts, arguments, environment values, or credentials, and the files are readable only by you where the OS
+  supports it.
+
 ## Pull requests
 
 - Reference the issue the change implements. Keep the change small enough to review in one sitting.

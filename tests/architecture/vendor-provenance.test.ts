@@ -43,6 +43,17 @@ test("a fenced package in a non-renderer entry declaration is flagged (S2)", () 
   );
 });
 
+test("Pino never crosses the composition entry's declarations (S2)", () => {
+  // Composition may import Pino, but no Pino type may leak through its entry.
+  assert.deepEqual(
+    scanEntryDeclaration(
+      "src/composition/main.ts",
+      'export declare function log(): import("pino").Logger;\n',
+    ).map((issue) => [issue.rule, issue.data]),
+    [["vendor/entry-declaration", { specifier: "pino" }]],
+  );
+});
+
 test("the renderer entry may name @opentui/core but not another fenced package (S2)", () => {
   assert.deepEqual(
     scanEntryDeclaration(

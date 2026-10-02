@@ -74,6 +74,22 @@ function hostPlatform(platform: NodeJS.Platform): Platform | undefined {
   }
 }
 
+/** The operational log's clock: wall-clock time for each record, and a monotonic
+ *  reading for elapsed time, so a wall-clock change cannot distort a duration. */
+export interface LogClock {
+  readonly now: () => Date;
+  readonly monotonic: () => number;
+}
+
+/** The operational log's test Seam. Production passes none: the folder comes
+ *  from the environment or the Secant home, the clock from the process, and a
+ *  log-failure notice goes to stderr. */
+interface LogSinkOverrides {
+  readonly folder?: string;
+  readonly clock?: LogClock;
+  readonly stderr?: (text: string) => void;
+}
+
 /** Overrides for the composition wiring test, which drives the one path both
  *  roots take against a temporary home without a terminal (#74 A18). Production
  *  passes none: the home, cwd, engine version, and host platform come from the
@@ -105,6 +121,41 @@ export interface WiringOverrides {
   /** Where the Shipped Bundle `.wfb` files are read from. Production reads the
    *  `builtin/` asset directory `scripts/build.ts` embeds beside the entry module. */
   readonly shippedBundleDir?: string;
+  /** The operational log's test Seam: target folder, clock, and fallback
+   *  channel. Semantic tests use it and never set the log environment names. */
+  readonly logSink?: LogSinkOverrides;
+}
+
+// The environment names composition reads, side by side and nowhere else: no
+// Module below composition reads either. `SECANT_LOG_DETAIL`, the detail switch,
+// joins them when it lands (#325).
+const SECANT_HOME_ENV = "SECANT_HOME";
+export const SECANT_LOG_DIR_ENV = "SECANT_LOG_DIR";
+
+/** What one Secant invocation reads from its process before anything is wired:
+ *  the Secant home, the operational-log folder, the running engine version, and
+ *  the host platform (absent on an unsupported OS). */
+interface HostContext {
+  readonly secantHome: string;
+  readonly logFolder: string;
+  readonly engineVersion: string;
+  readonly hostPlatform: Platform | undefined;
+}
+
+/** Resolves the host context, overrides first. The log folder follows the
+ *  Secant home (`logs` beneath it) unless `SECANT_LOG_DIR` names another. */
+export function resolveHostContext(overrides: WiringOverrides): HostContext {
+  const secantHome =
+    overrides.secantHome ??
+    (process.env[SECANT_HOME_ENV]?.trim() || join(homedir(), ".secant"));
+  return {
+    secantHome,
+    logFolder:
+      overrides.logSink?.folder ??
+      (process.env[SECANT_LOG_DIR_ENV]?.trim() || join(secantHome, "logs")),
+    engineVersion: overrides.engineVersion ?? engineVersion,
+    hostPlatform: overrides.hostPlatform ?? hostPlatform(process.platform),
+  };
 }
 
 export interface Wiring extends Application {
@@ -137,13 +188,14 @@ function shippedBundleFiles(dir: string): string[] {
  *  running engine version and host platform, handing it the raw launch cwd. The
  *  caller owns `catalog` and `runGroup` and must close both. */
 export function wireApplication(overrides: WiringOverrides = {}): Wiring {
-  const secantHome =
-    overrides.secantHome ??
-    (process.env.SECANT_HOME?.trim() || join(homedir(), ".secant"));
+  const {
+    secantHome,
+    engineVersion,
+    hostPlatform: host,
+  } = resolveHostContext(overrides);
   const launchWorkspacePath = overrides.launchCwd ?? process.cwd();
   const canonicalLaunchWorkspacePath =
     canonicalizeWorkspacePath(launchWorkspacePath);
-  const host = overrides.hostPlatform ?? hostPlatform(process.platform);
   const processAdapter =
     overrides.process ?? overrides.processFactory?.() ?? createProcessAdapter();
 
@@ -179,7 +231,7 @@ export function wireApplication(overrides: WiringOverrides = {}): Wiring {
       const application = createApplication({
         catalog,
         launchWorkspacePath,
-        engineVersion: overrides.engineVersion ?? engineVersion,
+        engineVersion,
         ...(host !== undefined ? { hostPlatform: host } : {}),
         runGroup,
         // The headless client cannot relay human turn-taking; an interactive-agent

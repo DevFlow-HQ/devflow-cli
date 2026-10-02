@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
+  readdirSync,
   readFileSync,
   realpathSync,
 } from "node:fs";
@@ -2478,6 +2479,164 @@ await withCleanup(
       "no-interactive-terminal",
       noInteractiveTerminalScenario,
     );
+
+    async function operationalLogScenario(): Promise<void> {
+      // The operational log inside the compiled binary (#318): Pino's synchronous
+      // destination writes one JSONL file per Secant invocation, a seeded secret
+      // never reaches it, and a fatal error flushes its failure record and names
+      // the file. The only scenario that sets SECANT_LOG_DIR; each command gets
+      // its own folder so its one file is unambiguous.
+      const logsRoot = join(smokeRoot, "operational-logs");
+      const secret = "sk-ant-smoke-seeded-7d41";
+      const platform = { win32: "windows", darwin: "macos", linux: "linux" }[
+        process.platform as "win32" | "darwin" | "linux"
+      ];
+      const envFor = (folder: string, home = secantHome) => ({
+        ...homeEnv(home),
+        SECANT_LOG_DIR: join(logsRoot, folder),
+        SECANT_SMOKE_SEEDED_SECRET: secret,
+      });
+      const recordsIn = (folder: string) => {
+        const dir = join(logsRoot, folder);
+        const names = existsSync(dir) ? readdirSync(dir) : [];
+        if (
+          names.length !== 1 ||
+          !/^\d{4}-\d\d-\d\dT[\d-]+Z-\d+\.jsonl$/.test(names[0]!)
+        ) {
+          throw new Error(`Expected one log file in ${dir}, found ${names}.`);
+        }
+        const path = join(dir, names[0]!);
+        const text = readFileSync(path, "utf8");
+        if (text.includes(secret)) {
+          throw new Error(
+            `The seeded secret reached the operational log: ${text}`,
+          );
+        }
+        const records = text
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        const id = records[0]?.invocationId;
+        for (const record of records) {
+          if (
+            typeof id !== "string" ||
+            record.invocationId !== id ||
+            typeof record.time !== "string" ||
+            Number.isNaN(Date.parse(record.time)) ||
+            "hostname" in record
+          ) {
+            throw new Error(`Malformed operational-log record: ${text}`);
+          }
+        }
+        return { path, records, text };
+      };
+      const expectLifecycle = (
+        log: ReturnType<typeof recordsIn>,
+        client: string,
+        events: readonly string[],
+        exitStatus: number,
+      ) => {
+        const start = log.records[0]!;
+        const end = log.records.at(-1)!;
+        const matches =
+          JSON.stringify(log.records.map((r) => r.event)) ===
+            JSON.stringify(events) &&
+          start.client === client &&
+          start.version === pkg.version &&
+          start.platform === platform &&
+          typeof start.pid === "number" &&
+          end.client === client &&
+          end.exitStatus === exitStatus &&
+          typeof end.elapsedMs === "number";
+        if (!matches) {
+          throw new Error(
+            `Unexpected ${client} lifecycle records: ${log.text}`,
+          );
+        }
+      };
+
+      // Help, version, and a parse error never load composition: no log.
+      for (const args of [["--help"], ["--version"], ["frobnicate"]]) {
+        spawnSync(binary, args, { cwd: smokeRoot, env: envFor("unlogged") });
+      }
+      if (existsSync(join(logsRoot, "unlogged"))) {
+        throw new Error("--help, --version, or a parse error wrote a log.");
+      }
+
+      // Composition-reaching commands under a seeded environment value; the
+      // refused one carries the secret as its argument too.
+      run(binary, ["workspace", "approve", workspaceDirectory, "--json"], {
+        cwd: workspaceDirectory,
+        env: envFor("headless"),
+      });
+      expectLifecycle(
+        recordsIn("headless"),
+        "headless",
+        ["invocation-start", "invocation-end"],
+        0,
+      );
+      const refused = spawnSync(binary, ["run", "show", secret], {
+        cwd: workspaceDirectory,
+        encoding: "utf8",
+        env: envFor("refused"),
+      });
+      if (refused.status !== 1) {
+        throw new Error(`A refused command did not exit 1: ${refused.stderr}`);
+      }
+      expectLifecycle(
+        recordsIn("refused"),
+        "headless",
+        ["invocation-start", "invocation-end"],
+        1,
+      );
+
+      // A fatal error: a Secant home that is a file cannot be opened.
+      const fileHome = join(logsRoot, "home-is-a-file");
+      await mkdir(logsRoot, { recursive: true });
+      await writeFile(fileHome, "");
+      const fatal = spawnSync(binary, ["workspace", "--json"], {
+        cwd: workspaceDirectory,
+        encoding: "utf8",
+        env: envFor("fatal", fileHome),
+      });
+      const fatalLog = recordsIn("fatal");
+      expectLifecycle(
+        fatalLog,
+        "headless",
+        ["invocation-start", "invocation-failure", "invocation-end"],
+        1,
+      );
+      const failure = fatalLog.records[1]!;
+      if (
+        fatal.status !== 1 ||
+        fatal.stdout !== "" ||
+        failure.level !== "fatal" ||
+        typeof (failure.cause as { type?: unknown } | undefined)?.type !==
+          "string" ||
+        !fatal.stderr.includes(
+          `The operational log for this Secant invocation is at ${fatalLog.path}`,
+        )
+      ) {
+        throw new Error(
+          `A fatal error did not flush and name its log: ${fatal.stderr}\n${fatalLog.text}`,
+        );
+      }
+
+      // The TUI's no-terminal rejection is a Secant invocation too.
+      spawnSync(binary, [], {
+        cwd: smokeRoot,
+        encoding: "utf8",
+        env: envFor("tui"),
+      });
+      expectLifecycle(
+        recordsIn("tui"),
+        "tui",
+        ["invocation-start", "invocation-end"],
+        1,
+      );
+    }
+
+    await runNamedScenario("operational-log", operationalLogScenario);
 
     process.stdout.write(
       `Compiled binary smoke passed for ${source} (@secantdev/secant@${pkg.version}).\n`,
