@@ -89,9 +89,10 @@ const PRODUCTION_CLOCK: LogClock = {
   monotonic: () => performance.now(),
 };
 
-/** The operational log's test Seam. Production passes none: the folder comes
- *  from the environment or the Secant home, the clock from the process, and a
- *  log-failure notice goes to stderr. */
+/** The operational log's test Seam. An injected sink uses its folder or the
+ *  injected Secant home's logs, independently of the process log environment.
+ *  Production passes none: the folder comes from the environment or the Secant
+ *  home, the clock from the process, and a log-failure notice goes to stderr. */
 interface LogSinkOverrides {
   readonly folder?: string;
   readonly clock?: LogClock;
@@ -162,8 +163,9 @@ export function resolveHostContext(overrides: WiringOverrides): HostContext {
   return {
     secantHome,
     logFolder:
-      overrides.logSink?.folder ??
-      (process.env[SECANT_LOG_DIR_ENV]?.trim() || join(secantHome, "logs")),
+      overrides.logSink === undefined
+        ? process.env[SECANT_LOG_DIR_ENV]?.trim() || join(secantHome, "logs")
+        : (overrides.logSink.folder ?? join(secantHome, "logs")),
     logClock: overrides.logSink?.clock ?? PRODUCTION_CLOCK,
     engineVersion: overrides.engineVersion ?? engineVersion,
     hostPlatform: overrides.hostPlatform ?? hostPlatform(process.platform),
