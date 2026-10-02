@@ -341,6 +341,7 @@ class CodexAdapter implements HarnessAdapter {
   ): Promise<TLiveQualification> {
     const launch = startPhase(this.phases, "launch");
     const spawned = await this.processAdapter.spawnOwnedProcess({
+      role: "harness-runtime",
       executable: target.executable,
       args: target.prefixArgs.concat("app-server"),
       cwd: workspace,
@@ -1800,6 +1801,7 @@ async function runTextProbe(
   options: TRunTextProbe,
 ): Promise<TProbeResult<string>> {
   const result = await options.processAdapter.spawnCommand({
+    role: "harness-probe",
     executable: options.target.executable,
     args: options.target.prefixArgs.concat(options.args),
     cwd: undefined,

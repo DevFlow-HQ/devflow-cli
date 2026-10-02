@@ -1015,6 +1015,7 @@ async function runCommand(
   }
 
   const result = await context.process.spawnCommand({
+    role: "command",
     executable: resolution.executable,
     args: [...resolution.prefixArgs, ...args],
     // Manifest validation makes this a Workspace-relative directory. Resolve it

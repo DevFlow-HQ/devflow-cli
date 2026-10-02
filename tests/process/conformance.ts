@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import type {
+  ChildFact,
   OwnedProcessOptions,
   ProcessAdapter,
   SpawnOptions,
 } from "../../src/process/process.js";
 
-interface ProcessConformanceCase<T> {
+/** What a scenario's observer recorded. The real scenarios attach one and each
+ *  case asserts its child facts; the fake attaches none, so its facts are proven
+ *  where they are read, in the composition suite. */
+interface ObservedFacts {
+  readonly facts?: readonly ChildFact[];
+}
+
+interface ProcessConformanceCase<T> extends ObservedFacts {
   readonly process: ProcessAdapter;
   readonly options: T;
 }
@@ -18,7 +26,7 @@ interface InterruptConformanceCase extends ProcessConformanceCase<OwnedProcessOp
 
 export interface ProcessConformanceScenarios {
   readonly label: string;
-  resolution(): {
+  resolution(): ObservedFacts & {
     readonly process: ProcessAdapter;
     readonly foundName: string;
     readonly foundExecutable: string;
@@ -43,7 +51,7 @@ export interface ProcessConformanceScenarios {
   forcedBoundInterruption(): InterruptConformanceCase;
   escalatingInterruption(): InterruptConformanceCase;
   treeCleanup(): ProcessConformanceCase<SpawnOptions>;
-  failures(): {
+  failures(): ObservedFacts & {
     readonly process: ProcessAdapter;
     readonly missingName: string;
     readonly command: SpawnOptions;
@@ -79,6 +87,18 @@ export function registerProcessConformanceCases(
           kind: "not-found",
         },
       );
+      // Only a Windows miss spawns: the `where.exe` fallback, reported in this
+      // Module's own role, starting before it blocks.
+      if (scenario.facts === undefined) return;
+      if (windows) {
+        const exit = assertChildFacts(scenario.facts, "executable-lookup", [
+          "spawn",
+          "exit",
+        ]);
+        assert.notEqual(exit.status, 0);
+      } else {
+        assert.deepEqual(scenario.facts, []);
+      }
     },
   );
 
@@ -91,6 +111,13 @@ export function registerProcessConformanceCases(
       if (result.kind !== "exited") throw new Error("unreachable");
       assert.equal(result.status, scenario.status);
       assert.equal(new TextDecoder().decode(result.text), scenario.text);
+      if (scenario.facts === undefined) return;
+      const exit = assertChildFacts(scenario.facts, "command", [
+        "spawn",
+        "exit",
+      ]);
+      assert.equal(exit.status, scenario.status);
+      assert.equal(exit.signal, undefined);
     },
   );
 
@@ -101,6 +128,15 @@ export function registerProcessConformanceCases(
       const resultPromise = scenario.process.spawnCommand(scenario.options);
       scenario.cancel();
       assert.deepEqual(await resultPromise, { kind: "cancelled" });
+      if (scenario.facts === undefined) return;
+      const reap = assertChildFacts(scenario.facts, "command", [
+        "spawn",
+        "cancellation",
+        ...forcedOnWindows,
+        "reap",
+      ]);
+      if (!windows) assert.equal(reap.signal, "SIGTERM");
+      assertTreeKill(scenario.facts);
     },
   );
 
@@ -122,6 +158,12 @@ export function registerProcessConformanceCases(
       assert.equal(stderr, scenario.stderr);
       assert.deepEqual(close, { kind: "exited", status: scenario.status });
       assert.equal(await launched.process.closed(), close);
+      if (scenario.facts === undefined) return;
+      const exit = assertChildFacts(scenario.facts, "harness-runtime", [
+        "spawn",
+        "exit",
+      ]);
+      assert.equal(exit.status, scenario.status);
     },
   );
 
@@ -136,27 +178,50 @@ export function registerProcessConformanceCases(
       if (!launched.ok) throw new Error("unreachable");
       const close = await launched.process.closed();
       assert.equal(close.kind, scenario.terminalKind);
+      if (scenario.facts === undefined) return;
+      // An outside signal is an exit: Secant sent no kill.
+      const exit = assertChildFacts(scenario.facts, "harness-runtime", [
+        "spawn",
+        "exit",
+      ]);
+      if (windows) assert.equal(exit.status, 1);
+      else assert.equal(exit.signal, "SIGTERM");
     },
   );
 
   register(
     name("uses the supplied graceful bound before interrupt escalation"),
     async () => {
-      await assertInterruption(scenarios.gracefulInterruption());
+      const scenario = scenarios.gracefulInterruption();
+      await assertInterruption(scenario);
+      if (scenario.facts === undefined) return;
+      // Off Windows the process exits on its own once SIGTERM reaches it, so the
+      // kill is reaped with that status and never escalates.
+      const reap = assertChildFacts(scenario.facts, "harness-runtime", [
+        "spawn",
+        "cancellation",
+        ...forcedOnWindows,
+        "reap",
+      ]);
+      if (!windows) assert.equal(reap.status, 0);
     },
   );
 
   register(
     name("force-kills an unresponsive process tree and reports escalation"),
     async () => {
-      await assertInterruption(scenarios.escalatingInterruption());
+      const scenario = scenarios.escalatingInterruption();
+      await assertInterruption(scenario);
+      assertEscalatedReap(scenario.facts);
     },
   );
 
   register(
     name("uses the supplied bound again after forced interruption"),
     async () => {
-      await assertInterruption(scenarios.forcedBoundInterruption());
+      const scenario = scenarios.forcedBoundInterruption();
+      await assertInterruption(scenario);
+      assertEscalatedReap(scenario.facts);
     },
   );
 
@@ -167,6 +232,14 @@ export function registerProcessConformanceCases(
       assert.deepEqual(await scenario.process.spawnCommand(scenario.options), {
         kind: "timeout",
       });
+      if (scenario.facts === undefined) return;
+      assertChildFacts(scenario.facts, "command", [
+        "spawn",
+        "timeout",
+        ...forcedOnWindows,
+        "reap",
+      ]);
+      assertTreeKill(scenario.facts);
     },
   );
 
@@ -182,7 +255,109 @@ export function registerProcessConformanceCases(
     assert.equal(launched.ok, false);
     if (launched.ok) throw new Error("unreachable");
     assert.equal(launched.failure.kind, "spawn-error");
+    if (scenario.facts === undefined) return;
+    // The cause is the native code alone: the message, syscall, and stack all
+    // carry the executable.
+    for (const role of ["command", "harness-runtime"] as const) {
+      const failed = assertChildFacts(scenario.facts, role, ["spawn-error"]);
+      assert.equal(failed.code, "ENOENT");
+    }
+    assert.equal(
+      JSON.stringify(scenario.facts).includes(scenario.missingName),
+      false,
+    );
   });
+}
+
+const windows = process.platform === "win32";
+// Windows has no graceful stage: its first kill is already `taskkill /T /F`.
+const forcedOnWindows: readonly ChildFact["kind"][] = windows
+  ? ["kill-escalation"]
+  : [];
+// The only fields a fact may carry: never an argument, environment value, or
+// output.
+const FACT_FIELDS = new Set([
+  "kind",
+  "role",
+  "pid",
+  "code",
+  "status",
+  "signal",
+  "elapsedMs",
+]);
+
+/** The settlement fields a case checks on the last fact it asserts. */
+interface LastFact {
+  readonly status?: number;
+  readonly signal?: string;
+  readonly code?: string;
+}
+
+/** Asserts the kinds `role`'s facts arrived in, that every fact naming a PID
+ *  names the same child's, that a settlement carries monotonic elapsed time, and
+ *  that no fact holds a field outside the allowlist. Returns the last fact. */
+function assertChildFacts(
+  facts: readonly ChildFact[],
+  role: ChildFact["role"],
+  kinds: readonly ChildFact["kind"][],
+): LastFact {
+  for (const fact of facts) {
+    for (const key of Object.keys(fact)) assert.ok(FACT_FIELDS.has(key), key);
+  }
+  const mine = facts.filter((fact) => fact.role === role);
+  assert.deepEqual(
+    mine.map((fact) => fact.kind),
+    kinds,
+    JSON.stringify(facts),
+  );
+  const pids = new Set<number | undefined>();
+  for (const fact of mine) {
+    if ("elapsedMs" in fact) assert.ok(fact.elapsedMs >= 0);
+    if (fact.kind === "spawn-error") {
+      assert.equal("pid" in fact, false);
+      continue;
+    }
+    // A synchronous spawn names its PID only once it returns.
+    if (fact.kind === "spawn" && fact.pid === undefined) continue;
+    assert.ok(
+      Number.isInteger(fact.pid) && fact.pid! > 0,
+      JSON.stringify(fact),
+    );
+    pids.add(fact.pid);
+  }
+  assert.ok(pids.size <= 1, JSON.stringify(mine));
+  const last = mine.at(-1)!;
+  return {
+    status: "status" in last ? last.status : undefined,
+    signal: "signal" in last ? last.signal : undefined,
+    code: "code" in last ? last.code : undefined,
+  };
+}
+
+function assertEscalatedReap(facts: readonly ChildFact[] | undefined): void {
+  if (facts === undefined) return;
+  const reap = assertChildFacts(facts, "harness-runtime", [
+    "spawn",
+    "cancellation",
+    "kill-escalation",
+    "reap",
+  ]);
+  if (!windows) assert.equal(reap.signal, "SIGKILL");
+}
+
+/** On Windows every kill spawns `taskkill`, reported in its own role. Its exit
+ *  can land after the killed child's result, so only its start is asserted. */
+function assertTreeKill(facts: readonly ChildFact[]): void {
+  const treeKill = facts.filter((fact) => fact.role === "tree-kill");
+  if (!windows) {
+    assert.deepEqual(treeKill, []);
+    return;
+  }
+  assert.equal(treeKill[0]?.kind, "spawn");
+  assert.equal(
+    treeKill.some((fact) => fact.kind === "spawn-error"),
+    false,
+  );
 }
 
 async function assertInterruption(

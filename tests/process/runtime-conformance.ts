@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Database } from "bun:sqlite";
 import {
   createProcessAdapter,
+  type ChildFact,
   type OwnedProcessOptions,
   type SpawnOptions,
   type OwnedProcess,
@@ -81,6 +82,7 @@ function commandOptions(
   overrides: Partial<SpawnOptions> = {},
 ): SpawnOptions {
   return {
+    role: "command",
     executable,
     args: ["-e", source],
     cwd: process.cwd(),
@@ -94,6 +96,7 @@ function commandOptions(
 
 function ownedOptions(source: string): OwnedProcessOptions {
   return {
+    role: "harness-runtime",
     executable,
     args: ["-e", source],
     cwd: process.cwd(),
@@ -116,16 +119,29 @@ function delayedForcedCloseSource(delayAfterSignalMs: number): string {
   );
 }
 
+/** A real Adapter whose observer records every child fact, for a case to
+ *  assert after the behaviour it exercised. */
+function observedProcess(): {
+  readonly process: ProcessAdapter;
+  readonly facts: readonly ChildFact[];
+} {
+  const facts: ChildFact[] = [];
+  return {
+    process: createProcessAdapter({ observeChild: (fact) => facts.push(fact) }),
+    facts,
+  };
+}
+
 const scenarios: ProcessConformanceScenarios = {
   label: "real",
   resolution: () => ({
-    process: createProcessAdapter(),
+    ...observedProcess(),
     foundName: executable,
     foundExecutable: executable,
     missingName: missing,
   }),
   commandExit: () => ({
-    process: createProcessAdapter(),
+    ...observedProcess(),
     options: commandOptions(
       "process.stdout.write('out');process.stderr.write('err');process.exit(17)",
     ),
@@ -135,7 +151,7 @@ const scenarios: ProcessConformanceScenarios = {
   commandCancellation: () => {
     const controller = new AbortController();
     return {
-      process: createProcessAdapter(),
+      ...observedProcess(),
       options: commandOptions("setInterval(()=>{},1000)", {
         cancelSignal: controller.signal,
       }),
@@ -143,7 +159,7 @@ const scenarios: ProcessConformanceScenarios = {
     };
   },
   ownedExit: () => ({
-    process: createProcessAdapter(),
+    ...observedProcess(),
     options: ownedOptions(
       "process.stdout.write('out-');process.stdout.write('one');" +
         "process.stderr.write('err-');process.stderr.write('two');process.exit(23)",
@@ -153,14 +169,14 @@ const scenarios: ProcessConformanceScenarios = {
     status: 23,
   }),
   ownedSignal: () => ({
-    process: createProcessAdapter(),
+    ...observedProcess(),
     options: ownedOptions("process.kill(process.pid,'SIGTERM')"),
     terminalKind: process.platform === "win32" ? "exited" : "signal",
   }),
   gracefulInterruption: () => {
     const gracefulMs = 2_000;
     return {
-      process: createProcessAdapter(),
+      ...observedProcess(),
       options: ownedOptions(
         // Exit after half the supplied bound. A shutdown that split gracefulMs
         // between stages would force-kill this process instead of observing its
@@ -181,7 +197,7 @@ const scenarios: ProcessConformanceScenarios = {
           "process.stdout.write('ready\\n');setInterval(()=>{},1000)"
         : delayedForcedCloseSource(gracefulMs + 1_500);
     return {
-      process: createProcessAdapter(),
+      ...observedProcess(),
       options: ownedOptions(source),
       ready: "ready",
       gracefulMs,
@@ -189,7 +205,7 @@ const scenarios: ProcessConformanceScenarios = {
     };
   },
   escalatingInterruption: () => ({
-    process: createProcessAdapter(),
+    ...observedProcess(),
     options: ownedOptions(
       "process.on('SIGTERM',()=>{});" +
         "process.stdout.write('ready\\n');setInterval(()=>{},1000)",
@@ -199,7 +215,7 @@ const scenarios: ProcessConformanceScenarios = {
     escalated: true,
   }),
   treeCleanup: () => ({
-    process: createProcessAdapter(),
+    ...observedProcess(),
     options: commandOptions(
       "const{spawn}=require('node:child_process');" +
         "spawn(process.execPath,['-e','setInterval(()=>{},1000)']," +
@@ -208,7 +224,7 @@ const scenarios: ProcessConformanceScenarios = {
     ),
   }),
   failures: () => ({
-    process: createProcessAdapter(),
+    ...observedProcess(),
     missingName: missing,
     command: {
       ...commandOptions(""),
@@ -235,6 +251,8 @@ registerProcessConformanceCases(scenarios, (name, body) => {
 cases.push(
   { name: "execution-real-command", body: executionRealCommand },
   { name: "process-sync-command", body: processSyncCommand },
+  { name: "process-throwing-observer", body: processThrowingObserver },
+  { name: "process-owned-shutdown-facts", body: processOwnedShutdownFacts },
   { name: "execution-real-nonzero", body: executionRealNonzero },
   { name: "execution-real-cancellation", body: executionRealCancellation },
   { name: "execution-real-group-reaping", body: executionRealGroupReaping },
@@ -897,12 +915,24 @@ async function processWorkerEnvironment(): Promise<void> {
 }
 
 function processSyncCommand(): void {
-  const processAdapter = createProcessAdapter();
+  // The observer writes a marker file on the start fact, and the child reports
+  // whether the marker exists. Only a start fact emitted before the blocking
+  // call can be seen by the child it names.
+  const marker = join(runtimeTemp("secant-runtime-sync-marker-"), "started");
+  const facts: ChildFact[] = [];
+  const processAdapter = createProcessAdapter({
+    observeChild: (fact) => {
+      facts.push(fact);
+      if (fact.kind === "spawn") writeFileSync(marker, "");
+    },
+  });
   const exited = processAdapter.spawnCommandSync({
+    role: "git",
     executable,
     args: [
       "-e",
-      "process.stdout.write('out');process.stderr.write('err');process.exit(17)",
+      `process.stdout.write(String(require('node:fs').existsSync(${JSON.stringify(marker)})));` +
+        "process.stderr.write('err');process.exit(17)",
     ],
     env: process.env,
     maxBufferBytes: 1024 * 1024,
@@ -910,20 +940,39 @@ function processSyncCommand(): void {
   assert.equal(exited.kind, "exited");
   if (exited.kind !== "exited") throw new Error("sync child did not exit");
   assert.equal(exited.status, 17);
-  assert.equal(new TextDecoder().decode(exited.stdout), "out");
+  assert.equal(new TextDecoder().decode(exited.stdout), "true");
   assert.equal(new TextDecoder().decode(exited.stderr), "err");
+  const [start, exit] = facts;
+  assert.deepEqual(start, { kind: "spawn", role: "git" });
+  assert.ok(exit?.kind === "exit", JSON.stringify(facts));
+  assert.ok(Number.isInteger(exit.pid) && exit.pid! > 0);
+  assert.equal(exit.status, 17);
+  assert.ok(exit.elapsedMs >= 0);
+  assert.equal(facts.length, 2);
 
+  facts.length = 0;
   const missing = processAdapter.spawnCommandSync({
+    role: "command",
     executable: join(runtimeTemp("secant-runtime-sync-missing-"), "missing"),
     args: [],
     env: process.env,
     maxBufferBytes: 1024,
   });
   assert.equal(missing.kind, "spawn-error");
+  assert.deepEqual(
+    facts.map((fact) => [fact.kind, fact.role, "pid" in fact]),
+    [
+      ["spawn", "command", false],
+      ["spawn-error", "command", false],
+    ],
+  );
+  assert.equal(facts[1]?.kind === "spawn-error" && facts[1].code, "ENOENT");
 
   // Windows has no POSIX signal terminal observation; its documented Process
   // contract reports an exit. The POSIX matrix jobs cover the `signal` branch.
+  facts.length = 0;
   const signalled = processAdapter.spawnCommandSync({
+    role: "command",
     executable,
     args: ["-e", "process.kill(process.pid,'SIGTERM')"],
     env: process.env,
@@ -933,6 +982,90 @@ function processSyncCommand(): void {
     signalled.kind,
     process.platform === "win32" ? "exited" : "signal",
   );
+  const ended = facts[1];
+  assert.ok(ended?.kind === "exit", JSON.stringify(facts));
+  if (process.platform === "win32") assert.equal(ended.status, 1);
+  else assert.equal(ended.signal, "SIGTERM");
+
+  // A child that overruns its buffer bound ran and was killed for it: its spawn
+  // error arrives with a PID, so it is reaped, not a spawn that never ran.
+  facts.length = 0;
+  const overrun = processAdapter.spawnCommandSync({
+    role: "git",
+    executable,
+    args: [
+      "-e",
+      "process.stdout.write('x'.repeat(65536));setInterval(()=>{},1000)",
+    ],
+    env: process.env,
+    maxBufferBytes: 1024,
+  });
+  assert.equal(overrun.kind, "spawn-error");
+  const reaped = facts[1];
+  assert.ok(reaped?.kind === "reap", JSON.stringify(facts));
+  assert.ok(Number.isInteger(reaped.pid) && reaped.pid! > 0);
+  assert.equal(facts.length, 2);
+}
+
+/** A long-lived process that outlives its stdin-close bound is timed out,
+ *  force-killed, and reaped. */
+async function processOwnedShutdownFacts(): Promise<void> {
+  const { process: processAdapter, facts } = observedProcess();
+  const launched = await processAdapter.spawnOwnedProcess(
+    ownedOptions(
+      "process.on('SIGTERM',()=>{});process.stdin.resume();" +
+        "process.stdout.write('ready\\n');setInterval(()=>{},1000)",
+    ),
+  );
+  assert.ok(launched.ok);
+  const iterator = launched.process.stdout[Symbol.asyncIterator]();
+  await iterator.next();
+  const close = await launched.process.closeStdin(600);
+  assert.notEqual(close.kind, "cleanup-timeout");
+  // Windows' first kill is already forced, and its `taskkill` is its own role.
+  const owned = facts.filter((fact) => fact.role === "harness-runtime");
+  assert.deepEqual(
+    owned.map((fact) => fact.kind),
+    ["spawn", "timeout", "kill-escalation", "reap"],
+  );
+  const reap = owned[3];
+  if (process.platform !== "win32") {
+    assert.ok(reap?.kind === "reap" && reap.signal === "SIGKILL");
+  }
+}
+
+/** An observer that throws changes no outcome on any spawn path. */
+async function processThrowingObserver(): Promise<void> {
+  let observed = 0;
+  const processAdapter = createProcessAdapter({
+    observeChild: () => {
+      observed++;
+      throw new Error("observer exploded");
+    },
+  });
+  const sync = processAdapter.spawnCommandSync({
+    role: "command",
+    executable,
+    args: ["-e", "process.exit(3)"],
+    env: process.env,
+    maxBufferBytes: 1024,
+  });
+  assert.equal(sync.kind === "exited" && sync.status, 3);
+  const cancel = new AbortController();
+  const command = processAdapter.spawnCommand(
+    commandOptions("setInterval(()=>{},1000)", { cancelSignal: cancel.signal }),
+  );
+  cancel.abort();
+  assert.deepEqual(await command, { kind: "cancelled" });
+  const launched = await processAdapter.spawnOwnedProcess(
+    ownedOptions("process.exit(4)"),
+  );
+  assert.ok(launched.ok);
+  assert.deepEqual(await launched.process.closed(), {
+    kind: "exited",
+    status: 4,
+  });
+  assert.ok(observed >= 7, `observed ${observed} facts`);
 }
 
 async function executionStoreOnFakeProcess(): Promise<void> {
@@ -1412,6 +1545,7 @@ function executeGit(
   args: readonly string[],
 ): Uint8Array {
   const result = processAdapter.spawnCommandSync({
+    role: "git",
     executable: "git",
     args,
     cwd,
@@ -1547,6 +1681,7 @@ async function storeLockedCoordination(): Promise<void> {
   lock.exec("BEGIN EXCLUSIVE");
   try {
     const launched = await processAdapter.spawnOwnedProcess({
+      role: "command",
       executable,
       args: [LOCKED_COORDINATION_WORKER, home, workspace],
       cwd: process.cwd(),
@@ -1597,6 +1732,7 @@ async function startStoreWriter(params: TStartStoreWriterParams): Promise<{
 }> {
   const mode = params.mode ?? "exit";
   const spawned = await params.processAdapter.spawnOwnedProcess({
+    role: "command",
     executable,
     args: [
       CONCURRENT_CREATE_WORKER,

@@ -34,7 +34,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 - `OperationalLog.record` maps each event to its level (`recordLevel`): a failed Harness phase, unclean cleanup, or not-ready qualification warns. `harness-log.ts` builds
   each Harness's phase observer and wraps its Adapter so every prepared Harness records its `CleanupReport` on first close and each completed
   Turn's usage: one seam for the qualify, Run, and interactive close sites, a double included. A test Adapter override may be a factory taking
-  that observer (#322).
+  that observer (#322). The Process observer (`process-observer.ts`, #321) is built where the one Process is constructed, and
+  `processFactory` receives the same options, so a double reports child facts too; a child that never ran, timed out, or was force-killed warns.
 - Startup prunes only matching regular log files strictly older than 30 days in the resolved folder (#323), before opening the active file:
   its real mtime can be stale against an injected future clock. Prune failures are silent; they never call the log-write failure fallback.
 

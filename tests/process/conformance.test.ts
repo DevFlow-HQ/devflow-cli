@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
+  ChildFact,
   OwnedProcessClose,
   OwnedProcessOptions,
   ProcessInterruption,
@@ -19,6 +20,7 @@ const encoder = new TextEncoder();
 const executable = "/fake/bin/runtime";
 const missing = "missing-process-parity-executable";
 const basicOwnedOptions: OwnedProcessOptions = {
+  role: "harness-runtime",
   executable,
   args: [],
   cwd: "/fake/workspace",
@@ -26,6 +28,7 @@ const basicOwnedOptions: OwnedProcessOptions = {
   launchTimeoutMs: 1_000,
 };
 const basicCommandOptions: SpawnOptions = {
+  role: "command",
   executable,
   args: [],
   cwd: undefined,
@@ -265,6 +268,7 @@ test("fake process scripts synchronous command streams independently", () => {
   });
   assert.deepEqual(
     fake.spawnCommandSync({
+      role: "git",
       executable: "git",
       args: ["status"],
       env: {},
@@ -276,5 +280,94 @@ test("fake process scripts synchronous command streams independently", () => {
       stdout: encoder.encode("out"),
       stderr: encoder.encode("err"),
     },
+  );
+});
+
+test("fake process reports each scripted child's facts as the real Adapter would", async () => {
+  const facts: ChildFact[] = [];
+  const fake = createFakeProcess(
+    {
+      commands: [
+        { trigger: "immediate", result: { kind: "spawn-error" } },
+        { trigger: "immediate", result: { kind: "cancelled" } },
+      ],
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            interruptTerminal(
+              { close: { kind: "signal", signal: "SIGKILL" }, escalated: true },
+              50,
+            ),
+          ],
+        },
+        {
+          kind: "launch-failure",
+          failure: {
+            ok: false,
+            failure: {
+              kind: "launch-timeout",
+              cause: new Error("no spawn event"),
+            },
+          },
+        },
+      ],
+    },
+    { observeChild: (fact) => facts.push(fact) },
+  );
+  await fake.spawnCommand(basicCommandOptions);
+  await fake.spawnCommand(basicCommandOptions);
+  const launched = await fake.spawnOwnedProcess(basicOwnedOptions);
+  if (!launched.ok) throw new Error("unreachable");
+  await launched.process.interrupt(50);
+  await fake.spawnOwnedProcess(basicOwnedOptions);
+
+  const [, cancelled, interrupted, timedOut] = [40_000, 40_001, 40_002, 40_003];
+  const settled = { elapsedMs: 12.6 };
+  assert.deepEqual(facts, [
+    { kind: "spawn-error", role: "command", ...settled },
+    { kind: "spawn", role: "command", pid: cancelled },
+    { kind: "cancellation", role: "command", pid: cancelled },
+    {
+      kind: "reap",
+      role: "command",
+      pid: cancelled,
+      signal: "SIGTERM",
+      ...settled,
+    },
+    { kind: "spawn", role: "harness-runtime", pid: interrupted },
+    { kind: "cancellation", role: "harness-runtime", pid: interrupted },
+    { kind: "kill-escalation", role: "harness-runtime", pid: interrupted },
+    {
+      kind: "reap",
+      role: "harness-runtime",
+      pid: interrupted,
+      signal: "SIGKILL",
+      ...settled,
+    },
+    { kind: "spawn", role: "harness-runtime", pid: timedOut },
+    { kind: "timeout", role: "harness-runtime", pid: timedOut },
+    {
+      kind: "reap",
+      role: "harness-runtime",
+      pid: timedOut,
+      signal: "SIGTERM",
+      ...settled,
+    },
+  ]);
+});
+
+test("every spawn declares a caller role from the closed set", () => {
+  const { role, ...roleless } = basicCommandOptions;
+  assert.equal(role, "command");
+  // @ts-expect-error -- a spawn without a role fails typecheck.
+  const missing: SpawnOptions = roleless;
+  // @ts-expect-error -- Process's own `where.exe` role is not a caller's.
+  const lookup: SpawnOptions = { ...roleless, role: "executable-lookup" };
+  // @ts-expect-error -- a free label could carry a Command's executable.
+  const free: SpawnOptions = { ...roleless, role: "node" };
+  assert.deepEqual(
+    [missing, lookup, free].map((options) => options.role),
+    [undefined, "executable-lookup", "node"],
   );
 });

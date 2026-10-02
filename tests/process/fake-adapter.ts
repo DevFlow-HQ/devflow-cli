@@ -1,5 +1,6 @@
 import {
   createProcessAdapter,
+  type ChildFact,
   type ExecutableResolution,
   type OwnedProcess,
   type OwnedProcessClose,
@@ -12,6 +13,7 @@ import {
   type SpawnOwnedProcessResult,
   type SpawnResult,
   type OwnedProcessOptions,
+  type ProcessAdapterOptions,
 } from "../../src/process/process.js";
 
 /** A Process Interface that resolves and probes through the real Module, but
@@ -85,8 +87,103 @@ export interface FakeProcessScript {
   readonly ownedProcesses?: readonly FakeOwnedProcessScript[];
 }
 
-export function createFakeProcess(script: FakeProcessScript): ProcessAdapter {
-  return new FakeProcessAdapter(script);
+/** The scripted Process. Given the factory's options, it reports each scripted
+ *  child's facts the way the real Adapter would: a start (before the call for a
+ *  synchronous spawn), then the scripted outcome's settlement, with a fake PID
+ *  and a fixed elapsed time. It never spawns `where.exe` or `taskkill`, so it
+ *  reports no Windows-only fact. */
+export function createFakeProcess(
+  script: FakeProcessScript,
+  options: ProcessAdapterOptions = {},
+): ProcessAdapter {
+  return new FakeProcessAdapter(script, options.observeChild ?? (() => {}));
+}
+
+type Observe = (fact: ChildFact) => void;
+
+// A scripted settlement's signal, which no SpawnResult names, and the fixed
+// elapsed time every settlement reports (fractional, so rounding shows).
+const FAKE_SIGNAL: NodeJS.Signals = "SIGTERM";
+const FAKE_ELAPSED_MS = 12.6;
+
+/** The facts the real Adapter reports after a running child settles to
+ *  `result`. */
+function commandSettlement(
+  role: ChildFact["role"],
+  pid: number,
+  result: SpawnResult,
+): ChildFact[] {
+  switch (result.kind) {
+    case "exited":
+      return [
+        {
+          kind: "exit",
+          role,
+          pid,
+          status: result.status,
+          elapsedMs: FAKE_ELAPSED_MS,
+        },
+      ];
+    case "signal":
+      return [
+        {
+          kind: "exit",
+          role,
+          pid,
+          signal: FAKE_SIGNAL,
+          elapsedMs: FAKE_ELAPSED_MS,
+        },
+      ];
+    case "timeout":
+    case "cancelled":
+      return [
+        {
+          kind: result.kind === "timeout" ? "timeout" : "cancellation",
+          role,
+          pid,
+        },
+        {
+          kind: "reap",
+          role,
+          pid,
+          signal: FAKE_SIGNAL,
+          elapsedMs: FAKE_ELAPSED_MS,
+        },
+      ];
+    case "spawn-error":
+      return [{ kind: "spawn-error", role, elapsedMs: FAKE_ELAPSED_MS }];
+  }
+}
+
+function closeSettlement(
+  role: ChildFact["role"],
+  pid: number,
+  kind: "exit" | "reap",
+  close: OwnedProcessClose,
+): ChildFact[] {
+  if (close.kind === "exited") {
+    return [
+      { kind, role, pid, status: close.status, elapsedMs: FAKE_ELAPSED_MS },
+    ];
+  }
+  if (close.kind === "signal") {
+    return [
+      {
+        kind,
+        role,
+        pid,
+        signal: close.signal ?? FAKE_SIGNAL,
+        elapsedMs: FAKE_ELAPSED_MS,
+      },
+    ];
+  }
+  // A cleanup error or timeout observed no close: the child was never reaped.
+  return [];
+}
+
+function errorCode(cause: unknown): string | undefined {
+  const code = (cause as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? code : undefined;
 }
 
 class FakeProcessAdapter implements ProcessAdapter {
@@ -94,8 +191,16 @@ class FakeProcessAdapter implements ProcessAdapter {
   private commandIndex = 0;
   private syncCommandIndex = 0;
   private ownedProcessIndex = 0;
+  private nextPid = 40_000;
 
-  constructor(private readonly script: FakeProcessScript) {}
+  constructor(
+    private readonly script: FakeProcessScript,
+    private readonly observe: Observe,
+  ) {}
+
+  private report(facts: readonly ChildFact[]): void {
+    for (const fact of facts) this.observe(fact);
+  }
 
   resolveExecutable(
     name: string,
@@ -119,20 +224,37 @@ class FakeProcessAdapter implements ProcessAdapter {
   }
 
   spawnCommand(options: SpawnOptions): Promise<SpawnResult> {
+    const pid = this.nextPid++;
+    const { role } = options;
+    const scripted = this.scriptedCommand(options);
+    // A child that never ran reports no spawn; one that did reports it before
+    // it settles, so a scripted child that never settles still names itself.
+    const neverRan =
+      !(scripted instanceof Promise) && scripted.kind === "spawn-error";
+    if (!neverRan) this.report([{ kind: "spawn", role, pid }]);
+    return Promise.resolve(scripted).then((result) => {
+      this.report(commandSettlement(role, pid, result));
+      return result;
+    });
+  }
+
+  private scriptedCommand(
+    options: SpawnOptions,
+  ): SpawnResult | Promise<SpawnResult> {
     const entry = this.script.commands?.[this.commandIndex++];
     if (entry === undefined && this.script.commandHandler !== undefined) {
-      return Promise.resolve(this.script.commandHandler(options));
+      return this.script.commandHandler(options);
     }
     if (entry === undefined) {
       throw new Error(
         `spawnCommand beyond the scripted commands: ${options.executable}`,
       );
     }
-    if (entry.trigger === "immediate") return Promise.resolve(entry.result);
+    if (entry.trigger === "immediate") return entry.result;
     if (options.cancelSignal === undefined) {
       throw new Error("scripted cancellation requires a cancelSignal");
     }
-    if (options.cancelSignal.aborted) return Promise.resolve(entry.result);
+    if (options.cancelSignal.aborted) return entry.result;
     return new Promise((resolve) => {
       options.cancelSignal!.addEventListener(
         "abort",
@@ -143,6 +265,45 @@ class FakeProcessAdapter implements ProcessAdapter {
   }
 
   spawnCommandSync(options: SpawnSyncOptions): SpawnSyncResult {
+    const { role } = options;
+    this.report([{ kind: "spawn", role }]);
+    const result = this.scriptedSyncCommand(options);
+    const pid = this.nextPid++;
+    if (result.kind === "spawn-error") {
+      const code = errorCode(result.cause);
+      this.report([
+        {
+          kind: "spawn-error",
+          role,
+          ...(code !== undefined ? { code } : {}),
+          elapsedMs: FAKE_ELAPSED_MS,
+        },
+      ]);
+    } else if (result.kind === "signal") {
+      this.report([
+        {
+          kind: "exit",
+          role,
+          pid,
+          signal: FAKE_SIGNAL,
+          elapsedMs: FAKE_ELAPSED_MS,
+        },
+      ]);
+    } else {
+      this.report([
+        {
+          kind: "exit",
+          role,
+          pid,
+          status: result.status,
+          elapsedMs: FAKE_ELAPSED_MS,
+        },
+      ]);
+    }
+    return result;
+  }
+
+  private scriptedSyncCommand(options: SpawnSyncOptions): SpawnSyncResult {
     const entry = this.script.syncCommands?.[this.syncCommandIndex++];
     if (entry === undefined && this.script.syncCommandHandler !== undefined) {
       return this.script.syncCommandHandler(options);
@@ -166,11 +327,52 @@ class FakeProcessAdapter implements ProcessAdapter {
         `spawnOwnedProcess beyond the scripted processes: ${options.executable}`,
       );
     }
-    if (entry.kind === "launch-failure") return Promise.resolve(entry.failure);
-    return Promise.resolve({
-      ok: true,
-      process: new FakeOwnedProcess(entry.emissions),
-    });
+    const { role } = options;
+    const pid = this.nextPid++;
+    if (entry.kind === "launch-failure") {
+      const { failure } = entry.failure;
+      if (failure.kind === "spawn-error") {
+        const code = errorCode(failure.cause);
+        this.report([
+          {
+            kind: "spawn-error",
+            role,
+            ...(code !== undefined ? { code } : {}),
+            elapsedMs: FAKE_ELAPSED_MS,
+          },
+        ]);
+      } else {
+        // The real Adapter reaps a launch that timed out before it reports.
+        this.report([
+          { kind: "spawn", role, pid },
+          { kind: "timeout", role, pid },
+          {
+            kind: "reap",
+            role,
+            pid,
+            signal: FAKE_SIGNAL,
+            elapsedMs: FAKE_ELAPSED_MS,
+          },
+        ]);
+      }
+      return Promise.resolve(entry.failure);
+    }
+    const owned = new FakeOwnedProcess(entry.emissions, (settled) =>
+      this.report(
+        settled.interruption === undefined
+          ? closeSettlement(role, pid, "exit", settled.close)
+          : [
+              { kind: "cancellation", role, pid },
+              ...(settled.interruption.escalated
+                ? [{ kind: "kill-escalation" as const, role, pid }]
+                : []),
+              ...closeSettlement(role, pid, "reap", settled.close),
+            ],
+      ),
+    );
+    this.report([{ kind: "spawn", role, pid }]);
+    owned.start();
+    return Promise.resolve({ ok: true, process: owned });
   }
 }
 
@@ -187,7 +389,13 @@ class FakeOwnedProcess implements OwnedProcess {
   >;
   private interruptPromise: Promise<ProcessInterruption> | undefined;
 
-  constructor(emissions: readonly FakeOwnedProcessEmission[]) {
+  constructor(
+    emissions: readonly FakeOwnedProcessEmission[],
+    private readonly onSettle: (settled: {
+      readonly close: OwnedProcessClose;
+      readonly interruption?: ProcessInterruption;
+    }) => void,
+  ) {
     let terminal:
       | Extract<FakeOwnedProcessEmission, { readonly kind: "terminal" }>
       | undefined;
@@ -213,7 +421,11 @@ class FakeOwnedProcess implements OwnedProcess {
       resolveClose = resolve;
     });
     this.resolveClose = resolveClose;
-    if (terminal.trigger === "automatic") this.settle(terminal.close);
+  }
+
+  /** Settles an automatic terminal once the spawn has been reported. */
+  start(): void {
+    if (this.terminal.trigger === "automatic") this.settle(this.terminal.close);
   }
 
   writeStdin(_bytes: Uint8Array): Promise<void> {
@@ -245,7 +457,7 @@ class FakeOwnedProcess implements OwnedProcess {
         `interrupt expected gracefulMs ${this.terminal.expectedGracefulMs}, received ${gracefulMs}`,
       );
     }
-    this.settle(this.terminal.interruption.close);
+    this.settle(this.terminal.interruption.close, this.terminal.interruption);
     this.interruptPromise = Promise.resolve(this.terminal.interruption);
     return this.interruptPromise;
   }
@@ -254,10 +466,21 @@ class FakeOwnedProcess implements OwnedProcess {
     return this.closePromise;
   }
 
-  private settle(close: OwnedProcessClose): void {
+  private settled = false;
+
+  private settle(
+    close: OwnedProcessClose,
+    interruption?: ProcessInterruption,
+  ): void {
     this.stdoutStream.close();
     this.stderrStream.close();
     this.resolveClose(close);
+    if (this.settled) return;
+    this.settled = true;
+    this.onSettle({
+      close,
+      ...(interruption !== undefined ? { interruption } : {}),
+    });
   }
 }
 

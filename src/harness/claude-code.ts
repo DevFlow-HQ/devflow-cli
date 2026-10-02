@@ -272,6 +272,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
     { ok: true; version: string } | { ok: false; failure: HarnessFailure }
   > {
     const result = await this.processAdapter.spawnCommand({
+      role: "harness-probe",
       executable: target.executable,
       args: [...target.prefixArgs, "--version"],
       cwd: undefined,
@@ -782,6 +783,7 @@ class ClaudeCodeSession {
         ? ["--add-dir", this.writableDirectory]
         : [];
     const launched = await this.spawn({
+      role: "harness-runtime",
       executable: this.target.executable,
       args: [
         ...this.target.prefixArgs,

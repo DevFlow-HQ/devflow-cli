@@ -440,6 +440,7 @@ function probeGitWorktreeRoot(
     return { problem: gitNotRunnable() };
   }
   const result = process.spawnCommandSync({
+    role: "git",
     executable: "git",
     args: ["-C", workspacePath, "rev-parse", "--show-toplevel"],
     env: isolatedGitEnvironment(),

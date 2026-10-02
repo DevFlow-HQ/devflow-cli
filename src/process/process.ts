@@ -92,12 +92,13 @@ function walkPath(
 function resolveWindowsFallback(
   name: string,
   options: ResolveExecutableOptions,
+  notify: Notify,
 ): string | undefined {
   const output =
     options.resolveWindowsFallback !== undefined
       ? options.resolveWindowsFallback(name)
       : options.resolve === undefined
-        ? runWhere(name, options.path)
+        ? runWhere(name, options.path, notify)
         : undefined;
   if (output === undefined) return undefined;
   const firstMatch = output.split(/\r?\n/, 1)[0]?.trim();
@@ -106,12 +107,19 @@ function resolveWindowsFallback(
     : firstMatch;
 }
 
-function runWhere(name: string, path: string | undefined): string | undefined {
+function runWhere(
+  name: string,
+  path: string | undefined,
+  notify: Notify,
+): string | undefined {
+  const watch = new ChildWatch(notify, "executable-lookup");
+  watch.starting();
   const result = spawnSync("where.exe", [name], {
     encoding: "utf8",
     windowsHide: true,
     ...(path !== undefined ? { env: { ...process.env, PATH: path } } : {}),
   });
+  watch.returned(result);
   // This is a best-effort positive probe after the primary resolver already
   // missed. An unavailable/blocked where.exe and a non-zero no-match result both
   // supply no spawnable path, matching `which.sync({ nothrow: true })` above.
@@ -123,23 +131,25 @@ function resolveExecutablePath(
   name: string,
   options: ResolveExecutableOptions,
   platform: NodeJS.Platform,
+  notify: Notify,
 ): string | undefined {
   const resolved = walkPath(name, options);
   if (resolved !== undefined || platform !== "win32") return resolved;
-  return resolveWindowsFallback(name, options);
+  return resolveWindowsFallback(name, options, notify);
 }
 
 function resolveExecutableWithNode(
   name: string,
-  options: ResolveExecutableOptions = {},
+  options: ResolveExecutableOptions,
+  notify: Notify,
 ): ExecutableResolution {
   const platform = options.platform ?? process.platform;
-  const resolved = resolveExecutablePath(name, options, platform);
+  const resolved = resolveExecutablePath(name, options, platform, notify);
   if (resolved === undefined) return { kind: "not-found" };
   if (platform === "win32") {
     const ext = extname(resolved).toLowerCase();
     if (ext === ".cmd" || ext === ".bat") {
-      return resolveWindowsShim(resolved, options);
+      return resolveWindowsShim(resolved, options, notify);
     }
   }
   return { kind: "found", executable: resolved, prefixArgs: [] };
@@ -151,6 +161,7 @@ function resolveExecutableWithNode(
 function resolveWindowsShim(
   shimPath: string,
   options: ResolveExecutableOptions,
+  notify: Notify,
 ): ExecutableResolution {
   let text: string;
   try {
@@ -166,6 +177,7 @@ function resolveWindowsShim(
     target.interpreter,
     options,
     "win32",
+    notify,
   );
   if (interpreter === undefined) return { kind: "not-found" };
   return {
@@ -214,6 +226,212 @@ function expandDp0(token: string, shimDir: string): string {
   return join(shimDir, ...segments);
 }
 
+// --- Child facts --------------------------------------------------------------
+
+/** What a caller's spawn is for: the Preflight worktree probe and the Artifact
+ *  repository spawn `git`, a Command step spawns `command`, a Harness version or
+ *  schema probe spawns `harness-probe`, and a Harness's long-lived process is
+ *  `harness-runtime`. Every caller declares one. The set is closed because a free
+ *  label could carry a Command's executable or arguments, which the operational
+ *  log excludes: the closed set is part of that privacy control. A role names a
+ *  child's purpose, never which Harness owns it. */
+type SpawnRole = "git" | "command" | "harness-probe" | "harness-runtime";
+
+/** A child's role in a fact: its caller's declared role, or one of the two this
+ *  Module assigns its own spawns and no caller can declare — the Windows
+ *  `where.exe` fallback (`executable-lookup`) and `taskkill` (`tree-kill`). */
+type ChildRole = SpawnRole | "executable-lookup" | "tree-kill";
+
+/** One observed lifecycle fact of a child this Module spawned. Arguments,
+ *  environment, and output never cross. Every child reports at most one
+ *  settlement: `spawn-error` (it never ran), `exit` (it ended without a kill from
+ *  Secant), or `reap` (it ended after Secant killed it). An asynchronous child
+ *  that never ran reports only `spawn-error`; every other child reports `spawn`
+ *  first. A child with no settlement was still running when Secant stopped
+ *  watching.
+ *
+ *  - `spawn`: emitted before a synchronous spawn blocks, so a hang inside it still
+ *    names the child; the PID is known only once it returns, on the settlement.
+ *    An asynchronous spawn carries its PID here.
+ *  - `spawn-error`: the child never ran. `code` is the native error code alone,
+ *    never the message, syscall, or stack, which carry the executable.
+ *  - A synchronous child killed for overrunning its buffer bound is a `reap`.
+ *  - `timeout`: a bound Secant set expired, and Secant starts killing the tree.
+ *  - `cancellation`: the caller cancelled or interrupted the child, and Secant
+ *    starts killing the tree.
+ *  - `kill-escalation`: Secant force-killed the tree — SIGKILL after SIGTERM off
+ *    Windows; on Windows every kill is `taskkill /T /F`, so it follows the first.
+ *  - `exit` and `reap` carry the exit status, or the signal that ended it.
+ *
+ *  `elapsedMs` is monotonic time since the spawn call. */
+export type ChildFact =
+  | {
+      readonly kind: "spawn";
+      readonly role: ChildRole;
+      readonly pid?: number;
+    }
+  | {
+      readonly kind: "spawn-error";
+      readonly role: ChildRole;
+      readonly code?: string;
+      readonly elapsedMs: number;
+    }
+  | {
+      readonly kind: "timeout" | "cancellation" | "kill-escalation";
+      readonly role: ChildRole;
+      readonly pid: number;
+    }
+  | {
+      readonly kind: "exit" | "reap";
+      readonly role: ChildRole;
+      readonly pid?: number;
+      readonly status?: number;
+      readonly signal?: NodeJS.Signals;
+      readonly elapsedMs: number;
+    };
+
+/** Options for the real Adapter. Production composition passes its operational
+ *  log's observer; omitted, no fact is reported. An observer that throws is
+ *  ignored, so a fact can never change a Process outcome. */
+export interface ProcessAdapterOptions {
+  readonly observeChild?: (fact: ChildFact) => void;
+}
+
+/** The guarded observer every spawn path reports through. */
+type Notify = (fact: ChildFact) => void;
+
+function guardedObserver(options: ProcessAdapterOptions): Notify {
+  const observe = options.observeChild;
+  if (observe === undefined) return () => {};
+  return (fact) => {
+    try {
+      observe(fact);
+    } catch {
+      // A fact is evidence about a child, never part of its outcome.
+    }
+  };
+}
+
+/** One child's facts. It holds what each fact needs — the role, the PID once
+ *  known, the spawn time, and whether Secant killed or force-killed the tree —
+ *  so every spawn and kill path reports alike, and it reports one settlement at
+ *  most. */
+class ChildWatch {
+  private readonly started = performance.now();
+  private pid: number | undefined;
+  private killed = false;
+  private escalated = false;
+  private settled = false;
+
+  constructor(
+    private readonly notify: Notify,
+    private readonly role: ChildRole,
+  ) {}
+
+  /** A synchronous spawn is about to block; its PID is not known yet. */
+  starting(): void {
+    this.notify({ kind: "spawn", role: this.role });
+  }
+
+  /** An asynchronous spawn returned a running child. */
+  spawned(pid: number): void {
+    this.pid = pid;
+    this.notify({ kind: "spawn", role: this.role, pid });
+  }
+
+  /** A synchronous spawn returned: it failed to start, or its child ended. A
+   *  child that overran its buffer bound ran and was killed for it, so its error
+   *  arrives with a PID and it is reaped. */
+  returned(result: {
+    readonly pid?: number;
+    readonly error?: Error;
+    readonly status: number | null;
+    readonly signal: NodeJS.Signals | null;
+  }): void {
+    const ran = result.pid !== undefined && result.pid > 0;
+    if (result.error !== undefined && !ran) {
+      this.failed(result.error);
+      return;
+    }
+    this.pid = result.pid;
+    if (result.error !== undefined) this.killed = true;
+    this.closed(result.status, result.signal);
+  }
+
+  failed(error: unknown): void {
+    if (this.settled) return;
+    this.settled = true;
+    const code =
+      error instanceof Error
+        ? (error as NodeJS.ErrnoException).code
+        : undefined;
+    this.notify({
+      kind: "spawn-error",
+      role: this.role,
+      ...(typeof code === "string" ? { code } : {}),
+      elapsedMs: this.elapsed(),
+    });
+  }
+
+  /** Secant's own bound expired, or its caller cancelled: the kill follows. */
+  stopping(reason: "timeout" | "cancellation"): void {
+    if (this.pid === undefined || this.settled) return;
+    this.notify({ kind: reason, role: this.role, pid: this.pid });
+  }
+
+  /** A kill was sent to the live tree. On Windows every kill is forced. */
+  killing(signal: "SIGTERM" | "SIGKILL"): void {
+    this.killed = true;
+    const forced = signal === "SIGKILL" || process.platform === "win32";
+    if (!forced || this.escalated || this.pid === undefined) return;
+    this.escalated = true;
+    this.notify({ kind: "kill-escalation", role: this.role, pid: this.pid });
+  }
+
+  /** Watches the `taskkill` a Windows kill spawns, in this Module's own role. */
+  treeKill(killer: ChildProcess): void {
+    watchChild(killer, this.notify, "tree-kill");
+  }
+
+  closed(status: number | null, signal: NodeJS.Signals | null): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.notify({
+      kind: this.killed ? "reap" : "exit",
+      role: this.role,
+      ...(this.pid !== undefined ? { pid: this.pid } : {}),
+      ...(status !== null ? { status } : {}),
+      ...(status === null && signal !== null ? { signal } : {}),
+      elapsedMs: this.elapsed(),
+    });
+  }
+
+  private elapsed(): number {
+    return performance.now() - this.started;
+  }
+}
+
+/** Whether a spawned child has not yet been seen to exit. */
+function alive(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+/** Starts watching an asynchronous child: its spawn fact as soon as it has a
+ *  PID, a spawn error if it never ran, and its close. */
+function watchChild(
+  child: ChildProcess,
+  notify: Notify,
+  role: ChildRole,
+): ChildWatch {
+  const watch = new ChildWatch(notify, role);
+  if (child.pid !== undefined) watch.spawned(child.pid);
+  child.once("error", (error) => {
+    if (child.pid === undefined) watch.failed(error);
+  });
+  child.once("close", (code, signal) => watch.closed(code, signal));
+  return watch;
+}
+
 // --- Direct spawn with tree reaping -----------------------------------------
 
 /** What became of one spawned Command. `timeout` and `cancelled` are our own
@@ -231,6 +449,7 @@ export type SpawnResult =
   | { readonly kind: "signal" };
 
 export interface SpawnOptions {
+  readonly role: SpawnRole;
   readonly executable: string;
   readonly args: readonly string[];
   readonly cwd: string | undefined;
@@ -249,6 +468,7 @@ export interface SpawnOptions {
  * before their enclosing SQLite transaction can be decided. Unlike Command-step
  * capture, stdout and stderr stay separate because callers interpret each stream. */
 export interface SpawnSyncOptions {
+  readonly role: SpawnRole;
   readonly executable: string;
   readonly args: readonly string[];
   readonly cwd?: string;
@@ -284,6 +504,7 @@ export type OwnedProcessClose =
   | { readonly kind: "cleanup-timeout" };
 
 export interface OwnedProcessOptions {
+  readonly role: SpawnRole;
   readonly executable: string;
   readonly args: readonly string[];
   readonly cwd: string;
@@ -347,34 +568,44 @@ export interface ProcessAdapter {
 }
 
 /** Construct the real Node-compatible implementation behind the Process Seam. */
-export function createProcessAdapter(): ProcessAdapter {
-  return new NodeProcessAdapter();
+export function createProcessAdapter(
+  options: ProcessAdapterOptions = {},
+): ProcessAdapter {
+  return new NodeProcessAdapter(guardedObserver(options));
 }
 
 class NodeProcessAdapter implements ProcessAdapter {
+  constructor(private readonly notify: Notify) {}
+
   resolveExecutable(
     name: string,
     options: ResolveExecutableOptions = {},
   ): ExecutableResolution {
-    return resolveExecutableWithNode(name, options);
+    return resolveExecutableWithNode(name, options, this.notify);
   }
 
   spawnCommand(options: SpawnOptions): Promise<SpawnResult> {
-    return spawnCommandWithNode(options);
+    return spawnCommandWithNode(options, this.notify);
   }
 
   spawnCommandSync(options: SpawnSyncOptions): SpawnSyncResult {
-    return spawnCommandSyncWithNode(options);
+    return spawnCommandSyncWithNode(options, this.notify);
   }
 
   spawnOwnedProcess(
     options: OwnedProcessOptions,
   ): Promise<SpawnOwnedProcessResult> {
-    return spawnOwnedProcessWithNode(options);
+    return spawnOwnedProcessWithNode(options, this.notify);
   }
 }
 
-function spawnCommandSyncWithNode(options: SpawnSyncOptions): SpawnSyncResult {
+function spawnCommandSyncWithNode(
+  options: SpawnSyncOptions,
+  notify: Notify,
+): SpawnSyncResult {
+  // Reported before the call blocks, so a hang inside it still names the child.
+  const watch = new ChildWatch(notify, options.role);
+  watch.starting();
   const result = spawnSync(options.executable, [...options.args], {
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     env: options.env,
@@ -382,6 +613,7 @@ function spawnCommandSyncWithNode(options: SpawnSyncOptions): SpawnSyncResult {
     maxBuffer: options.maxBufferBytes,
     windowsHide: true,
   });
+  watch.returned(result);
   if (result.error !== undefined) {
     return { kind: "spawn-error", cause: result.error };
   }
@@ -399,6 +631,7 @@ function spawnCommandSyncWithNode(options: SpawnSyncOptions): SpawnSyncResult {
  * ordinary pipes are used. */
 function spawnOwnedProcessWithNode(
   options: OwnedProcessOptions,
+  notify: Notify,
 ): Promise<SpawnOwnedProcessResult> {
   const pipe: "pipe" | "overlapped" =
     process.platform === "win32" ? "overlapped" : "pipe";
@@ -413,6 +646,7 @@ function spawnOwnedProcessWithNode(
       detached: process.platform !== "win32",
     });
   } catch (error) {
+    new ChildWatch(notify, options.role).failed(error);
     return Promise.resolve({
       ok: false,
       failure: {
@@ -421,6 +655,7 @@ function spawnOwnedProcessWithNode(
       },
     });
   }
+  const watch = watchChild(child, notify, options.role);
 
   return new Promise((resolve) => {
     let decided = false;
@@ -441,7 +676,10 @@ function spawnOwnedProcessWithNode(
     const onSpawn = (): void => {
       finish({
         ok: true,
-        process: new NodeOwnedProcess(child as ChildProcessWithoutNullStreams),
+        process: new NodeOwnedProcess(
+          child as ChildProcessWithoutNullStreams,
+          watch,
+        ),
       });
     };
     const launchTimeout = setTimeout(() => {
@@ -453,7 +691,8 @@ function spawnOwnedProcessWithNode(
       // ownership of the launch result. Tree reaping remains best-effort here;
       // no Turn content has been submitted yet.
       child.on("error", () => {});
-      void reapTimedOutLaunch(child).finally(() => {
+      watch.stopping("timeout");
+      void reapTimedOutLaunch(child, watch).finally(() => {
         resolve({
           ok: false,
           failure: {
@@ -470,14 +709,17 @@ function spawnOwnedProcessWithNode(
   });
 }
 
-async function reapTimedOutLaunch(child: ChildProcess): Promise<void> {
+async function reapTimedOutLaunch(
+  child: ChildProcess,
+  watch: ChildWatch,
+): Promise<void> {
   const closed = new Promise<true>((resolve) =>
     child.once("close", () => resolve(true)),
   );
   try {
-    killGroup(child, "SIGTERM");
+    killGroup(child, "SIGTERM", watch);
     if ((await settleWithin(closed, KILL_ESCALATION_MS)) === true) return;
-    killGroup(child, "SIGKILL");
+    killGroup(child, "SIGKILL", watch);
     await settleWithin(closed, KILL_ESCALATION_MS);
   } catch {
     // The launch result remains a typed timeout. Cleanup evidence cannot replace
@@ -492,7 +734,10 @@ class NodeOwnedProcess implements OwnedProcess {
   private shutdownPromise: Promise<OwnedProcessClose> | undefined;
   private interruptPromise: Promise<ProcessInterruption> | undefined;
 
-  constructor(private readonly child: ChildProcessWithoutNullStreams) {
+  constructor(
+    private readonly child: ChildProcessWithoutNullStreams,
+    private readonly watch: ChildWatch,
+  ) {
     this.stdout = child.stdout;
     this.stderr = child.stderr;
     this.closePromise = new Promise((resolve) => {
@@ -570,19 +815,20 @@ class NodeOwnedProcess implements OwnedProcess {
         // live child is force-killed at once and reported escalated — the Adapter
         // then reports the Turn `lost`, never a confirmed `interrupted` it cannot
         // vouch for. A child already gone was not killed by us: not escalated.
-        const alive =
-          this.child.exitCode === null && this.child.signalCode === null;
-        killGroup(this.child, "SIGKILL");
+        const live = alive(this.child);
+        if (live) this.watch.stopping("cancellation");
+        killGroup(this.child, "SIGKILL", this.watch);
         const forced = await settleWithin(this.closePromise, gracefulMs);
         return {
           close: forced ?? { kind: "cleanup-timeout" },
-          escalated: alive,
+          escalated: live,
         };
       }
-      killGroup(this.child, "SIGTERM");
+      if (alive(this.child)) this.watch.stopping("cancellation");
+      killGroup(this.child, "SIGTERM", this.watch);
       const graceful = await settleWithin(this.closePromise, gracefulMs);
       if (graceful !== undefined) return { close: graceful, escalated: false };
-      killGroup(this.child, "SIGKILL");
+      killGroup(this.child, "SIGKILL", this.watch);
       const forced = await settleWithin(this.closePromise, gracefulMs);
       return { close: forced ?? { kind: "cleanup-timeout" }, escalated: true };
     } catch (error) {
@@ -601,11 +847,14 @@ class NodeOwnedProcess implements OwnedProcess {
 
     const firstWait = await settleWithin(this.closePromise, stageTimeout(3));
     if (firstWait !== undefined) return firstWait;
-    killGroup(this.child, "SIGTERM");
+    // The process did not close within its share of the cleanup bound. One that
+    // exited but whose pipes are still held open is not killed, so no timeout.
+    if (alive(this.child)) this.watch.stopping("timeout");
+    killGroup(this.child, "SIGTERM", this.watch);
 
     const secondWait = await settleWithin(this.closePromise, stageTimeout(2));
     if (secondWait !== undefined) return secondWait;
-    killGroup(this.child, "SIGKILL");
+    killGroup(this.child, "SIGKILL", this.watch);
 
     const finalWait = await settleWithin(this.closePromise, stageTimeout(1));
     return finalWait ?? { kind: "cleanup-timeout" };
@@ -646,7 +895,10 @@ async function settleWithin<T>(
  * holding stdout open cannot outlive its parent (D2, #21). stdin is closed so a
  * command that reads it gets EOF rather than hanging.
  */
-function spawnCommandWithNode(options: SpawnOptions): Promise<SpawnResult> {
+function spawnCommandWithNode(
+  options: SpawnOptions,
+  notify: Notify,
+): Promise<SpawnResult> {
   return new Promise<SpawnResult>((resolve) => {
     // Unlike boundedCodexExchange (typed rejection) and settleWithin (undefined observation), AbortSignal.timeout actively aborts the command process tree.
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
@@ -665,6 +917,7 @@ function spawnCommandWithNode(options: SpawnOptions): Promise<SpawnResult> {
       // the tree instead, so detaching there would only orphan the child.
       detached: process.platform !== "win32",
     });
+    const watch = watchChild(child, notify, options.role);
     // Stream stdout then stderr under a shared cap: past it, chunks are dropped and
     // a marker is appended (D3). Buffers preserve the "stdout first" ordering the
     // synchronous path had, without holding unbounded output in memory.
@@ -692,9 +945,12 @@ function spawnCommandWithNode(options: SpawnOptions): Promise<SpawnResult> {
 
     let escalation: ReturnType<typeof setTimeout> | undefined;
     const onAbort = (): void => {
-      killGroup(child, "SIGTERM");
+      watch.stopping(
+        options.cancelSignal?.aborted ? "cancellation" : "timeout",
+      );
+      killGroup(child, "SIGTERM", watch);
       escalation = setTimeout(
-        () => killGroup(child, "SIGKILL"),
+        () => killGroup(child, "SIGKILL", watch),
         KILL_ESCALATION_MS,
       );
       escalation.unref?.();
@@ -753,15 +1009,21 @@ function withoutBunTestWorker(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  *  request would be sent into the void (#127 A6, verified on a Windows desktop
  *  2026-09-18). A not-found error means the child had already exited between the
  *  liveness check and the kill — swallow it (D2). */
-function killGroup(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): void {
+function killGroup(
+  child: ChildProcess,
+  signal: "SIGTERM" | "SIGKILL",
+  watch: ChildWatch,
+): void {
   const pid = child.pid;
   if (pid === undefined) return;
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!alive(child)) return;
   if (process.platform === "win32") {
+    watch.killing(signal);
     const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
       windowsHide: true,
       stdio: "ignore",
     });
+    watch.treeKill(killer);
     // taskkill.exe may be unspawnable (stripped image, restrictive sandbox); an
     // unhandled 'error' event would crash the whole process, so swallow it — a
     // failed kill leaves the child to its own timeout, never a fault here.
@@ -772,5 +1034,7 @@ function killGroup(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): void {
     process.kill(-pid, signal);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    return;
   }
+  watch.killing(signal);
 }

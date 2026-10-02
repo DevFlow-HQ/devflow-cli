@@ -50,10 +50,15 @@ export interface OperationalRecord {
 }
 
 /** Each event's level, mapped here so no observer chooses one: a failed Harness
- *  phase, an unclean Harness cleanup, and a not-ready Harness qualification are
- *  warnings, every other record info. */
+ *  phase, an unclean Harness cleanup, a not-ready Harness qualification, and a
+ *  child that never ran, timed out, or needed a force kill are warnings, every
+ *  other record info. */
 function recordLevel(record: OperationalRecord): "info" | "warn" {
   switch (record.event) {
+    case "child-spawn-error":
+    case "child-timeout":
+    case "child-kill-escalation":
+      return "warn";
     case "qualification-result":
       return record.status === "not-ready" ? "warn" : "info";
     case "harness-phase-end":

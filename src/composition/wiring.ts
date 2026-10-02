@@ -51,7 +51,9 @@ import { runLifecycleObserver } from "./run-lifecycle-log.js";
 import {
   createProcessAdapter,
   type ProcessAdapter,
+  type ProcessAdapterOptions,
 } from "../process/process.js";
+import { processObserver } from "./process-observer.js";
 
 // The one wiring path both composition roots take (#74 A1, A2, A6). Before this,
 // the headless root and the TUI root each resolved the Secant home, opened the
@@ -115,8 +117,10 @@ export interface WiringOverrides {
   /** Process test Seam. Production constructs the real Adapter once here. */
   readonly process?: ProcessAdapter;
   /** Constructor test Seam: proves the default construction branch runs once
-   * while keeping child creation out of the semantic test runner. */
-  readonly processFactory?: () => ProcessAdapter;
+   * while keeping child creation out of the semantic test runner. It receives
+   * the options the real Adapter would, so a double can report child facts to
+   * the operational log. */
+  readonly processFactory?: (options: ProcessAdapterOptions) => ProcessAdapter;
   /** The Claude Code Adapter registry entry (#116). Production constructs the
    * native Adapter; tests inject one over the replayer, or a factory taking the
    * phase observer composition built for it. */
@@ -207,8 +211,8 @@ function shippedBundleFiles(dir: string): string[] {
  *  running engine version and host platform, handing it the raw launch cwd. The
  *  caller owns `catalog` and `runGroup` and must close both. `log` is the Secant
  *  invocation's operational log, which both client entries pass; a direct caller
- *  passes none, and neither the Application's facts, the Run lifecycle, nor any
- *  Harness record is then reported. */
+ *  passes none, and neither the Application's facts, the Run lifecycle, any
+ *  Harness record, nor any child fact is then reported. */
 export function wireApplication(
   overrides: WiringOverrides = {},
   log?: Pick<OperationalLog, "record">,
@@ -224,8 +228,11 @@ export function wireApplication(
   const launchWorkspacePath = overrides.launchCwd ?? process.cwd();
   const canonicalLaunchWorkspacePath =
     canonicalizeWorkspacePath(launchWorkspacePath);
+  const processOptions = log === undefined ? {} : processObserver(log);
   const processAdapter =
-    overrides.process ?? overrides.processFactory?.() ?? createProcessAdapter();
+    overrides.process ??
+    overrides.processFactory?.(processOptions) ??
+    createProcessAdapter(processOptions);
 
   // The Catalog derives each installed digest's read-only asset tree through the
   // Bundle Module's reader, injected here so Catalog keeps depending only on the

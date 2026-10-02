@@ -156,6 +156,7 @@ export function openArtifactRepo(
    *  absent; throws a plain Error on any nonzero exit (a broken invariant). */
   function git(args: string[], input?: Uint8Array, env = baseEnv): Buffer {
     const result = process.spawnCommandSync({
+      role: "git",
       executable: "git",
       args,
       env,
@@ -264,6 +265,7 @@ export function openArtifactRepo(
     read(versionId, name) {
       if (!SAFE_NAME.test(name)) return undefined;
       const result = process.spawnCommandSync({
+        role: "git",
         executable: "git",
         args: ["cat-file", "blob", `${versionId}:${name}`],
         env: baseEnv,

@@ -166,6 +166,7 @@ test("a ChildProcess spawned directly reaches the Bun.spawn trap", (t) => {
 
 test("a spawn the real Process Adapter turns into spawn-error still fails its test", async (t) => {
   const result = await createProcessAdapter().spawnOwnedProcess({
+    role: "harness-runtime",
     executable: EXECUTABLE,
     args: [],
     cwd: process.cwd(),
