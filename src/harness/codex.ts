@@ -10,6 +10,7 @@ import {
   type HarnessAdapter,
   type HarnessFailure,
   type HarnessPhaseObserver,
+  type HarnessPhaseStep,
   type HarnessPlatform,
   type HarnessProfile,
   type HarnessRequest,
@@ -360,17 +361,37 @@ class CodexAdapter implements HarnessAdapter {
     }
     launch.ok();
     // Protocol initialization through the account and model reads is the open
-    // handshake; its sub-steps stay private.
+    // handshake. Each exchange is a semantic step nested inside it (#325); the
+    // step still open when the handshake ends settles with its outcome.
     const handshake = startPhase(this.phases, "handshake");
-    const live = await this.handshake(spawned.process, requestedModel);
-    if (live.ok) handshake.ok();
-    else handshake.failed(live.failure);
+    let step = startPhase(
+      this.phases,
+      "handshake",
+      undefined,
+      "protocol-initialize",
+    );
+    const live = await this.handshake(
+      spawned.process,
+      requestedModel,
+      (next) => {
+        step.ok();
+        step = startPhase(this.phases, "handshake", undefined, next);
+      },
+    );
+    if (live.ok) {
+      step.ok();
+      handshake.ok();
+    } else {
+      step.failed(live.failure);
+      handshake.failed(live.failure);
+    }
     return live;
   }
 
   private async handshake(
     child: OwnedProcess,
     requestedModel: string | undefined,
+    nextStep: (step: HarnessPhaseStep) => void,
   ): Promise<TLiveQualification> {
     const connection = new CodexQualificationConnection(
       child,
@@ -383,6 +404,7 @@ class CodexAdapter implements HarnessAdapter {
     );
     try {
       await connection.initialize();
+      nextStep("account-check");
       const account = await connection.readAccount();
       if (
         account.requiresOpenaiAuth &&
@@ -402,6 +424,7 @@ class CodexAdapter implements HarnessAdapter {
           }),
         };
       }
+      nextStep("model-list");
       const models = await connection.listModels();
       // A requested model the observed list does not admit is a typed unavailable
       // prepare failure, never a silent substitution (ADR 0022) — including when the

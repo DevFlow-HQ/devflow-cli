@@ -23,19 +23,23 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   failure record (write-once; the TUI writes a render failure before draining live Runs) before a throw reaches the CLI host, whose catch names
   the file through `describeFatal`. A log failure is one stderr notice (held until the TUI's terminal is restored) that disables logging and
   changes no outcome, exit code, or stdout.
-- `SECANT_HOME` and `SECANT_LOG_DIR` are read once, side by side, in `resolveHostContext` (`wiring.ts`); nothing below composition reads them.
+- `SECANT_HOME`, `SECANT_LOG_DIR`, and `SECANT_LOG_DETAIL` are read once, side by side, in `resolveHostContext` (`wiring.ts`); nothing below
+  composition reads them.
   Records hold only allowlisted semantic fields and causes from `translateCause`; Pino's named-field redaction is a second layer. Tests reach the
   sink through the `logSink` wiring override and never set the environment names. An injected sink defaults to the injected home's `logs`,
-  bypassing `SECANT_LOG_DIR`, so an injected clock cannot prune the real process's shared log folder.
+  bypassing `SECANT_LOG_DIR`, so an injected clock cannot prune the real process's shared log folder, and reads detail only from its own `detail`.
 - `wireApplication`'s second argument is the Secant invocation's log, passed only by the two client entries; a direct caller logs no lifecycle.
   `runLifecycleObserver` pairs each start with its settlement on the host context's `logClock`, the one clock the sink also reads (#320).
   `applicationObserver` (`application-log.ts`, #319) maps the Application's pre-Run events the same way and hands its `attempt-end` to that
   lifecycle observer, which holds the Attempt's start.
-- `OperationalLog.record` maps each event to its level (`recordLevel`): a failed Harness phase, unclean cleanup, or not-ready qualification warns. `harness-log.ts` builds
-  each Harness's phase observer and wraps its Adapter so every prepared Harness records its `CleanupReport` on first close and each completed
+- `OperationalLog.record` maps each event to its level (`recordLevel`): a failed Harness phase, unclean cleanup, or not-ready qualification warns.
+  `harness-log.ts` builds each Harness's phase observer and wraps its Adapter so every prepared Harness records its `CleanupReport` on first close and each completed
   Turn's usage: one seam for the qualify, Run, and interactive close sites, a double included. A test Adapter override may be a factory taking
   that observer (#322). The Process observer (`process-observer.ts`, #321) is built where the one Process is constructed, and
   `processFactory` receives the same options, so a double reports child facts too; a child that never ran, timed out, or was force-killed warns.
+- Detail checkpoints (#325) map to `debug`: a Preflight check, a Run execution store write, and a phase record carrying a `step`. No observer
+  learns whether detail is on; the Pino logger is built at `debug` only when it is, so detail-off drops them unserialized. They read no clock, so
+  detail-off records, elapsed times included, are byte-identical to a build without them.
 - Startup prunes only matching regular log files strictly older than 30 days in the resolved folder (#323), before opening the active file:
   its real mtime can be stale against an injected future clock. Prune failures are silent; they never call the log-write failure fallback.
 

@@ -8,16 +8,18 @@ import type { OperationalLog, OperationalRecord } from "./operational-log.js";
 import type { LogClock } from "./wiring.js";
 
 // The Application's facts in the operational log (#319, spec #313 stories 10–12,
-// 22, 23): Harness qualification, launch preparation and Preflight, and Operation
-// admission and outcome. Each event maps to an allowlisted record, its fields
-// copied one by one and its cause translated here. Elapsed time is measured on
+// 22, 23): Harness qualification, launch preparation and Preflight with each of
+// its checks as a detail checkpoint (#325), and Operation admission and
+// outcome. Each event maps to an allowlisted record, its fields copied one by
+// one and its cause translated here. Elapsed time is measured on
 // the log's monotonic clock by pairing each start with its settlement in this
 // Secant invocation. The Attempt outcomes the Application settles go to the Run
 // lifecycle observer (#320), which holds those Attempts' starts.
 
 type PreRunEvent = Exclude<ApplicationEvent, { kind: "attempt-end" }>;
 
-/** The stage an event opens or settles, keyed so a settlement finds its start.
+/** The stage an event opens or settles, keyed so a settlement finds its start,
+ *  or undefined for an event that opens no stage.
  *  Harness and Operation stages are keyed by their ids; launch preparation and
  *  Preflight are synchronous, so their names alone pair them, and a new start
  *  drops one that threw before settling. Concurrent model checks of one Harness
@@ -55,6 +57,11 @@ function stageOf(
         opens: event.kind === "preflight-start",
         sync: true,
       };
+    // A detail checkpoint reads no clock, so with detail off every other
+    // record's elapsed time is unchanged.
+    case "preflight-check-start":
+    case "preflight-check-settle":
+      return undefined;
     case "operation-admission":
       return event.admission === "admitted"
         ? { key: `operation:${event.operationId}`, opens: true }
@@ -102,9 +109,11 @@ function recordOf(event: PreRunEvent): OperationalRecord {
       return { event: event.kind };
     case "launch-preparation-settle":
     case "preflight-settle":
-      return event.codes.length === 0
-        ? { event: event.kind, status: "passed" }
-        : { event: event.kind, status: "refused", codes: [...event.codes] };
+      return settled(event.kind, event.codes);
+    case "preflight-check-start":
+      return { event: event.kind, check: event.check };
+    case "preflight-check-settle":
+      return settled(event.kind, event.codes, { check: event.check });
     case "operation-admission":
       return {
         event: event.kind,
@@ -122,6 +131,18 @@ function recordOf(event: PreRunEvent): OperationalRecord {
         ...(event.code !== undefined ? { code: event.code } : {}),
       };
   }
+}
+
+/** A synchronous stage's settlement, after any naming `fields`: passed, or
+ *  refused with its codes. */
+function settled(
+  event: string,
+  codes: readonly string[],
+  fields: Readonly<Record<string, string>> = {},
+): OperationalRecord {
+  return codes.length === 0
+    ? { event, ...fields, status: "passed" }
+    : { event, ...fields, status: "refused", codes: [...codes] };
 }
 
 /** The Application observer for one Secant invocation's log. */

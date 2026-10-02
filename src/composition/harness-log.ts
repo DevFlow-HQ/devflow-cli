@@ -21,7 +21,8 @@ type Recorder = Pick<OperationalLog, "record">;
 // coordinate or an unusable reason.
 
 // The records, each built field by field below:
-// - `harness-phase-start`: harness, phase, and the Session key when bound to one;
+// - `harness-phase-start`: harness, phase, the semantic step for a handshake
+//   sub-step (a detail record, #325), and the Session key when bound to one;
 // - `harness-phase-end`: those, plus status (ok, failed, abandoned), elapsedMs, and
 //   on failure the failure fields;
 // - `harness-cleanup`: harness, status (clean, unclean), each Session's key and
@@ -44,11 +45,14 @@ export function harnessPhaseRecorder(
 ): HarnessPhaseObserver {
   return (fact) => {
     const session = sessionField(fact.session);
+    const step: Readonly<Record<string, string>> =
+      fact.step === undefined ? {} : { step: fact.step };
     if (fact.kind === "phase-start") {
       log.record({
         event: "harness-phase-start",
         harness,
         phase: fact.phase,
+        ...step,
         ...session,
       });
       return;
@@ -57,6 +61,7 @@ export function harnessPhaseRecorder(
       event: "harness-phase-end",
       harness,
       phase: fact.phase,
+      ...step,
       ...session,
       status: fact.outcome,
       elapsedMs: fact.elapsedMs,

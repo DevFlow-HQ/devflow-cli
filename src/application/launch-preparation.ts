@@ -162,6 +162,7 @@ export function createLaunchPreparation(
         harnessRegistry: deps.harnessRegistry,
       },
       deps.process,
+      deps.observe,
     );
     deps.observe({
       kind: "preflight-settle",

@@ -99,16 +99,18 @@ function sessionOpen(turn: HarnessTurn): Promise<void> {
 /** One settlement as the assertions read it. */
 type Settled = "ok" | "abandoned" | `failed:${string}`;
 
-/** Each phase's settlements, in order, keyed by phase and Session (`-` when the
- *  phase is bound to none), after checking every start is settled exactly once,
- *  after it, with a whole-millisecond elapsed time. */
+/** Each phase's settlements, in order, keyed by phase, step when the fact names
+ *  a sub-step (#325), and Session (`-` when the phase is bound to none), after
+ *  checking every start is settled exactly once, after it, with a
+ *  whole-millisecond elapsed time. */
 function settlements(
   facts: readonly HarnessPhaseFact[],
 ): Record<string, Settled[]> {
   const open = new Map<string, number>();
   const settled: Record<string, Settled[]> = {};
   for (const fact of facts) {
-    const key = `${fact.phase}@${fact.session ?? "-"}`;
+    const step = fact.step === undefined ? "" : `/${fact.step}`;
+    const key = `${fact.phase}${step}@${fact.session ?? "-"}`;
     if (fact.kind === "phase-start") {
       open.set(key, (open.get(key) ?? 0) + 1);
       continue;
@@ -346,10 +348,33 @@ export function registerHarnessPhaseConformance(
       const installed = installCodexReplayer("completion");
       const { facts, observer } = collector();
       const prepared = await prepare(codexAdapter(installed, observer));
+      // The prepare handshake's three exchanges are its semantic steps (#325),
+      // each nested inside the handshake's own start and end.
+      const handshakeSteps = {
+        "handshake/protocol-initialize@-": ["ok"],
+        "handshake/account-check@-": ["ok"],
+        "handshake/model-list@-": ["ok"],
+      };
       assert.deepEqual(settlements(facts), {
         "launch@-": ["ok"],
         "handshake@-": ["ok"],
+        ...handshakeSteps,
       });
+      assert.deepEqual(
+        facts
+          .filter((fact) => fact.phase === "handshake")
+          .map((fact) => `${fact.kind}:${fact.step ?? "-"}`),
+        [
+          "phase-start:-",
+          "phase-start:protocol-initialize",
+          "phase-end:protocol-initialize",
+          "phase-start:account-check",
+          "phase-end:account-check",
+          "phase-start:model-list",
+          "phase-end:model-list",
+          "phase-end:-",
+        ],
+      );
       const turn = prepared.startTurn(
         turnRequest({ text: CODEX_RECORDING_INPUT.completion }),
       );
@@ -360,8 +385,33 @@ export function registerHarnessPhaseConformance(
       assert.deepEqual(settlements(facts), {
         "launch@-": ["ok"],
         "handshake@-": ["ok"],
+        ...handshakeSteps,
         [`handshake@${SESSION}`]: ["ok"],
         "cleanup@-": ["ok"],
+      });
+      assertNoNativeDetail(
+        facts,
+        codexLaunchArgs(installed),
+        CODEX_FRAME_MARKERS,
+      );
+    },
+  );
+
+  register(
+    "[codex phases] an account that needs a login fails the account-check step and the handshake, and no later step starts",
+    async () => {
+      const installed = installSyntheticCodexReplayer();
+      installed.requireLogin();
+      const { facts, observer } = collector();
+      const result = await codexAdapter(installed, observer).prepare({
+        workspace: makeTempDir("secant-phase-ws-"),
+      });
+      assert.equal(result.ok, false);
+      assert.deepEqual(settlements(facts), {
+        "launch@-": ["ok"],
+        "handshake/protocol-initialize@-": ["ok"],
+        "handshake/account-check@-": ["failed:prepare/authentication"],
+        "handshake@-": ["failed:prepare/authentication"],
       });
       assertNoNativeDetail(
         facts,

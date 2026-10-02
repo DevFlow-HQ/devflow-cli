@@ -42,6 +42,9 @@ operational log file to `logs/` in the Secant home: `~/.secant/logs` by default,
 - Each file is named `<UTC timestamp>-<pid>.jsonl`, for example `2026-10-02T09-08-07-006Z-4242.jsonl`, so the newest sorts last.
 - Each line is one JSON object: `level`, `time`, `invocationId`, `event`, and that event's own fields. Read them with `jq` or any JSON tool.
 - Set `SECANT_LOG_DIR` to write the files somewhere else, such as a CI folder that outlives a throwaway home.
+- Set `SECANT_LOG_DETAIL=1` while reproducing a problem to add finer `debug` checkpoints: each Preflight check, each Run Store write Run execution makes,
+  and each Harness handshake step. The start record then carries `"detail": true`. Detail adds no prompts, arguments, environment values,
+  credentials, or output.
 - Startup removes log files last written more than 30 days ago; a locked or unreadable file is left for the next startup.
 - A fatal error names its file on stderr. If the folder cannot be written, Secant says so once on stderr and carries on unlogged.
 - Logs hold lifecycle facts, never prompts, arguments, environment values, or credentials, and the files are readable only by you where the OS

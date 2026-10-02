@@ -60,4 +60,6 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
   exit status, elapsed time), the approval's Operation admission and outcome sharing one id (#319), and no trace of a seeded environment value or
   argument; a Secant home that is a file fails fatally, flushes its failure record, and names the file on stderr; the no-TTY TUI launch is logged as a
   `tui` Secant invocation; and startup removes a file last written 31 days ago while retaining a 10-day-old file, unrelated files in the override
-  folder, and a matching old file outside it.
+  folder, and a matching old file outside it. A two-Command Run launched with `SECANT_LOG_DETAIL` unset and then `1` (#325) adds only `debug`
+  Preflight-check and store-write records, keeps every other record's order, and prints each mode's bytes per record kind. `homeEnv` strips a
+  runner's `SECANT_LOG_DETAIL`, so only this scenario sets it.

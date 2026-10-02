@@ -67,7 +67,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 ## Native phases
 
 Each Adapter maps its native steps onto the five semantic phases (#322) through the private `phases.ts` span, which settles each start once and
-measures elapsed time on the monotonic clock. Handshake sub-steps stay private; a later detail mode may report them.
+measures elapsed time on the monotonic clock. A handshake made of several exchanges reports each as a span carrying a closed semantic `step`
+(`HarnessPhaseStep`, #325), nested inside the handshake's own start and end; composition logs those only in detail mode.
 
 - **Claude Code.** `launch` (per Session) spans the bridge start and the child spawn; a close that wins first abandons it. The first init of a fresh
   child is the Session's `handshake`; the init of a `--resume` child is `recovery`, which includes every relaunch of a Session that already ran
@@ -76,6 +77,8 @@ measures elapsed time on the monotonic clock. Handshake sub-steps stay private; 
   Turn already settled (an internal stop after corruption or a refused resume reports it too). `cleanup` spans the prepared Harness's `close`.
   The `--version` probe reports no phase.
 - **Codex.** `launch` is the app-server spawn and `handshake` the `initialize`/`account/read`/`model/list` exchange, both at `prepare` with no
-  Session key. Per Session, `thread/start` is a `handshake` and `thread/resume` is `recovery`. `control` spans the `turn/interrupt` or `turn/steer`
+  Session key. Those three are the handshake's steps `protocol-initialize`, `account-check`, and `model-list`; the step open when the handshake
+  ends settles with its outcome, so a login refusal fails `account-check` and a missing requested model fails `model-list`. Per Session,
+  `thread/start` is a `handshake` and `thread/resume` is `recovery`. `control` spans the `turn/interrupt` or `turn/steer`
   RPC: ok on a parsed acknowledgement, abandoned on an expected race, otherwise failed (`control-refused` with the RPC code, `control-timeout`,
   `control-transport`, or `protocol-corruption`). `cleanup` spans `close`, including its bounded interrupt.

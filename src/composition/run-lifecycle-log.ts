@@ -1,5 +1,8 @@
 import { translateCause } from "../harness/harness.js";
-import type { ExecutionObserver } from "../run/execution/execution.js";
+import type {
+  ExecutionObserver,
+  StoreWrite,
+} from "../run/execution/execution.js";
 import type { OperationalLog, OperationalRecord } from "./operational-log.js";
 import type { LogClock } from "./wiring.js";
 
@@ -9,7 +12,9 @@ import type { LogClock } from "./wiring.js";
 // by one. Elapsed time is measured here, on the log's monotonic clock: each start
 // is paired with its settlement in this Secant invocation, so a settlement whose
 // start an earlier Secant invocation saw (a gate answered after a reopen) carries
-// none. A start with no settlement stands for the last observed stage.
+// none. A start with no settlement stands for the last observed stage. Run
+// execution's Run Store writes are detail checkpoints (#325), unpaired: each
+// start precedes its write and each end follows it, with no elapsed time.
 
 /** The one observer both Run execution and the Application report through. */
 export function runLifecycleObserver(
@@ -30,6 +35,21 @@ export function runLifecycleObserver(
 
   return (event) => {
     const { runId } = event;
+    // A store write reads no clock, so with detail off every other record's
+    // elapsed time is unchanged.
+    if (event.kind === "store-write-start") {
+      write({ event: event.kind, runId, ...storeWriteFields(event) });
+      return;
+    }
+    if (event.kind === "store-write-end") {
+      write({
+        event: event.kind,
+        runId,
+        ...storeWriteFields(event),
+        status: event.status,
+      });
+      return;
+    }
     const run = `run:${runId}`;
     switch (event.kind) {
       case "run-start":
@@ -104,4 +124,29 @@ export function runLifecycleObserver(
       ...elapsed(turn),
     });
   };
+}
+
+/** A store write's kind and ids, copied one by one. */
+function storeWriteFields(write: StoreWrite): Readonly<Record<string, string>> {
+  switch (write.write) {
+    case "run-state":
+      return { write: write.write, state: write.state };
+    case "attempt-publish":
+      return {
+        write: write.write,
+        attemptId: write.attemptId,
+        ...(write.state !== undefined ? { state: write.state } : {}),
+      };
+    case "pending-gate":
+      return { write: write.write, attemptId: write.attemptId };
+    case "materialization-conflict":
+      return { write: write.write };
+    case "turn-admission":
+    case "turn-settlement":
+      return {
+        write: write.write,
+        attemptId: write.attemptId,
+        turnId: write.turnId,
+      };
+  }
 }

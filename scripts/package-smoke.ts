@@ -100,10 +100,13 @@ function run(
 }
 
 /** The base env for an isolated SECANT_HOME with the runtime dir on PATH (A35):
- *  the workspace, legacy, and SIGINT scenarios differ only by SECANT_HOME. */
+ *  the workspace, legacy, and SIGINT scenarios differ only by SECANT_HOME. A
+ *  runner's stray SECANT_LOG_DETAIL never reaches a scenario; only the
+ *  operational-log scenario sets it (#325). */
 function homeEnv(secantHome: string): NodeJS.ProcessEnv {
+  const { SECANT_LOG_DETAIL: _detail, ...inherited } = process.env;
   return {
-    ...process.env,
+    ...inherited,
     SECANT_HOME: secantHome,
     PATH: `${runtimeDir}${delimiter}${process.env.PATH ?? ""}`,
   };
@@ -2690,6 +2693,119 @@ await withCleanup(
         "tui",
         ["invocation-start", "invocation-end"],
         1,
+      );
+
+      // Detail mode (#325): one Command Run launched with SECANT_LOG_DETAIL
+      // unset and with it set to 1. Detail adds only debug records, the seeded
+      // argument and environment value stay absent, and every other record
+      // keeps its order. Each mode's bytes per record kind are printed, so the
+      // byte-cap decision has evidence from each OS.
+      const growthId = "dev.secant.smoke-log-growth";
+      const growthManifest = {
+        formatVersion: 1,
+        bundle: {
+          id: growthId,
+          version: "1.0.0",
+          name: "Log Growth Smoke",
+          description: "The operational-log growth measurement's Run.",
+        },
+        platforms: ["windows", "macos", "linux"],
+        inputs: {},
+        assets: [],
+        routing: [
+          {
+            id: "produce",
+            kind: "command",
+            produces: [{ name: "note", type: "text" }],
+            command: {
+              executable: basename(process.execPath),
+              arguments: ["-e", "process.stdout.write('noted')", secret],
+            },
+          },
+          {
+            id: "consume",
+            kind: "command",
+            requires: ["note"],
+            command: {
+              executable: basename(process.execPath),
+              arguments: ["-e", "process.stdout.write('done')"],
+            },
+          },
+        ],
+      };
+      const growth = await buildAndInstall(
+        binary,
+        join(smokeRoot, "log-growth-bundle"),
+        growthManifest,
+        {
+          build: smokeRoot,
+          list: workspaceDirectory,
+          env: homeEnv(secantHome),
+          label: "Log growth",
+        },
+      );
+      const detailEvents = new Set([
+        "preflight-check-start",
+        "preflight-check-settle",
+        "store-write-start",
+        "store-write-end",
+      ]);
+      const growthBytes: Record<string, Record<string, number>> = {};
+      for (const detail of [false, true]) {
+        const mode = detail ? "on" : "off";
+        const env: NodeJS.ProcessEnv = {
+          ...envFor(`growth-${mode}`),
+          ...(detail ? { SECANT_LOG_DETAIL: "1" } : {}),
+        };
+        run(
+          binary,
+          ["run", "launch", growthId, "--trust", growth.digest, "--json"],
+          { cwd: workspaceDirectory, env },
+        );
+        const log = recordsIn(`growth-${mode}`);
+        const debug = log.records.filter((record) => record.level === "debug");
+        const kinds = new Set(debug.map((record) => String(record.event)));
+        const wellFormed = detail
+          ? log.records[0]!.detail === true &&
+            debug.length > 0 &&
+            [...detailEvents].every((event) => kinds.has(event)) &&
+            debug.every((record) => detailEvents.has(String(record.event))) &&
+            log.records.every(
+              (record) =>
+                (record.level === "debug") ===
+                detailEvents.has(String(record.event)),
+            )
+          : debug.length === 0 &&
+            !("detail" in log.records[0]!) &&
+            log.records.every(
+              (record) => !detailEvents.has(String(record.event)),
+            );
+        if (!wellFormed) {
+          throw new Error(`Unexpected detail-${mode} records: ${log.text}`);
+        }
+        const bytes: Record<string, number> = {};
+        let total = 0;
+        for (const line of log.text.trimEnd().split("\n")) {
+          const event = String(JSON.parse(line).event);
+          const size = Buffer.byteLength(line, "utf8") + 1;
+          bytes[event] = (bytes[event] ?? 0) + size;
+          total += size;
+        }
+        growthBytes[mode] = { ...bytes, total };
+      }
+      const nonDetail = (mode: string) =>
+        recordsIn(`growth-${mode}`)
+          .records.filter((record) => record.level !== "debug")
+          .map((record) => record.event);
+      if (
+        JSON.stringify(nonDetail("on")) !== JSON.stringify(nonDetail("off"))
+      ) {
+        throw new Error(
+          "Detail mode changed the order or kinds of the records it does not add.",
+        );
+      }
+      process.stdout.write(
+        `Operational-log growth per record kind on ${platform} (bytes, one two-Command Run): ${JSON.stringify(growthBytes)}\n`,
       );
     }
 

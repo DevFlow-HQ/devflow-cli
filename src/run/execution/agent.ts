@@ -18,6 +18,7 @@ import type {
   OutputReceiptDirectoryResult,
   RunOwner,
   TurnKind,
+  WriteResult,
 } from "../store/store.js";
 import type {
   DurableTurnRecorder,
@@ -31,6 +32,7 @@ import type {
   TurnResult,
 } from "../../harness/harness.js";
 import type { ExecutionObserver, TurnFailureFacts } from "./execution.js";
+import { observedWrite } from "./store-write.js";
 
 // --- Live request-answer channel (#117) ------------------------------------
 //
@@ -397,17 +399,23 @@ async function driveHarnessTurn(
   let recoveryCoordinate: string | undefined;
   const recorder: DurableTurnRecorder = {
     admit(admission) {
-      const result = owner.admitTurn({
-        turnId,
-        attemptId,
-        session,
-        origin: admission.origin,
-        kind: params.kind,
-        input: admission.input.text,
-        recoveryCoordinate: admission.recoveryCoordinate.opaque,
-        harness: harnessName,
-        at: new Date(),
-      });
+      const result = observedWrite(
+        observe,
+        owner.runId,
+        { write: "turn-admission", attemptId, turnId },
+        () =>
+          owner.admitTurn({
+            turnId,
+            attemptId,
+            session,
+            origin: admission.origin,
+            kind: params.kind,
+            input: admission.input.text,
+            recoveryCoordinate: admission.recoveryCoordinate.opaque,
+            harness: harnessName,
+            at: new Date(),
+          }),
+      );
       // Only a durable admission makes the coordinate meaningful; a fenced (rejected)
       // admission drives the Turn `not-started`, whose availability is never detached.
       if (result.ok) {
@@ -493,12 +501,18 @@ async function driveHarnessTurn(
       else signal.addEventListener("abort", onAbort, { once: true });
     }
     const result = await resultPromise;
-    settleTurnResult(
-      owner,
-      turnId,
-      session,
-      result,
-      params.detachAfterTurn === true ? recoveryCoordinate : undefined,
+    observedWrite(
+      observe,
+      owner.runId,
+      { write: "turn-settlement", attemptId, turnId },
+      () =>
+        settleTurnResult(
+          owner,
+          turnId,
+          session,
+          result,
+          params.detachAfterTurn === true ? recoveryCoordinate : undefined,
+        ),
     );
     const failure = turnFailure(result);
     observe({
@@ -997,13 +1011,13 @@ function settleTurnResult(
   session: string,
   result: TurnResult,
   detachCoordinate?: string,
-): void {
+): WriteResult {
   const reported = resultAvailability(owner, session, result);
   const availability =
     detachCoordinate !== undefined && reported.state === "open"
       ? { state: "detached", detail: detachCoordinate }
       : reported;
-  owner.settleTurn({
+  return owner.settleTurn({
     turnId,
     session,
     resultKind: result.kind,

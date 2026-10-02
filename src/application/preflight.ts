@@ -16,6 +16,11 @@ import type {
   HarnessChoice,
   Problem,
 } from "./projection-port.js";
+import {
+  problemCodes,
+  type ApplicationObserver,
+  type PreflightCheck,
+} from "./observer.js";
 import { harnessNotFound } from "./problems.js";
 import { selectPlatform } from "./select-platform.js";
 
@@ -83,29 +88,38 @@ export interface PreflightAssessment {
 
 /** Run Preflight against a pinned Snapshot. Returns the first failing check as a
  *  Problem, or `ok` when every prerequisite holds. Short-circuits at the first
- *  failure so a launch performs no probe beyond the one that already refused it. */
+ *  failure so a launch performs no probe beyond the one that already refused it.
+ *  Each check that runs is reported to `observe` (#325). */
 export function preflight(
   request: PreflightRequest,
   process: ProcessAdapter,
+  observe: ApplicationObserver,
 ): PreflightResult {
   const steps = flattenSteps(request.manifest.routing);
+  const check = observedCheck(observe);
 
-  const composition = checkComposition(request);
+  const composition = check("composition", () => checkComposition(request));
   if (composition !== undefined) return { problem: composition };
 
-  const interactive = checkInteractive(request, steps);
+  const interactive = check("interactive", () =>
+    checkInteractive(request, steps),
+  );
   if (interactive !== undefined) return { problem: interactive };
 
-  const harness = checkHarness(request, steps);
+  const harness = observedHarnessCheck(observe, request, steps);
   if (harness.problems.length > 0) return { problem: harness.problems[0]! };
 
-  const inputs = checkInputs(request);
+  const inputs = check("inputs", () => checkInputs(request));
   if (inputs !== undefined) return { problem: inputs };
 
-  const workspace = checkWorkspacePrerequisites(request, steps, process);
+  const workspace = check("workspace-prerequisites", () =>
+    checkWorkspacePrerequisites(request, steps, process),
+  );
   if (workspace !== undefined) return { problem: workspace };
 
-  const command = checkCommands(request, steps, process);
+  const command = check("commands", () =>
+    checkCommands(request, steps, process),
+  );
   if (command !== undefined) return { problem: command };
 
   return okResult(harness.selectedHarness, request.requestedModel);
@@ -120,26 +134,34 @@ export function preflight(
 export function assessPreflight(
   request: PreflightRequest,
   process: ProcessAdapter,
+  observe: ApplicationObserver,
 ): PreflightAssessment {
   const steps = flattenSteps(request.manifest.routing);
+  const check = observedCheck(observe);
 
-  const composition = checkComposition(request);
+  const composition = check("composition", () => checkComposition(request));
   if (composition !== undefined) return { findings: [composition] };
 
   const findings: Problem[] = [];
-  const interactive = checkInteractive(request, steps);
+  const interactive = check("interactive", () =>
+    checkInteractive(request, steps),
+  );
   if (interactive !== undefined) findings.push(interactive);
 
-  const harness = checkHarness(request, steps);
+  const harness = observedHarnessCheck(observe, request, steps);
   findings.push(...harness.problems);
 
-  const inputs = checkInputs(request);
+  const inputs = check("inputs", () => checkInputs(request));
   if (inputs !== undefined) findings.push(inputs);
 
-  const workspace = checkWorkspacePrerequisites(request, steps, process);
+  const workspace = check("workspace-prerequisites", () =>
+    checkWorkspacePrerequisites(request, steps, process),
+  );
   if (workspace !== undefined) findings.push(workspace);
 
-  const command = checkCommands(request, steps, process);
+  const command = check("commands", () =>
+    checkCommands(request, steps, process),
+  );
   if (command !== undefined) findings.push(command);
 
   return {
@@ -168,6 +190,45 @@ function okResult(
 }
 
 type TSteps = ReturnType<typeof flattenSteps>;
+
+/** Runs one check between its start and settlement events (#325). */
+function runCheck<T>(
+  observe: ApplicationObserver,
+  check: PreflightCheck,
+  run: () => T,
+  problems: (result: T) => readonly Problem[],
+): T {
+  observe({ kind: "preflight-check-start", check });
+  const result = run();
+  observe({
+    kind: "preflight-check-settle",
+    check,
+    codes: problemCodes(problems(result)),
+  });
+  return result;
+}
+
+/** `runCheck` for the checks that find at most one Problem. */
+function observedCheck(observe: ApplicationObserver) {
+  return (check: PreflightCheck, run: () => Problem | undefined) =>
+    runCheck(observe, check, run, (problem) =>
+      problem === undefined ? [] : [problem],
+    );
+}
+
+/** The Harness check, which may find several Problems. */
+function observedHarnessCheck(
+  observe: ApplicationObserver,
+  request: PreflightRequest,
+  steps: TSteps,
+): ReturnType<typeof checkHarness> {
+  return runCheck(
+    observe,
+    "harness",
+    () => checkHarness(request, steps),
+    (harness) => harness.problems,
+  );
+}
 
 // 1. The pinned Snapshot must still compose. A launch re-checks it because a Run
 // pins a Snapshot (ADR 0021); a failing re-check means corrupted installed bytes.

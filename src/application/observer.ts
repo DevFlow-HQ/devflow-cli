@@ -35,6 +35,16 @@ export function problemCodes(problems: readonly Problem[]): ProblemCodes {
   return problems.map((problem) => problem.code);
 }
 
+/** One of Preflight's ordered checks, named for the detail checkpoint each
+ *  reports (#325). */
+export type PreflightCheck =
+  | "composition"
+  | "interactive"
+  | "harness"
+  | "inputs"
+  | "workspace-prerequisites"
+  | "commands";
+
 export type ApplicationEvent =
   /** The same `attempt-end` Run execution reports, for the Step Attempts the
    *  Application settles: an answered authored gate, an ended interactive Step
@@ -56,6 +66,15 @@ export type ApplicationEvent =
   | { readonly kind: "launch-preparation-settle"; readonly codes: ProblemCodes }
   | { readonly kind: "preflight-start" }
   | { readonly kind: "preflight-settle"; readonly codes: ProblemCodes }
+  /** One Preflight check, a detail checkpoint: the start precedes its
+   *  synchronous probes, so a hang names the check. A short-circuited check
+   *  reports nothing. */
+  | { readonly kind: "preflight-check-start"; readonly check: PreflightCheck }
+  | {
+      readonly kind: "preflight-check-settle";
+      readonly check: PreflightCheck;
+      readonly codes: ProblemCodes;
+    }
   /** The assessment's requested-model check against the selected Harness. */
   | { readonly kind: "model-check-start"; readonly harness: string }
   | {

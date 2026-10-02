@@ -66,6 +66,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The observer (`observer.ts`, #319) has a no-op default and never sees the logger. Every new Operation is admitted through `admit`, which reports the
   admission before scheduling settlement, so the record precedes an inline outcome; `submit` reports only replays and refusals. An Operation stored any
   other way is never logged as admitted. Events carry ids, kinds, Problem codes, and typed failure fields only — never input, Turn text, or Problem prose.
+  `preflight` and `assessPreflight` take the observer and report each check they run (`preflight-check-start`/`-settle`, #325).
 - The executor's `appendTurnEvent`/`settleTurn` go through the raw owner and push no **durable** snapshot (only `admitTurn` pushes, above); the Turn's durable
   timeline, Session availability, and effective model surface on the next intercepted write (`publishAttempt`, or the interactive `blocked` write). The live lane is
   separate — Turn activity reaches an open client through the live overlay (#117, [run-control](../../docs/agents/run-control.md)), not through this durable write.

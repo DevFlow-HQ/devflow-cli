@@ -33,3 +33,6 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   name to that Attempt id), so Continue always opens a fresh conversation; `interactiveStepTarget` finds the resting iteration from the log (#216).
 - `observe` reports the Run, Attempt, and Turn lifecycle by id only (#320): each start ends in `-end`, an `attempt-pause` awaiting a human, or an
   `-unwind` when the walk throws, which claims no outcome. Human Turns take it on `InteractiveTurnRequest`; the Application reports the Attempts it settles.
+- Execution's own Run Store writes report `store-write-start`/`-end` through `observedWrite` (`store-write.ts`, #325): the state write, Attempt publish,
+  pending gate, Materialization conflict, Turn admission, and Turn settlement, by kind and ids only. `appendTurnEvent` runs per transcript item and
+  reports nothing; the Run Store Interface takes no observer.

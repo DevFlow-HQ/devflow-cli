@@ -96,13 +96,15 @@ const PRODUCTION_CLOCK: LogClock = {
 };
 
 /** The operational log's test Seam. An injected sink uses its folder or the
- *  injected Secant home's logs, independently of the process log environment.
- *  Production passes none: the folder comes from the environment or the Secant
- *  home, the clock from the process, and a log-failure notice goes to stderr. */
+ *  injected Secant home's logs, and its own detail switch (off by default),
+ *  independently of the process log environment. Production passes none: the
+ *  folder and detail come from the environment or the Secant home, the clock
+ *  from the process, and a log-failure notice goes to stderr. */
 interface LogSinkOverrides {
   readonly folder?: string;
   readonly clock?: LogClock;
   readonly stderr?: (text: string) => void;
+  readonly detail?: boolean;
 }
 
 /** Overrides for the composition wiring test, which drives the one path both
@@ -145,17 +147,21 @@ export interface WiringOverrides {
 }
 
 // The environment names composition reads, side by side and nowhere else: no
-// Module below composition reads either. `SECANT_LOG_DETAIL`, the detail switch,
-// joins them when it lands (#325).
+// Module below composition reads any of them. `SECANT_LOG_DETAIL` is the detail
+// switch (#325).
 const SECANT_HOME_ENV = "SECANT_HOME";
 export const SECANT_LOG_DIR_ENV = "SECANT_LOG_DIR";
+const SECANT_LOG_DETAIL_ENV = "SECANT_LOG_DETAIL";
 
 /** What one Secant invocation reads from its process before anything is wired:
- *  the Secant home, the operational-log folder and clock, the running engine
- *  version, and the host platform (absent on an unsupported OS). */
+ *  the Secant home, the operational-log folder, detail switch, and clock, the
+ *  running engine version, and the host platform (absent on an unsupported OS). */
 interface HostContext {
   readonly secantHome: string;
   readonly logFolder: string;
+  /** Whether the sink writes detail records (#325). Only the sink's start
+   *  options read it; no observer learns it. */
+  readonly logDetail: boolean;
   /** Shared by the sink and every observer it feeds, so their elapsed times
    *  read one monotonic clock. */
   readonly logClock: LogClock;
@@ -164,7 +170,8 @@ interface HostContext {
 }
 
 /** Resolves the host context, overrides first. The log folder follows the
- *  Secant home (`logs` beneath it) unless `SECANT_LOG_DIR` names another. */
+ *  Secant home (`logs` beneath it) unless `SECANT_LOG_DIR` names another.
+ *  Detail is on only when `SECANT_LOG_DETAIL`, trimmed, is exactly `1`. */
 export function resolveHostContext(overrides: WiringOverrides): HostContext {
   const secantHome =
     overrides.secantHome ??
@@ -175,6 +182,10 @@ export function resolveHostContext(overrides: WiringOverrides): HostContext {
       overrides.logSink === undefined
         ? process.env[SECANT_LOG_DIR_ENV]?.trim() || join(secantHome, "logs")
         : (overrides.logSink.folder ?? join(secantHome, "logs")),
+    logDetail:
+      overrides.logSink === undefined
+        ? process.env[SECANT_LOG_DETAIL_ENV]?.trim() === "1"
+        : (overrides.logSink.detail ?? false),
     logClock: overrides.logSink?.clock ?? PRODUCTION_CLOCK,
     engineVersion: overrides.engineVersion ?? engineVersion,
     hostPlatform: overrides.hostPlatform ?? hostPlatform(process.platform),

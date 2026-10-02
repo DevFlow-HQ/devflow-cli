@@ -49,11 +49,23 @@ export interface OperationalRecord {
     | readonly Readonly<Record<string, string>>[];
 }
 
-/** Each event's level, mapped here so no observer chooses one: a failed Harness
- *  phase, an unclean Harness cleanup, a not-ready Harness qualification, and a
- *  child that never ran, timed out, or needed a force kill are warnings, every
- *  other record info. */
-function recordLevel(record: OperationalRecord): "info" | "warn" {
+// The detail checkpoints (#325): each Preflight check, each Run Store write Run
+// execution makes, and each Harness handshake step (a phase record carrying a
+// `step`). Their owners report them every time; mapped to `debug`, they are
+// written only when the detail switch is on.
+const DETAIL_EVENTS = new Set([
+  "preflight-check-start",
+  "preflight-check-settle",
+  "store-write-start",
+  "store-write-end",
+]);
+
+/** Each event's level, mapped here so no observer chooses one: a detail
+ *  checkpoint is debug; a failed Harness phase, an unclean Harness cleanup, a
+ *  not-ready Harness qualification, and a child that never ran, timed out, or
+ *  needed a force kill are warnings; every other record is info. */
+function recordLevel(record: OperationalRecord): "debug" | "info" | "warn" {
+  if (DETAIL_EVENTS.has(record.event) || "step" in record) return "debug";
   switch (record.event) {
     case "child-spawn-error":
     case "child-timeout":
@@ -135,6 +147,9 @@ interface StartOptions {
   readonly version: string;
   readonly platform: string;
   readonly clock: LogClock;
+  /** Whether detail records are written: the logger's level is `debug` when on
+   *  and `info` otherwise, so a dropped detail record is never serialized. */
+  readonly detail: boolean;
   /** The one fallback channel for a log-failure notice. */
   readonly notify: (text: string) => void;
 }
@@ -143,7 +158,7 @@ interface StartOptions {
  *  open or write is reported once through `notify` and disables logging; it never
  *  throws, so it cannot change an outcome or exit code. */
 function startOperationalLog(options: StartOptions): OperationalLog {
-  const { client, folder, version, platform, clock, notify } = options;
+  const { client, folder, version, platform, clock, detail, notify } = options;
   const started = clock.monotonic();
   const invocationId = randomUUID();
   // A sortable UTC timestamp with no colons (Windows forbids them) and the PID.
@@ -179,7 +194,7 @@ function startOperationalLog(options: StartOptions): OperationalLog {
     );
   };
   const write = (
-    level: "info" | "warn" | "fatal",
+    level: "debug" | "info" | "warn" | "fatal",
     record: Readonly<Record<string, unknown>>,
   ) => {
     if (!enabled || ended || logger === undefined) return;
@@ -214,7 +229,7 @@ function startOperationalLog(options: StartOptions): OperationalLog {
     destination = stream;
     logger = pino(
       {
-        level: "info",
+        level: detail ? "debug" : "info",
         // Replaces Pino's default base: no hostname, and the PID once, below.
         base: { invocationId },
         timestamp: () => `,"time":"${clock.now().toISOString()}"`,
@@ -233,6 +248,7 @@ function startOperationalLog(options: StartOptions): OperationalLog {
     version,
     platform,
     pid: process.pid,
+    ...(detail ? { detail: true } : {}),
   });
 
   return {
@@ -293,6 +309,7 @@ export async function runSecantInvocation(
     // Secant's platform name; an unsupported OS has none, so its own name stands.
     platform: context.hostPlatform ?? process.platform,
     clock: context.logClock,
+    detail: context.logDetail,
     notify: (text) => (holding ? held.push(text) : stderr(text)),
   });
   active = log;

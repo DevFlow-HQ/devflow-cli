@@ -9,6 +9,7 @@ import type {
   HarnessPhase,
   HarnessPhaseFact,
   HarnessPhaseObserver,
+  HarnessPhaseStep,
 } from "./harness.js";
 
 /** An open phase. Only its first settlement is reported. */
@@ -18,14 +19,20 @@ export interface PhaseSpan {
   abandoned(): void;
 }
 
-/** Report `phase` started, for `session` when the phase is bound to one, and
- *  return the span that settles it. With no observer, nothing is reported. */
+/** Report `phase` (or its `step`) started, for `session` when the phase is
+ *  bound to one, and return the span that settles it. With no observer, nothing
+ *  is reported. */
 export function startPhase(
   observer: HarnessPhaseObserver | undefined,
   phase: HarnessPhase,
   session?: string,
+  step?: HarnessPhaseStep,
 ): PhaseSpan {
-  const key = session === undefined ? { phase } : { phase, session };
+  const key = {
+    phase,
+    ...(step === undefined ? {} : { step }),
+    ...(session === undefined ? {} : { session }),
+  };
   const started = performance.now();
   report(observer, { kind: "phase-start", ...key });
   let settled = false;

@@ -26,7 +26,9 @@ import type {
   ControlReceipt,
   ControlRejection,
   HarnessAdapter,
+  HarnessPhaseFact,
   HarnessPhaseObserver,
+  HarnessPhaseStep,
   HarnessProfile,
   HarnessRequest,
   HarnessFailure,
@@ -92,6 +94,9 @@ export interface FakeScript {
   readonly turns: readonly FakeTurnScript[];
   /** The report `close` returns; the same value on every call. */
   readonly cleanup?: CleanupReport;
+  /** Handshake sub-steps each `prepare` reports inside its handshake, in order;
+   *  the last fails with a scripted `prepareFailure` (#325). */
+  readonly handshakeSteps?: readonly HarnessPhaseStep[];
 }
 
 const DEFAULT_CLEANUP: CleanupReport = {
@@ -181,8 +186,9 @@ class FakeAdapter implements HarnessAdapter {
     });
   }
 
-  /** The launch and handshake a native prepare reports; the handshake fails
-   *  with `failure` when one is given. */
+  /** The launch and handshake a native prepare reports, with any scripted
+   *  handshake steps nested inside; the handshake and its last step fail with
+   *  `failure` when one is given. */
   private reportOpen(failure?: HarnessFailure): void {
     this.phases?.({ kind: "phase-start", phase: "launch" });
     this.phases?.({
@@ -192,18 +198,31 @@ class FakeAdapter implements HarnessAdapter {
       outcome: "ok",
     });
     this.phases?.({ kind: "phase-start", phase: "handshake" });
-    this.phases?.(
-      failure === undefined
-        ? { kind: "phase-end", phase: "handshake", elapsedMs: 0, outcome: "ok" }
-        : {
-            kind: "phase-end",
-            phase: "handshake",
-            elapsedMs: 0,
-            outcome: "failed",
-            failure,
-          },
-    );
+    const steps = this.script.handshakeSteps ?? [];
+    steps.forEach((step, index) => {
+      this.phases?.({ kind: "phase-start", phase: "handshake", step });
+      this.phases?.(
+        endFact(index === steps.length - 1 ? failure : undefined, step),
+      );
+    });
+    this.phases?.(endFact(failure));
   }
+}
+
+/** A handshake (or handshake step) end: failed with `failure` when given. */
+function endFact(
+  failure: HarnessFailure | undefined,
+  step?: HarnessPhaseStep,
+): HarnessPhaseFact {
+  const key = {
+    kind: "phase-end",
+    phase: "handshake",
+    ...(step === undefined ? {} : { step }),
+    elapsedMs: 0,
+  } as const;
+  return failure === undefined
+    ? { ...key, outcome: "ok" }
+    : { ...key, outcome: "failed", failure };
 }
 
 function isExistingAbsoluteDirectory(path: string): boolean {

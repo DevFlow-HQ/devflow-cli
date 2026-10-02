@@ -43,6 +43,7 @@ import {
   resolveWorkspacePath,
   verifyMaterializations,
 } from "./materialization.js";
+import { observedWrite } from "./store-write.js";
 
 export {
   driveInteractiveTurn,
@@ -133,14 +134,46 @@ export interface ExecutionDeps {
   readonly observe?: ExecutionObserver;
 }
 
+/** One of Run execution's own Run Store writes, each one transaction (#325),
+ *  named by kind and ids: the Run state, an Attempt publication (with the state
+ *  it rests the Run in, if any), a pending Human Gate, a Materialization
+ *  conflict, and a Turn's admission and settlement. Never the Turn text, the
+ *  recovery coordinate, or a conflict's path. A Turn's per-item events are not
+ *  reported. */
+export type StoreWrite =
+  | { readonly write: "run-state"; readonly state: string }
+  | {
+      readonly write: "attempt-publish";
+      readonly attemptId: string;
+      readonly state?: string;
+    }
+  | { readonly write: "pending-gate"; readonly attemptId: string }
+  | { readonly write: "materialization-conflict" }
+  | {
+      readonly write: "turn-admission" | "turn-settlement";
+      readonly attemptId: string;
+      readonly turnId: string;
+    };
+
 /** One Run, Step Attempt, or Turn lifecycle fact (#320), carrying only ids, the
  *  Session name, outcomes, and typed failure facts: no prompt, Turn input,
  *  transcript item, or recovery coordinate crosses it, and nothing is reported per
  *  streamed event. Each start is followed by its settlement (`-end`) or, when the
  *  walk throws (a cancel or a fenced owner), by an `-unwind` that claims no
  *  outcome. An Attempt paused for a human (`attempt-pause`) settles later through
- *  the Application. */
+ *  the Application. A Run Store write is a detail checkpoint (#325): its start
+ *  precedes the write, so a hang names it, and its end says whether it
+ *  committed or the owner refused it. */
 export type ExecutionEvent =
+  | ({
+      readonly kind: "store-write-start";
+      readonly runId: string;
+    } & StoreWrite)
+  | ({
+      readonly kind: "store-write-end";
+      readonly runId: string;
+      readonly status: "committed" | "refused";
+    } & StoreWrite)
   | { readonly kind: "run-start"; readonly runId: string }
   | {
       readonly kind: "run-end";
@@ -410,7 +443,7 @@ async function walkRouting(
     resume: buildResumeState(deps.owner.attemptLog()),
   };
 
-  writeStateOrThrow(deps.owner, "running");
+  writeStateOrThrow(deps, "running");
 
   const lastIndex = routing.length - 1;
   let restedSucceeded = false;
@@ -423,7 +456,7 @@ async function walkRouting(
         : await runStep(node, context, isLastNode);
     if (outcome === "failed") return { outcome: "failed" };
     if (outcome === "blocked") {
-      writeStateOrThrow(deps.owner, "blocked");
+      writeStateOrThrow(deps, "blocked");
       return { outcome: "blocked" };
     }
     if (outcome === "halted") return { outcome: "halted" };
@@ -434,7 +467,7 @@ async function walkRouting(
   // transaction (the last plain Step, or the last iteration of a trailing Repeat
   // group). The remaining cases — an empty Routing, or a trailing group that
   // passed with zero iterations — leave no deciding Attempt, so rest here.
-  if (!restedSucceeded) writeStateOrThrow(deps.owner, "succeeded");
+  if (!restedSucceeded) writeStateOrThrow(deps, "succeeded");
   return { outcome: "succeeded" };
 }
 
@@ -658,7 +691,7 @@ async function runStepAttempts(
     context.now(),
   );
   if (conflict !== undefined) {
-    recordConflictOrThrow(context.step.owner, conflict);
+    recordConflictOrThrow(context.step, conflict);
     return "halted";
   }
   const executor = STEP_EXECUTORS[step.kind];
@@ -689,7 +722,20 @@ async function runStepAttempts(
       observe({ kind: "attempt-pause", ...ids });
     };
     const publish = (request: PublishAttemptRequest): void => {
-      publishOrThrow(owner.publishAttempt(request));
+      publishOrThrow(
+        observedWrite(
+          observe,
+          owner.runId,
+          {
+            write: "attempt-publish",
+            attemptId,
+            ...(request.advanceState !== undefined
+              ? { state: request.advanceState }
+              : {}),
+          },
+          () => owner.publishAttempt(request),
+        ),
+      );
       reported = true;
       observe({ kind: "attempt-end", ...ids, outcome: request.outcome });
     };
@@ -712,23 +758,31 @@ async function runStepAttempts(
             pause();
             return "blocked";
           }
-          writeStateOrThrow(owner, "halted");
+          writeStateOrThrow(context.step, "halted");
           pause();
           return "halted";
         }
-        const recorded = owner.recordPendingGate({
-          attemptId,
-          stepId: step.id,
-          shape: result.shape,
-          message: result.message,
-          ...(result.outputArtifactName !== undefined
-            ? { outputArtifactName: result.outputArtifactName }
-            : {}),
-          ...(result.suggestions !== undefined
-            ? { suggestions: result.suggestions }
-            : {}),
-          at: context.now(),
-        });
+        // Bound so the closure keeps the narrowed Human Gate pause.
+        const gate = result;
+        const recorded = observedWrite(
+          observe,
+          owner.runId,
+          { write: "pending-gate", attemptId },
+          () =>
+            owner.recordPendingGate({
+              attemptId,
+              stepId: step.id,
+              shape: gate.shape,
+              message: gate.message,
+              ...(gate.outputArtifactName !== undefined
+                ? { outputArtifactName: gate.outputArtifactName }
+                : {}),
+              ...(gate.suggestions !== undefined
+                ? { suggestions: gate.suggestions }
+                : {}),
+              at: context.now(),
+            }),
+        );
         if (!recorded.ok) {
           throw new Error(
             `execution: cannot record the pending Human Gate: ${recorded.reason}.`,
@@ -1173,8 +1227,16 @@ function encode(text: string): Uint8Array {
   return new TextEncoder().encode(text);
 }
 
-function writeStateOrThrow(owner: RunOwner, state: string): void {
-  const result = owner.writeState(state);
+function writeStateOrThrow(
+  { owner, observe }: Pick<StepContext, "owner" | "observe">,
+  state: string,
+): void {
+  const result = observedWrite(
+    observe,
+    owner.runId,
+    { write: "run-state", state },
+    () => owner.writeState(state),
+  );
   // ponytail: a fenced owner mid-Run means another process took over this Run;
   // stopping is correct, and throwing hands that to composition. Return a typed
   // `fenced` RunReport instead if a caller ever needs to resume rather than fault.

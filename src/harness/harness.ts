@@ -551,9 +551,10 @@ export interface CleanupReport {
 // Native phases
 //
 // The timed mechanical steps ADR 0022 names, reported to an optional observer
-// for M8's operational log (#322). Only the semantic phase crosses: which frame,
-// RPC, or argv a phase used stays private to each Adapter, and no raw frame,
-// launch argument, or recovery coordinate is carried.
+// for M8's operational log (#322). Only the semantic phase, and for a handshake
+// with sub-steps its semantic step (#325), crosses: which frame, RPC, or argv a
+// phase used stays private to each Adapter, and no raw frame, launch argument,
+// or recovery coordinate is carried.
 // ---------------------------------------------------------------------------
 
 /** A native phase: spawning the protocol child, the open handshake (protocol
@@ -563,22 +564,31 @@ export interface CleanupReport {
 export type HarnessPhase =
   "launch" | "handshake" | "control" | "recovery" | "cleanup";
 
+/** A semantic sub-step of a phase (#325), never a native RPC name: initializing
+ *  the protocol, checking the account, and listing the models. Only an Adapter
+ *  whose handshake is several exchanges reports steps. */
+export type HarnessPhaseStep =
+  "protocol-initialize" | "account-check" | "model-list";
+
 /** One phase fact. A start with no end marks the last stage reached. An end
- *  settles the start of the same phase and Session: `ok` when the phase did what
+ *  settles the start of the same phase, step, and Session: `ok` when the phase did what
  *  it set out to do, `failed` with the typed failure it ended on, `abandoned`
  *  when an interrupt or close ended it before it settled on its own. A failure's
  *  own `phase` keeps its `FailurePhase` meaning (a failed handshake is a `launch`,
- *  `prepare`, or `turn` failure; there is no `handshake` failure phase). */
+ *  `prepare`, or `turn` failure; there is no `handshake` failure phase). A fact
+ *  carrying a `step` is a sub-step nested inside its phase's own start and end. */
 export type HarnessPhaseFact =
   | {
       readonly kind: "phase-start";
       readonly phase: HarnessPhase;
+      readonly step?: HarnessPhaseStep;
       /** The normalized Harness Session key, for a phase bound to one Session. */
       readonly session?: string;
     }
   | {
       readonly kind: "phase-end";
       readonly phase: HarnessPhase;
+      readonly step?: HarnessPhaseStep;
       readonly session?: string;
       /** Monotonic milliseconds since the matching start. */
       readonly elapsedMs: number;
@@ -587,6 +597,7 @@ export type HarnessPhaseFact =
   | {
       readonly kind: "phase-end";
       readonly phase: HarnessPhase;
+      readonly step?: HarnessPhaseStep;
       readonly session?: string;
       readonly elapsedMs: number;
       readonly outcome: "failed";

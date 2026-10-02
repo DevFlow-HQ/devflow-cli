@@ -1474,6 +1474,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         harnessRegistry: deps.harnessRegistry ?? [],
       },
       process,
+      observe,
     );
     observe({
       kind: "preflight-settle",

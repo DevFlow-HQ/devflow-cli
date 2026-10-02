@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Reference, Step } from "../../workflow/workflow.js";
 import type { CandidateOutput, RunOwner } from "../store/store.js";
+import type { ExecutionObserver } from "./execution.js";
+import { observedWrite } from "./store-write.js";
 
 interface StepContext {
   readonly owner: RunOwner;
@@ -175,16 +177,22 @@ function conflictDiagnostic(
 }
 
 export function recordConflictOrThrow(
-  owner: RunOwner,
+  { owner, observe }: { owner: RunOwner; observe: ExecutionObserver },
   conflict: DetectedConflict,
 ): void {
-  const result = owner.recordMaterializationConflict({
-    artifactName: conflict.artifactName,
-    path: conflict.path,
-    versionId: conflict.versionId,
-    diagnostic: conflict.diagnostic,
-    at: conflict.at,
-  });
+  const result = observedWrite(
+    observe,
+    owner.runId,
+    { write: "materialization-conflict" },
+    () =>
+      owner.recordMaterializationConflict({
+        artifactName: conflict.artifactName,
+        path: conflict.path,
+        versionId: conflict.versionId,
+        diagnostic: conflict.diagnostic,
+        at: conflict.at,
+      }),
+  );
   // A fenced owner mid-Run means another process took over; stopping is correct
   // and throwing hands that to composition, like writeStateOrThrow.
   if (!result.ok) {
