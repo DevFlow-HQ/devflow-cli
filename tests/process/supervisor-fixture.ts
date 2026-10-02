@@ -16,6 +16,10 @@ import { runSupervised } from "../helpers/supervisor.js";
 //   open, and one more, which proves the run resumes after a failure. The first
 //   writes the scenario's temp folder to the file the second argument names;
 // - `async-timeout`: a scenario awaiting a Command child that outlives the bound;
+// - `passes-with-child`: a passing scenario that leaves an owned child open;
+// - `setup-sync-block`: cases() blocks before registering any scenario;
+// - `gap-sync-block` and `end-sync-block`: case-list reads block after a scenario;
+// - `crash-between`: the next case's name getter crashes outside a scenario;
 // - `sync-block`: a scenario with an owned child open that then blocks its event
 //   loop in a synchronous spawn. That child writes its own PID to the file the
 //   second argument names, since a blocking spawn reports none.
@@ -25,16 +29,40 @@ import { runSupervised } from "../helpers/supervisor.js";
 const HOLD = "setInterval(()=>{},1000)";
 const processAdapter = createProcessAdapter(withRunnerObserver());
 
-async function launchHolder(): Promise<void> {
+async function launchHolder(marker?: string): Promise<void> {
   const launched = await processAdapter.spawnOwnedProcess({
     role: "harness-runtime",
     executable: process.execPath,
-    args: ["-e", HOLD],
+    args: [
+      "-e",
+      (marker === undefined
+        ? ""
+        : `require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));`) +
+        "process.stdout.write('ready\\n');" +
+        HOLD,
+    ],
     cwd: process.cwd(),
     env: process.env,
     launchTimeoutMs: 5_000,
   });
   assert.ok(launched.ok, "the fixture's owned child launched");
+  const ready = await launched.process.stdout[Symbol.asyncIterator]().next();
+  assert.equal(new TextDecoder().decode(ready.value), "ready\n");
+}
+
+function blockSync(marker: string, name: string): void {
+  stage(name, () =>
+    processAdapter.spawnCommandSync({
+      role: "git",
+      executable: process.execPath,
+      args: [
+        "-e",
+        `require('node:fs').appendFileSync(${JSON.stringify(marker)},String(process.pid)+'\\n');${HOLD}`,
+      ],
+      env: process.env,
+      maxBufferBytes: 1_024,
+    }),
+  );
 }
 
 function fixtures(mode: string | undefined, marker: string | undefined) {
@@ -80,19 +108,63 @@ function fixtures(mode: string | undefined, marker: string | undefined) {
           name: "blocks-in-a-sync-child",
           body: async () => {
             await stage("launch holder", launchHolder);
-            stage("block in git", () =>
-              processAdapter.spawnCommandSync({
-                role: "git",
-                executable: process.execPath,
-                args: [
-                  "-e",
-                  `require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));${HOLD}`,
-                ],
-                env: process.env,
-                maxBufferBytes: 1_024,
-              }),
-            );
+            blockSync(marker, "block in git");
           },
+        },
+      ];
+    case "passes-with-child":
+      assert.ok(marker, "the passing fixture needs a PID marker path");
+      return [
+        { name: "passes-with-open-child", body: () => launchHolder(marker) },
+      ];
+    case "setup-sync-block":
+      assert.ok(marker, "the setup fixture needs a PID marker path");
+      blockSync(marker, "pre-scenario synchronous setup");
+      return [];
+    case "gap-sync-block":
+      assert.ok(marker, "the gap fixture needs a PID marker path");
+      return [
+        { name: "passes-before-gap", body: () => {} },
+        {
+          get name(): string {
+            blockSync(marker, "between-scenario synchronous work");
+            return "unreachable";
+          },
+          body: () => {},
+        },
+      ];
+    case "end-sync-block": {
+      assert.ok(marker, "the end fixture needs a PID marker path");
+      let finished = false;
+      // The loop reads length again after recording the final scenario-end.
+      // Block that read to exercise finalization outside the scenario's bound.
+      return new Proxy(
+        [
+          {
+            name: "passes-before-end",
+            body: () => {
+              finished = true;
+            },
+          },
+        ],
+        {
+          get(list, key, receiver) {
+            if (key === "length" && finished)
+              blockSync(marker, "program-end synchronous work");
+            return Reflect.get(list, key, receiver);
+          },
+        },
+      );
+    }
+    case "crash-between":
+      assert.ok(marker, "the crash fixture needs a PID marker path");
+      return [
+        { name: "passes-before-crash", body: () => launchHolder(marker) },
+        {
+          get name(): string {
+            return stage("between-scenario crash", () => process.exit(23));
+          },
+          body: () => {},
         },
       ];
     default:

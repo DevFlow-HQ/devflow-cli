@@ -30,8 +30,8 @@ export interface RunnerCase {
 
 /** Runs `program`'s cases and exits with its status. Supervised, it starts at the
  *  supervisor's index, and a failed scenario waits for the supervisor to kill
- *  its tree: on Windows a tree kill walks down from a live parent, so the
- *  scenario must not exit first. Unsupervised, as terminal lifecycle runs, a
+ *  its tree. A clean finish waits too: on Windows a tree kill walks down from a
+ *  live parent, so the scenario must not exit first. Unsupervised, as terminal lifecycle runs, a
  *  failure prints the summary and ends the program. `cases` is called only here,
  *  so a supervisor that imports the same program never builds its fixtures. */
 export async function runScenarios(
@@ -48,6 +48,7 @@ export async function runScenarios(
     if (fd !== undefined) writeSync(fd, `${JSON.stringify(crumb)}\n`);
   };
 
+  write({ type: "program-start", at: Date.now() });
   const status = await runRunnerInvocation(
     program,
     { folder: logFolder },
@@ -80,7 +81,7 @@ export async function runScenarios(
       });
 
       const list = cases();
-      write({ type: "program-start", total: list.length, at: Date.now() });
+      write({ type: "program-ready", total: list.length, at: Date.now() });
       for (let index = startIndex; index < list.length; index++) {
         const { name, body } = list[index]!;
         scenario = name;
@@ -128,6 +129,7 @@ export async function runScenarios(
           status: "passed",
           elapsedMs: performance.now() - started,
         });
+        scenario = "";
         console.log(`  ok  ${name}`);
       }
       return 0;
@@ -137,11 +139,16 @@ export async function runScenarios(
   if (status === 0 && fd === undefined) {
     console.log(`${program}: every scenario passed.`);
   }
+  if (status === 0 && fd !== undefined) {
+    write({ type: "program-end", at: Date.now() });
+    // Keep the parent alive for Windows taskkill /T, even on a clean finish.
+    await awaitSupervisorKill();
+  }
   // Explicit, so a handle a passing scenario left open cannot hold the run.
   process.exit(status);
 }
 
-/** Never settles: the supervisor that saw the failed scenario kills this tree.
+/** Never settles: the supervisor that saw the failure or clean finish kills this tree.
  *  Should the supervisor itself die first, the orphaned scenario notices its
  *  parent change and exits rather than linger (POSIX; Windows keeps the PID). */
 function awaitSupervisorKill(): Promise<number> {

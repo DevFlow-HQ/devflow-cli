@@ -264,13 +264,13 @@ test("the summary names the scenario, the open stage, each open child's role and
     formatSummary(
       summarize(
         "p",
-        new BreadcrumbFold(),
+        new BreadcrumbFold(0),
         { kind: "exited", status: null, signal: "SIGKILL" },
         "/l",
         0,
       ),
     ),
-    "FAILED p: the program ended its process by SIGKILL outside any scenario\n  log folder:     /l\n",
+    "FAILED p: the program ended its process by SIGKILL outside any scenario\n  program phase:  program-start\n  open stage:     none\n  open children:  none reported\n  elapsed:        0.0 s\n  log folder:     /l\n",
   );
 });
 
@@ -290,4 +290,106 @@ test("only complete lines parse, and the consumed count is in bytes", () => {
     crumbs: [],
     consumed: 0,
   });
+});
+
+test("setup stages and child facts survive outside scenarios and appear in the timeout summary", () => {
+  const state = fold([
+    { type: "program-start", at: 1_000 },
+    { type: "stage-start", stage: "pre-scenario setup", at: 1_500 },
+    { type: "child", fact: { kind: "spawn", role: "git" }, at: 2_000 },
+  ]);
+  const summary = summarize(
+    "p",
+    state,
+    { kind: "timed-out", boundMs: 20_000 },
+    "/l",
+    21_000,
+  );
+  assert.equal(summary.scenario, undefined);
+  assert.equal(summary.elapsedMs, 20_000);
+  assert.equal(
+    formatSummary(summary),
+    [
+      "FAILED p: the program did not settle within 20 seconds outside any scenario",
+      "  program phase:  program-start",
+      "  open stage:     pre-scenario setup, open 19.5 s",
+      "  open children:  git PID unknown (synchronous spawn still blocking), open 19.0 s",
+      "  elapsed:        20.0 s",
+      "  log folder:     /l",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("child settlement between scenarios removes carried children and keeps new children for cleanup", () => {
+  const state = fold([
+    { type: "program-start", total: 2, at: 0 },
+    { type: "child", fact: { kind: "spawn", role: "command", pid: 7 }, at: 1 },
+    { type: "scenario-start", index: 0, scenario: "first", at: 2 },
+    {
+      type: "scenario-end",
+      index: 0,
+      scenario: "first",
+      status: "passed",
+      at: 3,
+    },
+    { type: "stage-start", stage: "between", at: 4 },
+    {
+      type: "child",
+      fact: { kind: "exit", role: "command", pid: 7, status: 0, elapsedMs: 4 },
+      at: 5,
+    },
+    {
+      type: "child",
+      fact: { kind: "spawn", role: "harness-runtime", pid: 8 },
+      at: 6,
+    },
+  ]);
+  assert.equal(state.since, 3);
+  assert.deepEqual(state.children, [
+    { role: "harness-runtime", pid: 8, since: 6 },
+  ]);
+  const summary = summarize(
+    "p",
+    state,
+    { kind: "exited", status: 23, signal: null },
+    "/l",
+    10,
+  );
+  assert.equal(summary.gap?.phase, "between-scenarios");
+  assert.equal(summary.gap?.stages[0]?.stage, "between");
+  assert.equal(summary.elapsedMs, 7);
+  assert.match(formatSummary(summary), /harness-runtime PID 8/);
+  state.apply({ type: "scenario-start", index: 1, scenario: "last", at: 11 });
+  assert.equal(state.since, 11);
+  assert.deepEqual(state.open?.stages, []);
+  state.apply({
+    type: "scenario-end",
+    index: 1,
+    scenario: "last",
+    status: "passed",
+    at: 12,
+  });
+  assert.equal(state.since, 12);
+  assert.equal(state.gap?.phase, "program-end");
+  assert.equal(state.completed, false);
+  state.apply({ type: "program-end", at: 13 });
+  assert.equal(state.completed, true);
+  assert.deepEqual(state.children, [
+    { role: "harness-runtime", pid: 8, since: 6 },
+  ]);
+});
+
+test("startup has a bound before the first breadcrumb and ready does not renew setup's bound", () => {
+  const state = new BreadcrumbFold(100);
+  assert.equal(state.since, 100);
+  state.apply({ type: "program-start", at: 200 });
+  state.apply({ type: "program-ready", total: 1, at: 300 });
+  assert.equal(state.total, 1);
+  assert.equal(state.since, 100);
+  assert.equal(state.gap?.phase, "program-start");
+  const empty = new BreadcrumbFold(100);
+  empty.apply({ type: "program-ready", total: 0, at: 300 });
+  assert.equal(empty.gap?.phase, "program-end");
+  assert.equal(empty.since, 300);
 });

@@ -27,12 +27,14 @@ import { removeTempDir, runMain, runnerLogFolder } from "./standalone.js";
 
 // The runner supervisor (#326, spec #313 stories 51–57): a thin parent that runs
 // a standalone program's scenarios in a child process and enforces the
-// per-scenario bound from outside that child's event loop, so a scenario blocked
+// per-scenario and out-of-scenario bounds from outside that child's event loop, so work blocked
 // in synchronous child work still times out. It reads the breadcrumb file the
 // scenario side appends to (scenario-runner.ts), and when a scenario fails, times
 // out, or ends its process, it prints the last-active-stage summary, kills the
 // scenario's process tree, removes the run's temp folder, and restarts the
-// program at the next scenario. The run exits non-zero if any scenario failed.
+// program at the next scenario. Clean completion also kills any leftover children,
+// while the scenario parent still lives for Windows tree traversal. The run exits
+// non-zero if any scenario failed or a reported child survived cleanup.
 //
 // Kill reach. Off Windows the scenario process leads its own group, so killing
 // that group reaches every non-detached descendant, a blocked `spawnSync` child
@@ -54,7 +56,7 @@ export interface SuperviseOptions {
   /** The program file the scenario process runs. */
   readonly entry: string;
   readonly args?: readonly string[];
-  /** The per-scenario bound. */
+  /** The bound for each scenario, program startup, inter-scenario gap, and end. */
   readonly boundMs: number;
   /** Defaults to `runnerLogFolder()`. */
   readonly logFolder?: string;
@@ -74,9 +76,16 @@ export interface SupervisedFailure {
   readonly survivors: readonly number[];
 }
 
+interface SupervisedCleanup {
+  readonly scenarioPid?: number;
+  readonly children: readonly OpenChild[];
+  readonly survivors: readonly number[];
+}
+
 export interface SuperviseResult {
   readonly status: 0 | 1;
   readonly failures: readonly SupervisedFailure[];
+  readonly cleanups: readonly SupervisedCleanup[];
 }
 
 /** Runs a program's scenarios under the supervisor: the program itself when the
@@ -107,9 +116,26 @@ export async function superviseProgram(
   const report =
     options.report ?? ((text: string) => void process.stderr.write(text));
   const failures: SupervisedFailure[] = [];
+  const cleanups: SupervisedCleanup[] = [];
   for (let startIndex = 0; ;) {
-    const failure = await superviseOnce(options, logFolder, startIndex);
-    if (failure === undefined) break;
+    const { failure, cleanup } = await superviseOnce(
+      options,
+      logFolder,
+      startIndex,
+    );
+    cleanups.push(cleanup);
+    if (failure === undefined) {
+      if (cleanup.children.length > 0) {
+        report(
+          `${options.program}: clean-up of open children: ${cleanup.children.map((child) => `${child.role} PID ${child.pid ?? "unknown"}`).join(", ")}\n`,
+        );
+      }
+      if (cleanup.survivors.length > 0)
+        report(
+          `  clean-up: PIDs ${cleanup.survivors.join(", ")} survived the kill\n`,
+        );
+      break;
+    }
     failures.push(failure);
     report(
       formatSummary(failure.summary) +
@@ -128,17 +154,27 @@ export async function superviseProgram(
       `${options.program}: ${failures.length} failed: ${names.join(", ")}\n`,
     );
   }
-  return { status: failures.length === 0 ? 0 : 1, failures };
+  return {
+    status:
+      failures.length === 0 &&
+      cleanups.every((cleanup) => cleanup.survivors.length === 0)
+        ? 0
+        : 1,
+    failures,
+    cleanups,
+  };
 }
 
-/** One scenario process from case `startIndex`: undefined when it ran every
- *  remaining case and exited cleanly, else the failure it stopped at, after
- *  clean-up. */
+/** One scenario process from case `startIndex`, always cleaned up. A clean finish
+ *  has no failure, but still returns its leftover children and kill results. */
 async function superviseOnce(
   options: SuperviseOptions,
   logFolder: string,
   startIndex: number,
-): Promise<SupervisedFailure | undefined> {
+): Promise<{
+  readonly failure?: SupervisedFailure;
+  readonly cleanup: SupervisedCleanup;
+}> {
   // The run's root is the scenario's temp folder itself, so every folder the
   // scenario or its children make lands in it. Its name is short and it nests no
   // deeper: the Matt-front case's artifact refs sit 214 characters below it, so
@@ -149,6 +185,7 @@ async function superviseOnce(
     const file = join(root, "breadcrumbs.jsonl");
     writeFileSync(file, "");
     const output = options.output ?? "inherit";
+    const startedAt = Date.now();
     const child = spawn(
       process.execPath,
       [options.entry, ...(options.args ?? [])],
@@ -181,9 +218,9 @@ async function superviseOnce(
       });
     });
 
-    const fold = new BreadcrumbFold();
+    const fold = new BreadcrumbFold(startedAt);
     const reader = breadcrumbReader(file);
-    let cause: FailureCause;
+    let cause: FailureCause | undefined;
     for (;;) {
       await Promise.race([
         exited,
@@ -195,31 +232,31 @@ async function superviseOnce(
         cause = { kind: "failed" };
         break;
       }
+      if (fold.completed) break;
       if (ended !== undefined) {
-        if (ended.status === 0 && open === undefined) return undefined;
+        if (ended.status === 0 && open === undefined) break;
         cause = { kind: "exited", ...ended };
         break;
       }
-      if (open !== undefined && Date.now() - open.since >= options.boundMs) {
+      if (Date.now() - fold.since >= options.boundMs) {
         cause = { kind: "timed-out", boundMs: options.boundMs };
         break;
       }
     }
 
-    const summary = summarize(
-      options.program,
-      fold,
-      cause,
-      logFolder,
-      Date.now(),
-    );
-    const children = summary.scenario?.children ?? [];
+    const summary =
+      cause === undefined
+        ? undefined
+        : summarize(options.program, fold, cause, logFolder, Date.now());
+    const children = [...fold.children];
     const survivors = await killScenarioTree(
       child.pid,
       ended === undefined,
       children,
       exited,
     );
+    const cleanup = { scenarioPid: child.pid, children, survivors };
+    if (summary === undefined) return { cleanup };
     // After a scenario, the next one; after a crash between scenarios, the one
     // after the last that passed. A crash before any scenario ends the run.
     const next = summary.scenario?.index ?? fold.lastPassed;
@@ -228,9 +265,12 @@ async function superviseOnce(
         ? undefined
         : next + 1;
     return {
-      summary,
-      survivors,
-      ...(resumeAt === undefined ? {} : { resumeAt }),
+      cleanup,
+      failure: {
+        summary,
+        survivors,
+        ...(resumeAt === undefined ? {} : { resumeAt }),
+      },
     };
   } finally {
     await removeTempDir(root);
@@ -260,7 +300,8 @@ function breadcrumbReader(
 
 /** Kills each open child's own group or tree by its reported PID, then the
  *  scenario process's tree, and waits for them to be gone. Returns the PIDs still
- *  alive after that wait. The reported PIDs go first: while the scenario process
+ *  alive after that wait, including the scenario parent if its kill failed.
+ *  The reported PIDs go first: while the scenario process
  *  lives it holds its children unreaped (and on Windows their handles open), so
  *  none of those PIDs can yet name an unrelated, reused process. */
 async function killScenarioTree(
@@ -291,7 +332,9 @@ async function killScenarioTree(
     new Promise((resolve) => setTimeout(resolve, KILL_SETTLE_MS)),
   ]);
   const survivors: number[] = [];
-  for (const pid of pids) {
+  const watched =
+    scenarioAlive && scenarioPid !== undefined ? [...pids, scenarioPid] : pids;
+  for (const pid of watched) {
     while (isAlive(pid) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }

@@ -7,6 +7,7 @@ import {
   isAlive,
   superviseProgram,
   type SupervisedFailure,
+  type SuperviseResult,
 } from "../helpers/supervisor.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
@@ -28,9 +29,7 @@ const GONE_MS = 5_000;
 
 type Register = (name: string, body: () => Promise<void>) => void;
 
-interface Supervised {
-  readonly status: number;
-  readonly failures: readonly SupervisedFailure[];
+interface Supervised extends SuperviseResult {
   readonly text: string;
   readonly logFolder: string;
   readonly tempParent: string;
@@ -40,7 +39,7 @@ async function superviseFixture(args: readonly string[]): Promise<Supervised> {
   const tempParent = makeTempDir("secant-supervisor-temp-");
   const logFolder = join(makeTempDir("secant-supervisor-log-"), "logs");
   const reports: string[] = [];
-  const { status, failures } = await superviseProgram({
+  const result = await superviseProgram({
     program: "supervisor-fixture",
     entry: FIXTURE,
     args,
@@ -50,7 +49,11 @@ async function superviseFixture(args: readonly string[]): Promise<Supervised> {
     output: "ignore",
     report: (text) => reports.push(text),
   });
-  return { status, failures, text: reports.join(""), logFolder, tempParent };
+  for (const cleanup of result.cleanups) {
+    if (cleanup.scenarioPid !== undefined)
+      await assertGone(cleanup.scenarioPid);
+  }
+  return { ...result, text: reports.join(""), logFolder, tempParent };
 }
 
 /** The one failure, its children by role, and the run's leftovers checked. */
@@ -236,4 +239,138 @@ export function registerSupervisorConformance(register: Register): void {
       );
     },
   );
+  register(
+    "[supervisor] a passing scenario's leftover child is killed and reported without failing the run",
+    async () => {
+      const marker = join(
+        makeTempDir("secant-supervisor-marker-"),
+        "passing-pid",
+      );
+      const run = await superviseFixture(["passes-with-child", marker]);
+      assert.equal(run.status, 0, run.text);
+      assert.deepEqual(run.failures, [], run.text);
+      assert.ok(existsSync(marker), "the owned child started");
+      const pid = Number(readFileSync(marker, "utf8"));
+      assert.ok(run.text.includes(`harness-runtime PID ${pid}`), run.text);
+      assert.equal(run.cleanups[0]!.children[0]!.pid, pid);
+      assert.deepEqual(run.cleanups[0]!.survivors, []);
+      await assertGone(pid);
+      assert.deepEqual(readdirSync(run.tempParent), []);
+    },
+  );
+
+  register(
+    "[supervisor] synchronous setup before the first scenario is bounded, summarized, and killed",
+    async () => {
+      const marker = join(
+        makeTempDir("secant-supervisor-marker-"),
+        "setup-pid",
+      );
+      const run = await superviseFixture(["setup-sync-block", marker]);
+      assert.equal(run.status, 1, run.text);
+      assert.equal(run.failures.length, 1, run.text);
+      const failure = run.failures[0]!;
+      assert.equal(failure.summary.scenario, undefined);
+      assert.deepEqual(failure.summary.cause, {
+        kind: "timed-out",
+        boundMs: FIXTURE_BOUND_MS,
+      });
+      assert.ok(failure.summary.elapsedMs >= FIXTURE_BOUND_MS);
+      assert.deepEqual(failure.survivors, []);
+      assert.match(run.text, /outside any scenario/);
+      assert.match(run.text, /pre-scenario synchronous setup/);
+      assert.match(
+        run.text,
+        /git PID unknown \(synchronous spawn still blocking\)/,
+      );
+      assert.ok(existsSync(marker), "the synchronous setup child started");
+      await assertGone(Number(readFileSync(marker, "utf8")));
+      assert.deepEqual(readdirSync(run.tempParent), []);
+    },
+  );
+
+  register(
+    "[supervisor] a crash between scenarios kills and reports the passing scenario's leftover child",
+    async () => {
+      const marker = join(
+        makeTempDir("secant-supervisor-marker-"),
+        "crash-pid",
+      );
+      const run = await superviseFixture(["crash-between", marker]);
+      assert.equal(run.status, 1, run.text);
+      // The supervisor retries the next scenario once; its getter crashes again.
+      assert.equal(run.failures.length, 2, run.text);
+      assert.equal(run.failures[0]!.resumeAt, 1);
+      assert.equal(run.failures[1]!.resumeAt, undefined);
+      for (const failure of run.failures) {
+        assert.equal(failure.summary.scenario, undefined);
+        assert.deepEqual(failure.summary.cause, {
+          kind: "exited",
+          status: 23,
+          signal: null,
+        });
+        assert.deepEqual(failure.survivors, []);
+      }
+      assert.match(run.text, /between-scenario crash/);
+      assert.ok(existsSync(marker), "the owned child started before the crash");
+      const pid = Number(readFileSync(marker, "utf8"));
+      assert.ok(run.text.includes(`harness-runtime PID ${pid}`), run.text);
+      assert.equal(run.cleanups[0]!.children[0]!.pid, pid);
+      assert.deepEqual(run.cleanups[0]!.survivors, []);
+      await assertGone(pid);
+      assert.deepEqual(readdirSync(run.tempParent), []);
+    },
+  );
+  for (const [mode, phase, stage] of [
+    [
+      "gap-sync-block",
+      "between-scenarios",
+      "between-scenario synchronous work",
+    ],
+    ["end-sync-block", "program-end", "program-end synchronous work"],
+  ] as const) {
+    register(
+      `[supervisor] synchronous ${phase} work is bounded and its child tree is killed`,
+      async () => {
+        const marker = join(
+          makeTempDir("secant-supervisor-marker-"),
+          `${mode}-pid`,
+        );
+        const run = await superviseFixture([mode, marker]);
+        assert.equal(run.status, 1, run.text);
+        assert.equal(
+          run.failures.length,
+          mode === "gap-sync-block" ? 2 : 1,
+          run.text,
+        );
+        assert.equal(
+          run.failures[0]!.resumeAt,
+          mode === "gap-sync-block" ? 1 : undefined,
+        );
+        assert.equal(run.failures.at(-1)!.resumeAt, undefined);
+        const failure = run.failures[0]!;
+        assert.equal(failure.summary.scenario, undefined);
+        assert.equal(failure.summary.gap?.phase, phase);
+        assert.equal(failure.summary.cause.kind, "timed-out");
+        assert.ok(failure.summary.elapsedMs >= FIXTURE_BOUND_MS);
+        assert.ok(run.text.includes(stage), run.text);
+        assert.match(
+          run.text,
+          /git PID unknown \(synchronous spawn still blocking\)/,
+        );
+        assert.ok(existsSync(marker), "the synchronous child started");
+        const pids = readFileSync(marker, "utf8")
+          .trimEnd()
+          .split("\n")
+          .map(Number);
+        assert.equal(pids.length, mode === "gap-sync-block" ? 2 : 1);
+        for (const pid of pids) await assertGone(pid);
+        assert.ok(
+          run.cleanups.every((cleanup) => cleanup.survivors.length === 0),
+          run.text,
+        );
+        assert.deepEqual(readdirSync(run.tempParent), []);
+      },
+    );
+  }
 }

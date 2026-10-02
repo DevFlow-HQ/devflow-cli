@@ -13,7 +13,7 @@ import type { ChildFact } from "../../src/process/process.js";
 export type Breadcrumb =
   | {
       readonly type: "program-start";
-      readonly total: number;
+      readonly total?: number;
       readonly at: number;
     }
   | {
@@ -40,6 +40,12 @@ export type Breadcrumb =
       readonly status: "passed" | "failed";
       readonly at: number;
     }
+  | {
+      readonly type: "program-ready";
+      readonly total: number;
+      readonly at: number;
+    }
+  | { readonly type: "program-end"; readonly at: number }
   | { readonly type: "child"; readonly fact: ChildFact; readonly at: number };
 
 /** A child with a `spawn` fact and no settlement yet. A synchronous spawn names
@@ -72,24 +78,69 @@ export interface OpenScenario {
   readonly children: readonly OpenChild[];
 }
 
-/** The fold of a scenario process's breadcrumbs: its case count and the scenario
- *  it is in, if any. */
+/** The bounded work outside a scenario, including setup and finalization. */
+interface ProgramGap {
+  readonly phase: "program-start" | "between-scenarios" | "program-end";
+  readonly since: number;
+  readonly stages: readonly OpenStage[];
+  readonly children: readonly OpenChild[];
+}
+
+/** The fold of a scenario process's breadcrumbs: its case count, active scenario
+ *  or program gap, and every child not yet settled. */
 export class BreadcrumbFold {
   total: number | undefined;
+  completed = false;
   /** The last scenario that passed: where a supervisor resumes after the
    *  process ends outside any scenario. */
   lastPassed: number | undefined;
   private current: Mutable<OpenScenario> | undefined;
   private carried: OpenChild[] = [];
+  private gapSince: number;
+  private gapPhase: ProgramGap["phase"] = "program-start";
+  private gapStages: OpenStage[] = [];
+
+  constructor(startedAt = Date.now()) {
+    this.gapSince = startedAt;
+  }
+
+  get since(): number {
+    return this.current?.since ?? this.gapSince;
+  }
+
+  get gap(): ProgramGap | undefined {
+    return this.current === undefined
+      ? {
+          phase: this.gapPhase,
+          since: this.gapSince,
+          stages: this.gapStages,
+          children: this.carried,
+        }
+      : undefined;
+  }
 
   get open(): OpenScenario | undefined {
     return this.current;
+  }
+
+  get children(): readonly OpenChild[] {
+    return this.current?.children ?? this.carried;
   }
 
   apply(crumb: Breadcrumb): void {
     switch (crumb.type) {
       case "program-start":
         this.total = crumb.total;
+        // Include process startup before its first breadcrumb in this bound.
+        this.gapSince = Math.min(this.gapSince, crumb.at);
+        return;
+      case "program-ready":
+        this.total = crumb.total;
+        if (crumb.total === 0) {
+          this.gapPhase = "program-end";
+          this.gapSince = crumb.at;
+          this.gapStages = [];
+        }
         return;
       case "scenario-start":
         this.current = {
@@ -100,6 +151,7 @@ export class BreadcrumbFold {
           children: this.carried,
         };
         this.carried = [];
+        this.gapStages = [];
         return;
       case "scenario-end":
         if (crumb.status === "failed" && this.current !== undefined) {
@@ -112,17 +164,21 @@ export class BreadcrumbFold {
         // A child a passing scenario left open is still this process's to kill.
         this.carried = this.current?.children ?? [];
         this.current = undefined;
+        this.gapSince = crumb.at;
+        this.gapPhase =
+          this.total !== undefined && crumb.index + 1 >= this.total
+            ? "program-end"
+            : "between-scenarios";
+        this.gapStages = [];
         return;
       case "stage-start": {
-        const stages = this.current?.stages;
-        if (stages === undefined) return;
+        const stages = this.current?.stages ?? this.gapStages;
         dropCaughtFailures(stages);
         stages.push({ stage: crumb.stage, since: crumb.at });
         return;
       }
       case "stage-end": {
-        const stages = this.current?.stages;
-        if (stages === undefined) return;
+        const stages = this.current?.stages ?? this.gapStages;
         // A throw unwinding several stages marks each; they stay open as the
         // place the scenario stopped until it starts or ends another stage.
         if (crumb.status === "passed") dropCaughtFailures(stages);
@@ -133,10 +189,15 @@ export class BreadcrumbFold {
         else stages.splice(at, 1);
         return;
       }
+      case "program-end":
+        this.completed = true;
+        return;
       case "child":
-        if (this.current !== undefined) {
-          applyChild(this.current.children, crumb.fact, crumb.at);
-        }
+        applyChild(
+          this.current?.children ?? this.carried,
+          crumb.fact,
+          crumb.at,
+        );
         return;
     }
   }
@@ -212,6 +273,7 @@ export interface ScenarioSummary {
   readonly program: string;
   /** Undefined when the program stopped outside every scenario. */
   readonly scenario?: OpenScenario;
+  readonly gap?: ProgramGap;
   readonly total?: number;
   readonly cause: FailureCause;
   readonly elapsedMs: number;
@@ -230,10 +292,10 @@ export function summarize(
   const scenario = fold.open;
   return {
     program,
-    ...(scenario === undefined ? {} : { scenario }),
+    ...(scenario === undefined ? { gap: fold.gap } : { scenario }),
     ...(fold.total === undefined ? {} : { total: fold.total }),
     cause,
-    elapsedMs: scenario === undefined ? 0 : now - scenario.since,
+    elapsedMs: now - fold.since,
     logFolder,
     at: now,
   };
@@ -282,22 +344,23 @@ export function formatSummary(summary: ScenarioSummary): string {
     lines.push(
       `FAILED ${scenario.scenario} (${summary.program} ${position}): ${describeCause(summary.cause)}`,
     );
-    const stage = scenario.stages.at(-1);
-    lines.push(
-      `  open stage:     ${
-        stage === undefined
-          ? "none"
-          : `${scenario.stages.map((open) => open.stage).join(" > ")}, open ${seconds(now - stage.since)}`
-      }`,
-    );
-    lines.push(
-      `  open children:  ${scenario.children.length === 0 ? "none reported" : describeChild(scenario.children[0]!, now)}`,
-    );
-    for (const child of scenario.children.slice(1)) {
-      lines.push(`                  ${describeChild(child, now)}`);
-    }
-    lines.push(`  elapsed:        ${seconds(summary.elapsedMs)}`);
   }
+  const activity = scenario ?? summary.gap;
+  if (scenario === undefined && summary.gap !== undefined) {
+    lines.push(`  program phase:  ${summary.gap.phase}`);
+  }
+  const stage = activity?.stages.at(-1);
+  lines.push(
+    `  open stage:     ${stage === undefined ? "none" : `${activity!.stages.map((open) => open.stage).join(" > ")}, open ${seconds(now - stage.since)}`}`,
+  );
+  const children = activity?.children ?? [];
+  lines.push(
+    `  open children:  ${children.length === 0 ? "none reported" : describeChild(children[0]!, now)}`,
+  );
+  for (const child of children.slice(1)) {
+    lines.push(`                  ${describeChild(child, now)}`);
+  }
+  lines.push(`  elapsed:        ${seconds(summary.elapsedMs)}`);
   lines.push(`  log folder:     ${summary.logFolder}`);
   return `${lines.join("\n")}\n`;
 }

@@ -17,11 +17,15 @@ The gate separates three independently attributable, blocking layers (ADR 0027's
   `tests/process/runtime-conformance.ts` program, run by `bun run test:runtime-conformance` and CI's `Process runtime conformance` step. It and the
   terminal-lifecycle program share their runner helpers (timeouts, exit, temp-dir cleanup, `stage`) in `tests/helpers/standalone.ts`.
   - A supervisor parent (`tests/helpers/supervisor.ts`) runs the scenarios in one child process and enforces the 20-second bound from outside its event
-    loop. The scenario side (`scenario-runner.ts`) writes scenario, stage, and child-fact breadcrumbs synchronously to a breadcrumb file and the
-    operational log. Every real Process takes `withRunnerObserver()`.
-  - A failed, timed-out, or crashed scenario prints a last-active-stage summary: scenario, open stage, open child roles and PIDs (a blocking sync spawn
-    has none yet), elapsed time, and the log folder (`SECANT_LOG_DIR`, else `secant-runner-logs` under the OS temp folder). The supervisor then kills
-    the tree (each reported PID's group or tree, then the scenario's), removes the run's temp root, and resumes at the next scenario. Its fixtures
+    loop. The same bound applies from process spawn to the first scenario, between scenarios, and from the last scenario to program completion.
+    A new scenario or gap starts a fresh bound; stage and child breadcrumbs never extend it. The scenario side
+    (`scenario-runner.ts`) writes scenario, stage, and child-fact breadcrumbs synchronously to a breadcrumb file and the operational log.
+    Every real Process takes `withRunnerObserver()`.
+  - A failure, timeout, or crash prints a last-active-stage summary: scenario (or program phase outside one), open stage, open child roles and PIDs
+    (a blocking sync spawn has none yet), elapsed time, and the log folder (`SECANT_LOG_DIR`, else `secant-runner-logs` under the OS temp folder). The supervisor then kills
+    the tree (each reported PID's group or tree, then the scenario's), removes the run's temp root, and resumes at the next scenario. Child facts
+    outside scenarios are retained, including settlements of earlier children. A clean finish also kills and reports leftover children, with status 0
+    if cleanup succeeds; the scenario process waits for that kill so Windows still has a live parent for tree traversal. Its fixtures
     are runtime cases (`supervisor-conformance.ts`). Terminal lifecycle runs the same scenario side unsupervised.
   - The temp root is the scenario's `TMPDIR` itself, one short name deep: on Windows the deepest Run Store paths sit within 13 characters of git's
     260-character limit, so a deeper root fails `matt-front-replayer-workbench` there.
