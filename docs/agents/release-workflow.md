@@ -11,7 +11,7 @@ plain gate; a manual dispatch adds the authenticated npm dry-run; a `v*` tag add
 the parsed YAML (`Bun.YAML`, no dependency) in
 [tests/architecture/check-release-workflow.ts](../../tests/architecture/check-release-workflow.ts): `checkValidationWorkflow`, `checkReleaseProtection`,
 and `checkReleasePromotion`. They run in the structural step (`bun run structure:check`), the only place their `release/…` violations print, each at
-`.github/workflows/check.yml:1:1` with a `fix:` and a `see:` line naming one of the three sections below. A missing or unparseable workflow fails the step
+`.github/workflows/check.yml:1:1` with a `fix:` and a `see:` line naming the owning section below. A missing or unparseable workflow fails the step
 as a tool error. Each guard is proven under `bun test` by a synthetic workflow that breaks exactly that guard, so the step and the guards' proofs both run
 on Windows, macOS, and Linux without publishing.
 
@@ -79,6 +79,24 @@ an idempotent success.
 and invokes the one state-machine script. `tests/release/release-promotion.test.ts` proves fresh, partial, identical-rerun, conflict, stop-on-failure, digest,
 and draft-asset behavior without a registry or GitHub connection. Because this is ordinary deterministic `bun test` coverage, the named scenario runs on the
 existing Windows, macOS, and Linux canonical check matrix without adding a CI gate.
+
+## Operational Log Delivery
+
+The three-OS `check` and `consumer` jobs first persist `SECANT_LOG_DIR` through a Bash step into `GITHUB_ENV`. The folder is
+`runner.temp/secant-operational-logs`, outside every test home and beside Windows' `secant-tests`, so cleanup cannot remove the evidence.
+Use the runner context in the step's `env`, where GitHub permits it; job-level `env` cannot reference `runner.temp`.
+
+Each job ends with one `actions/upload-artifact@v4` step named `operational-logs-<job>-${{ matrix.os }}`, reading `env.SECANT_LOG_DIR`,
+with `retention-days: 30` and `if-no-files-found: ignore`. A failure before any Secant invocation leaves no folder and no artifact.
+The `check` upload uses `failure()`, after the always-run runtime conformance step. The `consumer` aggregation keeps `if: always()`
+and gains `id: consumer_result`; its upload uses `failure() && steps.consumer_result.outcome == 'failure'`, because scenario steps
+continue on error. Successful jobs upload no logs. Keep existing scenario order, conditions, and `continue-on-error` behavior.
+
+`checkValidationWorkflow` pins the directory setup, final upload shape, and failure trigger through three `release/log-…` rules.
+Synthetic fixtures cover missing uploads, wrong triggers and retention, directory placement, and the aggregation's identity and blocking behavior.
+The structural step pins each rule's report. Record induced-failure dispatch evidence per OS and an ordinary green run on the implementing issue;
+the induced failure stays on the dispatched ref and never enters the default branch. Logs are safe by field allowlist, not by access restriction:
+anyone who can read the repository's Actions runs can read these artifacts.
 
 ## Human Configuration
 

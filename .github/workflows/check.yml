@@ -30,6 +30,11 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Configure operational logs
+        shell: bash
+        env:
+          SECANT_LOG_DIR: ${{ runner.temp }}/secant-operational-logs
+        run: printf 'SECANT_LOG_DIR=%s\n' "$SECANT_LOG_DIR" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
@@ -79,6 +84,15 @@ jobs:
         # after the Windows temp-drive guard rejects the runner image.
         if: always() && (runner.os != 'Windows' || steps.windows_test_temp.outcome == 'success')
         run: bun run test:runtime-conformance
+
+      - name: Upload failed-job operational logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-logs-check-${{ matrix.os }}
+          path: ${{ env.SECANT_LOG_DIR }}
+          retention-days: 30
+          if-no-files-found: ignore
 
   # One Linux runner cross-compiles all three gated targets (ADR 0030). The wide
   # install fetches every platform's @opentui native package so the compile can
@@ -178,6 +192,11 @@ jobs:
             target: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Configure operational logs
+        shell: bash
+        env:
+          SECANT_LOG_DIR: ${{ runner.temp }}/secant-operational-logs
+        run: printf 'SECANT_LOG_DIR=%s\n' "$SECANT_LOG_DIR" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
@@ -254,6 +273,7 @@ jobs:
         continue-on-error: true
         run: bun tests/terminal/lifecycle.ts "dist/${{ matrix.binary }}"
       - name: Require every consumer scenario to succeed
+        id: consumer_result
         if: always()
         shell: bash
         run: |
@@ -275,6 +295,15 @@ jobs:
             fi
           done
           exit "$failed"
+
+      - name: Upload failed-job operational logs
+        if: failure() && steps.consumer_result.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-logs-consumer-${{ matrix.os }}
+          path: ${{ env.SECANT_LOG_DIR }}
+          retention-days: 30
+          if-no-files-found: ignore
 
   # The `release-protection-policy` scenario, runtime half (#158, spec #137 stories
   # 82/90/96/97): on a `v*` tag ONLY, admit the tag when it exactly matches the package

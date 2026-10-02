@@ -151,6 +151,16 @@ function needsOf(job: Record<string, unknown>): Set<string> {
   return new Set();
 }
 
+/** Conditions may be written bare or inside GitHub's expression delimiters. */
+function condition(value: unknown): string {
+  return typeof value === "string"
+    ? value
+        .trim()
+        .replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+        .trim()
+    : "";
+}
+
 /** Every release-workflow violation in the real CI workflow under `root`. */
 export function checkReleaseWorkflow(root: string): Finding[] {
   const workflow = readWorkflow(root);
@@ -237,6 +247,63 @@ export function checkValidationWorkflow(workflow: unknown): Finding[] {
         if (runs.includes(script))
           add("release/reassembly", { job: name, script, build: BUILD_JOB });
       }
+    }
+
+    // The canonical gate and every downstream consumer retain failed-job logs.
+    if (name !== BUILD_JOB && name !== APPROVAL_JOB && name !== PROMOTE_JOB) {
+      const steps = stepsOf(job);
+      const setup = steps.find((step) => typeof step.run === "string");
+      const setupEnv = isRecord(setup?.env) ? setup.env : {};
+      const logEnvScript = `printf 'SECANT_LOG_DIR=%s\\n' "$SECANT_LOG_DIR" >> "$GITHUB_ENV"`;
+      const overridden = [
+        workflow.env,
+        job.env,
+        ...steps.filter((step) => step !== setup).map((step) => step.env),
+      ].some((env) => isRecord(env) && "SECANT_LOG_DIR" in env);
+      if (
+        setup?.shell !== "bash" ||
+        setupEnv.SECANT_LOG_DIR !==
+          "${{ runner.temp }}/secant-operational-logs" ||
+        setup?.run !== logEnvScript ||
+        "if" in (setup ?? {}) ||
+        setup?.["continue-on-error"] === true ||
+        overridden
+      )
+        add("release/log-directory", { job: name });
+      const uploads = steps.filter(
+        (step) =>
+          typeof step.uses === "string" &&
+          step.uses.startsWith("actions/upload-artifact"),
+      );
+      const upload = uploads[0];
+      const inputs = isRecord(upload?.with) ? upload.with : {};
+      if (
+        uploads.length !== 1 ||
+        steps.at(-1) !== upload ||
+        upload?.uses !== "actions/upload-artifact@v4" ||
+        inputs.name !== `operational-logs-${name}-\${{ matrix.os }}` ||
+        inputs.path !== "${{ env.SECANT_LOG_DIR }}" ||
+        inputs["retention-days"] !== 30 ||
+        inputs["if-no-files-found"] !== "ignore"
+      )
+        add("release/log-upload-shape", { job: name });
+      const trigger =
+        name === "check"
+          ? "failure()"
+          : "failure() && steps.consumer_result.outcome == 'failure'";
+      const aggregation = steps.at(-2);
+      if (
+        upload &&
+        (condition(upload.if) !== trigger ||
+          upload["continue-on-error"] === true ||
+          (name !== "check" &&
+            (aggregation?.id !== "consumer_result" ||
+              aggregation?.name !==
+                "Require every consumer scenario to succeed" ||
+              condition(aggregation?.if) !== "always()" ||
+              aggregation?.["continue-on-error"] === true)))
+      )
+        add("release/log-upload-trigger", { job: name, trigger });
     }
 
     // 3. Credential placement. A secret may appear only inside a step's env, on a

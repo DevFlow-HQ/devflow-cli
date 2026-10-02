@@ -12,13 +12,38 @@ export const jobsToEdit = (workflow: Record<string, unknown>) =>
 export const stepsToEdit = (job: Record<string, unknown>) =>
   job.steps as Record<string, unknown>[];
 
+function logSetup() {
+  return {
+    name: "Configure operational logs",
+    shell: "bash",
+    env: { SECANT_LOG_DIR: "${{ runner.temp }}/secant-operational-logs" },
+    run: `printf 'SECANT_LOG_DIR=%s\\n' "$SECANT_LOG_DIR" >> "$GITHUB_ENV"`,
+  };
+}
+
+function logUpload(job: string) {
+  return {
+    if:
+      job === "check"
+        ? "failure()"
+        : "failure() && steps.consumer_result.outcome == 'failure'",
+    uses: "actions/upload-artifact@v4",
+    with: {
+      name: `operational-logs-${job}-\${{ matrix.os }}`,
+      path: "${{ env.SECANT_LOG_DIR }}",
+      "retention-days": 30,
+      "if-no-files-found": "ignore",
+    },
+  };
+}
+
 export function validWorkflow(): Record<string, unknown> {
   return {
     on: { push: null, pull_request: null, workflow_dispatch: null },
     jobs: {
       check: {
         "runs-on": "ubuntu-latest",
-        steps: [{ run: "bun run check" }],
+        steps: [logSetup(), { run: "bun run check" }, logUpload("check")],
       },
       build: {
         "runs-on": "ubuntu-latest",
@@ -41,7 +66,20 @@ export function validWorkflow(): Record<string, unknown> {
         "runs-on": "ubuntu-latest",
         steps: [
           { uses: "actions/download-artifact@v4" },
-          { run: "bun scripts/package-smoke.ts dist/secant-linux-x64" },
+          logSetup(),
+          {
+            id: "compiled_binary_smoke",
+            "continue-on-error": true,
+            run: "bun scripts/package-smoke.ts dist/secant-linux-x64",
+          },
+          {
+            name: "Require every consumer scenario to succeed",
+            id: "consumer_result",
+            if: "always()",
+            shell: "bash",
+            run: "test '${{ steps.compiled_binary_smoke.outcome }}' = success",
+          },
+          logUpload("smoke"),
         ],
       },
       "release-approval": {

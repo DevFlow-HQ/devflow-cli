@@ -491,3 +491,168 @@ test("promotion needs GitHub contents write permission for release assets", () =
     reports(checkReleasePromotion(workflow), "release/promote-permissions"),
   );
 });
+
+test("a gated job without its operational-log upload is rejected", () => {
+  const workflow = validWorkflow();
+  for (const name of ["check", "smoke"]) {
+    const job = jobsToEdit(workflow)[name]!;
+    job.steps = stepsToEdit(job).filter(
+      (step) => step.uses !== "actions/upload-artifact@v4",
+    );
+  }
+  assert.deepEqual(
+    checkValidationWorkflow(workflow).map((finding) => finding.rule),
+    ["release/log-upload-shape", "release/log-upload-shape"],
+  );
+});
+
+test("a success or unconditional log-upload trigger is rejected", () => {
+  for (const name of ["check", "smoke"]) {
+    for (const trigger of [
+      undefined,
+      "success()",
+      "always()",
+      "!failure()",
+      "failure() || success()",
+      "failure() && steps.wrong.outcome == 'failure'",
+    ]) {
+      const workflow = validWorkflow();
+      const upload = stepsToEdit(jobsToEdit(workflow)[name]!).at(-1)!;
+      upload.if = trigger;
+      assert.deepEqual(
+        checkValidationWorkflow(workflow).map((finding) => finding.rule),
+        ["release/log-upload-trigger"],
+      );
+    }
+  }
+});
+
+test("logs must be configured outside test homes before any script runs", () => {
+  for (const name of ["check", "smoke"]) {
+    const workflow = validWorkflow();
+    const job = jobsToEdit(workflow)[name]!;
+    job.steps = stepsToEdit(job).filter(
+      (step) => step.name !== "Configure operational logs",
+    );
+    assert.deepEqual(
+      checkValidationWorkflow(workflow).map((finding) => finding.rule),
+      ["release/log-directory"],
+    );
+  }
+});
+
+test("each upload pins retention, artifact identity, path, action version, and final position", () => {
+  const cases = [
+    { "retention-days": undefined },
+    { "retention-days": 29 },
+    { "retention-days": 31 },
+    { name: "operational-logs" },
+    { name: "operational-logs-${{ matrix.os }}" },
+    { path: "${{ runner.temp }}/secant-tests" },
+    { "if-no-files-found": "error" },
+  ];
+  for (const name of ["check", "smoke"]) {
+    for (const edit of cases) {
+      const workflow = validWorkflow();
+      const upload = stepsToEdit(jobsToEdit(workflow)[name]!).at(-1)!;
+      Object.assign(upload.with as Record<string, unknown>, edit);
+      assert.deepEqual(
+        checkValidationWorkflow(workflow).map((finding) => finding.rule),
+        ["release/log-upload-shape"],
+      );
+    }
+    for (const change of ["version", "position", "duplicate"]) {
+      const workflow = validWorkflow();
+      const steps = stepsToEdit(jobsToEdit(workflow)[name]!);
+      const upload = steps.at(-1)!;
+      if (change === "version") upload.uses = "actions/upload-artifact@v7";
+      if (change === "position") steps.unshift(steps.pop()!);
+      if (change === "duplicate") steps.unshift({ ...upload });
+      assert.ok(
+        reports(checkValidationWorkflow(workflow), "release/log-upload-shape", {
+          job: name,
+        }),
+      );
+    }
+  }
+});
+
+test("the consumer upload requires its always-run blocking aggregation", () => {
+  for (const edit of [
+    { id: undefined },
+    { id: "wrong" },
+    { name: "some unrelated failure" },
+    { if: "success()" },
+    { "continue-on-error": true },
+  ]) {
+    const workflow = validWorkflow();
+    const aggregation = stepsToEdit(jobsToEdit(workflow).smoke).at(-2)!;
+    Object.assign(aggregation, edit);
+    assert.deepEqual(
+      checkValidationWorkflow(workflow).map((finding) => finding.rule),
+      ["release/log-upload-trigger"],
+    );
+  }
+  const workflow = validWorkflow();
+  stepsToEdit(jobsToEdit(workflow).smoke).at(-1)!.if = "failure()";
+  assert.deepEqual(
+    checkValidationWorkflow(workflow).map((finding) => finding.rule),
+    ["release/log-upload-trigger"],
+  );
+});
+
+test("wrapped failure expressions preserve the upload policy", () => {
+  const workflow = validWorkflow();
+  for (const name of ["check", "smoke"]) {
+    const steps = stepsToEdit(jobsToEdit(workflow)[name]!);
+    const upload = steps.at(-1)!;
+    upload.if = `\u0024{{ ${upload.if} }}`;
+    if (name !== "check") steps.at(-2)!.if = "${{ always() }}";
+  }
+  assert.deepEqual(checkValidationWorkflow(workflow), []);
+});
+
+test("a log-directory setup cannot be late, gated, overridden, or inside a test home", () => {
+  for (const name of ["check", "smoke"]) {
+    for (const change of [
+      "late",
+      "gated",
+      "continued",
+      "folder",
+      "shell",
+      "write",
+      "job-env",
+      "step-env",
+      "workflow-env",
+    ]) {
+      const workflow = validWorkflow();
+      const job = jobsToEdit(workflow)[name]!;
+      const steps = stepsToEdit(job);
+      const index = steps.findIndex(
+        (step) => step.name === "Configure operational logs",
+      );
+      const setup = steps[index]!;
+      if (change === "late") {
+        steps.splice(index, 1);
+        steps.splice(index + 1, 0, setup);
+      }
+      if (change === "gated") setup.if = "success()";
+      if (change === "continued") setup["continue-on-error"] = true;
+      if (change === "folder")
+        setup.env = { SECANT_LOG_DIR: "${{ runner.temp }}/secant-tests/logs" };
+      if (change === "shell") setup.shell = "pwsh";
+      if (change === "write") setup.run = "echo $SECANT_LOG_DIR";
+      if (change === "job-env") job.env = { SECANT_LOG_DIR: "test-home/logs" };
+      if (change === "workflow-env")
+        workflow.env = { SECANT_LOG_DIR: "test-home/logs" };
+      if (change === "step-env")
+        steps.at(-1)!.env = { SECANT_LOG_DIR: "test-home/logs" };
+      assert.deepEqual(
+        checkValidationWorkflow(workflow).map((finding) => finding.rule),
+        change === "workflow-env"
+          ? ["release/log-directory", "release/log-directory"]
+          : ["release/log-directory"],
+      );
+    }
+  }
+});

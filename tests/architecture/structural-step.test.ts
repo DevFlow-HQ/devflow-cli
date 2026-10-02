@@ -1544,3 +1544,38 @@ test("every catalogued rule has a pinned fixture above", async () => {
   );
   assert.deepEqual(unpinned, []);
 });
+
+test("release/log-directory", async () => {
+  assert.equal(
+    await releaseReport("release/log-directory", (_workflow, jobs) => {
+      jobs.check.steps = stepsToEdit(jobs.check).filter(
+        (step) => step.name !== "Configure operational logs",
+      );
+    }),
+    `${WORKFLOW}  release/log-directory  job check does not persist its runner-temp operational-log folder before scripts run\n` +
+      "fix: start job check's scripts with a bash step that writes SECANT_LOG_DIR from runner.temp/secant-operational-logs to GITHUB_ENV, outside test homes and without later overrides\n" +
+      "see: docs/agents/release-workflow.md#operational-log-delivery",
+  );
+});
+
+test("release/log-upload-shape", async () => {
+  assert.equal(
+    await releaseReport("release/log-upload-shape", (_workflow, jobs) => {
+      stepsToEdit(jobs.smoke).pop();
+    }),
+    `${WORKFLOW}  release/log-upload-shape  job smoke lacks one final operational-log upload with the per-job, per-OS name, log-folder path, and 30-day retention\n` +
+      "fix: end job smoke with one actions/upload-artifact@v4 step named operational-logs-smoke-${{ matrix.os }}, reading env.SECANT_LOG_DIR, with retention-days: 30 and non-failing handling of absent files\n" +
+      "see: docs/agents/release-workflow.md#operational-log-delivery",
+  );
+});
+
+test("release/log-upload-trigger", async () => {
+  assert.equal(
+    await releaseReport("release/log-upload-trigger", (_workflow, jobs) => {
+      stepsToEdit(jobs.smoke).at(-1)!.if = "always()";
+    }),
+    `${WORKFLOW}  release/log-upload-trigger  job smoke does not gate its log upload on failure() && steps.consumer_result.outcome == 'failure' after the blocking result\n` +
+      "fix: set the final log-upload step in job smoke to if: failure() && steps.consumer_result.outcome == 'failure'; on a consumer job, keep the preceding always-run aggregation as id: consumer_result without continue-on-error\n" +
+      "see: docs/agents/release-workflow.md#operational-log-delivery",
+  );
+});

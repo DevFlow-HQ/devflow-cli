@@ -647,6 +647,27 @@ export const rules = {
         `add a step to job ${promote} that runs ${script}`,
     },
   ),
+  "release/log-directory": rule<{ job: string }>({
+    see: "docs/agents/release-workflow.md#operational-log-delivery",
+    problem: ({ job }) =>
+      `job ${job} does not persist its runner-temp operational-log folder before scripts run`,
+    fix: ({ job }) =>
+      `start job ${job}'s scripts with a bash step that writes SECANT_LOG_DIR from runner.temp/secant-operational-logs to GITHUB_ENV, outside test homes and without later overrides`,
+  }),
+  "release/log-upload-trigger": rule<{ job: string; trigger: string }>({
+    see: "docs/agents/release-workflow.md#operational-log-delivery",
+    problem: ({ job, trigger }) =>
+      `job ${job} does not gate its log upload on ${trigger} after the blocking result`,
+    fix: ({ job, trigger }) =>
+      `set the final log-upload step in job ${job} to if: ${trigger}; on a consumer job, keep the preceding always-run aggregation as id: consumer_result without continue-on-error`,
+  }),
+  "release/log-upload-shape": rule<{ job: string }>({
+    see: "docs/agents/release-workflow.md#operational-log-delivery",
+    problem: ({ job }) =>
+      `job ${job} lacks one final operational-log upload with the per-job, per-OS name, log-folder path, and 30-day retention`,
+    fix: ({ job }) =>
+      `end job ${job} with one actions/upload-artifact@v4 step named operational-logs-${job}-\${{ matrix.os }}, reading env.SECANT_LOG_DIR, with retention-days: 30 and non-failing handling of absent files`,
+  }),
   "release/promote-download": rule<{ promote: string; artifact: string }>({
     see: RELEASE_PROMOTION,
     problem: ({ promote, artifact }) =>
