@@ -100,8 +100,23 @@ export type ApplicationEvent =
     };
 
 /** Receives each event synchronously: a start before the work it names, a
- *  settlement or result once that work is done. Never throws. */
+ *  settlement or result once that work is done. The Module guards delivery, so
+ *  an observer never throws into its caller. */
 export type ApplicationObserver = (event: ApplicationEvent) => void;
 
 /** The default when a caller wires no observer: reports nowhere. */
-export const NO_APPLICATION_OBSERVER: ApplicationObserver = () => {};
+const NO_APPLICATION_OBSERVER: ApplicationObserver = () => {};
+
+/** Resolve and guard the observer once for all Application event delivery. */
+export function guardedApplicationObserver(
+  observer: ApplicationObserver | undefined,
+): ApplicationObserver {
+  if (observer === undefined) return NO_APPLICATION_OBSERVER;
+  return (event) => {
+    try {
+      observer(event);
+    } catch {
+      // Observation never changes an Application outcome.
+    }
+  };
+}

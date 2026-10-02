@@ -18,7 +18,8 @@ import {
   writeCommandBundle,
 } from "../helpers/commandBundle.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
+import { createFake } from "../harness/fake-adapter.js";
 import {
   QUALIFICATION_PROFILE,
   qualificationAdapter,
@@ -602,3 +603,204 @@ test("both roots ensure the Shipped Bundles at startup, and a later startup chan
   assert.deepEqual(bare.startupNotices, []);
   assert.equal(bare.catalog.countInstalledBundles(), 0);
 });
+
+for (const throwingRecord of [
+  "qualification-",
+  "harness-cleanup",
+  "every",
+] as const) {
+  test(`throwing ${throwingRecord} records leave Projection opening and qualification successful`, async (t) => {
+    const trace: string[] = [];
+    const wired = wireApplication(
+      {
+        secantHome: makeTempDir("secant-wire-throw-home-"),
+        launchCwd: makeTempDir("secant-wire-throw-ws-"),
+        harnessAdapter: qualificationAdapter(trace),
+        process: wiringProcess(),
+      },
+      {
+        record(record) {
+          if (
+            throwingRecord === "every" ||
+            record.event.startsWith(throwingRecord)
+          )
+            throw new Error("observer failed");
+        },
+      },
+    );
+    t.after(() => {
+      wired.runGroup.close();
+      wired.catalog.close();
+    });
+    const opened = wired.projectionPort.openProjection({
+      family: "harness-catalog",
+      focus: { id: "claude-code" },
+    });
+    t.after(() => opened.close());
+    const update = await opened.updates[Symbol.asyncIterator]().next();
+    assert.ok(update.value?.kind === "durable");
+    assert.ok(update.value.snapshot.result.found);
+    assert.equal(
+      update.value.snapshot.result.harness.qualification.state,
+      "qualified",
+    );
+    assert.deepEqual(
+      trace.map((entry) => entry.split(":", 1)[0]),
+      ["prepare", "close"],
+    );
+  });
+}
+
+async function appliedObserverOperation(
+  wired: Wiring,
+  submission: Parameters<Wiring["projectionPort"]["submit"]>[0],
+): Promise<void> {
+  assert.ok(wired.projectionPort.submit(submission).admitted);
+  const outcome = await awaitSettled(
+    wired.projectionPort,
+    submission.operationId,
+  );
+  assert.equal(outcome.status, "applied");
+}
+
+function readObserverRun(wired: Wiring, runId: string) {
+  const opened = wired.projectionPort.openProjection({ family: "run", runId });
+  try {
+    assert.ok(opened.snapshot.result.found);
+    return opened.snapshot.result.run;
+  } finally {
+    opened.close();
+  }
+}
+
+for (const kind of ["agent", "interactive-agent"] as const) {
+  test(`throwing every log record preserves an ${kind} Run, its Turn result, and cleanup`, async (t) => {
+    const workspace = makeTempDir("secant-throw-run-ws-");
+    const bundleId = "dev.secant.observer";
+    const folder = makeTempDir("secant-throw-bundle-");
+    writeFileSync(join(folder, "work.md"), "Do the work.");
+    writeFileSync(
+      join(folder, "manifest.json"),
+      JSON.stringify({
+        formatVersion: 1,
+        bundle: {
+          id: bundleId,
+          version: "1.0.0",
+          name: "Observer",
+          description: "Observer failure regression.",
+        },
+        platforms: ["windows", "macos", "linux"],
+        inputs: {},
+        assets: [{ path: "work.md", kind: "prompt" }],
+        routing: [
+          {
+            id: "draft",
+            kind,
+            retry: 0,
+            session: "planning",
+            prompt: { asset: "work.md" },
+          },
+        ],
+      }),
+    );
+    const wired = wireApplication(
+      {
+        secantHome: makeTempDir("secant-throw-run-home-"),
+        supportsInteractiveTurns: true,
+        launchCwd: workspace,
+        process: wiringProcess(),
+        harnessAdapter: createFake({
+          profile: QUALIFICATION_PROFILE,
+          turns: [
+            {
+              result: {
+                kind: "completed",
+                detail: {
+                  finalContent: "done",
+                  effectiveModel: { known: false },
+                  session: {
+                    state: "detached",
+                    coordinate: { opaque: "fake-session" },
+                  },
+                  usage: {
+                    estimate: true,
+                    summary: "input 1, output 2 tokens",
+                  },
+                },
+              },
+            },
+          ],
+        })(),
+      },
+      {
+        record() {
+          throw new Error("observer failed");
+        },
+      },
+    );
+    t.after(async () => {
+      await wired.shutdown();
+      wired.runGroup.close();
+      wired.catalog.close();
+    });
+    const built = wired.bundleManagement.build(folder, {
+      noInstall: false,
+    });
+    assert.ok(built.ok);
+    await appliedObserverOperation(wired, {
+      operationId: "op-approve",
+      operation: "approve-workspace",
+      input: { path: workspace },
+    });
+    const admission = wired.projectionPort.submit({
+      operationId: "op-launch",
+      operation: "launch-run",
+      input: {
+        bundle: { id: bundleId },
+        launchInputs: {},
+        trustDigest: built.report.digest,
+        harness: "claude-code",
+      },
+    });
+    assert.ok(admission.admitted, JSON.stringify(admission));
+    assert.ok(admission.runId);
+    const runId = admission.runId;
+    const outcome = await awaitSettled(wired.projectionPort, "op-launch");
+    assert.equal(outcome.status, "applied");
+    if (kind === "interactive-agent") {
+      assert.equal(readObserverRun(wired, runId).state, "blocked");
+      await appliedObserverOperation(wired, {
+        operationId: "op-turn",
+        operation: "send-interactive-turn",
+        input: { runId, stepId: "draft", text: "do the work" },
+      });
+      assert.equal(
+        (await awaitRunRest(wired.projectionPort, runId)).state,
+        "blocked",
+      );
+      await appliedObserverOperation(wired, {
+        operationId: "op-end",
+        operation: "end-interactive-step",
+        input: { runId, stepId: "draft" },
+      });
+    }
+    const run = readObserverRun(wired, runId);
+    assert.equal(run.state, "succeeded");
+    assert.deepEqual(
+      run.timeline
+        .filter(
+          (event) =>
+            event.event ===
+            (kind === "agent" ? "attempt-settled" : "interactive-step-ended"),
+        )
+        .map((event) => event.detail),
+      ["succeeded"],
+    );
+    assert.deepEqual(
+      run.timeline
+        .filter((event) => event.event === "turn-settled")
+        .map((event) => event.detail),
+      ["completed"],
+    );
+  });
+}

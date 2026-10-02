@@ -33,6 +33,7 @@ import type {
 } from "../../harness/harness.js";
 import type { ExecutionObserver, TurnFailureFacts } from "./execution.js";
 import { observedWrite } from "./store-write.js";
+import { guardedExecutionObserver } from "./observer.js";
 
 // --- Live request-answer channel (#117) ------------------------------------
 //
@@ -580,7 +581,7 @@ export async function driveInteractiveTurn(
     attemptId: request.attemptId,
     turnId: request.turnId,
     input: request.text,
-    observe: request.observe ?? (() => {}),
+    observe: guardedExecutionObserver(request.observe),
     // The Harness stays held for the interactive Step. Record detached after each
     // Turn so a later reopen or following Agent Step can resume the Session (#122).
     detachAfterTurn: true,

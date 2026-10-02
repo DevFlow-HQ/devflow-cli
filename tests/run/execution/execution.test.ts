@@ -1321,3 +1321,86 @@ test("End in a later iteration replays earlier iterations without reading the mi
   assert.equal(fake.calls("check"), 2);
   assert.equal(fake.calls("after"), 2);
 });
+
+for (const throwingEvent of [
+  "every",
+  "store-write-end",
+  "attempt-end",
+  "run-end",
+] as const) {
+  test(`a throwing ${throwingEvent} observer cannot reject a successful walk or strand its first Store write`, async (t) => {
+    const { owner, state } = ownerForFreshRun(t);
+    const report = await run(
+      [
+        commandStep("one", {
+          executable: NODE,
+          arguments: ["-e", "console.log('done')"],
+        }),
+      ],
+      owner,
+      {
+        observe: (event) => {
+          if (throwingEvent === "every" || event.kind === throwingEvent)
+            throw new Error("observer failed");
+        },
+      },
+    );
+    assert.deepEqual(report, { outcome: "succeeded" });
+    assert.equal(state(), "succeeded");
+    assert.deepEqual(
+      owner.attemptLog().map((entry) => entry.outcome),
+      ["succeeded"],
+    );
+  });
+}
+
+test("a throwing observer preserves a failed Routing's committed Attempt", async (t) => {
+  const { owner, state } = ownerForFreshRun(t);
+  const report = await run(
+    [
+      commandStep(
+        "missing",
+        {
+          executable: "secant-no-such-binary-xyz",
+          arguments: [],
+        },
+        { retry: 0 },
+      ),
+    ],
+    owner,
+    {
+      observe: () => {
+        throw new Error("observer failed");
+      },
+    },
+  );
+  assert.deepEqual(report, { outcome: "failed" });
+  assert.equal(state(), "failed");
+  assert.deepEqual(
+    owner.attemptLog().map((entry) => entry.outcome),
+    ["failed"],
+  );
+});
+
+test("a throwing observer preserves the original walk error during unwind", async (t) => {
+  const { owner } = ownerForFreshRun(t);
+  const controller = new AbortController();
+  const pending = run(
+    [
+      commandStep("cancelme", {
+        executable: NODE,
+        arguments: ["-e", "setTimeout(()=>{},1e9)"],
+      }),
+    ],
+    owner,
+    {
+      cancelSignal: controller.signal,
+      observe: () => {
+        throw new Error("observer failed");
+      },
+    },
+  );
+  controller.abort();
+  await assert.rejects(pending, RunCancelledError);
+  assert.equal(owner.attemptLog().length, 0);
+});

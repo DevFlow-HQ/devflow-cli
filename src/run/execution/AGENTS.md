@@ -31,8 +31,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   marked `endsStage`, so the walk exits the group once and a trailing group rests the Run `succeeded` as human-declared completion, never a second settle (#218).
 - Each Repeat iteration of an Interactive Step is its own Attempt (`encodeAttemptId` carries the iteration) with its own Session (`interactiveSession` scopes the
   name to that Attempt id), so Continue always opens a fresh conversation; `interactiveStepTarget` finds the resting iteration from the log (#216).
-- `observe` reports the Run, Attempt, and Turn lifecycle by id only (#320): each start ends in `-end`, an `attempt-pause` awaiting a human, or an
-  `-unwind` when the walk throws, which claims no outcome. Human Turns take it on `InteractiveTurnRequest`; the Application reports the Attempts it settles.
+- `observe` is guarded once at each entry (`executeRouting` and `driveInteractiveTurn`) by the shared `observer.ts` rule (#330): an observer never
+  throws into its caller or changes a Run, Attempt, or Turn outcome. It reports the Run, Attempt, and Turn lifecycle by id only (#320):
+  each start ends in `-end`, an `attempt-pause` awaiting a human, or an `-unwind` when the walk throws, which claims no outcome.
+  Human Turns take it on `InteractiveTurnRequest`; the Application reports the Attempts it settles.
 - Execution's own Run Store writes report `store-write-start`/`-end` through `observedWrite` (`store-write.ts`, #325): the state write, Attempt publish,
   pending gate, Materialization conflict, Turn admission, and Turn settlement, by kind and ids only. `appendTurnEvent` runs per transcript item and
   reports nothing; the Run Store Interface takes no observer.

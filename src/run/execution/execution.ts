@@ -44,6 +44,7 @@ import {
   verifyMaterializations,
 } from "./materialization.js";
 import { observedWrite } from "./store-write.js";
+import { guardedExecutionObserver } from "./observer.js";
 
 export {
   driveInteractiveTurn,
@@ -218,9 +219,9 @@ export type TurnFailureFacts = Pick<
   "phase" | "category" | "possibleEffects" | "nativeCode" | "cause"
 >;
 
+/** Synchronous lifecycle delivery is guarded by the Module: an observer never
+ *  throws into its caller or changes the execution outcome. */
 export type ExecutionObserver = (event: ExecutionEvent) => void;
-
-const IGNORE: ExecutionObserver = () => {};
 
 /** How a Run came to rest. `blocked` is a durable pause awaiting a human: an
  *  authored Human Gate, an interactive-agent Step, or a Review checkpoint. The
@@ -395,7 +396,7 @@ export async function executeRouting(
 ): Promise<RunReport> {
   // Every walk is one Run start and settlement: a launch, a resume, a gate
   // answer, and an End Step each re-walk the Routing.
-  const observe = deps.observe ?? IGNORE;
+  const observe = guardedExecutionObserver(deps.observe);
   const runId = deps.owner.runId;
   observe({ kind: "run-start", runId });
   let report: RunReport;

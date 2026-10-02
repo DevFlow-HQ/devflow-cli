@@ -36,7 +36,7 @@ import {
 import { createHarnessCatalog } from "./harness-catalog.js";
 import { createLaunchPreparation } from "./launch-preparation.js";
 import {
-  NO_APPLICATION_OBSERVER,
+  guardedApplicationObserver,
   problemCodes,
   type ApplicationObserver,
 } from "./observer.js";
@@ -388,7 +388,7 @@ interface TrackedOperation {
 
 export function createApplication(deps: ApplicationDependencies): Application {
   const { catalog, runGroup, runExecution, prepareRunInteractiveStep } = deps;
-  const observe = deps.observe ?? NO_APPLICATION_OBSERVER;
+  const observe = guardedApplicationObserver(deps.observe);
   const process = deps.process;
   const launchWorkspacePath = canonicalizeWorkspacePath(
     deps.launchWorkspacePath,

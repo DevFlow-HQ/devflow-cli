@@ -78,13 +78,22 @@ export function recordingHarness(
   harness: SelectedHarnessId,
   log: Recorder,
 ): HarnessAdapter {
+  const recorder: Recorder = {
+    record(record) {
+      try {
+        log.record(record);
+      } catch {
+        // Recording evidence never changes a Harness result or close report.
+      }
+    },
+  };
   return {
     async prepare(options) {
       const prepared = await adapter.prepare(options);
       if (!prepared.ok) return prepared;
       return {
         ok: true,
-        harness: recordingPrepared(prepared.harness, harness, log),
+        harness: recordingPrepared(prepared.harness, harness, recorder),
       };
     },
   };
