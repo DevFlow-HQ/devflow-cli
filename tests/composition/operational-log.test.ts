@@ -16,20 +16,21 @@ import {
   launchTui,
   withClients,
 } from "../../src/composition/main.js";
-import {
-  runHeadless,
-  runHeadlessCli,
-  type HeadlessIO,
-} from "../../src/headless/headless.js";
-import type {
-  HarnessAdapter,
-  HarnessProfile,
-} from "../../src/harness/harness.js";
+import { runHeadless, runHeadlessCli } from "../../src/headless/headless.js";
+import type { HarnessProfile } from "../../src/harness/harness.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import {
+  assertBase,
+  home,
+  io,
+  readLog,
+  steppingClock,
+  WALL,
+  type Home,
+} from "./log-sink.js";
 
 // The operational log (#318) through both client entries, read back from the
 // JSONL each Secant invocation writes. Every test reaches the sink through the
@@ -37,95 +38,6 @@ import { makeTempDir } from "../helpers/tempDir.js";
 // sets SECANT_LOG_DIR; the compiled-binary smoke owns the environment names.
 // The Process double has no script and the Harness doubles refuse to prepare, so
 // any spawn or Harness launch would throw.
-
-// The injected clock: a fixed wall clock, and a monotonic reading that advances
-// 125 ms per read, so elapsed time is exact.
-const WALL = new Date("2026-10-02T09:08:07.006Z");
-function steppingClock() {
-  let reading = 1000;
-  return {
-    now: () => WALL,
-    monotonic: () => (reading += 125),
-  };
-}
-
-const unpreparedHarness: HarnessAdapter = {
-  prepare() {
-    throw new Error("no Harness is prepared in these tests");
-  },
-};
-
-interface Home {
-  readonly folder: string;
-  readonly notices: string[];
-  readonly overrides: Parameters<typeof withClients>[1] & {};
-}
-
-function home(folder?: string): Home {
-  const logFolder = folder ?? join(makeTempDir("secant-oplog-"), "logs");
-  const notices: string[] = [];
-  return {
-    folder: logFolder,
-    notices,
-    overrides: {
-      secantHome: makeTempDir("secant-oplog-home-"),
-      launchCwd: makeTempDir("secant-oplog-ws-"),
-      engineVersion: "9.8.7",
-      hostPlatform: "linux",
-      process: createFakeProcess({}),
-      harnessAdapter: unpreparedHarness,
-      codexHarnessAdapter: unpreparedHarness,
-      logSink: {
-        folder: logFolder,
-        clock: steppingClock(),
-        stderr: (text) => notices.push(text),
-      },
-    },
-  };
-}
-
-function io(): { io: HeadlessIO; out: string[]; err: string[] } {
-  const out: string[] = [];
-  const err: string[] = [];
-  return {
-    io: {
-      out: (text) => out.push(text),
-      err: (text) => err.push(text),
-      cwd: () => process.cwd(),
-    },
-    out,
-    err,
-  };
-}
-
-/** The one file in the folder, its name, raw text, and parsed records. */
-function readLog(folder: string) {
-  const names = readdirSync(folder);
-  assert.equal(names.length, 1, `one file per Secant invocation: ${names}`);
-  const name = names[0]!;
-  const text = readFileSync(join(folder, name), "utf8");
-  assert.ok(text.endsWith("\n"));
-  const records = text
-    .trimEnd()
-    .split("\n")
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-  return { name, path: join(folder, name), text, records };
-}
-
-const INVOCATION_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-/** Every record carries exactly the base fields and one shared Secant invocation id. */
-function assertBase(records: readonly Record<string, unknown>[]): void {
-  const id = records[0]!.invocationId;
-  assert.match(String(id), INVOCATION_ID);
-  for (const record of records) {
-    assert.equal(record.invocationId, id);
-    assert.equal(record.time, WALL.toISOString());
-    assert.equal("hostname" in record, false);
-    assert.equal("msg" in record, false);
-  }
-}
 
 test("a headless Secant invocation writes its start and end records to one private JSONL file", async () => {
   const { folder, overrides, notices } = home();

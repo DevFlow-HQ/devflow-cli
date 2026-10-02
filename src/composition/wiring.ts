@@ -46,6 +46,7 @@ import {
   type HarnessAdapterOverride,
 } from "./harness-registry.js";
 import type { OperationalLog } from "./operational-log.js";
+import { applicationObserver } from "./application-log.js";
 import { runLifecycleObserver } from "./run-lifecycle-log.js";
 import {
   createProcessAdapter,
@@ -206,8 +207,8 @@ function shippedBundleFiles(dir: string): string[] {
  *  running engine version and host platform, handing it the raw launch cwd. The
  *  caller owns `catalog` and `runGroup` and must close both. `log` is the Secant
  *  invocation's operational log, which both client entries pass; a direct caller
- *  passes none, and neither the Run lifecycle nor any Harness record is then
- *  reported. */
+ *  passes none, and neither the Application's facts, the Run lifecycle, nor any
+ *  Harness record is then reported. */
 export function wireApplication(
   overrides: WiringOverrides = {},
   log?: Pick<OperationalLog, "record">,
@@ -278,7 +279,10 @@ export function wireApplication(
           harnessRegistry,
           observe,
         ),
-        ...(observe !== undefined ? { observe } : {}),
+        // Pre-Run Application facts (#319) beside the Attempt outcomes it settles.
+        ...(log !== undefined && observe !== undefined
+          ? { observe: applicationObserver(log, logClock, observe) }
+          : {}),
       });
       // Every startup, in both roots, before either client reads (ADR 0029). A
       // failure is a notice, never a thrown startup error.

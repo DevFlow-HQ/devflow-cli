@@ -23,6 +23,7 @@ import type {
   ResourceRead,
 } from "./projection-port.js";
 import type { UpdateStream } from "./update-stream.js";
+import type { ApplicationEvent, ApplicationObserver } from "./observer.js";
 
 import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 
@@ -51,6 +52,7 @@ export function createHarnessCatalog(
   registrations: readonly ApplicationHarnessRegistration[],
   now: () => Date,
   subscriptions: Pick<SubscriptionLifecycle, "open">,
+  observe: ApplicationObserver,
 ): HarnessCatalog {
   const held = new Map<string, HeldQualification>();
   const qualifications = new Map<string, Promise<HeldQualification>>();
@@ -75,6 +77,9 @@ export function createHarnessCatalog(
     const existing = qualifications.get(registration.choice.id);
     if (existing !== undefined) return existing;
 
+    const harness = registration.choice.id;
+    // Written before the qualification spawns, so a hang names this stage.
+    observe({ kind: "qualification-start", harness });
     const pending = registration
       .qualify()
       .catch((error): ApplicationHarnessQualification => ({
@@ -93,6 +98,7 @@ export function createHarnessCatalog(
       .then((result) => {
         const qualification = { checkedAt: now().toISOString(), result };
         held.set(registration.choice.id, qualification);
+        observe(qualificationResult(harness, result));
         for (const observer of listObservers) {
           observer.push({ kind: "durable", snapshot: listSnapshot() });
         }
@@ -302,19 +308,42 @@ function discoveryView(
   };
 }
 
+/** The result event: the Qualification state the Projection derives, plus a
+ *  failure's typed fields. Diagnostics and retry evidence stay behind. */
+function qualificationResult(
+  harness: string,
+  result: ApplicationHarnessQualification,
+): ApplicationEvent {
+  if (result.ok) {
+    return {
+      kind: "qualification-result",
+      harness,
+      qualification: qualifiedState(result.profile),
+    };
+  }
+  const { phase, category, possibleEffects, nativeCode, cause } =
+    result.failure;
+  return {
+    kind: "qualification-result",
+    harness,
+    qualification: "not-ready",
+    failure: {
+      phase,
+      category,
+      possibleEffects,
+      ...(nativeCode !== undefined ? { nativeCode } : {}),
+      ...(cause !== undefined ? { cause } : {}),
+    },
+  };
+}
+
 function qualificationView(
   held: HeldQualification | undefined,
 ): HarnessQualificationView {
   if (held === undefined) return { state: "not-checked" };
   if (!held.result.ok) return { state: "not-ready", checkedAt: held.checkedAt };
-  const capabilities = capabilitiesOf(held.result.profile);
-  const state = capabilities.every(
-    (capability) => capability.state === "available",
-  )
-    ? "qualified"
-    : "qualified-with-limits";
   return {
-    state,
+    state: qualifiedState(held.result.profile),
     observation: {
       executable: held.result.profile.executable,
       executableVersion: held.result.profile.executableVersion,
@@ -322,6 +351,16 @@ function qualificationView(
       checkedAt: held.checkedAt,
     },
   };
+}
+
+function qualifiedState(
+  profile: HarnessProfile,
+): "qualified" | "qualified-with-limits" {
+  return capabilitiesOf(profile).every(
+    (capability) => capability.state === "available",
+  )
+    ? "qualified"
+    : "qualified-with-limits";
 }
 
 const CAPABILITY_DEFINITIONS = [

@@ -2570,12 +2570,31 @@ await withCleanup(
         cwd: workspaceDirectory,
         env: envFor("headless"),
       });
+      // The approval is an Operation: its admission and outcome share one id (#319).
+      const approval = recordsIn("headless");
       expectLifecycle(
-        recordsIn("headless"),
+        approval,
         "headless",
-        ["invocation-start", "invocation-end"],
+        [
+          "invocation-start",
+          "operation-admission",
+          "operation-outcome",
+          "invocation-end",
+        ],
         0,
       );
+      const [, admitted, applied] = approval.records;
+      if (
+        admitted!.operation !== "approve-workspace" ||
+        admitted!.status !== "admitted" ||
+        applied!.status !== "applied" ||
+        typeof admitted!.operationId !== "string" ||
+        applied!.operationId !== admitted!.operationId
+      ) {
+        throw new Error(
+          `Unexpected approval Operation records: ${approval.text}`,
+        );
+      }
       const refused = spawnSync(binary, ["run", "show", secret], {
         cwd: workspaceDirectory,
         encoding: "utf8",

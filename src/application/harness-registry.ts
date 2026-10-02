@@ -41,6 +41,9 @@ export interface ApplicationHarnessQualificationFailure {
   readonly phase: FailurePhase;
   readonly category: string;
   readonly possibleEffects: EffectScope;
+  /** The native exit or error code, for the operational log; the client
+   *  Projection omits it. */
+  readonly nativeCode?: string;
   readonly retryEvidence?: string;
   readonly diagnostics?: string;
   /** Retained inside Application/composition; the client Projection omits it. */

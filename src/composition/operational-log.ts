@@ -45,13 +45,17 @@ export interface OperationalRecord {
     | number
     | boolean
     | SafeCause
+    | readonly string[]
     | readonly Readonly<Record<string, string>>[];
 }
 
 /** Each event's level, mapped here so no observer chooses one: a failed Harness
- *  phase and an unclean Harness cleanup are warnings, every other record info. */
+ *  phase, an unclean Harness cleanup, and a not-ready Harness qualification are
+ *  warnings, every other record info. */
 function recordLevel(record: OperationalRecord): "info" | "warn" {
   switch (record.event) {
+    case "qualification-result":
+      return record.status === "not-ready" ? "warn" : "info";
     case "harness-phase-end":
       return record.status === "failed" ? "warn" : "info";
     case "harness-cleanup":

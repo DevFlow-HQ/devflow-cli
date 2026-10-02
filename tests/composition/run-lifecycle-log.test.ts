@@ -151,6 +151,21 @@ interface Logged {
 
 /** Run `body` as one headless Secant invocation over a fresh home, with the
  *  Bundle installed and the Workspace approved, then read its one log file. */
+// The Application's qualification, launch-preparation, Preflight, and Operation
+// records (#319), which `tests/composition/application-log.test.ts` asserts.
+const APPLICATION_EVENTS = new Set([
+  "qualification-start",
+  "qualification-result",
+  "launch-preparation-start",
+  "launch-preparation-settle",
+  "preflight-start",
+  "preflight-settle",
+  "model-check-start",
+  "model-check-settle",
+  "operation-admission",
+  "operation-outcome",
+]);
+
 async function invocation(
   t: TestContext,
   options: {
@@ -210,12 +225,14 @@ async function invocation(
     status,
     text,
     records,
-    // The Run, Attempt, and Turn lifecycle alone: the invocation records and the
-    // Harness's phase, cleanup, and usage records (#322) are asserted elsewhere.
+    // The Run, Attempt, and Turn lifecycle alone: the invocation records, the
+    // Harness's phase, cleanup, and usage records (#322), and the Application's
+    // pre-Run records (#319) are asserted elsewhere.
     lifecycle: records.filter(
       (record) =>
         !String(record.event).startsWith("invocation-") &&
-        !String(record.event).startsWith("harness-"),
+        !String(record.event).startsWith("harness-") &&
+        !APPLICATION_EVENTS.has(String(record.event)),
     ),
   };
 }

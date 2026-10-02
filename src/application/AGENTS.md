@@ -63,6 +63,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `submitLaunch` takes its first finding; the Projection collects all in launch order, each with a `correction` target. Composition-corruption is a single hard-stop `bundle`
   finding like missing/invalid bytes. The model check is assessment-only — the Projection qualifies the selected Harness (`harnessCatalog.qualify`, which spawns) only when the
   draft is otherwise ready and a model is requested; a direct `submitLaunch` skips it, so a bad model surfaces at `prepare`, not as a pre-create refusal.
+- The observer (`observer.ts`, #319) has a no-op default and never sees the logger. Every new Operation is admitted through `admit`, which reports the
+  admission before scheduling settlement, so the record precedes an inline outcome; `submit` reports only replays and refusals. An Operation stored any
+  other way is never logged as admitted. Events carry ids, kinds, Problem codes, and typed failure fields only — never input, Turn text, or Problem prose.
 - The executor's `appendTurnEvent`/`settleTurn` go through the raw owner and push no **durable** snapshot (only `admitTurn` pushes, above); the Turn's durable
   timeline, Session availability, and effective model surface on the next intercepted write (`publishAttempt`, or the interactive `blocked` write). The live lane is
   separate — Turn activity reaches an open client through the live overlay (#117, [run-control](../../docs/agents/run-control.md)), not through this durable write.

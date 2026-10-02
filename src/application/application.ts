@@ -16,7 +16,6 @@ import {
 } from "../workflow/workflow.js";
 import {
   interactiveStepTarget,
-  type ExecutionEvent,
   type RequestChannel,
   type RunReport,
   RUN_CANCEL_ABORT as CANCEL_ABORT,
@@ -36,6 +35,11 @@ import {
 } from "./bundle-catalog.js";
 import { createHarnessCatalog } from "./harness-catalog.js";
 import { createLaunchPreparation } from "./launch-preparation.js";
+import {
+  NO_APPLICATION_OBSERVER,
+  problemCodes,
+  type ApplicationObserver,
+} from "./observer.js";
 import type { BundleManagement } from "./bundle-management.js";
 import {
   createBundleManagement,
@@ -159,6 +163,7 @@ import type {
   RunHarnessPreparationFailure,
 } from "./harness-registry.js";
 import { type ProcessAdapter } from "../process/process.js";
+export type { ApplicationEvent, ApplicationObserver } from "./observer.js";
 export type {
   ApplicationHarnessQualification,
   ApplicationHarnessRegistration,
@@ -342,18 +347,13 @@ export interface ApplicationDependencies {
   /** Closed semantic Harness registry. Composition strips Adapter instances and
    * native discovery targets before handing these entries to Application. */
   readonly harnessRegistry?: readonly ApplicationHarnessRegistration[];
-  /** Where the lifecycle facts the Application owns are reported (#320): the
-   *  outcomes of the Step Attempts it settles, an answered authored gate and an
-   *  ended interactive Step. Composition fills it from the operational log; absent,
-   *  they are reported nowhere. */
+  /** Where the facts the Application owns are reported: Operation admission and
+   *  outcome, Harness qualification, launch preparation and Preflight (#319), and
+   *  the outcomes of the Step Attempts it settles, an answered authored gate and
+   *  an ended interactive Step (#320). Composition fills it from the operational
+   *  log; absent, they are reported nowhere. */
   readonly observe?: ApplicationObserver;
 }
-
-/** A lifecycle fact the Application reports: the same `attempt-end` Run execution
- *  reports for the Attempts it settles. */
-type ApplicationEvent = Extract<ExecutionEvent, { kind: "attempt-end" }>;
-
-type ApplicationObserver = (event: ApplicationEvent) => void;
 
 export interface Application {
   readonly projectionPort: ProjectionPort;
@@ -376,9 +376,19 @@ export interface Application {
 // before Preflight (A10).
 const launchInputMap = z.record(z.string(), z.string());
 
+/** One admitted Operation as `createApplication` tracks it. */
+interface TrackedOperation {
+  readonly operation: Submission["operation"];
+  readonly replayKey: string;
+  outcome: OperationOutcome;
+  readonly observers: Set<UpdateStream>;
+  readonly runId?: string;
+  readonly settle: () => OperationOutcome | Promise<OperationOutcome>;
+}
+
 export function createApplication(deps: ApplicationDependencies): Application {
   const { catalog, runGroup, runExecution, prepareRunInteractiveStep } = deps;
-  const observe = deps.observe ?? (() => {});
+  const observe = deps.observe ?? NO_APPLICATION_OBSERVER;
   const process = deps.process;
   const launchWorkspacePath = canonicalizeWorkspacePath(
     deps.launchWorkspacePath,
@@ -392,6 +402,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     deps.harnessRegistry ?? [],
     now,
     subscriptions,
+    observe,
   );
   const budgets = deps.bundleBudgets ?? DEFAULT_BUDGETS;
   // The launch-draft evaluator both `submitLaunch` (first failing check) and the
@@ -409,22 +420,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
     harnessRegistry: deps.harnessRegistry ?? [],
     launchWorkspacePath,
     qualify: (id) => harnessCatalog.qualify(id),
+    observe,
   });
   // Each Operation carries a settler (run inline by default, deferred under a
   // test), its outcome, and the streams watching it. Observers are added only
   // while `pending` and delivered to exactly once on settlement, so a settled
   // Operation holds no live observer to leak. `replayKey` decides whether a
   // re-submitted operation id is a replay (equal) or a conflict (different).
-  const operations = new Map<
-    string,
-    {
-      readonly replayKey: string;
-      outcome: OperationOutcome;
-      readonly observers: Set<UpdateStream>;
-      readonly runId?: string;
-      readonly settle: () => OperationOutcome | Promise<OperationOutcome>;
-    }
-  >();
+  const operations = new Map<string, TrackedOperation>();
   // A launched Run tracked in this process: its routing and Bundle facts, the
   // owner while it is live (so a snapshot read never fences the executing owner),
   // the in-memory latest state, the AbortController that stops its execution
@@ -521,6 +524,27 @@ export function createApplication(deps: ApplicationDependencies): Application {
     return { status: "applied" };
   }
 
+  // Admits a new Operation: records it `pending`, reports the admission, then
+  // schedules its settlement, so the admission record precedes the outcome even
+  // when the settler runs inline.
+  function admit(
+    operationId: string,
+    entry: Omit<TrackedOperation, "outcome" | "observers">,
+  ): void {
+    operations.set(operationId, {
+      ...entry,
+      outcome: { status: "pending" },
+      observers: new Set<UpdateStream>(),
+    });
+    observe({
+      kind: "operation-admission",
+      operationId,
+      operation: entry.operation,
+      admission: "admitted",
+    });
+    scheduleSettlement(() => settleOperation(operationId));
+  }
+
   // Settles a `pending` Operation: runs its settler, records the durable outcome
   // in place (the observer Set and settler stay stable), and delivers it to any
   // Projection opened on this id while it was pending. Runs via
@@ -530,6 +554,17 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (entry === undefined) return;
     const record = (outcome: OperationOutcome): void => {
       entry.outcome = outcome;
+      if (outcome.status !== "pending") {
+        observe({
+          kind: "operation-outcome",
+          operationId,
+          operation: entry.operation,
+          outcome: outcome.status,
+          ...(outcome.status === "not-applied"
+            ? { code: outcome.problem.code }
+            : {}),
+        });
+      }
       const snapshot: OperationSnapshot = {
         family: "operation",
         operationId,
@@ -1305,13 +1340,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
       }
       return { admitted: false, problem: operationIdReused(operationId) };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "approve-workspace",
       replayKey: input.path,
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       settle: () => applyApproval(input.path),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId };
   }
 
@@ -1382,14 +1415,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
       live: liveOverlay.fresh(),
     });
     pushRunListUpdates();
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "launch-run",
       replayKey: launchReplayKey(input),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId,
       settle: () => startRun(runId),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId };
   }
 
@@ -1429,6 +1460,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const harnessSelection = routingNeedsHarness(manifest.routing)
       ? (storedHarness ?? "claude-code")
       : undefined;
+    observe({ kind: "preflight-start" });
     const pre = preflight(
       {
         manifest,
@@ -1443,6 +1475,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
       },
       process,
     );
+    observe({
+      kind: "preflight-settle",
+      codes: problemCodes("problem" in pre ? [pre.problem] : []),
+    });
     if ("problem" in pre) return { problem: pre.problem };
     const grant = catalog.getTrustGrant(digest, entry.installationGeneration);
     if (grant === undefined) {
@@ -1564,14 +1600,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
       observers: observersForRun(input.runId),
       live: liveOverlay.fresh(),
     });
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "resume-run",
       replayKey: resumeReplayKey(input),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId: input.runId,
       settle: () => startRun(input.runId),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId: input.runId };
   }
 
@@ -1597,14 +1631,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     ) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "answer-human-gate",
       replayKey: answerReplayKey(input),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId: input.runId,
       settle: () => startAnswer(operationId, input),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId: input.runId };
   }
 
@@ -1921,14 +1953,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (runGroup === undefined) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "answer-harness-request",
       replayKey: answerHarnessRequestReplayKey(input),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId: input.runId,
       settle: () => answerHarnessRequest(input),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId: input.runId };
   }
 
@@ -2003,14 +2033,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (runGroup === undefined) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "interrupt-turn",
       replayKey: interruptTurnReplayKey(input),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId: input.runId,
       settle: () => interruptTurnAndSettle(input),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId: input.runId };
   }
 
@@ -2066,14 +2094,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (runGroup === undefined) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "steer-turn",
       replayKey: steerTurnReplayKey(input),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId: input.runId,
       settle: () => steerTurnAndSettle(input),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId: input.runId };
   }
 
@@ -2300,14 +2326,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (input.text.trim() === "") {
       return { admitted: false, problem: interactiveTurnBlank(input.runId) };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "send-interactive-turn",
       replayKey: sendInteractiveTurnReplayKey(input),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId: input.runId,
       settle: () => startSendInteractiveTurn(operationId, input),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId: input.runId };
   }
 
@@ -2499,14 +2523,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     ) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: control,
       replayKey,
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId: input.runId,
       settle: () => startEndInteractiveStep(input, control),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId: input.runId };
   }
 
@@ -2623,14 +2645,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (runGroup === undefined) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "cancel-run",
       replayKey: cancelReplayKey(runId),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId,
       settle: () => cancelAndSettle(runId),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId };
   }
 
@@ -2777,14 +2797,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (runGroup === undefined) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
-    operations.set(operationId, {
+    admit(operationId, {
+      operation: "delete-run",
       replayKey: deleteReplayKey(runId),
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
       runId,
       settle: () => deleteAndSettle(operationId, runId),
     });
-    scheduleSettlement(() => settleOperation(operationId));
     return { admitted: true, operationId, runId };
   }
 
@@ -2859,47 +2877,72 @@ export function createApplication(deps: ApplicationDependencies): Application {
     return { ok: true, owner, transient: live === undefined };
   }
 
+  // Admit at once and record `pending`; settlement is scheduled (inline by
+  // default, deferred under a test) and publishes the outcome then.
+  function dispatch(submission: Submission): SubmissionAdmission {
+    switch (submission.operation) {
+      case "approve-workspace":
+        return submitApprove(submission.operationId, submission.input);
+      case "launch-run":
+        return submitLaunch(submission.operationId, submission.input);
+      case "resume-run":
+        return submitResume(submission.operationId, submission.input);
+      case "answer-human-gate":
+        return submitAnswer(submission.operationId, submission.input);
+      case "answer-harness-request":
+        return submitAnswerHarnessRequest(
+          submission.operationId,
+          submission.input,
+        );
+      case "interrupt-turn":
+        return submitInterruptTurn(submission.operationId, submission.input);
+      case "steer-turn":
+        return submitSteerTurn(submission.operationId, submission.input);
+      case "send-interactive-turn":
+        return submitSendInteractiveTurn(
+          submission.operationId,
+          submission.input,
+        );
+      case "end-interactive-step":
+      case "continue-repeat":
+      case "end-stage":
+        return submitEndInteractiveStep(
+          submission.operationId,
+          submission.input,
+          submission.operation,
+        );
+      case "cancel-run":
+        return submitCancel(submission.operationId, submission.input.runId);
+      case "delete-run":
+        return submitDelete(submission.operationId, submission.input.runId);
+    }
+  }
+
   const projectionPort: ProjectionPort = {
     openProjection,
     submit(submission: Submission): SubmissionAdmission {
-      // Admit at once and record `pending`; settlement is scheduled (inline by
-      // default, deferred under a test) and publishes the outcome then.
-      switch (submission.operation) {
-        case "approve-workspace":
-          return submitApprove(submission.operationId, submission.input);
-        case "launch-run":
-          return submitLaunch(submission.operationId, submission.input);
-        case "resume-run":
-          return submitResume(submission.operationId, submission.input);
-        case "answer-human-gate":
-          return submitAnswer(submission.operationId, submission.input);
-        case "answer-harness-request":
-          return submitAnswerHarnessRequest(
-            submission.operationId,
-            submission.input,
-          );
-        case "interrupt-turn":
-          return submitInterruptTurn(submission.operationId, submission.input);
-        case "steer-turn":
-          return submitSteerTurn(submission.operationId, submission.input);
-        case "send-interactive-turn":
-          return submitSendInteractiveTurn(
-            submission.operationId,
-            submission.input,
-          );
-        case "end-interactive-step":
-        case "continue-repeat":
-        case "end-stage":
-          return submitEndInteractiveStep(
-            submission.operationId,
-            submission.input,
-            submission.operation,
-          );
-        case "cancel-run":
-          return submitCancel(submission.operationId, submission.input.runId);
-        case "delete-run":
-          return submitDelete(submission.operationId, submission.input.runId);
+      const { operationId, operation } = submission;
+      const replay = operations.has(operationId);
+      const admission = dispatch(submission);
+      // `admit` reported a new admission before scheduling its settlement; a
+      // replay or a refusal settles nothing, so it is reported here.
+      if (!admission.admitted) {
+        observe({
+          kind: "operation-admission",
+          operationId,
+          operation,
+          admission: "not-admitted",
+          code: admission.problem.code,
+        });
+      } else if (replay) {
+        observe({
+          kind: "operation-admission",
+          operationId,
+          operation,
+          admission: "replayed",
+        });
       }
+      return admission;
     },
 
     readResource(

@@ -19,6 +19,7 @@ import {
   workspaceNotApproved,
 } from "./problems.js";
 import type { UpdateStream } from "./update-stream.js";
+import { problemCodes, type ApplicationObserver } from "./observer.js";
 import type {
   ActionOffer,
   ExecutionSummary,
@@ -57,6 +58,8 @@ export interface LaunchPreparationDeps {
   readonly qualify: (
     id: string,
   ) => Promise<ApplicationHarnessQualification | undefined>;
+  /** Reports the launch-preparation, Preflight, and model-check stages. */
+  readonly observe: ApplicationObserver;
 }
 
 /** The resolved facts a passing (or partially passing) evaluation carries, so
@@ -89,7 +92,19 @@ export interface LaunchPreparation {
 export function createLaunchPreparation(
   deps: LaunchPreparationDeps,
 ): LaunchPreparation {
+  // Both readers settle this one stage, so a launch and its assessment leave the
+  // same records; the start is written before the synchronous Process probes.
   function evaluate(input: LaunchRunInput): LaunchDraftEvaluation {
+    deps.observe({ kind: "launch-preparation-start" });
+    const evaluation = evaluateDraft(input);
+    deps.observe({
+      kind: "launch-preparation-settle",
+      codes: problemCodes(evaluation.findings),
+    });
+    return evaluation;
+  }
+
+  function evaluateDraft(input: LaunchRunInput): LaunchDraftEvaluation {
     const findings: Problem[] = [];
     const selected = selectRunEntry(
       deps.catalog,
@@ -132,6 +147,7 @@ export function createLaunchPreparation(
       return { findings };
     }
 
+    deps.observe({ kind: "preflight-start" });
     const pre = assessPreflight(
       {
         manifest,
@@ -147,6 +163,10 @@ export function createLaunchPreparation(
       },
       deps.process,
     );
+    deps.observe({
+      kind: "preflight-settle",
+      codes: problemCodes(pre.findings),
+    });
     findings.push(...pre.findings);
 
     // Trust mirrors `submitLaunch` exactly, minus the grant write: an untrusted
@@ -218,6 +238,7 @@ export function createLaunchPreparation(
     // harness finding, the same not-ready outcome a `{ok:false}` result produces.
     void (async () => {
       let extra: Problem | undefined;
+      deps.observe({ kind: "model-check-start", harness: modelCheck.harness });
       try {
         const qualification = await deps.qualify(modelCheck.harness);
         extra = modelFinding(
@@ -239,6 +260,11 @@ export function createLaunchPreparation(
           },
         });
       }
+      deps.observe({
+        kind: "model-check-settle",
+        harness: modelCheck.harness,
+        ...(extra !== undefined ? { code: extra.code } : {}),
+      });
       const findings = extra === undefined ? [] : [extra];
       const status = findings.length > 0 ? "not-ready" : "ready";
       updates.push({

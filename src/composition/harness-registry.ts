@@ -216,6 +216,7 @@ function qualificationFailure(
     phase: failure.phase,
     category: failure.category,
     possibleEffects: failure.possibleEffects,
+    nativeCode: failure.nativeCode,
     retryEvidence: failure.retryEvidence,
     diagnostics: failure.diagnostics,
     cause: failure.cause,
