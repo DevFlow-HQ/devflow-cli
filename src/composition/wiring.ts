@@ -21,6 +21,7 @@ import {
   driveInteractiveTurn,
   executeRouting,
   type AssetResolver,
+  type ExecutionObserver,
   type HarnessExecutionDeps,
 } from "../run/execution/execution.js";
 import {
@@ -41,6 +42,8 @@ import {
   routingNeedsHarness,
 } from "../workflow/workflow.js";
 import { HarnessRegistry } from "./harness-registry.js";
+import type { OperationalLog } from "./operational-log.js";
+import { runLifecycleObserver } from "./run-lifecycle-log.js";
 import {
   createProcessAdapter,
   type ProcessAdapter,
@@ -80,6 +83,11 @@ export interface LogClock {
   readonly now: () => Date;
   readonly monotonic: () => number;
 }
+
+const PRODUCTION_CLOCK: LogClock = {
+  now: () => new Date(),
+  monotonic: () => performance.now(),
+};
 
 /** The operational log's test Seam. Production passes none: the folder comes
  *  from the environment or the Secant home, the clock from the process, and a
@@ -133,11 +141,14 @@ const SECANT_HOME_ENV = "SECANT_HOME";
 export const SECANT_LOG_DIR_ENV = "SECANT_LOG_DIR";
 
 /** What one Secant invocation reads from its process before anything is wired:
- *  the Secant home, the operational-log folder, the running engine version, and
- *  the host platform (absent on an unsupported OS). */
+ *  the Secant home, the operational-log folder and clock, the running engine
+ *  version, and the host platform (absent on an unsupported OS). */
 interface HostContext {
   readonly secantHome: string;
   readonly logFolder: string;
+  /** Shared by the sink and every observer it feeds, so their elapsed times
+   *  read one monotonic clock. */
+  readonly logClock: LogClock;
   readonly engineVersion: string;
   readonly hostPlatform: Platform | undefined;
 }
@@ -153,6 +164,7 @@ export function resolveHostContext(overrides: WiringOverrides): HostContext {
     logFolder:
       overrides.logSink?.folder ??
       (process.env[SECANT_LOG_DIR_ENV]?.trim() || join(secantHome, "logs")),
+    logClock: overrides.logSink?.clock ?? PRODUCTION_CLOCK,
     engineVersion: overrides.engineVersion ?? engineVersion,
     hostPlatform: overrides.hostPlatform ?? hostPlatform(process.platform),
   };
@@ -186,13 +198,21 @@ function shippedBundleFiles(dir: string): string[] {
 /** Resolves the Secant home, opens the Catalog and the launch Workspace's Run
  *  Store, constructs the Run execution, and builds the Application with the
  *  running engine version and host platform, handing it the raw launch cwd. The
- *  caller owns `catalog` and `runGroup` and must close both. */
-export function wireApplication(overrides: WiringOverrides = {}): Wiring {
+ *  caller owns `catalog` and `runGroup` and must close both. `log` is the Secant
+ *  invocation's operational log, which both client entries pass; a direct caller
+ *  passes none, and the Run lifecycle is then reported nowhere. */
+export function wireApplication(
+  overrides: WiringOverrides = {},
+  log?: Pick<OperationalLog, "record">,
+): Wiring {
   const {
     secantHome,
     engineVersion,
     hostPlatform: host,
+    logClock,
   } = resolveHostContext(overrides);
+  const observe =
+    log === undefined ? undefined : runLifecycleObserver(log, logClock);
   const launchWorkspacePath = overrides.launchCwd ?? process.cwd();
   const canonicalLaunchWorkspacePath =
     canonicalizeWorkspacePath(launchWorkspacePath);
@@ -244,9 +264,13 @@ export function wireApplication(overrides: WiringOverrides = {}): Wiring {
           platform: host ?? "linux",
           harnessRegistry,
           process: processAdapter,
+          ...(observe !== undefined ? { observe } : {}),
         }),
-        prepareRunInteractiveStep:
-          makePrepareRunInteractiveStep(harnessRegistry),
+        prepareRunInteractiveStep: makePrepareRunInteractiveStep(
+          harnessRegistry,
+          observe,
+        ),
+        ...(observe !== undefined ? { observe } : {}),
       });
       // Every startup, in both roots, before either client reads (ADR 0029). A
       // failure is a notice, never a thrown startup error.
@@ -279,10 +303,11 @@ interface TMakeRunExecutionParams {
   readonly platform: Platform;
   readonly harnessRegistry: HarnessRegistry;
   readonly process: ProcessAdapter;
+  readonly observe?: ExecutionObserver;
 }
 
 function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
-  const { catalog, platform, harnessRegistry, process } = params;
+  const { catalog, platform, harnessRegistry, process, observe } = params;
   return async ({
     routing,
     digest,
@@ -296,6 +321,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
       platform,
       resolveAsset: treeResolver(catalog, digest),
       process,
+      ...(observe !== undefined ? { observe } : {}),
       // The Application's per-Run cancel Seam (#98): an abort kills the child's
       // process group and unwinds execution, and the Application decides the rest.
       ...(cancelSignal !== undefined ? { cancelSignal } : {}),
@@ -338,7 +364,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
         transferred = true;
         return {
           ...report,
-          interactiveStep: interactiveStepDriver(prepared.harness),
+          interactiveStep: interactiveStepDriver(prepared.harness, observe),
         };
       }
       return report;
@@ -354,6 +380,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
 // learning a Harness type, and the driver closes the prepared Harness exactly once.
 function makePrepareRunInteractiveStep(
   harnessRegistry: HarnessRegistry,
+  observe: ExecutionObserver | undefined,
 ): PrepareRunInteractiveStep {
   return async ({ owner }) => {
     const selectedHarness = owner.record.selectedHarness;
@@ -375,7 +402,7 @@ function makePrepareRunInteractiveStep(
     }
     return {
       ok: true,
-      interactiveStep: interactiveStepDriver(prepared.harness),
+      interactiveStep: interactiveStepDriver(prepared.harness, observe),
     };
   };
 }
@@ -411,7 +438,12 @@ async function prepareRunHarness(
   });
 }
 
-function interactiveStepDriver(prepared: PreparedHarness): RunInteractiveStep {
+// Human Turns reach execution through this driver, not the execution
+// dependencies, so the observer crosses here too (#320).
+function interactiveStepDriver(
+  prepared: PreparedHarness,
+  observe: ExecutionObserver | undefined,
+): RunInteractiveStep {
   let closed = false;
   return {
     steer: prepared.profile.steer,
@@ -433,6 +465,7 @@ function interactiveStepDriver(prepared: PreparedHarness): RunInteractiveStep {
         text,
         ...(cancelSignal !== undefined ? { cancelSignal } : {}),
         ...(requestChannel !== undefined ? { requestChannel } : {}),
+        ...(observe !== undefined ? { observe } : {}),
       });
       return { outcome: interactiveOutcome(result.kind) };
     },

@@ -1,0 +1,107 @@
+import { translateCause } from "../harness/harness.js";
+import type { ExecutionObserver } from "../run/execution/execution.js";
+import type { OperationalLog, OperationalRecord } from "./operational-log.js";
+import type { LogClock } from "./wiring.js";
+
+// The Run, Step Attempt, and Turn lifecycle in the operational log (#320, spec
+// #313 stories 13–15, 20, 22, 29). Run execution and the Application report typed
+// lifecycle facts; this maps each to an allowlisted record, copying its fields one
+// by one. Elapsed time is measured here, on the log's monotonic clock: each start
+// is paired with its settlement in this Secant invocation, so a settlement whose
+// start an earlier Secant invocation saw (a gate answered after a reopen) carries
+// none. A start with no settlement stands for the last observed stage.
+
+/** The one observer both Run execution and the Application report through. */
+export function runLifecycleObserver(
+  log: Pick<OperationalLog, "record">,
+  clock: LogClock,
+): ExecutionObserver {
+  const started = new Map<string, number>();
+  const start = (key: string): void => {
+    started.set(key, clock.monotonic());
+  };
+  const elapsed = (key: string): { elapsedMs?: number } => {
+    const at = started.get(key);
+    if (at === undefined) return {};
+    started.delete(key);
+    return { elapsedMs: Math.round(clock.monotonic() - at) };
+  };
+  const write = (record: OperationalRecord): void => log.record(record);
+
+  return (event) => {
+    const { runId } = event;
+    const run = `run:${runId}`;
+    switch (event.kind) {
+      case "run-start":
+        start(run);
+        write({ event: event.kind, runId });
+        return;
+      case "run-end":
+        write({
+          event: event.kind,
+          runId,
+          outcome: event.outcome,
+          ...elapsed(run),
+        });
+        return;
+      case "run-unwind":
+        write({ event: event.kind, runId, ...elapsed(run) });
+        return;
+    }
+    const { attemptId } = event;
+    const attempt = `attempt:${runId}:${attemptId}`;
+    switch (event.kind) {
+      case "attempt-start":
+        start(attempt);
+        write({ event: event.kind, runId, attemptId });
+        return;
+      // A pause is no settlement: the Attempt stays open until the Application
+      // settles it.
+      case "attempt-pause":
+        write({ event: event.kind, runId, attemptId });
+        return;
+      case "attempt-end":
+        write({
+          event: event.kind,
+          runId,
+          attemptId,
+          outcome: event.outcome,
+          ...elapsed(attempt),
+        });
+        return;
+      case "attempt-unwind":
+        write({ event: event.kind, runId, attemptId, ...elapsed(attempt) });
+        return;
+    }
+    const { turnId, session } = event;
+    const turn = `turn:${runId}:${turnId}`;
+    if (event.kind === "turn-start") {
+      start(turn);
+      write({ event: event.kind, runId, attemptId, turnId, session });
+      return;
+    }
+    const { failure } = event;
+    write({
+      event: event.kind,
+      runId,
+      attemptId,
+      turnId,
+      session,
+      result: event.result,
+      ...(failure !== undefined
+        ? {
+            phase: failure.phase,
+            category: failure.category,
+            possibleEffects: failure.possibleEffects,
+            ...(failure.nativeCode !== undefined
+              ? { nativeCode: failure.nativeCode }
+              : {}),
+            ...(failure.cause !== undefined
+              ? { cause: translateCause(failure.cause) }
+              : {}),
+          }
+        : {}),
+      ...elapsed(turn),
+    });
+  };
+}

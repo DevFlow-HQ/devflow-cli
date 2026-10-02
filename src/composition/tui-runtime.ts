@@ -115,7 +115,7 @@ async function launchTui(
     shutdown: drainLiveRuns,
     // The TUI relays human turn-taking, so an interactive-agent Bundle is admitted
     // here (headless refuses it at Preflight, #116, #122).
-  } = wireApplication({ ...overrides, supportsInteractiveTurns: true });
+  } = wireApplication({ ...overrides, supportsInteractiveTurns: true }, log);
   try {
     const { port, renderer } = await createProductionRenderer();
     // The diagnostic records the single teardown from createTeardown's own

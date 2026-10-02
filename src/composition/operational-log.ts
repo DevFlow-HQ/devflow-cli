@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import pino, { type Logger } from "pino";
-import { translateCause } from "../harness/harness.js";
+import { translateCause, type SafeCause } from "../harness/harness.js";
 import {
   resolveHostContext,
   SECANT_LOG_DIR_ENV,
@@ -35,11 +35,23 @@ import {
 /** Which client the Secant invocation ran. */
 type ClientKind = "tui" | "headless";
 
+/** One lifecycle record an observer mapping built: the event name and the
+ *  allowlisted semantic fields it copied one by one, never a caller's object
+ *  passed through. */
+export interface OperationalRecord {
+  readonly event: string;
+  readonly [field: string]: string | number | SafeCause;
+}
+
 /** One Secant invocation's log, as its client entry holds it. */
 export interface OperationalLog {
   /** The active file, or undefined once logging is disabled for the Secant
    *  invocation. */
   file(): string | undefined;
+  /** Writes one lifecycle record. The level follows from the record, never the
+   *  caller: every lifecycle record is `info`. Like every write, it stops silently
+   *  after `end` or a log failure. */
+  record(record: OperationalRecord): void;
   /** Writes the failure record, its cause translated safely, and flushes. Only
    *  the first call writes: the TUI records a render failure before it drains
    *  live Runs, and the guard's own call then finds it written. */
@@ -63,11 +75,6 @@ const REDACTED_FIELDS = [
   "password",
   "authorization",
 ].flatMap((name) => [name, `*.${name}`]);
-
-const PRODUCTION_CLOCK: LogClock = {
-  now: () => new Date(),
-  monotonic: () => performance.now(),
-};
 
 const LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const LOG_FILE_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-\d+\.jsonl$/;
@@ -203,6 +210,7 @@ function startOperationalLog(options: StartOptions): OperationalLog {
 
   return {
     file: () => (enabled ? path : undefined),
+    record: (record) => write("info", record),
     fatal(error) {
       if (failed) return;
       failed = true;
@@ -257,7 +265,7 @@ export async function runSecantInvocation(
     version: context.engineVersion,
     // Secant's platform name; an unsupported OS has none, so its own name stands.
     platform: context.hostPlatform ?? process.platform,
-    clock: overrides.logSink?.clock ?? PRODUCTION_CLOCK,
+    clock: context.logClock,
     notify: (text) => (holding ? held.push(text) : stderr(text)),
   });
   active = log;

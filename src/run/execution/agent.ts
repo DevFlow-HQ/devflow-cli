@@ -30,6 +30,7 @@ import type {
   TurnOrigin,
   TurnResult,
 } from "../../harness/harness.js";
+import type { ExecutionObserver, TurnFailureFacts } from "./execution.js";
 
 // --- Live request-answer channel (#117) ------------------------------------
 //
@@ -168,6 +169,7 @@ interface StepContext {
   readonly cancelSignal?: AbortSignal;
   readonly harness?: HarnessExecutionDeps;
   readonly requestChannel?: RequestChannel;
+  readonly observe: ExecutionObserver;
 }
 
 // --- Agent step (a Harness Turn dispatch entry, #116) ----------------------
@@ -246,6 +248,7 @@ export async function runAgent(
     attemptId,
     turnId,
     input: prompt,
+    observe: context.observe,
     ...(recovery.resume !== undefined ? { resume: recovery.resume } : {}),
     ...(context.requestChannel !== undefined
       ? { requestChannel: context.requestChannel }
@@ -381,9 +384,13 @@ async function driveHarnessTurn(
      *  reopen or following Agent Step can resume it. The Harness is held for the
      *  interactive Step and closed once when that Step is released. */
     readonly detachAfterTurn?: boolean;
+    /** Reports the Turn's durable admission and its settlement (#320); nothing
+     *  per streamed event. */
+    readonly observe: ExecutionObserver;
   },
 ): Promise<TurnResult> {
-  const { session, attemptId, turnId } = params;
+  const { session, attemptId, turnId, observe } = params;
+  const ids = { runId: owner.runId, attemptId, turnId, session };
   const harnessName = prepared.profile.harness;
   // The recovery coordinate the Adapter reveals at admission (Claude Code reveals it
   // before submission), captured so an interactive Turn can settle `detached` by it.
@@ -403,7 +410,10 @@ async function driveHarnessTurn(
       });
       // Only a durable admission makes the coordinate meaningful; a fenced (rejected)
       // admission drives the Turn `not-started`, whose availability is never detached.
-      if (result.ok) recoveryCoordinate = admission.recoveryCoordinate.opaque;
+      if (result.ok) {
+        recoveryCoordinate = admission.recoveryCoordinate.opaque;
+        observe({ kind: "turn-start", ...ids });
+      }
       return Promise.resolve(
         result.ok
           ? { recorded: true }
@@ -490,6 +500,13 @@ async function driveHarnessTurn(
       result,
       params.detachAfterTurn === true ? recoveryCoordinate : undefined,
     );
+    const failure = turnFailure(result);
+    observe({
+      kind: "turn-end",
+      ...ids,
+      result: result.kind,
+      ...(failure !== undefined ? { failure } : {}),
+    });
     // A full cancel-run of a live Turn stops the Turn but ends the Run `cancelled`
     // (#87/#98): unwind without settling this Attempt, so the Application's cancel
     // path owns the `cancelled` rest — the same RunCancelledError a cancelled
@@ -526,6 +543,9 @@ export interface InteractiveTurnRequest {
   readonly text: string;
   readonly requestChannel?: RequestChannel;
   readonly cancelSignal?: AbortSignal;
+  /** Reports the human Turn's admission and settlement (#320). Absent, they are
+   *  reported nowhere. */
+  readonly observe?: ExecutionObserver;
 }
 
 /** Drive one human Turn of an interactive-agent Step (#122): admit the human's
@@ -546,6 +566,7 @@ export async function driveInteractiveTurn(
     attemptId: request.attemptId,
     turnId: request.turnId,
     input: request.text,
+    observe: request.observe ?? (() => {}),
     // The Harness stays held for the interactive Step. Record detached after each
     // Turn so a later reopen or following Agent Step can resume the Session (#122).
     detachAfterTurn: true,
@@ -595,6 +616,7 @@ export async function runInteractiveEntryTurn(
     attemptId,
     turnId: `${attemptId}#entry`,
     input: rendered.prompt,
+    observe: context.observe,
     // Settle `detached` like a human Turn, so the next Turn resumes this Session.
     detachAfterTurn: true,
     ...(recovery.resume !== undefined ? { resume: recovery.resume } : {}),
@@ -605,6 +627,27 @@ export async function runInteractiveEntryTurn(
       ? { cancelSignal: context.cancelSignal }
       : {}),
   });
+}
+
+/** A settled Turn's typed failure facts, copied field by field so its diagnostics,
+ *  partial output, and retry evidence never reach the observer. */
+function turnFailure(result: TurnResult): TurnFailureFacts | undefined {
+  const failure =
+    result.kind === "not-started" ||
+    result.kind === "failed" ||
+    result.kind === "lost"
+      ? result.detail.failure
+      : undefined;
+  if (failure === undefined) return undefined;
+  return {
+    phase: failure.phase,
+    category: failure.category,
+    possibleEffects: failure.possibleEffects,
+    ...(failure.nativeCode !== undefined
+      ? { nativeCode: failure.nativeCode }
+      : {}),
+    ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
+  };
 }
 
 /** The failed result an interactive Turn returns for an unusable Session (#122). */

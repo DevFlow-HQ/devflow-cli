@@ -26,6 +26,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 - `SECANT_HOME` and `SECANT_LOG_DIR` are read once, side by side, in `resolveHostContext` (`wiring.ts`); nothing below composition reads them.
   Records hold only allowlisted semantic fields and causes from `translateCause`; Pino's named-field redaction is a second layer. Tests reach the
   sink through the `logSink` wiring override and never set the environment names.
+- `wireApplication`'s second argument is the Secant invocation's log, passed only by the two client entries; a direct caller logs no lifecycle.
+  `runLifecycleObserver` pairs each start with its settlement on the host context's `logClock`, the one clock the sink also reads (#320).
 - Startup prunes only matching regular log files strictly older than 30 days in the resolved folder (#323), before opening the active file:
   its real mtime can be stale against an injected future clock. Prune failures are silent; they never call the log-write failure fallback.
 

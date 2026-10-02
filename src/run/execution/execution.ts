@@ -21,9 +21,11 @@ import {
   isolatedGitEnvironment,
   type AttemptLogEntry,
   type CandidateOutput,
+  type PublishAttemptRequest,
   type RunOwner,
 } from "../store/store.js";
 import { type ProcessAdapter } from "../../process/process.js";
+import type { HarnessFailure, TurnResult } from "../../harness/harness.js";
 import {
   attemptEvidence,
   launchInputs,
@@ -125,7 +127,67 @@ export interface ExecutionDeps {
   readonly process: ProcessAdapter;
   /** Injectable clock so Attempt timestamps are deterministic in tests. */
   readonly now?: () => Date;
+  /** Where the Run, Step Attempt, and Turn lifecycle is reported (#320).
+   *  Composition fills it from the Secant invocation's operational log; absent, the
+   *  lifecycle is reported nowhere. */
+  readonly observe?: ExecutionObserver;
 }
+
+/** One Run, Step Attempt, or Turn lifecycle fact (#320), carrying only ids, the
+ *  Session name, outcomes, and typed failure facts: no prompt, Turn input,
+ *  transcript item, or recovery coordinate crosses it, and nothing is reported per
+ *  streamed event. Each start is followed by its settlement (`-end`) or, when the
+ *  walk throws (a cancel or a fenced owner), by an `-unwind` that claims no
+ *  outcome. An Attempt paused for a human (`attempt-pause`) settles later through
+ *  the Application. */
+export type ExecutionEvent =
+  | { readonly kind: "run-start"; readonly runId: string }
+  | {
+      readonly kind: "run-end";
+      readonly runId: string;
+      readonly outcome: RunOutcome;
+    }
+  | { readonly kind: "run-unwind"; readonly runId: string }
+  | {
+      readonly kind: "attempt-start" | "attempt-pause" | "attempt-unwind";
+      readonly runId: string;
+      readonly attemptId: string;
+    }
+  | {
+      readonly kind: "attempt-end";
+      readonly runId: string;
+      readonly attemptId: string;
+      readonly outcome: AttemptOutcome;
+    }
+  | {
+      /** The Turn's durable admission. */
+      readonly kind: "turn-start";
+      readonly runId: string;
+      readonly attemptId: string;
+      readonly turnId: string;
+      /** The Harness-agnostic Session name the Turn runs in. */
+      readonly session: string;
+    }
+  | {
+      readonly kind: "turn-end";
+      readonly runId: string;
+      readonly attemptId: string;
+      readonly turnId: string;
+      readonly session: string;
+      readonly result: TurnResult["kind"];
+      readonly failure?: TurnFailureFacts;
+    };
+
+/** The typed facts of a failed, not-started, or lost Turn: never its diagnostics,
+ *  partial output, or retry evidence, which may carry transcript text. */
+export type TurnFailureFacts = Pick<
+  HarnessFailure,
+  "phase" | "category" | "possibleEffects" | "nativeCode" | "cause"
+>;
+
+export type ExecutionObserver = (event: ExecutionEvent) => void;
+
+const IGNORE: ExecutionObserver = () => {};
 
 /** How a Run came to rest. `blocked` is a durable pause awaiting a human: an
  *  authored Human Gate, an interactive-agent Step, or a Review checkpoint. The
@@ -189,6 +251,7 @@ interface StepContext {
   readonly commandTimeoutMs: number;
   readonly cancelSignal?: AbortSignal;
   readonly process: ProcessAdapter;
+  readonly observe: ExecutionObserver;
   /** The prepared Harness and manifest facts an Agent Step runs against (#116). */
   readonly harness?: HarnessExecutionDeps;
   /** The live request-answer channel an Agent Turn reaches a client through (#117). */
@@ -297,6 +360,26 @@ export async function executeRouting(
   routing: readonly RoutingNode[],
   deps: ExecutionDeps,
 ): Promise<RunReport> {
+  // Every walk is one Run start and settlement: a launch, a resume, a gate
+  // answer, and an End Step each re-walk the Routing.
+  const observe = deps.observe ?? IGNORE;
+  const runId = deps.owner.runId;
+  observe({ kind: "run-start", runId });
+  let report: RunReport;
+  try {
+    report = await walkRouting(routing, { ...deps, observe });
+  } catch (error) {
+    observe({ kind: "run-unwind", runId });
+    throw error;
+  }
+  observe({ kind: "run-end", runId, outcome: report.outcome });
+  return report;
+}
+
+async function walkRouting(
+  routing: readonly RoutingNode[],
+  deps: ExecutionDeps & { readonly observe: ExecutionObserver },
+): Promise<RunReport> {
   const context: WalkContext = {
     step: {
       owner: deps.owner,
@@ -304,6 +387,7 @@ export async function executeRouting(
       resolveAsset: deps.resolveAsset,
       commandTimeoutMs: deps.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
       process: deps.process,
+      observe: deps.observe,
       ...(deps.cancelSignal !== undefined
         ? { cancelSignal: deps.cancelSignal }
         : {}),
@@ -594,87 +678,95 @@ async function runStepAttempts(
       iteration,
       baseAttempt + attempt,
     );
-    // A cancel abort throws RunCancelledError out of the executor: it unwinds the
-    // walk here without publishing this Attempt, so `cancel-run` (T4) owns the rest.
-    const result = await executor(step, context.step, attemptId);
-    // A durable pause (a Human Gate): record the pending gate with this minted
-    // Attempt id and rest the Run `blocked` — no Attempt is published, no retry
-    // (#108). Recording is idempotent on the Attempt id, so a resume that
-    // re-reaches the gate re-rests `blocked` and re-records nothing. A fenced owner
-    // means another process took over; throw as the publication path does.
-    if ("pause" in result) {
-      // An interactive-agent pause: a durable block with no gate record (#122). The
-      // Run rests `blocked` (executeRouting writes it) and the human drives Turns;
-      // `end-interactive-step` publishes this Step's Attempt. No Attempt here, no retry.
-      if ("interactive" in result) {
-        if (result.halted !== true) return "blocked";
-        writeStateOrThrow(context.step.owner, "halted");
+    const { owner, observe } = context.step;
+    const ids = { runId: owner.runId, attemptId };
+    observe({ kind: "attempt-start", ...ids });
+    // Whether this Attempt's pause or settlement was reported; a throw before
+    // either reports `attempt-unwind`, which claims no outcome.
+    let reported = false;
+    const pause = (): void => {
+      reported = true;
+      observe({ kind: "attempt-pause", ...ids });
+    };
+    const publish = (request: PublishAttemptRequest): void => {
+      publishOrThrow(owner.publishAttempt(request));
+      reported = true;
+      observe({ kind: "attempt-end", ...ids, outcome: request.outcome });
+    };
+    let result: StepAttempt | StepPause;
+    try {
+      // A cancel abort throws RunCancelledError out of the executor: it unwinds the
+      // walk here without publishing this Attempt, so `cancel-run` (T4) owns the rest.
+      result = await executor(step, context.step, attemptId);
+      // A durable pause (a Human Gate): record the pending gate with this minted
+      // Attempt id and rest the Run `blocked` — no Attempt is published, no retry
+      // (#108). Recording is idempotent on the Attempt id, so a resume that
+      // re-reaches the gate re-rests `blocked` and re-records nothing. A fenced owner
+      // means another process took over; throw as the publication path does.
+      if ("pause" in result) {
+        // An interactive-agent pause: a durable block with no gate record (#122). The
+        // Run rests `blocked` (executeRouting writes it) and the human drives Turns;
+        // `end-interactive-step` publishes this Step's Attempt. No Attempt here, no retry.
+        if ("interactive" in result) {
+          if (result.halted !== true) {
+            pause();
+            return "blocked";
+          }
+          writeStateOrThrow(owner, "halted");
+          pause();
+          return "halted";
+        }
+        const recorded = owner.recordPendingGate({
+          attemptId,
+          stepId: step.id,
+          shape: result.shape,
+          message: result.message,
+          ...(result.outputArtifactName !== undefined
+            ? { outputArtifactName: result.outputArtifactName }
+            : {}),
+          ...(result.suggestions !== undefined
+            ? { suggestions: result.suggestions }
+            : {}),
+          at: context.now(),
+        });
+        if (!recorded.ok) {
+          throw new Error(
+            `execution: cannot record the pending Human Gate: ${recorded.reason}.`,
+          );
+        }
+        pause();
+        return "blocked";
+      }
+      outcome = result.outcome;
+      // An interrupted Attempt (a termination signal, never our timeout) has no
+      // result: it is settled `indeterminate`, never retried, and rests the Run
+      // `halted` in the same transaction for human resume (ADR 0019, #86). A `lost`
+      // Agent Turn maps to `indeterminate` too (#116): terminal truth is unknown.
+      // A `cancelled` Attempt is an interrupted Agent Turn (#116): the Turn's native
+      // work stopped, so the Attempt ends `cancelled` and the Run rests `halted` for
+      // human resume, never retried — the same resumable rest an interrupt leaves.
+      if (
+        result.outcome === "indeterminate" ||
+        result.outcome === "cancelled"
+      ) {
+        publish({
+          attemptId,
+          outcome: result.outcome,
+          required: [],
+          outputs: [],
+          at: context.now(),
+          advanceState: "halted",
+          ...attemptEvidence(step.kind, result),
+        });
         return "halted";
       }
-      const recorded = context.step.owner.recordPendingGate({
-        attemptId,
-        stepId: step.id,
-        shape: result.shape,
-        message: result.message,
-        ...(result.outputArtifactName !== undefined
-          ? { outputArtifactName: result.outputArtifactName }
-          : {}),
-        ...(result.suggestions !== undefined
-          ? { suggestions: result.suggestions }
-          : {}),
-        at: context.now(),
-      });
-      if (!recorded.ok) {
-        throw new Error(
-          `execution: cannot record the pending Human Gate: ${recorded.reason}.`,
-        );
-      }
-      return "blocked";
-    }
-    outcome = result.outcome;
-    // An interrupted Attempt (a termination signal, never our timeout) has no
-    // result: it is settled `indeterminate`, never retried, and rests the Run
-    // `halted` in the same transaction for human resume (ADR 0019, #86). A `lost`
-    // Agent Turn maps to `indeterminate` too (#116): terminal truth is unknown.
-    if (result.outcome === "indeterminate") {
-      publishOrThrow(
-        context.step.owner.publishAttempt({
-          attemptId,
-          outcome: "indeterminate",
-          required: [],
-          outputs: [],
-          at: context.now(),
-          advanceState: "halted",
-          ...attemptEvidence(step.kind, result),
-        }),
-      );
-      return "halted";
-    }
-    // A `cancelled` Attempt is an interrupted Agent Turn (#116): the Turn's native
-    // work stopped, so the Attempt ends `cancelled` and the Run rests `halted` for
-    // human resume, never retried — the same resumable rest an interrupt leaves.
-    if (result.outcome === "cancelled") {
-      publishOrThrow(
-        context.step.owner.publishAttempt({
-          attemptId,
-          outcome: "cancelled",
-          required: [],
-          outputs: [],
-          at: context.now(),
-          advanceState: "halted",
-          ...attemptEvidence(step.kind, result),
-        }),
-      );
-      return "halted";
-    }
-    const advanceState =
-      result.outcome === "failed"
-        ? attempt === retries
-          ? "failed"
-          : undefined
-        : (decideSuccessAdvance?.(result) ?? successAdvance);
-    publishOrThrow(
-      context.step.owner.publishAttempt({
+      const advanceState =
+        result.outcome === "failed"
+          ? attempt === retries
+            ? "failed"
+            : undefined
+          : (decideSuccessAdvance?.(result) ?? successAdvance);
+      publish({
         attemptId,
         outcome: result.outcome,
         // A failed Attempt moves no binding; a succeeded one publishes exactly
@@ -684,14 +776,17 @@ async function runStepAttempts(
         at: context.now(),
         advanceState,
         ...attemptEvidence(step.kind, result),
-      }),
-    );
-    // A succeeded Attempt's `home: workspace` outputs are now canonical in the
-    // store; materialize each into the Workspace at its declared path (#88). Written
-    // after publication so a Workspace copy that outlives a failed publication is
-    // only external state, never a moved binding (ADR 0023).
-    if (result.outcome === "succeeded") {
-      materializeOutputs(step, result.outputs, context.step);
+      });
+      // A succeeded Attempt's `home: workspace` outputs are now canonical in the
+      // store; materialize each into the Workspace at its declared path (#88). Written
+      // after publication so a Workspace copy that outlives a failed publication is
+      // only external state, never a moved binding (ADR 0023).
+      if (result.outcome === "succeeded") {
+        materializeOutputs(step, result.outputs, context.step);
+      }
+    } catch (error) {
+      if (!reported) observe({ kind: "attempt-unwind", ...ids });
+      throw error;
     }
     // A Verdict (pass or fail) still ran to an exit, so it advances the Run;
     // only a `failed` Attempt is retried.

@@ -16,12 +16,14 @@ import {
 } from "../workflow/workflow.js";
 import {
   interactiveStepTarget,
+  type ExecutionEvent,
   type RequestChannel,
   type RunReport,
   RUN_CANCEL_ABORT as CANCEL_ABORT,
   SIGNAL_ABORT,
 } from "../run/execution/execution.js";
 import type {
+  PublishAttemptRequest,
   RunGroup,
   RunOwner,
   RunRecord,
@@ -340,7 +342,18 @@ export interface ApplicationDependencies {
   /** Closed semantic Harness registry. Composition strips Adapter instances and
    * native discovery targets before handing these entries to Application. */
   readonly harnessRegistry?: readonly ApplicationHarnessRegistration[];
+  /** Where the lifecycle facts the Application owns are reported (#320): the
+   *  outcomes of the Step Attempts it settles, an answered authored gate and an
+   *  ended interactive Step. Composition fills it from the operational log; absent,
+   *  they are reported nowhere. */
+  readonly observe?: ApplicationObserver;
 }
+
+/** A lifecycle fact the Application reports: the same `attempt-end` Run execution
+ *  reports for the Attempts it settles. */
+type ApplicationEvent = Extract<ExecutionEvent, { kind: "attempt-end" }>;
+
+type ApplicationObserver = (event: ApplicationEvent) => void;
 
 export interface Application {
   readonly projectionPort: ProjectionPort;
@@ -365,6 +378,7 @@ const launchInputMap = z.record(z.string(), z.string());
 
 export function createApplication(deps: ApplicationDependencies): Application {
   const { catalog, runGroup, runExecution, prepareRunInteractiveStep } = deps;
+  const observe = deps.observe ?? (() => {});
   const process = deps.process;
   const launchWorkspacePath = canonicalizeWorkspacePath(
     deps.launchWorkspacePath,
@@ -633,6 +647,22 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const observers = runObservers.get(runId);
     if (observers === undefined) return;
     for (const observer of observers) observer.end("subject-gone");
+  }
+
+  // Settle a Step Attempt the Application owns — an answered authored gate or an
+  // ended interactive Step — and report its outcome (#320).
+  function settleAttemptOrThrow(
+    owner: RunOwner,
+    runId: string,
+    request: PublishAttemptRequest,
+  ): void {
+    publishGateAttemptOrThrow(owner.publishAttempt(request));
+    observe({
+      kind: "attempt-end",
+      runId,
+      attemptId: request.attemptId,
+      outcome: request.outcome,
+    });
   }
 
   // Wrap the acquired owner so each canonical write pushes a fresh Run snapshot
@@ -1780,34 +1810,30 @@ export function createApplication(deps: ApplicationDependencies): Application {
                 "application: a free-text gate has no declared output artifact name.",
               );
             }
-            publishGateAttemptOrThrow(
-              observed.publishAttempt({
-                attemptId: input.gate.attemptId,
-                outcome: "succeeded",
-                required: [{ name: outputName, type: "text" }],
-                outputs: [
-                  {
-                    name: outputName,
-                    type: "text",
-                    content: new TextEncoder().encode(input.text!),
-                  },
-                ],
-                at: new Date(),
-                advanceState: "running",
-              }),
-            );
+            settleAttemptOrThrow(observed, input.runId, {
+              attemptId: input.gate.attemptId,
+              outcome: "succeeded",
+              required: [{ name: outputName, type: "text" }],
+              outputs: [
+                {
+                  name: outputName,
+                  type: "text",
+                  content: new TextEncoder().encode(input.text!),
+                },
+              ],
+              at: new Date(),
+              advanceState: "running",
+            });
           } else {
             const reject = input.answer === "stop";
-            publishGateAttemptOrThrow(
-              observed.publishAttempt({
-                attemptId: input.gate.attemptId,
-                outcome: reject ? "failed" : "succeeded",
-                required: [],
-                outputs: [],
-                at: new Date(),
-                advanceState: reject ? "failed" : "running",
-              }),
-            );
+            settleAttemptOrThrow(observed, input.runId, {
+              attemptId: input.gate.attemptId,
+              outcome: reject ? "failed" : "succeeded",
+              required: [],
+              outputs: [],
+              at: new Date(),
+              advanceState: reject ? "failed" : "running",
+            });
             if (reject) {
               leaveClaimLive = false;
               return { status: "applied" };
@@ -2553,17 +2579,15 @@ export function createApplication(deps: ApplicationDependencies): Application {
         // its next rest. The empty succeeded Attempt stages no commit (store/AGENTS),
         // and a resume skips the Step. An End Stage marks the Attempt in the same
         // transaction, so the re-walk exits the group; no tracker is read or written.
-        publishGateAttemptOrThrow(
-          observed.publishAttempt({
-            attemptId,
-            outcome: "succeeded",
-            required: [],
-            outputs: [],
-            at: new Date(),
-            advanceState: "running",
-            ...(endsStage ? { endsStage: true as const } : {}),
-          }),
-        );
+        settleAttemptOrThrow(observed, input.runId, {
+          attemptId,
+          outcome: "succeeded",
+          required: [],
+          outputs: [],
+          at: new Date(),
+          advanceState: "running",
+          ...(endsStage ? { endsStage: true as const } : {}),
+        });
         const driven = await executeTrackedRouting({
           runId: input.runId,
           tracking,

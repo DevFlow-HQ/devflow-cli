@@ -43,7 +43,7 @@ export async function withClients(
       bundleManagement,
       shutdown,
       startupNotices,
-    } = wireApplication(overrides);
+    } = wireApplication(overrides, log);
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGHUP", "SIGTERM"];
     let reraise: Promise<void> | undefined;
     const onSignal = (signal: NodeJS.Signals): void => {
