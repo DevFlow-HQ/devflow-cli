@@ -9,9 +9,9 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   path with identical bytes ⇒ the probed version cannot have changed, so the cached profile is reused without re-running `--version`; any drift in path or
   identity requalifies, and folding the source into the key stops a reused profile reporting a stale source.
 - The permission bridge mints a 256-bit per-Run bearer token for its loopback MCP server; the token lives only in the `--mcp-config` argv and the server's
-  constant-time auth check. The Session holds the bridge's `redactSecret` from launch and routes every failure cause originating below launch through it
-  (`scrub` on each close observation; the stdin-write and stdout-read errors and the captured stderr text too), so the rule is "redact at the Seam",
-  not one spawn-error path (#127 A22).
+  constant-time auth check. The bridge registers it with the Harness secret registry while open, and the Session routes every failure cause originating
+  below launch through the registry's `redactSecrets` (`scrub` on each close observation; the stdin-write and stdout-read errors and the captured
+  stderr text too), so the rule is "redact at the Seam", not one spawn-error path (#127 A22).
 - The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `assistant`, `user`,
   `stream_event`, `result`, `telemetry`), parsed per frame by `parseFrame`, with the pure readers and the only raw-field accessors. Only the fields dispatch
   iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as

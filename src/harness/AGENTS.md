@@ -11,7 +11,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   executable env constants (`CLAUDE_CODE_EXECUTABLE_ENV` / `SECANT_CLAUDE_CODE` and
   `CODEX_EXECUTABLE_ENV` / `SECANT_CODEX`) — the synchronous discovery outcome and static served-capability table that Preflight shares
   with the Adapter (the resolved spawn target stays private), and the permission-bridge factory (`startPermissionBridge`), exported so the fixture
-  recorder composes the production bridge instead of a copy (#127 D3); its surface is launch flags, the bearer, a redactor and a teardown, never an MCP type.
+  recorder composes the production bridge instead of a copy (#127 D3); its surface is launch flags, the bearer, and a teardown, never an MCP type;
+  and the safe cause translator (`translateCause`, #316), the one bounded, redacting record of a failure cause that M8's operational log and
+  M11's Detailed diagnostics write.
   Recovery coordinates cross the Seam only as opaque `RecoveryCoordinate` values, never Run truth; callers never decide from their contents. Native
   protocol models and qualification stay private to each Adapter and re-export nothing native.
 - No Routing, Step kind, retry budget, or Run policy knowledge lives here; those are above the Seam. A Turn is one mechanical exchange, not a
@@ -30,6 +32,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `close` is idempotent and returns the same report each call; cleanup failure is separate and cannot rewrite a settled Turn.
 - Secrets Secant itself introduces are redacted from failures and diagnostics. Excluding raw protocol, private reasoning, and duplicate transcript
   content is Interface design, not generic secret redaction — a `HarnessFailure` still preserves all useful Harness-originated diagnostics and its cause.
+  One private registry (`secrets.ts`) owns it: a minter registers a secret while live and releases it on teardown (the bridge: listen to `close`,
+  which follows every Session's close and in-flight interrupt); nothing registers through the Interface. The Seam's `redactSecrets` keeps a cause an
+  Error; the translator redacts each string before cutting it. Its bounds are Interface facts pinned by its tests, in serialized UTF-8 bytes.
 - Steer is a profile capability like the others (`HarnessProfile.steer`, evidence-bearing). An Adapter derives its `steer` receipt from it rather than
   hard-coding a second rejection; the Claude Code profile declares it unavailable (print mode has no same-Turn guidance frame) and the fake's script
   decides it through the profile it supplies.

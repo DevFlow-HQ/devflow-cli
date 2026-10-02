@@ -18,8 +18,9 @@
 // The MCP-native protocol types (`@modelcontextprotocol/sdk`) stay behind this
 // Seam: the Adapter sees only opaque strings and the bridge's spawn flags. The
 // bearer token is a Secant-introduced secret; it lives only in the `--mcp-config`
-// argv and this server's auth check, and `redactSecret` scrubs it from any spawn
-// error whose argv would otherwise carry it back as a diagnostic.
+// argv and this server's auth check. It is registered with the Harness secret
+// registry while the bridge is open, so every redaction at the Seam (a spawn error
+// whose argv carries it back, say) and the safe cause translator scrub it.
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -27,6 +28,7 @@ import type { Socket } from "node:net";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { registerSecret } from "./secrets.js";
 
 /** The MCP server name; Claude addresses the tool as `mcp__<server>__<tool>`. */
 const SERVER_NAME = "secant-permissions";
@@ -38,9 +40,6 @@ const PERMISSION_TOOL = `mcp__${SERVER_NAME}__${TOOL_NAME}`;
 /** The message returned to a bridge call whose Turn ended before it was
  *  answered. Claude sees this as an ordinary denial and stops the tool use. */
 export const EXPIRED_MESSAGE = "request expired";
-
-/** The placeholder a redacted bearer token leaves behind in a diagnostic. */
-const REDACTED = "«redacted-bearer-token»";
 
 /** Constant-time bearer comparison (D2): the 256-bit per-Run token must not be
  *  recoverable by timing an early-exit `!==` byte compare. `timingSafeEqual`
@@ -54,17 +53,6 @@ function bearerMatches(
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
-
-/** Error properties Node's `child_process` populates that can carry the launch
- *  argv (and thus the bearer token) into a diagnostic. */
-const ARGV_BEARING_KEYS = [
-  "spawnargs",
-  "cmd",
-  "path",
-  "syscall",
-  "message",
-  "stack",
-] as const;
 
 /** One permission prompt, flattened to opaque strings so no MCP-native type
  *  crosses the Seam. `input` is the tool input serialized for the request shape;
@@ -86,7 +74,7 @@ export type ApprovalRouter = (
 ) => Promise<ApprovalOutcome>;
 
 /** A live bridge: the flags to launch Claude Code against it, the bearer it
- *  authenticates, a redactor for that bearer, and its teardown. */
+ *  authenticates, and its teardown. */
 export interface PermissionBridge {
   /** The exact argv fragment that points a Claude Code launch at this bridge
    *  (the inline server config and the permission-prompt tool). It is the only
@@ -96,10 +84,8 @@ export interface PermissionBridge {
    *  composer can list it as a known secret rather than parse it back out of
    *  `launchArgs`. */
   readonly bearer: string;
-  /** Scrub this bridge's bearer token out of a value about to become a
-   *  diagnostic (typically a spawn error whose `spawnargs` carries the argv). */
-  redactSecret(value: unknown): unknown;
-  /** Idempotent teardown: closes the MCP sessions and the loopback listener. */
+  /** Idempotent teardown: closes the MCP sessions and the loopback listener,
+   *  then releases the bearer from the secret registry. */
   close(): Promise<void>;
 }
 
@@ -180,6 +166,8 @@ export function startPermissionBridge(
           },
         },
       });
+      // Registered once handed out; nothing carries the token before this.
+      const release = registerSecret(token, "bearer-token");
       let closed: Promise<void> | undefined;
       resolve({
         launchArgs: [
@@ -189,7 +177,6 @@ export function startPermissionBridge(
           PERMISSION_TOOL,
         ],
         bearer: token,
-        redactSecret: (value) => redactToken(value, token),
         close() {
           if (closed !== undefined) return closed;
           closed = (async () => {
@@ -199,7 +186,7 @@ export function startPermissionBridge(
             for (const server of servers) await server.close().catch(() => {});
             for (const socket of sockets) socket.destroy();
             await new Promise<void>((done) => http.close(() => done()));
-          })();
+          })().finally(release);
           return closed;
         },
       });
@@ -254,37 +241,6 @@ function endWith500(res: {
 }): void {
   if (!res.headersSent) res.writeHead(500);
   if (!res.writableEnded) res.end();
-}
-
-/** Replace every occurrence of the bearer token in a would-be diagnostic. An
- *  Error is cloned with its message, stack, and argv-bearing fields scrubbed so
- *  the failure keeps its shape and cause without carrying the secret. */
-function redactToken(value: unknown, token: string): unknown {
-  const scrub = (text: string) => text.split(token).join(REDACTED);
-  if (value instanceof Error) {
-    const source = value as unknown as Record<string, unknown>;
-    const clone = new Error(scrub(value.message));
-    const target = clone as unknown as Record<string, unknown>;
-    // Every enumerable own field (Node puts spawnargs/path/syscall/code here).
-    for (const [key, raw] of Object.entries(source)) {
-      target[key] = scrubValue(raw, scrub);
-    }
-    // Plus the non-enumerable message/stack that Object.entries skipped.
-    for (const key of ARGV_BEARING_KEYS) {
-      const raw = source[key];
-      if (raw !== undefined) target[key] = scrubValue(raw, scrub);
-    }
-    return clone;
-  }
-  return scrubValue(value, scrub);
-}
-
-function scrubValue(raw: unknown, scrub: (text: string) => string): unknown {
-  if (typeof raw === "string") return scrub(raw);
-  if (Array.isArray(raw)) {
-    return raw.map((item) => (typeof item === "string" ? scrub(item) : item));
-  }
-  return raw;
 }
 
 /** Serialize a tool input to the request-shape string. An object becomes JSON;

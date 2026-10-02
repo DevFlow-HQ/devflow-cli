@@ -491,7 +491,9 @@ function scriptedProcess(script: {
   readonly lineEnding?: "\n" | "\r\n";
   readonly splitUtf8Scalars?: boolean;
   readonly close?: (token: string) => OwnedProcessClose;
-  readonly interrupt?: (token: string) => ProcessInterruption;
+  readonly interrupt?: (
+    token: string,
+  ) => ProcessInterruption | Promise<ProcessInterruption>;
   readonly closeStdin?: (token: string) => OwnedProcessClose;
 }): ScriptedProcess {
   let launchArgs: readonly string[] = [];
@@ -542,13 +544,13 @@ function scriptedProcess(script: {
     writeStdin: () => Promise.resolve(),
     closeStdin: () =>
       Promise.resolve(settle(script.closeStdin?.(token()) ?? exit0)),
-    interrupt: () => {
-      const interruption = script.interrupt?.(token()) ?? {
+    interrupt: async () => {
+      const interruption = (await script.interrupt?.(token())) ?? {
         close: { kind: "exited", status: 143 },
         escalated: false,
       };
       settle(interruption.close);
-      return Promise.resolve(interruption);
+      return interruption;
     },
     closed: () => closed,
   };
@@ -715,6 +717,40 @@ test("an unconfirmed interrupt carries its cause with the bearer redacted", asyn
   if (result.kind !== "lost") throw new Error("unreachable");
   assert.equal(result.detail.unknown, "interruption");
   assert.equal(result.detail.failure?.category, "interruption-unknown");
+  assertScrubbed(result, result.detail.failure?.cause, tokenOf(scripted));
+});
+
+test("an interrupt still in flight when the Harness closes carries its cause with the bearer redacted", async () => {
+  // The interrupt settles only after `close` has had its turn: the bridge must
+  // not release its bearer while a Session can still send a cause across.
+  let finishInterrupt!: () => void;
+  const interrupting = new Promise<void>((resolve) => {
+    finishInterrupt = resolve;
+  });
+  const scripted = scriptedProcess({
+    frames: [scriptedInit],
+    interrupt: async (token) => {
+      await interrupting;
+      return {
+        close: {
+          kind: "cleanup-error",
+          cause: new Error(`kill failed: Bearer ${token}`),
+        },
+        escalated: true,
+      };
+    },
+  });
+  const { harness, turn, live } = await scriptedTurn(scripted);
+  await live;
+  const interrupted = turn.interrupt();
+  const closing = harness.close();
+  setImmediate(finishInterrupt);
+  assert.deepEqual(await interrupted, { outcome: "accepted" });
+  const result = await turn.result();
+  await closing;
+
+  assert.equal(result.kind, "lost");
+  if (result.kind !== "lost") throw new Error("unreachable");
   assertScrubbed(result, result.detail.failure?.cause, tokenOf(scripted));
 });
 

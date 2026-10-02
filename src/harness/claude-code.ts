@@ -63,6 +63,7 @@ import {
   type ApprovalRequest,
   type PermissionBridge,
 } from "./permission-bridge.js";
+import { redactSecrets, redactText } from "./secrets.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   discoverClaudeCode,
@@ -485,13 +486,10 @@ class ClaudeCodeSession {
   private unusableReason: string | undefined;
   private effectiveModel: ModelObservation = { known: false };
   private stderr = "";
-  /** The bridge's bearer redactor, held from launch so every failure cause that
-   *  originates below launch — a close while a Turn is live, an unconfirmed
-   *  interrupt, a cleanup error, a pipe failure — crosses the Seam scrubbed
-   *  (#127 A22). The rule is "redact at the Seam", not "redact where a leak was
-   *  found". Identity until a bridge exists: before launch no Secant secret has
-   *  been introduced. */
-  private redact: (value: unknown) => unknown = (value) => value;
+  /** A claimed interrupt still settling its Turn. `close` awaits it, so the
+   *  bridge — and the bearer it keeps registered for Seam redaction — outlives
+   *  every cause this Session can still send across. */
+  private interrupting: Promise<void> | undefined;
 
   constructor(
     readonly name: string,
@@ -556,6 +554,14 @@ class ClaudeCodeSession {
     this.process = undefined;
     this.processTurn = undefined;
     this.active = undefined;
+    this.interrupting = this.settleInterruption(turn, owned);
+    await this.interrupting;
+  }
+
+  private async settleInterruption(
+    turn: ClaudeCodeTurn,
+    owned: OwnedProcess,
+  ): Promise<void> {
     const outcome = await owned.interrupt(DEFAULT_CLEANUP_TIMEOUT_MS);
     if (turn.settled) return;
     const close = this.scrub(outcome.close);
@@ -596,6 +602,7 @@ class ClaudeCodeSession {
     }
     const launch = this.launchPromise;
     if (launch !== undefined) await launch;
+    await this.interrupting;
     const owned = this.process;
     if (owned === undefined) {
       return {
@@ -712,7 +719,7 @@ class ClaudeCodeSession {
         phase: "turn",
         category: "stdin-write",
         possibleEffects: "possible",
-        cause: this.redact(error),
+        cause: redactSecrets(error),
       });
       void this.interrupt(turn);
       return;
@@ -736,7 +743,6 @@ class ClaudeCodeSession {
     if (this.closed) {
       return { ok: false, category: "closed-before-launch", cause: undefined };
     }
-    this.redact = (value) => bridge.redactSecret(value);
     // A first launch mints the Session with `--session-id`; any relaunch (an
     // explicit resume coordinate, or a Session that already ran and detached)
     // reattaches with `--resume`, never a silent fresh conversation.
@@ -788,7 +794,7 @@ class ClaudeCodeSession {
       return {
         ok: false,
         category: launched.failure.kind,
-        cause: this.redact(launched.failure.cause),
+        cause: redactSecrets(launched.failure.cause),
       };
     }
 
@@ -796,14 +802,14 @@ class ClaudeCodeSession {
     this.process = owned;
     this.processTurn = turn;
     void this.consumeStdout(owned).catch((error) => {
-      const redacted = this.redact(error);
+      const redacted = redactSecrets(error);
       this.active?.protocolCorruption(
         `stdout read failed: ${describe(redacted)}`,
         redacted,
       );
     });
     void this.consumeStderr(owned).catch((error) => {
-      this.stderr += ` stderr read failed: ${describe(this.redact(error))}`;
+      this.stderr += ` stderr read failed: ${describe(redactSecrets(error))}`;
     });
     void owned.closed().then((result) => this.onClosed(owned, result));
     return { ok: true };
@@ -844,7 +850,7 @@ class ClaudeCodeSession {
     } catch (error) {
       this.active?.protocolCorruption(
         "malformed JSON frame",
-        this.redact(error),
+        redactSecrets(error),
       );
       return;
     }
@@ -890,7 +896,7 @@ class ClaudeCodeSession {
    *  both the cause and every diagnostic string derived from it are scrubbed. */
   private scrub(close: OwnedProcessClose): OwnedProcessClose {
     if (close.kind === "cleanup-error" || close.kind === "spawn-error") {
-      return { kind: close.kind, cause: this.redact(close.cause) };
+      return { kind: close.kind, cause: redactSecrets(close.cause) };
     }
     return close;
   }
@@ -903,7 +909,7 @@ class ClaudeCodeSession {
    *  that crosses the Seam from below launch: a child that echoed its argv on
    *  failure would otherwise carry the bearer back verbatim. */
   private diagnostics(): string {
-    const text = String(this.redact(this.stderr)).trim();
+    const text = redactText(this.stderr).trim();
     return text.length === 0 ? "" : ` stderr: ${text}`;
   }
 }

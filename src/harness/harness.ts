@@ -659,3 +659,9 @@ export type { HarnessDiscovery } from "./discovery.js";
 // router) instead of carrying a copy (#127 D3). The surface is opaque strings and
 // launch flags: no MCP vocabulary or protocol type crosses this entry.
 export { startPermissionBridge } from "./permission-bridge.js";
+
+// The safe cause translator (ADR 0041): the one bounded, redacting record of a
+// failure cause that diagnostics may write. The secret registry it redacts from
+// and its bounds stay private; nothing registers a secret through this entry.
+export { translateCause } from "./safe-cause.js";
+export type { SafeCause } from "./safe-cause.js";
