@@ -49,6 +49,9 @@ operational log file to `logs/` in the Secant home: `~/.secant/logs` by default,
 - A fatal error names its file on stderr. If the folder cannot be written, Secant says so once on stderr and carries on unlogged.
 - Logs hold lifecycle facts, never prompts, arguments, environment values, or credentials, and the files are readable only by you where the OS
   supports it.
+- The runner programs (`bun run test:terminal` and `bun run test:runtime-conformance`) are the exception to the Secant home: they log to
+  `$SECANT_LOG_DIR` when it is set, else to `secant-runner-logs` in your OS temp folder, and their failure summary names the folder.
+- When a `check` or `consumer` job fails in CI, its logs are the artifact `operational-logs-<job>-<os>` on the run's summary page, kept for 30 days.
 
 ## Pull requests
 

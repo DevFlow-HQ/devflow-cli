@@ -38,15 +38,16 @@ Read the line that matches your task, then the file it names. The canonical gate
 
 Before editing under a Module root that carries its own `AGENTS.md`, read that file. Each one is listed here by path when it is created:
 
-- `src/application/AGENTS.md` — Application Module: observed-owner writes, gate answering, Trust-grant order, launch and Harness selection, live-Run reads, derived state.
+- `src/application/AGENTS.md` — Application Module: observed-owner writes, gate answering, Trust-grant order, launch and Harness selection, live-Run reads, derived state,
+  the guarded observer, Operation `runId`, and `run-rest`.
 - `src/headless/AGENTS.md` — headless CLI Module: the exit-code contract, gate re-read, frozen `--json` shapes, and commander-settings ordering.
 - `src/tui/AGENTS.md` — presentation Module: OpenTUI layout and key-binding invariants, the Renderer Port rule, and the per-screen view seams for screen authors.
 - `src/bundle/AGENTS.md` — Bundle Module: digest, validator, and budget invariants for slice authors.
 - `src/run/store/AGENTS.md` — Run Store Module: coordination/run.db split, crash-safety ordering, and fencing invariants for slice authors.
-- `src/harness/AGENTS.md` — Harness Module: Interface opacity, terminal ordering, typed-failure/throw split, and durable-admission invariants.
-- `src/process/AGENTS.md` — process Module: the Process Interface, Windows `escalated` (true for a live child, false once gone), the shared-bound shutdown, git spawns.
-- `src/composition/AGENTS.md` — composition Module: Adapter opacity above the root and sole Harness-registry ownership.
-- `src/run/execution/AGENTS.md` — Run execution Module: abort-reason to resting-state mapping, the three admitted Turn writes, Agent evidence, Command-step Git hardening.
+- `src/harness/AGENTS.md` — Harness Module: Interface opacity, terminal ordering, failure/throw split, durable admission, `translateCause`, secret registry, phase observer.
+- `src/process/AGENTS.md` — process Module: the Process Interface, Windows `escalated`, the shared-bound shutdown, git spawns, and `ChildWatch` child facts.
+- `src/composition/AGENTS.md` — composition Module: Adapter opacity above the root, sole Harness-registry ownership, the operational log, and the per-Run scope.
+- `src/run/execution/AGENTS.md` — Run execution Module: abort-reason rests, Turn writes, Agent evidence, Command-step Git hardening, the guarded observer, `store-write` spans.
 - `src/catalog/AGENTS.md` — Catalog Module: first-install-wins, generation-keyed Trust grants, lock-free re-extraction, and the asset-root Interface crossing.
 
 ## Failing checks

@@ -11,7 +11,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   executable env constants (`CLAUDE_CODE_EXECUTABLE_ENV` / `SECANT_CLAUDE_CODE` and
   `CODEX_EXECUTABLE_ENV` / `SECANT_CODEX`) — the synchronous discovery outcome and static served-capability table that Preflight shares
   with the Adapter (the resolved spawn target stays private), and the permission-bridge factory (`startPermissionBridge`), exported so the fixture
-  recorder composes the production bridge instead of a copy (#127 D3); its surface is launch flags, the bearer, and a teardown, never an MCP type;
+  recorder composes the production bridge instead of a copy (#127 D3) and so redaction tests register a bearer the way production does (#334);
+  its surface is launch flags, the bearer, and a teardown, never an MCP type;
   and the safe cause translator (`translateCause`, #316), the one bounded, redacting record of a failure cause that M8's operational log and
   M11's Detailed diagnostics write; and the optional phase observer each prepare takes (`HarnessPhaseObserver`, #322), which carries only the
   semantic phase, an optional closed semantic `step` (#325), the Session key, elapsed time, and a typed `HarnessFailure`; no typed field carries a

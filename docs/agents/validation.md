@@ -8,3 +8,5 @@ persistence.
 
 Translate external failures at their owning Seam into typed domain failures while preserving the original cause. Presentation formats those failures;
 it does not classify them.
+
+For a cause written to a log or diagnostic, read the safe cause translator (`translateCause`) in the [Harness guidance](../../src/harness/AGENTS.md).

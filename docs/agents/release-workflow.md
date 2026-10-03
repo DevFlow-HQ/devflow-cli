@@ -86,8 +86,9 @@ The three-OS `check` and `consumer` jobs first persist `SECANT_LOG_DIR` through 
 `runner.temp/secant-operational-logs`, outside every test home and beside Windows' `secant-tests`, so cleanup cannot remove the evidence.
 Use the runner context in the step's `env`, where GitHub permits it; job-level `env` cannot reference `runner.temp`.
 
-Each job ends with one `actions/upload-artifact@v4` step named `operational-logs-<job>-${{ matrix.os }}`, reading `env.SECANT_LOG_DIR`,
-with `retention-days: 30` and `if-no-files-found: ignore`. A failure before any Secant invocation leaves no folder and no artifact.
+Each job ends with one `actions/upload-artifact@v4` step, `Upload failed-job operational logs`, whose artifact `with.name` is
+`operational-logs-<job>-${{ matrix.os }}`; it reads `env.SECANT_LOG_DIR`, with `retention-days: 30` and `if-no-files-found: ignore`.
+A failure before any Secant invocation leaves no folder and no artifact.
 The `check` upload uses `failure()`, after the always-run runtime conformance step. The `consumer` aggregation keeps `if: always()`
 and gains `id: consumer_result`; its upload uses `failure() && steps.consumer_result.outcome == 'failure'`, because scenario steps
 continue on error. Successful jobs upload no logs. Keep existing scenario order, conditions, and `continue-on-error` behavior.

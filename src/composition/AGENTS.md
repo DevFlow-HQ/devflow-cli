@@ -27,15 +27,16 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   failure record (write-once; the TUI writes a render failure before draining live Runs) before a throw reaches the CLI host, whose catch names
   the file through `describeFatal`. A log failure is one stderr notice (held until the TUI's terminal is restored) that disables logging and
   changes no outcome, exit code, or stdout. Serialization failures use that same fallback; a failed or zero-progress write is never retried.
-- `SECANT_HOME`, `SECANT_LOG_DIR`, and `SECANT_LOG_DETAIL` are read once, side by side, in `resolveHostContext` (`wiring.ts`); nothing below
-  composition reads them.
+- `SECANT_HOME`, `SECANT_LOG_DIR`, and `SECANT_LOG_DETAIL` are read side by side in one function, `resolveHostContext` (`wiring.ts`), which each
+  client invocation calls twice (`runSecantInvocation`, then `wireApplication`) against the same environment; nothing below composition reads them.
   Records hold only allowlisted semantic fields and causes from `translateCause`; the recursive named-field scrub is a second layer. Tests reach the
   sink through the `logSink` wiring override and never set the environment names. An injected sink defaults to the injected home's `logs`,
   bypassing `SECANT_LOG_DIR`, so an injected clock cannot prune the real process's shared log folder, and reads detail only from its own `detail`.
 - `wireApplication`'s second argument is the Secant invocation's log, passed only by the two client entries; a direct caller logs no lifecycle.
   `runLifecycleObserver` pairs each start with its settlement on the host context's `logClock`, the one clock the sink also reads (#320).
-  `applicationObserver` (`application-log.ts`, #319) maps the Application's pre-Run events the same way and hands its `attempt-end` to that
-  lifecycle observer, which holds the Attempt's start.
+  `applicationObserver` (`application-log.ts`, #319) maps the Application's events the same way: pre-Run events, tracked Operations with their
+  `runId`, and each Application-owned `run-rest` as a `run-end` record (#331). It hands its `attempt-end` to that lifecycle observer, which holds the
+  Attempt's start.
 - `OperationalLog.record` maps each event to its level (`recordLevel`): a failed Harness phase, unclean cleanup, or not-ready qualification warns.
   `harness-log.ts` (`prepareRecorded`) hands each prepare its scope's Process and phase observer and wraps the Prepared Harness so it records its
   `CleanupReport` on first close and each completed Turn's usage: one seam for the qualify, Run, and interactive close sites, a double included. A
