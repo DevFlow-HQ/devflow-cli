@@ -86,12 +86,15 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - The `tests/harness` domain owns the deterministic fake Adapter, shared conformance, and native replayers. Recorded and residual synthetic cases live in
   `tests/harness/fixtures/<harness>/<case>/` with a `recording.json` sidecar and opt-in recorder.
-- Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, and native Steer. Other control groups stay capability-specific.
+- Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, native Steer, and leftover re-delivery. Other
+  control groups stay capability-specific.
   Structured clarifications, after-acceptance checkpoint, load-with-replay, and caller-contract violations remain fake-only. The fake performs load-with-replay:
   resumed Turn re-emits the Session's transcript history (`assistant-content`, `tool-activity`), drops a scripted entry that repeats a replayed one, then
   emits `REPLAY_BARRIER` (an `activity`) before any live event — history is historical by position, inside the closed vocabulary.
 - Native Adapter and replayer conformance that launches real children runs only in standalone runtime conformance (#198); scripted Process failure
   cases through the Claude Code Seam run in the semantic suite (#332). The layer rules are in [testing](../../docs/agents/testing.md).
+- **Leftover recording race:** a leftover Steer lands only in the few milliseconds after a native turn's Stop hook completes, so its recorder
+  steers from the stdout observer and retries; a line-buffered pass-through shim missed 40 of 40, so any recorder shim forwards raw bytes (#357).
 - **Replayer startup-signal race:** a Bun child's `process.on("SIGTERM")` handler is only honoured once installed — a SIGTERM delivered before the
   child's top-level code runs hits the default disposition and kills it (this is a startup race, not a `bun test` limitation; plain `bun` shows the same
   window). So the replayer installs its SIGTERM handler at startup, and interrupt/close cases wait for the `session` event (init observed) before
