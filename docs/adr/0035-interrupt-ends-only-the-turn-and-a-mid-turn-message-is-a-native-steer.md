@@ -51,15 +51,18 @@ Code 2.1.284, answers without the SDK's `initialize` in milliseconds, ends the T
 frame, keeps the partial text in context, and stops the foreground tool. It holds while a tool waits on Secant's permission bridge too: Claude Code
 cancels the pending approval call with an MCP `notifications/cancelled`, which expires the Harness Request, and the tool never runs. That makes Claude
 Code's interruption a confirmed active-Turn interruption rather than a process-only stop. Qualification bounds the dependency: a Claude Code that does
-not answer the request falls back to today's process stop, SIGTERM of the process group on POSIX and `taskkill /T /F` on Windows, and `--resume`,
-which loses partial streamed text. This is the same wire and the same degrade rule [ADR
-0034](./0034-choose-and-change-model-and-effort-as-one-run-wide-model-choice.md) adopted for `set_model`; adopting the Agent SDK itself stays rejected
-for the reasons in [Establish Claude Code's viable structured transports](https://github.com/secantdev/secant/issues/3). An Interrupt stops the Turn's
-foreground tool work; a shell the model moved to the background may outlive it until the Session closes. The same held on Windows
-([recorded](../research/windows-live-interrupt-and-steer.md) on Claude Code 2.1.283 and codex-cli 0.155.0), with one limit: a script the Bash tool
-runs through Git Bash leaves the process tree, so neither Claude Code's stop nor Secant's `taskkill /T` reaches it, and it can outlive the Interrupt
-and the Session. The Turn stop itself is still confirmed, Claude Code's Windows interruption evidence states the limit, and containment is decided
-separately on [Decide how Secant contains a Harness's descendant processes on Windows](https://github.com/secantdev/secant/issues/259).
+not answer the request falls back to today's process stop, SIGTERM of the process group on POSIX and job termination on contained Windows
+children, or `taskkill /T /F` on a Windows fallback, and `--resume`, which loses partial streamed text. This is the same wire and the same degrade
+rule [ADR 0034](./0034-choose-and-change-model-and-effort-as-one-run-wide-model-choice.md) adopted for `set_model`; adopting the Agent SDK itself
+stays rejected for the reasons in [Establish Claude Code's viable structured transports](https://github.com/secantdev/secant/issues/3).
+On POSIX, an Interrupt stops the Turn's foreground tool work; a shell the model moved to the background may outlive it until the Session closes.
+**Windows amendment, 2026-10-04 ([#259 decision](https://github.com/secantdev/secant/issues/259#issuecomment-5890689876)):**
+Windows Interrupt stops all work owned by the contained native process, including background tools and Harness-launched MCP servers. Request
+native interruption first, then terminate and reap the whole job before reporting the stop finished. Native terminal confirmation and cleanup are
+separate evidence: a force-kill without confirmation is `lost`, and incomplete cleanup remains visible. Cancel, Session teardown, and shutdown also
+reap the owned tree. This supersedes the earlier Windows background-work allowance; the POSIX allowance is unchanged. Without containment, usual
+Windows cleanup can still miss escaped Git Bash descendants, as [recorded](../research/windows-live-interrupt-and-steer.md) on Claude Code 2.1.283
+and codex-cli 0.155.0. Exact Harness Session recovery after a reaped Interrupt belongs to the Harness Adapters.
 
 **Recording.** Each Steer is durable against its Turn: the human's text, when it was sent, and how it settled, as delivered within the Turn, delivered
 after a native boundary, re-delivered, or dropped by an Interrupt or a lost Turn. An interrupted Turn records the stop used, the control request or

@@ -214,6 +214,132 @@ async function fallback(): Promise<void> {
   }
 }
 
+// The Process paths used by the Harness owners: cancel uses interrupt, while
+// Session teardown and shutdown close stdin and escalate inside one shared bound.
+async function stopTree(
+  stop: "interrupt" | "cancel" | "session-teardown" | "shutdown",
+): Promise<void> {
+  const { adapter, facts } = observed();
+  const launched = await adapter.spawnOwnedProcess(options("bash-tree"));
+  assert.ok(launched.ok);
+  const ready = await stage("escaped Bash descendants ready", () =>
+    line(launched.process),
+  );
+  const tree = z
+    .object({
+      harnessPid: z.number().int().positive(),
+      bashPid: z.number().int().positive(),
+      pids: z.array(z.number().int().positive()).length(2),
+    })
+    .parse(JSON.parse(ready.text));
+  const holders = [tree.harnessPid, ...tree.pids].map(observeLifetime);
+  const stdoutEnd = ready.iterator.next();
+  const stderr = collect(launched.process.stderr);
+  try {
+    assert.ok(holders.every((holder) => holder.alive()));
+    assert.equal(isLive(tree.bashPid), false);
+    const close = await stage(`whole-tree ${stop}`, async () => {
+      if (stop === "interrupt" || stop === "cancel") {
+        const interrupted = await launched.process.interrupt(5000);
+        assert.equal(interrupted.escalated, true);
+        assert.equal(interrupted.containment, "contained");
+        assert.equal(await launched.process.interrupt(5000), interrupted);
+        return interrupted.close;
+      }
+      const closed = await launched.process.closeStdin(5000);
+      assert.equal(await launched.process.closeStdin(5000), closed);
+      return closed;
+    });
+    assert.equal(close.kind, "exited");
+    assert.equal(await launched.process.closed(), close);
+    assert.ok(
+      holders.every((holder) => !holder.alive()),
+      "a successful stop must confirm every retained descendant handle",
+    );
+    assert.equal((await stdoutEnd).done, true);
+    assert.equal(await stderr, "");
+    assertContainment(facts, "contained");
+    assert.deepEqual(
+      facts
+        .filter((fact) => fact.role === "harness-runtime")
+        .map((fact) => fact.kind),
+      [
+        "spawn",
+        stop === "interrupt" || stop === "cancel" ? "cancellation" : "timeout",
+        "kill-escalation",
+        "reap",
+      ],
+    );
+    assert.ok(
+      facts.every((fact) => fact.role !== "tree-kill"),
+      "contained stops must not spawn taskkill",
+    );
+    const afterClose = await launched.process.interrupt(5000);
+    if (stop === "session-teardown" || stop === "shutdown")
+      assert.equal(afterClose.escalated, false);
+    assert.equal(facts.filter((fact) => fact.kind === "reap").length, 1);
+  } finally {
+    for (const holder of holders) holder.close();
+    await launched.process.interrupt(5000);
+  }
+}
+
+async function incompleteCleanup(
+  failAt: "job-terminate" | "descendant-confirm",
+  stop: "interrupt" | "close-stdin",
+): Promise<void> {
+  const { adapter, facts } = observed({
+    testWindowsContainmentFailure: failAt,
+  });
+  const launched = await adapter.spawnOwnedProcess(options("bash-tree"));
+  assert.ok(launched.ok);
+  const ready = await line(launched.process);
+  const tree = z
+    .object({
+      harnessPid: z.number().int().positive(),
+      pids: z.array(z.number().int().positive()).length(2),
+    })
+    .parse(JSON.parse(ready.text));
+  const holders = [tree.harnessPid, ...tree.pids].map(observeLifetime);
+  // A failed drain destroys the readers. Observe their errors independently of
+  // the typed Process close result so none can masquerade as successful cleanup.
+  const stdoutEnd = ready.iterator.next().catch(() => undefined);
+  const stderr = collect(launched.process.stderr).catch(() => undefined);
+  try {
+    const close =
+      stop === "interrupt"
+        ? (await launched.process.interrupt(5000)).close
+        : await launched.process.closeStdin(5000);
+    assert.ok(close.kind === "cleanup-error");
+    assert.ok(close.cause instanceof Error);
+    assert.match(
+      close.cause.message,
+      new RegExp(`forced containment failure: ${failAt}`),
+    );
+    assertContainment(facts, "contained");
+    assert.ok(facts.every((fact) => fact.role !== "tree-kill"));
+    if (failAt === "job-terminate") {
+      assert.ok(
+        holders.every((holder) => holder.alive()),
+        "failed termination must not claim death",
+      );
+      assert.ok(
+        facts.every(
+          (fact) => fact.kind !== "reap" && fact.kind !== "kill-escalation",
+        ),
+      );
+    } else {
+      assert.equal(await launched.process.closed(), close);
+      assert.equal(facts.filter((fact) => fact.kind === "reap").length, 1);
+      await until(() => holders.every((holder) => !holder.alive()));
+    }
+  } finally {
+    for (const holder of holders) holder.close();
+    await launched.process.closed();
+    await Promise.all([stdoutEnd, stderr]);
+  }
+}
+
 async function crashCleanup(): Promise<void> {
   // The holder must itself be uncontained, otherwise its ancestor's job could
   // hide a broken inner job. Kill only this holder, never /T.
@@ -282,6 +408,26 @@ export function registerWindowsContainmentCases(
     ["forced-fallback-once", fallback],
     ["parent-crash-escaped-bash", crashCleanup],
     ["exit-wait-reference", waitReference],
+    ["interrupt-escaped-tree", () => stopTree("interrupt")],
+    ["cancel-escaped-tree", () => stopTree("cancel")],
+    ["session-teardown-escaped-tree", () => stopTree("session-teardown")],
+    ["shutdown-escaped-tree", () => stopTree("shutdown")],
+    [
+      "interrupt-termination-error",
+      () => incompleteCleanup("job-terminate", "interrupt"),
+    ],
+    [
+      "shutdown-termination-error",
+      () => incompleteCleanup("job-terminate", "close-stdin"),
+    ],
+    [
+      "interrupt-confirmation-error",
+      () => incompleteCleanup("descendant-confirm", "interrupt"),
+    ],
+    [
+      "shutdown-confirmation-error",
+      () => incompleteCleanup("descendant-confirm", "close-stdin"),
+    ],
   ] as const) {
     register({
       name: `process-windows-containment-${name}`,

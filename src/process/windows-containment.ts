@@ -65,8 +65,8 @@ function loadKernel() {
 type Kernel = ReturnType<typeof loadKernel>["symbols"];
 let kernel: Kernel | undefined;
 
-/** Test-only failures at pre-execution acquisition points. Composition never
- * supplies one; there is no environment or command-line containment switch. */
+/** Test-only acquisition and cleanup failures. Composition never supplies one;
+ * there is no environment or command-line containment switch. */
 export type ContainmentFailureStage =
   | "job-create"
   | "job-configure"
@@ -75,7 +75,9 @@ export type ContainmentFailureStage =
   | "job-list"
   | "create-process"
   | "exit-wait"
-  | "exit-callback";
+  | "exit-callback"
+  | "job-terminate"
+  | "descendant-confirm";
 
 export interface ContainedChild {
   readonly pid: number;
@@ -84,6 +86,8 @@ export interface ContainedChild {
   readonly stderr: Socket;
   readonly close: Promise<OwnedProcessClose>;
   alive(): boolean;
+  /** Request job-level termination once; true means a forced kill was sent. */
+  terminate(): boolean;
 }
 
 type LaunchResult =
@@ -277,10 +281,23 @@ function registerExit(
   }
 }
 
+// A contained stop has its own status, never kill-on-close's misleading zero.
+// Only Process attributes the successful kill to ChildWatch; callers use facts
+// and escalation evidence rather than interpreting this private native code.
+const REAP_EXIT_CODE = 0x53454341;
+
+function terminateJob(k: Kernel, job: bigint): void {
+  if (!k.TerminateJobObject(job, REAP_EXIT_CODE))
+    throw nativeError(k, "TerminateJobObject");
+}
+
 /** Termination requests stop the tree, but pipe EOF can precede its process
  * handles being signaled. Retain the job while confirming those handle exits. */
-async function endJob(k: Kernel, job: bigint, deadline: number): Promise<void> {
-  if (!k.TerminateJobObject(job, 1)) throw nativeError(k, "TerminateJobObject");
+async function confirmJobExit(
+  k: Kernel,
+  job: bigint,
+  deadline: number,
+): Promise<void> {
   let capacity = 16;
   let processes: Uint8Array;
   for (;;) {
@@ -473,6 +490,7 @@ export async function launchContained(
     k.CloseHandle(thread);
     thread = 0n;
     let live = true;
+    let terminated = false;
     // Install the drain observers before releasing the child's pipe handles.
     const drained = Promise.all(
       [output.socket, errors.socket].map((socket) =>
@@ -488,7 +506,9 @@ export async function launchContained(
       closeDeadline = Date.now() + 1000;
       let releaseError: Error | undefined;
       try {
-        await endJob(k, ownedJob, closeDeadline);
+        if (!terminated) terminateJob(k, ownedJob);
+        check("descendant-confirm");
+        await confirmJobExit(k, ownedJob, closeDeadline);
       } finally {
         if (!k.CloseHandle(ownedJob))
           releaseError = nativeError(k, "CloseHandle(job)");
@@ -537,6 +557,13 @@ export async function launchContained(
         stderr: errors.socket,
         close,
         alive: () => live,
+        terminate: () => {
+          if (!live || terminated) return false;
+          check("job-terminate");
+          terminateJob(k, ownedJob);
+          terminated = true;
+          return true;
+        },
       },
     };
   } catch (cause) {

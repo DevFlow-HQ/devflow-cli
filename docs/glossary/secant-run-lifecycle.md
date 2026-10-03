@@ -131,9 +131,10 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Steer** — a message the human sends while a **Turn** is live, delivered natively at the **Harness**'s next boundary and inside that Turn,
   which lasts until every Steer is delivered. Delivered means the Harness put it in front of the model, not that the model followed it. An
   **Interrupt** drops a Steer not yet delivered and returns its text to the human. _Avoid_: queued message.
-- **Interrupt** — asking the **Harness** to stop the current live **Turn** and its foreground tool work. It ends only the Turn: the **Step Attempt**
-  stays open and the **Run** waits `blocked` on the human, whose next message continues the same **Harness Session**. It does not close the
-  Harness, halt the Run, or cancel it.
+- **Interrupt** — asking the **Harness** to stop the current live **Turn** and its tool work. On contained Windows processes it reaps all owned
+  work, including background tools and Harness-launched MCP servers; on POSIX it stops foreground tool work, and background work may survive until
+  Session close. It ends only the Turn: the **Step Attempt** stays open and the **Run** waits `blocked` on the human, whose next message continues
+  the same **Harness Session**, recovering its exact native conversation after a Windows reap. It does not halt or cancel the Run.
 - **Reasoning summary** — text a **Harness**'s provider writes for the user about the model's reasoning during a **Turn**, such as a
   summarized thought. It may cross the Harness Seam and be shown. The raw chain of thought is private reasoning and never does. _Avoid_: thinking,
   chain of thought.

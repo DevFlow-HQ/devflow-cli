@@ -9,13 +9,15 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   an implementation (where and how many is its guidance's); no other Module constructs or imports one.
 - Windows has no graceful stage (#127 A6, amended 2026-09-18): Windows' polite close (`taskkill` without `/F`) reaches only a window, and every child this
   Module spawns is `windowsHide: true` and so has none — verified on a desktop, where the same executable closed politely only when launched visible. So
-  `killGroup` runs `taskkill /T /F` for both signals there, `interrupt` force-kills a live child at once and reports `escalated: true` (a child already
-  gone reports `false`), and the graceful-stop proof in the spawn suite is POSIX-only by design. Off Windows: SIGTERM to the group, then SIGKILL.
+  contained owned children terminate their job, and Node children use `taskkill /T /F` for both signals. `interrupt` force-kills a live child at once
+  and reports `escalated: true` (a child already gone reports `false`). The graceful-stop proof is POSIX-only. Off Windows: SIGTERM, then SIGKILL.
 - Windows owned launches attach a separate kill-on-close, no-breakaway job at creation. Only `windows-containment.ts` imports `bun:ffi`.
   The root starts suspended until its exit wait is registered. Any pre-execution failure releases the attempt before the Node fallback runs.
   Root-handle exit terminates the job and confirms descendant handle exits before releasing it and publishing `closed()`; pipe EOF alone does not prove death.
   The existing close bound spans descendant-exit confirmation and output drain; a timeout is a cleanup error.
-  The `spawn` fact and interruption carry `contained` or `fallback`; Command spawns carry neither. Taskkill stopping stays until #362.
+  The `spawn` fact and interruption carry `contained` or `fallback`; Command spawns carry neither.
+  Interrupt and stdin-close escalation terminate the whole job with a private stop code and record a reap only after a successful kill request;
+  callers use child facts and cleanup outcomes, never exit codes, because kill-on-close can report zero. Failed termination records no kill.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound
   again to die once force-killed. The bound is not split between the stages.
 - The primary single-PATH-walk comment (D1, `walkPath`) covers only this Module's executable resolution; it must not be read as excluding the three git

@@ -304,7 +304,7 @@ export type ChildFact =
  *  ignored, so a fact can never change a Process outcome. */
 export interface ProcessAdapterOptions {
   readonly observeChild?: (fact: ChildFact) => void;
-  /** Test-only acquisition failure; never wired by production composition. */
+  /** Test-only containment failure; never wired by production composition. */
   readonly testWindowsContainmentFailure?: ContainmentFailureStage;
 }
 
@@ -559,9 +559,9 @@ export interface OwnedProcess {
   closeStdin(timeoutMs: number): Promise<OwnedProcessClose>;
   /** Off Windows: SIGTERM the tree, wait up to `gracefulMs` for it to close, and if
    * it does not, SIGKILL within the same bound and report `escalated: true`. On
-   * Windows: force-kill the tree (`taskkill /T /F`) at once and report
-   * `escalated: true` for a live child — no product child can observe a graceful
-   * request there. Repeated calls return the same interruption. */
+   * Windows: terminate the contained job, or `taskkill /T /F` for a fallback,
+   * at once and report `escalated: true` for a live child. Process proves cleanup,
+   * never native Harness interruption. Repeated calls return the same result. */
   interrupt(gracefulMs: number): Promise<ProcessInterruption>;
   closed(): Promise<OwnedProcessClose>;
 }
@@ -925,8 +925,7 @@ class ManagedOwnedProcess implements OwnedProcess {
 
   private kill(signal: "SIGTERM" | "SIGKILL"): void {
     if (this.child.kind === "contained") {
-      if (this.child.child.alive())
-        killWindowsTree(this.child.child.pid, signal, this.watch);
+      if (this.child.child.terminate()) this.watch.killing(signal);
     } else killGroup(this.child.child, signal, this.watch);
   }
 
@@ -942,9 +941,10 @@ class ManagedOwnedProcess implements OwnedProcess {
         // polite close (`taskkill` without `/F`) reaches only a window, and every
         // child this Module spawns runs `windowsHide: true`, so none can observe
         // it; a graceful wait could never change the outcome, only delay it. A
-        // live child is force-killed at once and reported escalated — the Adapter
-        // then reports the Turn `lost`, never a confirmed `interrupted` it cannot
-        // vouch for. A child already gone was not killed by us: not escalated.
+        // live child is force-killed at once and reported escalated. A contained
+        // child uses job termination, a fallback uses taskkill. Native Harness
+        // confirmation is separate evidence owned by the Harness Adapter.
+        // A child already gone was not killed by us: not escalated.
         const live = this.alive();
         if (live) this.watch.stopping("cancellation");
         this.kill("SIGKILL");
@@ -1164,7 +1164,7 @@ function killGroup(
   watch.killing(signal);
 }
 
-/** The same Windows cleanup for Node fallback and contained roots until #362. */
+/** Windows cleanup for Node children, including uncontained owned fallbacks. */
 function killWindowsTree(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
