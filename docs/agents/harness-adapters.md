@@ -12,8 +12,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   constant-time auth check. The bridge registers it with the Harness secret registry for the rest of the invocation, and the Session routes every
   failure cause originating below launch through the registry's `redactSecrets` (`scrub` on each close observation; the stdin-write and stdout-read
   errors and the captured stderr text too), so the rule is "redact at the Seam", not one spawn-error path (#127 A22).
-- The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `assistant`, `user`,
-  `stream_event`, `result`, `control_response`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the only
+- The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `status`, `assistant`, `user`,
+  `stream_event`, `result`, `control_response`, `command_lifecycle`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the only
   raw-field accessors. Inbound `control_request` and `control_cancel_request` stay generic activity until #371. Only the fields dispatch
   iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
   `unknown-result`); every other field degrades to absent (`.catch(undefined)`), unknown fields pass through, and a known type whose
@@ -33,12 +33,16 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   settles `is_error:false` and stays a completed Turn. The raw result never crosses the Seam (it may quote a key) — only `AUTHENTICATION_REQUIRED` does.
 - Session child reuse: a Turn result may settle before the child emits `close`. The Session tracks which Turn owns the child, lets an already-settled close
   win before the next send, and never attributes an old child's close to the next Turn; a still-live child may accept the next Turn in place.
-- A caller's Interrupt on a live, initialized process running its Turn is native (#346): `claude-code/control.ts`, one channel per process, mints the
-  `request_id`, writes the stdin `control_request` `interrupt`, and correlates the echoed `control_response`. `controlTimeoutMs` (default 5 s, a named
-  test seam) bounds the write through the aborted `result`. The process, active Turn, and process ownership stay put. The confirming result's subtype
-  is `error_during_execution`, a task failure's too, so only an aborted `terminal_reason` (`aborted_streaming`, `aborted_tools`) while that Interrupt is
-  in flight settles `interrupted` `active-turn`; a natural result that wins the race keeps its own truth. The Session then reports `detached` with its
-  coordinate, as Codex does, and a resuming Turn finds the process live and sends at once.
+- A caller's Interrupt on a live, initialized process running its Turn is native (#346): `claude-code/control.ts`, one channel per process, mints the `request_id`, writes the
+  stdin `control_request` `interrupt` with `cancel_queued: true`, and correlates the echoed `control_response`. `controlTimeoutMs` (default 5 s, a named test seam) bounds the
+  write through the aborted `result`. The process, active Turn, and process ownership stay put. The confirming result's subtype is `error_during_execution`, a task failure's
+  too, so only an aborted `terminal_reason` (`aborted_streaming`, `aborted_tools`) while that Interrupt is in flight settles `interrupted` `active-turn`; a natural result that
+  wins the race keeps its own truth. The Session then reports `detached` with its coordinate, as Codex does, and a resuming Turn finds the process live and sends at once.
+- A Steer (#359) is a stdin `user` frame with a minted uuid, written only after the prompt (stamped too) and accepted once written. A result listing only uuids the Turn never
+  sent is another exchange's and is ignored. `command_lifecycle` `started` or the result's `user_message_uuids` settle it delivered, `cancelled` dropped. A result with a Steer
+  pending is held as a boundary, and the Turn ends at the next exchange's; the delivering exchange decides `within-turn` or `after-boundary`. Each exchange re-sends init, and
+  a same-id repeat only refreshes the Session fact. `compact_result: "failed"` turns that exchange's success result with `num_turns: 0` into `interrupted` under an Interrupt,
+  else `failed`. A relaunched process sends init only after a `/compact`, so a pre-init `compacting` status lifts the init bound (`handshakeTimeoutMs` is the test seam).
 - A refused response, failed write, unconfirmed stop, process close, or closing Session falls back to the process stop, which the internal stops
   (failed Turn write, init timeout or mismatch, corruption) always take. It uses the process Module's `interrupt(gracefulMs)`: graceful settles
   `interrupted` `process-only`, a force-kill `lost`, and a live child on Windows is force-killed at once, so its fallback settles `lost`. A process stop

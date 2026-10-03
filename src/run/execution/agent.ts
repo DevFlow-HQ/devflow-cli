@@ -124,6 +124,10 @@ export interface RequestChannel {
   bindSteer(steer: LiveSteerFn | undefined): void;
   /** Bind (or unbind) interrupt for this Turn only, alongside answer and steer. */
   bindInterrupt(interrupt: LiveInterruptFn | undefined): void;
+  /** The live Turn's Session commands (ADR 0040): the typed leading words the
+   *  Harness runs as its own commands, replaced at each Session fact and cleared
+   *  (`undefined`) when the Turn ends. Steer admission refuses them mid-Turn. */
+  sessionCommands(commands: readonly string[] | undefined): void;
   /** Merge live overlay observations (activity / preview / context / usage). */
   observe(observation: LiveObservation): void;
 }
@@ -607,7 +611,7 @@ async function driveHarnessTurn(
       // Same-Turn guidance (#148): a Harness declaring native steer accepts it while
       // the Turn is live and keeps working. Bound for every Turn — the Application
       // only reaches it when the prepared profile declares steer available, so a
-      // Harness without it (Claude Code) is never asked here.
+      // Harness without it is never asked here.
       channel.bindSteer(async (input) => {
         const receipt = await turn.steer(input);
         return receipt.outcome === "accepted"
@@ -658,6 +662,7 @@ async function driveHarnessTurn(
     channel?.bindAnswer(undefined);
     channel?.bindSteer(undefined);
     channel?.bindInterrupt(undefined);
+    channel?.sessionCommands(undefined);
   }
 }
 
@@ -829,6 +834,10 @@ function unusableTurnResult(session: string): TurnResult {
  *  coalesced observations. Durable recording is separate (`recordTurnEvent`). */
 function notifyChannel(channel: RequestChannel, event: TurnEvent): void {
   switch (event.kind) {
+    case "session":
+      if (event.facts !== undefined)
+        channel.sessionCommands(event.facts.commands);
+      return;
     case "request-raised":
       if (event.request.shape.kind === "approval") {
         channel.raised({

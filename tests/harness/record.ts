@@ -15,7 +15,7 @@
 //   bun tests/harness/record.ts all           # every real case
 //
 // Cases: plain, test-repair, interrupt, resume, authentication, protocol-corruption,
-// matt-front.
+// matt-front, steer-within, steer-boundary, steer-cancel, compaction.
 // It records with `--restricted` (real login and model, but no personal hooks,
 // CLAUDE.md, plugins, or settings) so fixtures are clean and reproducible. The
 // authentication case uses a fresh, not-logged-in `CLAUDE_CONFIG_DIR`, so the real
@@ -59,6 +59,10 @@ const SESSION_IDS = {
   authentication: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
   "protocol-corruption": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   "matt-front": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "steer-within": "57ee1111-1111-4111-8111-111111111111",
+  "steer-boundary": "57ee2222-2222-4222-8222-222222222222",
+  "steer-cancel": "57ee3333-3333-4333-8333-333333333333",
+  compaction: "c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0",
 } as const;
 /** Ticket planning opens its own Session before implementation Sessions (#295). */
 const MATT_FRONT_TICKETS_SESSION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb0";
@@ -99,11 +103,15 @@ function launchArgs(
   ];
 }
 
-function userFrame(text: string): string {
+/** A user frame. The held-process recorders stamp a uuid exactly as the
+ *  Adapter's `encodeUserMessage` does (#359); the single-Turn recorders predate
+ *  it, and Claude Code then lists no uuid on that Turn's result. */
+function userFrame(text: string, uuid?: string): string {
   return `${JSON.stringify({
     type: "user",
     message: { role: "user", content: text },
     parent_tool_use_id: null,
+    ...(uuid !== undefined ? { uuid } : {}),
   })}\n`;
 }
 
@@ -567,112 +575,459 @@ function lineBoundary(stdout: Buffer, offset: number): number {
 }
 
 /** Record the native Interrupt (#346) on one held-open process: Turn 1 streams,
- *  receives a stdin `control_request` `interrupt`, and settles with the aborted
- *  `result`; Turn 2 then runs on the same process with no relaunch. stdout is
- *  split at the line boundaries where each stdin frame was written. */
+ *  receives a stdin `control_request` `interrupt` (with `cancel_queued`, as the
+ *  Adapter sends it, #359), and settles with the aborted `result`; Turn 2 then
+ *  runs on the same process with no relaunch. stdout is split at the line
+ *  boundaries where each stdin frame was written. */
 async function recordInterrupt(): Promise<void> {
   const ws = tempWorkspace("secant-rec-ws-");
-  const bridge = await startBridge(
-    () => ({ behavior: "allow" }),
-    () => 0,
-  );
+  try {
+    let interrupted = false;
+    let results = 0;
+    const recorded = await recordHeld({
+      sessionId: SESSION_IDS.interrupt,
+      workspace: ws,
+      prompt:
+        "Write a long slow essay about the number seven, at least 500 words, using no tools. Take your time.",
+      onFrame: (frame, held) => {
+        const delta = (
+          frame.event as { delta?: { type?: unknown } } | undefined
+        )?.delta;
+        if (
+          !interrupted &&
+          frame.type === "stream_event" &&
+          delta?.type === "text_delta"
+        ) {
+          interrupted = true;
+          held.write(interruptFrame());
+          return;
+        }
+        if (frame.type !== "result") return;
+        results += 1;
+        if (results === 1) {
+          held.write(
+            userFrame(
+              "Never mind. Reply with exactly: continued. Use no tools.",
+              RECORDED_PROMPT_UUIDS[1],
+            ),
+          );
+        } else held.end();
+      },
+    });
+    writeCase({
+      name: "interrupt",
+      files: splitAtMarks(recorded.stdout, recorded.marks, [
+        "turn-1.stdout",
+        "interrupted.stdout",
+        "turn-2.stdout",
+      ]),
+      caseJson: {
+        exitCode: recorded.exitCode,
+        turns: [
+          {
+            uuid: RECORDED_PROMPT_UUIDS[0],
+            steps: [
+              { emit: "turn-1.stdout" },
+              {
+                control: {
+                  subtype: "interrupt",
+                  cancelQueued: true,
+                  emit: "interrupted.stdout",
+                },
+              },
+            ],
+          },
+          { uuid: RECORDED_PROMPT_UUIDS[1], stdout: "turn-2.stdout" },
+        ],
+      },
+      workspace: ws,
+      secrets: hostSecrets(recorded.bridgeToken),
+      executableVersion: claudeVersion(),
+      protocolVersion: protocolVersionOf(recorded.stdout),
+    });
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
+// --- Steer and compaction on one held-open process (#359) ---------------------
+
+/** The uuids the recorder stamps on its Steer frames and on each Turn's
+ *  prompt. The replayer echoes the Adapter-minted uuid in their place, the way
+ *  it echoes `session_id`. */
+const RECORDED_STEER_UUIDS = [
+  "5eee0000-0000-4000-8000-000000000001",
+  "5eee0000-0000-4000-8000-000000000002",
+] as const;
+const RECORDED_PROMPT_UUIDS = [
+  "9a0e0000-0000-4000-8000-000000000001",
+  "9a0e0000-0000-4000-8000-000000000002",
+  "9a0e0000-0000-4000-8000-000000000003",
+] as const;
+
+/** The Adapter's Interrupt, which always cancels queued messages. */
+function interruptFrame(): string {
+  return `${JSON.stringify({
+    type: "control_request",
+    request_id: RECORDED_INTERRUPT_REQUEST_ID,
+    request: { subtype: "interrupt", cancel_queued: true },
+  })}\n`;
+}
+
+interface HeldProcess {
+  /** Write one stdin frame, marking the stdout offset it was written at. */
+  write(frame: string): void;
+  /** Close stdin so the process exits after its current work. */
+  end(): void;
+  /** Resolves when the process has closed. */
+  readonly closed: Promise<void>;
+}
+
+interface HeldRecording {
+  readonly stdout: Buffer;
+  /** The stdout offset at each `write`, in order. */
+  readonly marks: number[];
+  readonly exitCode: number;
+  readonly bridgeToken: string;
+}
+
+/** Hold one process's stdin open, as the Adapter does: send `prompt` (stamped
+ *  with the first recorded prompt uuid), hand every
+ *  stdout frame to `onFrame`, and answer each permission prompt through
+ *  `approve`, which may write further frames before it allows the tool. */
+async function recordHeld(options: {
+  readonly sessionId: string;
+  readonly workspace: string;
+  readonly prompt: string;
+  readonly onFrame: (frame: Record<string, unknown>, held: HeldProcess) => void;
+  readonly approve?: (held: HeldProcess) => Promise<void>;
+}): Promise<HeldRecording> {
+  let held!: HeldProcess;
+  const bridge = await startPermissionBridge(async () => {
+    await options.approve?.(held);
+    return { decision: "allow" };
+  });
   try {
     const child = spawn(
       "claude",
-      launchArgs(["--session-id", SESSION_IDS.interrupt], bridge),
-      { cwd: ws, env: baseEnv(), stdio: ["pipe", "pipe", "pipe"] },
+      launchArgs(["--session-id", options.sessionId], {
+        launchArgs: bridge.launchArgs,
+        token: bridge.bearer,
+        calls: [],
+        close: () => bridge.close(),
+      }),
+      {
+        cwd: options.workspace,
+        env: baseEnv(),
+        stdio: ["pipe", "pipe", "pipe"],
+      },
     );
     let stdout = Buffer.alloc(0);
-    let interruptAt: number | undefined;
-    let secondAt: number | undefined;
-    const resultsSince = (from: number) =>
-      stdout.subarray(from).toString("utf8").split('"type":"result"').length -
-      1;
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout = Buffer.concat([stdout, chunk]);
-      if (
-        interruptAt === undefined &&
-        stdout.includes('"subtype":"init"') &&
-        stdout.includes('"text_delta"')
-      ) {
-        interruptAt = stdout.length;
-        child.stdin.write(
-          `${JSON.stringify({
-            type: "control_request",
-            request_id: RECORDED_INTERRUPT_REQUEST_ID,
-            request: { subtype: "interrupt" },
-          })}\n`,
-        );
-        return;
-      }
-      // Once the interrupted result's line is complete, send the next Turn.
-      if (
-        interruptAt !== undefined &&
-        secondAt === undefined &&
-        resultsSince(interruptAt) > 0 &&
-        stdout.at(-1) === 0x0a
-      ) {
-        secondAt = stdout.length;
-        child.stdin.write(
-          userFrame("Never mind. Reply with exactly: continued. Use no tools."),
-        );
-        return;
-      }
-      if (
-        secondAt !== undefined &&
-        resultsSince(secondAt) > 0 &&
-        !child.stdin.writableEnded
-      ) {
-        child.stdin.end();
-      }
-    });
-    child.stderr.resume();
-    child.stdin.write(
-      userFrame(
-        "Write a long slow essay about the number seven, at least 500 words, using no tools. Take your time.",
-      ),
-    );
-    const exitCode = await new Promise<number>((resolve) => {
+    let pending = "";
+    const marks: number[] = [];
+    const exit = new Promise<number>((resolve) => {
       child.on("close", (code, signal) => {
         resolve(code ?? (signal ? 128 + signalNumber(signal) : 0));
       });
     });
-    if (interruptAt === undefined || secondAt === undefined) {
-      throw new Error("the native interrupt recording never reached Turn 2");
-    }
-    const interruptLine = lineBoundary(stdout, interruptAt);
-    const secondLine = lineBoundary(stdout, secondAt);
+    held = {
+      write: (frame) => {
+        if (child.stdin.writableEnded) return;
+        marks.push(stdout.length);
+        child.stdin.write(frame);
+      },
+      end: () => {
+        if (!child.stdin.writableEnded) child.stdin.end();
+      },
+      closed: exit.then(() => undefined),
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout = Buffer.concat([stdout, chunk]);
+      pending += chunk.toString("utf8");
+      for (;;) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        const line = pending.slice(0, newline).trim();
+        pending = pending.slice(newline + 1);
+        if (!line.startsWith("{")) continue;
+        options.onFrame(JSON.parse(line) as Record<string, unknown>, held);
+      }
+    });
+    child.stderr.resume();
+    child.stdin.write(userFrame(options.prompt, RECORDED_PROMPT_UUIDS[0]));
+    const exitCode = await exit;
+    return { stdout, marks, exitCode, bridgeToken: bridge.bearer };
+  } finally {
+    await bridge.close();
+  }
+}
+
+/** Split recorded stdout at the line boundary of each stdin write. */
+function splitAtMarks(
+  stdout: Buffer,
+  marks: readonly number[],
+  names: readonly string[],
+): WriteFile[] {
+  if (marks.length + 1 !== names.length) {
+    throw new Error(
+      `expected ${names.length - 1} stdin writes, recorded ${marks.length}`,
+    );
+  }
+  const bounds = [0, ...marks.map((mark) => lineBoundary(stdout, mark))];
+  return names.map((name, index) => ({
+    name,
+    bytes: stdout.subarray(bounds[index], bounds[index + 1] ?? stdout.length),
+  }));
+}
+
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** The tool round a Steer can land in: a Write whose permission prompt the
+ *  recorder holds while it writes the Steer. */
+const WRITE_PROMPT =
+  "Use the Write tool to create a file named note.txt containing the word hi. Then reply with exactly: PINEAPPLE.";
+
+/** A Steer written while a tool round waits on its approval reaches the model
+ *  with the round's tool result, inside the same exchange. The approval wait
+ *  is the recorder's timing device only: replay emits the bytes around the
+ *  Steer and raises no approval. */
+async function recordSteerWithin(): Promise<void> {
+  const ws = tempWorkspace("secant-rec-ws-");
+  try {
+    const [uuid] = RECORDED_STEER_UUIDS;
+    const recorded = await recordHeld({
+      sessionId: SESSION_IDS["steer-within"],
+      workspace: ws,
+      prompt: WRITE_PROMPT,
+      approve: async (held) => {
+        held.write(
+          userFrame("Also say the word MANGO at the end of your reply.", uuid),
+        );
+        await delay(2_000);
+      },
+      onFrame: (frame, held) => {
+        if (frame.type === "result") held.end();
+      },
+    });
     writeCase({
-      name: "interrupt",
-      files: [
-        { name: "turn-1.stdout", bytes: stdout.subarray(0, interruptLine) },
-        {
-          name: "interrupted.stdout",
-          bytes: stdout.subarray(interruptLine, secondLine),
-        },
-        { name: "turn-2.stdout", bytes: stdout.subarray(secondLine) },
-      ],
+      name: "steer-within",
+      files: splitAtMarks(recorded.stdout, recorded.marks, [
+        "turn-1.stdout",
+        "steered.stdout",
+      ]),
       caseJson: {
-        exitCode,
+        exitCode: recorded.exitCode,
         turns: [
           {
+            uuid: RECORDED_PROMPT_UUIDS[0],
             steps: [
               { emit: "turn-1.stdout" },
-              {
-                control: { subtype: "interrupt", emit: "interrupted.stdout" },
-              },
+              { steer: { uuid } },
+              { emit: "steered.stdout" },
             ],
           },
-          { stdout: "turn-2.stdout" },
         ],
       },
       workspace: ws,
-      secrets: hostSecrets(bridge.token),
+      secrets: hostSecrets(recorded.bridgeToken),
       executableVersion: claudeVersion(),
-      protocolVersion: protocolVersionOf(stdout),
+      protocolVersion: protocolVersionOf(recorded.stdout),
     });
   } finally {
-    await bridge.close();
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
+/** A Steer written while text streams runs as the next native exchange, after a
+ *  `result`, a repeated same-id init, and its own `result`. */
+async function recordSteerBoundary(): Promise<void> {
+  const ws = tempWorkspace("secant-rec-ws-");
+  try {
+    const [uuid] = RECORDED_STEER_UUIDS;
+    let steered = false;
+    let results = 0;
+    const recorded = await recordHeld({
+      sessionId: SESSION_IDS["steer-boundary"],
+      workspace: ws,
+      prompt: "Count from one to forty in words, one per line. Use no tools.",
+      onFrame: (frame, held) => {
+        const delta = (
+          frame.event as { delta?: { type?: unknown } } | undefined
+        )?.delta;
+        if (
+          !steered &&
+          frame.type === "stream_event" &&
+          delta?.type === "text_delta"
+        ) {
+          steered = true;
+          held.write(userFrame("Now reply with the single word MANGO.", uuid));
+        }
+        // The prompt's exchange, then the Steer's own exchange.
+        if (frame.type === "result" && ++results === 2) held.end();
+      },
+    });
+    writeCase({
+      name: "steer-boundary",
+      files: splitAtMarks(recorded.stdout, recorded.marks, [
+        "turn-1.stdout",
+        "steered.stdout",
+      ]),
+      caseJson: {
+        exitCode: recorded.exitCode,
+        turns: [
+          {
+            uuid: RECORDED_PROMPT_UUIDS[0],
+            steps: [
+              { emit: "turn-1.stdout" },
+              { steer: { uuid } },
+              { emit: "steered.stdout" },
+            ],
+          },
+        ],
+      },
+      workspace: ws,
+      secrets: hostSecrets(recorded.bridgeToken),
+      executableVersion: claudeVersion(),
+      protocolVersion: protocolVersionOf(recorded.stdout),
+    });
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
+/** Two Steers queue during a tool round, then the Interrupt cancels them with
+ *  `cancel_queued`: each gets a `cancelled` lifecycle frame and none runs. */
+async function recordSteerCancel(): Promise<void> {
+  const ws = tempWorkspace("secant-rec-ws-");
+  try {
+    const [first, second] = RECORDED_STEER_UUIDS;
+    const recorded = await recordHeld({
+      sessionId: SESSION_IDS["steer-cancel"],
+      workspace: ws,
+      prompt: WRITE_PROMPT,
+      approve: async (held) => {
+        held.write(
+          userFrame("Queued message one: reply with the word MANGO.", first),
+        );
+        await delay(300);
+        held.write(
+          userFrame("Queued message two: reply with the word KIWI.", second),
+        );
+        await delay(700);
+        held.write(interruptFrame());
+        // Claude Code cancels this approval call on the Interrupt.
+        await held.closed;
+      },
+      onFrame: (frame, held) => {
+        if (frame.type === "result") held.end();
+      },
+    });
+    writeCase({
+      name: "steer-cancel",
+      files: splitAtMarks(recorded.stdout, recorded.marks, [
+        "turn-1.stdout",
+        "queued-1.stdout",
+        "queued-2.stdout",
+        "cancelled.stdout",
+      ]),
+      caseJson: {
+        exitCode: recorded.exitCode,
+        turns: [
+          {
+            uuid: RECORDED_PROMPT_UUIDS[0],
+            steps: [
+              { emit: "turn-1.stdout" },
+              { steer: { uuid: first } },
+              { emit: "queued-1.stdout" },
+              { steer: { uuid: second } },
+              { emit: "queued-2.stdout" },
+              {
+                control: {
+                  subtype: "interrupt",
+                  cancelQueued: true,
+                  emit: "cancelled.stdout",
+                },
+              },
+            ],
+          },
+        ],
+      },
+      workspace: ws,
+      secrets: hostSecrets(recorded.bridgeToken),
+      executableVersion: claudeVersion(),
+      protocolVersion: protocolVersionOf(recorded.stdout),
+    });
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
+/** `/compact` sent as its own Turn: one interrupted mid-compaction (reported
+ *  `compact_result: "failed"`, then a success result), then one that compacts.
+ *  Each compaction's init arrives after it, mid-exchange. */
+async function recordCompaction(): Promise<void> {
+  const ws = tempWorkspace("secant-rec-ws-");
+  try {
+    let results = 0;
+    let interrupted = false;
+    const recorded = await recordHeld({
+      sessionId: SESSION_IDS.compaction,
+      workspace: ws,
+      prompt: "Reply with exactly: hello. Use no tools.",
+      onFrame: (frame, held) => {
+        if (
+          frame.type === "system" &&
+          frame.subtype === "status" &&
+          frame.status === "compacting" &&
+          results === 1 &&
+          !interrupted
+        ) {
+          interrupted = true;
+          held.write(interruptFrame());
+        }
+        if (frame.type !== "result") return;
+        results += 1;
+        const next = RECORDED_PROMPT_UUIDS[results];
+        if (results < 3 && next !== undefined) {
+          held.write(userFrame("/compact", next));
+        } else held.end();
+      },
+    });
+    writeCase({
+      name: "compaction",
+      files: splitAtMarks(recorded.stdout, recorded.marks, [
+        "turn-1.stdout",
+        "compacting.stdout",
+        "compact-cancelled.stdout",
+        "compact.stdout",
+      ]),
+      caseJson: {
+        exitCode: recorded.exitCode,
+        turns: [
+          { uuid: RECORDED_PROMPT_UUIDS[0], stdout: "turn-1.stdout" },
+          {
+            uuid: RECORDED_PROMPT_UUIDS[1],
+            steps: [
+              { emit: "compacting.stdout" },
+              {
+                control: {
+                  subtype: "interrupt",
+                  cancelQueued: true,
+                  emit: "compact-cancelled.stdout",
+                },
+              },
+            ],
+          },
+          { uuid: RECORDED_PROMPT_UUIDS[2], stdout: "compact.stdout" },
+        ],
+      },
+      workspace: ws,
+      secrets: hostSecrets(recorded.bridgeToken),
+      executableVersion: claudeVersion(),
+      protocolVersion: protocolVersionOf(recorded.stdout),
+    });
+  } finally {
     rmSync(ws, { recursive: true, force: true });
   }
 }
@@ -1141,6 +1496,10 @@ const RECORDERS: Record<string, () => Promise<void>> = {
   authentication: recordAuthentication,
   "protocol-corruption": recordProtocolCorruption,
   "matt-front": recordMattFront,
+  "steer-within": recordSteerWithin,
+  "steer-boundary": recordSteerBoundary,
+  "steer-cancel": recordSteerCancel,
+  compaction: recordCompaction,
 };
 
 async function main(): Promise<void> {

@@ -58,7 +58,9 @@ installed-Harness evidence. The Codex qualification and defaults recordings (`mo
 installed-Harness report.
 
 Recorded versions are replay provenance, not rows: the Claude Code native-interrupt case (`interrupt`, #346) was recorded on Claude Code 2.1.288,
-while the installed-Harness row below stays at the 2.1.283 that `v0.1.0` checked. Each case's version is in its `recording.json`.
+as were the native Steer and compaction cases (`steer-within`, `steer-boundary`, `steer-cancel`, `compaction`, #359) on 2026-10-03 on Linux x64. They
+qualify the Steer `uuid`, `command_lifecycle`, `user_message_uuids`, `cancel_queued`, and `compact_result` fields, not an installed-Harness Proof Bundle
+pass, while the installed-Harness row below stays at the 2.1.283 that `v0.1.0` checked. Each case's version is in its `recording.json`.
 
 | Harness     | OS/architecture | Installed version | Evidence                                                                                                                                    |
 | ----------- | --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |

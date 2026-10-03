@@ -33,12 +33,14 @@ import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 
 // Interrupt a live Turn through the Port, continue it with the follow-up, and reject
 // the unavailable steer control (#118, #354). Each test wires the Application against
-// the deterministic fake Claude Code Harness (native steer unavailable) and an
-// injected fake Process — no child spawns (#184). No real Harness runs (ADR 0027).
-// Claude Code's stream-json print mode has no same-Turn guidance frame, so the steer
-// Offer is unavailable and its `reason` is exactly this profile evidence.
+// the deterministic fake Harness (native steer unavailable, a profile Claude Code no
+// longer declares since #359) and an injected fake Process — no child spawns (#184).
+// No real Harness runs (ADR 0027).
+
+// The fake profile has no same-Turn guidance, so the steer Offer is unavailable and
+// its `reason` is exactly this profile evidence.
 const STEER_EVIDENCE =
-  "Claude Code's stream-json print mode has no same-Turn guidance frame: a further user message queues as the next Turn, so steer is rejected unsupported and never emulated.";
+  "This Harness has no same-Turn guidance, so steer is rejected unsupported and never emulated.";
 
 /** The fake Claude Code profile: native reattach recovery, process-only interruption,
  *  and — the fact these cases turn on — steer unavailable, carrying the exact evidence
@@ -545,7 +547,7 @@ test("interrupt-turn ends only the Agent Turn: the Attempt stays open and the Ru
   }
 });
 
-test("steer-turn is rejected as a value when submitted (#118)", async (t) => {
+test("an unavailable steer-turn is refused at admission with the profile's evidence (#118, #359)", async (t) => {
   const { wired, digest } = wire(t, "interrupt");
   const port = wired.projectionPort;
   const runId = launchAgent(port, digest);
@@ -556,12 +558,10 @@ test("steer-turn is rejected as a value when submitted (#118)", async (t) => {
     operation: "steer-turn",
     input: { runId, turnId: offer.turnId, text: "go faster" },
   });
-  assert.ok(steer.admitted);
-  const outcome = await awaitSettled(port, "op-steer");
-  assert.equal(outcome.status, "not-applied");
-  if (outcome.status === "not-applied") {
-    assert.equal(outcome.problem.code, "steer-unavailable");
-    assert.match(outcome.problem.explanation, /stream-json print mode/);
+  assert.equal(steer.admitted, false);
+  if (!steer.admitted) {
+    assert.equal(steer.problem.code, "steer-unavailable");
+    assert.match(steer.problem.explanation, /no same-Turn guidance/);
   }
 
   // Interrupt so the Run rests waiting and the wired process leaks no live Turn.

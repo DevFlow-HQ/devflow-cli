@@ -2,8 +2,12 @@
   "harness": "claude-code",
   "executableVersion": "2.1.288 (Claude Code)",
   "protocolVersion": "2.1.288",
-  "recordedAt": "2026-10-03T19:55:12.781Z",
+  "recordedAt": "2026-10-03T19:55:33.217Z",
   "redactions": [
+    {
+      "placeholder": "«TOOL-INPUT-DELTAS»",
+      "reason": "streamed tool-input JSON deltas removed (not consumed by the Adapter; they fragment host paths past substring redaction)"
+    },
     {
       "placeholder": "«WORKSPACE»",
       "reason": "recording workspace path"
@@ -13,5 +17,5 @@
       "reason": "user runtime directory"
     }
   ],
-  "refreshCommand": "bun tests/harness/record.ts interrupt"
+  "refreshCommand": "bun tests/harness/record.ts steer-cancel"
 }

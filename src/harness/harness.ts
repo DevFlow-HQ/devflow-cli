@@ -359,6 +359,9 @@ export interface SessionFacts {
     readonly name: string;
     readonly status: string;
   }[];
+  /** The typed leading words the Harness itself runs as commands in this Session,
+   *  such as `/compact` (ADR 0040); empty when it lists none. */
+  readonly commands: readonly string[];
 }
 
 /** Context-window pressure, prominent when observed or honestly calculable. */

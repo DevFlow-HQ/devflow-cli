@@ -551,7 +551,7 @@ export function RunWorkbench(props: {
   // Native Steer (#148, spec story 19): while an agent Turn is live under a Harness
   // that declares native same-Turn guidance, `s` opens a compose input in the bottom
   // region; Enter sends the guidance without ending the Turn, Escape backs out. Only
-  // the available offer is composable — an unavailable Harness (Claude Code) shows the
+  // the available offer is composable — a Harness without native Steer shows the
   // reason on the Actions rail and never opens the input.
   const steerAvailable = () => offers().steer?.available === true;
   const [steerComposing, setSteerComposing] = createSignal(false);
@@ -1777,8 +1777,8 @@ function Workbench(props: {
               and no interactive Step owns the interaction (its input hint carries the
               Interrupt instead, #219). The working scanner leads the interrupt row,
               which says "working" in words because the rail has no label (#292).
-              A Harness with native steer (Codex) names the `s` key; one without
-              (Claude Code) names its unavailable reason and never opens (story 19). */}
+              A Harness with native steer names the `s` key; one without names its
+              unavailable reason and never opens (story 19). */}
           <Show
             when={!props.interactiveActive() && props.actionOffers().interrupt}
           >

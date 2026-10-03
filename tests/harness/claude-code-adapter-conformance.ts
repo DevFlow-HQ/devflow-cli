@@ -878,7 +878,7 @@ test("the recorded Test Repair Turn approves an Edit and its patch makes the fai
   execFileSync(process.execPath, ["sum.test.mjs"], { cwd: workspace });
 });
 
-// --- Steer and interrupt (steer is declared unavailable; see the profile) ----
+// --- Interrupt and Steer (ADR 0035) ------------------------------------------
 
 test("a recorded native interrupt settles interrupted active-turn on every OS and the next Turn runs on the same process", async () => {
   const replayer = installReplayer(VERSION, protocolCase("interrupt"));
@@ -908,14 +908,6 @@ test("a recorded native interrupt settles interrupted active-turn on every OS an
       }
     });
   });
-  // steer never touches the process: rejected unsupported while the Turn is live.
-  assert.deepEqual(
-    await turn.steer({ steerId: "conformance-steer", text: "no" }),
-    {
-      outcome: "rejected",
-      reason: "unsupported",
-    },
-  );
   assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
   const result = await turn.result();
   assert.equal(result.kind, "interrupted");
@@ -947,12 +939,134 @@ test("a recorded native interrupt settles interrupted active-turn on every OS an
   assert.deepEqual(relaunches, [], "a native interrupt spawns no relaunch");
   assert.ok(invocation?.args.includes("--session-id"));
   assert.equal(invocation.stdinLines.length, 2);
-  // The one control frame is a plain interrupt; the replayer echoed its
-  // Adapter-minted request id into the recorded confirmation.
+  // The one control frame is the interrupt, cancelling queued messages (#359);
+  // the replayer echoed its Adapter-minted request id into the recorded
+  // confirmation.
   assert.equal(invocation.controlLines.length, 1);
   const control = JSON.parse(invocation.controlLines[0]!);
-  assert.deepEqual(control.request, { subtype: "interrupt" });
+  assert.deepEqual(control.request, {
+    subtype: "interrupt",
+    cancel_queued: true,
+  });
   assert.notEqual(control.request_id, "secant-recorded-interrupt");
+});
+
+/** Prepare the Claude Code Adapter over one recorded case. */
+async function preparedOver(caseName: string, sessionId: string) {
+  const replayer = installReplayer(VERSION, protocolCase(caseName));
+  const prepared = await createClaudeCodeAdapter({
+    path: replayer.path,
+    env: {},
+    sessionId: () => sessionId,
+  }).prepare({ workspace: makeTempDir("secant-claude-workspace-") });
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) throw new Error("unreachable");
+  return { replayer, harness: prepared.harness };
+}
+
+function recordedTurn(text: string): TurnRequest {
+  return {
+    session: "steered",
+    origin: "human",
+    correlationKey: { opaque: text },
+    input: { text },
+    recorder: {
+      admit: () => Promise.resolve({ recorded: true } as const),
+      checkpoint: () => Promise.resolve({ recorded: true } as const),
+    },
+  };
+}
+
+test("a recorded Steer written while text streams runs as the next native exchange inside the same Turn, across a repeated init", async () => {
+  const { replayer, harness } = await preparedOver(
+    "steer-boundary",
+    "57ee2222-2222-4222-8222-222222222222",
+  );
+  const turn = harness.startTurn(recordedTurn("count to forty"));
+  const events: TurnEvent[] = [];
+  await new Promise<void>((resolve) => {
+    turn.subscribe((event) => {
+      events.push(event);
+      if (event.kind === "session") resolve();
+    });
+  });
+  assert.deepEqual(
+    await turn.steer({ steerId: "mango", text: "Now reply with MANGO." }),
+    { outcome: "accepted" },
+  );
+  const result = await turn.result();
+  assert.equal(result.kind, "completed");
+  if (result.kind !== "completed") throw new Error("unreachable");
+  // The Turn ends at the Steer's own exchange, not the prompt's.
+  assert.equal(result.detail.finalContent, "MANGO");
+  const steers = events.filter((event) => event.kind === "steer");
+  assert.equal(steers.length, 1);
+  assert.deepEqual(steers[0]?.kind === "steer" && steers[0].settlement, {
+    kind: "delivered",
+    delivery: "after-boundary",
+  });
+  // The second exchange's init is tolerated as a refreshed Session fact, whose
+  // Session commands are the typed leading words Claude Code listed.
+  const sessions = events.flatMap((event) =>
+    event.kind === "session" && event.facts !== undefined ? [event.facts] : [],
+  );
+  assert.equal(sessions.length, 2);
+  assert.ok(sessions[0]?.commands.includes("/compact"));
+  await harness.close();
+
+  // One process, one Turn frame, and the Steer as a uuid-stamped user frame.
+  const [invocation, ...relaunches] = replayer
+    .invocations()
+    .filter((launch) => launch.args.includes("-p"));
+  assert.deepEqual(relaunches, []);
+  assert.equal(invocation?.stdinLines.length, 1);
+  assert.equal(invocation?.steerLines.length, 1);
+  const steer = JSON.parse(invocation!.steerLines[0]!);
+  assert.deepEqual(steer.message, {
+    role: "user",
+    content: "Now reply with MANGO.",
+  });
+  assert.match(steer.uuid, /^[0-9a-f-]{36}$/);
+  assert.notEqual(steer.uuid, "5eee0000-0000-4000-8000-000000000001");
+});
+
+test("a recorded compaction the Interrupt cancels settles interrupted active-turn, and the next compaction completes", async () => {
+  const { replayer, harness } = await preparedOver(
+    "compaction",
+    "c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0",
+  );
+  assert.equal(
+    (await harness.startTurn(recordedTurn("say hello")).result()).kind,
+    "completed",
+  );
+
+  const cancelled = harness.startTurn(recordedTurn("/compact"));
+  await new Promise<void>((resolve) => {
+    cancelled.subscribe((event) => {
+      if (event.kind === "activity" && event.description.includes("compacting"))
+        resolve();
+    });
+  });
+  assert.deepEqual(await cancelled.interrupt(), { outcome: "accepted" });
+  const stopped = await cancelled.result();
+  assert.equal(stopped.kind, "interrupted");
+  if (stopped.kind !== "interrupted") throw new Error("unreachable");
+  assert.equal(stopped.detail.interruption.mode, "active-turn");
+
+  const compacted = await harness
+    .startTurn({
+      ...recordedTurn("/compact again"),
+      input: { text: "/compact" },
+      resume: { opaque: "c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0" },
+    })
+    .result();
+  assert.equal(compacted.kind, "completed");
+  await harness.close();
+  const launches = replayer
+    .invocations()
+    .filter((launch) => launch.args.includes("-p"));
+  assert.equal(launches.length, 1, "every Turn ran on the one live process");
+  assert.equal(launches[0]?.stdinLines.length, 3);
 });
 
 // --- Recovery ----------------------------------------------------------------
@@ -1222,11 +1336,17 @@ test("one stream-json Turn yields normalized events and an authoritative complet
     admissions[0].recoveryCoordinate.opaque,
   );
   assert.equal(turnInvocation.stdinLines.length, 1);
-  assert.deepEqual(JSON.parse(turnInvocation.stdinLines[0]), {
+  // The prompt carries a minted uuid that results are matched by (#359).
+  const { uuid, ...prompt } = JSON.parse(turnInvocation.stdinLines[0]);
+  assert.deepEqual(prompt, {
     type: "user",
     message: { role: "user", content: "Repair the failing test." },
     parent_tool_use_id: null,
   });
+  assert.match(
+    uuid,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  );
 });
 
 test("a Turn's requested model is forwarded to its launch as --model, distinct from the effective model", async () => {
@@ -1564,7 +1684,8 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
 
   assert.equal(profile.harness, "claude-code");
   assert.equal(profile.executableVersion, VERSION);
-  assert.equal(profile.adapterRevision, "claude-code-2");
+  // Revision 3 declares native Steer (#359).
+  assert.equal(profile.adapterRevision, "claude-code-3");
   assert.equal(
     profile.platform,
     process.platform === "win32"
@@ -1591,6 +1712,8 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
   );
   assert.equal(profile.approvals.available, true);
   assert.equal(profile.clarifications.available, false);
+  assert.equal(profile.steer.available, true);
+  assert.match(profile.steer.evidence, /cancel_queued/);
   // Claude Code accepts any model string via --model at launch: it suggests
   // its documented aliases, each with the five `--help` efforts and no declared
   // default effort, and observes the effective model from init/result.

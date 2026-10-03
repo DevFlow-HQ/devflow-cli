@@ -70,20 +70,29 @@ const valueAfter = (flag) => {
 // some cases prove acknowledgement and others prove a mismatched acknowledgement.
 const requestedSessionId = valueAfter("--session-id");
 
-/** Replay recorded bytes while echoing this invocation's supplied Session id.
- *  Session ids are UUIDs in the recordings and at runtime, so replacement keeps
- *  frame boundaries and byte counts stable. */
+// Each `steer` step, and each Turn carrying `uuid`, maps the uuid the recorder
+// stamped on that stdin message to the one the Adapter minted (#359), so every
+// later recorded byte naming it (lifecycle frames, `user_message_uuids`)
+// echoes the Adapter's, as `session_id` does.
+const messageUuids = new Map();
+
+/** Replay recorded bytes while echoing this invocation's supplied Session id
+ *  and each Steer's minted uuid. Both are UUIDs in the recordings and at
+ *  runtime, so replacement keeps frame boundaries and byte counts stable. */
 function replayBytes(path) {
   const bytes = readFileSync(path);
-  if (requestedSessionId === undefined) return bytes;
-  return Buffer.from(
-    bytes
-      .toString("utf8")
-      .replace(
-        /"session_id":"[^"]+"/g,
-        `"session_id":${JSON.stringify(requestedSessionId)}`,
-      ),
-  );
+  if (requestedSessionId === undefined && messageUuids.size === 0) return bytes;
+  let text = bytes.toString("utf8");
+  if (requestedSessionId !== undefined) {
+    text = text.replace(
+      /"session_id":"[^"]+"/g,
+      `"session_id":${JSON.stringify(requestedSessionId)}`,
+    );
+  }
+  for (const [recorded, minted] of messageUuids) {
+    text = text.replaceAll(recorded, minted);
+  }
+  return Buffer.from(text);
 }
 
 // The MCP permission bridge Secant launched us against: its loopback URL and
@@ -353,17 +362,44 @@ async function nextFrame(queue) {
   return queue.shift();
 }
 
+/** Perform one `steer` step (#359): take the next stdin `user` frame written
+ *  while the Turn runs, which must carry a uuid, and echo that uuid wherever the
+ *  recording names `spec.uuid`. stdin closing first ends the process. */
+async function steerStep(spec) {
+  const line = await nextFrame(userFrames);
+  if (line === undefined) process.exit(playback.exitCode ?? 0);
+  if (recording.log) {
+    appendFileSync(
+      recording.log,
+      JSON.stringify({ type: "steer", id: invocationId, line }) + "\n",
+    );
+  }
+  const uuid = JSON.parse(line).uuid;
+  if (typeof uuid !== "string" || uuid.length === 0) {
+    process.stderr.write("secant replayer: a Steer frame carried no uuid\n");
+    process.exit(2);
+  }
+  messageUuids.set(spec.uuid, uuid);
+}
+
 /** Perform one `control` step: take the next control request, which must carry
- *  the step's subtype, then emit the step's recorded bytes (if any) with the
- *  recorded `request_id` replaced by the one the Adapter minted, the way
- *  `session_id` is echoed. A step without `emit` swallows the request: it models
- *  a Claude Code that never confirms. stdin closing first ends the process. */
+ *  the step's subtype (and `cancel_queued` when the step names it), then emit
+ *  the step's recorded bytes (if any) with the recorded `request_id` replaced by
+ *  the one the Adapter minted, the way `session_id` is echoed. A step without
+ *  `emit` swallows the request: it models a Claude Code that never confirms.
+ *  stdin closing first ends the process. */
 async function controlStep(spec) {
   const frame = await nextFrame(controlFrames);
   if (frame === undefined) process.exit(playback.exitCode ?? 0);
   if (frame.request?.subtype !== spec.subtype) {
     process.stderr.write(
       `secant replayer: expected a ${spec.subtype} control request\n`,
+    );
+    process.exit(2);
+  }
+  if (spec.cancelQueued === true && frame.request?.cancel_queued !== true) {
+    process.stderr.write(
+      `secant replayer: expected the ${spec.subtype} to cancel queued messages\n`,
     );
     process.exit(2);
   }
@@ -396,6 +432,14 @@ for (;;) {
       "secant replayer: received more Turns than recorded\n",
     );
     process.exit(2);
+  }
+  if (typeof turn.uuid === "string") {
+    const uuid = JSON.parse(line).uuid;
+    if (typeof uuid !== "string" || uuid.length === 0) {
+      process.stderr.write("secant replayer: a Turn frame carried no uuid\n");
+      process.exit(2);
+    }
+    messageUuids.set(turn.uuid, uuid);
   }
   let workspacePatchApplied = false;
   const applyWorkspacePatch = () => {
@@ -432,7 +476,8 @@ for (;;) {
     // Ordered mix of stdout emissions and permission-bridge calls. A bridge step
     // blocks until Secant answers it, so the recorded stdout after it emits only
     // once the permission verdict is in — the "recorded point in the Turn".
-    // A `control` step blocks until the Adapter's control request arrives.
+    // A `control` step blocks until the Adapter's control request arrives, and a
+    // `steer` step until the Adapter writes a Steer's `user` frame mid-Turn.
     // A bridge call answered "request expired" skips ahead to the Turn's next
     // `control` step (Claude Code still answers an Interrupt) or, with none,
     // ends the process as Claude Code would when its permission call is refused.
@@ -441,6 +486,8 @@ for (;;) {
       if (expired && !step.control) continue;
       if (step.control) {
         await controlStep(step.control);
+      } else if (step.steer) {
+        await steerStep(step.steer);
       } else if (step.emit) {
         const bytes = replayBytes(join(caseDirectory, step.emit));
         // A recorded Workspace patch is the effect the Harness completed during

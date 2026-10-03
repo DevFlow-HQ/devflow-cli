@@ -4569,9 +4569,9 @@ function steerableInteractiveRunOf(over: Partial<RunView> = {}): RunView {
   });
 }
 
-/** Claude Code's real steer evidence (`claude-code.ts`), 170 columns long. */
-const CLAUDE_STEER_REASON =
-  "Claude Code's stream-json print mode has no same-Turn guidance frame: a further user message queues as the next Turn, so steer is rejected unsupported and never emulated.";
+/** A long unavailable-steer evidence, wider than any terminal under test. */
+const LONG_STEER_REASON =
+  "This Harness has no same-Turn guidance frame: a further user message would queue as the next Turn, so steer is rejected unsupported and never emulated.";
 
 test("Enter in the interactive input steers a live Turn with the draft, with no pending state (#294)", async () => {
   const wb = await mountWorkbench(
@@ -4610,6 +4610,95 @@ test("Enter in the interactive input steers a live Turn with the draft, with no 
   assert.doesNotMatch(frame, /focus on the tests/);
   assert.match(frame, /◆ The agent is working/);
   assert.match(frame, /enter steer · esc esc interrupt/);
+});
+
+/** The Problems Steer admission refuses a Claude Code Steer with (#359), as the
+ *  Application words them. */
+const CLAUDE_STEER_REFUSALS = [
+  {
+    text: "/clear the slate",
+    shown: /✗ \/clear is reserved by Claude Code/,
+    problem: {
+      code: "harness-input-reserved",
+      explanation:
+        "/clear is reserved by Claude Code; Secant owns the conversation, Model choice, or permission change it requests.",
+      remediation:
+        "Use Secant's controls for these changes, or send text with a different first word.",
+      possibleEffects: "none",
+    },
+  },
+  {
+    text: "/compact",
+    shown: /✗ Send \/compact when the Turn ends/,
+    problem: {
+      code: "steer-session-command",
+      explanation:
+        "Send /compact when the Turn ends: Claude Code runs its commands after the Turn, not inside it.",
+      remediation:
+        "Wait for the Turn to end and send it as the next Turn, or Interrupt the Turn first.",
+      possibleEffects: "none",
+    },
+  },
+] as const;
+
+test("a Claude Code Steer shows each refusal reason and keeps its draft and focus through small terminals and resize (#359, #23)", async () => {
+  for (const refusal of CLAUDE_STEER_REFUSALS) {
+    const wb = await mountWorkbench(
+      steerableInteractiveRunOf({ selectedHarness: "claude-code" }),
+      100,
+      24,
+      okActions(),
+    );
+    await type(wb.t, refusal.text);
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(wb.control.steers, [
+      { runId: "run-1", turnId: "turn-7", text: refusal.text },
+    ]);
+    wb.control.setSteerOutcome({ kind: "refused", problem: refusal.problem });
+    for (const width of [100, 48, 60, 140]) {
+      wb.renderer.resize(width, 24);
+      wb.t.resize(width, 24);
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      // The reason leads with what to do, in words and the ✗ glyph, so it
+      // survives a narrow clip and reads without colour.
+      assert.match(frame, refusal.shown, `${refusal.problem.code} @${width}`);
+      assert.ok(frame.includes(`> ${refusal.text}`), `draft @${width}`);
+      assert.match(frame, /◆ The agent is working/);
+      noOverflow(frame, width);
+    }
+    // Focus stays in the input: typing extends the kept draft, and Enter steers
+    // the edited text.
+    await type(wb.t, "!");
+    assert.ok(wb.t.captureCharFrame().includes(`> ${refusal.text}!`));
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(wb.control.steers[1], {
+      runId: "run-1",
+      turnId: "turn-7",
+      text: `${refusal.text}!`,
+    });
+  }
+});
+
+test("the Agent-step Steer compose shows a Session-command refusal and keeps the guidance (#359)", async () => {
+  const wb = await mountWorkbench(steerableRunOf(), 48, 24, okActions());
+  await press(wb.t, wb.renderer, "s");
+  await type(wb.t, "/compact");
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.steers, [
+    { runId: "run-1", turnId: "turn-7", text: "/compact" },
+  ]);
+  const [, sessionCommand] = CLAUDE_STEER_REFUSALS;
+  wb.control.setSteerOutcome({
+    kind: "refused",
+    problem: sessionCommand.problem,
+  });
+  await wb.t.renderOnce();
+  const frame = wb.t.captureCharFrame();
+  assert.match(frame, /Steer — guide the running Turn/);
+  assert.match(frame, /> \/compact/);
+  assert.match(frame, /Send \/compact when the Turn ends/);
+  noOverflow(frame, 48);
 });
 
 test("text typed while an interactive Steer settles survives its applied outcome (#294)", async () => {
@@ -4788,10 +4877,10 @@ test("the unavailable reason leaves when the Turn ends, and Enter then sends the
 });
 
 test("a long unavailable reason clips to a small terminal and relays out on resize (#294)", async () => {
-  const claude = { ...STEER_OFFER, reason: CLAUDE_STEER_REASON };
+  const unsteerable = { ...STEER_OFFER, reason: LONG_STEER_REASON };
   const wb = await mountWorkbench(
     liveInteractiveRunOf({
-      actionOffers: [INTERRUPT_OFFER, claude, CANCEL_OFFER],
+      actionOffers: [INTERRUPT_OFFER, unsteerable, CANCEL_OFFER],
       timeline: wrappingEvents(200),
     }),
     100,
@@ -4803,7 +4892,7 @@ test("a long unavailable reason clips to a small terminal and relays out on resi
   let frame = wb.t.captureCharFrame();
   assert.match(
     frame,
-    /✗ steer unavailable · Claude Code's stream-json print mode has no same-Turn guidance frame.*…/,
+    /✗ steer unavailable · This Harness has no same-Turn guidance frame.*…/,
   );
   noOverflow(frame, 100);
 
@@ -4811,7 +4900,7 @@ test("a long unavailable reason clips to a small terminal and relays out on resi
   wb.renderer.resize(40, 16);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
-  assert.match(frame, /^ {3}✗ steer unavailable · Claude Code's[^\n]*…/m);
+  assert.match(frame, /^ {3}✗ steer unavailable · This Harness[^\n]*…/m);
   assert.match(frame, /◆ The agent is working/);
   noOverflow(frame, 40);
   wb.renderer.resize(100, 24);

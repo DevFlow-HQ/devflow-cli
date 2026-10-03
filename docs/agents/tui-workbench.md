@@ -63,12 +63,13 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   and `handleInteractiveKey` runs the shared two-press `armOrDispatchInterrupt` (disarming on any other key first), so Esc leaves only at a Turn boundary.
   `anyActionOffer` and `actionLines` must agree on this, or an empty `Actions:` heading steals the hint row.
 - Native Steer (#148) is an on-demand compose, not a blocked-state modal like the gate/interactive inputs: while an agent Turn is live under a Harness that declares native
-  steer (Codex offers `steer-turn` `available`, Claude Code `available:false`), the Actions rail names the `s` key; `s` opens a native `<input>` (`SteerInput`) in the bottom
+  steer (Codex and Claude Code offer `steer-turn` `available`), the Actions rail names the `s` key; `s` opens a native `<input>` (`SteerInput`) in the bottom
   region with `focus === "steer"`, Enter dispatches `steer-turn` (blank refused, a refused steer keeps the draft), Escape backs out — the Turn keeps working either way. It
   belongs to Agent steps only: in an interactive Step `s` types into the input, whose own Enter steers the live Turn (#294). It yields to a request/gate modal
   (`modalControl` wins `bottomHeight`; an effect closes the compose when the offer leaves or a modal appears). The `s`-open and steer-typing key routing sit beside the
   interactive `typing` branch (gated so `q`/`t`/Run-Actions type as text while composing). An unavailable steer shows `steer — unavailable · <reason>` on the rail and `s`
-  opens nothing.
+  opens nothing. Admission refusals (a reserved word, a Session command, #359) take the refusal line and keep the draft; their explanations lead with what to
+  do, so a narrow clip keeps it.
 - Interrupt-drop settlements restore full Steer text once, after the live Turn leaves and pending send receipts settle (#356). Delivered and loss-drop rows remain history.
   New drops join in recorded order before the unsent draft; opening old history restores nothing, and repeated snapshots never duplicate a restore.
   Full text comes from `RunTimelineEvent.steer`,

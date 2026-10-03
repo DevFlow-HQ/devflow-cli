@@ -40,16 +40,21 @@ Six keys, all required (the structural step enforces their presence):
     `{ "bridge": { tool_name, input } }` / `{ "bridgeAll": [ ... ] }` (a real MCP
     permission round-trip that blocks until Secant answers), so recorded stdout
     after a bridge step emits only once the verdict is in, and
-    `{ "control": { "subtype", "emit"? } }` (#346), which blocks until the
-    Adapter writes a stdin `control_request` of that subtype, then emits `emit`
+    `{ "control": { "subtype", "cancelQueued"?, "emit"? } }` (#346), which blocks
+    until the Adapter writes a stdin `control_request` of that subtype (with
+    `cancel_queued: true` when `cancelQueued` is set), then emits `emit`
     with every recorded `request_id` replaced by the Adapter-minted one (as
-    `session_id` is echoed). A control step without `emit` swallows the request:
+    `session_id` is echoed), and `{ "steer": { "uuid" } }` (#359), which blocks
+    until the Adapter writes a mid-Turn `user` frame and then replaces the
+    recorded Steer `uuid` with the Adapter-minted one in every later byte. A control step without `emit` swallows the request:
     it models a Claude Code that never confirms, so the Adapter falls back to
     the process stop. On the recorded `resume` case it overlays that fallback on
     bytes recorded with a SIGTERM stop. stdin is read while steps run, so a
     control request may arrive before its step; one that arrives once the Turn
     has no control step left fails the replay. A bridge call answered "request
     expired" skips to the Turn's next control step, or exits 0 without one.
+  - `uuid` — the uuid the recorder stamped on this Turn's prompt (#359); the
+    replayer swaps in the Adapter's from the Turn frame, as for a Steer.
   - `workspacePatch` — a git diff file the replayer `git apply`s in the launch
     cwd as the Turn concludes (the "applied at the Turn's result" step).
   - `workingAreaPatch` — the same, applied in the launch's `--add-dir` directory
@@ -88,6 +93,19 @@ The `interrupt` case holds one process's stdin open: it writes the first Turn,
 sends a `control_request` `interrupt` once text streams, sends the next Turn
 once the aborted `result` arrives, then closes stdin. stdout is split at the
 line boundary where each stdin frame was written.
+
+The `steer-within`, `steer-boundary`, `steer-cancel`, and `compaction` cases
+(#359), and `interrupt` since #359, hold stdin open through one shared helper.
+Their prompts and Steers carry recorder uuids (`9a0e0000-…-00000000000N` and
+`5eee0000-…-00000000000N`) the replayer swaps for the Adapter's; the older
+single-Turn cases send unstamped prompts, so their results list no uuid. A Steer
+lands in a tool round because the recorder holds that round's Write approval
+while it writes the Steer; replay emits the bytes around the Steer and raises
+no approval, so the approval wait is a recording device, not replayed
+behaviour. `compaction` sends `/compact` twice as its own Turn: the first is
+interrupted mid-compaction, the second compacts. Automatic compaction is not
+recorded (it needs a near-full context window); the scripted Claude in
+`claude-code-steer.test.ts` covers its frames.
 
 ## Codex replay
 

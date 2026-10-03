@@ -1127,6 +1127,45 @@ async function steerTurn(
   return awaitSettled(wired.projectionPort, operationId);
 }
 
+/** Submit a Steer that admission refuses, and return its Problem. */
+function refuseSteer(
+  wired: Wiring,
+  runId: string,
+  turnId: string,
+  text: string,
+  operationId = "op-steer-refused",
+) {
+  const steered = wired.projectionPort.submit({
+    operationId,
+    operation: "steer-turn",
+    input: { runId, turnId, text },
+  });
+  assert.equal(steered.admitted, false, JSON.stringify(steered));
+  if (steered.admitted) throw new Error("unreachable");
+  return steered.problem;
+}
+
+/** A live Turn under a steerable Harness whose Session lists `commands`. */
+function steerableSessionTurn(
+  commands: readonly string[],
+): FakeScript["turns"][number] {
+  return {
+    ...BLOCKING_TURN,
+    events: [
+      {
+        kind: "session",
+        availability: { state: "open" },
+        facts: {
+          recoveryCoordinate: { opaque: "coord-s" },
+          tools: [],
+          mcp: [],
+          commands,
+        },
+      },
+    ],
+  };
+}
+
 /** Interrupt the live Turn, assert the interrupt applied, and return the Run's rest. */
 async function interruptTurn(
   wired: Wiring,
@@ -1209,15 +1248,13 @@ test("a live interactive Turn offers Steer unavailable with the profile's reason
   if (steer.available) throw new Error("unreachable");
   assert.equal(steer.reason, profile().steer.evidence);
 
-  const outcome = await steerTurn(
-    wired,
-    runId,
-    steer.turnId,
-    "op-steer-refused",
-  );
-  assert.equal(outcome.status, "not-applied", JSON.stringify(outcome));
-  if (outcome.status !== "not-applied") throw new Error("unreachable");
-  assert.equal(outcome.problem.code, "steer-unavailable");
+  // Availability is checked first, before blank text or the input rules, and
+  // refuses at admission: no Operation is admitted.
+  for (const text of ["focus on the tests first", "   ", "/clear"]) {
+    const refused = refuseSteer(wired, runId, steer.turnId, text);
+    assert.equal(refused.code, "steer-unavailable");
+    assert.equal(refused.details?.reason, profile().steer.evidence);
+  }
 
   // The refusal changes nothing: the Turn is still live and still interruptible.
   const after = readRun(wired, runId);
@@ -1983,4 +2020,94 @@ test("End Stage is refused as a value on an interactive Step outside a human-con
   const still = readRun(wired, runId);
   assert.equal(still.state, "blocked");
   assert.ok(offer(still, "end-interactive-step"));
+});
+
+test("Steer admission checks availability, then blank text, then input rules, then the Session's commands (#359)", async (t) => {
+  const { wired, runId } = await launchInteractive(t, {
+    profile: {
+      ...profile(),
+      steer: { available: true, evidence: "scripted fake" },
+    },
+    // `/clear` is both reserved and a listed Session command: the input rule,
+    // checked first, names it.
+    turns: [steerableSessionTurn(["/compact", "/clear", "/context"])],
+  });
+  const { steer } = await sendLiveTurn(wired, runId, "op-send-ordered");
+  assert.equal(steer.available, true);
+
+  const blank = refuseSteer(wired, runId, steer.turnId, " \n\t ");
+  assert.equal(blank.code, "steer-blank");
+
+  const reserved = refuseSteer(wired, runId, steer.turnId, "/clear the slate");
+  assert.equal(reserved.code, "harness-input-reserved");
+  assert.equal(reserved.details?.word, "/clear");
+
+  // The shared matcher: leading whitespace skipped, the whole first word,
+  // compared case-insensitively.
+  for (const text of ["/compact", "  /COMPACT now", "/Context\nplease"]) {
+    const command = refuseSteer(wired, runId, steer.turnId, text);
+    assert.equal(command.code, "steer-session-command", text);
+    assert.match(command.explanation, /^Send \/\S+ when the Turn ends:/);
+    assert.equal(command.details?.harness, "Claude Code");
+  }
+  const named = refuseSteer(wired, runId, steer.turnId, "/compact");
+  assert.equal(named.details?.word, "/compact");
+
+  // A refusal consumes no Operation id and records nothing: the same id then
+  // carries a Steer whose first word is no command at all.
+  const live = readRun(wired, runId);
+  assert.equal(live.state, "running");
+  assert.equal(
+    live.timeline.filter((event) => event.event === "steer").length,
+    0,
+  );
+  for (const text of ["/compactness of the code", "use the /compact flag"]) {
+    const operationId = `op-steer-${text.length}`;
+    const admitted = wired.projectionPort.submit({
+      operationId,
+      operation: "steer-turn",
+      input: { runId, turnId: steer.turnId, text },
+    });
+    assert.ok(admitted.admitted, JSON.stringify(admitted));
+    const outcome = await awaitSettled(wired.projectionPort, operationId);
+    assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  }
+  const retried = wired.projectionPort.submit({
+    operationId: "op-steer-refused",
+    operation: "steer-turn",
+    input: { runId, turnId: steer.turnId, text: "plain guidance" },
+  });
+  assert.ok(retried.admitted, JSON.stringify(retried));
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "op-steer-refused")).status,
+    "applied",
+  );
+});
+
+test("a Codex Steer is refused no reserved word, since Codex reserves none and lists no commands (#359)", async (t) => {
+  const { wired, runId } = await launchInteractive(
+    t,
+    {
+      profile: {
+        ...profile(),
+        harness: "Codex",
+        steer: { available: true, evidence: "scripted fake" },
+      },
+      turns: [steerableSessionTurn([])],
+    },
+    undefined,
+    undefined,
+    "codex",
+  );
+  const { steer } = await sendLiveTurn(wired, runId, "op-send-codex");
+  const admitted = wired.projectionPort.submit({
+    operationId: "op-steer-codex",
+    operation: "steer-turn",
+    input: { runId, turnId: steer.turnId, text: "/clear" },
+  });
+  assert.ok(admitted.admitted, JSON.stringify(admitted));
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "op-steer-codex")).status,
+    "applied",
+  );
 });

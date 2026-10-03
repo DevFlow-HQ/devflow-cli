@@ -19,7 +19,6 @@ import type {
   RecoveryCoordinate,
   SessionFacts,
   TurnEvent,
-  TurnRequest,
   UsageObservation,
 } from "../harness.js";
 
@@ -28,12 +27,26 @@ import type {
 /** A string-valued field that is absent when missing or of another type. */
 const lenientString = z.string().optional().catch(undefined);
 
+/** A list of strings that keeps only its string entries, and is empty when
+ *  missing or of another type. */
+const lenientStrings = z
+  .array(z.unknown())
+  .optional()
+  .catch(undefined)
+  .transform((values) =>
+    (values ?? []).filter(
+      (value): value is string => typeof value === "string",
+    ),
+  );
+
 /** `system` / `init`: the per-process handshake echoing the Session id. */
 const InitFrame = z.looseObject({
   type: z.literal("system"),
   subtype: z.literal("init"),
   session_id: lenientString,
   model: lenientString,
+  /** The Session's commands by bare name (`compact`), #359. */
+  slash_commands: lenientStrings,
 });
 export type InitFrame = z.infer<typeof InitFrame>;
 
@@ -74,16 +87,23 @@ const StreamEventFrame = z.looseObject({
 });
 export type StreamEventFrame = z.infer<typeof StreamEventFrame>;
 
-/** `result`: the one authoritative Turn result. Only the type is structural: a
- *  result frame always settles the Turn, and a missing or mistyped `subtype`
- *  settles it `failed` as `unknown-result` exactly as the untyped reader did,
- *  rather than leaving the Turn to be lost when the process later closes. */
+/** `result`: the one authoritative result of a native exchange. Only the type
+ *  is structural: a result frame always ends its exchange, and a missing or
+ *  mistyped `subtype` settles it `failed` as `unknown-result` exactly as the
+ *  untyped reader did, rather than leaving the Turn to be lost when the process
+ *  later closes. `user_message_uuids` lists every stdin message the exchange put
+ *  in front of the model, and `user_message_uuid` the one that started it (#359). */
 const ResultFrame = z.looseObject({
   type: z.literal("result"),
   subtype: lenientString,
   is_error: z.boolean().optional().catch(undefined),
   result: lenientString,
   terminal_reason: lenientString,
+  user_message_uuid: lenientString,
+  user_message_uuids: lenientStrings,
+  /** Model turns the exchange ran: 0 for a command Claude Code ran itself,
+   *  such as `/compact`. */
+  num_turns: z.number().optional().catch(undefined),
 });
 export type ResultFrame = z.infer<typeof ResultFrame>;
 
@@ -99,6 +119,26 @@ const ControlResponseFrame = z.looseObject({
   }),
 });
 export type ControlResponseFrame = z.infer<typeof ControlResponseFrame>;
+
+/** `command_lifecycle` (`msg_lifecycle_v1`): one stdin message's progress,
+ *  `queued`, `started` (in front of the model), `completed`, or `cancelled`
+ *  (#359). The message's own uuid is the one structural field. */
+const CommandLifecycleFrame = z.looseObject({
+  type: z.literal("command_lifecycle"),
+  command_uuid: z.string(),
+  state: lenientString,
+});
+export type CommandLifecycleFrame = z.infer<typeof CommandLifecycleFrame>;
+
+/** `system` / `status`: what the process is doing, such as `compacting`, and how
+ *  a compaction ended (`compact_result`, #359). */
+const StatusFrame = z.looseObject({
+  type: z.literal("system"),
+  subtype: z.literal("status"),
+  status: lenientString,
+  compact_result: lenientString,
+});
+export type StatusFrame = z.infer<typeof StatusFrame>;
 
 const TelemetryFrame = z.looseObject({ type: z.literal("telemetry") });
 
@@ -132,6 +172,16 @@ export type ParsedFrame =
       readonly type: string;
       readonly frame: ControlResponseFrame;
     }
+  | {
+      readonly kind: "command-lifecycle";
+      readonly type: string;
+      readonly frame: CommandLifecycleFrame;
+    }
+  | {
+      readonly kind: "status";
+      readonly type: string;
+      readonly frame: StatusFrame;
+    }
   | { readonly kind: "telemetry"; readonly type: string }
   | { readonly kind: "other"; readonly type: string | undefined };
 
@@ -144,6 +194,12 @@ export function parseFrame(value: unknown): ParsedFrame | undefined {
     const init = InitFrame.safeParse(value);
     return init.success
       ? { kind: "init", type, frame: init.data }
+      : { kind: "other", type };
+  }
+  if (type === "system" && stringField(value, "subtype") === "status") {
+    const status = StatusFrame.safeParse(value);
+    return status.success
+      ? { kind: "status", type, frame: status.data }
       : { kind: "other", type };
   }
   switch (type) {
@@ -177,6 +233,12 @@ export function parseFrame(value: unknown): ParsedFrame | undefined {
         ? { kind: "control-response", type, frame: parsed.data }
         : { kind: "other", type };
     }
+    case "command_lifecycle": {
+      const parsed = CommandLifecycleFrame.safeParse(value);
+      return parsed.success
+        ? { kind: "command-lifecycle", type, frame: parsed.data }
+        : { kind: "other", type };
+    }
     case "telemetry":
       return TelemetryFrame.safeParse(value).success
         ? { kind: "telemetry", type }
@@ -188,19 +250,27 @@ export function parseFrame(value: unknown): ParsedFrame | undefined {
 
 // --- The stdin encoders --------------------------------------------------------
 
-export function encodeTurn(request: TurnRequest): Uint8Array {
+/** One stdin user message, a Turn's prompt or a Steer (#359), stamped with the
+ *  Adapter-minted uuid that Claude Code's lifecycle frames and a result's
+ *  `user_message_uuids` echo, so each result is matched to its own messages. */
+export function encodeUserMessage(uuid: string, text: string): Uint8Array {
   return new TextEncoder().encode(
     `${JSON.stringify({
       type: "user",
-      message: { role: "user", content: request.input.text },
+      message: { role: "user", content: text },
       parent_tool_use_id: null,
+      uuid,
     })}\n`,
   );
 }
 
-/** The control requests this Adapter sends. #346 sends only the plain
- *  `interrupt`; #347, #348, and #359 add their subtypes here. */
-export type ControlRequest = { readonly subtype: "interrupt" };
+/** The control requests this Adapter sends. The Interrupt always cancels
+ *  queued stdin messages (#359), so an undelivered Steer never runs after it;
+ *  #347 and #348 add their subtypes here. */
+export type ControlRequest = {
+  readonly subtype: "interrupt";
+  readonly cancel_queued: true;
+};
 
 export function encodeControlRequest(
   requestId: string,
@@ -227,7 +297,7 @@ export function contentBlocks(frame: MessageFrame): ContentBlock[] {
 }
 
 export function sessionFacts(
-  frame: Record<string, unknown>,
+  frame: InitFrame,
   coordinate: RecoveryCoordinate,
 ): SessionFacts {
   const tools = Array.isArray(frame.tools)
@@ -247,8 +317,19 @@ export function sessionFacts(
     recoveryCoordinate: coordinate,
     tools,
     mcp,
+    commands: sessionCommands(frame.slash_commands),
     ...(executableVersion !== undefined ? { executableVersion } : {}),
   };
+}
+
+/** Claude Code lists its Session's commands by bare name (`compact`); a person
+ *  types them as a leading `/compact`, the word ADR 0040's matcher compares. */
+function sessionCommands(names: readonly string[]): string[] {
+  const words = names.flatMap((name) => {
+    const bare = name.replace(/^\//, "");
+    return bare.length === 0 ? [] : [`/${bare}`];
+  });
+  return [...new Set(words)];
 }
 
 export function usageObservation(

@@ -30,12 +30,14 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   Interrupt never fires the Run's controller, so a refused or ineffective interrupt cannot stop a following human Turn, Agent Turn, or Command step.
 - Both `interrupt-turn` and `steer-turn` are offered only while a live (unsettled) Turn exists in this process; a control naming a settled Turn is rejected as a value.
 - The steer Offer is discriminated on the prepared profile's steer evidence (live first, then persisted with the Attempt), never Adapter prose above the Seam: a Harness
-  with native steer (Codex) offers it `available` with the live turnId, one without (Claude Code) offers it `available:false` with the evidence as `reason` (#148).
-- Steer keeps the Turn working. `submitSteerTurn` refuses an unavailable profile with `steer-unavailable`
-  before any native call, else reaches the live Turn's `tracking.live.steer` (bound by `driveHarnessTurn` over `turn.steer` via the `RequestChannel.bindSteer` hook,
-  unbound at Turn end alongside `bindAnswer`); a native control race settles `steer-rejected`, a stale/settled turnId `turn-control-rejected`, an accepted steer
-  `applied`, Run still running. Its Operation id is the opaque Steer id through execution to the Harness; replay never sends it twice (#356).
-  Settlement carries full text and send time through `appendTurnEvent`, independently of when the acceptance receipt resolves.
+  with native steer (Codex, Claude Code since #359) offers it `available` with the live turnId, one without `available:false` with the evidence as `reason` (#148).
+- Steer admission (`steerRefusal`, #359) refuses before any Operation, in ADR 0040's order: `steer-unavailable`, `steer-blank`, the selected Harness's
+  `harness-input-reserved`, then `steer-session-command` for a word in `tracking.live.sessionCommands` (execution sets it from the live Turn's Session fact
+  through `RequestChannel.sessionCommands`, clearing it at Turn end). Workflow's one matcher serves both word checks.
+- Steer keeps the Turn working. An admitted Steer reaches the live Turn's `tracking.live.steer` (bound by `driveHarnessTurn` over `turn.steer` via the
+  `RequestChannel.bindSteer` hook, unbound at Turn end alongside `bindAnswer`); a native control race settles `steer-rejected`, a stale/settled turnId `turn-control-rejected`,
+  an accepted steer `applied`, Run still running. Its Operation id is the opaque Steer id through execution to the Harness; replay never sends it twice (#356). Settlement
+  carries full text and send time through `appendTurnEvent`, independently of when the acceptance receipt resolves.
 - `resume-run` continues a `detached` Session in the same native Session because the executor reads the stored Session availability and passes its coordinate as
   `resume`; a Session recorded `unusable` fails the Attempt without ever opening a fresh Session (ADR 0022).
 

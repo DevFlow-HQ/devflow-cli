@@ -3,22 +3,26 @@
   "turns": [
     {
       "uuid": "9a0e0000-0000-4000-8000-000000000001",
+      "stdout": "turn-1.stdout"
+    },
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000002",
       "steps": [
         {
-          "emit": "turn-1.stdout"
+          "emit": "compacting.stdout"
         },
         {
           "control": {
             "subtype": "interrupt",
             "cancelQueued": true,
-            "emit": "interrupted.stdout"
+            "emit": "compact-cancelled.stdout"
           }
         }
       ]
     },
     {
-      "uuid": "9a0e0000-0000-4000-8000-000000000002",
-      "stdout": "turn-2.stdout"
+      "uuid": "9a0e0000-0000-4000-8000-000000000003",
+      "stdout": "compact.stdout"
     }
   ]
 }

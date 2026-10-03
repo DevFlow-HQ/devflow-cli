@@ -2,7 +2,7 @@
   "harness": "claude-code",
   "executableVersion": "2.1.288 (Claude Code)",
   "protocolVersion": "2.1.288",
-  "recordedAt": "2026-10-03T19:55:12.781Z",
+  "recordedAt": "2026-10-03T19:55:41.071Z",
   "redactions": [
     {
       "placeholder": "«WORKSPACE»",
@@ -11,7 +11,11 @@
     {
       "placeholder": "«RUNTIME_DIR»",
       "reason": "user runtime directory"
+    },
+    {
+      "placeholder": "«HOME»",
+      "reason": "home directory"
     }
   ],
-  "refreshCommand": "bun tests/harness/record.ts interrupt"
+  "refreshCommand": "bun tests/harness/record.ts compaction"
 }

@@ -44,8 +44,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Steer ids are caller-supplied and opaque. Each accepted Steer emits one `steer` settlement with its text and send time, even before its receipt resolves.
   Native correlation and pending state stay inside the Adapter; delivery means model exposure, never compliance (#356).
 - Steer is a profile capability like the others (`HarnessProfile.steer`, evidence-bearing). An Adapter derives its `steer` receipt from it rather than
-  hard-coding a second rejection; the Claude Code profile declares it unavailable (print mode has no same-Turn guidance frame) and the fake's script
-  decides it through the profile it supplies.
+  hard-coding a second rejection; Codex and Claude Code (#359) declare it available, and the fake's script decides it through the profile it supplies.
+- `SessionFacts.commands` (#359) are the typed leading words a Harness runs as its own commands in the Session (Claude Code's init `slash_commands` as
+  `/name`; Codex lists none). They are data for ADR 0040's Steer check above the Seam, never a native list.
 - Model selection is a profile fact. `modelSelection` declares where a model can be chosen (`launch`, `per-turn`, both, or `unavailable`) and carries a
   `ModelDeclaration` (ADR 0034): an exhaustive `list`, `suggested` picks that are neither exhaustive nor validated, or `free-text`. `list` and
   `suggested` entries share `{model, label, efforts, defaultEffort?}`; empty `efforts` is a model without an effort setting, and `suggested` and
@@ -86,8 +87,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - The `tests/harness` domain owns the deterministic fake Adapter, shared conformance, and native replayers. Recorded and residual synthetic cases live in
   `tests/harness/fixtures/<harness>/<case>/` with a `recording.json` sidecar and opt-in recorder.
-- Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, native Steer, and leftover re-delivery. Other
-  control groups stay capability-specific.
+- Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, native Steer, and leftover re-delivery, and
+  Claude replay covers native and pending Steer. Other control groups stay capability-specific.
   Structured clarifications, after-acceptance checkpoint, load-with-replay, and caller-contract violations remain fake-only. The fake performs load-with-replay:
   resumed Turn re-emits the Session's transcript history (`assistant-content`, `tool-activity`), drops a scripted entry that repeats a replayed one, then
   emits `REPLAY_BARRIER` (an `activity`) before any live event — history is historical by position, inside the closed vocabulary.
@@ -100,7 +101,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   window). So the replayer installs its SIGTERM handler at startup, and interrupt/close cases wait for the `session` event (init observed) before
   interrupting. Never signal a freshly spawned child before it has announced readiness.
 - The replayer's `case.json` vocabulary (`tests/harness/fixtures/README.md` is the reference): a `control` step (#346: take the next stdin
-  `control_request` and emit recorded bytes echoing its `request_id`, or swallow it to model an unconfirmed stop; stdin is read while steps run),
+  `control_request` and emit recorded bytes echoing its `request_id`, or swallow it to model an unconfirmed stop; stdin is read while steps run;
+  `cancelQueued` requires `cancel_queued`), a `steer` step and a Turn's `uuid` (#359: echo the message's minted uuid in later bytes),
   `ignoreSigterm` (swallow SIGTERM → force-kill path; moot on Windows, where every live child is force-killed regardless), per-turn `exitAfter`
   (exit without a result → lost/corruption) and `workingAreaPatch` (applied in the launch's `--add-dir` directory), a `resume` section replayed when
   the launch has `--resume`, and `sessions[]` (#224: the Nth fresh `--session-id` launch after the first plays `sessions[N-1]`, one conversation per

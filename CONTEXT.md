@@ -51,6 +51,8 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   prompt) must satisfy, whatever the transport. It is closed data with a kind; the one kind today, reserved leading words, names the first words
   that would change a conversation, Model choice, or permission Secant owns. Secant owns the matching and the refusal. See
   [ADR 0040](./docs/adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md).
+- **Session command** — a typed leading word, such as `/compact`, that a **Harness** lists as its own command for one **Harness Session**. A **Steer**
+  starting with one is refused while the **Turn** works, since the Harness would run it after the Turn; at a Turn boundary it is sent as its own Turn.
 - **Projection Port** — the single Secant-owned application Interface shared by TUI and headless callers. It opens bounded **Projections**,
   admits user intent as **Operations**, and reads content through **Resource References** without exposing workflow-runtime, persistence, Adapter,
   or Harness-native objects. It is an in-memory Interface rather than a wire protocol; see

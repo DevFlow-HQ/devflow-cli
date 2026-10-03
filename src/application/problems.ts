@@ -466,6 +466,40 @@ export function interactiveTurnBlank(runId: string): Problem {
   };
 }
 
+/** Steer guidance was blank or whitespace-only (#359): Secant authors nothing,
+ *  so an empty Steer is refused at admission, before anything reaches stdin. */
+export function steerBlank(runId: string): Problem {
+  return {
+    code: "steer-blank",
+    explanation: `Run ${runId} was sent a Steer with no text; a Steer must carry text.`,
+    remediation: "Type the guidance, then send it; blank Steers are not sent.",
+    possibleEffects: "none",
+    details: { runId },
+  };
+}
+
+/** A Steer's first word is a command the Harness listed for this Session (ADR
+ *  0040): Claude Code runs such a command after the Turn rather than inside it,
+ *  so it is refused while the Turn works. */
+export function steerSessionCommand({
+  runId,
+  harness,
+  word,
+}: {
+  readonly runId: string;
+  readonly harness: string;
+  readonly word: string;
+}): Problem {
+  return {
+    code: "steer-session-command",
+    explanation: `Send ${word} when the Turn ends: ${harness} runs its commands after the Turn, not inside it.`,
+    remediation:
+      "Wait for the Turn to end and send it as the next Turn, or Interrupt the Turn first.",
+    possibleEffects: "none",
+    details: { runId, harness, word },
+  };
+}
+
 /** A leading word would change Harness state Secant owns (ADR 0040). */
 export function harnessInputReserved({
   runId,

@@ -248,6 +248,31 @@ export function registerClaudeCodeReplayerConformance(
   runInterruptRecoveryCases(interruptScenarios, register, {
     recoveryInterruptOutcome: CLAUDE_FALLBACK_OUTCOME,
   });
+
+  // Native Steer (#359): a Steer written during a recorded tool round reaches the
+  // model with its tool result, and two Steers queued in one are dropped by the
+  // Interrupt's `cancel_queued`, or by the loss when the Harness closes.
+  runNativeSteerCases(
+    {
+      label: "claude-code",
+      guidanceText: "Also say the word MANGO at the end of your reply.",
+      steerableTurn: caseScenario(
+        "steer-within",
+        "57ee1111-1111-4111-8111-111111111111",
+      ),
+    },
+    register,
+  );
+  runPendingSteerCases(
+    {
+      label: "claude-code",
+      pendingTurn: caseScenario(
+        "steer-cancel",
+        "57ee3333-3333-4333-8333-333333333333",
+      ),
+    },
+    register,
+  );
 }
 
 // --- Codex over the real replayer --------------------------------------------

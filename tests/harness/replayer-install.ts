@@ -54,6 +54,8 @@ export interface InstalledReplayer {
     stdinLines: string[];
     /** The stdin `control_request` frames, kept apart from Turn frames. */
     controlLines: string[];
+    /** The mid-Turn Steer frames a `steer` step took (#359). */
+    steerLines: string[];
   }[];
   bridges(): BridgeRecord[];
   drift(newVersion: string): void;
@@ -150,6 +152,7 @@ export function installReplayerAt(
           stdinBytes: number;
           stdinLines: string[];
           controlLines: string[];
+          steerLines: string[];
         }
       >();
       for (const entry of entries) {
@@ -160,6 +163,7 @@ export function installReplayerAt(
             stdinBytes: 0,
             stdinLines: [],
             controlLines: [],
+            steerLines: [],
           });
           continue;
         }
@@ -167,6 +171,10 @@ export function installReplayerAt(
         if (!invocation) continue;
         if (entry.type === "control") {
           invocation.controlLines.push(entry.line);
+          continue;
+        }
+        if (entry.type === "steer") {
+          invocation.steerLines.push(entry.line);
           continue;
         }
         if (entry.type !== "stdin") continue;

@@ -312,8 +312,8 @@ function runResult(
           // prepared profile declares native same-Turn guidance. The steer Offer is
           // discriminated on that profile
           // evidence (live first, then persisted with the Attempt) — a Harness with
-          // steer (Codex) offers it available, one without (Claude Code) offers it
-          // unavailable with the evidence, never Adapter-specific prose here.
+          // steer offers it available, one without offers it unavailable with the
+          // evidence, never Adapter-specific prose here.
           ...(isLive && liveTurn !== undefined
             ? [
                 interruptTurnOffer(runId, liveTurn.turnId),

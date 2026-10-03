@@ -1672,7 +1672,12 @@ class CodexTurn implements HarnessTurn {
     this.emit({
       kind: "session",
       availability: { state: "open" },
-      facts: { recoveryCoordinate: coordinate, tools: [], mcp: [] },
+      facts: {
+        recoveryCoordinate: coordinate,
+        tools: [],
+        mcp: [],
+        commands: [],
+      },
     });
     this.emit({ kind: "model", observation: model });
   }

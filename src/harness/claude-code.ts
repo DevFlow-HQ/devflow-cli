@@ -17,17 +17,19 @@ import type {
 import { ControlChannel, type ControlOutcome } from "./claude-code/control.js";
 import {
   contentBlocks,
-  encodeTurn,
+  encodeUserMessage,
   genericActivity,
   isAbortedResult,
   isAuthenticationResult,
   parseFrame,
   sessionFacts,
   usageObservation,
+  type CommandLifecycleFrame,
   type InitFrame,
   type MessageFrame,
   type ParsedFrame,
   type ResultFrame,
+  type StatusFrame,
   type StreamEventFrame,
 } from "./claude-code/frames.js";
 import { APPROVAL_DECISIONS } from "./harness.js";
@@ -55,11 +57,13 @@ import type {
   SessionFacts,
   SteerCapability,
   SteerInput,
+  SteerSettlement,
   TurnEvent,
   TurnEventListener,
   TurnRequest,
   TurnResult,
   TurnSubscription,
+  UsageObservation,
 } from "./harness.js";
 import { JsonlLineReader } from "./jsonl.js";
 import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
@@ -86,7 +90,7 @@ const DENY_MESSAGE = "The tool use was denied.";
 
 /** This Adapter's revision, stamped onto every profile it produces so a cached
  *  qualification from an older Adapter is never mistaken for a current one. */
-const ADAPTER_REVISION = "claude-code-2";
+const ADAPTER_REVISION = "claude-code-3";
 
 const HARNESS_NAME = "claude-code";
 
@@ -125,6 +129,9 @@ export interface ClaudeCodeAdapterOverrides {
   /** Bounds a native stop before the process-stop fallback, so a replayed
    *  unanswered `control_request` falls back within a test's bound. */
   readonly controlTimeoutMs?: number;
+  /** Bounds the wait for init, so a scripted silent process times out within
+   *  a test's bound. */
+  readonly handshakeTimeoutMs?: number;
   /** Override UUID generation for deterministic protocol replay. */
   readonly sessionId?: () => string;
 }
@@ -174,8 +181,11 @@ class ClaudeCodeAdapter implements HarnessAdapter {
     const spawn: ProcessAdapter["spawnOwnedProcess"] = (spawnOptions) =>
       processAdapter.spawnOwnedProcess(spawnOptions);
 
-    const controlTimeoutMs =
-      this.overrides.controlTimeoutMs ?? DEFAULT_CONTROL_TIMEOUT_MS;
+    const timeouts: SessionTimeouts = {
+      controlMs: this.overrides.controlTimeoutMs ?? DEFAULT_CONTROL_TIMEOUT_MS,
+      handshakeMs:
+        this.overrides.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS,
+    };
     const identity = fileIdentity(target.identityPath);
     // Keyed by the target's path and file identity (the spec's cache key); the
     // discovery route is folded in too so a reused profile never reports a stale
@@ -193,7 +203,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
           spawn,
           options.writableDirectory,
           options.phases,
-          controlTimeoutMs,
+          timeouts,
           options.containment,
         ),
       };
@@ -214,7 +224,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
         spawn,
         options.writableDirectory,
         options.phases,
-        controlTimeoutMs,
+        timeouts,
         options.containment,
       ),
     };
@@ -327,6 +337,14 @@ class ClaudeCodeAdapter implements HarnessAdapter {
   }
 }
 
+/** The bounds a Session's native exchanges run under. */
+interface SessionTimeouts {
+  /** A native stop, from the `control_request` write through its result. */
+  readonly controlMs: number;
+  /** The wait for a process's init. */
+  readonly handshakeMs: number;
+}
+
 /** One prepared Harness owns every live named Session for one Workspace. It
  * permits one active Turn globally, while retaining each idle Session process
  * for a later Turn. */
@@ -349,7 +367,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
     /** The one additional writable directory, forwarded as --add-dir (#214). */
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
-    private readonly controlTimeoutMs: number,
+    private readonly timeouts: SessionTimeouts,
     private readonly containment: HarnessContainmentObserver | undefined,
   ) {}
 
@@ -413,7 +431,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
         this.profile,
         this.writableDirectory,
         this.phases,
-        this.controlTimeoutMs,
+        this.timeouts,
         this.containment,
       );
       this.sessions.set(request.session, session);
@@ -541,7 +559,7 @@ class ClaudeCodeSession {
      *  launch, fresh or resumed (#214). */
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
-    private readonly controlTimeoutMs: number,
+    private readonly timeouts: SessionTimeouts,
     private readonly containment: HarnessContainmentObserver | undefined,
   ) {
     this.coordinate = { opaque: sessionId };
@@ -645,13 +663,13 @@ class ClaudeCodeSession {
     // A result that wins the race settles the Turn without waiting on the
     // response; the channel still correlates it, or times it out, alone.
     const outcome = await Promise.race([
-      control.request({ subtype: "interrupt" }),
+      control.request({ subtype: "interrupt", cancel_queued: true }),
       turn.result().then(() => undefined),
     ]);
     if (outcome?.kind === "success") {
       await settlesWithin(
         turn,
-        this.controlTimeoutMs - (performance.now() - started),
+        this.timeouts.controlMs - (performance.now() - started),
         Promise.race([this.closing, owned.closed().then(() => undefined)]),
       );
     }
@@ -677,11 +695,24 @@ class ClaudeCodeSession {
       return;
     }
     turn.noteActivity(
-      `${interruptFallbackReason(outcome, this.controlTimeoutMs)}; stopping the Claude Code process.`,
+      `${interruptFallbackReason(outcome, this.timeouts.controlMs)}; stopping the Claude Code process.`,
     );
     this.releaseProcess();
     if (this.active === turn) this.active = undefined;
     await this.settleInterruption(turn, owned, span);
+  }
+
+  /** Write one Steer frame to the process serving `turn` (ADR 0035). False when
+   *  that process is gone or the write fails; the caller then refuses the Steer. */
+  async writeSteer(turn: ClaudeCodeTurn, bytes: Uint8Array): Promise<boolean> {
+    const owned = this.process;
+    if (owned === undefined || this.processTurn !== turn) return false;
+    try {
+      await owned.writeStdin(bytes);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Give up the current process: its control channel settles every pending
@@ -851,7 +882,7 @@ class ClaudeCodeSession {
     // acknowledges the resume, so it is the recovery handshake.
     if (!this.initialized) {
       turn.armHandshake(
-        DEFAULT_HANDSHAKE_TIMEOUT_MS,
+        this.timeouts.handshakeMs,
         startPhase(
           this.phases,
           this.resuming ? "recovery" : "handshake",
@@ -861,8 +892,11 @@ class ClaudeCodeSession {
     }
     const acceptingProcess = this.process!;
     try {
-      await acceptingProcess.writeStdin(encodeTurn(turn.request));
+      await acceptingProcess.writeStdin(
+        encodeUserMessage(turn.promptUuid, turn.request.input.text),
+      );
       if (this.process === acceptingProcess) this.processTurn = turn;
+      turn.markSent();
     } catch (error) {
       turn.settleLost("acceptance", "stdin write failed", {
         phase: "turn",
@@ -956,7 +990,7 @@ class ClaudeCodeSession {
     const owned = launched.process;
     const control = new ControlChannel(
       (bytes) => owned.writeStdin(bytes),
-      this.controlTimeoutMs,
+      this.timeouts.controlMs,
     );
     this.controls.set(owned, control);
     this.process = owned;
@@ -1091,6 +1125,24 @@ interface PendingApproval {
   readonly resolve: (outcome: ApprovalOutcome) => void;
 }
 
+/** How one native exchange ended: its result, usage, and whether it was a
+ *  compaction Claude Code reported failed. */
+interface ExchangeEnd {
+  readonly frame: ResultFrame;
+  readonly usage: UsageObservation | undefined;
+  readonly compactionFailed: boolean;
+}
+
+/** One Steer written (or being written) to stdin and not yet settled. */
+interface PendingSteer {
+  readonly input: SteerInput;
+  readonly sentAt: string;
+  /** The native exchange running when it was sent, counted by the boundaries
+   *  before it, or undefined when it was sent between exchanges. Delivery in any
+   *  other exchange is after a boundary. */
+  readonly exchange: number | undefined;
+}
+
 class ClaudeCodeTurn implements HarnessTurn {
   get settled(): boolean {
     return this.settledKind !== undefined;
@@ -1116,6 +1168,32 @@ class ClaudeCodeTurn implements HarnessTurn {
    *  coexist; each expires when the Turn ends, is interrupted, or is lost. */
   private readonly approvals = new Map<string, PendingApproval>();
   private approvalSeq = 0;
+  /** Steers awaiting model exposure, keyed by their minted uuid (#359). */
+  private readonly steers = new Map<string, PendingSteer>();
+  private readonly steerIds = new Set<string>();
+  /** Native exchanges this Turn has ended while a Steer was still pending; each
+   *  one is a boundary the Turn stretched across (ADR 0035). */
+  private boundaries = 0;
+  /** The last exchange's result, held while an accepted Steer is pending: the
+   *  Turn ends at the first boundary after which none is. */
+  private heldResult: ExchangeEnd | undefined;
+  /** True from a held boundary until the next native exchange starts. */
+  private betweenExchanges = false;
+  /** Whether this Turn has seen its first init; a later one in the same Turn is
+   *  the next native exchange's, tolerated rather than a new handshake. */
+  private initObserved = false;
+  /** Claude Code reported a compaction failed (`compact_result: "failed"`) in
+   *  the running exchange, which a cancelled compaction does while its result
+   *  still says success. Reset at each exchange's result. */
+  private compactionFailed = false;
+  /** The uuid stamped on this Turn's prompt; with its Steers' uuids, the stdin
+   *  messages a result must list to belong to this Turn (ADR 0040). */
+  readonly promptUuid = randomUUID();
+  private readonly messages = new Set<string>([this.promptUuid]);
+  /** Resolves true once the prompt is on stdin, false if the Turn settles first:
+   *  a Steer is written only after it. */
+  private readonly sent: Promise<boolean>;
+  private resolveSent!: (sent: boolean) => void;
 
   constructor(
     request: TurnRequest,
@@ -1126,6 +1204,9 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.request = request;
     this.resultPromise = new Promise((resolve) => {
       this.resolveResult = resolve;
+    });
+    this.sent = new Promise((resolve) => {
+      this.resolveSent = resolve;
     });
   }
 
@@ -1139,11 +1220,44 @@ class ClaudeCodeTurn implements HarnessTurn {
     return this.resultPromise;
   }
 
-  steer(_input: SteerInput): Promise<ControlReceipt> {
+  /** Native Steer (ADR 0035): a stdin `user` frame stamped with a minted uuid,
+   *  written after the prompt. Accepted once the bytes are written; it settles
+   *  when Claude Code puts it in front of the model, or drops on the Turn's end. */
+  async steer(input: SteerInput): Promise<ControlReceipt> {
     if (this.settled || this.interrupting) {
-      return Promise.resolve({ outcome: "rejected", reason: "expired" });
+      return { outcome: "rejected", reason: "expired" };
     }
-    return Promise.resolve(steerReceipt(this.steerCapability));
+    if (!this.steerCapability.available) {
+      return { outcome: "rejected", reason: "unsupported" };
+    }
+    if (this.steerIds.has(input.steerId)) {
+      return { outcome: "rejected", reason: "already-settled" };
+    }
+    this.steerIds.add(input.steerId);
+    if (!(await this.sent) || this.settled || this.interrupting) {
+      return { outcome: "rejected", reason: "expired" };
+    }
+    const uuid = randomUUID();
+    this.messages.add(uuid);
+    this.steers.set(uuid, {
+      input,
+      sentAt: new Date().toISOString(),
+      exchange: this.betweenExchanges ? undefined : this.boundaries,
+    });
+    const written = await this.session.writeSteer(
+      this,
+      encodeUserMessage(uuid, input.text),
+    );
+    // A Steer already settled was delivered or dropped, so it was accepted.
+    if (written || !this.steers.has(uuid)) return { outcome: "accepted" };
+    this.steers.delete(uuid);
+    this.endHeldBoundary();
+    return { outcome: "rejected", reason: "expired" };
+  }
+
+  /** The prompt reached stdin, so Steers may follow it. */
+  markSent(): void {
+    this.resolveSent(true);
   }
 
   async interrupt(): Promise<ControlReceipt> {
@@ -1282,6 +1396,15 @@ class ClaudeCodeTurn implements HarnessTurn {
       return;
     }
     if (!this.session.isInitialized()) {
+      // A process whose first Turn is a compaction (a `/compact` sent to a
+      // relaunched Session) reports init only once the compaction ends, which
+      // can outlast the handshake bound: Claude Code has started, so the wait
+      // for init is no longer bounded.
+      if (parsed.kind === "status" && parsed.frame.status === "compacting") {
+        this.clearHandshake();
+        this.acceptStatus(parsed.frame);
+        return;
+      }
       if (parsed.kind !== "result") this.emit(genericActivity(parsed.type));
       return;
     }
@@ -1297,6 +1420,12 @@ class ClaudeCodeTurn implements HarnessTurn {
         return;
       case "result":
         this.acceptResult(parsed.frame);
+        return;
+      case "command-lifecycle":
+        this.acceptLifecycle(parsed.frame);
+        return;
+      case "status":
+        this.acceptStatus(parsed.frame);
         return;
       case "telemetry":
         return;
@@ -1403,6 +1532,24 @@ class ClaudeCodeTurn implements HarnessTurn {
   private acceptInit(frame: InitFrame): void {
     this.clearHandshake();
     const nativeSessionId = frame.session_id;
+    if (this.initObserved) {
+      // Each native exchange re-sends init. A Turn that stretched across a
+      // boundary, or ran a compaction, sees it again with the same Session id:
+      // only the Session fact (its commands may change) is refreshed.
+      if (nativeSessionId !== this.session.coordinate.opaque) {
+        this.protocolCorruption(
+          "Claude Code init named a different Session mid-Turn",
+        );
+        return;
+      }
+      this.betweenExchanges = false;
+      this.emit({
+        kind: "session",
+        availability: { state: "open" },
+        facts: sessionFacts(frame, this.session.coordinate),
+      });
+      return;
+    }
     if (nativeSessionId !== this.session.coordinate.opaque) {
       // A resume that the Harness does not acknowledge is a recovery failure that
       // makes the Session unusable — never a silent fresh conversation. A fresh
@@ -1430,6 +1577,7 @@ class ClaudeCodeTurn implements HarnessTurn {
         ? { known: false }
         : { known: true, model: modelName };
     this.session.observeInit(model);
+    this.initObserved = true;
     this.initPhase?.ok();
     this.initPhase = undefined;
     this.lastObservation = "Claude Code acknowledged the Session at init";
@@ -1497,17 +1645,141 @@ class ClaudeCodeTurn implements HarnessTurn {
     if (text !== undefined) this.emitPreview(text);
   }
 
+  /** A Steer's lifecycle: `started` is model exposure, `cancelled` the drop an
+   *  Interrupt's `cancel_queued` makes. The prompt's own lifecycle is ignored. */
+  private acceptLifecycle(frame: CommandLifecycleFrame): void {
+    const uuid = frame.command_uuid;
+    const pending = this.steers.get(uuid);
+    if (pending === undefined) return;
+    if (frame.state === "started") {
+      // A Steer started while the Turn sat at a boundary starts the next exchange.
+      this.betweenExchanges = false;
+      this.settleSteer(uuid, pending, this.delivered(pending));
+    } else if (frame.state === "cancelled") {
+      this.settleSteer(uuid, pending, { kind: "dropped", reason: "interrupt" });
+      this.endHeldBoundary();
+    }
+  }
+
+  private acceptStatus(frame: StatusFrame): void {
+    if (frame.compact_result !== undefined) {
+      if (frame.compact_result !== "success") this.compactionFailed = true;
+      this.emit({
+        kind: "activity",
+        description:
+          frame.compact_result === "success"
+            ? "Claude Code compaction succeeded."
+            : `Claude Code compaction ${frame.compact_result}.`,
+      });
+      return;
+    }
+    if (frame.status === "compacting") {
+      this.emit({
+        kind: "activity",
+        description: "Claude Code is compacting the conversation.",
+      });
+      return;
+    }
+    this.emit(genericActivity(frame.type));
+  }
+
+  private delivered(pending: PendingSteer): SteerSettlement {
+    return {
+      kind: "delivered",
+      delivery:
+        pending.exchange === this.boundaries ? "within-turn" : "after-boundary",
+    };
+  }
+
+  private settleSteer(
+    uuid: string,
+    pending: PendingSteer,
+    settlement: SteerSettlement,
+  ): void {
+    this.steers.delete(uuid);
+    this.emit({
+      kind: "steer",
+      steerId: pending.input.steerId,
+      text: pending.input.text,
+      sentAt: pending.sentAt,
+      settlement,
+    });
+  }
+
+  /** A held boundary whose last pending Steer went away without running: the
+   *  Turn ends there, interrupted when an Interrupt cancelled it. */
+  private endHeldBoundary(): void {
+    const held = this.heldResult;
+    if (held === undefined || this.steers.size > 0 || this.settled) return;
+    this.heldResult = undefined;
+    if (this.interrupting) this.settleInterrupted("native");
+    else this.finishExchange(held);
+  }
+
+  /** One native exchange ended. Steers it lists were in front of the model.
+   *  While an accepted Steer is still pending the result is a boundary, not the
+   *  Turn's end: Claude Code runs the queued message as the next exchange. */
   private acceptResult(frame: ResultFrame): void {
+    // A result lists the stdin messages its exchange put in front of the model.
+    // One that lists only messages this Turn never sent is another exchange's,
+    // never this Turn's end (ADR 0040).
+    if (
+      frame.user_message_uuids.length > 0 &&
+      !frame.user_message_uuids.some((uuid) => this.messages.has(uuid))
+    ) {
+      this.emit({
+        kind: "activity",
+        description:
+          "Claude Code ended an exchange for a message this Turn did not send; it is ignored.",
+      });
+      return;
+    }
     const usage = usageObservation(frame);
     if (usage !== undefined) this.emit({ kind: "usage", observation: usage });
+    for (const uuid of frame.user_message_uuids) {
+      const pending = this.steers.get(uuid);
+      if (pending !== undefined) {
+        this.settleSteer(uuid, pending, this.delivered(pending));
+      }
+    }
+    // A compaction Claude Code ran itself (no model turn) and reported failed.
+    const end: ExchangeEnd = {
+      frame,
+      usage,
+      compactionFailed: this.compactionFailed && frame.num_turns === 0,
+    };
+    this.compactionFailed = false;
     // A native stop's confirmation is an `error_during_execution` result, the
     // same subtype a task failure reports. Only an aborted terminal reason while
     // this Turn's Interrupt is in flight confirms it; an aborted result without
-    // one, or any other result that wins the race, settles as itself.
-    if (this.interrupting && isAbortedResult(frame)) {
+    // one, or any other result that wins the race, settles as itself. A
+    // compaction the Interrupt cancelled reports `compact_result: "failed"` and
+    // then a success result with no model turn, so it confirms the stop too.
+    if (this.interrupting && (isAbortedResult(frame) || end.compactionFailed)) {
       this.settleInterrupted("native");
       return;
     }
+    if (this.steers.size > 0) {
+      this.heldResult = end;
+      this.boundaries += 1;
+      this.betweenExchanges = true;
+      this.lastObservation = "Claude Code ended a native exchange";
+      this.emit({
+        kind: "activity",
+        description: `Claude Code ended an exchange; the Turn stays open for ${this.steers.size} pending Steer(s).`,
+      });
+      return;
+    }
+    this.heldResult = undefined;
+    this.finishExchange(end);
+  }
+
+  /** Settle the Turn from the end of its last native exchange. */
+  private finishExchange({
+    frame,
+    usage,
+    compactionFailed,
+  }: ExchangeEnd): void {
     const subtype = frame.subtype ?? "unknown-result";
     // Authentication is recognized before the success branch: #115's recording
     // pinned the real signal — the not-logged-in result arrives as
@@ -1530,6 +1802,23 @@ class ClaudeCodeTurn implements HarnessTurn {
             category: "authentication",
             possibleEffects: "none",
             diagnostics: AUTHENTICATION_REQUIRED,
+          },
+          effectiveModel: this.session.model(),
+          session: { state: "open" },
+        },
+      });
+      return;
+    }
+    if (subtype === "success" && compactionFailed) {
+      // Claude Code reports a compaction that did not happen as a success.
+      this.settle({
+        kind: "failed",
+        detail: {
+          failure: {
+            phase: "turn",
+            category: "compaction-failed",
+            possibleEffects: "none",
+            diagnostics: "Claude Code reported that its compaction failed.",
           },
           effectiveModel: this.session.model(),
           session: { state: "open" },
@@ -1608,9 +1897,18 @@ class ClaudeCodeTurn implements HarnessTurn {
     else this.initPhase?.failed(failure);
     this.initPhase = undefined;
     this.clearPreview();
-    // Terminal ordering: expire every outstanding prompt (its events publish
-    // here) before the producer closes and the one result settles.
+    // Terminal ordering: drop every Steer still pending, then expire every
+    // outstanding prompt (their events publish here), before the producer
+    // closes and the one result settles.
+    for (const [uuid, pending] of [...this.steers]) {
+      this.settleSteer(uuid, pending, {
+        kind: "dropped",
+        reason: result.kind === "interrupted" ? "interrupt" : "loss",
+      });
+    }
+    this.heldResult = undefined;
     this.expireOutstanding();
+    this.resolveSent(false);
     this.settledKind = result.kind;
     this.onSettled();
     this.resolveResult(result);
@@ -1645,20 +1943,6 @@ function summarize(value: unknown): string {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** The steer receipt the profile implies. The profile is the one statement of
- *  native steer (#127 A12): this Adapter declares it unavailable in `buildProfile`
- *  because the print-mode contract has no same-Turn guidance frame, and it has
- *  no send path. A profile claiming steer here would be an Adapter bug, so it is
- *  refused loudly rather than half-honoured. */
-function steerReceipt(capability: SteerCapability): ControlReceipt {
-  if (capability.available) {
-    throw new Error(
-      "Claude Code Adapter: the profile declares native steer this Adapter cannot send",
-    );
-  }
-  return { outcome: "rejected", reason: "unsupported" };
 }
 
 function truncate(text: string, max = 200): string {
@@ -1888,9 +2172,9 @@ function buildProfile(
         "Claude Code exposes no raw-CLI question callback; structured clarifications are never emulated.",
     },
     steer: {
-      available: false,
+      available: true,
       evidence:
-        "Claude Code's stream-json print mode has no same-Turn guidance frame: a further user message queues as the next Turn, so steer is rejected unsupported and never emulated.",
+        "A Steer is a stdin user frame stamped with a Secant-minted uuid: written during a tool round it reaches the model with the round's tool result, and written while text streams it runs as the next native exchange inside the same Turn. Delivery is read from command_lifecycle frames and the result's user_message_uuids; an Interrupt sends cancel_queued, so an undelivered Steer is dropped, never run.",
     },
     modelSelection: {
       at: "launch",

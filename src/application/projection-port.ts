@@ -1262,9 +1262,11 @@ export interface InterruptTurnOffer {
 /** Steer the live Turn (#118, #148). Offered while a Turn is live, discriminated on
  *  `available` by the prepared Harness profile's steer evidence — never by client
  *  guesswork about which Harness is selected. A Harness with native same-Turn
- *  guidance (Codex) offers it `available`, carrying the live turnId a client submits
- *  `steer-turn` against; a Harness without it (Claude Code's print mode) offers it
- *  `unavailable`, so a client shows it disabled with `reason` and never submits. */
+ *  guidance (Codex, and Claude Code since #359) offers it `available`, carrying the
+ *  live turnId a client submits `steer-turn` against; a profile without it offers it
+ *  `unavailable`, so a client shows it disabled with `reason` and never submits.
+ *  Admission refuses a submitted Steer in ADR 0040's order: unavailable, blank,
+ *  a reserved word, then a command the live Session lists. */
 export type SteerTurnOffer =
   | {
       readonly action: "steer-turn";

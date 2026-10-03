@@ -1,0 +1,4 @@
+{"type":"command_lifecycle","command_uuid":"9a0e0000-0000-4000-8000-000000000001","state":"completed","uuid":"53f1f6f1-f17f-47a8-8021-c75c697b11ba","session_id":"c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0"}
+{"type":"command_lifecycle","command_uuid":"9a0e0000-0000-4000-8000-000000000002","state":"queued","uuid":"f609c84d-8676-44e7-97aa-75edbf6b22c2","session_id":"c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0"}
+{"type":"command_lifecycle","command_uuid":"9a0e0000-0000-4000-8000-000000000002","state":"started","uuid":"96b5f820-c6d4-4d3f-8d51-03167644ba20","session_id":"c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0"}
+{"type":"system","subtype":"status","status":"compacting","session_id":"c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0","uuid":"5c40a681-2a3c-45e2-a91a-4a5a015b88f5"}

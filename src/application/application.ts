@@ -98,7 +98,9 @@ import {
   runStoreDamaged,
   runSupportUnavailable,
   selectedHarnessUnavailable,
+  steerBlank,
   steerRejected,
+  steerSessionCommand,
   steerUnavailable,
   turnControlRejected,
   type InteractiveControl,
@@ -2148,10 +2150,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
     });
   }
 
-  // Steer the live Turn (#118, #148). Admitted at once; relayed at settle time.
-  // A Harness declaring native steer (Codex) reaches the live Turn and keeps it
-  // working; a Harness without it (Claude Code) is refused above the Seam with the
-  // recorded profile evidence — never emulated. Idempotent per operation id.
+  // Steer the live Turn (#118, #148, #359). Admission refuses in ADR 0040's order,
+  // before any Operation or stdin: a Harness without native steer (with its
+  // recorded profile evidence, never emulated), then blank text, then the selected
+  // Harness's input rules, then a command the live Session lists. An admitted
+  // Steer is relayed at settle time. Idempotent per operation id.
   function submitSteerTurn(
     operationId: string,
     input: SteerTurnInput,
@@ -2166,6 +2169,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (runGroup === undefined) {
       return { admitted: false, problem: runSupportUnavailable() };
     }
+    const refusal = steerRefusal(input);
+    if (refusal !== undefined) return { admitted: false, problem: refusal };
     admit(operationId, {
       operation: "steer-turn",
       replayKey: steerTurnReplayKey(input),
@@ -2175,30 +2180,63 @@ export function createApplication(deps: ApplicationDependencies): Application {
     return { admitted: true, operationId, runId: input.runId };
   }
 
-  // Relay same-Turn guidance to the live Turn (#148). The prepared profile decides
-  // availability: an unavailable Harness is refused with its evidence before any
-  // native call; an available Harness reaches the live Turn's bound steer function,
-  // and a native control race (`expired`/`already-settled`/`shape-mismatch`) settles
-  // `not-applied` precisely. The Turn keeps working either way — steer never rests
-  // the Run. A control naming a Turn that is no longer the live one is rejected as a
-  // value, exactly as interrupt is.
+  // The ordered Steer admission checks (ADR 0040). The prepared profile decides
+  // availability (live first, then persisted with the Attempt); the rules and the
+  // Session's commands share Workflow's matcher. Only a Run tracked here can hold a
+  // live Turn, so the Session's commands come from its live overlay.
+  function steerRefusal(input: SteerTurnInput): Problem | undefined {
+    const tracking = runs.get(input.runId);
+    const steer =
+      tracking?.steer ?? tracking?.owner?.harnessEvidence()?.identity?.steer;
+    if (steer === undefined || !steer.available) {
+      return steerUnavailable(
+        input.runId,
+        steer?.evidence ??
+          "No recorded Harness profile evidence permits same-Turn steer.",
+      );
+    }
+    if (input.text.trim() === "") return steerBlank(input.runId);
+    const selected = tracking?.owner?.record.selectedHarness;
+    const reserved = reservedHarnessWord(input.runId, selected, input.text);
+    if (reserved !== undefined) return reserved;
+    const command = matchHarnessInputRule({
+      text: input.text,
+      rules: [
+        {
+          kind: "reserved-leading-words",
+          words: tracking?.live.sessionCommands ?? [],
+        },
+      ],
+    });
+    return command === undefined
+      ? undefined
+      : steerSessionCommand({
+          runId: input.runId,
+          harness:
+            inputRuleRegistration(selected)?.choice.name ??
+            selected ??
+            "claude-code",
+          word: command,
+        });
+  }
+
+  // The selected Harness's input-rule registration (ADR 0040). A pre-M4
+  // unselected Run is upgraded to Claude Code on reopen and resume, so its rules
+  // apply to it here too, without acquiring ownership or writing.
+  function inputRuleRegistration(selected: SelectedHarnessId | undefined) {
+    return harnessInputRegistrations.get(selected ?? "claude-code");
+  }
+
+  // Relay admitted same-Turn guidance to the live Turn's bound steer function
+  // (#148); a native control race (`expired`/`already-settled`/`shape-mismatch`)
+  // settles `not-applied` precisely. The Turn keeps working either way — steer
+  // never rests the Run. A control naming a Turn that is no longer the live one is
+  // rejected as a value, exactly as interrupt is.
   function steerTurnAndSettle(
     steerId: string,
     input: SteerTurnInput,
   ): OperationOutcome | Promise<OperationOutcome> {
     const tracking = runs.get(input.runId);
-    const steer =
-      tracking?.steer ?? tracking?.owner?.harnessEvidence()?.identity?.steer;
-    if (steer === undefined || !steer.available) {
-      return {
-        status: "not-applied",
-        problem: steerUnavailable(
-          input.runId,
-          steer?.evidence ??
-            "No recorded Harness profile evidence permits same-Turn steer.",
-        ),
-      };
-    }
     const owner =
       tracking !== undefined && !tracking.done ? tracking.owner : undefined;
     const live =
@@ -2446,21 +2484,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
             : runStoreDamaged(runId),
       };
     }
-    const reserved = reservedHarnessWord(runId, read.run, text);
+    const reserved = reservedHarnessWord(runId, read.run.selectedHarness, text);
     return reserved === undefined ? undefined : { problem: reserved };
   }
 
-  // A human Turn's leading word that would change Harness state Secant owns (#358).
-  // Reopen/resume upgrades pre-M4 Harness Runs to Claude Code; enforce the same
-  // selection here without acquiring ownership or writing during admission.
+  // A human Turn's or Steer's leading word that would change Harness state Secant
+  // owns (#358, #359), refused without acquiring ownership or writing.
   function reservedHarnessWord(
     runId: string,
-    record: RunRecord,
+    selected: SelectedHarnessId | undefined,
     text: string,
   ): Problem | undefined {
-    const registration = harnessInputRegistrations.get(
-      record.selectedHarness ?? "claude-code",
-    );
+    const registration = inputRuleRegistration(selected);
     if (registration === undefined) return undefined;
     const word = matchHarnessInputRule({
       text,

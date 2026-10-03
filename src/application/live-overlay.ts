@@ -23,6 +23,9 @@ export interface LiveOverlayState {
    *  Application reaches it for an available `steer-turn`. */
   steer?: LiveSteerFn;
   interrupt?: LiveInterruptFn;
+  /** The live Turn's Session commands (ADR 0040), which Steer admission refuses
+   *  while the Turn works. */
+  sessionCommands?: readonly string[];
   activity?: string;
   preview?: string;
   context?: { readonly usedTokens: number; readonly limitTokens: number };
@@ -122,6 +125,11 @@ export function createLiveOverlay(
         const tracking = trackingFor(runId);
         if (tracking === undefined) return;
         tracking.live.steer = steer;
+      },
+      sessionCommands(commands: readonly string[] | undefined): void {
+        const tracking = trackingFor(runId);
+        if (tracking === undefined) return;
+        tracking.live.sessionCommands = commands;
       },
       bindAnswer(answer: RequestAnswerFn | undefined): void {
         const tracking = trackingFor(runId);

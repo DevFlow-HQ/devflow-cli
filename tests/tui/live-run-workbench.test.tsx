@@ -123,6 +123,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
                 executableVersion: "0.0.0-fake",
                 tools: ["Edit"],
                 mcp: [],
+                commands: [],
               },
             },
             {
