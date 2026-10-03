@@ -9,9 +9,11 @@ import type {
 } from "../../../src/harness/harness.js";
 import {
   executeRouting,
+  openAgentAttemptTurn,
   type AssetResolver,
+  type ExecutionObserver,
 } from "../../../src/run/execution/execution.js";
-import type { RunOwner } from "../../../src/run/store/store.js";
+import type { RunOwner, TurnRecord } from "../../../src/run/store/store.js";
 import type {
   AgentStep,
   ArtifactType,
@@ -359,6 +361,204 @@ for (const kind of ["interrupted", "lost"] as const) {
     );
   });
 }
+
+// A crash mid-Agent-Turn leaves the Turn admitted; startup reconciliation settles it
+// `lost` behind a UUID marker the resume cursor skips, so the resumed walk re-mints
+// the same Attempt id. Its Turn joins that Attempt under the next id in order rather
+// than colliding with the abandoned row (#352).
+test("a Turn resumed into an open Agent Attempt takes the next id in order, and the open-Attempt read returns its latest Turn (#352)", async (t) => {
+  const home = makeTempDir("secant-agent-home-");
+  const workspace = makeTempDir("secant-agent-workspace-");
+  const assets = promptAssets(workspace, "Do the work.\n");
+  const walk = (
+    owner: RunOwner,
+    prepared: PreparedHarness,
+    observe: ExecutionObserver,
+  ) =>
+    executeRouting([agentStep()], {
+      owner,
+      platform: HOST,
+      resolveAsset: assets.resolveAsset,
+      now: () => AT,
+      process: executionProcess,
+      harness: {
+        prepared,
+        inputTypes: {},
+        assetKinds: { "prompt.md": "prompt" },
+      },
+      observe,
+    });
+
+  // The first walk admits its Turn, then the process dies mid-Turn: the Turn blocks,
+  // is never settled, and the group closes without ending the Run.
+  const crashedGroup = openRunGroup(home, workspace);
+  const created = crashedGroup.createRun({
+    operationId: "op-1",
+    bundleSnapshotDigest: "sha256:agent",
+    launch: {},
+    at: AT,
+  });
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") throw new Error("unreachable");
+  const crashedOwner = crashedGroup.acquireRun(created.runId);
+  assert.ok(crashedOwner);
+  const crashed = await preparedHarness(profile(), [
+    { block: true, result: RESULT_CASES.completed.result },
+  ]);
+  let admitted: () => void = () => undefined;
+  const firstAdmission = new Promise<void>((resolve) => {
+    admitted = resolve;
+  });
+  // A dead process never settles its Turn or closes its Harness, so this walk
+  // stays pending for good.
+  void walk(crashedOwner, crashed, (event) => {
+    if (event.kind === "turn-start") admitted();
+  });
+  await firstAdmission;
+  crashedOwner.close();
+  crashedGroup.close();
+
+  const group = openRunGroup(home, workspace);
+  t.after(() => group.close());
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  const abandoned = openAgentAttemptTurn(owner);
+  assert.equal(abandoned?.attemptId, "0.0:agent");
+  assert.equal(abandoned.turnId, "0.0:agent#turn-1");
+  assert.equal(abandoned.resultKind, "lost");
+
+  const resumed = await preparedHarness(profile(), [
+    { result: RESULT_CASES.completed.result },
+  ]);
+  t.after(() => resumed.close());
+  let whileAdmitted: TurnRecord | undefined;
+  const report = await walk(owner, resumed, (event) => {
+    if (event.kind === "turn-start") {
+      whileAdmitted = openAgentAttemptTurn(owner);
+    }
+  });
+
+  assert.deepEqual(report, { outcome: "succeeded" });
+  assert.equal(whileAdmitted?.attemptId, "0.0:agent");
+  assert.equal(whileAdmitted.turnId, "0.0:agent#turn-2");
+  assert.equal(whileAdmitted.resultKind, undefined);
+  assert.deepEqual(
+    owner.turns().map((turn) => [turn.turnId, turn.attemptId, turn.resultKind]),
+    [
+      ["0.0:agent#turn-1", "0.0:agent", "lost"],
+      ["0.0:agent#turn-2", "0.0:agent", "completed"],
+    ],
+  );
+  assert.deepEqual(
+    owner.attemptLog().map((entry) => entry.outcome),
+    ["indeterminate", "succeeded"],
+  );
+  assert.equal(owner.attemptLog()[1]?.attemptId, "0.0:agent");
+  // The published Attempt is closed, so no open Attempt remains.
+  assert.equal(openAgentAttemptTurn(owner), undefined);
+});
+
+// A Run written before #352 holds its Agent Turn under the one-per-Attempt id. A Turn
+// joining that Attempt counts the old row, never reusing its id (#352).
+test("a Turn joining an Attempt that holds a pre-change `#turn` row takes the next id (#352)", async (t) => {
+  const f = fixture(t);
+  const assets = promptAssets(f.workspace, "Do the work.\n");
+  assert.deepEqual(
+    f.owner.admitTurn({
+      turnId: "0.0:agent#turn",
+      attemptId: "0.0:agent",
+      session: SESSION,
+      origin: "managed",
+      kind: "agent",
+      input: "Do the work.\n",
+      recoveryCoordinate: "native-1",
+      harness: "fake",
+      at: AT,
+    }),
+    { ok: true },
+  );
+  const prepared = await preparedHarness(profile(), [
+    { result: RESULT_CASES.completed.result },
+  ]);
+  t.after(() => prepared.close());
+
+  const report = await executeRouting([agentStep()], {
+    owner: f.owner,
+    platform: HOST,
+    resolveAsset: assets.resolveAsset,
+    now: () => AT,
+    process: executionProcess,
+    harness: {
+      prepared,
+      inputTypes: {},
+      assetKinds: { "prompt.md": "prompt" },
+    },
+  });
+
+  assert.deepEqual(report, { outcome: "succeeded" });
+  assert.deepEqual(
+    f.owner.turns().map((turn) => [turn.turnId, turn.resultKind]),
+    [
+      ["0.0:agent#turn", undefined],
+      ["0.0:agent#turn-2", "completed"],
+    ],
+  );
+});
+
+test("the open-Attempt read finds only an Agent Attempt with Turns and no published outcome (#352)", () => {
+  const turn = (
+    turnId: string,
+    attemptId: string,
+    sequence: number,
+    kind?: string,
+  ): TurnRecord => ({
+    turnId,
+    attemptId,
+    session: SESSION,
+    origin: "managed",
+    ...(kind !== undefined ? { kind } : {}),
+    sequence,
+    input: "Do the work.",
+    admittedAt: AT.toISOString(),
+  });
+  const read = (
+    turns: readonly TurnRecord[],
+    published: readonly string[] = [],
+  ) =>
+    openAgentAttemptTurn({
+      turns: () => turns,
+      attemptLog: () =>
+        published.map((attemptId) => ({
+          attemptId,
+          outcome: "succeeded" as const,
+          at: AT.toISOString(),
+        })),
+    });
+  const closed = turn("0.0:a#turn-1", "0.0:a", 0, "agent");
+
+  assert.equal(read([]), undefined);
+  assert.equal(read([closed], ["0.0:a"]), undefined);
+  // A resting Interactive Attempt has Turns and no outcome, but is not an Agent one.
+  assert.equal(
+    read([turn("0.0:i#entry", "0.0:i", 0, "interactive-agent")]),
+    undefined,
+  );
+  // A legacy row's kind is unknown, never guessed to be an Agent Turn.
+  assert.equal(read([turn("0.0:l#turn", "0.0:l", 0)]), undefined);
+
+  const open = read(
+    [
+      closed,
+      turn("1.0:b#turn-1", "1.0:b", 1, "agent"),
+      turn("2.0:i#entry", "2.0:i", 2, "interactive-agent"),
+      turn("1.0:b#turn-2", "1.0:b", 3, "agent"),
+    ],
+    ["0.0:a"],
+  );
+  assert.equal(open?.attemptId, "1.0:b");
+  assert.equal(open.turnId, "1.0:b#turn-2");
+});
 
 for (const delivery of ["skill", "file"] as const) {
   test(`a non-plain-path ${delivery} delivery is a typed failure before a Turn starts`, async (t) => {

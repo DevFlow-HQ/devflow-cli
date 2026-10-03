@@ -23,6 +23,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Every Command-step spawn passes its resolved authored environment through the Run Store entry's `isolatedGitEnvironment`; the helper appends
   non-interactive signing, hook, credential, and editor overrides after authored Git config entries, without changing user files or hiding ordinary
   system/global config (#166). `GIT_CONFIG_PARAMETERS` is removed because Git applies it after the counted entries and could undo the hardening.
+- An Agent Step Attempt's Turn is `<attemptId>#turn-<n>`, `n` one past that Attempt's admitted Turns (#352): a walk resumed after a crash mid-Turn re-mints the
+  same Attempt id behind the Store's UUID marker, so its Turn joins that Attempt rather than colliding with the `lost` row. `openAgentAttemptTurn` derives the
+  open Agent Attempt's latest Turn from `turns()` and `attemptLog()` with no new record, counting only `kind: "agent"`; open is not waiting, so callers add the basis.
 - An interactive-agent Step's Entry Turn (`entryTurn`) is due only while no Turn of its Attempt was admitted, so resume never re-sends it; an interrupted or
   lost Entry Turn rests the Run `halted` without publishing an Attempt, and only `end-interactive-step` publishes one (#212).
 - `runRepeatGroup` has two branches (#217): the Verdict-driven one re-reads `until` after each iteration and blocks at the Review cadence; the human-controlled

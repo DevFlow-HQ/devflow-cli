@@ -48,6 +48,7 @@ import { guardedExecutionObserver } from "./observer.js";
 
 export {
   driveInteractiveTurn,
+  openAgentAttemptTurn,
   RUN_CANCEL_ABORT,
   RunCancelledError,
   SIGNAL_ABORT,

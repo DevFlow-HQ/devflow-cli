@@ -18,6 +18,7 @@ import type {
   OutputReceiptDirectoryResult,
   RunOwner,
   TurnKind,
+  TurnRecord,
   WriteResult,
 } from "../store/store.js";
 import type {
@@ -178,13 +179,16 @@ interface StepContext {
 // --- Agent step (a Harness Turn dispatch entry, #116) ----------------------
 
 /**
- * Run one autonomous Turn in the Step's named Session and map its result to an
- * Attempt outcome (#116). The rendered prompt is admitted as the Turn's transcript
- * input before the stdin frame is sent (the durable recorder the Adapter awaits: a
- * write failure proves the Turn `not-started`), events drain into the Store as they
- * arrive, and the settled result maps: `completed` → `succeeded`; `failed` and
- * `not-started` → `failed` (retryable within budget); `interrupted` → `cancelled`
- * (Run `halted`); `lost` → `indeterminate` (Run `halted`). A Step declaring
+ * Run the Attempt's autonomous Turn in the Step's named Session and map its result
+ * to an Attempt outcome (#116). An Attempt may already hold Turns — a walk resumed
+ * after a crash mid-Turn re-mints the same Attempt id — so the Turn takes the next
+ * id in order and, as the Attempt's last Turn, gives it its outcome (#352). The
+ * rendered prompt is admitted as the Turn's transcript input before the stdin frame
+ * is sent (the durable recorder the Adapter awaits: a write failure proves the Turn
+ * `not-started`), events drain into the Store as they arrive, and the settled result
+ * maps: `completed` → `succeeded`; `failed` and `not-started` → `failed` (retryable
+ * within budget); `interrupted` → `cancelled` (Run `halted`); `lost` →
+ * `indeterminate` (Run `halted`). A Step declaring
  * `text` outputs succeeds only when each validated receipt file is present after a
  * completed Turn (#215); a Step declaring none publishes an empty output set.
  */
@@ -211,8 +215,7 @@ export async function runAgent(
     step.session === FRESH_SESSION
       ? `${FRESH_SESSION}-${attemptId}`
       : step.session;
-  // One Turn per Agent Step Attempt in M3. The id keys the durable Turn record.
-  const turnId = `${attemptId}#turn`;
+  const turnId = nextAgentTurnId(owner, attemptId);
 
   const recovery = sessionRecovery(owner, session);
   // `unusable`: recovery already failed and ADR 0022 forbids fabricating a fresh
@@ -274,6 +277,46 @@ export async function runAgent(
     outputs.push({ name: receipt.name, type: "text", content });
   }
   return { ...attempt, outputs };
+}
+
+// --- An Attempt's Turns (#352) ---------------------------------------------
+
+/** Every admitted Turn of one Attempt, in admission order. */
+function attemptTurns(
+  owner: Pick<RunOwner, "turns">,
+  attemptId: string,
+): readonly TurnRecord[] {
+  return owner.turns().filter((turn) => turn.attemptId === attemptId);
+}
+
+/** The id keying an Agent Step Attempt's next durable Turn record: one past the
+ *  Attempt's admitted Turns, whatever their origin or id, so a later Turn joining the
+ *  Attempt never collides with an earlier one — including a row admitted before this
+ *  scheme as `#turn`. */
+function nextAgentTurnId(
+  owner: Pick<RunOwner, "turns">,
+  attemptId: string,
+): string {
+  return `${attemptId}#turn-${attemptTurns(owner, attemptId).length + 1}`;
+}
+
+/** The latest Turn of the open Agent Step Attempt — one with admitted Turns and no
+ *  published outcome — whose `attemptId` names that Attempt (#352). Read from the
+ *  Turns and the attempt log already stored, so it adds no durable record. Only a
+ *  Turn admitted with kind `agent` counts: a resting Interactive Attempt also has
+ *  Turns and no outcome, and a legacy row's unknown kind is never guessed to be an
+ *  Agent one. Should more than one be open, the Run's latest such Turn wins. Open is
+ *  not waiting: a crash-abandoned Attempt stays open behind its `lost` Turn until a
+ *  resume re-runs it, so the waiting basis also needs the Run `blocked` and this
+ *  Turn `interrupted`. */
+export function openAgentAttemptTurn(
+  run: Pick<RunOwner, "turns" | "attemptLog">,
+): TurnRecord | undefined {
+  const published = new Set(run.attemptLog().map((entry) => entry.attemptId));
+  return run
+    .turns()
+    .filter((turn) => turn.kind === "agent" && !published.has(turn.attemptId))
+    .at(-1);
 }
 
 // --- Required text output receipts (#215) ----------------------------------
@@ -611,9 +654,7 @@ export async function runInteractiveEntryTurn(
 ): Promise<TurnResult | undefined> {
   if (step.entryTurn !== true) return undefined;
   const owner = context.owner;
-  if (owner.turns().some((turn) => turn.attemptId === attemptId)) {
-    return undefined;
-  }
+  if (attemptTurns(owner, attemptId).length > 0) return undefined;
   const harness = context.harness;
   if (harness === undefined) {
     throw new Error(

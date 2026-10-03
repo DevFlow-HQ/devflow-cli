@@ -23,7 +23,7 @@ test("startup reconciliation settles an admitted-but-unsettled Turn as lost/comp
   // dies mid-Turn.
   assert.deepEqual(
     owner.admitTurn({
-      turnId: "0.0:fix#turn",
+      turnId: "0.0:fix#turn-1",
       attemptId: "0.0:fix",
       session: "s",
       origin: "managed",

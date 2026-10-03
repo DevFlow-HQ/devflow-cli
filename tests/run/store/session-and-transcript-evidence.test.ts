@@ -355,6 +355,87 @@ test("Turn kind records both kinds in one Session, and a legacy row reads unknow
   assert.equal(legacy.kind, undefined);
 });
 
+test("an Agent Attempt's pre-change `#turn` row and later Turns read back unchanged, in order (#352)", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-1");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner !== undefined);
+  t.after(() => owner.close());
+
+  // A Run written before #352 holds its Agent Turn under the one-per-Attempt id
+  // (`#turn`); the raw INSERT is that row exactly as the old executor admitted it.
+  // Later Turns joining the same Attempt take the per-Turn ids.
+  const runDb = new Database(join(groupDirOf(home), created.runId, "run.db"));
+  try {
+    runDb
+      .query(
+        `INSERT INTO turn
+           (turn_id, attempt_id, session_key, origin, kind, sequence, input,
+            admitted_at, result_kind, result_detail, settled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "0.0:build#turn",
+        "0.0:build",
+        "shared",
+        "managed",
+        "agent",
+        0,
+        "Build it.",
+        AT.toISOString(),
+        "lost",
+        '{"kind":"lost","unknown":"completion"}',
+        AT.toISOString(),
+      );
+  } finally {
+    runDb.close();
+  }
+  for (const [turnId, input] of [
+    ["0.0:build#turn-2", "Build it."],
+    ["0.0:build#turn-3", "Carry on."],
+  ] as const) {
+    assert.deepEqual(
+      owner.admitTurn({
+        turnId,
+        attemptId: "0.0:build",
+        session: "shared",
+        origin: "managed",
+        kind: "agent",
+        input,
+        recoveryCoordinate: "native-1",
+        harness: "claude-code",
+        at: AT,
+      }),
+      { ok: true },
+    );
+  }
+
+  const turns = owner.turns();
+  assert.deepEqual(turns[0], {
+    turnId: "0.0:build#turn",
+    attemptId: "0.0:build",
+    session: "shared",
+    origin: "managed",
+    kind: "agent",
+    sequence: 0,
+    input: "Build it.",
+    admittedAt: AT.toISOString(),
+    resultKind: "lost",
+    resultDetail: '{"kind":"lost","unknown":"completion"}',
+    settledAt: AT.toISOString(),
+  });
+  assert.deepEqual(
+    turns.map((turn) => [turn.turnId, turn.attemptId, turn.sequence]),
+    [
+      ["0.0:build#turn", "0.0:build", 0],
+      ["0.0:build#turn-2", "0.0:build", 1],
+      ["0.0:build#turn-3", "0.0:build", 2],
+    ],
+  );
+});
+
 test("transcriptPage reads bounded, ordered pages and flags older history (#124)", async (t) => {
   const home = makeTempDir("secant-store-");
   const group = openRunGroup(home, WORKSPACE);
