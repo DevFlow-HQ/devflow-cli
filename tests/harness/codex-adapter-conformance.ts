@@ -18,16 +18,23 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_EXECUTABLE_ENV,
+  type CleanupReport,
   type CodexRecordingObserver,
   type DurableTurnRecorder,
   type HarnessPlatform,
+  type PrepareOptions,
   type PreparedHarness,
   type RecoveryCoordinate,
   type TurnEvent,
   type TurnRequest,
 } from "../../src/harness/harness.js";
 import { createCodexAdapter } from "./test-adapters.js";
-import type { OwnedProcess } from "../../src/process/process.js";
+import {
+  createProcessAdapter,
+  type ProcessAdapter,
+  type OwnedProcess,
+} from "../../src/process/process.js";
+import { withRunnerObserver } from "../helpers/standalone.js";
 import { processWithSpawn } from "../process/fake-adapter.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { seedTestRepairWorkspace } from "../helpers/testRepairWorkspace.js";
@@ -1683,6 +1690,694 @@ test("cleanup failure cannot rewrite an already-settled Codex Turn", async () =>
 });
 
 // --- Recovery ----------------------------------------------------------------
+
+test("codex replacement resumes two Sessions on one new app-server before admission", async () => {
+  const installed = installSyntheticCodexReplayer();
+  const writableDirectory = makeTempDir("secant-replacement-writable-");
+  let end: (() => Promise<CleanupReport>) | undefined;
+  const result = await createCodexAdapter({
+    path: installed.path,
+    env: {},
+    observeAppServerLifecycle: (control) => {
+      end = control.end;
+    },
+  }).prepare({ workspace: process.cwd(), writableDirectory });
+  assert.ok(result.ok);
+  const prepared = result.harness;
+  try {
+    for (const session of ["one", "two"]) {
+      assert.equal(
+        (await prepared.startTurn({ ...turnRequest(), session }).result()).kind,
+        "completed",
+      );
+    }
+    assert.ok(end);
+    const ended = await end();
+    assert.equal(ended.clean, true);
+    assert.deepEqual(
+      ended.sessions?.map((session) => session.availability),
+      [
+        { state: "detached", coordinate: { opaque: "thread-1" } },
+        { state: "detached", coordinate: { opaque: "thread-2" } },
+      ],
+    );
+    const unsupported = await prepared
+      .startTurn({
+        ...turnRequest(),
+        session: "one",
+        modelChoice: { model: "unlisted-model" },
+      })
+      .result();
+    assert.equal(unsupported.kind, "not-started");
+    if (unsupported.kind !== "not-started") throw new Error("unreachable");
+    assert.equal(unsupported.detail.failure.category, "model-unavailable");
+    assert.equal(
+      installed
+        .invocations()
+        .filter((entry) => entry.args.join(" ") === "app-server").length,
+      1,
+    );
+    for (const session of ["two", "one"]) {
+      const next = prepared.startTurn({
+        ...turnRequest({
+          admit: () => {
+            const servers = installed
+              .invocations()
+              .filter((entry) => entry.args.join(" ") === "app-server");
+            assert.equal(servers.length, 2);
+            assert.equal(
+              JSON.parse(servers[1]!.stdinLines.at(-1)!).method,
+              "thread/resume",
+            );
+            return Promise.resolve({ recorded: true });
+          },
+          checkpoint: () => Promise.resolve({ recorded: true }),
+        }),
+        session,
+        modelChoice: {
+          model: session === "two" ? "gpt-5.6-sol" : "gpt-6-astra",
+        },
+      });
+      assert.equal((await next.result()).kind, "completed");
+    }
+    const servers = installed
+      .invocations()
+      .filter((entry) => entry.args.join(" ") === "app-server");
+    assert.equal(servers.length, 2);
+    const frames = servers[1]!.stdinLines.map((line) => JSON.parse(line));
+    assert.deepEqual(
+      frames.map((frame) => frame.method),
+      [
+        "initialize",
+        "initialized",
+        "account/read",
+        "model/list",
+        "thread/resume",
+        "turn/start",
+        "thread/resume",
+        "turn/start",
+      ],
+    );
+    assert.deepEqual(
+      frames
+        .filter((frame) => frame.method === "thread/resume")
+        .map((frame) => frame.params),
+      [
+        {
+          threadId: "thread-2",
+          config: {
+            "sandbox_workspace_write.writable_roots": [writableDirectory],
+          },
+        },
+        {
+          threadId: "thread-1",
+          config: {
+            "sandbox_workspace_write.writable_roots": [writableDirectory],
+          },
+        },
+      ],
+    );
+    assert.deepEqual(
+      frames
+        .filter((frame) => frame.method === "turn/start")
+        .map((frame) => frame.params.threadId),
+      ["thread-2", "thread-1"],
+    );
+    assert.deepEqual(
+      frames
+        .filter((frame) => frame.method === "turn/start")
+        .map((frame) => frame.params.model),
+      ["gpt-5.6-sol", "gpt-6-astra"],
+    );
+  } finally {
+    await prepared.close();
+  }
+});
+
+for (const drift of ["digest", "version", "path"] as const) {
+  test(`codex replacement refuses ${drift} drift and retries with Sessions still detached`, async () => {
+    const installed = installSyntheticCodexReplayer();
+    const other = installSyntheticCodexReplayer();
+    const env: NodeJS.ProcessEnv = {
+      [CODEX_EXECUTABLE_ENV]: installed.executablePath,
+    };
+    const { prepared, end } = await prepareReplaceableCodex(
+      installed,
+      {},
+      { env },
+    );
+    const bytes = readFileSync(installed.identityPath);
+    try {
+      for (const session of ["one", "two"]) {
+        assert.equal(
+          (await prepared.startTurn({ ...turnRequest(), session }).result())
+            .kind,
+          "completed",
+        );
+      }
+      await end();
+      if (drift === "digest") installed.driftBytesWithoutMetadataChange();
+      if (drift === "version") installed.changeVersionOnly("codex-cli changed");
+      if (drift === "path") env[CODEX_EXECUTABLE_ENV] = other.executablePath;
+      let admitted = false;
+      const result = await prepared
+        .startTurn({
+          ...turnRequest({
+            admit: () => {
+              admitted = true;
+              return Promise.resolve({ recorded: true });
+            },
+            checkpoint: () => Promise.resolve({ recorded: true }),
+          }),
+          session: "one",
+        })
+        .result();
+      assert.equal(result.kind, "failed");
+      if (result.kind !== "failed") throw new Error("unreachable");
+      assert.equal(result.detail.failure.phase, "recovery");
+      assert.equal(result.detail.failure.category, "recovery-identity");
+      assert.equal(result.detail.failure.possibleEffects, "none");
+      assert.deepEqual(result.detail.session, {
+        state: "detached",
+        coordinate: { opaque: "thread-1" },
+      });
+      assert.equal(admitted, false);
+      assert.equal(
+        installed
+          .invocations()
+          .filter((entry) => entry.args.join(" ") === "app-server").length,
+        1,
+      );
+      writeFileSync(installed.identityPath, bytes);
+      installed.changeVersionOnly(prepared.profile.executableVersion);
+      env[CODEX_EXECUTABLE_ENV] = installed.executablePath;
+      for (const session of ["two", "one"]) {
+        assert.equal(
+          (await prepared.startTurn({ ...turnRequest(), session }).result())
+            .kind,
+          "completed",
+        );
+      }
+    } finally {
+      await prepared.close();
+    }
+  });
+}
+
+for (const refused of [
+  "launch",
+  "version-probe",
+  "authentication",
+  "model-list",
+] as const) {
+  test(`codex replacement ${refused} failure is typed and leaves recovery retryable`, async () => {
+    const installed = installSyntheticCodexReplayer();
+    const native = createProcessAdapter(withRunnerObserver());
+    let refuseLaunch = false;
+    let refuseVersion = false;
+    const processAdapter: ProcessAdapter = {
+      resolveExecutable: (name, options) =>
+        native.resolveExecutable(name, options),
+      spawnCommandSync: (options) => native.spawnCommandSync(options),
+      spawnCommand: (options) =>
+        refuseVersion && options.args.includes("--version")
+          ? Promise.resolve({
+              kind: "spawn-error",
+              cause: new Error("version probe refused"),
+            })
+          : native.spawnCommand(options),
+      spawnOwnedProcess: (options) =>
+        refuseLaunch
+          ? Promise.resolve({
+              ok: false,
+              failure: {
+                kind: "spawn-error",
+                cause: new Error("replacement launch refused"),
+              },
+            })
+          : native.spawnOwnedProcess(options),
+    };
+    const casePath = join(installed.identityPath, "..", "fixture", "case.json");
+    const original = readFileSync(casePath);
+    const { prepared, end } = await prepareReplaceableCodex(installed, {
+      process: processAdapter,
+    });
+    try {
+      assert.equal(
+        (await prepared.startTurn(turnRequest()).result()).kind,
+        "completed",
+      );
+      await end();
+      if (refused === "launch") refuseLaunch = true;
+      if (refused === "version-probe") refuseVersion = true;
+      if (refused === "authentication") installed.requireLogin();
+      if (refused === "model-list") {
+        const scenario = JSON.parse(original.toString());
+        scenario.responses["model/list"] = {};
+        delete scenario.traffic;
+        writeFileSync(casePath, JSON.stringify(scenario));
+      }
+      const result = await prepared.startTurn(turnRequest()).result();
+      assert.equal(result.kind, "failed");
+      if (result.kind !== "failed") throw new Error("unreachable");
+      assert.equal(result.detail.failure.phase, "recovery");
+      assert.equal(result.detail.failure.category, "recovery-app-server");
+      assert.equal(result.detail.failure.possibleEffects, "none");
+      assert.equal(result.detail.session.state, "detached");
+      refuseLaunch = false;
+      refuseVersion = false;
+      writeFileSync(casePath, original);
+      assert.equal(
+        (await prepared.startTurn(turnRequest()).result()).kind,
+        "completed",
+      );
+    } finally {
+      await prepared.close();
+    }
+  });
+}
+
+test("codex replacement resume refusal fences only that Session", async () => {
+  const installed = installSyntheticCodexReplayer();
+  const { prepared, end } = await prepareReplaceableCodex(installed);
+  try {
+    for (const session of ["one", "two"]) {
+      assert.equal(
+        (await prepared.startTurn({ ...turnRequest(), session }).result()).kind,
+        "completed",
+      );
+    }
+    await end();
+    // Only Session one receives the deliberately wrong acknowledgement.
+    installed.configureRecovery({ refuseThreadId: "thread-1" });
+    const refused = await prepared
+      .startTurn({ ...turnRequest(), session: "one" })
+      .result();
+    assert.equal(refused.kind, "failed");
+    if (refused.kind !== "failed") throw new Error("unreachable");
+    assert.equal(refused.detail.failure.category, "recovery-unacknowledged");
+    assert.equal(refused.detail.session.state, "unusable");
+    assert.equal(
+      (await prepared.startTurn({ ...turnRequest(), session: "two" }).result())
+        .kind,
+      "completed",
+    );
+    assert.deepEqual(
+      await prepared.startTurn({ ...turnRequest(), session: "one" }).result(),
+      refused,
+    );
+    await end();
+    installed.changeVersionOnly("codex-cli changed");
+    assert.deepEqual(
+      await prepared.startTurn({ ...turnRequest(), session: "one" }).result(),
+      refused,
+    );
+  } finally {
+    await prepared.close();
+  }
+});
+
+test("codex replacement ignores retired callbacks and preserves an interrupted Turn", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({
+    withholdTerminal: true,
+    interruptTerminal: "interrupted",
+  });
+  const native = createProcessAdapter(withRunnerObserver());
+  let first = true;
+  let releaseOld!: () => void;
+  const released = new Promise<void>((resolve) => {
+    releaseOld = resolve;
+  });
+  let oldConsumed!: () => void;
+  const consumed = new Promise<void>((resolve) => {
+    oldConsumed = resolve;
+  });
+  const processAdapter: ProcessAdapter = {
+    resolveExecutable: (name, options) =>
+      native.resolveExecutable(name, options),
+    spawnCommandSync: (options) => native.spawnCommandSync(options),
+    spawnCommand: (options) => native.spawnCommand(options),
+    spawnOwnedProcess: async (options) => {
+      const launched = await native.spawnOwnedProcess(options);
+      if (!launched.ok || !first) return launched;
+      first = false;
+      const owned = launched.process;
+      return {
+        ok: true,
+        process: {
+          stderr: owned.stderr,
+          writeStdin: (bytes) => owned.writeStdin(bytes),
+          closeStdin: (timeout) => owned.closeStdin(timeout),
+          interrupt: (timeout) => owned.interrupt(timeout),
+          closed: () => owned.closed(),
+          stdout: (async function* () {
+            yield* owned.stdout;
+            await released;
+            // The replacement reuses these native ids, so an unguarded callback
+            // would complete its live Turn or lose it on the following EOF.
+            yield new TextEncoder().encode(
+              JSON.stringify({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-1",
+                  turn: { id: "turn-1", items: [], status: "completed" },
+                },
+              }) + "\n",
+            );
+            oldConsumed();
+          })(),
+        },
+      };
+    },
+  };
+  const { prepared, end } = await prepareReplaceableCodex(installed, {
+    process: processAdapter,
+  });
+  try {
+    const interrupted = prepared.startTurn(turnRequest());
+    await waitForSession(interrupted);
+    assert.equal((await interrupted.interrupt()).outcome, "accepted");
+    const settled = await interrupted.result();
+    assert.equal(settled.kind, "interrupted");
+    await end();
+    installed.configureTurn({
+      approvals: [
+        { id: "held", kind: "command", itemId: "tool", command: "bun test" },
+      ],
+    });
+    const next = prepared.startTurn(turnRequest());
+    const events = observeEvents(next);
+    await waitForRequestCount(next, events, 1);
+    releaseOld();
+    await consumed;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.strictEqual(await interrupted.result(), settled);
+    const request = events.find((event) => event.kind === "request-raised");
+    assert.ok(request?.kind === "request-raised");
+    assert.equal(
+      (
+        await next.answerRequest({
+          requestId: request.request.requestId,
+          kind: "approval",
+          decision: "allow",
+        })
+      ).outcome,
+      "accepted",
+    );
+    assert.equal((await next.result()).kind, "completed");
+  } finally {
+    releaseOld();
+    await prepared.close();
+  }
+});
+
+test("codex replacement close waits for an in-flight spawn and sends no Turn content", async () => {
+  const installed = installSyntheticCodexReplayer();
+  const native = createProcessAdapter(withRunnerObserver());
+  let hold = false;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let began!: () => void;
+  const beganSpawn = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const processAdapter: ProcessAdapter = {
+    resolveExecutable: (name, options) =>
+      native.resolveExecutable(name, options),
+    spawnCommand: (options) => native.spawnCommand(options),
+    spawnCommandSync: (options) => native.spawnCommandSync(options),
+    spawnOwnedProcess: async (options) => {
+      if (hold) {
+        began();
+        await released;
+      }
+      return native.spawnOwnedProcess(options);
+    },
+  };
+  const { prepared, end } = await prepareReplaceableCodex(installed, {
+    process: processAdapter,
+  });
+  try {
+    assert.equal(
+      (await prepared.startTurn(turnRequest()).result()).kind,
+      "completed",
+    );
+    await end();
+    hold = true;
+    const next = prepared.startTurn(turnRequest());
+    await beganSpawn;
+    const closing = prepared.close();
+    release();
+    assert.equal((await next.result()).kind, "not-started");
+    const report = await closing;
+    assert.equal(report.clean, true);
+    assert.strictEqual(await prepared.close(), report);
+    const replacement = installed
+      .invocations()
+      .filter((entry) => entry.args.join(" ") === "app-server")[1];
+    assert.ok(replacement);
+    assert.deepEqual(
+      replacement.stdinLines.map((line) => JSON.parse(line).method),
+      ["initialize", "initialized", "account/read", "model/list"],
+    );
+  } finally {
+    release();
+    await prepared.close();
+  }
+});
+
+test("codex replacement lifecycle close settles a Turn without interrupt confirmation", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({
+    withholdTerminal: true,
+    stallInterruptResponse: true,
+  });
+  const { prepared } = await prepareReplaceableCodex(
+    installed,
+    {},
+    { controlTimeoutMs: 100, cleanupTimeoutMs: 100 },
+  );
+  const turn = prepared.startTurn(turnRequest());
+  await waitForSession(turn);
+  await prepared.close();
+  const result = await turn.result();
+  assert.equal(result.kind, "lost");
+  if (result.kind !== "lost") throw new Error("unreachable");
+  assert.equal(result.detail.failure?.category, "interruption-unknown");
+});
+
+test("codex replacement retains an earlier cleanup failure in the final close report", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.failCleanup(9);
+  const { prepared, end } = await prepareReplaceableCodex(installed);
+  try {
+    const first = prepared.startTurn(turnRequest());
+    const settled = await first.result();
+    assert.equal(settled.kind, "completed");
+    assert.equal((await end()).clean, false);
+    installed.failCleanup(0);
+    assert.equal(
+      (await prepared.startTurn(turnRequest()).result()).kind,
+      "completed",
+    );
+    const report = await prepared.close();
+    assert.equal(report.clean, false);
+    assert.equal(report.failure?.category, "cleanup");
+    assert.strictEqual(await first.result(), settled);
+    assert.strictEqual(await prepared.close(), report);
+  } finally {
+    await prepared.close();
+  }
+});
+
+for (const observation of ["cleanup-timeout", "cleanup-error"] as const) {
+  for (const failedQualification of [false, true]) {
+    test(`codex replacement cannot spawn after ${failedQualification ? "failed qualification" : "retirement"} cleanup reports ${observation}`, async () => {
+      const installed = installSyntheticCodexReplayer();
+      const casePath = join(
+        installed.identityPath,
+        "..",
+        "fixture",
+        "case.json",
+      );
+      const original = readFileSync(casePath);
+      const native = createProcessAdapter(withRunnerObserver());
+      let unreaped: OwnedProcess | undefined;
+      let runtimeSpawns = 0;
+      const processAdapter: ProcessAdapter = {
+        resolveExecutable: (name, options) =>
+          native.resolveExecutable(name, options),
+        spawnCommand: (options) => native.spawnCommand(options),
+        spawnCommandSync: (options) => native.spawnCommandSync(options),
+        spawnOwnedProcess: async (options) => {
+          runtimeSpawns += 1;
+          const launched = await native.spawnOwnedProcess(options);
+          if (!launched.ok || runtimeSpawns !== (failedQualification ? 2 : 1))
+            return launched;
+          const owned = launched.process;
+          unreaped = owned;
+          const cachedShutdown = Promise.resolve(
+            observation === "cleanup-timeout"
+              ? { kind: "cleanup-timeout" as const }
+              : {
+                  kind: "cleanup-error" as const,
+                  cause: new Error("cannot reap app-server"),
+                },
+          );
+          return {
+            ok: true,
+            process: {
+              stdout: owned.stdout,
+              stderr: owned.stderr,
+              writeStdin: (bytes) => owned.writeStdin(bytes),
+              interrupt: (timeout) => owned.interrupt(timeout),
+              closed: () => owned.closed(),
+              // Match the Process Interface: the shutdown receipt never changes.
+              closeStdin: () => cachedShutdown,
+            },
+          };
+        },
+      };
+      const { prepared, end } = await prepareReplaceableCodex(
+        installed,
+        { process: processAdapter },
+        { cleanupTimeoutMs: 100 },
+      );
+      try {
+        assert.equal(
+          (await prepared.startTurn(turnRequest()).result()).kind,
+          "completed",
+        );
+        assert.equal((await end()).clean, !failedQualification ? false : true);
+        if (failedQualification) installed.requireLogin();
+        const refused = await prepared.startTurn(turnRequest()).result();
+        assert.equal(refused.kind, "failed");
+        if (refused.kind !== "failed") throw new Error("unreachable");
+        assert.equal(refused.detail.failure.phase, "recovery");
+        assert.equal(refused.detail.failure.category, "recovery-app-server");
+        assert.equal(refused.detail.failure.possibleEffects, "none");
+        assert.deepEqual(refused.detail.session, {
+          state: "detached",
+          coordinate: { opaque: "thread-1" },
+        });
+        const refusedAgain = await prepared.startTurn(turnRequest()).result();
+        assert.equal(refusedAgain.kind, "failed");
+        assert.equal(runtimeSpawns, failedQualification ? 2 : 1);
+        assert.ok(unreaped);
+        // A final process exit is separate evidence from the cached shutdown
+        // receipt. Only that exit allows the next Turn to replace the server.
+        assert.equal((await unreaped.closeStdin(5_000)).kind, "exited");
+        writeFileSync(casePath, original);
+        assert.equal(
+          (await prepared.startTurn(turnRequest()).result()).kind,
+          "completed",
+        );
+        assert.equal(runtimeSpawns, failedQualification ? 3 : 2);
+        assert.equal((await prepared.close()).clean, false);
+      } finally {
+        await unreaped?.closeStdin(5_000);
+        await prepared.close();
+      }
+    });
+  }
+}
+
+test("codex replacement close during retired cleanup cannot start another app-server", async () => {
+  const installed = installSyntheticCodexReplayer();
+  const native = createProcessAdapter(withRunnerObserver());
+  let owned: OwnedProcess | undefined;
+  let runtimeSpawns = 0;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let began!: () => void;
+  const beganObservation = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const processAdapter: ProcessAdapter = {
+    resolveExecutable: (name, options) =>
+      native.resolveExecutable(name, options),
+    spawnCommand: (options) => native.spawnCommand(options),
+    spawnCommandSync: (options) => native.spawnCommandSync(options),
+    spawnOwnedProcess: async (options) => {
+      runtimeSpawns += 1;
+      const launched = await native.spawnOwnedProcess(options);
+      if (!launched.ok || runtimeSpawns !== 1) return launched;
+      owned = launched.process;
+      const first = launched.process;
+      return {
+        ok: true,
+        process: {
+          stdout: first.stdout,
+          stderr: first.stderr,
+          writeStdin: (bytes) => first.writeStdin(bytes),
+          interrupt: (timeout) => first.interrupt(timeout),
+          closeStdin: () => Promise.resolve({ kind: "cleanup-timeout" }),
+          closed: async () => {
+            began();
+            await released;
+            return first.closed();
+          },
+        },
+      };
+    },
+  };
+  const { prepared, end } = await prepareReplaceableCodex(
+    installed,
+    { process: processAdapter },
+    { cleanupTimeoutMs: 500, controlTimeoutMs: 100 },
+  );
+  try {
+    assert.equal(
+      (await prepared.startTurn(turnRequest()).result()).kind,
+      "completed",
+    );
+    assert.equal((await end()).clean, false);
+    assert.ok(owned);
+    await owned.closeStdin(5_000);
+    const next = prepared.startTurn(turnRequest());
+    await beganObservation;
+    const interrupt = next.interrupt();
+    const closing = prepared.close();
+    await interrupt;
+    release();
+    await closing;
+    assert.equal((await next.result()).kind, "not-started");
+    assert.equal(runtimeSpawns, 1);
+  } finally {
+    release();
+    await owned?.closeStdin(5_000);
+    await prepared.close();
+  }
+});
+
+async function prepareReplaceableCodex(
+  installed: InstalledCodexReplayer,
+  options: Omit<PrepareOptions, "process" | "workspace"> & {
+    readonly process?: ProcessAdapter;
+  } = {},
+  overrides: Parameters<typeof createCodexAdapter>[0] = {},
+): Promise<{
+  readonly prepared: PreparedHarness;
+  readonly end: () => Promise<CleanupReport>;
+}> {
+  let end: (() => Promise<CleanupReport>) | undefined;
+  const result = await createCodexAdapter({
+    path: installed.path,
+    env: {},
+    ...overrides,
+    observeAppServerLifecycle: (control) => {
+      end = control.end;
+    },
+  }).prepare({ workspace: process.cwd(), ...options });
+  assert.ok(result.ok);
+  assert.ok(end);
+  return { prepared: result.harness, end };
+}
 
 test("codex-exact-thread-recovery acknowledges the same thread before admission and prompt", async () => {
   const installed = installSyntheticCodexReplayer();

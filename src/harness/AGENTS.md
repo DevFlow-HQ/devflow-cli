@@ -7,7 +7,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The public entry (`harness.ts`) is the whole Interface surface: the Adapter Interface, the evidence-bearing profile, and the factory a
   composition root calls. No native frame, protocol type, or conversation-id value crosses it; the declared exceptions are the Workspace path
   (`PrepareOptions.workspace`, the directory every Session runs against) and the one additional writable directory (`writableDirectory`), the named
-  native-Adapter test seams on their override types (including Codex's recorder-only schema, stdio, stderr, and shutdown observer), and the
+  native-Adapter test seams on their override types (including Codex's recorder-only observer and between-Turn app-server lifecycle control), and the
   executable env constants (`CLAUDE_CODE_EXECUTABLE_ENV` / `SECANT_CLAUDE_CODE` and
   `CODEX_EXECUTABLE_ENV` / `SECANT_CODEX`) — the synchronous discovery outcome and static served-capability table that Preflight shares
   with the Adapter (the resolved spawn target stays private), and the frozen static Harness input-rule declarations (ADR 0040),
@@ -69,7 +69,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   evidence states each Harness's stop and its per-OS fallback; the conformance `interruptOutcome` and `recoveryInterruptOutcome` options pin them.
 - Recovery is caller- and history-driven: a relaunch of a Session that already ran, or any Turn carrying `resume`, resumes that exact native conversation.
   A resume the native side does not acknowledge is a `recovery`-phase failure that marks the Session `unusable`; recovery never silently starts a fresh
-  conversation. Each Adapter's resume mechanics are in [harness-adapters](../../docs/agents/harness-adapters.md).
+  conversation. Codex app-server replacement failures leave Sessions detached; only an unacknowledged thread resume makes its Session unusable.
+  Each Adapter's resume mechanics are in [harness-adapters](../../docs/agents/harness-adapters.md).
 
 ## Tests
 

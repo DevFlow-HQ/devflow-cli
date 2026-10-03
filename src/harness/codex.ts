@@ -101,6 +101,11 @@ export interface CodexAdapterOverrides {
   /** Recorder-only observation of the exact schema, protocol/stderr bytes, and
    *  shutdown. Production passes none; native data never reaches a caller. */
   readonly recordingObserver?: CodexRecordingObserver;
+  /** Native-Adapter test seam for ending the shared app-server between Turns.
+   *  Production interruption owns this lifecycle privately (#365). */
+  readonly observeAppServerLifecycle?: (control: {
+    readonly end: () => Promise<CleanupReport>;
+  }) => void;
 }
 
 interface TDiscoveredTarget extends DiscoveredHarnessTarget {
@@ -111,6 +116,20 @@ type TProbeResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly failure: HarnessFailure };
 
+type CodexGeneration = {
+  readonly process: OwnedProcess;
+  readonly connection: CodexJsonlConnection;
+  readonly diagnostics: CodexDiagnosticCapture;
+};
+
+type TGenerationResult =
+  | { readonly ok: true; readonly value: CodexGeneration }
+  | {
+      readonly ok: false;
+      readonly failure: HarnessFailure;
+      readonly unreaped?: CodexGeneration;
+    };
+
 type TLiveQualification =
   | {
       readonly ok: true;
@@ -120,7 +139,11 @@ type TLiveQualification =
       /** The non-hidden models `model/list` observed, in order. */
       readonly models: readonly string[];
     }
-  | { readonly ok: false; readonly failure: HarnessFailure };
+  | {
+      readonly ok: false;
+      readonly failure: HarnessFailure;
+      readonly unreaped?: CodexGeneration;
+    };
 
 /** The factory a composition root calls. Each `prepare` supplies the Process
  *  Interface and phase observer its Prepared Harness uses; the Adapter keeps
@@ -185,7 +208,7 @@ class CodexAdapter implements HarnessAdapter {
       discovery.target,
       options.workspace,
     );
-    if (!live.ok) return live;
+    if (!live.ok) return { ok: false, failure: live.failure };
     const profile = buildProfile({
       target: discovery.target,
       version: version.value,
@@ -193,23 +216,87 @@ class CodexAdapter implements HarnessAdapter {
       probeRevision,
       models: live.models,
     });
-    return {
-      ok: true,
-      harness: new CodexPreparedHarness(
-        profile,
-        live.process,
-        live.connection,
-        live.diagnostics,
-        options.workspace,
-        this.overrides.controlTimeoutMs ??
-          this.overrides.handshakeTimeoutMs ??
-          DEFAULT_HANDSHAKE_TIMEOUT_MS,
-        this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
-        this.overrides.recordingObserver,
-        options.writableDirectory,
-        options.phases,
-      ),
-    };
+    const harness = new CodexPreparedHarness(
+      profile,
+      live,
+      () =>
+        this.replaceGeneration(
+          options,
+          discovery.target,
+          identity,
+          version.value,
+        ),
+      options.workspace,
+      this.overrides.controlTimeoutMs ??
+        this.overrides.handshakeTimeoutMs ??
+        DEFAULT_HANDSHAKE_TIMEOUT_MS,
+      this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
+      this.overrides.recordingObserver,
+      options.writableDirectory,
+      options.phases,
+    );
+    this.overrides.observeAppServerLifecycle?.({
+      end: () => harness.endAppServer(),
+    });
+    return { ok: true, harness };
+  }
+
+  private async replaceGeneration(
+    options: PrepareOptions,
+    qualifiedTarget: TDiscoveredTarget,
+    identity: string | undefined,
+    version: string,
+  ): Promise<TGenerationResult> {
+    const mismatch = (): TGenerationResult => ({
+      ok: false,
+      failure: {
+        phase: "recovery",
+        category: "recovery-identity",
+        possibleEffects: "none",
+        diagnostics:
+          "Codex executable no longer matches the qualified path, digest, or version.",
+      },
+    });
+    const discovery = this.discover(options);
+    if (!discovery.ok) return mismatch();
+    const target = discovery.target;
+    if (
+      target.executable !== qualifiedTarget.executable ||
+      target.identityPath !== qualifiedTarget.identityPath ||
+      JSON.stringify(target.prefixArgs) !==
+        JSON.stringify(qualifiedTarget.prefixArgs) ||
+      identity === undefined ||
+      fileIdentity(target.identityPath) !== identity
+    )
+      return mismatch();
+    const observedVersion = await this.probeVersion(options.process, target);
+    if (!observedVersion.ok)
+      return {
+        ok: false,
+        failure: {
+          ...observedVersion.failure,
+          phase: "recovery",
+          category: "recovery-app-server",
+        },
+      };
+    if (observedVersion.value !== version) return mismatch();
+    const live = await this.qualifyLive(
+      options.process,
+      options.phases,
+      target,
+      options.workspace,
+    );
+    return live.ok
+      ? { ok: true, value: live }
+      : {
+          ok: false,
+          failure: {
+            ...live.failure,
+            phase: "recovery",
+            category: "recovery-app-server",
+          },
+          ...(live.unreaped !== undefined ? { unreaped: live.unreaped } : {}),
+        };
   }
 
   private discover(
@@ -398,6 +485,19 @@ class CodexAdapter implements HarnessAdapter {
       child.stderr,
       this.overrides.recordingObserver,
     );
+    const refuse = (failure: HarnessFailure, includeStderr: boolean) =>
+      failedQualification({
+        generation: {
+          process: child,
+          diagnostics: diagnosticCapture,
+          connection: connection.runtimeConnection(),
+        },
+        failure,
+        includeStderr,
+        cleanupTimeoutMs:
+          this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
+        observer: this.overrides.recordingObserver,
+      });
     try {
       await connection.initialize();
       nextStep("account-check");
@@ -407,18 +507,7 @@ class CodexAdapter implements HarnessAdapter {
         (account.account === null || account.account === undefined)
       ) {
         const authFailure = failure("authentication", AUTHENTICATION_REQUIRED);
-        return {
-          ok: false,
-          failure: await failedQualification({
-            process: child,
-            diagnostics: diagnosticCapture,
-            failure: authFailure,
-            cleanupTimeoutMs:
-              this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
-            includeStderr: false,
-            observer: this.overrides.recordingObserver,
-          }),
-        };
+        return refuse(authFailure, false);
       }
       nextStep("model-list");
       const models = await connection.listModels();
@@ -432,22 +521,14 @@ class CodexAdapter implements HarnessAdapter {
     } catch (cause) {
       const failureDiagnostics =
         cause instanceof Error ? cause.message : "unknown protocol failure";
-      return {
-        ok: false,
-        failure: await failedQualification({
-          process: child,
-          diagnostics: diagnosticCapture,
-          failure: failureWithCause(
-            "protocol-incompatible",
-            `Codex live qualification failed: ${failureDiagnostics}`,
-            cause,
-          ),
-          cleanupTimeoutMs:
-            this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
-          includeStderr: true,
-          observer: this.overrides.recordingObserver,
-        }),
-      };
+      return refuse(
+        failureWithCause(
+          "protocol-incompatible",
+          `Codex live qualification failed: ${failureDiagnostics}`,
+          cause,
+        ),
+        true,
+      );
     }
   }
 }
@@ -457,12 +538,18 @@ class CodexPreparedHarness implements PreparedHarness {
   private readonly sessions = new Map<string, CodexSession>();
   private active: CodexTurn | undefined;
   private closed = false;
+  private generation: CodexGeneration | undefined;
+  private replacement: Promise<TGenerationResult> | undefined;
+  private ending: Promise<CleanupReport> | undefined;
+  private endedReport: CleanupReport | undefined;
+  private unreaped:
+    | { readonly generation: CodexGeneration; readonly failure: HarnessFailure }
+    | undefined;
 
   constructor(
     readonly profile: HarnessProfile,
-    private readonly process: OwnedProcess,
-    private readonly connection: CodexJsonlConnection,
-    private readonly diagnostics: CodexDiagnosticCapture,
+    generation: CodexGeneration,
+    private readonly replaceGeneration: () => Promise<TGenerationResult>,
     private readonly workspace: string,
     private readonly controlTimeoutMs: number,
     private readonly cleanupTimeoutMs: number,
@@ -472,9 +559,17 @@ class CodexPreparedHarness implements PreparedHarness {
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
   ) {
-    this.connection.startRuntime({
-      message: (message) => this.acceptMessage(message),
+    this.attachGeneration(generation);
+  }
+
+  private attachGeneration(generation: CodexGeneration): void {
+    this.generation = generation;
+    generation.connection.startRuntime({
+      message: (message) => {
+        if (this.generation === generation) this.acceptMessage(message);
+      },
       ended: (cause) => {
+        if (this.generation !== generation) return;
         const active = this.active;
         if (active === undefined) return;
         if (cause instanceof CodexProtocolError) {
@@ -497,9 +592,7 @@ class CodexPreparedHarness implements PreparedHarness {
     if (session === undefined) {
       session = new CodexSession(
         request.session,
-        this.connection,
         this.workspace,
-        this.profile,
         this.controlTimeoutMs,
         this.writableDirectory,
         this.phases,
@@ -510,7 +603,6 @@ class CodexPreparedHarness implements PreparedHarness {
       request,
       session,
       steerCapability: this.profile.steer,
-      connection: this.connection,
       controlTimeoutMs: this.controlTimeoutMs,
       phases: this.phases,
       onSettled: () => {
@@ -518,8 +610,146 @@ class CodexPreparedHarness implements PreparedHarness {
       },
     });
     this.active = turn;
-    session.start(turn);
+    const turnSession = session;
+    queueMicrotask(() => void this.submit(turn, turnSession));
     return turn;
+  }
+
+  private async submit(turn: CodexTurn, session: CodexSession): Promise<void> {
+    // Validate this Turn's model before recovery can spawn or send native frames.
+    const refusal = modelChoiceRefusal(this.profile, turn.request.modelChoice);
+    if (refusal !== undefined) {
+      turn.settleNotStartedWith(refusal);
+      return;
+    }
+    if (session.refusesUnusableTurn(turn)) return;
+    if (this.ending !== undefined) await this.ending;
+    if (this.closed || turn.settled) {
+      turn.settleNotStarted(
+        "app-server-closed",
+        "Codex closed before Turn admission.",
+      );
+      return;
+    }
+    if (this.unreaped !== undefined) {
+      turn.recovering();
+      await this.endGeneration();
+      turn.recovered();
+      if (this.closed || turn.settled) {
+        turn.settleNotStarted(
+          "app-server-closed",
+          "Codex closed before Turn admission.",
+        );
+        return;
+      }
+    }
+    if (this.unreaped !== undefined) {
+      turn.settleRecoveryFailure(
+        {
+          ...this.unreaped.failure,
+          phase: "recovery",
+          category: "recovery-app-server",
+          possibleEffects: "none",
+          diagnostics:
+            "Codex app-server cleanup is incomplete; replacement cannot start until that process is reaped.",
+        },
+        session.effectiveModel(),
+        session.availability(),
+      );
+      return;
+    }
+    let generation = this.generation;
+    if (generation === undefined) {
+      turn.recovering();
+      const recovery = startPhase(this.phases, "recovery", session.name);
+      this.replacement = this.replaceGeneration();
+      const replacement = await this.replacement;
+      this.replacement = undefined;
+      if (!replacement.ok) {
+        if (replacement.unreaped !== undefined) {
+          const cleanupFailure: HarnessFailure = {
+            ...replacement.failure,
+            phase: "cleanup",
+            category: "cleanup",
+          };
+          this.unreaped = {
+            generation: replacement.unreaped,
+            failure: cleanupFailure,
+          };
+          this.endedReport = {
+            clean: false,
+            detail:
+              "Codex replacement qualification could not reap its app-server.",
+            failure: cleanupFailure,
+            sessions: this.sessionReports(),
+          };
+        }
+        recovery.failed(replacement.failure);
+        turn.settleRecoveryFailure(
+          replacement.failure,
+          session.effectiveModel(),
+          session.availability(),
+        );
+        return;
+      }
+      generation = replacement.value;
+      this.attachGeneration(generation);
+      recovery.ok();
+      turn.recovered();
+    }
+    if (this.closed || turn.settled) {
+      turn.settleNotStarted(
+        "app-server-closed",
+        "Codex closed before Turn admission.",
+      );
+      return;
+    }
+    turn.attachConnection(generation.connection);
+    await session.submit(turn, generation.connection);
+  }
+
+  /** End the current generation without closing the Prepared Harness. Detach
+   *  before awaiting EOF so late native callbacks cannot reach another Turn. */
+  endAppServer(): Promise<CleanupReport> {
+    if (this.active !== undefined && !this.active.settled) {
+      throw new Error("end app-server while a Turn is active");
+    }
+    return this.endGeneration();
+  }
+
+  private endGeneration(): Promise<CleanupReport> {
+    if (this.ending !== undefined) return this.ending;
+    const generation = this.generation ?? this.unreaped?.generation;
+    if (generation === undefined)
+      return Promise.resolve(
+        this.endedReport ?? {
+          clean: true,
+          detail: "Codex app-server is already ended.",
+          sessions: this.sessionReports(),
+        },
+      );
+    const retryingCleanup = this.unreaped !== undefined;
+    this.unreaped = undefined;
+    const active = this.active?.isOnConnection(generation.connection)
+      ? this.active
+      : undefined;
+    // During close, the interrupt acknowledgement may precede its terminal.
+    // Keep that live Turn's reader until EOF; close forbids a newer Turn.
+    if (active === undefined || active.settled) this.generation = undefined;
+    for (const session of this.sessions.values()) session.markDetached();
+    this.ending = this.closeGeneration(generation, retryingCleanup).then(
+      (report) => {
+        // Retired callbacks are fenced, so finish any still-live Turn here. Native
+        // terminal truth that already settled it remains authoritative.
+        if (this.generation === generation) this.generation = undefined;
+        active?.connectionEnded(report.failure?.cause);
+        // An incomplete cleanup remains visible after a later generation closes.
+        if (this.endedReport?.clean !== false) this.endedReport = report;
+        this.ending = undefined;
+        return report;
+      },
+    );
+    return this.ending;
   }
 
   close(): Promise<CleanupReport> {
@@ -540,12 +770,37 @@ class CodexPreparedHarness implements PreparedHarness {
       active.beginClose();
       await active.interruptForClose(this.cleanupTimeoutMs);
     }
-    const closed = await this.process.closeStdin(this.cleanupTimeoutMs);
+    if (this.replacement !== undefined) await this.replacement;
+    const report = await this.endGeneration();
+    return this.endedReport?.clean === false
+      ? { ...this.endedReport, sessions: this.sessionReports() }
+      : report;
+  }
+
+  private async closeGeneration(
+    generation: CodexGeneration,
+    retryingCleanup: boolean,
+  ): Promise<CleanupReport> {
+    let closed = await generation.process.closeStdin(this.cleanupTimeoutMs);
+    if (
+      retryingCleanup &&
+      (closed.kind === "cleanup-error" || closed.kind === "cleanup-timeout")
+    ) {
+      try {
+        closed = await boundedCodexExchange({
+          operation: () => generation.process.closed(),
+          timeoutMs: this.cleanupTimeoutMs,
+          label: "Codex retired app-server final exit",
+        });
+      } catch {
+        // The cached shutdown receipt remains the evidence until final exit.
+      }
+    }
     this.observer?.closed(
       closed.kind,
       closed.kind === "exited" ? closed.status : undefined,
     );
-    const diagnosticResult = await this.diagnostics.settle(
+    const diagnosticResult = await generation.diagnostics.settle(
       this.cleanupTimeoutMs,
     );
     if (closed.kind === "exited" && closed.status === 0) {
@@ -582,6 +837,9 @@ class CodexPreparedHarness implements PreparedHarness {
     }
     const cause = combinedCause(causes, "Codex cleanup failed");
     const cleanupFailure = failureWithOptionalCause("cleanup", detail, cause);
+    if (closed.kind === "cleanup-timeout" || closed.kind === "cleanup-error") {
+      this.unreaped = { generation, failure: cleanupFailure };
+    }
     return {
       clean: false,
       detail,
@@ -620,11 +878,7 @@ class CodexSession {
 
   constructor(
     readonly name: string,
-    private readonly connection: CodexJsonlConnection,
     private readonly workspace: string,
-    /** The qualified profile, whose declared model list each Turn's request is
-     *  checked against before anything native is sent. */
-    private readonly profile: HarnessProfile,
     private readonly controlTimeoutMs: number,
     /** The additional writable directory (#214), sent as a per-thread config
      *  override and checked against the acknowledged sandbox. */
@@ -667,8 +921,14 @@ class CodexSession {
     return true;
   }
 
-  start(turn: CodexTurn): void {
-    queueMicrotask(() => void this.submit(turn));
+  refusesUnusableTurn(turn: CodexTurn): boolean {
+    if (this.unusableFailure === undefined) return false;
+    turn.settleRecoveryFailure(this.unusableFailure, this.model);
+    return true;
+  }
+
+  effectiveModel(): ModelObservation {
+    return this.model;
   }
 
   availability(): SessionAvailability {
@@ -687,26 +947,10 @@ class CodexSession {
     this.detached = true;
   }
 
-  respondToServerRequest(
-    id: string | number,
-    decision: "accept" | "decline",
+  async submit(
+    turn: CodexTurn,
+    connection: CodexJsonlConnection,
   ): Promise<void> {
-    return this.connection.respondToServerRequest(id, { decision });
-  }
-
-  private async submit(turn: CodexTurn): Promise<void> {
-    // A model the observed list does not admit refuses the Turn before any thread
-    // exchange or admission, never a silent substitution (ADR 0034) — including
-    // when the list is empty, so an unconfirmable model is never forwarded.
-    const refusal = modelChoiceRefusal(this.profile, turn.request.modelChoice);
-    if (refusal !== undefined) {
-      turn.settleNotStartedWith(refusal);
-      return;
-    }
-    if (this.unusableFailure !== undefined) {
-      turn.settleRecoveryFailure(this.unusableFailure, this.model);
-      return;
-    }
     if (
       turn.request.resume !== undefined &&
       this.coordinate !== undefined &&
@@ -729,7 +973,7 @@ class CodexSession {
       try {
         const result = await boundedCodexExchange({
           operation: () =>
-            this.connection.request("thread/resume", {
+            connection.request("thread/resume", {
               threadId: recoveryCoordinate.opaque,
               ...this.threadConfig(),
             }),
@@ -761,7 +1005,7 @@ class CodexSession {
       try {
         const result = await boundedCodexExchange({
           operation: () =>
-            this.connection.request("thread/start", {
+            connection.request("thread/start", {
               cwd: this.workspace,
               ...this.threadConfig(),
             }),
@@ -801,7 +1045,7 @@ class CodexSession {
     try {
       const result = await boundedCodexExchange({
         operation: () =>
-          this.connection.request("turn/start", {
+          connection.request("turn/start", {
             threadId: coordinate.opaque,
             input: [{ type: "text", text: turn.request.input.text }],
             // This Turn's requested model is applied at the native per-Turn point;
@@ -861,7 +1105,6 @@ type TCodexTurnParams = {
   readonly request: TurnRequest;
   readonly session: CodexSession;
   readonly steerCapability: SteerCapability;
-  readonly connection: CodexJsonlConnection;
   readonly controlTimeoutMs: number;
   readonly phases: HarnessPhaseObserver | undefined;
   readonly onSettled: () => void;
@@ -890,7 +1133,7 @@ class CodexTurn implements HarnessTurn {
   readonly request: TurnRequest;
   private readonly session: CodexSession;
   private readonly steerCapability: SteerCapability;
-  private readonly connection: CodexJsonlConnection;
+  private boundConnection: CodexJsonlConnection | undefined;
   private readonly controlTimeoutMs: number;
   private readonly phases: HarnessPhaseObserver | undefined;
   private readonly onSettled: () => void;
@@ -929,7 +1172,6 @@ class CodexTurn implements HarnessTurn {
     this.request = params.request;
     this.session = params.session;
     this.steerCapability = params.steerCapability;
-    this.connection = params.connection;
     this.controlTimeoutMs = params.controlTimeoutMs;
     this.phases = params.phases;
     this.onSettled = params.onSettled;
@@ -939,6 +1181,21 @@ class CodexTurn implements HarnessTurn {
     this.nativeTargetPromise = new Promise((resolve) => {
       this.resolveNativeTarget = resolve;
     });
+  }
+
+  isOnConnection(connection: CodexJsonlConnection): boolean {
+    return this.boundConnection === connection;
+  }
+
+  attachConnection(connection: CodexJsonlConnection): void {
+    this.boundConnection = connection;
+  }
+
+  private get connection(): CodexJsonlConnection {
+    if (this.boundConnection === undefined) {
+      throw new Error("Codex Turn has no native connection before submission");
+    }
+    return this.boundConnection;
   }
 
   subscribe(listener: TurnEventListener): TurnSubscription {
@@ -1254,10 +1511,9 @@ class CodexTurn implements HarnessTurn {
     }
     pending.state = { kind: "answering", answer };
     try {
-      await this.session.respondToServerRequest(
-        pending.nativeRequestId,
-        answer.decision === "allow" ? "accept" : "decline",
-      );
+      await this.connection.respondToServerRequest(pending.nativeRequestId, {
+        decision: answer.decision === "allow" ? "accept" : "decline",
+      });
     } catch (cause) {
       if (pending.state.kind === "answering") {
         pending.state = { kind: "outstanding" };
@@ -1500,14 +1756,17 @@ class CodexTurn implements HarnessTurn {
   settleRecoveryFailure(
     failure: HarnessFailure,
     effectiveModel: ModelObservation,
+    availability: SessionAvailability = {
+      state: "unusable",
+      reason: recoveryFailureDiagnostics(failure),
+    },
   ): void {
-    const reason = recoveryFailureDiagnostics(failure);
     this.settle({
       kind: "failed",
       detail: {
         failure,
         effectiveModel,
-        session: { state: "unusable", reason },
+        session: availability,
       },
     });
   }
@@ -2034,8 +2293,7 @@ function failedProbe(
 }
 
 interface TFailedQualification {
-  readonly process: OwnedProcess;
-  readonly diagnostics: CodexDiagnosticCapture;
+  readonly generation: CodexGeneration;
   readonly failure: HarnessFailure;
   readonly cleanupTimeoutMs: number;
   readonly includeStderr: boolean;
@@ -2044,13 +2302,15 @@ interface TFailedQualification {
 
 async function failedQualification(
   options: TFailedQualification,
-): Promise<HarnessFailure> {
-  const closed = await options.process.closeStdin(options.cleanupTimeoutMs);
+): Promise<Extract<TLiveQualification, { ok: false }>> {
+  const closed = await options.generation.process.closeStdin(
+    options.cleanupTimeoutMs,
+  );
   options.observer?.closed(
     closed.kind,
     closed.kind === "exited" ? closed.status : undefined,
   );
-  const diagnosticResult = await options.diagnostics.settle(
+  const diagnosticResult = await options.generation.diagnostics.settle(
     options.cleanupTimeoutMs,
   );
   const stderr = options.includeStderr ? diagnosticResult.text : "";
@@ -2062,11 +2322,14 @@ async function failedQualification(
     causes.push(diagnosticResult.cause);
   }
   if (closed.kind === "exited" && closed.status === 0) {
-    return failureWithOptionalCause(
-      options.failure.category,
-      diagnostics,
-      combinedCause(causes, "Codex qualification failed"),
-    );
+    return {
+      ok: false,
+      failure: failureWithOptionalCause(
+        options.failure.category,
+        diagnostics,
+        combinedCause(causes, "Codex qualification failed"),
+      ),
+    };
   }
 
   diagnostics += ` Cleanup ended '${closed.kind}'.`;
@@ -2075,11 +2338,17 @@ async function failedQualification(
       ? closed.cause
       : new Error(`Codex cleanup ended '${closed.kind}'`);
   causes.push(cleanupCause);
-  return failureWithCause(
-    options.failure.category,
-    diagnostics,
-    new AggregateError(causes, "Codex qualification and cleanup failed"),
-  );
+  return {
+    ok: false,
+    failure: failureWithCause(
+      options.failure.category,
+      diagnostics,
+      new AggregateError(causes, "Codex qualification and cleanup failed"),
+    ),
+    ...(closed.kind === "cleanup-error" || closed.kind === "cleanup-timeout"
+      ? { unreaped: options.generation }
+      : {}),
+  };
 }
 
 function combinedCause(causes: readonly unknown[], message: string): unknown {

@@ -149,6 +149,7 @@ interface CodexApprovalReplay {
 }
 
 interface CodexRecoveryReplayOptions {
+  readonly refuseThreadId?: string;
   readonly threadId?: string | null;
   readonly malformedFrame?: boolean;
 }

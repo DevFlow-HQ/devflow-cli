@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   translateCause,
   type HarnessFailure,
+  type CleanupReport,
   type HarnessPhaseFact,
   type HarnessPhaseObserver,
   type HarnessTurn,
@@ -374,6 +375,61 @@ export function registerHarnessPhaseConformance(
       .invocations()
       .filter((invocation) => invocation.args.includes("app-server"))
       .flatMap((invocation) => [...invocation.args, ...invocation.stdinLines]);
+
+  for (const failsIdentity of [false, true]) {
+    register(
+      `[codex phases] codex replacement ${failsIdentity ? "identity failure" : "launch and handshake"} settles recovery`,
+      async () => {
+        const installed = installSyntheticCodexReplayer();
+        const { facts, observer } = collector();
+        let end: (() => Promise<CleanupReport>) | undefined;
+        const prepared = await prepare(
+          createCodexAdapter({
+            path: installed.path,
+            env: {},
+            observeAppServerLifecycle: (control) => {
+              end = control.end;
+            },
+          }),
+          observer,
+        );
+        try {
+          assert.equal(
+            (await prepared.startTurn(turnRequest()).result()).kind,
+            "completed",
+          );
+          assert.ok(end);
+          await end();
+          if (failsIdentity) installed.changeVersionOnly("codex-cli changed");
+          assert.equal(
+            (await prepared.startTurn(turnRequest()).result()).kind,
+            failsIdentity ? "failed" : "completed",
+          );
+          await prepared.close();
+          const occurrences: Settled[] = failsIdentity ? ["ok"] : ["ok", "ok"];
+          assert.deepEqual(settlements(facts), {
+            "launch@-": occurrences,
+            "handshake@-": occurrences,
+            "handshake/protocol-initialize@-": occurrences,
+            "handshake/account-check@-": occurrences,
+            "handshake/model-list@-": occurrences,
+            [`handshake@${SESSION}`]: ["ok"],
+            [`recovery@${SESSION}`]: failsIdentity
+              ? ["failed:recovery/recovery-identity"]
+              : ["ok", "ok"],
+            "cleanup@-": ["ok"],
+          });
+          assertNoNativeDetail(
+            facts,
+            codexLaunchArgs(installed),
+            CODEX_FRAME_MARKERS,
+          );
+        } finally {
+          await prepared.close();
+        }
+      },
+    );
+  }
 
   register(
     "[codex phases] prepare launches and handshakes, a fresh thread is the Session's handshake, and close is cleanup",

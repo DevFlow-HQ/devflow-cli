@@ -52,6 +52,8 @@ const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let trafficAt = 0;
 let requestedWorkspace;
 let turnNumber = 0;
+let threadNumber = 0;
+let activeThreadId = "thread-1";
 let activeTurnId;
 const outstandingApprovals = new Map();
 let steerNumber = 0;
@@ -212,18 +214,24 @@ for await (const line of lines) {
   if (request.method === "initialized") continue;
   if (request.method === "thread/start") {
     process.stdout.write(
-      `${JSON.stringify({ id: request.id, result: threadStartResponse("thread-1", request.params) })}\n`,
+      `${JSON.stringify({ id: request.id, result: threadStartResponse(`thread-${++threadNumber}`, request.params) })}\n`,
     );
     continue;
   }
   if (request.method === "thread/resume") {
+    if (scenario.recovery?.refuseThreadId === request.params.threadId) {
+      process.stdout.write(
+        `${JSON.stringify({ id: request.id, error: { code: -32600, message: "thread resume refused" } })}\n`,
+      );
+      continue;
+    }
     if (scenario.recovery?.malformedFrame === true) {
       process.stdout.write("{malformed\n");
       continue;
     }
     const threadId =
       scenario.recovery?.threadId === undefined
-        ? "thread-1"
+        ? request.params.threadId
         : scenario.recovery.threadId;
     process.stdout.write(
       `${JSON.stringify({ id: request.id, result: threadStartResponse(threadId, request.params) })}\n`,
@@ -231,6 +239,7 @@ for await (const line of lines) {
     continue;
   }
   if (request.method === "turn/start") {
+    activeThreadId = request.params.threadId;
     turnNumber += 1;
     const turnId = `turn-${turnNumber}`;
     activeTurnId = turnId;
@@ -263,7 +272,7 @@ for await (const line of lines) {
           process.stdout.write(
             `${JSON.stringify({
               method: "serverRequest/resolved",
-              params: { requestId: first.id, threadId: "thread-1" },
+              params: { requestId: first.id, threadId: activeThreadId },
             })}\n`,
           );
         }
@@ -288,7 +297,7 @@ for await (const line of lines) {
           method: "error",
           params: {
             error: { message: scenario.turn.retryingError },
-            threadId: "thread-1",
+            threadId: activeThreadId,
             turnId,
             willRetry: true,
           },
@@ -302,7 +311,7 @@ for await (const line of lines) {
           params: {
             completedAtMs: 1,
             item: { id: "broken-command", type: "commandExecution" },
-            threadId: "thread-1",
+            threadId: activeThreadId,
             turnId,
           },
         })}\n`,
@@ -316,7 +325,7 @@ for await (const line of lines) {
           params: {
             delta: "preview",
             itemId: "item-1",
-            threadId: "thread-1",
+            threadId: activeThreadId,
             turnId,
           },
         })}\n`,
@@ -327,7 +336,7 @@ for await (const line of lines) {
           params: {
             completedAtMs: 1,
             item: { id: "item-1", type: "agentMessage", text: "final answer" },
-            threadId: "thread-1",
+            threadId: activeThreadId,
             turnId,
           },
         })}\n`,
@@ -347,7 +356,7 @@ for await (const line of lines) {
         `${JSON.stringify({
           method: "turn/completed",
           params: {
-            threadId: "thread-1",
+            threadId: activeThreadId,
             turn: { id: "stale-turn", items: [], status: "completed" },
           },
         })}\n`,
@@ -356,7 +365,7 @@ for await (const line of lines) {
     const terminalLine = JSON.stringify({
       method: "turn/completed",
       params: {
-        threadId: "thread-1",
+        threadId: activeThreadId,
         turn: {
           id: turnId,
           items: [],
@@ -530,7 +539,7 @@ function emitActivityItems() {
       type: "collabAgentToolCall",
       agentsStates: {},
       receiverThreadIds: ["agent-thread"],
-      senderThreadId: "thread-1",
+      senderThreadId: activeThreadId,
       status: "completed",
       tool: "spawnAgent",
     },
@@ -557,7 +566,7 @@ function emitActivityItems() {
           params: {
             [`${phase}AtMs`]: 1,
             item,
-            threadId: "thread-1",
+            threadId: activeThreadId,
             turnId: `turn-${turnNumber}`,
           },
         })}\n`,
@@ -586,7 +595,7 @@ function emitFileChangeStarted(approval, turnId) {
           changes,
           status: "inProgress",
         },
-        threadId: "thread-1",
+        threadId: activeThreadId,
         turnId,
       },
     })}\n`,
@@ -598,7 +607,7 @@ function emitTurnStarted(turnId) {
     `${JSON.stringify({
       method: "turn/started",
       params: {
-        threadId: "thread-1",
+        threadId: activeThreadId,
         turn: { id: turnId, items: [], status: "inProgress" },
       },
     })}\n`,
@@ -610,7 +619,7 @@ function emitTurnCompleted(turnId, status) {
     `${JSON.stringify({
       method: "turn/completed",
       params: {
-        threadId: "thread-1",
+        threadId: activeThreadId,
         turn: {
           id: turnId,
           items: [],
@@ -634,7 +643,7 @@ function emitApprovalRequest(approval, turnId) {
   const params = {
     itemId: approval.itemId,
     startedAtMs: 1,
-    threadId: "thread-1",
+    threadId: activeThreadId,
     turnId,
     ...(approval.kind === "command"
       ? { command: approval.command, kind: "command" }

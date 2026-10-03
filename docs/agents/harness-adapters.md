@@ -58,6 +58,11 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - Live qualification sends one `initialize` then `initialized`, runs bounded `account/read` and `model/list`, and transfers its child and connection.
 - A fresh Session gets `thread.id` before admission; a detached Session requires its exact `thread/resume` id. Any bad acknowledgement makes it
   `unusable`; no fallback. A caller's resume matching the thread still live on this connection skips `thread/resume` and sends the next `turn/start`.
+- The Prepared Harness owns one replaceable app-server generation. An Adapter-ended generation detaches every Session before EOF;
+  the next Turn rediscovers and checks the qualified path, SHA-256 digest and version, then repeats full live qualification through its prepare's Process.
+  Replacement failures (`recovery-identity` or `recovery-app-server`, no possible effects) leave Sessions detached for retry; a refused resume fences only
+  that Session. An incompletely reaped generation is retained for cleanup and refuses replacement until it is reaped, preventing duplicate app-servers.
+  Sessions resend their thread config on resume. Turns bind after replacement; retired generations cannot dispatch into newer Turns.
 - Fresh and resumed Turns preserve admission-before-content and matching terminal authority; completed items supersede delta previews.
 - Codex client RPC and reverse-request ids have separate private maps. Approvals expose exact actions. A native resolution or terminal confirms an answer
   whose send has started, emitting `request-answered` before settlement; earlier resolution or terminal expires it. Close and local failures expire
@@ -66,7 +71,7 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - `CodexTurn` keeps approval correlation and native control together because both share terminal-ordering state. A third Harness needing the same shapes
   triggers their split; before then, splitting only relocates coupling.
 - Codex close rejects new work, expires requests, attempts bounded native interruption, closes stdin, and reaps the tree; cleanup cannot rewrite Turn truth.
-- Timeout split: `handshakeTimeoutMs` bounds only the one-off `prepare` qualification (spawn → `initialize`/`account`/`model`); `controlTimeoutMs`
+- Timeout split: `handshakeTimeoutMs` bounds prepare and replacement qualification (spawn → `initialize`/`account`/`model`); `controlTimeoutMs`
   (defaults to it) bounds post-qualification live exchanges (session start/resume, Turn start/interrupt/steer acks). A stall-then-timeout test squeezes
   `controlTimeoutMs`, never `handshakeTimeoutMs` — throttling the spawn+handshake there flakes `prepare` on a loaded Windows runner (the #148 CI flake).
 - Codex inherits user environment/home; unauthenticated becomes the fixed separate-login remediation, and no account or credential crosses the Seam.
@@ -87,10 +92,11 @@ measures elapsed time on the monotonic clock. A handshake made of several exchan
   result wins, and otherwise spans the fallback process termination too. A process termination settles the span on its outcome even when the Turn
   already settled (an internal stop after corruption or a refused resume reports it too). `cleanup` spans the prepared Harness's `close`.
   The `--version` probe reports no phase.
-- **Codex.** `launch` is the app-server spawn and `handshake` the `initialize`/`account/read`/`model/list` exchange, both at `prepare` with no
-  Session key. Those three are the handshake's steps `protocol-initialize`, `account-check`, and `model-list`; the step open when the handshake
+- **Codex.** `launch` is the app-server spawn and `handshake` the `initialize`/`account/read`/`model/list` exchange, both at prepare and replacement with no
+  Session key. Replacement also reports the triggering Session's `recovery` around identity checks, launch and handshake.
+  The handshake's steps are `protocol-initialize`, `account-check`, and `model-list`; the step open when the handshake
   ends settles with its outcome, so a login refusal fails `account-check`. `model-list` only reads the list; each Turn's model is checked against it
-  at Turn start, never at prepare. Per Session,
+  at Turn start before native recovery, never at prepare. Per Session,
   `thread/start` is a `handshake` and `thread/resume` is `recovery`. `control` spans the `turn/interrupt` or `turn/steer`
   RPC: ok on a parsed acknowledgement, abandoned on an expected race, otherwise failed (`control-refused` with the RPC code, `control-timeout`,
   `control-transport`, or `protocol-corruption`). `cleanup` spans `close`, including its bounded interrupt.
