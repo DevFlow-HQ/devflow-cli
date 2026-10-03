@@ -156,10 +156,10 @@ class ClaudeCodeAdapter implements HarnessAdapter {
       return { ok: false, failure: writableFailure };
     }
 
-    const discovery = this.discover(options);
+    const processAdapter = options.process;
+    const discovery = this.discover(processAdapter, options);
     if (!discovery.ok) return { ok: false, failure: discovery.failure };
     const target = discovery.target;
-    const processAdapter = options.process;
     const spawn: ProcessAdapter["spawnOwnedProcess"] = (spawnOptions) =>
       processAdapter.spawnOwnedProcess(spawnOptions);
 
@@ -210,11 +210,12 @@ class ClaudeCodeAdapter implements HarnessAdapter {
    *  `claude`. `not-found` names every searched location; an unparsable shim is
    *  the distinct `unsupported-shim` and is not fallen through. */
   private discover(
+    processAdapter: ProcessAdapter,
     options: PrepareOptions,
   ):
     | { ok: true; target: DiscoveredTarget }
     | { ok: false; failure: HarnessFailure } {
-    const discovery = discoverClaudeCode(options.process, {
+    const discovery = discoverClaudeCode(processAdapter, {
       ...(options.configuredExecutable !== undefined
         ? { configuredExecutable: options.configuredExecutable }
         : {}),

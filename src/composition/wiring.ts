@@ -43,7 +43,7 @@ import {
   routingNeedsHarness,
 } from "../workflow/workflow.js";
 import { HarnessRegistry } from "./harness-registry.js";
-import type { HarnessScope } from "./harness-log.js";
+import type { ReportingScope } from "./harness-log.js";
 import type { OperationalLog } from "./operational-log.js";
 import { applicationObserver } from "./application-log.js";
 import { runLifecycleObserver } from "./run-lifecycle-log.js";
@@ -246,7 +246,7 @@ export function wireApplication(
     constructProcess(log === undefined ? {} : processObserver(log));
   // The invocation's scope serves Preflight, discovery, and qualification, whose
   // records belong to no Run.
-  const invocation: HarnessScope = {
+  const invocation: ReportingScope = {
     process: processAdapter,
     ...(log === undefined ? {} : { log }),
   };
@@ -256,7 +256,7 @@ export function wireApplication(
   // Process Adapter holds no state but its observer, so each call builds an
   // equivalent scope with its own Process rather than caching one per Run; an
   // injected Process instance cannot be rebound and is shared.
-  const runScope = (runId: string): HarnessScope => {
+  const runScope: ScopeForRun = (runId) => {
     if (log === undefined) return invocation;
     const runLog = runRecorder(log, runId);
     return {
@@ -350,11 +350,14 @@ export function wireApplication(
 // Catalog when missing (#100, A8). A Run copies nothing. `run read` returns only
 // `text`/`verdict` in M2 (execution's file-materialization gap is a documented
 // `ponytail:`).
+/** The scope a Run's work spawns and reports through, given the Run's id. */
+type ScopeForRun = (runId: string) => ReportingScope;
+
 interface TMakeRunExecutionParams {
   readonly catalog: Catalog;
   readonly platform: Platform;
   readonly harnessRegistry: HarnessRegistry;
-  readonly runScope: (runId: string) => HarnessScope;
+  readonly runScope: ScopeForRun;
   readonly observe?: ExecutionObserver;
 }
 
@@ -438,7 +441,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
 // learning a Harness type, and the driver closes the prepared Harness exactly once.
 function makePrepareRunInteractiveStep(
   harnessRegistry: HarnessRegistry,
-  runScope: (runId: string) => HarnessScope,
+  runScope: ScopeForRun,
   observe: ExecutionObserver | undefined,
 ): PrepareRunInteractiveStep {
   return async ({ owner }) => {
@@ -479,7 +482,7 @@ async function prepareRunHarness(
   harnessRegistry: HarnessRegistry,
   selectedHarness: SelectedHarnessId,
   owner: RunOwner,
-  scope: HarnessScope,
+  scope: ReportingScope,
 ): Promise<PrepareResult> {
   const area = owner.workingArea();
   if (!area.ok) {

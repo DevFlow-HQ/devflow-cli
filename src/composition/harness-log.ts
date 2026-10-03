@@ -41,14 +41,18 @@ function sessionField(
   return session === undefined ? {} : { session };
 }
 
-/** What one prepare reports through (#333): the Process its Harness spawns
- *  through, and the log its phase, usage, and cleanup records reach (none when
- *  the invocation logs nothing). A Run's scope binds both to the Run's id;
- *  qualification's binds neither. */
-export interface HarnessScope {
+/** What a unit of work spawns and reports through (#333): its Process, and the
+ *  log its records reach (none when the invocation logs nothing). A Run's scope
+ *  binds both to the Run's id and serves its Command Steps, Harness, and
+ *  Artifact Git; the invocation's binds neither and serves Preflight,
+ *  discovery, and qualification. */
+export interface ReportingScope {
   readonly process: ProcessAdapter;
   readonly log?: Recorder;
 }
+
+/** The prepare options a caller chooses; the scope supplies the rest. */
+export type ScopedPrepareOptions = Omit<PrepareOptions, "process" | "phases">;
 
 /** Prepares `adapter` through `scope`: its Process and phase observer go to this
  *  prepare alone, and the Prepared Harness records its `CleanupReport` on its
@@ -57,8 +61,8 @@ export interface HarnessScope {
 export async function prepareRecorded(
   adapter: HarnessAdapter,
   harness: SelectedHarnessId,
-  options: Omit<PrepareOptions, "process" | "phases">,
-  scope: HarnessScope,
+  options: ScopedPrepareOptions,
+  scope: ReportingScope,
 ): Promise<PrepareResult> {
   const { log } = scope;
   const prepared = await adapter.prepare({

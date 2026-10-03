@@ -17,11 +17,14 @@ import {
   type HarnessDiscovery,
   type HarnessAdapter,
   type HarnessFailure,
-  type PrepareOptions,
   type PrepareResult,
 } from "../harness/harness.js";
 import type { SelectedHarnessId } from "../run/store/store.js";
-import { prepareRecorded, type HarnessScope } from "./harness-log.js";
+import {
+  prepareRecorded,
+  type ReportingScope,
+  type ScopedPrepareOptions,
+} from "./harness-log.js";
 
 /** Test Adapters in place of the native ones. A double reads the Process and
  *  phase observer from each prepare's options, as the native Adapters do. */
@@ -49,7 +52,7 @@ export class HarnessRegistry {
 
   constructor(
     qualificationWorkspace: string,
-    invocation: HarnessScope,
+    invocation: ReportingScope,
     overrides: HarnessRegistryOverrides,
   ) {
     const { process } = invocation;
@@ -120,8 +123,8 @@ export class HarnessRegistry {
    *  usage, and cleanup there. */
   prepare(
     selectedHarness: SelectedHarnessId,
-    options: Omit<PrepareOptions, "process" | "phases">,
-    scope: HarnessScope,
+    options: ScopedPrepareOptions,
+    scope: ReportingScope,
   ): Promise<PrepareResult> {
     return prepareRecorded(
       this.entry(selectedHarness).adapter,
@@ -164,7 +167,7 @@ async function qualifyAdapter(
   adapter: HarnessAdapter,
   harness: SelectedHarnessId,
   workspace: string,
-  invocation: HarnessScope,
+  invocation: ReportingScope,
 ): Promise<ApplicationHarnessQualification> {
   let prepared: PrepareResult;
   try {
