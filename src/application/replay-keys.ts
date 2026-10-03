@@ -31,6 +31,7 @@ export function launchReplayKey(input: LaunchRunInput): string {
     input.trustDigest ?? null,
     input.harness ?? null,
     input.requestedModel ?? null,
+    input.requestedEffort ?? null,
   ]);
 }
 

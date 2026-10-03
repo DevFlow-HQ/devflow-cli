@@ -17,10 +17,19 @@ export const CODEX_RECORDING_INPUT = {
 
 /** The Model choice each `two-turns` Turn requests (#345): one model at two
  *  efforts, so the recording carries per-Turn effort on `turn/start` and what
- *  `thread/read` reports back for each Turn. Every other case requests none. */
+ *  `thread/read` reports back for each Turn. Test Repair requests its own below;
+ *  every other case requests none. */
 export const CODEX_RECORDING_MODEL_CHOICE = {
   first: { model: "gpt-5.5", effort: "low" },
   second: { model: "gpt-5.5", effort: "medium" },
+} as const;
+
+/** The Model choice the Test Repair recording's Turn requests (#342): the
+ *  default the `codex-qualification` recording reports, so a flagless launch
+ *  that qualifies against that recording replays this session unchanged. */
+export const CODEX_TEST_REPAIR_MODEL_CHOICE = {
+  model: "gpt-5.5",
+  effort: "high",
 } as const;
 
 export function codexTestRepairPrompt(workspace: string): string {

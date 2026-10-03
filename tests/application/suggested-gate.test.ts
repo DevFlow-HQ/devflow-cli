@@ -232,6 +232,7 @@ async function launchToGate(
       launchInputs: {},
       trustDigest: entry.digest,
       harness: "claude-code",
+      requestedModel: "fake-model",
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));

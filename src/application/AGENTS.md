@@ -6,13 +6,12 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - Windows fallback notices are live launch evidence retained per Run for this Application lifetime (#363), across tracking replacement and Projection reopen.
   A fresh Application learns a notice only from a new fallback launch; the notice is not persisted Run truth.
-
-- Every canonical write to a Run must go through `observedOwner`, not the raw `RunOwner`, or an open client's live `run` Projection never updates.
-  `observedOwner` spreads `...owner` and intercepts eight methods — `selectHarness`, `writeState`, `publishAttempt`, `recordMaterializationConflict`,
-  `recordGateAnswer`, `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own transaction),
-  `admitTurn` (#290), and `appendTurnEvent` for Steer settlements (#356),
-  pushing a fresh snapshot after each commits. A `run` Projection registers in the Run-scoped observer set even while rested; every later tracking entry reuses that set, so
-  resume, gate-answer, and interactive drivers cannot orphan the stream. A new `RunOwner` write method compiles and silently pushes nothing (A3).
+- Every canonical write to a Run must go through `observedOwner`, not the raw `RunOwner`, or an open client's live `run` Projection never updates. `observedOwner` spreads
+  `...owner`, reads `record` through a getter (a spread copy goes stale after an upgrade write), and intercepts nine methods — `selectHarness`, `selectModelChoice` (#342),
+  `writeState`, `publishAttempt`, `recordMaterializationConflict`, `recordGateAnswer`, `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own
+  transaction), `admitTurn` (#290), and `appendTurnEvent` for Steer settlements (#356), pushing a fresh snapshot after each commits. A `run` Projection registers in the
+  Run-scoped observer set even while rested; every later tracking entry reuses that set, so resume, gate-answer, and interactive drivers cannot orphan the stream. A new
+  `RunOwner` write method compiles and silently pushes nothing (A3).
 - `answer-human-gate` serves two gate mechanisms off one Port operation (#108). The Projection derivation decides which: `derived.pendingGate` present is an
   **authored** gate, answered by settling its producing Attempt through `observedOwner.publishAttempt` (into `attempt_log`, so the resumed walk skips the gate) —
   `free-text` publishes the `text` answer as the gate's declared output and re-drives execution in this process, approve advances `running` and re-drives, reject
@@ -28,14 +27,15 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Runs.) Preflight runs before the Trust gate, so a Run whose preconditions fail is refused before trust is ever asked for.
 - New Agent/Interactive-agent Runs require one known, available registry id and pin it in `createRun`; Command-only Runs reject a selection as irrelevant.
   The launch replay key includes the choice, and resume automatically reuses the immutable stored id without deriving it from Attempt evidence (#138, #146).
-- A launch's requested model is written into the Run record by `createRun` beside the Harness selection, before the first Attempt, and never changes
-  (ADR 0023). Run execution sends that stored value on every Turn request and records it on each Turn, which the `run` Projection shows on
-  `turn-started` (ADR 0034); the observed `effectiveModel` never overwrites it (#187).
+- Every Agent-bearing Run holds a Model choice (ADR 0034). `launch-preparation` resolves it (the draft's model and effort, else `preselectModelChoice`: reported default,
+  then the Adapter's fallback; #343 puts the last choice first), checks it against the qualified declaration, and writes it into the `launch-run` Offer's draft. `submit` never
+  qualifies: it refuses an Agent draft without a model (`model-choice-required`) and trusts the Offer's effort.
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
   strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
-- A pre-M4 Run with no selection upgrades only after its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume
-  write `claude-code` once through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems remain unselected (#139).
+- A pre-M4 Run with no selection upgrades only once its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume write `claude-code` once
+  through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems stay unselected (#139). A Run with no Model choice takes the preselection once
+  at the resume drive or a reopened human Turn (`upgradeLegacyModelChoice`), never at reopen; other drives skip it without an await.
 - Human Turn admission reads the Run's selected Harness and its registration's static input rules before `admit` (#358). The read acquires no owner;
   a pre-M4 unselected Run uses Claude Code's rules, matching its reopen/resume upgrade. A refusal consumes no Operation id and records no Turn.
 - Never `acquireRun` a Run merely to read it when it is live in another process: acquiring bumps the owner-fencing epoch and would abort the process
@@ -75,8 +75,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   reports `not-checked`, then publishes one durable normalized result. Qualification diagnostics are process-held Resources addressed by semantic id and checked time.
 - `launch-preparation` and `submitLaunch` share one create-time evaluator (`LaunchPreparation.evaluate`, `launch-preparation.ts`) so both admit under identical rules (#189):
   `submitLaunch` takes its first finding; the Projection collects all in launch order, each with a `correction` target. Composition-corruption is a single hard-stop `bundle`
-  finding like missing/invalid bytes. The model check is assessment-only — the Projection qualifies the selected Harness (`harnessCatalog.qualify`, which spawns) only when the
-  draft is otherwise ready and a model is requested; a direct `submitLaunch` skips it, so a model outside the Harness's list surfaces at the first Turn as
+  finding like missing/invalid bytes. The Model-choice check is assessment-only — the Projection qualifies the selected Harness (`harnessCatalog.qualify`, which spawns)
+  whenever the draft is otherwise ready and needs one; a direct `submitLaunch` skips it, so a model outside the Harness's list surfaces at the first Turn as
   a `not-started` `model-unavailable` Turn, not as a pre-create refusal.
 - The observer (`observer.ts`, #319) has a no-op default and never sees the logger. Application guards it once at resolution (#330): an observer
   never throws into its caller or changes a Projection, qualification, or Operation outcome. Every new Operation is admitted through `admit`, which reports the

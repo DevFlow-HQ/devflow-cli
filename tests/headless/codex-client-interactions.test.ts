@@ -68,6 +68,12 @@ function codexProfile(): HarnessProfile {
   };
 }
 
+// A flagless `run launch` starts from the Model choice the Harness reports.
+const REPORTED_DEFAULTS: FakeScript["defaults"] = {
+  kind: "reported",
+  choice: { model: "fake-codex-model", effort: "medium" },
+};
+
 const COMPLETED: TurnResult = {
   kind: "completed",
   detail: {
@@ -89,6 +95,7 @@ function codexScript(fixture: string): FakeScript {
   if (fixture === "approval") {
     return {
       profile: codexProfile(),
+      defaults: REPORTED_DEFAULTS,
       turns: [
         {
           events,
@@ -109,7 +116,11 @@ function codexScript(fixture: string): FakeScript {
       ],
     };
   }
-  return { profile: codexProfile(), turns: [{ events, result: COMPLETED }] };
+  return {
+    profile: codexProfile(),
+    defaults: REPORTED_DEFAULTS,
+    turns: [{ events, result: COMPLETED }],
+  };
 }
 
 function writeAgentBundle(prompt: string): { folder: string; id: string } {

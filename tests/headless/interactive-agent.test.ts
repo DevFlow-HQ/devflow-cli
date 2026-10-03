@@ -232,6 +232,8 @@ async function launchInteractive(
       launchInputs: {},
       trustDigest: entry.digest,
       harness,
+      // The fake selects no model, so any Model choice is admitted.
+      requestedModel: "fake-model",
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));

@@ -253,6 +253,12 @@ export function installCodexReplayerAt(
   directory: string,
   caseName: string,
   syntheticFaultInjection = false,
+  options: {
+    /** Recorded cases served, in order, to the `app-server` sessions before
+     *  `caseName`'s, such as a launch's qualification ahead of its Run (#342).
+     *  Each replays strictly; the mutation helpers change only `caseName`. */
+    readonly earlierInvocations?: readonly string[];
+  } = {},
 ): InstalledCodexReplayer {
   const fixtureDirectory = join(fixtureRoot, caseName);
   const fixtureRecording = JSON.parse(
@@ -262,52 +268,14 @@ export function installCodexReplayerAt(
   const logPath = join(directory, "invocations.log");
   writeFileSync(logPath, "");
   const installedFixtureDirectory = join(directory, "fixture");
-  mkdirSync(installedFixtureDirectory);
-  const qualificationCase = JSON.parse(
-    readFileSync(join(qualificationFixtureDirectory, "case.json"), "utf8"),
+  installCase(caseName, installedFixtureDirectory, syntheticFaultInjection);
+  const earlierFixtureDirectories = (options.earlierInvocations ?? []).map(
+    (earlier, index) => {
+      const installed = join(directory, `fixture-earlier-${index}`);
+      installCase(earlier, installed, false);
+      return installed;
+    },
   );
-  const selectedCase = JSON.parse(
-    readFileSync(join(fixtureDirectory, "case.json"), "utf8"),
-  );
-  const strictReplay =
-    !syntheticFaultInjection && selectedCase.replay === "strict";
-  // A synthetic case replays only the handshake every prepare sends; the
-  // recorded `config/read` answer stays in `responses` for a test that asks.
-  const handshakeTraffic = (traffic: readonly { line?: string }[]) => {
-    const defaultsAt = traffic.findIndex(
-      (entry) => entry.line?.includes('"method":"config/read"') === true,
-    );
-    return defaultsAt < 0 ? traffic : traffic.slice(0, defaultsAt);
-  };
-  writeFileSync(
-    join(installedFixtureDirectory, "case.json"),
-    JSON.stringify({
-      ...qualificationCase,
-      ...selectedCase,
-      ...(strictReplay
-        ? {}
-        : {
-            traffic: handshakeTraffic(
-              selectedCase.traffic ?? qualificationCase.traffic ?? [],
-            ),
-          }),
-      // Protocol-private tests deliberately inject deterministic faults over the
-      // recorded qualification exchange. Only that explicit synthetic mode may
-      // use the configurable response generator; real cases stay strict.
-      replay: strictReplay ? "strict" : "synthetic-fault-injection",
-      responses: {
-        ...qualificationCase.responses,
-        ...selectedCase.responses,
-      },
-    }),
-  );
-  const workspacePatch = join(fixtureDirectory, "workspace.patch");
-  if (existsSync(workspacePatch)) {
-    copyFileSync(
-      workspacePatch,
-      join(installedFixtureDirectory, "workspace.patch"),
-    );
-  }
   const windows = process.platform === "win32";
   const executablePath = join(directory, windows ? "codex.cmd" : "codex");
   const identityPath = join(directory, windows ? "codex.mjs" : "codex");
@@ -339,6 +307,14 @@ export function installCodexReplayerAt(
         redactions: fixtureRecording.redactions,
         refreshCommand: fixtureRecording.refreshCommand,
         fixtureDirectory: installedFixtureDirectory,
+        ...(earlierFixtureDirectories.length > 0
+          ? {
+              fixtureDirectories: [
+                ...earlierFixtureDirectories,
+                installedFixtureDirectory,
+              ],
+            }
+          : {}),
         schemaDirectory,
         schemaFile: SCHEMA_FILE,
         log: logPath,
@@ -572,6 +548,60 @@ export function installCodexReplayerAt(
       writeFileSync(casePath, JSON.stringify(protocolCase));
     },
   };
+}
+
+/** Install one recorded case's replay inputs into `into`: strict cases replay
+ *  their own traffic, and a synthetic case replays only the handshake every
+ *  prepare sends over the qualification recording's answers. */
+function installCase(
+  caseName: string,
+  into: string,
+  syntheticFaultInjection: boolean,
+): void {
+  const fixtureDirectory = join(fixtureRoot, caseName);
+  mkdirSync(into);
+  const qualificationCase = JSON.parse(
+    readFileSync(join(qualificationFixtureDirectory, "case.json"), "utf8"),
+  );
+  const selectedCase = JSON.parse(
+    readFileSync(join(fixtureDirectory, "case.json"), "utf8"),
+  );
+  const strictReplay =
+    !syntheticFaultInjection && selectedCase.replay === "strict";
+  // A synthetic case replays only the handshake every prepare sends; the
+  // recorded `config/read` answer stays in `responses` for a test that asks.
+  const handshakeTraffic = (traffic: readonly { line?: string }[]) => {
+    const defaultsAt = traffic.findIndex(
+      (entry) => entry.line?.includes('"method":"config/read"') === true,
+    );
+    return defaultsAt < 0 ? traffic : traffic.slice(0, defaultsAt);
+  };
+  writeFileSync(
+    join(into, "case.json"),
+    JSON.stringify({
+      ...qualificationCase,
+      ...selectedCase,
+      ...(strictReplay
+        ? {}
+        : {
+            traffic: handshakeTraffic(
+              selectedCase.traffic ?? qualificationCase.traffic ?? [],
+            ),
+          }),
+      // Protocol-private tests deliberately inject deterministic faults over the
+      // recorded qualification exchange. Only that explicit synthetic mode may
+      // use the configurable response generator; real cases stay strict.
+      replay: strictReplay ? "strict" : "synthetic-fault-injection",
+      responses: {
+        ...qualificationCase.responses,
+        ...selectedCase.responses,
+      },
+    }),
+  );
+  const workspacePatch = join(fixtureDirectory, "workspace.patch");
+  if (existsSync(workspacePatch)) {
+    copyFileSync(workspacePatch, join(into, "workspace.patch"));
+  }
 }
 
 function synchronizeTraffic(

@@ -46,8 +46,9 @@ import {
 //
 // The Harness step reads the spawn-free `harness-catalog` list for its rows and
 // worded qualification/availability; choosing a Harness opens that one's focus,
-// which qualifies only it and carries the supported-model declaration the model
-// field renders (a choice list, free-text entry, or `Harness default` alone).
+// which qualifies only it and carries the model declaration the model field
+// renders (a choice list or free-text entry) and the Application's preselection,
+// the Model choice a launch starts from and its source (ADR 0034).
 //
 // State that survives back-navigation (chosen Bundle index, chosen Harness, the
 // requested model, entered input values, the acknowledged digest) lives in this one
@@ -82,7 +83,8 @@ export function StartRun(props: {
   const [catalogOpen, setCatalogOpen] = createSignal(false);
   const [selected, setSelected] = createSignal(0);
   // The chosen Harness id (undefined until the user chooses one) and the requested
-  // model draft (undefined means `Harness default`). Both survive back-navigation.
+  // model draft (undefined starts from the preselection the launch assessment
+  // resolves). Both survive back-navigation.
   const [chosenHarnessId, setChosenHarnessId] = createSignal<
     string | undefined
   >();
@@ -235,8 +237,8 @@ export function StartRun(props: {
       launchInputs: declaredValues(),
       harness: needsHarness ? chosenHarnessId() : undefined,
       // The draft carries the requested model into the launch; a Command-only
-      // Bundle asks for neither Harness nor model (#191). `Harness default` is the
-      // absence of a requested model, so it rides as `undefined`.
+      // Bundle asks for neither Harness nor model (#191). An undefined model takes
+      // the preselection, which the assessment resolves into the Offer's draft.
       requestedModel: needsHarness ? requestedModel() : undefined,
       trustDigest:
         bundle.trust.state === "not-yet-trusted" && acknowledged()
@@ -300,6 +302,10 @@ export function StartRun(props: {
       setStep("harness");
     } else if (problem.correction === "model") {
       setRequestedModel(undefined);
+      setStep("harness");
+    } else if (problem.correction === "effort") {
+      // Effort is resolved, not chosen, until the guided picker (#349): a model
+      // whose effort cannot be resolved is corrected by choosing another model.
       setStep("harness");
     } else if (problem.correction === "trust") {
       const bundle = focusBundle();
@@ -409,7 +415,7 @@ export function StartRun(props: {
             <ReviewStep
               bundle={focusBundle}
               harness={chosenHarnessSummary}
-              model={requestedModel}
+              harnessFocus={chosenHarnessFocus}
               draft={launchDraft}
               canAcknowledgeTrust={() => untrusted() && !acknowledged()}
               onAcknowledgeTrust={acknowledge}

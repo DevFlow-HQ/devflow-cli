@@ -344,8 +344,11 @@ function runOf(over: Partial<RunView> = {}): RunView {
     ...(over.effectiveModel !== undefined
       ? { effectiveModel: over.effectiveModel }
       : {}),
-    ...(over.requestedModel !== undefined
-      ? { requestedModel: over.requestedModel }
+    ...(over.modelChoice !== undefined
+      ? {
+          modelChoice: over.modelChoice,
+          requestedModel: over.modelChoice.model,
+        }
       : {}),
     ...(over.selectedHarness !== undefined
       ? { selectedHarness: over.selectedHarness }
@@ -670,7 +673,7 @@ test("the details panel shows the observed Harness, executable, version, and mod
       state: "succeeded",
       progress: PROGRESS,
       selectedHarness: "claude-code",
-      requestedModel: "fake-opus",
+      modelChoice: { model: "fake-opus", effort: "high" },
       harness: {
         name: "Claude Code",
         executable: "/usr/bin/claude",
@@ -691,7 +694,7 @@ test("the details panel shows the observed Harness, executable, version, and mod
     /Observed Harness · Claude Code · \/usr\/bin\/claude · 1\.2\.3 · model fake-sonnet/,
   );
   // Requested and observed models stay visibly distinct (AC1).
-  assert.match(frame, /Requested model · fake-opus/);
+  assert.match(frame, /Model choice · fake-opus · high effort/);
   noOverflow(frame, 100);
 });
 

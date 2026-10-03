@@ -443,7 +443,8 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
     );
 
     // The launch seam builds this exact LaunchRunInput — the acknowledged installed
-    // digest, the interactive Harness selection, the required idea. The launch runs
+    // digest, the interactive Harness selection, its resolved Model choice, the
+    // required idea. The launch runs
     // the grill's entry Turn, rests the Run `blocked` at the grill Step, and only then
     // clears its execution claim, so awaiting this Operation is the correct gate
     // before a human Turn is sent (earlier, it is refused `interactive-turn-busy`).
@@ -456,6 +457,10 @@ async function mattFrontReplayerWorkbench(): Promise<void> {
         launchInputs: { idea: MATT_FRONT_IDEA },
         trustDigest: entry.digest,
         harness: "claude-code",
+        // The Claude Code fallback a TUI launch resolves when settings are not
+        // read (ADR 0034); the replayer accepts any `--model`.
+        requestedModel: "opus",
+        requestedEffort: "medium",
       },
     });
     assert.equal(admission.admitted, true);

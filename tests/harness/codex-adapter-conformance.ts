@@ -48,6 +48,7 @@ import {
 } from "./codex-replayer.js";
 import {
   CODEX_RECORDING_INPUT,
+  CODEX_TEST_REPAIR_MODEL_CHOICE,
   CODEX_RECORDING_MODEL_CHOICE,
   codexTestRepairPrompt,
 } from "./codex-recording-cases.js";
@@ -3268,16 +3269,18 @@ test("[codex-recorded-conformance] Test Repair applies its recorded Workspace pa
       session: "test-repair",
       correlationKey: { opaque: "record-test-repair" },
       input: { text: codexTestRepairPrompt(workspace) },
+      modelChoice: CODEX_TEST_REPAIR_MODEL_CHOICE,
     })
     .result();
   assert.equal(result.kind, "completed", JSON.stringify(result));
   // Codex refused the first thread/read while the fresh thread's rollout was
-  // empty; the read sent again at the Turn's next item answered (#345).
+  // empty; the read sent again at the Turn's next item answered (#345). It
+  // reports the Model choice the Turn requested (#342), not the thread default.
   if (result.kind !== "completed") throw new Error("unreachable");
   assert.deepEqual(result.detail.effectiveModel, {
     known: true,
-    model: "gpt-6.1-sol",
-    effort: "high",
+    model: CODEX_TEST_REPAIR_MODEL_CHOICE.model,
+    effort: CODEX_TEST_REPAIR_MODEL_CHOICE.effort,
   });
   execFileSync(process.execPath, ["test", "sum.test.mjs"], {
     cwd: workspace,

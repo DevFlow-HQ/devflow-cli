@@ -113,6 +113,58 @@ export function modelName(entry: {
     : `${entry.label} · ${entry.model}`;
 }
 
+type ModelChoiceWordsInput = {
+  readonly model: string;
+  readonly effort?: string;
+};
+
+type ModelChoiceSource =
+  | NonNullable<HarnessFocus["preselection"]>["source"]
+  | { readonly kind: "requested" };
+
+/** The friendly label a Harness gives a model, when it names one. */
+function modelLabel(
+  declaration: HarnessFocus["modelDeclaration"],
+  model: string,
+): string | undefined {
+  if (declaration === undefined || declaration.kind === "free-text") {
+    return undefined;
+  }
+  return declaration.models.find((entry) => entry.model === model)?.label;
+}
+
+/** A Model choice in words (ADR 0034): the model's label and exact name, then
+ *  its effort. A choice without effort shows the model alone. */
+export function modelChoiceWords(
+  choice: ModelChoiceWordsInput,
+  declaration: HarnessFocus["modelDeclaration"],
+): string {
+  const label = modelLabel(declaration, choice.model);
+  const name = modelName({
+    model: choice.model,
+    ...(label === undefined ? {} : { label }),
+  });
+  return choice.effort === undefined
+    ? name
+    : `${name} at ${choice.effort} effort`;
+}
+
+/** Where a launch's Model choice came from, in the #311 wording: the Harness's
+ *  own settings, its declared fallback with the reason, or the person's choice. */
+export function modelChoiceSourceLine(
+  harnessName: string,
+  source: ModelChoiceSource,
+  choice: ModelChoiceWordsInput,
+  declaration: HarnessFocus["modelDeclaration"],
+): string {
+  if (source.kind === "reported") return `From your ${harnessName} settings`;
+  if (source.kind === "requested") return "Your choice for this launch";
+  const label = modelLabel(declaration, choice.model) ?? choice.model;
+  const effort =
+    choice.effort === undefined ? "" : ` and ${choice.effort} effort`;
+  return `${source.reason} Starting with ${label}${effort}.`;
+}
+
 /** A model's efforts in words, the default marked in text rather than colour. */
 export function effortsLine(
   efforts: readonly string[],

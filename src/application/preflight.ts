@@ -64,10 +64,12 @@ export interface PreflightRequest {
   /** The caller's semantic Harness selection. Required only when the routing's
    * Step kinds declare Harness capability needs. */
   readonly harnessSelection?: string;
-  /** The caller's requested model (#187). Accepted only when the routing needs a
-   *  Harness; refused as irrelevant for a Command-only routing. Free text, not
-   *  validated to a closed set here — an unknown model fails later at prepare. */
+  /** The caller's requested model and effort (ADR 0034). Accepted only when the
+   *  routing needs a Harness; each is refused as irrelevant for a Command-only
+   *  routing. Free text, not validated here — the launch assessment checks them
+   *  against the qualified Harness's declaration. */
   readonly requestedModel?: string;
+  readonly requestedEffort?: string;
   /** Closed registry entries with native state already normalized away. */
   readonly harnessRegistry: readonly ApplicationHarnessRegistration[];
 }
@@ -77,6 +79,7 @@ export type PreflightResult =
       readonly ok: true;
       readonly selectedHarness?: HarnessChoice["id"];
       readonly requestedModel?: string;
+      readonly requestedEffort?: string;
     }
   | { readonly problem: Problem };
 
@@ -88,6 +91,7 @@ export interface PreflightAssessment {
   readonly findings: readonly Problem[];
   readonly selectedHarness?: HarnessChoice["id"];
   readonly requestedModel?: string;
+  readonly requestedEffort?: string;
 }
 
 /** Run Preflight against a pinned Snapshot. Returns the first failing check as a
@@ -101,9 +105,7 @@ export function preflight(
 ): PreflightResult {
   const assessment = evaluatePreflight(request, process, observe, true);
   const problem = assessment.findings[0];
-  return problem === undefined
-    ? okResult(assessment.selectedHarness, assessment.requestedModel)
-    : { problem };
+  return problem === undefined ? okResult(assessment) : { problem };
 }
 
 /** Run the same ordered checks as `preflight`, collecting every finding instead of
@@ -202,23 +204,31 @@ function collectFindings(
     ...(harness.selectedHarness !== undefined
       ? { selectedHarness: harness.selectedHarness }
       : {}),
-    // The requested model is meaningful only on the Agent-bearing path; a
-    // Command-only routing already yields a `model` finding above (#187).
+    // The requested model and effort are meaningful only on the Agent-bearing
+    // path; a Command-only routing already yields their findings above (#187).
     ...(harness.selectedHarness !== undefined &&
     request.requestedModel !== undefined
       ? { requestedModel: request.requestedModel }
       : {}),
+    ...(harness.selectedHarness !== undefined &&
+    request.requestedEffort !== undefined
+      ? { requestedEffort: request.requestedEffort }
+      : {}),
   };
 }
 
-function okResult(
-  selectedHarness: HarnessChoice["id"] | undefined,
-  requestedModel: string | undefined,
-): PreflightResult {
+function okResult(assessment: PreflightAssessment): PreflightResult {
   return {
     ok: true,
-    ...(selectedHarness !== undefined ? { selectedHarness } : {}),
-    ...(requestedModel !== undefined ? { requestedModel } : {}),
+    ...(assessment.selectedHarness !== undefined
+      ? { selectedHarness: assessment.selectedHarness }
+      : {}),
+    ...(assessment.requestedModel !== undefined
+      ? { requestedModel: assessment.requestedModel }
+      : {}),
+    ...(assessment.requestedEffort !== undefined
+      ? { requestedEffort: assessment.requestedEffort }
+      : {}),
   };
 }
 
@@ -306,15 +316,19 @@ function checkHarness(
     }
   }
   if (capabilityNeeds.size === 0) {
-    // A Command-only routing prepares no Harness, so a selected Harness and a
-    // requested model are each independently irrelevant: collect both, so a draft
-    // carrying both is corrected in one pass rather than one refusal at a time (#189).
+    // A Command-only routing prepares no Harness, so a selected Harness, a
+    // requested model, and a requested effort are each independently irrelevant:
+    // collect all, so a draft is corrected in one pass rather than one refusal at
+    // a time (#189).
     const irrelevant: Problem[] = [];
     if (request.harnessSelection !== undefined) {
       irrelevant.push(harnessSelectionIrrelevant(request.harnessSelection));
     }
     if (request.requestedModel !== undefined) {
       irrelevant.push(requestedModelIrrelevant(request.requestedModel));
+    }
+    if (request.requestedEffort !== undefined) {
+      irrelevant.push(requestedEffortIrrelevant(request.requestedEffort));
     }
     return { problems: irrelevant };
   }
@@ -625,6 +639,17 @@ function requestedModelIrrelevant(model: string): Problem {
     possibleEffects: "none",
     correction: "model",
     details: { model },
+  };
+}
+
+function requestedEffortIrrelevant(effort: string): Problem {
+  return {
+    code: "requested-effort-irrelevant",
+    explanation: `This Bundle is Command-only, so effort "${effort}" would never be used.`,
+    remediation: "Launch the Bundle again without an effort.",
+    possibleEffects: "none",
+    correction: "effort",
+    details: { effort },
   };
 }
 

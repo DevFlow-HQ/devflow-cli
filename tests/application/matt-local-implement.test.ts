@@ -279,6 +279,7 @@ async function publishLocalTickets(
       launchInputs: { idea: IDEA },
       trustDigest: digest,
       harness,
+      requestedModel: "fake-model",
     },
   });
   assert.ok(admission.admitted && admission.runId);

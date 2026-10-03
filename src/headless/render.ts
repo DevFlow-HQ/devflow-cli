@@ -143,7 +143,7 @@ function renderHarnessModels(harness: HarnessFocus): string[] {
   const defaults = harness.harnessDefaults;
   if (defaults === undefined) return lines;
   if (defaults.kind === "unavailable") {
-    lines.push(`Harness default: None. ${defaults.reason}`);
+    lines.push(`Reported settings: None. ${defaults.reason}`);
     return lines;
   }
   const label = entries.find(
@@ -152,8 +152,8 @@ function renderHarnessModels(harness: HarnessFocus): string[] {
   const choice = `${modelName(label ?? defaults.choice.model, defaults.choice.model)} ${defaults.choice.effort === undefined ? "with no effort setting" : `at ${defaults.choice.effort}`}`;
   lines.push(
     defaults.kind === "reported"
-      ? `Harness default: ${choice}, reported by the Harness`
-      : `Harness default: ${choice}, the fallback. ${defaults.reason}`,
+      ? `Reported settings: ${choice}, reported by the Harness`
+      : `Reported settings: ${choice}, the fallback. ${defaults.reason}`,
   );
   if (defaults.effortLock !== undefined) {
     lines.push(`Effort locked by ${defaults.effortLock.source}`);
@@ -304,10 +304,12 @@ export function renderRun(run: RunView): string {
           `Observed version: ${run.harness.executableVersion}`,
         ]
       : []),
-    // The immutable model requested at launch (#187), beside the observed effective
-    // model so the two stay distinct. Omitted when no model was requested.
-    ...(run.requestedModel !== undefined
-      ? [`Requested model: ${run.requestedModel}`]
+    // The Run's current Model choice (ADR 0034), beside the observed effective
+    // model so the two stay distinct. Omitted for a Command-only Run.
+    ...(run.modelChoice !== undefined
+      ? [
+          `Model choice: ${run.modelChoice.model}${run.modelChoice.effort === undefined ? "" : ` at ${run.modelChoice.effort} effort`}`,
+        ]
       : []),
     // The effective model the latest Agent-step Attempt ran under (#116), from the
     // Harness init message. Omitted for a Command-only Run.

@@ -22,7 +22,12 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
   OS), installed, re-installed as already installed at the equal digest, and listed.
 - **two-harness-proof-bundle** (#149): the installed Test Repair Proof Bundle run headlessly through the recorded Claude Code and Codex replayers in
   two fresh Workspaces differing only in `--harness`; each enters one repair iteration, passes its Verdict, and the authored approve-commit gate keeps
-  Git unchanged until a separate `run answer --continue` succeeds and commits. Different effective models prove both Adapters were driven.
+  Git unchanged until a separate `run answer --continue` succeeds and commits. Different effective models prove both Adapters were driven. Each launch
+  names no model, so it qualifies first: the Codex replayer serves the `codex-qualification` recording to that session and the Test Repair recording,
+  whose `turn/start` requests the reported default, to the Run's (#342).
+- **headless-model-choice** (#342): `run launch --model --effort` through each replayer rests at the Proof Bundle's gate, and `run show --json` reports
+  the Run's `modelChoice` and every `turn-started` entry's requested model and effort. Each launch names a value its preselection would not choose
+  (Codex qualifies against `codex-qualification-unconfigured`), and the strict Codex replay proves both on `turn/start`.
 - **install-collision**: a byte-different same-identity archive is rejected as `bundle-identity-collision` (first-install-wins).
 - **run-refusals** (#82): `run show` on an unknown id and `run launch` on an uninstalled Bundle exit non-zero with `run-not-found` and
   `bundle-not-installed` before any Run directory exists.

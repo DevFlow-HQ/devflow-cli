@@ -97,6 +97,7 @@ import {
   runOutputMissing,
   runStoreDamaged,
   runSupportUnavailable,
+  modelChoiceRequired,
   selectedHarnessUnavailable,
   steerBlank,
   steerRejected,
@@ -106,6 +107,7 @@ import {
   type InteractiveControl,
 } from "./problems.js";
 import type { UpdateStream } from "./update-stream.js";
+import { preselectModelChoice } from "./model-choice.js";
 import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import { listRunsSnapshot } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
@@ -765,6 +767,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const tracking = runs.get(runId);
     return {
       ...owner,
+      // The raw owner refreshes its record after an upgrade write; read through it
+      // so a wrapper made before the write never serves the stale value.
+      get record() {
+        return owner.record;
+      },
       appendTurnEvent(event) {
         const receipt = owner.appendTurnEvent(event);
         if (event.kind === "steer" && receipt.ok) pushRunUpdate(runId);
@@ -772,6 +779,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
       },
       selectHarness(selectedHarness) {
         const result = owner.selectHarness(selectedHarness);
+        if (result.outcome === "selected") pushRunUpdate(runId);
+        return result;
+      },
+      selectModelChoice(choice) {
+        const result = owner.selectModelChoice(choice);
         if (result.outcome === "selected") pushRunUpdate(runId);
         return result;
       },
@@ -849,6 +861,39 @@ export function createApplication(deps: ApplicationDependencies): Application {
       "fenced"
       ? "ready"
       : "fenced";
+  }
+
+  // A Run created before every launch resolved a Model choice holds none (ADR
+  // 0034). Resuming it resolves the preselection once, through the same qualify
+  // path launch preparation reads, and writes it with the fenced null-only upgrade.
+  // A Harness that fails to qualify, or reports nothing to preselect, leaves the
+  // Run without a choice: the drive's own prepare reports a failure, and its Turns
+  // request none, as they did before. Every other drive returns undefined at once,
+  // so it gains no await before execution starts. A fenced write throws.
+  function upgradeLegacyModelChoice(
+    owner: RunOwner,
+    routing: readonly RoutingNode[],
+    runId: string,
+  ): Promise<void> | undefined {
+    const harness = owner.record.selectedHarness;
+    if (
+      owner.record.modelChoice !== undefined ||
+      harness === undefined ||
+      !routingNeedsHarness(routing)
+    ) {
+      return undefined;
+    }
+    return harnessCatalog.qualify(harness).then((qualification) => {
+      if (qualification === undefined || !qualification.ok) return;
+      const preselection = preselectModelChoice(qualification.defaults);
+      if (preselection === undefined) return;
+      const written = observedOwner(owner, runId).selectModelChoice(
+        preselection.choice,
+      );
+      if (written.outcome === "fenced") {
+        throw new Error("application: legacy Model choice write was fenced.");
+      }
+    });
   }
 
   // Why the Run holds its current Step for the human, by the Projection's one
@@ -991,6 +1036,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
         "application: legacy Harness selection write was fenced.",
       );
     }
+    // Await only a real upgrade: even `await undefined` yields, which would let a
+    // shutdown abort before execution registers its listener.
+    const choiceUpgrade = upgradeLegacyModelChoice(
+      params.owner,
+      params.routing,
+      params.runId,
+    );
+    if (choiceUpgrade !== undefined) await choiceUpgrade;
     const report = await runExecution!({
       routing: params.routing,
       digest: params.digest,
@@ -1448,15 +1501,46 @@ export function createApplication(deps: ApplicationDependencies): Application {
         problem: evaluation.findings[0] ?? runSupportUnavailable(),
       };
     }
-    const { entry, manifest, selectedHarness, requestedModel, needsGrant } =
-      evaluation.resolution;
+    const {
+      entry,
+      manifest,
+      selectedHarness,
+      requestedModel,
+      requestedEffort,
+      needsGrant,
+    } = evaluation.resolution;
+    // Every Agent-bearing Run carries a Model choice (ADR 0034). `submit` never
+    // qualifies, so it takes the choice the `launch-run` Offer resolved; a draft
+    // without one was not assessed and is refused before anything is created.
+    if (selectedHarness !== undefined && requestedModel === undefined) {
+      // Preflight admitted the selection from this registry, so it is present.
+      const registration = harnessInputRegistrations.get(selectedHarness);
+      if (registration === undefined) {
+        throw new Error(
+          `application: Harness ${selectedHarness} is not registered.`,
+        );
+      }
+      return {
+        admitted: false,
+        problem: modelChoiceRequired(registration.choice),
+      };
+    }
 
     const created = runGroup.createRun({
       operationId,
       bundleSnapshotDigest: entry.digest,
       launch: input.launchInputs,
       selectedHarness,
-      ...(requestedModel !== undefined ? { requestedModel } : {}),
+      ...(requestedModel !== undefined
+        ? {
+            modelChoice: {
+              model: requestedModel,
+              ...(requestedEffort !== undefined
+                ? { effort: requestedEffort }
+                : {}),
+            },
+          }
+        : {}),
       at: new Date(),
     });
     if (needsGrant) {
@@ -2632,6 +2716,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
       owner,
       drive: async () => {
         if (tracking.heldStep === undefined) {
+          // A reopened human Turn is a resume boundary too: it prepares here,
+          // without the routing drive's upgrade.
+          const choiceUpgrade = upgradeLegacyModelChoice(
+            owner,
+            begun.facts.routing,
+            input.runId,
+          );
+          if (choiceUpgrade !== undefined) await choiceUpgrade;
           const prepared = await prepareRunInteractiveStep!({
             observeWindowsCleanupFallback: () =>
               observeWindowsCleanupFallback(input.runId),

@@ -13,11 +13,13 @@ export const runRecord = sqliteTable("run_record", {
   // Nullable only for Command-only Runs and Runs created before M4. Agent-bearing
   // Runs created from M4 onward pin their semantic Harness at creation.
   selected_harness: text("selected_harness"),
-  // The immutable requested model pinned at launch, applied at each Adapter's native
-  // point through prepare (#187). Free text, never validated to a closed set here.
-  // Null when the launch requested no model (the Harness default is used, never a
-  // substitute) and for a Command-only Run, which prepares no Harness.
+  // The Run's current Model choice (ADR 0034): the model and effort every Turn
+  // requests when it starts. Free text, never validated to a closed set here. Null
+  // for a Command-only Run, which prepares no Harness, and for an Agent-bearing Run
+  // created before every launch resolved one, until its legacy upgrade writes it.
+  // Effort is null too when the chosen model has no effort setting.
   requested_model: text("requested_model"),
+  requested_effort: text("requested_effort"),
   state: text("state").notNull(),
   created_at: text("created_at").notNull(),
 });

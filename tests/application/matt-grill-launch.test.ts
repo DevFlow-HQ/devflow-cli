@@ -180,6 +180,7 @@ function submitLaunch(
       launchInputs,
       trustDigest: digest,
       harness,
+      requestedModel: "fake-model",
     },
   });
 }

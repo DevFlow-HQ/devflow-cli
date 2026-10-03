@@ -96,7 +96,7 @@ export function trustDigestMismatch(
 
 /** The requested model is not one the selected Harness declares (#189): a launch
  *  assessment qualifies the Harness and, when its model declaration is an exact
- *  list, checks the requested model against it. Distinct from the per-Turn
+ *  list, checks the Model choice's model against it. Distinct from the per-Turn
  *  `model-unavailable` refusal — the assessment surfaces it before a Run is created. */
 export function requestedModelUnavailable(
   harness: HarnessChoice,
@@ -108,11 +108,78 @@ export function requestedModelUnavailable(
     explanation: `${harness.name} does not offer the model "${model}".`,
     remediation:
       supported.length > 0
-        ? `Choose one of ${harness.name}'s models (${supported.join(", ")}) or the Harness default, then launch again.`
-        : `Choose the Harness default, then launch again.`,
+        ? `Choose one of ${harness.name}'s models (${supported.join(", ")}), then launch again.`
+        : `${harness.name} lists no models to choose from; check its installation, then launch again.`,
     possibleEffects: "none",
     correction: "model",
     details: { harness: harness.id, model, supported: supported.join(", ") },
+  };
+}
+
+/** An Agent-bearing launch with no model to run (ADR 0034): the draft named none
+ *  and the Harness reported nothing to preselect, or a launch was submitted
+ *  without the Model choice its assessment resolves. `reason` says why nothing
+ *  was preselected, when that is the cause. */
+export function modelChoiceRequired(
+  harness: HarnessChoice,
+  reason?: string,
+): Problem {
+  return {
+    code: "model-choice-required",
+    explanation:
+      reason === undefined
+        ? `This launch names no model for ${harness.name}.`
+        : `${harness.name} reported no model to start from. ${reason}`,
+    remediation: "Choose a model, then launch again.",
+    possibleEffects: "none",
+    correction: "model",
+    details: { harness: harness.id },
+  };
+}
+
+/** The requested effort is not one the chosen model offers (ADR 0034), including
+ *  any effort for a model without an effort setting. */
+export function requestedEffortUnavailable(
+  harness: HarnessChoice,
+  model: string,
+  effort: string,
+  offered: readonly string[],
+): Problem {
+  return {
+    code: "requested-effort-unavailable",
+    explanation:
+      offered.length === 0
+        ? `${model} has no effort setting, so ${harness.name} cannot use "${effort}" effort.`
+        : `${harness.name} does not offer "${effort}" effort for ${model}.`,
+    remediation:
+      offered.length === 0
+        ? "Launch again without an effort."
+        : `Choose one of ${offered.join(", ")}, then launch again.`,
+    possibleEffects: "none",
+    correction: "effort",
+    details: {
+      harness: harness.id,
+      model,
+      effort,
+      supported: offered.join(", "),
+    },
+  };
+}
+
+/** A model that offers efforts, with none requested, none preselected that it
+ *  offers, and no default of its own (ADR 0034): Secant never invents one. */
+export function effortChoiceRequired(
+  harness: HarnessChoice,
+  model: string,
+  offered: readonly string[],
+): Problem {
+  return {
+    code: "effort-choice-required",
+    explanation: `${model} needs an effort, and ${harness.name} names no default for it.`,
+    remediation: `Choose one of ${offered.join(", ")}, then launch again.`,
+    possibleEffects: "none",
+    correction: "effort",
+    details: { harness: harness.id, model, supported: offered.join(", ") },
   };
 }
 

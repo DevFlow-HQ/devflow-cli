@@ -203,6 +203,7 @@ async function driveToSpec(
       launchInputs: { idea: "Add a dark-mode toggle." },
       trustDigest: digest,
       harness,
+      requestedModel: "fake-model",
     },
   });
   assert.ok(admission.admitted && admission.runId, JSON.stringify(admission));

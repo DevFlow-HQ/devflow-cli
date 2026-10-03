@@ -14,10 +14,11 @@ import {
   bundleBytesMissing,
   bundleTrustRequired,
   harnessQualificationUnavailable,
-  requestedModelUnavailable,
   trustDigestMismatch,
   workspaceNotApproved,
 } from "./problems.js";
+import { resolveModelChoice, type ModelChoiceSource } from "./model-choice.js";
+import type { ModelChoice } from "../harness/harness.js";
 import type { UpdateStream } from "./update-stream.js";
 import { problemCodes, type ApplicationObserver } from "./observer.js";
 import type {
@@ -34,12 +35,15 @@ import type {
 // `launch-preparation` (#189): the read-only assessment of one complete launch
 // draft. It reruns the ordered creation-free checks a launch runs today (through
 // `evaluate`, the same evaluator `submitLaunch` refuses from, so both clients
-// create Runs under identical rules) and, when a model is requested for an
-// Agent-bearing routing, additionally qualifies only the selected Harness through
-// the process cache to check that model against the declared list. It creates no
-// Run, Session, Turn, Trust grant, or durable draft, and releases the prepared
-// Harness immediately (composition's qualify path closes it). Changing any draft
-// field opens a new Projection — the selector is the draft.
+// create Runs under identical rules) and, for an otherwise-ready Agent-bearing
+// draft, additionally qualifies only the selected Harness through the process
+// cache to resolve the Run's Model choice (ADR 0034): the draft's model and effort
+// where named, else the preselection, checked against the Harness's declaration.
+// The `launch-run` Offer carries that resolved choice, so both clients launch
+// exactly what the assessment showed. It creates no Run, Session, Turn, Trust
+// grant, or durable draft, and releases the prepared Harness immediately
+// (composition's qualify path closes it). Changing any draft field opens a new
+// Projection — the selector is the draft.
 
 import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 
@@ -73,6 +77,7 @@ interface LaunchDraftResolution {
   readonly manifest: AuthoredManifest;
   readonly selectedHarness?: HarnessChoice["id"];
   readonly requestedModel?: string;
+  readonly requestedEffort?: string;
   /** Whether launching will record a new Trust grant (the digest was untrusted
    *  and the draft acknowledges it). */
   readonly needsGrant: boolean;
@@ -166,6 +171,7 @@ export function createLaunchPreparation(
         supportsInteractiveTurns: deps.supportsInteractiveTurns,
         harnessSelection: input.harness,
         requestedModel: input.requestedModel,
+        requestedEffort: input.requestedEffort,
         harnessRegistry: deps.harnessRegistry,
       },
       deps.process,
@@ -207,6 +213,9 @@ export function createLaunchPreparation(
         ...(pre.requestedModel !== undefined
           ? { requestedModel: pre.requestedModel }
           : {}),
+        ...(pre.requestedEffort !== undefined
+          ? { requestedEffort: pre.requestedEffort }
+          : {}),
       },
     };
   }
@@ -219,25 +228,16 @@ export function createLaunchPreparation(
     const resolution = evaluation.resolution;
     const syncFindings = evaluation.findings;
 
-    // Qualify only when the draft is otherwise ready AND a model is requested.
-    // Qualification spawns the real Harness, so it never runs to browse a draft
-    // without a model, nor to add a model finding to a draft already not-ready for
-    // other reasons — those findings are printed at once and the model is checked
-    // once they are fixed (spec: qualification is to check the requested model).
-    const modelCheck =
-      syncFindings.length === 0 &&
-      resolution?.selectedHarness !== undefined &&
-      resolution.requestedModel !== undefined
-        ? {
-            harness: resolution.selectedHarness,
-            model: resolution.requestedModel,
-          }
-        : undefined;
-
-    if (modelCheck === undefined) {
+    // Qualify only when the draft is otherwise ready and needs a Harness.
+    // Qualification spawns the real Harness, so it never runs to add a Model-choice
+    // finding to a draft already not-ready for other reasons — those findings are
+    // printed at once and the choice is resolved once they are fixed.
+    const harness =
+      syncFindings.length === 0 ? resolution?.selectedHarness : undefined;
+    if (harness === undefined || resolution === undefined) {
       const status = syncFindings.length > 0 ? "not-ready" : "ready";
       return settled(
-        snapshot(status, syncFindings, resolution, draft),
+        snapshot(status, syncFindings, resolution, draft, undefined),
         updates,
       );
     }
@@ -245,17 +245,16 @@ export function createLaunchPreparation(
     // A qualification error must never read as ready: an unexpected throw becomes a
     // harness finding, the same not-ready outcome a `{ok:false}` result produces.
     void (async () => {
-      let extra: Problem | undefined;
-      deps.observe({ kind: "model-check-start", harness: modelCheck.harness });
+      deps.observe({ kind: "model-check-start", harness });
+      let assessed: TModelAssessment;
       try {
-        const qualification = await deps.qualify(modelCheck.harness);
-        extra = modelFinding(
-          modelCheck.harness,
-          modelCheck.model,
-          qualification,
+        assessed = assessModelChoice(
+          harness,
+          resolution,
+          await deps.qualify(harness),
         );
       } catch (error) {
-        extra = modelFinding(modelCheck.harness, modelCheck.model, {
+        assessed = assessModelChoice(harness, resolution, {
           ok: false,
           failure: {
             phase: "prepare",
@@ -270,47 +269,64 @@ export function createLaunchPreparation(
       }
       deps.observe({
         kind: "model-check-settle",
-        harness: modelCheck.harness,
-        ...(extra !== undefined ? { code: extra.code } : {}),
+        harness,
+        ...("problem" in assessed ? { code: assessed.problem.code } : {}),
       });
-      const findings = extra === undefined ? [] : [extra];
-      const status = findings.length > 0 ? "not-ready" : "ready";
       updates.push({
         kind: "durable",
-        snapshot: snapshot(status, findings, resolution, draft),
+        snapshot:
+          "problem" in assessed
+            ? snapshot(
+                "not-ready",
+                [assessed.problem],
+                resolution,
+                draft,
+                undefined,
+              )
+            : snapshot("ready", [], resolution, draft, assessed),
       });
     })();
 
     return settled(
-      snapshot("assessing", syncFindings, resolution, draft),
+      snapshot("assessing", syncFindings, resolution, draft, undefined),
       updates,
     );
   }
 
-  function modelFinding(
+  function assessModelChoice(
     harnessId: HarnessChoice["id"],
-    model: string,
+    resolution: LaunchDraftResolution,
     qualification: ApplicationHarnessQualification | undefined,
-  ): Problem | undefined {
-    // The Harness was already validated by `evaluate`, so an unregistered id here
-    // is unreachable; treat a missing qualification as no additional finding.
-    if (qualification === undefined) return undefined;
+  ): TModelAssessment {
     const choice = deps.harnessRegistry.find(
       (registration) => registration.choice.id === harnessId,
     )?.choice;
-    if (choice === undefined) return undefined;
+    // `evaluate` already validated the Harness against the registry, so neither
+    // an unregistered id nor a missing qualification is reachable.
+    if (choice === undefined || qualification === undefined) {
+      throw new Error(
+        `launch-preparation: Harness ${harnessId} is not registered.`,
+      );
+    }
     if (!qualification.ok) {
-      return harnessQualificationUnavailable(choice, qualification.failure);
+      return {
+        problem: harnessQualificationUnavailable(choice, qualification.failure),
+      };
     }
-    const { modelSelection } = qualification.profile;
-    if (modelSelection.at === "unavailable") return undefined;
-    const declaration = modelSelection.declaration;
-    if (declaration.kind !== "list") return undefined;
-    const names = declaration.models.map((entry) => entry.model);
-    if (!names.includes(model)) {
-      return requestedModelUnavailable(choice, model, names);
-    }
-    return undefined;
+    const resolved = resolveModelChoice({
+      harness: choice,
+      profile: qualification.profile,
+      defaults: qualification.defaults,
+      ...(resolution.requestedModel !== undefined
+        ? { requestedModel: resolution.requestedModel }
+        : {}),
+      ...(resolution.requestedEffort !== undefined
+        ? { requestedEffort: resolution.requestedEffort }
+        : {}),
+    });
+    return resolved.ok
+      ? { choice: resolved.choice, source: resolved.source }
+      : { problem: resolved.problem };
   }
 
   function snapshot(
@@ -318,13 +334,14 @@ export function createLaunchPreparation(
     findings: readonly Problem[],
     resolution: LaunchDraftResolution | undefined,
     draft: LaunchRunInput,
+    modelChoice: TResolvedModelChoice | undefined,
   ): LaunchPreparationSnapshot {
     const offers: ActionOffer[] =
       status === "ready" && resolution !== undefined
         ? [
             {
               action: "launch-run",
-              draft,
+              draft: launchDraft(draft, modelChoice?.choice),
               trustRequired: resolution.needsGrant,
               consequence:
                 "Create and start a Run for this draft; launch rechecks every requirement.",
@@ -334,7 +351,7 @@ export function createLaunchPreparation(
     return {
       family: "launch-preparation",
       status,
-      draft: draftView(draft, resolution),
+      draft: draftView(draft, resolution, modelChoice),
       findings,
       ...(resolution !== undefined
         ? { executionSummary: executionSummaryFor(resolution) }
@@ -358,9 +375,32 @@ export function createLaunchPreparation(
   return { evaluate, open };
 }
 
+interface TResolvedModelChoice {
+  readonly choice: ModelChoice;
+  readonly source: ModelChoiceSource;
+}
+
+type TModelAssessment = TResolvedModelChoice | { readonly problem: Problem };
+
+/** The draft the `launch-run` Offer carries: the assessed draft with its resolved
+ *  Model choice in place of whatever model and effort it named. */
+function launchDraft(
+  draft: LaunchRunInput,
+  choice: ModelChoice | undefined,
+): LaunchRunInput {
+  if (choice === undefined) return draft;
+  const { requestedModel: _model, requestedEffort: _effort, ...rest } = draft;
+  return {
+    ...rest,
+    requestedModel: choice.model,
+    ...(choice.effort !== undefined ? { requestedEffort: choice.effort } : {}),
+  };
+}
+
 function draftView(
   draft: LaunchRunInput,
   resolution: LaunchDraftResolution | undefined,
+  modelChoice: TResolvedModelChoice | undefined,
 ): LaunchPreparationDraftView {
   const bundle =
     resolution !== undefined
@@ -381,6 +421,20 @@ function draftView(
     ...(draft.harness !== undefined ? { harness: draft.harness } : {}),
     ...(draft.requestedModel !== undefined
       ? { requestedModel: draft.requestedModel }
+      : {}),
+    ...(draft.requestedEffort !== undefined
+      ? { requestedEffort: draft.requestedEffort }
+      : {}),
+    ...(modelChoice !== undefined
+      ? {
+          modelChoice: {
+            model: modelChoice.choice.model,
+            ...(modelChoice.choice.effort !== undefined
+              ? { effort: modelChoice.choice.effort }
+              : {}),
+            source: modelChoice.source,
+          },
+        }
       : {}),
     launchInputs: draft.launchInputs,
     ...(draft.trustDigest !== undefined

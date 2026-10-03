@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import type {
   AnswerHumanGateOffer,
   LaunchPreparationSnapshot,
+  LaunchRunOffer,
   LaunchRunInput,
   ObserverEnd,
   OpenedProjection,
@@ -79,7 +80,11 @@ export function registerRunCommands(
     )
     .option(
       "--model <id>",
-      "request a model for an Agent-bearing Bundle (Command-only Bundles reject it)",
+      "choose the model for an Agent-bearing Bundle (default: the Harness's preselection)",
+    )
+    .option(
+      "--effort <level>",
+      "choose the effort for an Agent-bearing Bundle (default: the preselected effort, else the model's own)",
     );
   addHarnessRequestsOption(launch)
     .option("--json", "print the Run snapshot as JSON")
@@ -91,6 +96,7 @@ export function registerRunCommands(
           input: string[];
           harness?: string;
           model?: string;
+          effort?: string;
           harnessRequests?: string;
           json?: boolean;
         },
@@ -122,6 +128,7 @@ export function registerRunCommands(
               inputs: inputs.values,
               harness: options.harness,
               model: options.model,
+              effort: options.effort,
               harnessRequests: policy.policy,
             }),
           ),
@@ -575,13 +582,14 @@ interface TLaunchRunParams {
   readonly inputs: Record<string, string>;
   readonly harness?: string;
   readonly model?: string;
+  readonly effort?: string;
   readonly harnessRequests: HarnessRequestPolicy;
 }
 
 /** Read the launch-preparation assessment for one draft (#189): return the settled
  *  snapshot, awaiting the first durable update when the initial snapshot is still
- *  `assessing` (a requested model is being qualified), like `harness inspect` waits
- *  on its first focus update. */
+ *  `assessing` (the Harness is qualifying to resolve the Model choice), like
+ *  `harness inspect` waits on its first focus update. */
 async function assessDraft(
   port: ProjectionPort,
   draft: LaunchRunInput,
@@ -627,19 +635,26 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
     trustDigest: params.trust,
     harness: params.harness,
     requestedModel: params.model,
+    requestedEffort: params.effort,
   };
   // Read the `launch-preparation` assessment first (#189): when the draft is not
   // ready, print every finding in text and JSON and exit without submitting, so an
-  // operator sees all problems in one invocation. A ready draft falls through to
-  // the launch, which reruns every authoritative check under identical rules.
+  // operator sees all problems in one invocation. A ready draft launches the
+  // `launch-run` Offer's draft, which carries the Model choice the assessment
+  // resolved — the same preselection the TUI shows (ADR 0034) — and the launch
+  // reruns every authoritative check under identical rules.
   const assessment = await assessDraft(port, draft);
   if (assessment.status === "not-ready") {
     return reportNotReady(io, fail, json, assessment.findings);
   }
+  const offer = assessment.actionOffers.find(
+    (candidate): candidate is LaunchRunOffer =>
+      candidate.action === "launch-run",
+  );
   const admission = port.submit({
     operationId: randomUUID(),
     operation: "launch-run",
-    input: draft,
+    input: offer?.draft ?? draft,
   });
   if (!admission.admitted) return fail(io, json, admission.problem);
   const runId = admission.runId;

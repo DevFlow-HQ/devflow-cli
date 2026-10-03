@@ -276,8 +276,9 @@ export interface TurnRequest {
   /** The Model choice this Turn requests, applied at the Adapter's native point for
    *  this Turn. A model outside a declared `list` settles the Turn `not-started`
    *  (`model-unavailable`) before admission, never a substitution; a suggested
-   *  or free-text declaration forwards any value. Absent, the Harness's own default applies. The
-   *  effective model a Turn reports is observed and never copies this request. */
+   *  or free-text declaration forwards any value. Absent only when the caller
+   *  holds no choice, and then the Adapter sends no model. The effective model a
+   *  Turn reports is observed and never copies this request. */
   readonly modelChoice?: ModelChoice;
 }
 

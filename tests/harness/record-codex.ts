@@ -35,6 +35,7 @@ import {
 } from "./redact.js";
 import {
   CODEX_RECORDING_INPUT,
+  CODEX_TEST_REPAIR_MODEL_CHOICE,
   CODEX_RECORDING_MODEL_CHOICE,
   codexTestRepairPrompt,
 } from "./codex-recording-cases.js";
@@ -308,9 +309,10 @@ async function driveCase(
       return true;
     }
     case "test-repair": {
-      const turn = startTurn(
-        turnRequest("test-repair", codexTestRepairPrompt(workspace)),
-      );
+      const turn = startTurn({
+        ...turnRequest("test-repair", codexTestRepairPrompt(workspace)),
+        modelChoice: CODEX_TEST_REPAIR_MODEL_CHOICE,
+      });
       const result = answerEveryApproval(turn);
       await expectTurnResult(turn, "completed");
       await result;

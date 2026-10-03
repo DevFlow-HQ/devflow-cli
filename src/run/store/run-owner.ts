@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { asc, desc, eq, isNotNull, notInArray, or } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
+import type { ModelChoice } from "../../harness/harness.js";
 import type { ProcessAdapter } from "../../process/process.js";
 import { openArtifactRepo } from "./artifacts/artifacts.js";
 import {
@@ -35,6 +36,7 @@ import type {
   RunRecord,
   SelectedHarnessId,
   SelectHarnessResult,
+  SelectModelChoiceResult,
   WorkingAreaResult,
   WriteResult,
 } from "./store.js";
@@ -107,11 +109,16 @@ const runRecordRow = z.object({
   launch: z.string(),
   selected_harness: selectedHarnessId.nullable(),
   requested_model: z.string().nullable(),
+  requested_effort: z.string().nullable(),
   state: z.string(),
   created_at: z.string(),
 });
 const selectedHarnessRow = z.object({
   selected_harness: selectedHarnessId.nullable(),
+});
+const modelChoiceRow = z.object({
+  requested_model: z.string().nullable(),
+  requested_effort: z.string().nullable(),
 });
 const runOwnerRow = z.object({
   ownerEpoch: z.number(),
@@ -225,7 +232,14 @@ function toRunRecord(row: z.infer<typeof runRecordRow>): RunRecord {
       ? { selectedHarness: row.selected_harness }
       : {}),
     ...(row.requested_model !== null
-      ? { requestedModel: row.requested_model }
+      ? {
+          modelChoice: {
+            model: row.requested_model,
+            ...(row.requested_effort !== null
+              ? { effort: row.requested_effort }
+              : {}),
+          },
+        }
       : {}),
     state: row.state,
     createdAt: row.created_at,
@@ -291,7 +305,8 @@ export function stageRunStore(params: TStageRunStoreParams): void {
           bundle_snapshot_digest: record.bundleSnapshotDigest,
           launch: JSON.stringify(record.launch ?? null),
           selected_harness: record.selectedHarness ?? null,
-          requested_model: record.requestedModel ?? null,
+          requested_model: record.modelChoice?.model ?? null,
+          requested_effort: record.modelChoice?.effort ?? null,
           state: record.state,
           created_at: record.createdAt,
         })
@@ -703,9 +718,15 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     }
   }
 
+  // The record as this owner last read or wrote it: acquire-time, refreshed by
+  // the two upgrade writes below so a later reader never sees the stale value.
+  let record = params.record;
+
   return {
     runId: params.runId,
-    record: params.record,
+    get record() {
+      return record;
+    },
     selectHarness(selectedHarness: SelectedHarnessId): SelectHarnessResult {
       const result = guardedTransaction(
         (tx): "selected" | "already-selected" => {
@@ -735,9 +756,51 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
           return "selected";
         },
       );
-      return result.kind === "fenced"
-        ? { outcome: "fenced" }
-        : { outcome: result.value };
+      if (result.kind === "fenced") return { outcome: "fenced" };
+      record = { ...record, selectedHarness };
+      return { outcome: result.value };
+    },
+    selectModelChoice(choice: ModelChoice): SelectModelChoiceResult {
+      const result = guardedTransaction(
+        (tx): "selected" | "already-selected" => {
+          const row = tx
+            .select({
+              requested_model: runRecord.requested_model,
+              requested_effort: runRecord.requested_effort,
+            })
+            .from(runRecord)
+            .where(eq(runRecord.run_id, params.runId))
+            .get();
+          if (row === undefined) {
+            throw new Error(
+              `Run Store: Run ${params.runId} has no canonical record.`,
+            );
+          }
+          const current = modelChoiceRow.parse(row);
+          if (current.requested_model !== null) {
+            if (
+              current.requested_model === choice.model &&
+              current.requested_effort === (choice.effort ?? null)
+            ) {
+              return "already-selected";
+            }
+            throw new Error(
+              `Run Store: Run ${params.runId} already holds a Model choice.`,
+            );
+          }
+          tx.update(runRecord)
+            .set({
+              requested_model: choice.model,
+              requested_effort: choice.effort ?? null,
+            })
+            .where(eq(runRecord.run_id, params.runId))
+            .run();
+          return "selected";
+        },
+      );
+      if (result.kind === "fenced") return { outcome: "fenced" };
+      record = { ...record, modelChoice: choice };
+      return { outcome: result.value };
     },
     writeState(state) {
       const result = guardedWrite((tx) => {

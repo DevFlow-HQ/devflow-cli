@@ -58,6 +58,10 @@ function fakeProcess(): ProcessAdapter {
 // Command-only Run (no identity at all). The live case is covered by the Run Workbench
 // live suite (tests/tui/live-run-workbench.test.tsx).
 
+// Every Agent-bearing launch names its Model choice (ADR 0034); the fake selects
+// no model, so any name is admitted.
+const FAKE_MODEL = "fake-model";
+
 function profile(harness = "Claude Code"): HarnessProfile {
   return {
     harness,
@@ -432,6 +436,9 @@ async function launch(
       launchInputs: {},
       trustDigest: entry.digest,
       harness: bundle.selectedHarness,
+      ...(bundle.selectedHarness !== undefined
+        ? { requestedModel: FAKE_MODEL }
+        : {}),
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));
@@ -451,6 +458,8 @@ async function launch(
     assert.equal(createdView.selectedHarness, undefined);
   } else {
     assert.equal(createdView.selectedHarness, bundle.selectedHarness);
+    // The launch's Model choice is pinned beside the selection, not observed.
+    assert.deepEqual(createdView.modelChoice, { model: FAKE_MODEL });
     assert.equal(createdView.harness, undefined);
     assert.equal(createdView.effectiveModel, undefined);
   }
@@ -462,6 +471,9 @@ async function launch(
       launchInputs: {},
       trustDigest: entry.digest,
       harness: bundle.selectedHarness,
+      ...(bundle.selectedHarness !== undefined
+        ? { requestedModel: FAKE_MODEL }
+        : {}),
     },
   });
   assert.deepEqual(replay, admission);
@@ -592,6 +604,7 @@ test("[both-client-harness-selection] selected Harness authentication and protoc
       launchInputs: {},
       trustDigest: entry.digest,
       harness: "codex",
+      requestedModel: FAKE_MODEL,
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));

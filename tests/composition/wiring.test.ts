@@ -840,6 +840,7 @@ for (const kind of ["agent", "interactive-agent"] as const) {
         launchInputs: {},
         trustDigest: built.report.digest,
         harness: "claude-code",
+        requestedModel: "fake-model",
       },
     });
     assert.ok(admission.admitted, JSON.stringify(admission));
@@ -1237,6 +1238,7 @@ test("two overlapping Runs sharing one Session attribute every Harness and child
             launchInputs: {},
             trustDigest: built.report.digest,
             harness: "claude-code",
+            requestedModel: "fake-model",
           },
         });
         assert.ok(admission.admitted, JSON.stringify(admission));

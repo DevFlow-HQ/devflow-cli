@@ -104,6 +104,8 @@ const COMPLETED_OPEN: TurnResult = {
 function requestScript(): FakeScript {
   return {
     profile: claudeProfile(),
+    // A flagless `run launch` starts from the Harness's reported Model choice.
+    defaults: { kind: "reported", choice: { model: "fake-model" } },
     turns: [
       {
         requests: [
@@ -299,6 +301,7 @@ test("run show names the ephemeral Harness Request from the live overlay while a
       launchInputs: {},
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: "fake-model",
     },
   });
   assert.ok(

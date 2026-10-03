@@ -219,6 +219,7 @@ function launchCodex(
       launchInputs: {},
       trustDigest: digest,
       harness: "codex",
+      requestedModel: "fake-model",
     },
   });
   assert.ok(launch.admitted, JSON.stringify(launch));

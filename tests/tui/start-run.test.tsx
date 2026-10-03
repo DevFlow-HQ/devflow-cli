@@ -67,6 +67,14 @@ import type {
 // Esc back to the list mid-check), meaning without colour (the glyph and the
 // checking words in character frames, the fill and bold in spans), and renderer
 // evidence through `testRender` with the fake Renderer Port.
+//
+// #342 slice coverage (the `[start-run-model-choice]` and `[start-run-preselection]`
+// groups): the interim model field offers no "Harness default" and opens on the
+// Application's preselection with its source. Keymap and focus (←/→ cycles only the
+// declared models; Esc to the list and back keeps the choice), small sizes and
+// resize (60x24 and 140x44, a mid-selection resize keeps the choice and focus),
+// meaning without colour (the value and its source read from character frames), and
+// renderer evidence through `testRender`. The guided picker's effort step is #349's.
 
 const WORKSPACE = "/tmp/secant-launch-workspace";
 
@@ -173,6 +181,9 @@ interface HarnessSpec {
   readonly name: string;
   /** A declared model list, `"free-text"`, or `undefined` for none. */
   readonly models?: readonly string[] | "free-text";
+  /** The Application's preselection the focus carries, when the Harness reports
+   *  one (ADR 0034). */
+  readonly preselection?: HarnessFocus["preselection"];
   /** When present, focus resolves unavailable with this Problem. */
   readonly unavailable?: Problem;
   /** When present, the list-view discovery is not-found (colour-independent
@@ -218,10 +229,27 @@ function focusOf(spec: HarnessSpec): HarnessFocus {
       : spec.models === "free-text"
         ? ({ kind: "free-text" } as const)
         : ({ kind: "list", models: spec.models } as const);
+  const modelDeclaration =
+    spec.models === undefined
+      ? undefined
+      : spec.models === "free-text"
+        ? ({ kind: "free-text", efforts: ["low", "high"] } as const)
+        : ({
+            kind: "list",
+            models: spec.models.map((model) => ({
+              model,
+              label: model,
+              efforts: ["low", "high"],
+            })),
+          } as const);
   return {
     ...summary,
     qualification: { state: "qualified", observation: OBSERVATION },
     ...(supportedModels === undefined ? {} : { supportedModels }),
+    ...(modelDeclaration === undefined ? {} : { modelDeclaration }),
+    ...(spec.preselection === undefined
+      ? {}
+      : { preselection: spec.preselection }),
     capabilities: [],
     configurationPosture: "Harness-owned settings stay with the Harness.",
   };
@@ -340,6 +368,48 @@ function fakeLaunch() {
   return { view, calls, resolve: (o: LaunchOutcome) => setOutcome(() => o) };
 }
 
+/** The model the fake assessment preselects when a draft names none. */
+const PRESELECTED_MODEL = "preselected-model";
+
+/** What the fake assessment resolves for an Agent draft (ADR 0034): the named
+ *  model as the person's choice, else the preselection with its source. A
+ *  Command-only draft (no Harness) resolves none. */
+function resolvedChoice(
+  draft: LaunchRunInput,
+): LaunchPreparationSnapshot["draft"]["modelChoice"] {
+  if (draft.harness === undefined) return undefined;
+  return draft.requestedModel !== undefined
+    ? { model: draft.requestedModel, source: { kind: "requested" } }
+    : {
+        model: PRESELECTED_MODEL,
+        effort: "medium",
+        source: { kind: "reported" },
+      };
+}
+
+/** The draft the fake `launch-run` Offer carries: the resolved choice in place. */
+function offeredDraft(draft: LaunchRunInput): LaunchRunInput {
+  const choice = resolvedChoice(draft);
+  return choice === undefined
+    ? draft
+    : {
+        ...draft,
+        requestedModel: choice.model,
+        ...(choice.effort !== undefined
+          ? { requestedEffort: choice.effort }
+          : {}),
+      };
+}
+
+/** The resolved choice a draft view carries: only a ready assessment has one. */
+function readyChoice(
+  status: LaunchPreparationSnapshot["status"],
+  draft: LaunchRunInput,
+): Pick<LaunchPreparationSnapshot["draft"], "modelChoice"> {
+  const choice = status === "ready" ? resolvedChoice(draft) : undefined;
+  return choice === undefined ? {} : { modelChoice: choice };
+}
+
 function preparation(status: LaunchPreparationSnapshot["status"] = "ready") {
   const view: LaunchPreparationView = {
     open(draft) {
@@ -348,7 +418,7 @@ function preparation(status: LaunchPreparationSnapshot["status"] = "ready") {
           ? [
               {
                 action: "launch-run",
-                draft,
+                draft: offeredDraft(draft),
                 trustRequired: draft.trustDigest !== undefined,
                 consequence: "Create and start a Run.",
               },
@@ -361,6 +431,7 @@ function preparation(status: LaunchPreparationSnapshot["status"] = "ready") {
           bundle: { id: draft.bundle.id, version: draft.bundle.version },
           harness: draft.harness,
           requestedModel: draft.requestedModel,
+          ...readyChoice(status, draft),
           launchInputs: draft.launchInputs,
           trustDigest: draft.trustDigest,
         },
@@ -387,6 +458,7 @@ function controlledPreparation() {
           bundle: { id: draft.bundle.id, version: draft.bundle.version },
           harness: draft.harness,
           requestedModel: draft.requestedModel,
+          ...readyChoice("assessing", draft),
           launchInputs: draft.launchInputs,
           trustDigest: draft.trustDigest,
         },
@@ -409,7 +481,7 @@ function controlledPreparation() {
         ? [
             {
               action: "launch-run",
-              draft: openedDraft,
+              draft: offeredDraft(openedDraft),
               trustRequired: openedDraft.trustDigest !== undefined,
               consequence: "Create and start a Run.",
             },
@@ -427,6 +499,7 @@ function controlledPreparation() {
         },
         harness: openedDraft.harness,
         requestedModel: openedDraft.requestedModel,
+        ...readyChoice(status, openedDraft),
         launchInputs: openedDraft.launchInputs,
         trustDigest: openedDraft.trustDigest,
       },
@@ -455,6 +528,7 @@ function readyPreparationFor(
           },
           harness: draft.harness,
           requestedModel: draft.requestedModel,
+          ...readyChoice("ready", draft),
           launchInputs: draft.launchInputs,
           trustDigest: draft.trustDigest,
         },
@@ -463,7 +537,7 @@ function readyPreparationFor(
         actionOffers: [
           {
             action: "launch-run",
-            draft,
+            draft: offeredDraft(draft),
             trustRequired: draft.trustDigest !== undefined,
             consequence: "Create and start a Run.",
           },
@@ -494,7 +568,7 @@ function trustPreparation(bundle: InstalledBundleFocus): LaunchPreparationView {
           ? [
               {
                 action: "launch-run",
-                draft,
+                draft: offeredDraft(draft),
                 trustRequired: true,
                 consequence: "Create and start a Run.",
               },
@@ -512,6 +586,7 @@ function trustPreparation(bundle: InstalledBundleFocus): LaunchPreparationView {
           },
           harness: draft.harness,
           requestedModel: draft.requestedModel,
+          ...readyChoice(acknowledged ? "ready" : "not-ready", draft),
           launchInputs: draft.launchInputs,
           trustDigest: draft.trustDigest,
         },
@@ -896,7 +971,9 @@ test("[start-run-review-assessment] Review renders the complete assessed draft a
   assert.match(frame, /Workspace.*secant-launch-workspace/s);
   assert.match(frame, new RegExp(WORKSPACE.replaceAll("/", "\\/")));
   assert.match(frame, /Harness: Claude Code \(claude-code\)/);
-  assert.match(frame, /model claude-sonnet/);
+  // The review repeats the Model choice the Offer launches and its source.
+  assert.match(frame, /Model choice: claude-sonnet/);
+  assert.match(frame, /Your choice for this launch/);
   assert.match(frame, /target: hi/);
   assert.match(frame, /Trust: Exact digest acknowledged for this launch/);
   assert.equal(frame.split("untrustedagentbeta111").length - 1, 1);
@@ -936,14 +1013,16 @@ test("[both-client-harness-selection] the Harness step shows worded rows, spawns
   await t.waitForFrame((candidate) => candidate.includes("Model"));
   assert.deepEqual(harnesses.focusCalls, ["codex"]);
 
-  t.mockInput.pressEnter(); // model default → review
+  t.mockInput.pressEnter(); // the preselection → review
   await t.waitForFrame((candidate) => candidate.includes("Review"));
   assert.match(t.captureCharFrame(), /Harness: Codex \(codex\)/);
 
   t.mockInput.pressEnter();
   await t.waitForFrame((candidate) => candidate.includes("Checking launch"));
+  // A draft naming no model launches the Offer's resolved preselection.
   assert.equal(launch.calls[0]?.harness, "codex");
-  assert.equal(launch.calls[0]?.requestedModel, undefined);
+  assert.equal(launch.calls[0]?.requestedModel, PRESELECTED_MODEL);
+  assert.equal(launch.calls[0]?.requestedEffort, "medium");
 });
 
 test("changing a Harness after a selected-Harness refusal preserves unrelated input drafts", async () => {
@@ -1055,7 +1134,8 @@ test("a model refusal keeps the Harness and inputs but clears only the requested
   await t.waitForFrame((frame) => frame.includes("selected model"));
   const model = t.captureCharFrame();
   assert.match(model, /Harness: Claude Code/);
-  assert.match(model, /‹ Harness default ›/);
+  // Only the model is cleared: no Harness default stands in, the field asks again.
+  assert.match(model, /‹ \(choose a model\) ›/);
   assert.match(model, /Run not started/);
   t.mockInput.pressEnter();
   await t.waitForFrame((frame) => frame.includes("Launch inputs"));
@@ -1124,7 +1204,15 @@ function rowSpan(t: Awaited<ReturnType<typeof mountFlow>>["t"], title: string) {
 
 const CHECKED_HARNESSES: readonly HarnessSpec[] = [
   { id: "claude-code", name: "Claude Code", models: "free-text" },
-  { id: "codex", name: "Codex", models: ["gpt-5-codex", "gpt-5"] },
+  {
+    id: "codex",
+    name: "Codex",
+    models: ["gpt-5-codex", "gpt-5"],
+    preselection: {
+      choice: { model: "gpt-5", effort: "high" },
+      source: { kind: "reported" },
+    },
+  },
 ];
 
 test("[start-run-checking] while models are checked the step says so and holds Continue; once qualified the model control and Continue appear", async () => {
@@ -1164,9 +1252,12 @@ test("[start-run-checking] while models are checked the step says so and holds C
   assert.doesNotMatch(held, /Review/);
 
   harnesses.settle("codex");
-  await t.waitForFrame((frame) => frame.includes("‹ Harness default ›"));
+  await t.waitForFrame((frame) => frame.includes("‹ gpt-5 ›"));
   const settled = t.captureCharFrame();
   assert.match(settled, /Qualified/);
+  // The field opens on the preselection and names where it came from.
+  assert.match(settled, /Starts from gpt-5 at high effort/);
+  assert.match(settled, /From your Codex settings/);
   assert.doesNotMatch(settled, /Checking models/);
   assert.match(settled, /gpt-5-codex, gpt-5/);
   assert.match(settled, /←\/→ model · enter continue · esc choose another/);
@@ -1190,14 +1281,12 @@ test("[start-run-checking] a free-text Harness mounts no model field until its c
   await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
   t.mockInput.pressEnter(); // choose Claude Code (free-text)
   await t.waitForFrame((frame) => frame.includes("Checking models…"));
-  assert.doesNotMatch(t.captureCharFrame(), /Leave blank/);
+  assert.doesNotMatch(t.captureCharFrame(), /Type an exact model name/);
   t.mockInput.pressKey("o"); // nothing to type into
   await t.renderOnce();
 
   harnesses.settle("claude-code");
-  await t.waitForFrame((frame) =>
-    frame.includes("Leave blank for Harness default"),
-  );
+  await t.waitForFrame((frame) => frame.includes("Type an exact model name"));
   t.mockInput.pressKey("o");
   t.mockInput.pressKey("4");
   await t.waitForFrame((frame) => frame.includes("o4"));
@@ -1393,13 +1482,17 @@ test("[start-run-highlight] a click moves the highlight on both lists without ch
   assert.deepEqual(harnesses.focusCalls, ["codex"]);
 });
 
-test("[start-run-model-choice] a list Harness offers Harness default first then its models, and the draft carries the chosen model", async () => {
+test("[start-run-model-choice] a list Harness opens on the preselected model, names its source, offers only its models, and the draft carries a changed model", async () => {
   const launch = fakeLaunch();
   const harnesses = harnessCatalog([
     {
       id: "claude-code",
       name: "Claude Code",
       models: ["claude-sonnet", "claude-opus"],
+      preselection: {
+        choice: { model: "claude-opus", effort: "high" },
+        source: { kind: "reported" },
+      },
     },
     { id: "codex", name: "Codex", models: "free-text" },
   ]);
@@ -1418,24 +1511,39 @@ test("[start-run-model-choice] a list Harness offers Harness default first then 
   await t.waitForFrame((frame) => frame.includes("Model"));
   assert.deepEqual(harnesses.focusCalls, ["claude-code"]);
   const model = t.captureCharFrame();
-  // Harness default is the first option and the models follow it.
-  assert.match(model, /Harness default/);
+  assert.match(model, /‹ claude-opus ›/);
   assert.match(model, /claude-sonnet, claude-opus/);
+  assert.match(model, /Starts from claude-opus at high effort/);
+  assert.match(model, /From your Claude Code settings/);
+  assert.doesNotMatch(model, /Harness default/);
 
-  t.mockInput.pressArrow("right"); // Harness default → claude-sonnet
+  t.mockInput.pressArrow("right"); // claude-opus → claude-sonnet (wraps)
   await t.waitForFrame((frame) => /‹ claude-sonnet ›/.test(frame));
   t.mockInput.pressEnter(); // → review
   await t.waitForFrame((frame) => frame.includes("Review"));
-  assert.match(t.captureCharFrame(), /model claude-sonnet/);
+  const review = t.captureCharFrame();
+  assert.match(review, /Model choice: claude-sonnet/);
+  assert.match(review, /Your choice for this launch/);
   t.mockInput.pressEnter(); // Start
   await t.waitForFrame((frame) => frame.includes("Checking launch"));
   assert.equal(launch.calls[0]?.requestedModel, "claude-sonnet");
 });
 
-test("[start-run-model-choice] a free-text Harness accepts a typed model, and blank means Harness default", async () => {
+test("[start-run-model-choice] a free-text Harness accepts a typed model, and blank starts from the preselection", async () => {
   const launch = fakeLaunch();
   const harnesses = harnessCatalog([
-    { id: "codex", name: "Codex", models: "free-text" },
+    {
+      id: "claude-code",
+      name: "Claude Code",
+      models: "free-text",
+      preselection: {
+        choice: { model: "opus", effort: "medium" },
+        source: {
+          kind: "fallback",
+          reason: "Claude Code's own settings were not read before launch.",
+        },
+      },
+    },
   ]);
   const { t } = await mountFlow(
     catalog([AGENT_ALPHA]),
@@ -1449,20 +1557,155 @@ test("[start-run-model-choice] a free-text Harness accepts a typed model, and bl
   await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
   t.mockInput.pressEnter(); // choose the only Harness → model phase
   await t.waitForFrame((frame) =>
-    frame.includes("Leave blank for Harness default"),
+    frame.includes("leave blank to start from opus"),
+  );
+  // The fallback names its reason and what it starts with.
+  assert.match(
+    t.captureCharFrame(),
+    /Claude Code's own settings were not read before launch\. Starting with opus and medium effort\./,
   );
   // Type a free-text model, then a trailing space: the stored model is trimmed so
-  // Preflight (which matches the model verbatim) never sees stray whitespace.
+  // the launch (which matches the model verbatim) never sees stray whitespace.
   t.mockInput.pressKey("o");
   t.mockInput.pressKey("4");
   t.mockInput.pressKey(" ");
   await t.waitForFrame((frame) => frame.includes("o4"));
   t.mockInput.pressEnter(); // → review
   await t.waitForFrame((frame) => frame.includes("Review"));
-  assert.match(t.captureCharFrame(), /model o4/);
+  assert.match(t.captureCharFrame(), /Model choice: o4/);
   t.mockInput.pressEnter(); // Start
   await t.waitForFrame((frame) => frame.includes("Checking launch"));
   assert.equal(launch.calls[0]?.requestedModel, "o4");
+});
+
+const FALLBACK_CLAUDE: HarnessSpec = {
+  id: "claude-code",
+  name: "Claude Code",
+  models: ["opus", "sonnet"],
+  preselection: {
+    choice: { model: "opus", effort: "medium" },
+    source: {
+      kind: "fallback",
+      reason: "Claude Code's own settings were not read before launch.",
+    },
+  },
+};
+
+/** The frame's words with line breaks and padding collapsed, so wrapped text
+ *  reads as one sentence. */
+function words(frame: string): string {
+  return frame
+    .split("\n")
+    .map((line) => line.replace(/[│┃]/g, " ").trim())
+    .join(" ")
+    .replace(/\s+/g, " ");
+}
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`[start-run-preselection] at ${width}x${height} the model field shows the preselected choice and its fallback reason in words, wrapped without clipping`, async () => {
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([FALLBACK_CLAUDE]).view,
+    );
+    t.mockInput.pressEnter(); // Bundle → Harness
+    await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+    t.mockInput.pressEnter(); // choose Claude Code
+    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+    // A character frame carries no colour: the current value and the source are
+    // read from the words alone.
+    const frame = t.captureCharFrame();
+    for (const line of frame.split("\n")) {
+      assert.ok(
+        line.length <= width,
+        `overflow at ${width}: ${JSON.stringify(line)}`,
+      );
+    }
+    const text = words(frame);
+    assert.match(text, /‹ opus ›/);
+    assert.match(text, /Starts from opus at medium effort/);
+    assert.match(
+      text,
+      /Claude Code's own settings were not read before launch\. Starting with opus and medium effort\./,
+    );
+    assert.doesNotMatch(text, /Harness default/);
+  });
+}
+
+test("[start-run-preselection] a changed model and the model focus survive a resize and a trip back to the Harness list", async () => {
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    launch.view,
+    140,
+    44,
+    noRunView(),
+    harnessCatalog([FALLBACK_CLAUDE]).view,
+  );
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  t.mockInput.pressEnter(); // choose Claude Code
+  await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+  t.mockInput.pressArrow("right"); // opus → sonnet
+  await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
+
+  t.resize(60, 24);
+  await t.waitForFrame((frame) => frame.includes("Starts from"));
+  const narrow = t.captureCharFrame();
+  for (const line of narrow.split("\n")) {
+    assert.ok(line.length <= 60, `overflow at 60: ${JSON.stringify(line)}`);
+  }
+  assert.match(narrow, /‹ sonnet ›/, "the choice survives the resize");
+  // The preselection stays named: the launch would start from it unchanged.
+  assert.match(words(narrow), /Starts from opus at medium effort/);
+  // Focus stayed on the model field: ←/→ still cycles it.
+  t.mockInput.pressArrow("left");
+  await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+  t.mockInput.pressArrow("left");
+  await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
+
+  // Esc returns to the list; choosing the same Harness keeps the choice.
+  t.mockInput.pressEscape();
+  await until(() => t.captureCharFrame().includes("enter choose"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
+  t.mockInput.pressEnter(); // → review
+  await t.waitForFrame((frame) => frame.includes("Review"));
+  t.mockInput.pressEnter(); // Start
+  await t.waitForFrame((frame) => frame.includes("Checking launch"));
+  assert.equal(launch.calls[0]?.requestedModel, "sonnet");
+});
+
+test("[start-run-preselection] the review names the resolved preselection and its source once the assessment settles", async () => {
+  const prep = controlledPreparation();
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    fakeLaunch().view,
+    60,
+    24,
+    noRunView(),
+    harnessCatalog([FALLBACK_CLAUDE]).view,
+    prep.view,
+  );
+  t.mockInput.pressEnter(); // Bundle → Harness
+  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  t.mockInput.pressEnter(); // choose Claude Code
+  await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+  t.mockInput.pressEnter(); // keep the preselection → review
+  await t.waitForFrame((frame) => frame.includes("Review"));
+  // While assessing, the review says so rather than guessing a choice.
+  assert.match(t.captureCharFrame(), /Model choice: checking…/);
+  prep.settle("ready", []);
+  await t.waitForFrame((frame) => frame.includes("Ready to start"));
+  const text = words(t.captureCharFrame());
+  assert.match(text, /Model choice: preselected-model at medium effort/);
+  assert.match(text, /From your Claude Code settings/);
 });
 
 test("a Command-only Bundle asks for neither Harness nor model and numbers its steps N of M", async () => {

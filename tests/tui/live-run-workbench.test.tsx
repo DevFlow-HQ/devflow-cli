@@ -14,6 +14,7 @@ import type {
 import { wireApplication } from "../../src/composition/main.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
+  type HarnessDefaults,
   type HarnessProfile,
 } from "../../src/harness/harness.js";
 import {
@@ -56,6 +57,12 @@ function profile(): HarnessProfile {
     fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
   };
 }
+
+/** The Model choice the fake reports, which Start a Run launches unchanged. */
+const REPORTED_DEFAULTS: HarnessDefaults = {
+  kind: "reported",
+  choice: { model: "fake-opus" },
+};
 
 function writeAgentBundle(): { folder: string; id: string } {
   const folder = makeTempDir("secant-tui-live-bundle-");
@@ -112,6 +119,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
     process: createFakeBundleProcess({ executables: [process.execPath] }),
     harnessAdapter: createFake({
       profile: profile(),
+      defaults: REPORTED_DEFAULTS,
       turns: [
         {
           events: [
@@ -246,7 +254,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   rendered.mockInput.pressEnter(); // choose the highlighted Harness → model field
   await rendered.waitForFrame((frame) => frame.includes("Model"));
   await rendered.renderOnce();
-  rendered.mockInput.pressEnter(); // Harness default → Review
+  rendered.mockInput.pressEnter(); // the preselected model → Review
   await rendered.waitForFrame((frame) => frame.includes("Review"));
   rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) =>
@@ -301,6 +309,7 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
     process: createFakeBundleProcess({ executables: [process.execPath] }),
     harnessAdapter: createFake({
       profile: profile(),
+      defaults: REPORTED_DEFAULTS,
       turns: [
         {
           events: [{ kind: "assistant-content", content: question }],

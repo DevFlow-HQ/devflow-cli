@@ -129,6 +129,13 @@ function profile(
 function claudeScript(sumPath: string): FakeScript {
   return {
     profile: profile("Claude Code"),
+    // The flagless launch starts from the Model choice the Harness reports, as
+    // the two-harness smoke does: Claude Code's declared fallback.
+    defaults: {
+      kind: "fallback",
+      choice: { model: "opus", effort: "medium" },
+      reason: "Claude Code's own settings were not read before launch.",
+    },
     turns: [
       {
         requests: [
@@ -163,6 +170,10 @@ function codexScript(): FakeScript {
     profile: profile("Codex", {
       steer: { available: true, evidence: "fake native steer" },
     }),
+    defaults: {
+      kind: "reported",
+      choice: { model: "gpt-5.5", effort: "high" },
+    },
     turns: [
       {
         // As the codex-cli 0.160.0 recording (#345): thread/read reports the

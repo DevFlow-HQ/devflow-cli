@@ -198,6 +198,7 @@ function launch(
     trustDigest?: string;
     launchInputs?: Record<string, string>;
     harness?: string;
+    requestedModel?: string;
   } = {},
 ) {
   return f.app.projectionPort.submit({
@@ -207,6 +208,7 @@ function launch(
       bundle: { id },
       launchInputs: extra.launchInputs ?? {},
       harness: extra.harness,
+      requestedModel: extra.requestedModel,
       trustDigest: extra.trustDigest,
     },
   });
@@ -497,9 +499,11 @@ test("[both-client-harness-selection] Agent launches require one known semantic 
   if (unknown.admitted) throw new Error("unreachable");
   assert.equal(unknown.problem.code, "harness-selection-unknown");
 
+  // An admitted Agent launch names its Model choice (ADR 0034).
   const selected = launch(f, id, {
     trustDigest: digest,
     harness: "codex",
+    requestedModel: "fake-model",
   });
   assert.ok(selected.admitted, JSON.stringify(selected));
   assert.equal(claudeDiscoveries, 0);
@@ -516,6 +520,7 @@ test("[both-client-harness-selection] Agent launches require one known semantic 
       launchInputs: {},
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: "fake-model",
     },
   });
   assert.equal(changedReplay.admitted, false);
@@ -1024,8 +1029,10 @@ for (const agentCompletion of [undefined, false, true, ["step"]] as const) {
         trustDigest: digest,
       },
     });
+    // Every Preflight check passed; only the Model-choice qualification an Agent
+    // draft always runs (#342) remains, so the assessment is still in flight.
     assert.deepEqual(view.snapshot.findings, []);
-    assert.equal(view.snapshot.status, "ready");
+    assert.equal(view.snapshot.status, "assessing");
     assert.equal(discoveries, 1);
     view.close();
     assert.deepEqual(f.runGroup.listRuns(), []);

@@ -45,8 +45,30 @@ if (process.argv[3] === "generate-json-schema") {
   process.exit(0);
 }
 
+// An install may name recordings for successive protocol invocations, such as a
+// launch's bounded qualification and then its Run session (#342): the nth
+// `app-server` session this install serves replays the nth recording, and the
+// last repeats. Each replay stays strict; only which recording is chosen varies.
+const fixtureDirectory = (() => {
+  const directories = recording.fixtureDirectories ?? [
+    recording.fixtureDirectory,
+  ];
+  if (directories.length === 1) return directories[0];
+  const earlier = readFileSync(recording.log, "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line))
+    .filter(
+      (entry) =>
+        entry.type === "start" &&
+        entry.id !== id &&
+        entry.args[0] === "app-server" &&
+        entry.args[1] !== "generate-json-schema",
+    ).length;
+  return directories[Math.min(earlier, directories.length - 1)];
+})();
 const scenario = JSON.parse(
-  readFileSync(join(recording.fixtureDirectory, "case.json"), "utf8"),
+  readFileSync(join(fixtureDirectory, "case.json"), "utf8"),
 );
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let trafficAt = 0;
@@ -141,7 +163,7 @@ function applyWorkspacePatch(path) {
   try {
     execFileSync(
       "git",
-      ["apply", "--whitespace=nowarn", join(recording.fixtureDirectory, path)],
+      ["apply", "--whitespace=nowarn", join(fixtureDirectory, path)],
       { cwd: process.cwd() },
     );
   } catch (error) {

@@ -48,6 +48,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `settledOutcome` returns `operation-observation-ended` (unknown effects) instead of the still-pending snapshot, so neither reopens into a spin at shutdown.
 - `run launch --harness claude-code|codex` forwards the semantic choice through `LaunchRunInput`; Application owns required/unknown/irrelevant refusal. Resume accepts
   no Harness flag and reuses the durable id. The option changes no frozen JSON field or exit code; selected-Harness Problems use the existing renderer (#146).
+- `run launch --model`/`--effort` forward the draft's Model choice, and an omitted one is resolved by launch preparation. `launchRun` submits the ready
+  `launch-run` Offer's draft (a ready assessment always carries one), so headless launches the preselection the TUI shows (ADR 0034). `run show --json` adds
+  `modelChoice`; `requestedModel` is its model.
 - `run launch` reads the `launch-preparation` assessment before submitting (`assessDraft`, #189). A `not-ready` draft prints every finding (text through the
   shared `fail` renderer) and exits 1 without submitting; its `--json` is the frozen `{ status: "not-ready", findings }` shape (`reportNotReady`).
 - `run read --transcript` (#124) selects the Session from `<run-id>/<session>` then `--session`; with neither it takes the sole Session that has a recorded
@@ -62,8 +65,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   the existing shape a command already emits.
 - The `harness` command group lives in `harness-commands.ts`. `harness inspect` waits for the first durable focus update when its initial snapshot is
   `not-checked` (#188). Its frozen JSON is the inner focused Harness, where `supportedModels` keeps its names-only shape (a `suggested` declaration
-  reads as `free-text`) and #341 adds `modelDeclaration` and `harnessDefaults` beside it; `harness list --json` prints the whole list snapshot, and neither command derives or
-  exposes Action Offers.
+  reads as `free-text`) and #341 adds `modelDeclaration` and `harnessDefaults` (text: `Reported settings:`) beside it, #342 `preselection`;
+  `harness list --json` prints the whole list snapshot, and neither command derives or exposes Action Offers.
 - Every command prints the startup notices (`clients.startupNotices`, the ADR 0029 Shipped Bundle ensure) to stderr before executing (`buildProgram`'s
   `execute`). A failed ensure never blocks the command, and stdout, the `--json` shapes, and exit codes are untouched by the notices.
 - Commander settings (`exitOverride`, `configureOutput`, `enablePositionalOptions`, `configureHelp`) must be configured on the program before the

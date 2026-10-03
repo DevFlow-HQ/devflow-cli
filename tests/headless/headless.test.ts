@@ -264,7 +264,7 @@ test("harness inspect awaits qualification and freezes text and inner JSON", asy
   assert.match(text, /^ {2}GPT-5 mini · gpt-5-mini: no effort setting$/m);
   assert.match(
     text,
-    /^Harness default: GPT-5 · gpt-5 at high, reported by the Harness$/m,
+    /^Reported settings: GPT-5 · gpt-5 at high, reported by the Harness$/m,
   );
   assert.match(text, /Session recovery: Available/);
   assert.match(
@@ -277,9 +277,8 @@ test("harness inspect awaits qualification and freezes text and inner JSON", asy
   assert.equal(await h.run(["harness", "inspect", "codex", "--json"]), 0);
   // #341 adds `modelDeclaration` and `harnessDefaults`; every earlier field,
   // `supportedModels` included, keeps its frozen shape.
-  const { modelDeclaration, harnessDefaults, ...frozen } = JSON.parse(
-    h.stdout(),
-  );
+  const { modelDeclaration, harnessDefaults, preselection, ...frozen } =
+    JSON.parse(h.stdout());
   assert.deepEqual(modelDeclaration, {
     kind: "list",
     models: [
@@ -295,6 +294,11 @@ test("harness inspect awaits qualification and freezes text and inner JSON", asy
   assert.deepEqual(harnessDefaults, {
     kind: "reported",
     choice: { model: "gpt-5", effort: "high" },
+  });
+  // ADR 0034 adds the Model choice a launch starts from, additively.
+  assert.deepEqual(preselection, {
+    choice: { model: "gpt-5", effort: "high" },
+    source: { kind: "reported" },
   });
   assert.deepEqual(frozen, {
     id: "codex",
@@ -391,7 +395,7 @@ test("harness inspect text names suggested models, efforts for any other name, a
   assert.match(text, /^ {2}Other model names: efforts low, max$/m);
   assert.match(
     text,
-    /^Harness default: Opus \(latest\) · opus at max, the fallback\. The settings were not read\.$/m,
+    /^Reported settings: Opus \(latest\) · opus at max, the fallback\. The settings were not read\.$/m,
   );
   assert.match(text, /^Effort locked by EFFORT_LEVEL=max$/m);
 });
@@ -413,7 +417,10 @@ test("harness inspect text says when the Harness has no default to start from", 
   const text = h.stdout();
   assert.match(text, /^Supported models: Free-text model entry$/m);
   assert.match(text, /^ {2}Other model names: no effort setting$/m);
-  assert.match(text, /^Harness default: None\. No default model is marked\.$/m);
+  assert.match(
+    text,
+    /^Reported settings: None\. No default model is marked\.$/m,
+  );
 });
 
 test("harness inspect refuses a missing or unknown semantic id", async (t) => {

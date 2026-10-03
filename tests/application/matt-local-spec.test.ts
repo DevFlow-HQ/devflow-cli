@@ -226,6 +226,7 @@ async function planToLocal(
       launchInputs: { idea: IDEA },
       trustDigest: digest,
       harness,
+      requestedModel: "fake-model",
     },
   });
   assert.ok(runId);

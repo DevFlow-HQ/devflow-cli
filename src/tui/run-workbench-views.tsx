@@ -491,8 +491,10 @@ export function buildDetailsRows(params: {
         : `  Observed Harness · ${run.harness.name} · ${run.harness.executable} · ${run.harness.executableVersion} · model ${model}`,
     );
   }
-  if (run.requestedModel !== undefined)
-    push(`  Requested model · ${run.requestedModel}`);
+  if (run.modelChoice !== undefined)
+    push(
+      `  Model choice · ${run.modelChoice.model}${run.modelChoice.effort === undefined ? "" : ` · ${run.modelChoice.effort} effort`}`,
+    );
 
   // Recovery evidence (#194 story 36): each line only when its fact is present.
   const recovery: DetailsRow[] = [];

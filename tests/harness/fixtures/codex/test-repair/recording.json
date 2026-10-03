@@ -2,7 +2,7 @@
   "harness": "codex",
   "executableVersion": "codex-cli 0.160.0",
   "protocolVersion": "codex-probe-3",
-  "recordedAt": "2026-10-03T19:55:04.414Z",
+  "recordedAt": "2026-10-03T21:26:02.175Z",
   "redactions": [
     {
       "placeholder": "«WORKSPACE»",
@@ -23,10 +23,6 @@
     {
       "placeholder": "/recorded/codex-home",
       "reason": "Codex home path"
-    },
-    {
-      "placeholder": "«HOME»",
-      "reason": "user home path"
     },
     {
       "placeholder": "«HOSTNAME»",

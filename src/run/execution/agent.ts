@@ -465,14 +465,12 @@ function sessionRecovery(
   return { unusable: false, ...(resume !== undefined ? { resume } : {}) };
 }
 
-/** The Run's requested model as a Turn's Model choice, or undefined when the Run
- *  requested none and the Harness default applies. An empty stored model is no
- *  request, as it was at prepare. The Run carries no effort until #342, and the
- *  owner's record is the one read at acquire, which holds while no Run can change
- *  its request (#344). */
+/** The Run's current Model choice (ADR 0034), read fresh from the owner's record
+ *  each Turn, or undefined for a legacy Run that holds none. An empty stored model
+ *  is no choice, as it was at prepare. */
 function currentModelChoice(owner: RunOwner): ModelChoice | undefined {
-  const model = owner.record.requestedModel;
-  return model === undefined || model.length === 0 ? undefined : { model };
+  const choice = owner.record.modelChoice;
+  return choice === undefined || choice.model.length === 0 ? undefined : choice;
 }
 
 /** The mechanical driving of one Harness Turn shared by the autonomous Agent Step

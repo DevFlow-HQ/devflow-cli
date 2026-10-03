@@ -35,6 +35,10 @@ import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
 
 /** The fake Claude Code profile: it hosts a permission bridge, so an Agent Turn can
  *  raise an approval Harness Request. */
+// Every Agent-bearing launch names its Model choice (ADR 0034); the fake selects
+// no model, so any name is admitted.
+const FAKE_MODEL = "fake-model";
+
 function claudeProfile(): HarnessProfile {
   return {
     harness: "Claude Code",
@@ -247,6 +251,7 @@ test("the live overlay shows the outstanding request; answering is accepted, sta
       launchInputs: {},
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: FAKE_MODEL,
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));
@@ -484,6 +489,7 @@ test("a slow Run observer ends observer-lagged while a healthy one follows the s
       launchInputs: {},
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: FAKE_MODEL,
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));

@@ -130,6 +130,8 @@ when a test asks.
 Every real Turn case carries the Turn's `thread/read` right after the
 `turn/start` response (#345); `two-turns` also requests `gpt-5.5` at `low`, then
 `medium`, so its `turn/start` frames carry effort and each read reports it back.
+`test-repair` requests `gpt-5.5` at `high` (#342), the default `codex-qualification`
+reports, so a flagless smoke launch qualified against that case replays it.
 In `test-repair` Codex refused that first read while the fresh thread's rollout
 was still empty, and the read sent again at the Turn's next item answered.
 A synthetic replay holds the rest of a Turn until its `thread/read` arrives, as

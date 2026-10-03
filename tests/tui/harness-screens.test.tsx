@@ -366,7 +366,7 @@ test("harness-catalog-screen renders normalized rows and every inspector section
   // Harness's own default and where it came from.
   assert.match(
     inspectorPane(frame),
-    /^ Supported models *\n Listed by the Harness · only these can be chosen *\n · GPT-5 · gpt-5 *\n {3}Efforts · low, medium \(default\), high *\n · GPT-5 mini · gpt-5-mini *\n {3}No effort setting *\n *\n Harness default *\n GPT-5 · gpt-5 at high *\n Reported by the Harness *$/m,
+    /^ Supported models *\n Listed by the Harness · only these can be chosen *\n · GPT-5 · gpt-5 *\n {3}Efforts · low, medium \(default\), high *\n · GPT-5 mini · gpt-5-mini *\n {3}No effort setting *\n *\n Reported settings *\n GPT-5 · gpt-5 at high *\n Reported by the Harness *$/m,
   );
   assert.match(frame, /Capabilities/);
   assert.match(frame, /Session recovery · Available with limits/);
@@ -699,7 +699,7 @@ function longestOverlap(seen: readonly string[], next: readonly string[]) {
 // labels, the declaration-level efforts, and a fallback default under an effort
 // lock, read at small sizes and across a resize from text-only frames, so every
 // meaning (the default effort, where the default came from, the lock) is words.
-test("the inspector's models, efforts, and Harness default survive small sizes, resize, and a large list without colour", async () => {
+test("the inspector's models, efforts, and reported settings survive small sizes, resize, and a large list without colour", async () => {
   const qualification = QUALIFIED_CODEX.qualification;
   if (!("observation" in qualification)) {
     throw new Error("qualified fixture lost its observation");
@@ -773,7 +773,7 @@ test("the inspector's models, efforts, and Harness default survive small sizes, 
   }
   assert.match(
     read,
-    /· Any other model Efforts · low, medium, high, xhigh, max Harness default Family 30 \(latest\) with a long friendly label and 1M context · family-30\[1m\] at xhigh Fallback · Claude Code's own settings were not read before launch\. Effort locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh/,
+    /· Any other model Efforts · low, medium, high, xhigh, max Reported settings Family 30 \(latest\) with a long friendly label and 1M context · family-30\[1m\] at xhigh Fallback · Claude Code's own settings were not read before launch\. Effort locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh/,
   );
 
   // A resize keeps the selection and the inspector's focus, rewrapped within

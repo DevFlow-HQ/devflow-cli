@@ -382,6 +382,11 @@ test("harness focus qualifies once, maps normalized capabilities, and reuses the
         kind: "reported",
         choice: { model: "gpt-5", effort: "high" },
       },
+      // The Application's preselection over those defaults (ADR 0034).
+      preselection: {
+        choice: { model: "gpt-5", effort: "high" },
+        source: { kind: "reported" },
+      },
       capabilities: [
         {
           capability: "session-recovery",

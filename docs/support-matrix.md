@@ -55,9 +55,9 @@ Three-OS replay evidence comes from the `check` job's `Process runtime conforman
 `tests/process/runtime-conformance.ts`), which drives the real Adapters against recorded-protocol replayers; it is replay evidence, not
 installed-Harness evidence. The Codex qualification and defaults recordings (`model/list` efforts and `config/read`, #341) come from codex-cli
 0.160.0 and its stable schema. The Codex Turn recordings (completion, two Turns, approval, Steer, Interrupt, resume, and Test Repair) were
-re-recorded on 0.160.0 against `codex-probe-3` with each Turn's `thread/read` and, on two Turns, `turn/start` effort (#345); the authentication
-recording stays on 0.155.0, and `model/rerouted` is replayed from a synthetic case. The installed-version rows below change only with a new
-installed-Harness report.
+re-recorded on 0.160.0 against `codex-probe-3` with each Turn's `thread/read` and, on two Turns, `turn/start` effort (#345); Test Repair was
+recorded again with its Model choice on `turn/start` (#342). The authentication recording stays on 0.155.0, and `model/rerouted` is replayed from a
+synthetic case. The installed-version rows below change only with a new installed-Harness report.
 
 Recorded versions are replay provenance, not rows: the Claude Code native-interrupt case (`interrupt`, #346) was recorded on Claude Code 2.1.288,
 as were the native Steer and compaction cases (`steer-within`, `steer-boundary`, `steer-cancel`, `compaction`, #359) on 2026-10-03 on Linux x64. They

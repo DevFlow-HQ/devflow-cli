@@ -101,6 +101,8 @@ const COMPLETED_OPEN: TurnResult = {
 function agentScript(): FakeScript {
   return {
     profile: claudeProfile(),
+    // A flagless `run launch` starts from the Harness's reported Model choice.
+    defaults: { kind: "reported", choice: { model: "fake-model" } },
     turns: [
       {
         requests: [
@@ -347,10 +349,12 @@ test("an Agent Bundle prepares exactly one Harness and closes it once the Run re
     "allow",
   ]);
   assert.equal(launched.code, 0, launched.out + launched.err);
-  // Exactly one Harness prepared for the Run, and it is gone (closed) once the Run
-  // rests — the "exactly one bridge per Run, gone at rest" evidence.
-  assert.equal(spy.prepareCount(), 1);
-  assert.equal(spy.closeCount(), 1);
+  // Launch preparation qualifies the Harness once, closing it at once to read the
+  // Model choice (ADR 0034); then exactly one Harness is prepared for the Run, and
+  // it is gone (closed) once the Run rests — the "exactly one bridge per Run, gone
+  // at rest" evidence.
+  assert.equal(spy.prepareCount(), 2);
+  assert.equal(spy.closeCount(), 2);
 });
 
 test("the default --harness-requests policy is deny and an agent Run still terminates (#117 AC5)", async (t) => {

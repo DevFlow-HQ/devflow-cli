@@ -4,10 +4,17 @@ import { join } from "node:path";
 import test from "node:test";
 import type { Problem } from "../../src/application/projection-port.js";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import type { HarnessProfile } from "../../src/harness/harness.js";
+import type {
+  HarnessDefaults,
+  HarnessProfile,
+} from "../../src/harness/harness.js";
 import type { RunOwner } from "../../src/run/store/store.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  createFake,
+  type FakeScript,
+  type FakeTurnRequestRecord,
+} from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
@@ -81,9 +88,21 @@ function profile(): HarnessProfile {
   };
 }
 
-function completedScript(): FakeScript {
+/** What the fake reports as its own Model choice, which a legacy Run resolves
+ *  through preselection once on resume (ADR 0034). */
+const REPORTED: HarnessDefaults = {
+  kind: "reported",
+  choice: { model: "legacy-opus", effort: "high" },
+};
+
+function completedScript(
+  defaults: HarnessDefaults = REPORTED,
+  turnRequests?: FakeTurnRequestRecord[],
+): FakeScript {
   return {
     profile: profile(),
+    defaults,
+    ...(turnRequests !== undefined ? { turnRequests } : {}),
     turns: [
       {
         result: {
@@ -177,6 +196,9 @@ function setLegacyRest(owner: RunOwner, afterAttempt: boolean): void {
 function createLegacyFixture(
   kind: LegacyKind,
   afterAttempt: boolean,
+  /** A Run created after M4 selected its Harness but before #342 held a Model
+   *  choice; otherwise a pre-M4 Run with neither. */
+  selectedHarness?: "claude-code",
 ): LegacyFixture {
   const fixtureHome = makeTempDir(`secant-legacy-${kind}-fixture-`);
   const workspace = makeTempDir(`secant-legacy-${kind}-workspace-`);
@@ -208,6 +230,7 @@ function createLegacyFixture(
     operationId: `legacy-${kind}-${afterAttempt}`,
     bundleSnapshotDigest: entry.digest,
     launch: {},
+    ...(selectedHarness !== undefined ? { selectedHarness } : {}),
     at: new Date("2026-09-01T00:00:00.000Z"),
   });
   const owner = setup.runGroup.acquireRun(created.runId);
@@ -253,14 +276,18 @@ function openRun(wiring: Wiring, runId: string): Problem | undefined {
 }
 
 for (const afterAttempt of [false, true]) {
-  test(`[legacy-run-harness-upgrade] an Agent Run ${afterAttempt ? "after" : "before"} its first Attempt upgrades before resume`, async (t) => {
+  test(`[legacy-run-harness-upgrade] an Agent Run ${afterAttempt ? "after" : "before"} its first Attempt upgrades its Harness and Model choice once, then resumes to completion`, async (t) => {
     const fixture = createLegacyFixture("agent", afterAttempt);
-    const first = openFixture(fixture);
+    const requests: FakeTurnRequestRecord[] = [];
+    const first = openFixture(fixture, completedScript(REPORTED, requests));
     if (!afterAttempt) {
       assert.equal(openRun(first, fixture.runId), undefined);
       const upgradedOnReopen = first.runGroup.readRun(fixture.runId);
       assert.ok(upgradedOnReopen.ok);
       assert.equal(upgradedOnReopen.run.selectedHarness, "claude-code");
+      // Reopen is synchronous and qualifies nothing, so the choice waits for
+      // the resume.
+      assert.equal(upgradedOnReopen.run.modelChoice, undefined);
     }
     const resume = first.projectionPort.submit({
       operationId: `resume-${afterAttempt}`,
@@ -271,11 +298,32 @@ for (const afterAttempt of [false, true]) {
     const upgradedBeforeExecution = first.runGroup.readRun(fixture.runId);
     assert.ok(upgradedBeforeExecution.ok);
     assert.equal(upgradedBeforeExecution.run.selectedHarness, "claude-code");
-    await awaitSettled(first.projectionPort, resume.operationId);
+    // The drive reads the upgraded record, not the one read at acquire: the
+    // resume applies, and the Turn requests the resolved choice.
+    const outcome = await awaitSettled(
+      first.projectionPort,
+      resume.operationId,
+    );
+    assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+    assert.deepEqual(requests, [
+      { session: "s", modelChoice: { model: "legacy-opus", effort: "high" } },
+    ]);
+    const resolved = first.runGroup.readRun(fixture.runId);
+    assert.ok(resolved.ok);
+    assert.equal(resolved.run.state, "succeeded");
+    assert.deepEqual(resolved.run.modelChoice, {
+      model: "legacy-opus",
+      effort: "high",
+    });
     first.runGroup.close();
     first.catalog.close();
 
-    const reopened = openFixture(fixture, { profile: profile(), turns: [] });
+    // Once: a later process whose Harness reports another default changes
+    // neither fact.
+    const reopened = openFixture(
+      fixture,
+      completedScript({ kind: "reported", choice: { model: "later" } }),
+    );
     t.after(() => {
       reopened.runGroup.close();
       reopened.catalog.close();
@@ -284,8 +332,74 @@ for (const afterAttempt of [false, true]) {
     const stillSelected = reopened.runGroup.readRun(fixture.runId);
     assert.ok(stillSelected.ok);
     assert.equal(stillSelected.run.selectedHarness, "claude-code");
+    assert.deepEqual(stillSelected.run.modelChoice, resolved.run.modelChoice);
   });
 }
+
+test("[legacy-run-harness-upgrade] a Run that selected its Harness before Model choices upgrades only its choice on resume", async (t) => {
+  const fixture = createLegacyFixture("agent", true, "claude-code");
+  const requests: FakeTurnRequestRecord[] = [];
+  const wiring = openFixture(
+    fixture,
+    completedScript(
+      {
+        kind: "fallback",
+        choice: { model: "opus", effort: "medium" },
+        reason: "Settings were not read.",
+      },
+      requests,
+    ),
+  );
+  t.after(() => {
+    wiring.runGroup.close();
+    wiring.catalog.close();
+  });
+  const resume = wiring.projectionPort.submit({
+    operationId: "resume-selected",
+    operation: "resume-run",
+    input: { runId: fixture.runId },
+  });
+  assert.ok(resume.admitted, JSON.stringify(resume));
+  const outcome = await awaitSettled(wiring.projectionPort, resume.operationId);
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  // The fallback is a real choice like any other preselection.
+  assert.deepEqual(requests, [
+    { session: "s", modelChoice: { model: "opus", effort: "medium" } },
+  ]);
+  const run = wiring.runGroup.readRun(fixture.runId);
+  assert.ok(run.ok);
+  assert.equal(run.run.selectedHarness, "claude-code");
+  assert.deepEqual(run.run.modelChoice, { model: "opus", effort: "medium" });
+});
+
+test("[legacy-run-harness-upgrade] a legacy Run whose Harness reports nothing to preselect resumes holding no choice", async (t) => {
+  const fixture = createLegacyFixture("agent", true, "claude-code");
+  const requests: FakeTurnRequestRecord[] = [];
+  const wiring = openFixture(
+    fixture,
+    completedScript(
+      { kind: "unavailable", reason: "Nothing is listed." },
+      requests,
+    ),
+  );
+  t.after(() => {
+    wiring.runGroup.close();
+    wiring.catalog.close();
+  });
+  const resume = wiring.projectionPort.submit({
+    operationId: "resume-unavailable",
+    operation: "resume-run",
+    input: { runId: fixture.runId },
+  });
+  assert.ok(resume.admitted, JSON.stringify(resume));
+  const outcome = await awaitSettled(wiring.projectionPort, resume.operationId);
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  assert.deepEqual(requests, [{ session: "s" }]);
+  const run = wiring.runGroup.readRun(fixture.runId);
+  assert.ok(run.ok);
+  assert.equal(run.run.state, "succeeded");
+  assert.equal(run.run.modelChoice, undefined);
+});
 
 test("[legacy-run-harness-upgrade] a Command-only Run remains unselected and prepares no Harness", async (t) => {
   const fixture = createLegacyFixture("command", false);

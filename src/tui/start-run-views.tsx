@@ -24,6 +24,8 @@ import {
   harnessFocusStatus,
   harnessRowStatus,
   isCheckingModels,
+  modelChoiceSourceLine,
+  modelChoiceWords,
 } from "./harness-format.js";
 import { useBindings } from "./keymap.js";
 import { LaunchTextBox, type LaunchTextBoxHandle } from "./launch-text-box.js";
@@ -41,10 +43,6 @@ import { formatOrigin } from "./bundle-format.js";
 // directly.
 
 const NARROW_BREAKPOINT = 60;
-
-// `Harness default` means no requested model: the Harness's own configuration
-// decides. It is the first option in both the list and free-text model fields.
-const HARNESS_DEFAULT = "Harness default";
 
 // --- shared layout ---------------------------------------------------------
 
@@ -431,17 +429,17 @@ export function HarnessStep(props: {
     setPhase("model");
   };
 
-  const declaration = () => props.focus()?.supportedModels;
-  // A qualified Harness declares a model list, free-text entry, or (when it exposes
-  // no model selection) neither — then only `Harness default` is offered, with no
-  // field to change and no requested model.
-  const modelMode = (): "list" | "free-text" | "default-only" => {
+  const declaration = () => props.focus()?.modelDeclaration;
+  // A qualified Harness declares an exhaustive model list, suggested picks or
+  // free-text entry (both typed here until the guided picker, #349), or no model
+  // selection at all, when the field shows only what the launch starts from.
+  const modelMode = (): "list" | "free-text" | "fixed" => {
     const decl = declaration();
     return decl?.kind === "list"
       ? "list"
-      : decl?.kind === "free-text"
-        ? "free-text"
-        : "default-only";
+      : decl === undefined
+        ? "fixed"
+        : "free-text";
   };
   // Where the chosen Harness stands: its models are still being checked, it is
   // ready to continue (StartRun's gate), or its settled check found it unavailable.
@@ -451,26 +449,30 @@ export function HarnessStep(props: {
       : props.canContinue()
         ? "ready"
         : "unavailable";
-  // The model choices for a list-declaring Harness, `Harness default` first.
+  const preselection = () => props.focus()?.preselection;
+  // The model choices for a list-declaring Harness. No model is chosen until the
+  // person moves off the preselection, which the launch then resolves.
   const modelOptions = (): readonly string[] => {
     const decl = declaration();
-    return decl?.kind === "list"
-      ? [HARNESS_DEFAULT, ...decl.models]
-      : [HARNESS_DEFAULT];
+    return decl?.kind === "list" ? decl.models.map((entry) => entry.model) : [];
   };
-  const modelLabel = () => props.model() ?? HARNESS_DEFAULT;
+  const currentModel = () => props.model() ?? preselection()?.choice.model;
   const cycleModel = (delta: number) => {
     const options = modelOptions();
-    if (options.length <= 1) return;
-    const index = Math.max(0, options.indexOf(modelLabel()));
-    const next = (index + delta + options.length) % options.length;
-    const chosen = options[next] ?? HARNESS_DEFAULT;
-    props.setModel(chosen === HARNESS_DEFAULT ? undefined : chosen);
+    if (options.length === 0) return;
+    const index = options.indexOf(currentModel() ?? "");
+    const next =
+      index < 0
+        ? delta > 0
+          ? 0
+          : options.length - 1
+        : (index + delta + options.length) % options.length;
+    props.setModel(options[next]);
   };
   const editModel = (value: string) => {
-    // Store the trimmed model: nothing downstream trims (Preflight matches the
-    // free-text model verbatim), so a stray leading/trailing space would fail an
-    // otherwise-valid model. Blank still means `Harness default`.
+    // Store the trimmed model: nothing downstream trims (the launch matches the
+    // typed model verbatim), so a stray leading/trailing space would fail an
+    // otherwise-valid model. Blank starts from the preselection.
     const trimmed = value.trim();
     props.setModel(trimmed.length === 0 ? undefined : trimmed);
   };
@@ -530,8 +532,8 @@ export function HarnessStep(props: {
       { key: "ctrl+c", desc: "Quit", group: "Harness", cmd: () => exit() },
     ],
   }));
-  // No free-text field is focused for the list or default-only variants, so `q`
-  // quits there; the list variant also cycles the model with ←/→.
+  // No free-text field is focused for the list or fixed variants, so `q` quits
+  // there; the list variant also cycles the model with ←/→.
   useBindings(() => ({
     enabled:
       phase() === "model" &&
@@ -616,7 +618,7 @@ export function HarnessStep(props: {
             focus={props.focus}
             mode={modelMode}
             standing={standing}
-            modelLabel={modelLabel}
+            currentModel={currentModel}
             modelOptions={modelOptions}
             model={props.model}
             editModel={editModel}
@@ -649,9 +651,9 @@ type HarnessStanding = "checking" | "ready" | "unavailable";
 function ModelField(props: {
   harness: () => string;
   focus: Accessor<HarnessFocus | undefined>;
-  mode: Accessor<"list" | "free-text" | "default-only">;
+  mode: Accessor<"list" | "free-text" | "fixed">;
   standing: Accessor<HarnessStanding>;
-  modelLabel: Accessor<string>;
+  currentModel: Accessor<string | undefined>;
   modelOptions: Accessor<readonly string[]>;
   model: Accessor<string | undefined>;
   editModel: (value: string) => void;
@@ -660,6 +662,35 @@ function ModelField(props: {
   const dimensions = useTerminalDimensions();
   const inputWidth = () => Math.max(10, dimensions().width - 4);
   const focus = () => props.focus();
+  const declaration = () => focus()?.modelDeclaration;
+  const preselection = () => focus()?.preselection;
+  const harnessName = () => focus()?.name ?? props.harness();
+  const currentWords = () => {
+    const model = props.currentModel();
+    return model === undefined
+      ? "(choose a model)"
+      : modelChoiceWords({ model }, declaration());
+  };
+  // What the launch starts from, and why — a word, never only a colour (#311).
+  // A Harness that reports nothing to start from says so with its reason.
+  const startsFrom = (): readonly string[] => {
+    const current = preselection();
+    if (current !== undefined) {
+      return [
+        `Starts from ${modelChoiceWords(current.choice, declaration())}`,
+        modelChoiceSourceLine(
+          harnessName(),
+          current.source,
+          current.choice,
+          declaration(),
+        ),
+      ];
+    }
+    const defaults = focus()?.harnessDefaults;
+    return defaults?.kind === "unavailable"
+      ? [`Nothing to start from. ${defaults.reason}`]
+      : [];
+  };
 
   return (
     <box flexDirection="column" gap={1} flexGrow={1} overflow="hidden">
@@ -700,7 +731,7 @@ function ModelField(props: {
           <Switch>
             <Match when={props.mode() === "list"}>
               <text fg={theme.text} flexShrink={0}>
-                {`‹ ${props.modelLabel()} › — ←/→ to choose from: ${props
+                {`‹ ${currentWords()} › — ←/→ to choose from: ${props
                   .modelOptions()
                   .join(", ")}`}
               </text>
@@ -714,16 +745,25 @@ function ModelField(props: {
                   onInput={(value: string) => props.editModel(value)}
                 />
                 <text fg={theme.textMuted} flexShrink={0}>
-                  Leave blank for Harness default.
+                  {preselection() === undefined
+                    ? "Type an exact model name."
+                    : `Type an exact model name, or leave blank to start from ${preselection()?.choice.model}.`}
                 </text>
               </box>
             </Match>
-            <Match when={props.mode() === "default-only"}>
+            <Match when={props.mode() === "fixed"}>
               <text fg={theme.text} flexShrink={0}>
-                {`${HARNESS_DEFAULT} — this Harness manages its own model.`}
+                This Harness offers no model selection.
               </text>
             </Match>
           </Switch>
+          <For each={startsFrom()}>
+            {(line) => (
+              <text fg={theme.textMuted} flexShrink={0}>
+                {line}
+              </text>
+            )}
+          </For>
         </box>
       </Show>
       <text fg={theme.textMuted} flexShrink={0}>
@@ -971,7 +1011,7 @@ export function InputsStep(props: {
 export function ReviewStep(props: {
   bundle: Accessor<InstalledBundleFocus | undefined>;
   harness: Accessor<HarnessSummary | undefined>;
-  model: Accessor<string | undefined>;
+  harnessFocus: Accessor<HarnessFocus | undefined>;
   draft: Accessor<LaunchRunInput>;
   canAcknowledgeTrust: Accessor<boolean>;
   onAcknowledgeTrust: () => void;
@@ -993,6 +1033,28 @@ export function ReviewStep(props: {
     assessment().actionOffers.find((offer) => offer.action === "launch-run");
   const canStart = () =>
     assessment().status === "ready" && launchOffer() !== undefined;
+  // The Model choice the Offer launches, resolved by the assessment, and where it
+  // came from; until it resolves, the line says so rather than guessing.
+  const modelChoiceLines = (): readonly string[] => {
+    const choice = assessment().draft.modelChoice;
+    if (choice === undefined) {
+      return [
+        assessment().status === "assessing"
+          ? "Model choice: checking…"
+          : "Model choice: not resolved",
+      ];
+    }
+    const declaration = props.harnessFocus()?.modelDeclaration;
+    return [
+      `Model choice: ${modelChoiceWords(choice, declaration)}`,
+      modelChoiceSourceLine(
+        props.harness()?.name ?? "the Harness",
+        choice.source,
+        choice,
+        declaration,
+      ),
+    ];
+  };
   const trustPosture = () => {
     if (
       assessment().findings.some((finding) => finding.correction === "trust")
@@ -1102,8 +1164,18 @@ export function ReviewStep(props: {
             </text>
             <Show when={routingNeedsHarness(bundle().routing)}>
               <text fg={theme.text} flexShrink={0}>
-                {`Harness: ${props.harness()?.name ?? "(not selected)"} (${props.harness()?.id ?? "none"}) · model ${props.model() ?? HARNESS_DEFAULT}`}
+                {`Harness: ${props.harness()?.name ?? "(not selected)"} (${props.harness()?.id ?? "none"})`}
               </text>
+              <For each={modelChoiceLines()}>
+                {(line, index) => (
+                  <text
+                    fg={index() === 0 ? theme.text : theme.textMuted}
+                    flexShrink={0}
+                  >
+                    {line}
+                  </text>
+                )}
+              </For>
             </Show>
             <Show
               when={bundle().launchInputs.length > 0}

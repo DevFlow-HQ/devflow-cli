@@ -75,8 +75,8 @@ export function HarnessCatalogInspector(props: {
       <Section title="Supported models">
         <SupportedModels harness={harness} />
       </Section>
-      <Section title="Harness default">
-        <HarnessDefaults harness={harness} />
+      <Section title="Reported settings">
+        <ReportedSettings harness={harness} />
       </Section>
       <Section title="Capabilities">
         <box flexDirection="column" gap={1} flexShrink={0}>
@@ -177,7 +177,7 @@ function ModelLines(props: { name: string; efforts: string }) {
 
 /** The Model choice the Harness itself reports, or the fallback and why. The
  *  source is a word, never only a colour. */
-function HarnessDefaults(props: { harness: Accessor<HarnessFocus> }) {
+function ReportedSettings(props: { harness: Accessor<HarnessFocus> }) {
   const { theme } = useTheme();
   const defaults = () => props.harness().harnessDefaults;
   const choiceLine = () => {

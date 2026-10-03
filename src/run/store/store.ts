@@ -73,10 +73,11 @@ export interface RunRecord {
   /** The immutable semantic Harness selected for this Run. Absent for a
    *  Command-only Run and for a pre-M4 Run not yet upgraded. */
   readonly selectedHarness?: SelectedHarnessId;
-  /** The immutable model requested at launch, threaded into prepare (#187). Absent
-   *  when no model was requested (the Harness default applies) and for a
-   *  Command-only Run. Free text; the Store never validates it to a closed set. */
-  readonly requestedModel?: string;
+  /** The Run's current Model choice (ADR 0034), which every Turn requests when it
+   *  starts. Absent for a Command-only Run and for an Agent-bearing Run created
+   *  before launches resolved one, until its legacy upgrade selects it. Free text;
+   *  the Store never validates it to a closed set. */
+  readonly modelChoice?: ModelChoice;
   readonly state: string; // canonical Run state, including a durable `blocked` pause
   readonly createdAt: string; // ISO 8601
 }
@@ -109,9 +110,9 @@ interface CreateRunRequest {
   readonly launch: unknown; // JSON-serialisable; stored opaque
   /** Required by Application for an Agent-bearing Run; omitted for Command-only. */
   readonly selectedHarness?: SelectedHarnessId;
-  /** The model requested at launch, pinned immutably; omitted when none was
-   *  requested and for a Command-only Run (#187). */
-  readonly requestedModel?: string;
+  /** The Model choice resolved at launch (ADR 0034); omitted for a Command-only
+   *  Run. */
+  readonly modelChoice?: ModelChoice;
   readonly at: Date;
 }
 
@@ -191,6 +192,10 @@ export type SelectHarnessResult =
   | { readonly outcome: "selected" }
   | { readonly outcome: "already-selected" }
   | { readonly outcome: "fenced" };
+
+/** A legacy Run's one-time Model choice upgrade (ADR 0034), shaped like the
+ *  Harness upgrade: `already-selected` is an idempotent retry of the same choice. */
+export type SelectModelChoiceResult = SelectHarnessResult;
 
 /** A candidate output a producer wrote once, ready to publish together. */
 export interface CandidateOutput {
@@ -493,10 +498,17 @@ export interface TranscriptPage {
  */
 export interface RunOwner {
   readonly runId: string;
+  /** The canonical record read at acquire, refreshed by this owner's own
+   *  `selectHarness` and `selectModelChoice` writes, so a reader after an upgrade
+   *  sees the upgraded value. */
   readonly record: RunRecord;
   /** Durably select the Harness for a pre-M4 Run if it is still absent. The
    *  selected value is immutable; repeating the same upgrade performs no write. */
   selectHarness(selectedHarness: SelectedHarnessId): SelectHarnessResult;
+  /** Durably select the Model choice of a Run that has none, the legacy upgrade
+   *  (ADR 0034). Fenced and null-only: repeating the same choice performs no
+   *  write, and a different stored choice is a caller error. */
+  selectModelChoice(choice: ModelChoice): SelectModelChoiceResult;
   /** Record the Run's canonical state, unless this owner has been fenced. */
   writeState(state: string): WriteResult;
   /**
@@ -1046,8 +1058,8 @@ export function openRunGroup(
           ...(request.selectedHarness !== undefined
             ? { selectedHarness: request.selectedHarness }
             : {}),
-          ...(request.requestedModel !== undefined
-            ? { requestedModel: request.requestedModel }
+          ...(request.modelChoice !== undefined
+            ? { modelChoice: request.modelChoice }
             : {}),
           state: "created",
           createdAt: request.at.toISOString(),

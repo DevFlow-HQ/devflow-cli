@@ -760,7 +760,7 @@ test("a Harness that fails qualification while checking a model is a not-ready h
   assert.equal(finding?.correction, "harness");
 });
 
-test("an Agent draft with no requested model never qualifies the Harness", async (t) => {
+test("an Agent draft with no requested model qualifies the Harness once and offers its preselection", async (t) => {
   let qualificationCalls = 0;
   const f = fixture(t, [
     registeredHarness({
@@ -768,20 +768,34 @@ test("an Agent draft with no requested model never qualifies the Harness", async
       name: "Codex",
       qualify: async () => {
         qualificationCalls++;
-        return listed(["m1"]);
+        return {
+          ...listed(["m1"]),
+          defaults: { kind: "reported", choice: { model: "m1" } },
+        };
       },
     }),
   ]);
   approve(f);
   const { id, digest } = installAgent(f);
-  const snapshot = await assess(f, {
+  const draft = {
     bundle: { id },
     launchInputs: {},
     trustDigest: digest,
     harness: "codex",
-  });
+  };
+  const snapshot = await assess(f, draft);
   assert.equal(snapshot.status, "ready");
-  assert.equal(qualificationCalls, 0);
+  assert.equal(qualificationCalls, 1);
+  // `m1` has no effort setting, so the resolved choice carries none.
+  assert.deepEqual(snapshot.draft.modelChoice, {
+    model: "m1",
+    source: { kind: "reported" },
+  });
+  const offer = snapshot.actionOffers.find(
+    (candidate) => candidate.action === "launch-run",
+  );
+  assert.ok(offer && offer.action === "launch-run");
+  assert.deepEqual(offer.draft, { ...draft, requestedModel: "m1" });
 });
 
 test("a draft already not-ready for another reason never qualifies the Harness for its model", async (t) => {

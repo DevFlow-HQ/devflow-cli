@@ -391,17 +391,18 @@ await withCleanup(
       }
       assertMigrated(join(legacyHome, "catalog.db"), "Catalog");
       assertMigrated(join(groupDir, "coordination.db"), "coordination", 2);
-      // The Run Store carries twelve migrations: #108 added `pending_gate`, #116 added
+      // The Run Store carries thirteen migrations: #108 added `pending_gate`, #116 added
       // the Harness Turn records (`harness_session`/`turn`/`turn_event`/
       // `transcript_entry`) and Attempt `effective_model`, #126 added the durable Turn
       // `kind` column, and #125 added the Attempt Harness-identity columns
       // (`harness`/`executable`/`executable_version`), #133 moved ownership into the
       // Run Store, #134 added the persisted steer capability evidence, #138 added
       // the Run's semantic selected-Harness id, #187 added the requested-model column,
-      // #213 added gate suggestions, #218 added the attempt-log End Stage mark, and
-      // #340 added each Turn's requested model and effort.
+      // #213 added gate suggestions, #218 added the attempt-log End Stage mark,
+      // #340 added each Turn's requested model and effort, and #342 added the Run's
+      // Model choice effort.
       const runDatabasePath = join(groupDir, runId, "run.db");
-      assertMigrated(runDatabasePath, "Run Store", 12);
+      assertMigrated(runDatabasePath, "Run Store", 13);
       assertLegacyRunRemainsUnselected(runDatabasePath);
     }
 
@@ -703,10 +704,20 @@ await withCleanup(
         },
         {
           harness: "codex",
-          effectiveModel: "gpt-6.1-sol",
+          effectiveModel: "gpt-5.5",
           replayerDirectory: join(smokeRoot, "codex-replayer"),
           install() {
-            installCodexReplayerAt(this.replayerDirectory, "test-repair");
+            // A flagless launch qualifies Codex first (#342): that session replays
+            // the qualification recording, whose reported default the Run then
+            // requests on the recorded Test Repair `turn/start`.
+            installCodexReplayerAt(
+              this.replayerDirectory,
+              "test-repair",
+              false,
+              {
+                earlierInvocations: ["codex-qualification"],
+              },
+            );
           },
           // Codex auto-approves the edit internally: no approval request crosses to the
           // client; the edit is observable only as a generic tool-activity event. The
@@ -830,6 +841,135 @@ await withCleanup(
     await runNamedScenario(
       "two-harness-proof-bundle",
       twoHarnessProofBundleScenario,
+    );
+
+    async function headlessModelChoiceScenario(): Promise<void> {
+      // The `headless-model-choice` scenario (#342): `run launch --model --effort`
+      // through each recorded replayer records that Model choice on the Run, and
+      // `run show --json` reports it additively beside the per-Turn requested
+      // values. Each launch rests at the Proof Bundle's authored gate. The flags
+      // differ from what a flagless launch resolves (Claude Code's fallback is opus
+      // at medium; the unconfigured Codex qualification falls back to its listed
+      // default), so the record proves they were taken. Codex sends both on
+      // `turn/start`, so its strict replay proves them on the wire too (#345);
+      // Claude Code's native effort is #348's.
+      const choices = [
+        {
+          harness: "claude-code",
+          model: "sonnet",
+          effort: "high",
+          install(directory: string) {
+            installReplayerAt(
+              directory,
+              "2.1.273 (Claude Code)",
+              join(
+                projectRoot,
+                "tests",
+                "harness",
+                "fixtures",
+                "claude-code",
+                "test-repair",
+              ),
+            );
+          },
+        },
+        {
+          harness: "codex",
+          model: "gpt-5.5",
+          effort: "high",
+          install(directory: string) {
+            // This qualification names no configured model, so a flagless launch
+            // would start from Codex's listed default instead of the flags.
+            installCodexReplayerAt(directory, "test-repair", false, {
+              earlierInvocations: ["codex-qualification-unconfigured"],
+            });
+          },
+        },
+      ] as const;
+      for (const choice of choices) {
+        const replayerDirectory = join(
+          smokeRoot,
+          `model-choice-${choice.harness}-replayer`,
+        );
+        choice.install(replayerDirectory);
+        const workspaceRaw = join(
+          smokeRoot,
+          `model-choice-${choice.harness}-workspace`,
+        );
+        await mkdir(workspaceRaw, { recursive: true });
+        const workspace = realpathSync.native(workspaceRaw);
+        const { failingTest } = seedTestRepairWorkspace(workspace);
+        const env: NodeJS.ProcessEnv = {
+          ...workspaceEnv,
+          PATH: `${replayerDirectory}${delimiter}${workspaceEnv.PATH}`,
+        };
+        delete env.SECANT_CLAUDE_CODE;
+        delete env.SECANT_CODEX;
+        run(binary, ["workspace", "approve"], { cwd: workspace, env });
+
+        const launched = JSON.parse(
+          run(
+            binary,
+            [
+              "run",
+              "launch",
+              "dev.secant.test-repair",
+              "--input",
+              `failing-test=${failingTest}`,
+              "--trust",
+              listed.digest,
+              "--harness",
+              choice.harness,
+              "--model",
+              choice.model,
+              "--effort",
+              choice.effort,
+              "--harness-requests",
+              "allow",
+              "--json",
+            ],
+            { cwd: workspace, env, expect: 2 },
+          ),
+        );
+        if (typeof launched.runId !== "string") {
+          throw new Error(
+            `run launch --model --effort did not identify its Run through ${choice.harness}: ${JSON.stringify(launched)}`,
+          );
+        }
+        const shownJson = run(
+          binary,
+          ["run", "show", launched.runId, "--json"],
+          { cwd: workspace, env },
+        );
+        const shown = JSON.parse(shownJson).result?.run;
+        const started = Array.isArray(shown?.timeline)
+          ? shown.timeline.filter(
+              (event: { event: string }) => event.event === "turn-started",
+            )
+          : [];
+        if (
+          shown?.state !== "blocked" ||
+          shown.modelChoice?.model !== choice.model ||
+          shown.modelChoice?.effort !== choice.effort ||
+          shown.requestedModel !== choice.model ||
+          typeof shown.effectiveModel !== "string" ||
+          started.length === 0 ||
+          !started.every(
+            (event: { requestedModel?: string; requestedEffort?: string }) =>
+              event.requestedModel === choice.model &&
+              event.requestedEffort === choice.effort,
+          )
+        ) {
+          throw new Error(
+            `run show --json did not report the launched Model choice through ${choice.harness}: ${shownJson}`,
+          );
+        }
+      }
+    }
+
+    await runNamedScenario(
+      "headless-model-choice",
+      headlessModelChoiceScenario,
     );
 
     async function installCollisionScenario(): Promise<void> {

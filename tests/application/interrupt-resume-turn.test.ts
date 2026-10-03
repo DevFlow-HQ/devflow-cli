@@ -39,6 +39,10 @@ import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 
 // The fake profile has no same-Turn guidance, so the steer Offer is unavailable and
 // its `reason` is exactly this profile evidence.
+// Every Agent-bearing launch names its Model choice (ADR 0034); the fake selects
+// no model, so any name is admitted.
+const FAKE_MODEL = "fake-model";
+
 const STEER_EVIDENCE =
   "This Harness has no same-Turn guidance, so steer is rejected unsupported and never emulated.";
 
@@ -412,6 +416,7 @@ function launchAgent(port: ProjectionPort, digest: string): string {
       launchInputs: {},
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: FAKE_MODEL,
     },
   });
   assert.ok(launch.admitted, JSON.stringify(launch));
@@ -928,6 +933,7 @@ async function failedInterruptScenario(
       launchInputs: {},
       trustDigest: entry.digest,
       harness: "claude-code",
+      requestedModel: FAKE_MODEL,
     },
   });
   assert.ok(launch.admitted, JSON.stringify(launch));
@@ -1238,6 +1244,7 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
       launchInputs: {},
       trustDigest: entry.digest,
       harness: "claude-code",
+      requestedModel: FAKE_MODEL,
     },
   });
   assert.ok(launch.admitted, JSON.stringify(launch));

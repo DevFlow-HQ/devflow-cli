@@ -103,11 +103,17 @@ export interface LaunchRunInput {
    * routing. Application validates the semantic id against the closed registry;
    * callers pass a string so unknown external input becomes a typed Problem. */
   readonly harness?: string;
-  /** An optional model to request for an Agent-bearing routing, pinned immutably on
-   *  the Run and threaded into prepare (#187). Irrelevant for a Command-only routing
-   *  (refused as such). A string so an unknown value becomes a typed prepare failure,
-   *  never a substitution; an omitted model means the Harness default. */
+  /** The model of the Run's Model choice (ADR 0034) for an Agent-bearing routing.
+   *  Irrelevant for a Command-only routing (refused as such). Omitted in a draft,
+   *  `launch-preparation` resolves it from the preselection and writes it into the
+   *  `launch-run` Offer's draft; `submit` refuses an Agent-bearing launch without
+   *  one (`model-choice-required`). A string so an unknown value becomes a typed
+   *  Problem, never a substitution. */
   readonly requestedModel?: string;
+  /** The effort of the Model choice. Omitted in a draft, the preselected effort
+   *  applies when the model offers it, else the model's own default; a model with
+   *  no effort setting takes none. Irrelevant for a Command-only routing. */
+  readonly requestedEffort?: string;
   /** The exact installed digest the caller acknowledges trusting. Required only
    *  when the installed digest is not yet trusted (ADR 0021). */
   readonly trustDigest?: string;
@@ -506,6 +512,25 @@ interface ModelChoiceView {
   readonly effort?: string;
 }
 
+/** Where a preselected Model choice came from (ADR 0034): the Harness's own
+ *  reported settings, or the Adapter's declared fallback with the reason it
+ *  stands in. #343 adds the last choice. */
+type PreselectionSourceView =
+  | { readonly kind: "reported" }
+  | { readonly kind: "fallback"; readonly reason: string };
+
+/** The Model choice a launch with this Harness starts from, and its source. */
+interface PreselectionView {
+  readonly choice: ModelChoiceView;
+  readonly source: PreselectionSourceView;
+}
+
+/** A launch's resolved Model choice and its source: the preselection, or
+ *  `requested` when the draft named a model or an effort. */
+interface LaunchModelChoiceView extends ModelChoiceView {
+  readonly source: PreselectionSourceView | { readonly kind: "requested" };
+}
+
 /** An effort the user's environment fixes; `source` says what fixes it. */
 interface EffortLockView {
   readonly effort: string;
@@ -532,6 +557,10 @@ export interface HarnessFocus extends HarnessSummary {
   readonly supportedModels?: SupportedModelDeclarationView;
   readonly modelDeclaration?: ModelDeclarationView;
   readonly harnessDefaults?: HarnessDefaultsView;
+  /** The Model choice a launch with this Harness starts from (ADR 0034), ordered
+   *  by the Application from the defaults; absent when the Harness reports
+   *  nothing to start from. Clients show it and never derive it. */
+  readonly preselection?: PreselectionView;
   readonly capabilities: readonly HarnessCapabilityView[];
   readonly configurationPosture?: string;
   readonly authenticationInstructions?: string;
@@ -1038,10 +1067,13 @@ export interface RunView {
   readonly sessions?: readonly RunSessionView[];
   /** The effective model the latest Agent-step Attempt ran under (#116). */
   readonly effectiveModel?: string;
-  /** The immutable model requested at launch, threaded into prepare (#187). Sits
-   *  beside `effectiveModel` so the requested and observed models stay distinct
-   *  facts. Additive to the frozen `--json`; absent when no model was requested and
-   *  for a Command-only Run. */
+  /** The Run's current Model choice (ADR 0034), which each Turn requests when it
+   *  starts. Sits beside `effectiveModel` so the requested and observed models
+   *  stay distinct facts. Additive to the frozen `--json`; absent for a
+   *  Command-only Run and a legacy Run not yet resumed. */
+  readonly modelChoice?: ModelChoiceView;
+  /** The model of `modelChoice`, kept for parsers of the frozen `--json` written
+   *  before the Model choice (#187). */
   readonly requestedModel?: string;
   /** The immutable semantic Harness selected for this Run before its first
    *  Attempt. Additive to the frozen `--json`; absent for Command-only Runs. */
@@ -1125,8 +1157,8 @@ export interface RunListSnapshot {
 // qualifies only the selected Harness to check a requested model, creating no Run,
 // Session, Turn, or durable draft. Changing any draft field opens a new Projection.
 
-/** `assessing` while the selected Harness is qualifying to check a requested
- *  model; then `ready` (no findings) or `not-ready` (one or more findings). */
+/** `assessing` while the selected Harness is qualifying to resolve the Model
+ *  choice; then `ready` (no findings) or `not-ready` (one or more findings). */
 type LaunchPreparationStatus = "assessing" | "ready" | "not-ready";
 
 /** The assessed draft in normalized form. Bundle `version`/`digest`/`name` are
@@ -1140,7 +1172,12 @@ export interface LaunchPreparationDraftView {
     readonly name?: string;
   };
   readonly harness?: string;
+  /** The model and effort the draft named, as given. */
   readonly requestedModel?: string;
+  readonly requestedEffort?: string;
+  /** The Model choice the `launch-run` Offer launches, present once the
+   *  qualified Harness resolved it (ADR 0034). */
+  readonly modelChoice?: LaunchModelChoiceView;
   readonly launchInputs: Readonly<Record<string, string>>;
   readonly trustDigest?: string;
 }
@@ -1438,7 +1475,14 @@ export type ObserverEnd =
  *  (#189). A client moves to the step that owns the named field; it never
  *  classifies Problem codes or reads free-form details to decide. */
 type CorrectionTarget =
-  "bundle" | "harness" | "model" | "inputs" | "trust" | "workspace" | "command";
+  | "bundle"
+  | "harness"
+  | "model"
+  | "effort"
+  | "inputs"
+  | "trust"
+  | "workspace"
+  | "command";
 
 /**
  * The one normalized failure family crossing the Port. Operational failures are

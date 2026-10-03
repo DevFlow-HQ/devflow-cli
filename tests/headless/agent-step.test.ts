@@ -35,6 +35,9 @@ import { makeTempDir } from "../helpers/tempDir.js";
 // Code Adapter scripts, matching what the recorded plain-Turn fixture observed.
 const PLAIN_EFFECTIVE_MODEL = "claude-opus-5";
 const PLAIN_EXECUTABLE_VERSION = "2.1.273 (Claude Code)";
+// The model the fake reports as its own default, and the one a direct launch
+// submission names, since only launch preparation resolves a preselection.
+const PLAIN_REPORTED_MODEL = "opus";
 
 /** The deterministic Claude Code profile the fake Adapter reports for the plain
  *  Turn: the observed identity (#125) the Agent-step assertions read back — an
@@ -70,6 +73,8 @@ function claudeCodeProfile(): HarnessProfile {
 function plainScript(): FakeScript {
   return {
     profile: claudeCodeProfile(),
+    // A flagless `run launch` starts from the Harness's reported Model choice.
+    defaults: { kind: "reported", choice: { model: PLAIN_REPORTED_MODEL } },
     turns: [
       {
         events: [
@@ -267,6 +272,7 @@ async function launchAgentRun(
       launchInputs: { doc: docPath },
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: PLAIN_REPORTED_MODEL,
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));
@@ -344,11 +350,13 @@ test("[selected-versus-observed-evidence] headless distinguishes durable selecti
       },
     ],
   })();
+  // The first prepare is launch preparation's qualification; the second, the
+  // launch drive's, refuses, and the resume's third succeeds.
   let prepareCount = 0;
   const adapter: HarnessAdapter = {
     async prepare(options) {
       prepareCount++;
-      if (prepareCount === 1) {
+      if (prepareCount === 2) {
         return {
           ok: false,
           failure: {
@@ -419,6 +427,8 @@ test("[selected-versus-observed-evidence] headless distinguishes durable selecti
       `doc=${docPath}`,
       "--harness",
       "codex",
+      "--model",
+      "gpt-6",
       "--json",
     ],
     io,
@@ -464,7 +474,7 @@ test("[selected-versus-observed-evidence] headless distinguishes durable selecti
   const record = wired.runGroup.readRun(runId);
   assert.ok(record.ok);
   assert.equal(record.run.selectedHarness, "codex");
-  assert.equal(prepareCount, 2);
+  assert.equal(prepareCount, 3);
 });
 
 /** Run one headless command against the wired clients and capture its stdout. */
@@ -511,55 +521,78 @@ test("run show names the waiting basis of an Agent Step an Interrupt left open, 
   assert.doesNotMatch(shown, /follow-up/);
 });
 
-test("[requested-model-durability] run launch --model is accepted for an Agent Bundle and run show prints it beside the effective model", async (t) => {
-  const { wired, bundleId, digest, docPath } = wireAgent(t);
+/** Run `secant run launch` for the agent Bundle with `flags` and return the Run id. */
+async function launchWith(
+  wired: Wiring,
+  params: { bundleId: string; digest: string; docPath: string },
+  flags: readonly string[],
+): Promise<string> {
   const out: string[] = [];
   const err: string[] = [];
-  const io: HeadlessIO = {
-    out: (text) => out.push(text),
-    err: (text) => err.push(text),
-    cwd: () => process.cwd(),
-  };
   const launchCode = await runHeadless(
     wired,
     [
       "run",
       "launch",
-      bundleId,
+      params.bundleId,
       "--trust",
-      digest,
+      params.digest,
       "--input",
-      `doc=${docPath}`,
+      `doc=${params.docPath}`,
       "--harness",
       "claude-code",
-      "--model",
-      "requested-opus",
+      ...flags,
     ],
-    io,
+    {
+      out: (text) => out.push(text),
+      err: (text) => err.push(text),
+      cwd: () => process.cwd(),
+    },
   );
   assert.equal(launchCode, 0, `${out.join("")}\n${err.join("")}`);
   const runId = /^Run (\S+)$/m.exec(out.join(""))?.[1];
   assert.ok(runId);
-  const record = wired.runGroup.readRun(runId);
-  assert.ok(record.ok);
-  assert.equal(record.run.requestedModel, "requested-opus");
+  return runId;
+}
 
-  const shown = await runShow(wired, runId);
-  assert.match(shown, /Requested model: requested-opus/);
-  // The observed effective model stays a separate line: requested vs effective.
-  assert.match(shown, /Observed effective model: claude-/);
-
-  // `--json` adds the model each Turn requested on its `turn-started` entry and
-  // keeps the run-level requested and effective models as they were (ADR 0034).
+async function runShowJson(wired: Wiring, runId: string): Promise<RunView> {
   const json: string[] = [];
-  const jsonCode = await runHeadless(wired, ["run", "show", runId, "--json"], {
+  const code = await runHeadless(wired, ["run", "show", runId, "--json"], {
     out: (text) => json.push(text),
     err: () => {},
     cwd: () => process.cwd(),
   });
-  assert.equal(jsonCode, 0);
-  const run = (JSON.parse(json.join("")) as { result: { run: RunView } }).result
-    .run;
+  assert.equal(code, 0);
+  return (JSON.parse(json.join("")) as { result: { run: RunView } }).result.run;
+}
+
+test("[model-choice-durability] run launch --model --effort records the Model choice, and run show prints it beside the effective model", async (t) => {
+  const { wired, bundleId, digest, docPath } = wireAgent(t);
+  const runId = await launchWith(wired, { bundleId, digest, docPath }, [
+    "--model",
+    "requested-opus",
+    "--effort",
+    "high",
+  ]);
+  const record = wired.runGroup.readRun(runId);
+  assert.ok(record.ok);
+  assert.deepEqual(record.run.modelChoice, {
+    model: "requested-opus",
+    effort: "high",
+  });
+
+  const shown = await runShow(wired, runId);
+  assert.match(shown, /^Model choice: requested-opus at high effort$/m);
+  // The observed effective model stays a separate line: requested vs effective.
+  assert.match(shown, /Observed effective model: claude-/);
+
+  // `--json` adds the Run's Model choice and each Turn's requested values, and
+  // keeps the run-level requested and effective models (ADR 0034).
+  const run = await runShowJson(wired, runId);
+  assert.deepEqual(run.modelChoice, {
+    model: "requested-opus",
+    effort: "high",
+  });
   assert.equal(run.requestedModel, "requested-opus");
   assert.match(run.effectiveModel ?? "", /^claude-/);
   const started = run.timeline.find((event) => event.event === "turn-started");
@@ -569,6 +602,7 @@ test("[requested-model-durability] run launch --model is accepted for an Agent B
     detail: "s",
     turnKind: "agent",
     requestedModel: "requested-opus",
+    requestedEffort: "high",
     step: "fix",
     session: "s",
     sessionName: "s",
@@ -593,6 +627,30 @@ test("[requested-model-durability] run launch --model is accepted for an Agent B
   }
   assert.equal(effective.at(-1)?.effectiveModel, run.effectiveModel);
   assert.match(shown, /effective-model claude-\S+ · step fix/);
+});
+
+test("[model-choice-durability] run launch with neither flag launches the preselection the TUI shows", async (t) => {
+  const { wired, bundleId, digest, docPath } = wireAgent(t);
+  const runId = await launchWith(wired, { bundleId, digest, docPath }, []);
+  // The fake reports `opus` and declares no efforts, so none is invented.
+  const run = await runShowJson(wired, runId);
+  assert.deepEqual(run.modelChoice, { model: PLAIN_REPORTED_MODEL });
+  const started = run.timeline.find((event) => event.event === "turn-started");
+  assert.equal(started?.requestedModel, PLAIN_REPORTED_MODEL);
+  assert.equal(started?.requestedEffort, undefined);
+});
+
+test("run launch --effort alone keeps the preselected model", async (t) => {
+  const { wired, bundleId, digest, docPath } = wireAgent(t);
+  const runId = await launchWith(wired, { bundleId, digest, docPath }, [
+    "--effort",
+    "low",
+  ]);
+  const run = await runShowJson(wired, runId);
+  assert.deepEqual(run.modelChoice, {
+    model: PLAIN_REPORTED_MODEL,
+    effort: "low",
+  });
 });
 
 test("a command -> agent -> command Bundle runs the plain Turn to succeeded (#116)", async (t) => {
@@ -745,6 +803,7 @@ test("run show prints each event's Step; run show --json and run read --transcri
     event: "turn-started",
     detail: "s",
     turnKind: "agent",
+    requestedModel: PLAIN_REPORTED_MODEL,
     step: "fix",
     session: "s",
     sessionName: "s",
@@ -805,13 +864,14 @@ test("the rendered prompt carries the file's absolute path and the skill's SKILL
 });
 
 test("run answer settles a refused Harness preparation after the Gate as a non-success with the selected-Harness Problem (#304)", async (t) => {
-  // The Harness prepares at launch and refuses on the drive the answer starts.
+  // Launch preparation qualifies the Harness first, the launch drive prepares it,
+  // and it refuses on the drive the answer starts.
   let prepares = 0;
   const fake = createFake(plainScript());
   const adapter: HarnessAdapter = {
     prepare(options) {
       prepares += 1;
-      return prepares === 2
+      return prepares === 3
         ? Promise.resolve({
             ok: false,
             failure: {
@@ -929,7 +989,7 @@ test("run answer settles a refused Harness preparation after the Gate as a non-s
 
   assert.equal(await runHeadless(wired, ["run", "show", runId], io), 0);
   assert.match(out.join(""), /^State: halted$/m);
-  assert.equal(prepares, 2);
+  assert.equal(prepares, 3);
 });
 
 for (const containment of ["fallback", "contained", undefined] as const) {

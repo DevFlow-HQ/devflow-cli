@@ -95,6 +95,7 @@ export function launch(port: ProjectionPort, digest: string): string {
       launchInputs: {},
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: "fake-model",
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));

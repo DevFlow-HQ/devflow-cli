@@ -26,6 +26,7 @@ function create(
     digest?: string;
     launch?: unknown;
     selectedHarness?: "claude-code" | "codex";
+    modelChoice?: { model: string; effort?: string };
   } = {},
 ) {
   return group.createRun({
@@ -34,6 +35,9 @@ function create(
     launch: overrides.launch ?? { goal: "ship it" },
     ...(overrides.selectedHarness !== undefined
       ? { selectedHarness: overrides.selectedHarness }
+      : {}),
+    ...(overrides.modelChoice !== undefined
+      ? { modelChoice: overrides.modelChoice }
       : {}),
     at: AT,
   });
@@ -660,6 +664,8 @@ test("legacy Harness selection is idempotent and a fenced owner cannot change it
   assert.deepEqual(owner.selectHarness("claude-code"), {
     outcome: "selected",
   });
+  // The owner's own record reads the upgrade back without a re-acquire.
+  assert.equal(owner.record.selectedHarness, "claude-code");
   assert.deepEqual(owner.selectHarness("claude-code"), {
     outcome: "already-selected",
   });
@@ -673,6 +679,80 @@ test("legacy Harness selection is idempotent and a fenced owner cannot change it
   assert.deepEqual(owner.selectHarness("claude-code"), {
     outcome: "fenced",
   });
+});
+
+test("a launch's Model choice is held on the record with or without an effort and survives reopen", (t) => {
+  const home = makeTempDir("secant-store-");
+  const first = openRunGroup(home, WORKSPACE);
+  const withEffort = create(first, "op-effort", {
+    selectedHarness: "codex",
+    modelChoice: { model: "gpt-5", effort: "high" },
+  });
+  const withoutEffort = create(first, "op-no-effort", {
+    selectedHarness: "claude-code",
+    modelChoice: { model: "no-effort-model" },
+  });
+  assert.deepEqual(withEffort.record.modelChoice, {
+    model: "gpt-5",
+    effort: "high",
+  });
+  first.close();
+
+  const second = openRunGroup(home, WORKSPACE);
+  t.after(() => second.close());
+  const owner = second.acquireRun(withEffort.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.deepEqual(owner.record.modelChoice, {
+    model: "gpt-5",
+    effort: "high",
+  });
+  const read = second.readRun(withoutEffort.runId);
+  assert.ok(read.ok);
+  assert.deepEqual(read.run.modelChoice, { model: "no-effort-model" });
+});
+
+test("the legacy Model choice upgrade is null-only, idempotent, refreshes the owner's record, and a fenced owner cannot write it", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "legacy-choice", {
+    selectedHarness: "claude-code",
+  });
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.equal(owner.record.modelChoice, undefined);
+
+  const choice = { model: "opus", effort: "medium" };
+  assert.deepEqual(owner.selectModelChoice(choice), { outcome: "selected" });
+  assert.deepEqual(owner.record.modelChoice, choice);
+  assert.deepEqual(owner.selectModelChoice({ ...choice }), {
+    outcome: "already-selected",
+  });
+  // Only the same choice is a retry: a different one is never written over it.
+  assert.throws(
+    () => owner.selectModelChoice({ model: "opus" }),
+    /already holds a Model choice/,
+  );
+  const read = group.readRun(created.runId);
+  assert.ok(read.ok);
+  assert.deepEqual(read.run.modelChoice, choice);
+
+  const other = create(group, "legacy-choice-fenced", {
+    selectedHarness: "claude-code",
+  });
+  const stale = group.acquireRun(other.runId);
+  assert.ok(stale);
+  t.after(() => stale.close());
+  const replacement = group.acquireRun(other.runId);
+  assert.ok(replacement);
+  t.after(() => replacement.close());
+  assert.deepEqual(stale.selectModelChoice(choice), { outcome: "fenced" });
+  assert.equal(stale.record.modelChoice, undefined);
+  const untouched = group.readRun(other.runId);
+  assert.ok(untouched.ok);
+  assert.equal(untouched.run.modelChoice, undefined);
 });
 
 test("a home created by the pre-Drizzle release migrates in place", (t) => {
@@ -693,6 +773,8 @@ test("a home created by the pre-Drizzle release migrates in place", (t) => {
   assert.ok(read.ok);
   assert.deepEqual(read.run.launch, { input: "fixture" });
   assert.equal(read.run.state, "halted");
+  // A Run from before the Model choice reads with none, for its upgrade to fill.
+  assert.equal(read.run.modelChoice, undefined);
 
   const created = create(group, "post-migration-create");
   assert.equal(created.outcome, "created");

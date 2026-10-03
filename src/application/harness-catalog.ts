@@ -32,6 +32,7 @@ import type {
 import type { UpdateStream } from "./update-stream.js";
 import type { ApplicationEvent, ApplicationObserver } from "./observer.js";
 
+import { preselectModelChoice } from "./model-choice.js";
 import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 
 interface HeldQualification {
@@ -286,6 +287,7 @@ function focusOf(
       ? {}
       : modelViews(profile.modelSelection.declaration)),
     harnessDefaults: defaultsView(defaults),
+    ...preselectionView(defaults),
     capabilities: capabilitiesOf(profile),
     configurationPosture: profile.configurationPosture,
   };
@@ -321,6 +323,28 @@ function entryView(entry: ModelEntry): ModelEntryView {
     ...(entry.defaultEffort === undefined
       ? {}
       : { defaultEffort: entry.defaultEffort }),
+  };
+}
+
+/** The Application's preselection over the qualified defaults (ADR 0034), so a
+ *  client choosing a Harness shows what a launch starts from without deriving it. */
+function preselectionView(
+  defaults: HarnessDefaults,
+): Pick<HarnessFocus, "preselection"> {
+  const preselection = preselectModelChoice(defaults);
+  if (preselection === undefined) return {};
+  const { choice, source } = preselection;
+  return {
+    preselection: {
+      choice: {
+        model: choice.model,
+        ...(choice.effort === undefined ? {} : { effort: choice.effort }),
+      },
+      source:
+        source.kind === "reported"
+          ? { kind: "reported" }
+          : { kind: "fallback", reason: source.reason },
+    },
   };
 }
 

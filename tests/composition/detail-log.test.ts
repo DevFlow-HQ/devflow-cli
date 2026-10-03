@@ -165,6 +165,7 @@ async function launch(port: ProjectionPort, digest: string): Promise<void> {
       launchInputs: {},
       trustDigest: digest,
       harness: "claude-code",
+      requestedModel: "fake-model",
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));
@@ -348,6 +349,7 @@ test("an assessment's refused check settles refused with its codes while later c
           launchInputs: {},
           trustDigest: built.report.digest,
           harness: "claude-code",
+          requestedModel: "fake-model",
         },
       });
       assert.equal(admission.admitted, false);

@@ -322,6 +322,7 @@ test("an Agent Run records its completed Turn's usage and the Run Harness's Clea
           launchInputs: {},
           trustDigest: digest,
           harness: "claude-code",
+          requestedModel: "fake-model",
         },
       });
       assert.ok(admission.admitted, JSON.stringify(admission));
@@ -433,6 +434,7 @@ test("an interactive Step's Turn usage and its driver's CleanupReport reach the 
           launchInputs: {},
           trustDigest: built.report.digest,
           harness: "claude-code",
+          requestedModel: "fake-model",
         },
       });
       assert.ok(admission.admitted, JSON.stringify(admission));
@@ -559,6 +561,7 @@ test("a Claude Code failure crosses the Harness Seam into the log with its redac
             launchInputs: {},
             trustDigest: built.report.digest,
             harness: "claude-code",
+            requestedModel: "fake-model",
           },
         });
         assert.ok(admission.admitted, JSON.stringify(admission));
@@ -659,6 +662,7 @@ test("a reopened interactive Step prepares, records usage, and closes its Harnes
           launchInputs: {},
           trustDigest: built.report.digest,
           harness: "claude-code",
+          requestedModel: "fake-model",
         },
       });
       assert.ok(admission.admitted, JSON.stringify(admission));
