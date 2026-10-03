@@ -26,6 +26,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   The launch replay key includes the choice, and resume automatically reuses the immutable stored id without deriving it from Attempt evidence (#138, #146).
 - A launch's requested model is written into the Run record by `createRun` beside the Harness selection, before the first Attempt, and never changes
   (ADR 0023). Launch and resume hand that stored value to `prepare`; the observed `effectiveModel` never overwrites it (#187).
+- Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
+  strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
 - A pre-M4 Run with no selection upgrades only after its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume
   write `claude-code` once through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems remain unselected (#139).

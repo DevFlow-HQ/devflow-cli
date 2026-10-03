@@ -22,6 +22,7 @@ import {
   type PreflightCheck,
 } from "./observer.js";
 import { harnessNotFound } from "./problems.js";
+import { engineProblem } from "./engine-range.js";
 import { selectPlatform } from "./select-platform.js";
 
 // Preflight: the Application-owned precondition gate that refuses to create a Run
@@ -29,7 +30,7 @@ import { selectPlatform } from "./select-platform.js";
 // at launch, before a Run exists, after the pinned bytes are read and inspected
 // and before `runGroup.createRun`, so a failed Preflight leaves no Run directory,
 // record, or Trust grant. It checks — in order — that the pinned Snapshot still
-// composes, that a headless client is not handed an interactive-agent Step, that
+// composes, that the engine satisfies its declared range, that a headless client is not handed an interactive-agent Step, that
 // every declared Launch input is present and valid for its Artifact type, that the
 // union of authored Workspace prerequisites holds, and that each selected Command
 // step's executable resolves on `PATH`.
@@ -42,6 +43,8 @@ import { selectPlatform } from "./select-platform.js";
 // typed Problem; presentation only formats it.
 
 export interface PreflightRequest {
+  readonly engine: string;
+  readonly engineVersion: string;
   readonly manifest: AuthoredManifest;
   /** The Composition findings from re-inspecting the pinned Snapshot's bytes. */
   readonly composition: readonly CompositionFinding[];
@@ -142,6 +145,21 @@ function collectFindings(
   if (composition !== undefined) return { findings: [composition] };
 
   const findings: Problem[] = [];
+  const engine = check("engine", () => {
+    if (request.engineVersion === "0.0.0-dev") {
+      observe({
+        kind: "preflight-engine-skip",
+        engineVersion: request.engineVersion,
+        range: request.engine,
+      });
+      return undefined;
+    }
+    return engineProblem(request.engine, request.engineVersion);
+  });
+  if (engine !== undefined) {
+    findings.push(engine);
+    if (stopAtFirst) return { findings };
+  }
   const interactive = check("interactive", () =>
     checkInteractive(request, steps),
   );

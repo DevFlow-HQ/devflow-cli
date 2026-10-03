@@ -36,8 +36,17 @@ export type ManifestResult =
       readonly findings: readonly BundleFinding[]; // every issue
     };
 
+/** A strict parse failed, but a validated engine range can explain it to a host. */
+export interface EngineUnsupported {
+  readonly ok: false;
+  readonly engineUnsupported: string;
+  readonly finding: BundleFinding;
+  readonly findings: readonly BundleFinding[];
+}
+
 /** A packaged manifest carries the builder-owned `requires.engine` too. */
 export type PackagedManifestResult =
+  | EngineUnsupported
   | {
       readonly ok: true;
       readonly manifest: AuthoredManifest;
@@ -392,6 +401,11 @@ const requires = z.strictObject({
   ),
 });
 
+// Read only the engine with the same grammar, ignoring future fields at both levels.
+const engineEnvelope = z.object({
+  requires: z.object({ engine: requires.shape.engine }),
+});
+
 // Authored: `requires` and `platforms` are builder-owned, so authors omit them.
 // Packaged: the build wrote `requires` and a mandatory `platforms`.
 const authoredManifest = z.strictObject({
@@ -541,8 +555,14 @@ export function validatePackagedManifest(text: string): PackagedManifestResult {
   } catch (error) {
     return notJson(error);
   }
+  const envelope = engineEnvelope.safeParse(raw);
   const result = packagedManifest.safeParse(raw);
-  if (!result.success) return fail(result.error);
+  if (!result.success) {
+    const failure = fail(result.error);
+    return envelope.success
+      ? { ...failure, engineUnsupported: envelope.data.requires.engine }
+      : failure;
+  }
   const { requires: declared, ...manifest } = result.data;
   return {
     ok: true,

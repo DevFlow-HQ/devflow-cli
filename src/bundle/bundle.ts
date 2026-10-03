@@ -6,6 +6,7 @@ import {
   validateManifest,
   validatePackagedManifest,
   type BundleFinding,
+  type EngineUnsupported,
   type PackagedManifestResult,
 } from "./manifest.js";
 import {
@@ -71,6 +72,7 @@ export interface ReadBundle {
 }
 
 export type ReadOutcome =
+  | EngineUnsupported
   | { readonly ok: true; readonly read: ReadBundle }
   | {
       readonly ok: false;
@@ -100,8 +102,7 @@ export function buildBundle(folder: string): BuildOutcome {
   }
 
   const parsed = validateManifest(manifestText);
-  if (!parsed.ok)
-    return { ok: false, finding: parsed.finding, findings: parsed.findings };
+  if (!parsed.ok) return parsed;
   const manifest = parsed.manifest;
 
   const entries = walk(folder);
@@ -189,8 +190,7 @@ export function readBundle(bytes: Uint8Array, budgets: Budgets): ReadOutcome {
   if (!archive.ok) return archive;
 
   const parsed = parsePackagedArchive(archive.entries);
-  if (!parsed.ok)
-    return { ok: false, finding: parsed.finding, findings: parsed.findings };
+  if (!parsed.ok) return parsed;
 
   const bad = (code: string, message: string, path?: string): ReadOutcome => ({
     ok: false,
@@ -268,6 +268,7 @@ export interface BundleInspection {
 }
 
 export type InspectOutcome =
+  | EngineUnsupported
   | { readonly ok: true; readonly inspection: BundleInspection }
   | {
       readonly ok: false;
@@ -290,8 +291,7 @@ export function inspectBundle(
   if (!archive.ok) return archive;
 
   const parsed = parsePackagedArchive(archive.entries);
-  if (!parsed.ok)
-    return { ok: false, finding: parsed.finding, findings: parsed.findings };
+  if (!parsed.ok) return parsed;
 
   // The list view (summaryOf) never reads composition; opting out skips decoding
   // every prompt/schema asset and re-running the check for a plain `bundle list`.

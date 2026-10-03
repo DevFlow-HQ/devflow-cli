@@ -749,3 +749,48 @@ test("the TUI's wiring difference leaves the Application's records unchanged for
   assert.ok(headlessRecords.length > 0);
   assert.deepEqual(tuiRecords, headlessRecords);
 });
+
+test("the exact dev engine skips Preflight with an info record even when detail is off", async () => {
+  const h = wiredHome();
+  const cmd = writeCommandBundle();
+  await withClients(
+    async (clients) => {
+      assert.ok(
+        clients.bundleManagement.build(cmd.folder, { noInstall: false }).ok,
+      );
+      approve(clients.projectionPort, h.overrides.launchCwd!);
+      const admission = clients.projectionPort.submit({
+        operationId: "op-launch",
+        operation: "launch-run",
+        input: { bundle: { id: cmd.id }, launchInputs: {} },
+      });
+      assert.ok(!admission.admitted);
+      assert.equal(admission.problem.code, "bundle-trust-required");
+      return 1;
+    },
+    {
+      ...h.overrides,
+      engineVersion: "0.0.0-dev",
+      logSink: { ...h.overrides.logSink, detail: false },
+    },
+  );
+  const records = readLog(h.folder).records;
+  assert.deepEqual(
+    records
+      .filter((record) => record.event === "preflight-engine-skip")
+      .map(({ time: _time, invocationId: _id, ...record }) => record),
+    [
+      {
+        level: "info",
+        event: "preflight-engine-skip",
+        version: "0.0.0-dev",
+        range: ">=0.1.0",
+      },
+    ],
+  );
+  const preflight = records.find(
+    (record) => record.event === "preflight-settle",
+  );
+  assert.equal(preflight?.status, "passed");
+  assert.equal(preflight?.elapsedMs, 125);
+});

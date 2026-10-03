@@ -29,6 +29,7 @@ import {
   assertLocked,
   readLock,
 } from "./shipped-bundles.js";
+import { writeZip } from "../src/bundle/bundle.js";
 import { TARGETS, hostTargetKey } from "./targets.js";
 import { installReplayerAt } from "../tests/harness/replayer-install.js";
 import { installCodexReplayerAt } from "../tests/harness/codex-replayer-install.js";
@@ -1290,7 +1291,58 @@ await withCleanup(
     await runNamedScenario("matt-front-refusal", mattFrontRefusalScenario);
 
     async function preflightRefusalsScenario(): Promise<void> {
+      // The builder owns requires.engine, so hand-pack a strict-valid archive with
+      // a floor above this versioned binary. It must stay installed and untrusted.
+      const higherMajor = Number(pkg.version.split(".")[0]) + 1;
+      const higherFloor = `${higherMajor}.0.0`;
+      const engineWfb = join(smokeRoot, "higher-engine.wfb");
+      await writeFile(
+        engineWfb,
+        writeZip([
+          {
+            path: "manifest.json",
+            data: Buffer.from(
+              JSON.stringify({
+                formatVersion: 1,
+                bundle: {
+                  id: "dev.secant.smoke-higher-engine",
+                  version: "1.0.0",
+                  name: "Higher engine",
+                  description: "Refused before Trust.",
+                },
+                requires: { engine: `>=${higherFloor}` },
+                platforms: ["windows", "macos", "linux"],
+                inputs: {},
+                assets: [],
+                routing: [
+                  {
+                    id: "run",
+                    kind: "command",
+                    command: {
+                      executable: basename(process.execPath),
+                      arguments: ["--version"],
+                    },
+                  },
+                ],
+              }),
+            ),
+          },
+        ]),
+      );
+      run(binary, ["bundle", "install", engineWfb], {
+        cwd: workspaceDirectory,
+        env: workspaceEnv,
+      });
       assertRefuses(binary, [
+        {
+          args: ["run", "launch", "dev.secant.smoke-higher-engine"],
+          match: new RegExp(
+            `^(?![\\s\\S]*bundle-trust-required)[\\s\\S]*needs Secant ≥ ${higherMajor}\\.0`,
+          ),
+          cwd: workspaceDirectory,
+          env: workspaceEnv,
+          detail: "did not refuse the higher engine before Trust",
+        },
         {
           args: ["run", "launch", "dev.secant.smoke-interactive"],
           match: "interactive-step-needs-tui",

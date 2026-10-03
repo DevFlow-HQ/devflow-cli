@@ -43,7 +43,10 @@ import type {
 
 import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 
+import { engineProblem } from "./engine-range.js";
+
 export interface LaunchPreparationDeps {
+  readonly engineVersion: string;
   readonly subscriptions: Pick<SubscriptionLifecycle, "open">;
   readonly catalog: Catalog;
   readonly budgets: Budgets;
@@ -130,7 +133,10 @@ export function createLaunchPreparation(
     const inspected = inspectBundle(bytes, deps.budgets, true);
     if (!inspected.ok) {
       findings.push(
-        bundleBytesCorrupt({ digest: entry.digest }, inspected.finding.code),
+        ("engineUnsupported" in inspected
+          ? engineProblem(inspected.engineUnsupported, deps.engineVersion)
+          : undefined) ??
+          bundleBytesCorrupt({ digest: entry.digest }, inspected.finding.code),
       );
       return { findings };
     }
@@ -150,6 +156,8 @@ export function createLaunchPreparation(
     const pre = assessPreflight(
       {
         manifest,
+        engine: inspected.inspection.engine,
+        engineVersion: deps.engineVersion,
         composition: inspected.inspection.composition,
         workspacePath: deps.launchWorkspacePath,
         launchInputs: input.launchInputs,
@@ -164,6 +172,10 @@ export function createLaunchPreparation(
       deps.observe,
     );
     findings.push(...pre.findings);
+    // An unsupported engine cannot authorize this Bundle, so do not ask for Trust.
+    if (pre.findings.some((finding) => finding.code === "engine-unsupported")) {
+      return { findings };
+    }
 
     // Trust mirrors `submitLaunch` exactly, minus the grant write: an untrusted
     // digest needs a matching acknowledgement; a missing one is `bundle-trust-

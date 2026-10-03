@@ -20,6 +20,7 @@ import type {
   BundleReport,
   BundleResult,
 } from "./bundle-management.js";
+import { engineProblem } from "./engine-range.js";
 import type { Problem } from "./projection-port.js";
 
 // Application's implementation of the Bundle-management contract. It coordinates
@@ -31,6 +32,7 @@ import type { Problem } from "./projection-port.js";
 export interface BundleManagementDependencies {
   readonly catalog: Catalog;
   readonly budgets: Budgets;
+  readonly engineVersion: string;
   /** Called after a fresh install commits, so an open `bundle-catalog`
    *  Projection can push a durable update. Not called for an already-installed
    *  or failed install. */
@@ -53,7 +55,9 @@ export function installBytes(
       problem:
         "composition" in outcome
           ? compositionProblem(outcome.composition)
-          : toProblem(outcome.finding, outcome.findings),
+          : (("engineUnsupported" in outcome
+              ? engineProblem(outcome.engineUnsupported, deps.engineVersion)
+              : undefined) ?? toProblem(outcome.finding, outcome.findings)),
     };
   const result = commit(deps.catalog, outcome.read, bytes, origin, extra);
   if (result.ok && result.report.installed?.status === "installed") {

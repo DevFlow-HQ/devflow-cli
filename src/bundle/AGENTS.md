@@ -11,7 +11,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `validatePackagedManifest`→`packagedManifest` on install (`requires`/`platforms` differ; nested schemas are shared). Install additionally re-derives
   `requires.engine` to reject an understated range, and runs the same Composition check the build runs over the archived prompt/schema text, so a
   received archive is refused with the build-time finding codes; launch (`launch-preparation.ts`) and resume (`application.ts`) re-run it over the pinned stored bytes. The
-  digest makes a built and an imported archive indistinguishable once stored.
+  digest makes a built and an imported archive indistinguishable once stored. A lenient engine-envelope read precedes the strict packaged parse:
+  if that parse fails, a valid `>=x.y.z` range crosses as `engineUnsupported` alongside the findings. Application compares versions; Bundle never does.
 - The Catalog's digest-named asset tree (`<home>/bundles/<digest>/`) is a derived, read-only cache of the managed bytes, never an identity or a second
   source of truth: `readBundleAssets` hands the Catalog the manifest-declared entries (never `manifest.json` or an unclaimed entry), and a missing or
   corrupt tree is re-derived from the bytes. Nothing keys on the tree; the digest over the bytes stays the only content identity.

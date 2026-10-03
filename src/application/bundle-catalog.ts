@@ -23,7 +23,6 @@ import type {
   BundleFocusSnapshot,
   BundleOriginView,
   BundleTrustState,
-  EngineRange,
   InstalledBundleFocus,
   InstalledBundleSummary,
   LaunchInputView,
@@ -34,6 +33,7 @@ import type {
 } from "./projection-port.js";
 import { bundleBytesCorrupt, bundleBytesMissing } from "./problems.js";
 import { selectInstalledEntry } from "./entry-selection.js";
+import { engineRange, engineProblem } from "./engine-range.js";
 import { selectPlatform } from "./select-platform.js";
 
 // The `bundle-catalog` Projection join (#54). It reads Catalog Entries and their
@@ -157,11 +157,17 @@ function inspectEntry(
   }
   const outcome = inspectBundle(bytes, deps.budgets, includeComposition);
   if (!outcome.ok) {
+    const unsupported =
+      "engineUnsupported" in outcome
+        ? engineProblem(outcome.engineUnsupported, deps.engineVersion)
+        : undefined;
     return {
-      problem: bundleBytesCorrupt(
-        { digest: entry.digest, id: entry.id, version: entry.version },
-        outcome.finding.code,
-      ),
+      problem:
+        unsupported ??
+        bundleBytesCorrupt(
+          { digest: entry.digest, id: entry.id, version: entry.version },
+          outcome.finding.code,
+        ),
     };
   }
   return { inspection: outcome.inspection };
@@ -338,25 +344,5 @@ function producedView(
     home: produced.home ?? "store",
     ...(produced.path !== undefined ? { path: produced.path } : {}),
     producedBy,
-  };
-}
-
-// --- version facts ---------------------------------------------------------
-
-function engineRange(engine: string, engineVersion: string): EngineRange {
-  const floor = engine.slice(">=".length);
-  // includePrerelease so a prerelease Secant build above the floor (e.g. an RC)
-  // still satisfies the range; without it semver excludes every prerelease host.
-  const satisfied = semver.satisfies(engineVersion, engine, {
-    includePrerelease: true,
-  });
-  return {
-    range: engine,
-    satisfied,
-    ...(satisfied
-      ? {}
-      : {
-          note: `needs Secant ≥ ${semver.major(floor)}.${semver.minor(floor)}`,
-        }),
   };
 }

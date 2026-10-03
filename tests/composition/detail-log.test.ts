@@ -269,6 +269,7 @@ test("detail checkpoints are written with detail on and dropped with it off, for
   assert.deepEqual(detail, [
     ...[
       "composition",
+      "engine",
       "interactive",
       "harness",
       "inputs",
@@ -374,6 +375,7 @@ test("an assessment's refused check settles refused with its codes while later c
     settles.map((settle) => settle.check),
     [
       "composition",
+      "engine",
       "interactive",
       "harness",
       "inputs",
@@ -567,6 +569,7 @@ test("a Human Gate's pending-gate write, a Materialization conflict's write, and
     .map(({ check, status }) => [check, status]);
   assert.deepEqual(resumeChecks, [
     ["composition", "passed"],
+    ["engine", "passed"],
     ["interactive", "passed"],
     ["harness", "passed"],
     ["inputs", "passed"],

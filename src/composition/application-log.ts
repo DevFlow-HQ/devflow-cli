@@ -63,6 +63,7 @@ function stageOf(
     case "preflight-check-start":
     case "preflight-check-settle":
     case "run-rest":
+    case "preflight-engine-skip":
       return undefined;
     case "operation-admission":
       return event.admission === "admitted"
@@ -75,6 +76,12 @@ function stageOf(
 
 function recordOf(event: MappedEvent): OperationalRecord {
   switch (event.kind) {
+    case "preflight-engine-skip":
+      return {
+        event: event.kind,
+        version: event.engineVersion,
+        range: event.range,
+      };
     case "run-rest":
       // No Routing walk starts this Application-owned rest, so it carries no
       // invented duration. Execution's run-unwind remains a separate fact.

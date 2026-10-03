@@ -8,6 +8,7 @@ import {
   DEFAULT_BUDGETS,
   readBundle,
   readBundleAssets,
+  inspectBundle,
   writeZip,
   type Budgets,
   type ZipEntry,
@@ -778,3 +779,59 @@ test("readBundleAssets returns only the manifest-declared entries, never manifes
     undefined,
   );
 });
+
+test("Bundle reads retain the declared engine before rejecting unknown fields", () => {
+  const bytes = repack(proofBytes(), (entries) =>
+    entries.map((entry) => {
+      if (entry.path !== "manifest.json") return entry;
+      const manifest = JSON.parse(decode(entry.data));
+      manifest.requires = { engine: ">=9.0.0", future: true };
+      manifest.routing[0].future = true;
+      manifest.future = true;
+      return { path: entry.path, data: Buffer.from(JSON.stringify(manifest)) };
+    }),
+  );
+  for (const outcome of [
+    readBundle(bytes, DEFAULT_BUDGETS),
+    inspectBundle(bytes, DEFAULT_BUDGETS),
+  ]) {
+    assert.ok(
+      !outcome.ok && "engineUnsupported" in outcome,
+      JSON.stringify(outcome),
+    );
+    assert.equal(outcome.engineUnsupported, ">=9.0.0");
+  }
+});
+
+for (const engine of [
+  undefined,
+  null,
+  1,
+  ">=v9.0.0",
+  ">=9.0",
+  "^9.0.0",
+  ">= 9.0.0",
+  ">=9.0.0 ",
+]) {
+  test(`a malformed engine ${String(engine)} cannot override strict validation`, () => {
+    const bytes = repack(proofBytes(), (entries) =>
+      entries.map((entry) => {
+        if (entry.path !== "manifest.json") return entry;
+        const manifest = JSON.parse(decode(entry.data));
+        manifest.requires.engine = engine;
+        manifest.future = true;
+        return {
+          path: entry.path,
+          data: Buffer.from(JSON.stringify(manifest)),
+        };
+      }),
+    );
+    for (const outcome of [
+      readBundle(bytes, DEFAULT_BUDGETS),
+      inspectBundle(bytes, DEFAULT_BUDGETS),
+    ]) {
+      assert.ok(!outcome.ok && "finding" in outcome);
+      assert.equal("engineUnsupported" in outcome, false);
+    }
+  });
+}

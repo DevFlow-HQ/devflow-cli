@@ -34,6 +34,7 @@ import {
   type BundleCatalogDependencies,
 } from "./bundle-catalog.js";
 import { createHarnessCatalog } from "./harness-catalog.js";
+import { engineProblem } from "./engine-range.js";
 import { createLaunchPreparation } from "./launch-preparation.js";
 import {
   guardedApplicationObserver,
@@ -313,7 +314,7 @@ export interface ApplicationDependencies {
   readonly launchWorkspacePath: string;
   /** Install budgets a Bundle can never raise; composition wires the defaults. */
   readonly bundleBudgets?: Budgets;
-  /** The running Secant engine version, for the `bundle-catalog` engine note.
+  /** The running Secant engine version, for compatibility checks and the catalog note.
    *  Defaults to the dev sentinel when a caller has no version to declare. */
   readonly engineVersion?: string;
   /** The host platform the Execution summary resolves commands for. */
@@ -404,6 +405,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     observe,
   );
   const budgets = deps.bundleBudgets ?? DEFAULT_BUDGETS;
+  const engineVersion = deps.engineVersion ?? "0.0.0-dev";
   // The launch-draft evaluator both `submitLaunch` (first failing check) and the
   // `launch-preparation` Projection (every finding) read, so both clients admit a
   // launch under identical rules and route a refusal to the same step (#189).
@@ -411,6 +413,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     subscriptions,
     catalog,
     budgets,
+    engineVersion,
     process,
     ...(deps.hostPlatform !== undefined
       ? { hostPlatform: deps.hostPlatform }
@@ -453,7 +456,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const bundleCatalog: BundleCatalogDependencies = {
     catalog,
     budgets,
-    engineVersion: deps.engineVersion ?? "0.0.0-dev",
+    engineVersion,
     get shipped() {
       return shippedBundles.shipped;
     },
@@ -1466,7 +1469,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const inspected = inspectBundle(bytes, budgets, true);
     if (!inspected.ok) {
       return {
-        problem: bundleBytesCorrupt({ digest }, inspected.finding.code),
+        problem:
+          ("engineUnsupported" in inspected
+            ? engineProblem(inspected.engineUnsupported, engineVersion)
+            : undefined) ??
+          bundleBytesCorrupt({ digest }, inspected.finding.code),
       };
     }
     const manifest = inspected.inspection.manifest;
@@ -1476,6 +1483,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const pre = preflight(
       {
         manifest,
+        engine: inspected.inspection.engine,
+        engineVersion,
         composition: inspected.inspection.composition,
         workspacePath: launchWorkspacePath,
         launchInputs,
@@ -3061,6 +3070,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const bundleManagementDeps: BundleManagementDependencies = {
     catalog,
     budgets: bundleCatalog.budgets,
+    engineVersion,
     onInstalled() {
       // A fresh install changes the list; push the new snapshot to observers.
       if (bundleCatalogObservers.size === 0) return;

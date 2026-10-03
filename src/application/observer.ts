@@ -32,6 +32,7 @@ export function problemCodes(problems: readonly Problem[]): ProblemCodes {
  *  reports (#325). */
 export type PreflightCheck =
   | "composition"
+  | "engine"
   | "interactive"
   | "harness"
   | "inputs"
@@ -63,6 +64,11 @@ export type ApplicationEvent =
   /** The creation-free launch checks, shared by a launch and its assessment. */
   | { readonly kind: "launch-preparation-start" }
   | { readonly kind: "launch-preparation-settle"; readonly codes: ProblemCodes }
+  | {
+      readonly kind: "preflight-engine-skip";
+      readonly engineVersion: string;
+      readonly range: string;
+    }
   | { readonly kind: "preflight-start" }
   | { readonly kind: "preflight-settle"; readonly codes: ProblemCodes }
   /** One Preflight check, a detail checkpoint: the start precedes its

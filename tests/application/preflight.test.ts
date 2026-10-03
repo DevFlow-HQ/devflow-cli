@@ -54,6 +54,10 @@ function fixture(
   workspace: string,
   harnessRegistry: readonly ApplicationHarnessRegistration[] = [],
   gitProbe: GitProbe = "pass",
+  options: Pick<
+    Parameters<typeof createApplication>[0],
+    "engineVersion" | "supportsInteractiveTurns"
+  > = {},
 ): Fixture {
   const executionProcess = preflightProcess(workspace, gitProbe);
   const catalog = openCatalog(makeTempDir("secant-pf-home-"));
@@ -61,6 +65,7 @@ function fixture(
   const runGroup = openRunGroup(makeTempDir("secant-pf-store-"), workspace);
   t.after(() => runGroup.close());
   const app = createApplication({
+    ...options,
     catalog,
     process: executionProcess,
     launchWorkspacePath: workspace,
@@ -711,3 +716,198 @@ test("a headless launch refuses an interactive-agent Bundle with interactive-ste
   assert.match(admission.problem.remediation, /TUI/i);
   assert.deepEqual(f.runGroup.listRuns(), []);
 });
+
+function engineBundle(engine: string, future = false) {
+  const cmd = writeCommandBundle();
+  const built = buildBundle(cmd.folder);
+  assert.ok(built.ok);
+  const bytes = writeZip(
+    readArchiveEntries(built.built.bytes).map((entry) => {
+      if (entry.path !== "manifest.json") return entry;
+      const manifest = JSON.parse(entry.data.toString("utf8"));
+      manifest.requires.engine = engine;
+      if (future) manifest.routing[0].future = true;
+      return { path: entry.path, data: Buffer.from(JSON.stringify(manifest)) };
+    }),
+  );
+  const file = join(makeTempDir("secant-engine-"), "engine.wfb");
+  writeFileSync(file, bytes);
+  return {
+    id: cmd.id,
+    version: cmd.version,
+    file,
+    bytes,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+}
+
+function installEngineBundle(f: Fixture, engine: string) {
+  const bundle = engineBundle(engine);
+  const installed = f.app.bundleManagement.install(bundle.file);
+  assert.ok(installed.ok, JSON.stringify(installed));
+  return { id: bundle.id, digest: installed.report.digest };
+}
+
+for (const supportsInteractiveTurns of [false, true]) {
+  test(`Preflight refuses an unmet engine before Trust, interactive client=${supportsInteractiveTurns}`, (t) => {
+    const f = fixture(t, workspace(), [], "pass", {
+      engineVersion: "0.1.0",
+      supportsInteractiveTurns,
+    });
+    const { id, digest } = installEngineBundle(f, ">=0.2.0");
+    const admission = launch(f, id);
+    assert.ok(!admission.admitted);
+    assert.equal(admission.problem.code, "engine-unsupported");
+    assert.equal(admission.problem.explanation, "needs Secant ≥ 0.2");
+    assert.match(admission.problem.remediation, /[Uu]pgrade Secant/);
+    const view = f.app.projectionPort.openProjection({
+      family: "launch-preparation",
+      draft: { bundle: { id }, launchInputs: {} },
+    });
+    assert.equal(view.snapshot.status, "not-ready");
+    assert.equal(view.snapshot.findings[0]?.code, "engine-unsupported");
+    assert.equal(
+      view.snapshot.findings.some(
+        (finding) => finding.code === "bundle-trust-required",
+      ),
+      false,
+    );
+    view.close();
+    assert.deepEqual(f.runGroup.listRuns(), []);
+    const entry = f.catalog
+      .listEntries()
+      .find((entry) => entry.digest === digest);
+    assert.ok(entry);
+    assert.equal(
+      f.catalog.getTrustGrant(digest, entry.installationGeneration),
+      undefined,
+    );
+  });
+}
+
+for (const engineVersion of ["0.2.0", "0.3.0-rc.1", "0.0.0-dev"]) {
+  test(`Preflight accepts an engine floor under ${engineVersion}`, async (t) => {
+    const f = fixture(t, workspace(), [], "pass", { engineVersion });
+    const { id, digest } = installEngineBundle(f, ">=0.2.0");
+    const admission = launch(f, id, { trustDigest: digest });
+    assert.ok(admission.admitted, JSON.stringify(admission));
+    await settled(f, "op-1");
+    const list = f.app.projectionPort.openProjection({
+      family: "bundle-catalog",
+    });
+    assert.ok(list.snapshot.result.found);
+    const bundle = list.snapshot.result.bundles.find(
+      (bundle) => bundle.id === id,
+    );
+    assert.equal(bundle?.engine.satisfied, engineVersion !== "0.0.0-dev");
+    if (engineVersion === "0.0.0-dev")
+      assert.equal(bundle?.engine.note, "needs Secant ≥ 0.2");
+    list.close();
+  });
+}
+
+for (const engineVersion of ["0.0.0", "0.0.0-rc.1", "0.2.0-rc.1"]) {
+  test(`Preflight does not exempt ${engineVersion}`, (t) => {
+    const f = fixture(t, workspace(), [], "pass", { engineVersion });
+    const { id } = installEngineBundle(f, ">=0.2.0");
+    const admission = launch(f, id);
+    assert.ok(!admission.admitted);
+    assert.equal(admission.problem.code, "engine-unsupported");
+  });
+}
+
+for (const engineVersion of ["0.1.0", "0.0.0-dev", "9.0.0"]) {
+  test(`future manifest install and stored-byte surfaces under ${engineVersion}`, (t) => {
+    const f = fixture(t, workspace(), [], "pass", { engineVersion });
+    const bundle = engineBundle(">=0.2.0", true);
+    const installed = f.app.bundleManagement.install(bundle.file);
+    assert.ok(!installed.ok);
+    const unsupported = engineVersion !== "9.0.0";
+    assert.equal(
+      installed.problem.code,
+      unsupported ? "engine-unsupported" : "unknown-field",
+    );
+    if (unsupported)
+      assert.equal(installed.problem.explanation, "needs Secant ≥ 0.2");
+    assert.equal(f.catalog.countInstalledBundles(), 0);
+    // Model bytes retained after an engine downgrade, bypassing the installer.
+    f.catalog.installBundle({
+      identity: { id: bundle.id, version: bundle.version },
+      digest: bundle.digest,
+      bytes: bundle.bytes,
+      origin: { kind: "local-file", path: bundle.file },
+      installedAt: new Date(),
+    });
+    for (const selector of [
+      { family: "bundle-catalog" },
+      { family: "bundle-catalog", focus: { id: bundle.id } },
+    ] satisfies Parameters<typeof f.app.projectionPort.openProjection>[0][]) {
+      const view = f.app.projectionPort.openProjection(selector);
+      assert.ok(view.snapshot.family === "bundle-catalog");
+      assert.ok(!view.snapshot.result.found);
+      assert.equal(
+        view.snapshot.result.problem.code,
+        unsupported ? "engine-unsupported" : "bundle-bytes-corrupt",
+      );
+      if (unsupported)
+        assert.equal(
+          view.snapshot.result.problem.explanation,
+          "needs Secant ≥ 0.2",
+        );
+      view.close();
+    }
+    const admission = launch(f, bundle.id);
+    assert.ok(!admission.admitted);
+    assert.equal(
+      admission.problem.code,
+      unsupported ? "engine-unsupported" : "bundle-bytes-corrupt",
+    );
+    assert.deepEqual(f.runGroup.listRuns(), []);
+  });
+}
+
+for (const future of [false, true]) {
+  test(`resume after downgrade refuses the engine before Trust, future fields=${future}`, (t) => {
+    const f = fixture(t, workspace(), [], "pass", { engineVersion: "0.1.0" });
+    const bundle = engineBundle(">=0.2.0", future);
+    f.catalog.installBundle({
+      identity: { id: bundle.id, version: bundle.version },
+      digest: bundle.digest,
+      bytes: bundle.bytes,
+      origin: { kind: "local-file", path: bundle.file },
+      installedAt: new Date(),
+    });
+    const created = f.runGroup.createRun({
+      operationId: "seed-engine-resume",
+      bundleSnapshotDigest: bundle.digest,
+      launch: {},
+      at: new Date(),
+    });
+    assert.equal(created.outcome, "created");
+    if (created.outcome !== "created") throw new Error("unreachable");
+    const owner = f.runGroup.acquireRun(created.runId);
+    assert.ok(owner);
+    assert.ok(owner.writeState("failed").ok);
+    assert.ok(owner.release().ok);
+    owner.close();
+    const admission = f.app.projectionPort.submit({
+      operationId: "engine-resume",
+      operation: "resume-run",
+      input: { runId: created.runId },
+    });
+    assert.ok(!admission.admitted);
+    assert.equal(admission.problem.code, "engine-unsupported");
+    assert.equal(admission.problem.explanation, "needs Secant ≥ 0.2");
+    const read = f.runGroup.readRun(created.runId);
+    assert.ok(read.ok);
+    assert.equal(read.run.state, "failed");
+    const entry = f.catalog
+      .listEntries()
+      .find((entry) => entry.digest === bundle.digest);
+    assert.ok(entry);
+    assert.equal(
+      f.catalog.getTrustGrant(bundle.digest, entry.installationGeneration),
+      undefined,
+    );
+  });
+}

@@ -27,7 +27,9 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **run-refusals** (#82): `run show` on an unknown id and `run launch` on an uninstalled Bundle exit non-zero with `run-not-found` and
   `bundle-not-installed` before any Run directory exists.
 - **headless-refusal-fixtures** and **preflight-refusals** (#83, #116): a built-and-installed interactive-agent Bundle is refused with
-  `interactive-step-needs-tui` and a Git-guarded Command Bundle with `git-worktree-root`, both ahead of the Trust gate.
+  `interactive-step-needs-tui` and a Git-guarded Command Bundle with `git-worktree-root`, both ahead of the Trust gate. A hand-packed,
+  strict-valid Bundle with a floor above `package.json`'s version installs untrusted; the versioned binary refuses its launch with
+  "needs Secant ≥ x.y" before asking for Trust (#367).
 - **shipped-bundles-embedded**: this OS's binary rebuilds each allow-listed folder to its `bundles/builtin.lock.json` digest and embeds those exact
   bytes, and not the External Proof Bundle's.
 - **shipped-bundles-startup** (#227): a fresh home's first startup installs exactly the locked built-ins with origin `built-in` and app-release trust, a
