@@ -44,3 +44,39 @@ jobs:
       - name: T5 eof compiled
         continue-on-error: true
         run: dist/spike.exe t5-eof
+      - name: T5 eof (Git Bash backgrounded sleep) compiled
+        continue-on-error: true
+        run: dist/spike.exe t5-eof bash
+      - name: T5 register bun script
+        continue-on-error: true
+        run: bun spike/main.ts t5 register
+      - name: Install npm shim package (real cmd-shim output)
+        run: |
+          Push-Location spike/shim-pkg
+          npm pack --pack-destination $env:RUNNER_TEMP
+          Pop-Location
+          $prefix = Join-Path $env:RUNNER_TEMP 'npm prefix'
+          npm install -g --prefix "$prefix" (Join-Path $env:RUNNER_TEMP 'spike-echo-1.0.0.tgz')
+          Get-ChildItem -LiteralPath $prefix | Format-Table Name, Length
+          "SPIKE_SHIM=$prefix\spike-echo.cmd" >> $env:GITHUB_ENV
+      - name: T2 shim routes compiled
+        continue-on-error: true
+        run: dist/spike.exe t2 "$env:SPIKE_SHIM"
+      - name: T3 quoting compiled
+        continue-on-error: true
+        run: dist/spike.exe t3 "$env:SPIKE_SHIM"
+      - name: T4 environment block compiled
+        continue-on-error: true
+        run: dist/spike.exe t4 "$env:SPIKE_SHIM" "$env:RUNNER_TEMP"
+      - name: T6 escape compiled
+        continue-on-error: true
+        run: dist/spike.exe t6-escape
+      - name: T6 escape bun script
+        continue-on-error: true
+        run: bun spike/main.ts t6-escape
+      - name: T6 parent crash compiled
+        continue-on-error: true
+        run: dist/spike.exe t6-crash "$env:RUNNER_TEMP"
+      - name: Leftover sleep.exe check
+        if: always()
+        run: Get-Process sleep -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime

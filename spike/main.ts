@@ -91,10 +91,10 @@ async function childModes(): Promise<boolean> {
       process.exit(Number(args[2] ?? 0));
     case "hold-child": {
       // Leave a grandchild holding our stdout for 4 s, then exit at once.
-      nodeSpawn(self("sleep-child", 4000, 0)[0]!, self("sleep-child", 4000, 0).slice(1), {
+      const gc = nodeSpawn(self("sleep-child", 4000, 0)[0]!, self("sleep-child", 4000, 0).slice(1), {
         stdio: ["ignore", "inherit", "inherit"],
       });
-      process.stdout.write("hold-child up\n");
+      process.stdout.write(`hold-child up, grandchild ${gc.pid}\n`);
       await Bun.sleep(200);
       process.exit(3);
     }
@@ -185,9 +185,12 @@ async function t5(which: string): Promise<void> {
 }
 
 /** Pipe EOF is not process exit: a grandchild that inherited stdout delays EOF. */
-async function t5eof(): Promise<void> {
+async function t5eof(kind: string): Promise<void> {
   const argv = self("hold-child");
-  const c = await spawnContained({ app: argv[0], commandLine: commandLine(argv) });
+  const c =
+    kind === "bash"
+      ? await spawnContained({ app: BASH, commandLine: `${quoteArg(BASH)} -c "sleep 4 & echo up; exit 3"` })
+      : await spawnContained({ app: argv[0], commandLine: commandLine(argv) });
   const o = collect(c.stdout);
   c.stderr.resume();
   c.stdin.end();
@@ -197,12 +200,13 @@ async function t5eof(): Promise<void> {
   const code = exitCode(c.hProcess);
   const eofAt = await withTimeout(o.ended, 15000, "eof");
   const eofMs = eofAt - t0;
-  result("t5.eof", "INFO", {
+  result(`t5.eof.${kind}`, "INFO", {
     compiled,
     code,
     exitDetectedMs: Math.round(exitMs),
     stdoutEofMs: Math.round(eofMs),
     eofLagMs: Math.round(eofMs - exitMs),
+    out: o.text(),
     note: "EOF lag ~4000ms means pipe EOF cannot stand in for exit",
   });
   c.closeJob();
@@ -590,7 +594,7 @@ if (!(await childModes())) {
         await t5(args[1]!);
         break;
       case "t5-eof":
-        await t5eof();
+        await t5eof(args[1] ?? "bun");
         break;
       case "t2":
         await t2(args[1]!);
