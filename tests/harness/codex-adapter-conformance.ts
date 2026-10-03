@@ -889,9 +889,15 @@ test("codex-live-controls steers the exact active native Turn", async () => {
   const turn = prepared.startTurn(turnRequest());
   await waitForSession(turn);
 
-  assert.deepEqual(await turn.steer({ text: "inspect the other seam" }), {
-    outcome: "accepted",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "inspect the other seam",
+    }),
+    {
+      outcome: "accepted",
+    },
+  );
   await prepared.close();
   await turn.result();
 
@@ -905,6 +911,8 @@ test("codex-live-controls steers the exact active native Turn", async () => {
   assert.deepEqual(steer?.params, {
     threadId: "thread-1",
     expectedTurnId: "turn-1",
+    clientUserMessageId:
+      "secant-steer-c3562695713f21842df862acee1dcab488dd2668d7d9b6733db29d6a35bc4be9",
     input: [{ type: "text", text: "inspect the other seam" }],
   });
 });
@@ -954,10 +962,13 @@ test("codex-live-controls does not turn interrupt acknowledgement into terminal 
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
-  assert.deepEqual(await turn.steer({ text: "too late" }), {
-    outcome: "rejected",
-    reason: "expired",
-  });
+  assert.deepEqual(
+    await turn.steer({ steerId: "conformance-steer", text: "too late" }),
+    {
+      outcome: "rejected",
+      reason: "expired",
+    },
+  );
 
   await prepared.close();
   const result = await turn.result();
@@ -1000,9 +1011,15 @@ test("codex-live-controls native interrupt rejection does not poison later input
     outcome: "rejected",
     reason: "expired",
   });
-  assert.deepEqual(await turn.steer({ text: "continue instead" }), {
-    outcome: "accepted",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "continue instead",
+    }),
+    {
+      outcome: "accepted",
+    },
+  );
   assert.equal((await turn.result()).kind, "completed");
   await prepared.close();
 });
@@ -1022,9 +1039,15 @@ test("codex-live-controls native Interrupt mismatch is expired", async () => {
     outcome: "rejected",
     reason: "expired",
   });
-  assert.deepEqual(await turn.steer({ text: "continue instead" }), {
-    outcome: "accepted",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "continue instead",
+    }),
+    {
+      outcome: "accepted",
+    },
+  );
   assert.equal((await turn.result()).kind, "completed");
   await prepared.close();
 });
@@ -1055,9 +1078,15 @@ test("codex-live-controls refuses a near-miss Interrupt error without losing the
       },
     ],
   );
-  assert.deepEqual(await turn.steer({ text: "continue after refusal" }), {
-    outcome: "accepted",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "continue after refusal",
+    }),
+    {
+      outcome: "accepted",
+    },
+  );
   assert.equal((await turn.result()).kind, "completed");
   await prepared.close();
 });
@@ -1088,9 +1117,15 @@ test("codex-live-controls native internal control error preserves its diagnostic
       },
     ],
   );
-  assert.deepEqual(await turn.steer({ text: "continue after refusal" }), {
-    outcome: "accepted",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "continue after refusal",
+    }),
+    {
+      outcome: "accepted",
+    },
+  );
   assert.equal((await turn.result()).kind, "completed");
   await prepared.close();
 });
@@ -1141,10 +1176,13 @@ test("codex-live-controls rejects a mismatched native Steer response as stale", 
   const turn = prepared.startTurn(turnRequest());
   await waitForSession(turn);
 
-  assert.deepEqual(await turn.steer({ text: "stale guidance" }), {
-    outcome: "rejected",
-    reason: "expired",
-  });
+  assert.deepEqual(
+    await turn.steer({ steerId: "conformance-steer", text: "stale guidance" }),
+    {
+      outcome: "rejected",
+      reason: "expired",
+    },
+  );
   assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
   assert.equal((await turn.result()).kind, "interrupted");
   await prepared.close();
@@ -1162,10 +1200,16 @@ for (const race of ["no-active", "mismatch"] as const) {
     const turn = prepared.startTurn(turnRequest());
     await waitForSession(turn);
 
-    assert.deepEqual(await turn.steer({ text: "racing guidance" }), {
-      outcome: "rejected",
-      reason: "expired",
-    });
+    assert.deepEqual(
+      await turn.steer({
+        steerId: "conformance-steer",
+        text: "racing guidance",
+      }),
+      {
+        outcome: "rejected",
+        reason: "expired",
+      },
+    );
     assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
     assert.equal((await turn.result()).kind, "interrupted");
     await prepared.close();
@@ -1189,10 +1233,16 @@ for (const controlCase of [
     const turn = prepared.startTurn(turnRequest());
     await waitForSession(turn);
 
-    assert.deepEqual(await turn.steer({ text: "rejected guidance" }), {
-      outcome: "rejected",
-      reason: controlCase.reason,
-    });
+    assert.deepEqual(
+      await turn.steer({
+        steerId: "conformance-steer",
+        text: "rejected guidance",
+      }),
+      {
+        outcome: "rejected",
+        reason: controlCase.reason,
+      },
+    );
     assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
     assert.equal((await turn.result()).kind, "interrupted");
     await prepared.close();
@@ -1211,10 +1261,16 @@ test("codex-live-controls refuses a near-miss Steer error until native interrupt
   const events = observeEvents(turn);
   await waitForSession(turn);
 
-  assert.deepEqual(await turn.steer({ text: "refused guidance" }), {
-    outcome: "rejected",
-    reason: "expired",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "refused guidance",
+    }),
+    {
+      outcome: "rejected",
+      reason: "expired",
+    },
+  );
   assert.deepEqual(
     events.filter((event) => event.kind === "activity"),
     [
@@ -1240,10 +1296,16 @@ test("codex-live-controls malformed Steer response fails closed without throwing
   const turn = prepared.startTurn(turnRequest());
   await waitForSession(turn);
 
-  assert.deepEqual(await turn.steer({ text: "invalid response" }), {
-    outcome: "rejected",
-    reason: "expired",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "invalid response",
+    }),
+    {
+      outcome: "rejected",
+      reason: "expired",
+    },
+  );
   const result = await turn.result();
   assert.equal(result.kind, "lost");
   if (result.kind !== "lost") throw new Error("unreachable");
@@ -1272,10 +1334,13 @@ test("codex-live-controls Steer timeout keeps the Turn until native interruption
   const events = observeEvents(turn);
   await waitForSession(turn);
 
-  assert.deepEqual(await turn.steer({ text: "will time out" }), {
-    outcome: "rejected",
-    reason: "expired",
-  });
+  assert.deepEqual(
+    await turn.steer({ steerId: "conformance-steer", text: "will time out" }),
+    {
+      outcome: "rejected",
+      reason: "expired",
+    },
+  );
   assert.deepEqual(
     events.filter((event) => event.kind === "activity"),
     [
@@ -1368,7 +1433,10 @@ for (const control of ["steer", "interrupt"] as const) {
 
         assert.deepEqual(
           await (control === "steer"
-            ? turn.steer({ text: "refused guidance" })
+            ? turn.steer({
+                steerId: "conformance-steer",
+                text: "refused guidance",
+              })
             : turn.interrupt()),
           { outcome: "rejected", reason: "expired" },
         );
@@ -1393,7 +1461,10 @@ for (const control of ["steer", "interrupt"] as const) {
             reason: "already-settled",
           });
           assert.deepEqual(
-            await turn.steer({ text: "cannot race the pending stop" }),
+            await turn.steer({
+              steerId: "conformance-steer",
+              text: "cannot race the pending stop",
+            }),
             { outcome: "rejected", reason: "expired" },
           );
         }
@@ -1526,7 +1597,10 @@ for (const control of ["steer", "interrupt"] as const) {
 
     assert.deepEqual(
       await (control === "steer"
-        ? turn.steer({ text: "unwritable guidance" })
+        ? turn.steer({
+            steerId: "conformance-steer",
+            text: "unwritable guidance",
+          })
         : turn.interrupt()),
       { outcome: "rejected", reason: "expired" },
     );
@@ -1633,9 +1707,15 @@ test("codex-live-controls close bounds an already in-flight Interrupt", async ()
   const prepared = preparedResult.harness;
   const turn = prepared.startTurn(turnRequest());
   await waitForSession(turn);
-  assert.deepEqual(await turn.steer({ text: "establish active target" }), {
-    outcome: "accepted",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "establish active target",
+    }),
+    {
+      outcome: "accepted",
+    },
+  );
 
   const interrupt = turn.interrupt();
   const closeStartedAt = Date.now();
@@ -1661,14 +1741,40 @@ test("codex-live-controls close rejects an in-flight Steer receipt", async () =>
     stallSecondSteerResponse: true,
     interruptTerminal: "interrupted",
   });
-  const prepared = await prepareCodex(installed.path);
+  let sent!: () => void;
+  const sending = new Promise<void>((resolve) => {
+    sent = resolve;
+  });
+  const capture = createCodexRecordingCapture();
+  const prepared = await prepareCodex(installed.path, {
+    ...capture.observer,
+    stdin(bytes) {
+      capture.observer.stdin(bytes);
+      if (
+        new TextDecoder()
+          .decode(bytes)
+          .includes('"text":"must expire during close"')
+      )
+        sent();
+    },
+  });
   const turn = prepared.startTurn(turnRequest());
   await waitForSession(turn);
-  assert.deepEqual(await turn.steer({ text: "establish active target" }), {
-    outcome: "accepted",
-  });
+  assert.deepEqual(
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: "establish active target",
+    }),
+    {
+      outcome: "accepted",
+    },
+  );
 
-  const racingSteer = turn.steer({ text: "must expire during close" });
+  const racingSteer = turn.steer({
+    steerId: "in-flight-close-steer",
+    text: "must expire during close",
+  });
+  await sending;
   await prepared.close();
   assert.deepEqual(await racingSteer, {
     outcome: "rejected",
@@ -2624,8 +2730,15 @@ async function prepareDetachedCodex(
 
 // --- Shared helpers (hoisted; used by every group) ---------------------------
 
-async function prepareCodex(path: string): Promise<PreparedHarness> {
-  const result = await createCodexAdapter({ path, env: {} }).prepare({
+async function prepareCodex(
+  path: string,
+  recordingObserver?: CodexRecordingObserver,
+): Promise<PreparedHarness> {
+  const result = await createCodexAdapter({
+    path,
+    env: {},
+    ...(recordingObserver !== undefined ? { recordingObserver } : {}),
+  }).prepare({
     workspace: process.cwd(),
   });
   assert.equal(result.ok, true);
@@ -2944,7 +3057,10 @@ test("[codex-recorded-conformance] native Steer replays its exact active Turn", 
   });
   await waitForSession(turn);
   assert.deepEqual(
-    await turn.steer({ text: CODEX_RECORDING_INPUT.steerGuidance }),
+    await turn.steer({
+      steerId: "conformance-steer",
+      text: CODEX_RECORDING_INPUT.steerGuidance,
+    }),
     { outcome: "accepted" },
   );
   assert.equal((await turn.result()).kind, "completed");
@@ -4041,4 +4157,37 @@ function qualificationProcess(options: TQualificationProcess): OwnedProcess {
         cause: options.cleanupCause,
       }),
   };
+}
+
+for (const order of ["before-response", "after-response"] as const) {
+  test(`codex-live-controls correlates Steer delivery ${order} exactly once`, async () => {
+    const installed = installSyntheticCodexReplayer();
+    installed.configureTurn({
+      withholdTerminal: true,
+      deliverSteer: order,
+      steerTerminal: "completed",
+    });
+    const prepared = await prepareCodex(installed.path);
+    const turn = prepared.startTurn(turnRequest());
+    const events: TurnEvent[] = [];
+    turn.subscribe((event) => events.push(event));
+    await waitForSession(turn);
+    assert.deepEqual(
+      await turn.steer({
+        steerId: "delivery-race",
+        text: "guidance before finish",
+      }),
+      { outcome: "accepted" },
+    );
+    assert.equal((await turn.result()).kind, "completed");
+    const settlements = events.filter((event) => event.kind === "steer");
+    assert.equal(settlements.length, 1);
+    assert.equal(settlements[0]?.steerId, "delivery-race");
+    assert.equal(settlements[0]?.text, "guidance before finish");
+    assert.deepEqual(settlements[0]?.settlement, {
+      kind: "delivered",
+      delivery: "within-turn",
+    });
+    await prepared.close();
+  });
 }

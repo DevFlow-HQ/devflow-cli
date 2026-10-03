@@ -24,13 +24,13 @@ interface PendingRequest {
   readonly method: string;
   readonly resolve: (result: unknown) => void;
   readonly reject: (cause: unknown) => void;
-  readonly onAccepted?: () => void;
+  readonly onAccepted?: (result: unknown) => void;
 }
 
 interface TCodexRequest {
   readonly method: string;
   readonly params: object;
-  readonly onAccepted?: () => void;
+  readonly onAccepted?: (result: unknown) => void;
 }
 
 export interface CodexRuntimeHandlers {
@@ -162,7 +162,7 @@ export class CodexJsonlConnection {
     this.pending.delete(message.id);
     try {
       const result = responseResult(pending.method, message);
-      pending.onAccepted?.();
+      pending.onAccepted?.(result);
       pending.resolve(result);
     } catch (cause) {
       pending.reject(cause);
@@ -404,6 +404,7 @@ export type CodexRuntimeNotification =
       readonly threadId: string;
       readonly turnId: string;
       readonly itemId: string;
+      readonly userMessageClientId?: string;
       readonly event?: TurnEvent;
       readonly approvalInput?: string;
     }
@@ -540,6 +541,7 @@ function normalizeItem(
   started: boolean,
 ): {
   readonly itemId: string;
+  readonly userMessageClientId?: string;
   readonly event?: TurnEvent;
   readonly approvalInput?: string;
 } {
@@ -551,12 +553,20 @@ function normalizeItem(
   const type = item.type;
   if (type === "reasoning") return { itemId: item.id };
   if (type === "userMessage") {
-    parseResult(
+    const message = parseResult(
       item,
-      z.looseObject({ content: z.array(z.unknown()) }),
+      z.looseObject({
+        content: z.array(z.unknown()),
+        clientId: z.string().nullish(),
+      }),
       "userMessage item",
     );
-    return { itemId: item.id };
+    return {
+      itemId: item.id,
+      ...(message.clientId != null
+        ? { userMessageClientId: message.clientId }
+        : {}),
+    };
   }
   if (type === "agentMessage") {
     const message = parseResult(

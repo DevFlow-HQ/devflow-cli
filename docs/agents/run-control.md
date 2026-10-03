@@ -34,7 +34,8 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 - Steer keeps the Turn working. `submitSteerTurn` refuses an unavailable profile with `steer-unavailable`
   before any native call, else reaches the live Turn's `tracking.live.steer` (bound by `driveHarnessTurn` over `turn.steer` via the `RequestChannel.bindSteer` hook,
   unbound at Turn end alongside `bindAnswer`); a native control race settles `steer-rejected`, a stale/settled turnId `turn-control-rejected`, an accepted steer
-  `applied`, Run still running.
+  `applied`, Run still running. Its Operation id is the opaque Steer id through execution to the Harness; replay never sends it twice (#356).
+  Settlement carries full text and send time through `appendTurnEvent`, independently of when the acceptance receipt resolves.
 - `resume-run` continues a `detached` Session in the same native Session because the executor reads the stored Session availability and passes its coordinate as
   `resume`; a Session recorded `unusable` fails the Attempt without ever opening a fresh Session (ADR 0022).
 

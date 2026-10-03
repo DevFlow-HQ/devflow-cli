@@ -27,6 +27,7 @@ import {
   type SessionAvailability,
   type SteerCapability,
   type SteerInput,
+  type SteerSettlement,
   type TurnEvent,
   type TurnEventListener,
   type TurnRequest,
@@ -1166,6 +1167,13 @@ type TInterruptControlState =
       readonly receipt: Promise<ControlReceipt>;
     };
 
+interface PendingCodexSteer {
+  readonly input: SteerInput;
+  readonly sentAt: string;
+  accepted: boolean;
+  delivered: boolean;
+}
+
 class CodexTurn implements HarnessTurn {
   settled = false;
   readonly request: TurnRequest;
@@ -1191,6 +1199,8 @@ class CodexTurn implements HarnessTurn {
   private previewIndex: number | undefined;
   private lastObservation = "no authoritative Codex Turn observation";
   private recoveryPending = false;
+  private readonly steers = new Map<string, PendingCodexSteer>();
+  private readonly steerIds = new Set<string>();
   private readonly approvals = new Map<string, PendingCodexApproval>();
   private readonly approvalsByNativeId = new Map<
     string,
@@ -1260,6 +1270,9 @@ class CodexTurn implements HarnessTurn {
     if (target === undefined || !this.acceptsNewInput()) {
       return { outcome: "rejected", reason: "expired" };
     }
+    if (this.steerIds.has(input.steerId))
+      return { outcome: "rejected", reason: "already-settled" };
+    this.steerIds.add(input.steerId);
     return this.steerTarget(input, target);
   }
 
@@ -1268,6 +1281,14 @@ class CodexTurn implements HarnessTurn {
     target: TCodexNativeTarget,
   ): Promise<ControlReceipt> {
     let acceptedWhileLive = false;
+    const clientId = `secant-steer-${createHash("sha256").update(input.steerId).digest("hex")}`;
+    const pending: PendingCodexSteer = {
+      input,
+      sentAt: new Date().toISOString(),
+      accepted: false,
+      delivered: false,
+    };
+    this.steers.set(clientId, pending);
     let result: unknown;
     const control = startPhase(this.phases, "control", this.request.session);
     try {
@@ -1278,16 +1299,34 @@ class CodexTurn implements HarnessTurn {
             params: {
               threadId: target.threadId,
               expectedTurnId: target.turnId,
+              clientUserMessageId: clientId,
               input: [{ type: "text", text: input.text }],
             },
-            onAccepted: () => {
-              acceptedWhileLive = this.acceptsNewInput();
+            onAccepted: (response) => {
+              let responseTurnId: string;
+              try {
+                responseTurnId = parseTurnSteerResult(response);
+              } catch {
+                return;
+              }
+              acceptedWhileLive =
+                this.acceptsNewInput() &&
+                responseTurnId === target.turnId &&
+                this.steers.get(clientId) === pending;
+              if (!acceptedWhileLive) return;
+              pending.accepted = true;
+              if (pending.delivered)
+                this.settleSteer(clientId, pending, {
+                  kind: "delivered",
+                  delivery: "within-turn",
+                });
             },
           }),
         timeoutMs: this.controlTimeoutMs,
         label: "turn/steer control exchange",
       });
     } catch (cause) {
+      this.steers.delete(clientId);
       this.settleControlPhase(control, cause);
       return this.rejectControlFailure(
         "Codex turn/steer control failed.",
@@ -1309,6 +1348,7 @@ class CodexTurn implements HarnessTurn {
     }
     control.ok();
     if (!acceptedWhileLive || steeredTurnId !== target.turnId) {
+      this.steers.delete(clientId);
       return { outcome: "rejected", reason: "expired" };
     }
     return { outcome: "accepted" };
@@ -1689,6 +1729,17 @@ class CodexTurn implements HarnessTurn {
         this.emitPreview(notification.delta);
         return;
       case "item-event":
+        if (notification.userMessageClientId !== undefined) {
+          const pending = this.steers.get(notification.userMessageClientId);
+          if (pending !== undefined) {
+            pending.delivered = true;
+            if (pending.accepted)
+              this.settleSteer(notification.userMessageClientId, pending, {
+                kind: "delivered",
+                delivery: "within-turn",
+              });
+          }
+        }
         if (notification.approvalInput !== undefined) {
           this.approvalInputsByItemId.set(
             notification.itemId,
@@ -1942,50 +1993,58 @@ class CodexTurn implements HarnessTurn {
       );
       return;
     }
-    this.settleApprovals(true);
     if (notification.status === "completed") {
-      this.settle({
-        kind: "completed",
-        detail: {
-          ...(this.finalContent !== undefined
-            ? { finalContent: this.finalContent }
-            : {}),
-          effectiveModel: this.model,
-          session: { state: "open" },
+      this.settle(
+        {
+          kind: "completed",
+          detail: {
+            ...(this.finalContent !== undefined
+              ? { finalContent: this.finalContent }
+              : {}),
+            effectiveModel: this.model,
+            session: { state: "open" },
+          },
         },
-      });
+        true,
+      );
       return;
     }
     if (notification.status === "interrupted") {
       this.confirmInterrupt();
       this.session.markDetached();
-      this.settle({
-        kind: "interrupted",
-        detail: {
-          interruption: {
-            mode: "active-turn",
-            evidence: "Codex emitted a matching interrupted terminal Turn.",
+      this.settle(
+        {
+          kind: "interrupted",
+          detail: {
+            interruption: {
+              mode: "active-turn",
+              evidence: "Codex emitted a matching interrupted terminal Turn.",
+            },
+            session: this.session.availability(),
           },
-          session: this.session.availability(),
         },
-      });
+        true,
+      );
       return;
     }
     const diagnostics =
       notification.error ?? this.terminalError ?? "Codex Turn failed.";
-    this.settle({
-      kind: "failed",
-      detail: {
-        failure: {
-          phase: "turn",
-          category: "execution",
-          possibleEffects: "possible",
-          diagnostics,
+    this.settle(
+      {
+        kind: "failed",
+        detail: {
+          failure: {
+            phase: "turn",
+            category: "execution",
+            possibleEffects: "possible",
+            diagnostics,
+          },
+          effectiveModel: this.model,
+          session: { state: "open" },
         },
-        effectiveModel: this.model,
-        session: { state: "open" },
       },
-    });
+      true,
+    );
   }
 
   private emit(event: TurnEvent): void {
@@ -2026,11 +2085,33 @@ class CodexTurn implements HarnessTurn {
     this.preview = "";
   }
 
-  private settle(result: TurnResult): void {
+  private settleSteer(
+    clientId: string,
+    pending: PendingCodexSteer,
+    settlement: SteerSettlement,
+  ): void {
+    this.steers.delete(clientId);
+    this.emit({
+      kind: "steer",
+      ...pending.input,
+      sentAt: pending.sentAt,
+      settlement,
+    });
+  }
+
+  private settle(result: TurnResult, confirmAnswers = false): void {
     if (this.settled) return;
     this.resolveTarget(undefined);
     this.clearPreview();
-    this.settleApprovals(false);
+    for (const [clientId, pending] of this.steers) {
+      if (pending.accepted)
+        this.settleSteer(clientId, pending, {
+          kind: "dropped",
+          reason: result.kind === "interrupted" ? "interrupt" : "loss",
+        });
+    }
+    this.steers.clear();
+    this.settleApprovals(confirmAnswers);
     this.settled = true;
     this.listeners.clear();
     this.onSettled();

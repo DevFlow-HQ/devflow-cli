@@ -131,9 +131,12 @@ test("native steer is accepted where the profile supports it", async () => {
   const turn = harness.startTurn(request(recorder().recorder));
   const events: TurnEvent[] = [];
   turn.subscribe((event) => events.push(event));
-  const receipt = await turn.steer({ text: "try the other file" });
+  const receipt = await turn.steer({
+    steerId: "first-steer",
+    text: "try the other file",
+  });
   assert.deepEqual(receipt, { outcome: "accepted" });
-  assert.ok(events.some((e) => e.kind === "activity"));
+  assert.equal(events.filter((e) => e.kind === "steer").length, 0);
   // Finish the awaited Turn so it settles.
   const raised = await new Promise<HarnessRequest>((resolve) => {
     turn.subscribe((event) => {
@@ -146,6 +149,14 @@ test("native steer is accepted where the profile supports it", async () => {
     text: "yes",
   });
   assert.equal((await turn.result()).kind, "completed");
+  const settlements = events.filter((e) => e.kind === "steer");
+  assert.equal(settlements.length, 1);
+  assert.equal(settlements[0]?.steerId, "first-steer");
+  assert.equal(settlements[0]?.text, "try the other file");
+  assert.deepEqual(settlements[0]?.settlement, {
+    kind: "delivered",
+    delivery: "within-turn",
+  });
   await harness.close();
 });
 

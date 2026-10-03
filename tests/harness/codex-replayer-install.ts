@@ -131,6 +131,7 @@ interface CodexTurnReplayOptions {
   readonly withholdTerminal?: boolean;
   readonly interruptTerminal?: "interrupted" | "exit";
   readonly steerTerminal?: "completed";
+  readonly deliverSteer?: "before-response" | "after-response";
   readonly interruptRpcError?: "stale" | "mismatch" | "near-miss" | "internal";
   readonly interruptTerminalBeforeResponse?:
     "completed" | "failed" | "interrupted";

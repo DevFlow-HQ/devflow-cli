@@ -54,6 +54,7 @@ test("the closed vocabulary sets are exactly what the Interface fixes", () => {
       "usage",
       "activity",
       "model",
+      "steer",
     ],
   );
 });

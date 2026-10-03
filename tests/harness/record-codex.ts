@@ -215,6 +215,7 @@ async function driveCase(
       const turn = startTurn(turnRequest("steer", CODEX_RECORDING_INPUT.steer));
       await firstSession(turn);
       const receipt = await turn.steer({
+        steerId: "conformance-steer",
         text: CODEX_RECORDING_INPUT.steerGuidance,
       });
       if (receipt.outcome !== "accepted") {

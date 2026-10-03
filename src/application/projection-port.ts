@@ -786,7 +786,8 @@ export type RunTimelineKind =
   // stored, so a resumed Run re-raises nothing.
   | "request-raised"
   | "request-answered"
-  | "request-expired";
+  | "request-expired"
+  | "steer";
 
 /** The Crucible Step kind a durable Turn was produced by (#126): an autonomous
  *  `agent` Step's Turn or an `interactive-agent` Step's human Turn. Carried on the
@@ -799,7 +800,22 @@ export type RunTurnKind = "agent" | "interactive-agent";
  * the end of the displayed content instead of inferring truncation from length. */
 export const RUN_TIMELINE_TRUNCATION_MARKER = "… output truncated";
 
+/** Durable human text and model-exposure evidence, independent of native ids. */
+interface RunSteerEvent {
+  readonly steerId: string;
+  readonly text: string;
+  readonly sentAt: string;
+  readonly settlement:
+    | {
+        readonly kind: "delivered";
+        readonly delivery: "within-turn" | "after-boundary" | "re-delivered";
+      }
+    | { readonly kind: "dropped"; readonly reason: "interrupt" | "loss" };
+}
+
 export interface RunTimelineEvent {
+  /** Full text is separate from the bounded, whitespace-collapsed detail. */
+  readonly steer?: RunSteerEvent;
   readonly at: string; // ISO 8601
   readonly event: RunTimelineKind;
   /** The Attempt outcome for `attempt-settled`; the granting operation id for

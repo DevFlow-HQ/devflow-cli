@@ -82,9 +82,9 @@ const COMPLETED: TurnResult = {
 };
 
 /** The fake Codex script for a fixture. The `steer` case blocks the live Turn so a
- *  native Steer can reach it, then completes once steered; `completion` completes
+ *  native Steer can reach it, then completes at an explicit native boundary; `completion` completes
  *  straight away. Both emit a Session event and authoritative assistant content. */
-function codexScript(fixture: string): FakeScript {
+function codexScript(fixture: string, finish: Promise<void>): FakeScript {
   const events: TurnEvent[] = [
     { kind: "session", availability: { state: "open" } },
     { kind: "assistant-content", content: `recorded ${fixture}` },
@@ -92,7 +92,7 @@ function codexScript(fixture: string): FakeScript {
   if (fixture === "steer") {
     return {
       profile: codexProfile(),
-      turns: [{ events, block: true, settleOnSteer: true, result: COMPLETED }],
+      turns: [{ events, block: true, finish, result: COMPLETED }],
     };
   }
   return { profile: codexProfile(), turns: [{ events, result: COMPLETED }] };
@@ -166,13 +166,17 @@ function wire(
   t: TestContext,
   fixture: string,
   prompt: string,
-): { wired: Wiring; bundleId: string; digest: string } {
+): { wired: Wiring; bundleId: string; digest: string; finish: () => void } {
+  let finish!: () => void;
+  const boundary = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
   const workspace = makeTempDir("secant-codex-cli-ws-");
   const wired = wireApplication({
     secantHome: makeTempDir("secant-codex-cli-home-"),
     launchCwd: workspace,
     process: fakeProcess(),
-    codexHarnessAdapter: createFake(codexScript(fixture))(),
+    codexHarnessAdapter: createFake(codexScript(fixture, boundary))(),
     discoverCodex: () => ({
       kind: "found",
       attempt: {
@@ -199,7 +203,7 @@ function wire(
     input: { path: workspace },
   });
   assert.ok(approve.admitted);
-  return { wired, bundleId: bundle.id, digest: entry.digest };
+  return { wired, bundleId: bundle.id, digest: entry.digest, finish };
 }
 
 function launchCodex(
@@ -253,7 +257,7 @@ async function awaitSteerable(
 }
 
 test("[codex-shared-client-interactions] a live Codex Turn offers native Steer; steering keeps it working and the Run succeeds", async (t) => {
-  const { wired, bundleId, digest } = wire(
+  const { wired, bundleId, digest, finish } = wire(
     t,
     "steer",
     "Think silently about the number one until you receive more guidance. Do not inspect files or run tools.",
@@ -287,6 +291,8 @@ test("[codex-shared-client-interactions] a live Codex Turn offers native Steer; 
   const steerOutcome = await awaitSettled(port, "op-steer");
   assert.equal(steerOutcome.status, "applied", JSON.stringify(steerOutcome));
 
+  assert.equal(runView(port, runId).state, "running");
+  finish();
   await awaitSettled(port, "op-launch");
   const run = runView(port, runId);
   assert.equal(run.state, "succeeded");
@@ -297,6 +303,17 @@ test("[codex-shared-client-interactions] a live Codex Turn offers native Steer; 
   assert.ok(kinds.includes("turn-started"));
   assert.ok(kinds.includes("assistant-content"));
   assert.ok(kinds.includes("turn-settled"));
+  const settlement = run.timeline.find((event) => event.event === "steer");
+  assert.equal(settlement?.steer?.steerId, "op-steer");
+  assert.equal(
+    settlement?.steer?.text,
+    "Finish now with exactly: recorded steer.",
+  );
+  assert.deepEqual(settlement?.steer?.settlement, {
+    kind: "delivered",
+    delivery: "within-turn",
+  });
+  assert.ok(settlement?.steer?.sentAt);
 });
 
 test("[codex-shared-client-interactions] a completed Codex Turn renders in existing timeline shapes and the Run succeeds", async (t) => {
@@ -318,4 +335,80 @@ test("[codex-shared-client-interactions] a completed Codex Turn renders in exist
   assert.ok(run.effectiveModel !== undefined);
   const settled = run.timeline.find((event) => event.event === "turn-settled");
   assert.equal(settled?.detail, "completed");
+});
+
+test("[codex-shared-client-interactions] Interrupt records every pending Steer verbatim, replay stays singular, and late Steer is refused (#356)", async (t) => {
+  const { wired, bundleId, digest } = wire(
+    t,
+    "steer",
+    "Work until interrupted.",
+  );
+  const port = wired.projectionPort;
+  const runId = launchCodex(port, bundleId, digest);
+  const offer = await awaitSteerable(port, runId);
+  const texts = [
+    "first line\n\n" + "large text ".repeat(35) + "last line",
+    "second message",
+  ];
+  for (const [index, text] of texts.entries()) {
+    const operationId = `steer-${index}`;
+    const submission = {
+      operationId,
+      operation: "steer-turn",
+      input: { runId, turnId: offer.turnId, text },
+    } as const;
+    assert.ok(port.submit(submission).admitted);
+    assert.equal((await awaitSettled(port, operationId)).status, "applied");
+    assert.ok(port.submit(submission).admitted);
+    assert.equal((await awaitSettled(port, operationId)).status, "applied");
+  }
+  assert.ok(
+    port.submit({
+      operationId: "stop",
+      operation: "interrupt-turn",
+      input: { runId, turnId: offer.turnId },
+    }).admitted,
+  );
+  assert.equal((await awaitSettled(port, "stop")).status, "applied");
+  await awaitSettled(port, "op-launch");
+  const run = runView(port, runId);
+  assert.equal(run.state, "halted");
+  const events = run.timeline.filter((event) => event.event === "steer");
+  assert.deepEqual(
+    events.map((event) => [
+      event.steer?.steerId,
+      event.steer?.text,
+      event.steer?.settlement,
+    ]),
+    texts.map((text, index) => [
+      `steer-${index}`,
+      text,
+      { kind: "dropped", reason: "interrupt" },
+    ]),
+  );
+  assert.ok((events[0]?.detail?.length ?? 0) <= 160);
+  const settlements = run.timeline.filter(
+    (event) => event.event === "turn-settled",
+  );
+  assert.equal(settlements.length, 1);
+  assert.ok(
+    run.timeline.indexOf(events[1]!) < run.timeline.indexOf(settlements[0]!),
+  );
+  const draft = "my late draft\nstays verbatim";
+  assert.ok(
+    port.submit({
+      operationId: "late",
+      operation: "steer-turn",
+      input: { runId, turnId: offer.turnId, text: draft },
+    }).admitted,
+  );
+  const late = await awaitSettled(port, "late");
+  assert.equal(late.status, "not-applied");
+  if (late.status === "not-applied")
+    assert.equal(late.problem.code, "turn-control-rejected");
+  assert.equal(
+    runView(port, runId).timeline.filter((event) => event.event === "steer")
+      .length,
+    2,
+  );
 });

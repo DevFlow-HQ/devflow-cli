@@ -20,6 +20,7 @@ import {
   runInterruptRecoveryCases,
   runModelDeclarationCases,
   runNativeSteerCases,
+  runPendingSteerCases,
   runPrepareProfileCases,
   runRequestedModelCases,
   runTurnLifecycleCases,
@@ -418,6 +419,21 @@ export function registerCodexReplayerConformance(
         }),
       failedTurn: () => () =>
         createCodexAdapter({ path: failedTurnReplayer().path, env: {} }),
+    },
+    register,
+  );
+
+  runPendingSteerCases(
+    {
+      label: "codex-live-controls",
+      pendingTurn: (stop) => {
+        const installed = installSyntheticCodexReplayer();
+        installed.configureTurn({
+          withholdTerminal: true,
+          interruptTerminal: stop === "interrupt" ? "interrupted" : "exit",
+        });
+        return () => createCodexAdapter({ path: installed.path, env: {} });
+      },
     },
     register,
   );

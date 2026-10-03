@@ -5040,3 +5040,194 @@ test("the request control fits small widths without overflow and reads without c
   assert.match(frame, /Allow/);
   assert.match(frame, /Deny/);
 });
+
+function steerSettlement(
+  id: string,
+  text: string,
+  settlement: NonNullable<RunTimelineEvent["steer"]>["settlement"],
+  step = "discuss",
+): RunTimelineEvent {
+  return {
+    at: "2026-01-01T00:00:01.000Z",
+    event: "steer",
+    step,
+    detail: `${settlement.kind === "dropped" ? "dropped by interrupt" : "delivered within Turn"} · ${text.slice(0, 30).replace(/\s+/g, " ")}`,
+    steer: {
+      steerId: id,
+      text,
+      sentAt: "2026-01-01T00:00:00.000Z",
+      settlement,
+    },
+  };
+}
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`Interrupt restores every undelivered interactive Steer with focus at ${width}x${height} (#356)`, async () => {
+    let interrupts = 0;
+    const wb = await mountWorkbench(
+      steerableInteractiveRunOf(),
+      width,
+      height,
+      okActions({
+        interrupt: () => {
+          interrupts += 1;
+          return () => ({ kind: "ok" });
+        },
+      }),
+    );
+    await type(wb.t, "restore this guidance");
+    await press(wb.t, wb.renderer, "return");
+    wb.control.setSteerOutcome({ kind: "applied" });
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /> restore this guidance/);
+    await type(wb.t, "my unsent draft");
+    await press(wb.t, wb.renderer, "escape");
+    assert.equal(interrupts, 0);
+    assert.match(wb.t.captureCharFrame(), /esc again/);
+    await press(wb.t, wb.renderer, "escape");
+    assert.equal(interrupts, 1);
+    const timeline = [
+      steerSettlement("delivered", "already exposed", {
+        kind: "delivered",
+        delivery: "within-turn",
+      }),
+      steerSettlement("first", "restore this guidance", {
+        kind: "dropped",
+        reason: "interrupt",
+      }),
+      steerSettlement("second", "second guidance", {
+        kind: "dropped",
+        reason: "interrupt",
+      }),
+    ];
+    wb.control.setRun(interactiveRunOf({ timeline }));
+    await wb.t.renderOnce();
+    const frame = wb.t.captureCharFrame();
+    assert.match(frame, /draft restored/);
+    assert.match(frame, /Steer.*dropped by interrupt/);
+    noOverflow(frame, width);
+    // Restore once, preserve the unsent draft, and send the exact full text at a boundary.
+    wb.control.setRun(interactiveRunOf({ timeline }));
+    wb.renderer.resize(width === 60 ? 140 : 60, 24);
+    await wb.t.renderOnce();
+    noOverflow(wb.t.captureCharFrame(), width === 60 ? 140 : 60);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(
+      wb.control.sends[0]?.text,
+      "restore this guidance\n\nsecond guidance\n\nmy unsent draft",
+    );
+    assert.doesNotMatch(wb.control.sends[0]?.text ?? "", /already exposed/);
+  });
+}
+
+test("an Agent Interrupt restores a long Steer in its compose while halted (#356)", async () => {
+  const wb = await mountWorkbench(steerableRunOf(), 60, 24, okActions());
+  await press(wb.t, wb.renderer, "s");
+  await type(wb.t, "sent guidance");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  const text = `verbatim line\n${"long guidance ".repeat(30)}last word`;
+  const timeline = [
+    steerSettlement(
+      "long",
+      text,
+      { kind: "dropped", reason: "interrupt" },
+      "repair",
+    ),
+  ];
+  wb.control.setRun(
+    steerableRunOf({ state: "halted", actionOffers: [RESUME_OFFER], timeline }),
+  );
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /draft restored/);
+  noOverflow(wb.t.captureCharFrame(), 60);
+  // When the Run is live again, the original text survives the 160-character timeline cap.
+  wb.control.setRun(steerableRunOf({ timeline }));
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.steers[1]?.text, text);
+});
+
+test("settlement observed before its receipt restores only after acceptance clears the original draft (#356)", async () => {
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf(),
+    100,
+    30,
+    okActions(),
+  );
+  await type(wb.t, "a racing draft");
+  await press(wb.t, wb.renderer, "return");
+  const timeline = [
+    steerSettlement("racing", "a racing draft", {
+      kind: "dropped",
+      reason: "interrupt",
+    }),
+  ];
+  wb.control.setRun(interactiveRunOf({ timeline }));
+  await wb.t.renderOnce();
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /draft restored/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, "a racing draft");
+});
+
+test("historic drops and loss drops do not replace the compose on open or repeated snapshots (#356)", async () => {
+  const old = steerSettlement("old", "old interrupt", {
+    kind: "dropped",
+    reason: "interrupt",
+  });
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf({ timeline: [old] }),
+    100,
+    30,
+    okActions(),
+  );
+  await type(wb.t, "my current draft");
+  const loss = steerSettlement("loss", "lost turn", {
+    kind: "dropped",
+    reason: "loss",
+  });
+  wb.control.setRun(interactiveRunOf({ timeline: [old, loss] }));
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /draft restored/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, "my current draft");
+});
+
+for (const close of ["offer-ended", "escaped"] as const) {
+  test(`an Agent Steer accepted after compose ${close} restores its text once (#356)`, async () => {
+    const wb = await mountWorkbench(steerableRunOf(), 100, 30, okActions());
+    await press(wb.t, wb.renderer, "s");
+    await type(wb.t, "guidance awaiting receipt");
+    await press(wb.t, wb.renderer, "return");
+    if (close === "escaped") await press(wb.t, wb.renderer, "escape");
+    const timeline = [
+      steerSettlement(
+        "late-accepted",
+        "guidance awaiting receipt",
+        { kind: "dropped", reason: "interrupt" },
+        "repair",
+      ),
+    ];
+    wb.control.setRun(
+      steerableRunOf({
+        state: "halted",
+        actionOffers: [RESUME_OFFER],
+        timeline,
+      }),
+    );
+    await wb.t.renderOnce();
+    wb.control.setSteerOutcome({ kind: "applied" });
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /draft restored/);
+    wb.control.setRun(steerableRunOf({ timeline }));
+    await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.steers[1]?.text, "guidance awaiting receipt");
+  });
+}

@@ -83,7 +83,10 @@ type LiveSteerOutcome =
 /** Send same-Turn guidance to the live Turn (#148). Bound only while a Turn whose
  *  Harness declares native steer is live; the Application reaches it for an
  *  available `steer-turn`. */
-export type LiveSteerFn = (text: string) => Promise<LiveSteerOutcome>;
+export type LiveSteerFn = (input: {
+  readonly steerId: string;
+  readonly text: string;
+}) => Promise<LiveSteerOutcome>;
 
 /** Interrupt one live Turn and report whether it ended interrupted or lost.
  *  Receipt rejection returns immediately; acceptance waits for this Turn's end. */
@@ -550,8 +553,8 @@ async function driveHarnessTurn(
       // the Turn is live and keeps working. Bound for every Turn — the Application
       // only reaches it when the prepared profile declares steer available, so a
       // Harness without it (Claude Code) is never asked here.
-      channel.bindSteer(async (text) => {
-        const receipt = await turn.steer({ text });
+      channel.bindSteer(async (input) => {
+        const receipt = await turn.steer(input);
         return receipt.outcome === "accepted"
           ? { outcome: "accepted" }
           : { outcome: "rejected", reason: receipt.reason };
@@ -996,7 +999,7 @@ export function launchInputs(
 }
 
 /** Drain the meaningful Turn events into the Store as durable timeline entries
- *  (#116): authoritative assistant content and tool activity. Session facts and the
+ *  (#116): authoritative assistant content, tool activity, and Steer settlements. Session facts and the
  *  effective model reach the durable view through the settled result; previews,
  *  usage, and context are live-only in M3. Best-effort: `appendTurnEvent` (and
  *  `settleTurn` below) no-op on a fenced owner rather than throw — a fenced owner
@@ -1008,7 +1011,19 @@ function recordTurnEvent(
   event: TurnEvent,
   answerSources: ReadonlyMap<string, RequestAnswerBy>,
 ): void {
-  if (event.kind === "assistant-content") {
+  if (event.kind === "steer") {
+    owner.appendTurnEvent({
+      turnId,
+      kind: "steer",
+      payload: JSON.stringify({
+        steerId: event.steerId,
+        text: event.text,
+        sentAt: event.sentAt,
+        settlement: event.settlement,
+      }),
+      at: new Date(),
+    });
+  } else if (event.kind === "assistant-content") {
     owner.appendTurnEvent({
       turnId,
       kind: "assistant-content",

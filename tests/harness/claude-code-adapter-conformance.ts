@@ -909,10 +909,13 @@ test("a recorded native interrupt settles interrupted active-turn on every OS an
     });
   });
   // steer never touches the process: rejected unsupported while the Turn is live.
-  assert.deepEqual(await turn.steer({ text: "no" }), {
-    outcome: "rejected",
-    reason: "unsupported",
-  });
+  assert.deepEqual(
+    await turn.steer({ steerId: "conformance-steer", text: "no" }),
+    {
+      outcome: "rejected",
+      reason: "unsupported",
+    },
+  );
   assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
   const result = await turn.result();
   assert.equal(result.kind, "interrupted");

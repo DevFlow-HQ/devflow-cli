@@ -1,5 +1,15 @@
-import { TextAttributes } from "@opentui/core";
-import { createMemo, For, Match, Show, Switch, type Accessor } from "solid-js";
+import { TextAttributes, type TextareaRenderable } from "@opentui/core";
+import {
+  createEffect,
+  createSignal,
+  untrack,
+  createMemo,
+  For,
+  Match,
+  Show,
+  Switch,
+  type Accessor,
+} from "solid-js";
 import type {
   AnswerHumanGateOffer,
   CancelRunOffer,
@@ -43,6 +53,7 @@ export type InteractiveRefusal =
  *  while an answer is in flight (until the send is admitted) and while the End Step
  *  confirm is armed, so a confirming `y` never types into it (D9 freeze). */
 export function InteractiveInput(props: {
+  restored: Accessor<boolean>;
   draft: Accessor<string>;
   onInput: (value: string) => void;
   /** The live Turn's interrupt Offer: present exactly while the agent holds the Turn. */
@@ -111,7 +122,11 @@ export function InteractiveInput(props: {
               : "  enter send Turn · ^N continue · esc back"
             : "  enter send Turn · ^E end step · esc back",
         );
-      return text("  esc back");
+      return text(
+        props.restored()
+          ? "  draft restored · esc back · tab for Run actions"
+          : "  esc back",
+      );
     },
   );
   const hintText = () => {
@@ -130,9 +145,11 @@ export function InteractiveInput(props: {
         flexShrink={0}
       >
         {clip(
-          props.interrupt() !== undefined
-            ? "◆ The agent is working — wait for its reply or interrupt it"
-            : "◇ Your move — the agent is waiting for your next Turn",
+          props.restored()
+            ? "◇ Steer dropped by interrupt · draft restored"
+            : props.interrupt() !== undefined
+              ? "◆ The agent is working — wait for its reply or interrupt it"
+              : "◇ Your move — the agent is waiting for your next Turn",
           w(),
         )}
       </text>
@@ -140,12 +157,24 @@ export function InteractiveInput(props: {
         <text fg={theme.text} flexShrink={0}>
           {"> "}
         </text>
-        <input
-          value={props.draft()}
-          onInput={props.onInput}
-          focused={fieldFocused()}
-          width={Math.max(1, w() - 2)}
-        />
+        <Show
+          when={props.restored()}
+          fallback={
+            <input
+              value={props.draft()}
+              onInput={props.onInput}
+              focused={fieldFocused()}
+              width={Math.max(1, w() - 2)}
+            />
+          }
+        >
+          <RestoredDraftInput
+            draft={props.draft}
+            onInput={props.onInput}
+            focused={fieldFocused}
+            width={() => Math.max(1, w() - 2)}
+          />
+        </Show>
       </box>
       <Show
         when={props.refusal()}
@@ -200,6 +229,8 @@ function refusalText(refusal: InteractiveRefusal): string {
  *  distinctly without colour (AC4). The field is blurred while a send is in flight so
  *  a submitting Enter never types into it (D9 freeze). */
 export function SteerInput(props: {
+  restored: Accessor<boolean>;
+  available: Accessor<boolean>;
   draft: Accessor<string>;
   onInput: (value: string) => void;
   pending: Accessor<boolean>;
@@ -213,6 +244,8 @@ export function SteerInput(props: {
   const fieldFocused = () => props.focused() && !props.pending();
   const hint = () => {
     if (props.pending()) return "  … steering…";
+    if (!props.available())
+      return "  draft restored · esc back · r resume from timeline";
     return "  enter send guidance · esc back — the Turn keeps running";
   };
   return (
@@ -222,18 +255,35 @@ export function SteerInput(props: {
         attributes={props.focused() ? TextAttributes.BOLD : 0}
         flexShrink={0}
       >
-        {clip("➤ Steer — guide the running Turn", w())}
+        {clip(
+          props.restored()
+            ? "➤ Steer dropped by interrupt · draft restored"
+            : "➤ Steer — guide the running Turn",
+          w(),
+        )}
       </text>
       <box flexDirection="row" flexShrink={0}>
         <text fg={theme.text} flexShrink={0}>
           {"> "}
         </text>
-        <input
-          value={props.draft()}
-          onInput={props.onInput}
-          focused={fieldFocused()}
-          width={Math.max(1, w() - 2)}
-        />
+        <Show
+          when={props.restored()}
+          fallback={
+            <input
+              value={props.draft()}
+              onInput={props.onInput}
+              focused={fieldFocused()}
+              width={Math.max(1, w() - 2)}
+            />
+          }
+        >
+          <RestoredDraftInput
+            draft={props.draft}
+            onInput={props.onInput}
+            focused={fieldFocused}
+            width={() => Math.max(1, w() - 2)}
+          />
+        </Show>
       </box>
       <Show
         when={props.refusal()}
@@ -565,5 +615,41 @@ export function DetailsPanel(props: {
         )}
       </For>
     </box>
+  );
+}
+
+/** A restored compose can carry several messages and verbatim line breaks. The
+ *  native single-line input strips those breaks, so this one-row editor keeps them. */
+function RestoredDraftInput(props: {
+  draft: Accessor<string>;
+  onInput: (value: string) => void;
+  focused: Accessor<boolean>;
+  width: Accessor<number>;
+}) {
+  const initial = untrack(props.draft);
+  let reported = initial;
+  const [box, setBox] = createSignal<TextareaRenderable>();
+  createEffect(() => {
+    const editor = box();
+    const value = props.draft();
+    if (editor === undefined || editor.plainText === value) return;
+    reported = value;
+    editor.setText(value);
+  });
+  return (
+    <textarea
+      ref={setBox}
+      initialValue={initial}
+      height={1}
+      width={props.width()}
+      focused={props.focused()}
+      keyBindings={[{ name: "return", action: "submit" }]}
+      onContentChange={() => {
+        const value = box()?.plainText;
+        if (value === undefined || value === reported) return;
+        reported = value;
+        props.onInput(value);
+      }}
+    />
   );
 }

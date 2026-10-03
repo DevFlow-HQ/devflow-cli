@@ -23,7 +23,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - No Routing, Step kind, retry budget, or Run policy knowledge lives here; those are above the Seam. A Turn is one mechanical exchange, not a
   judgement that a Step succeeded — the closed Turn results (`not-started`, `completed`, `failed`, `interrupted`, `lost`) are mechanical truth, and the
   Step kind decides the Attempt outcome above the Seam.
-- Terminal ordering is exact and load-bearing: on terminal an Adapter publishes remaining events, expires every still-outstanding request, closes the
+- Terminal ordering is exact and load-bearing: on terminal an Adapter publishes remaining events, drops every pending Steer, expires outstanding requests, closes the
   event producer, then settles the one authoritative result. No event is observable after the result settles. The fake enforces this with an
   `emit after result` guard; a real Adapter must hold the same order.
 - Child reuse across Turns (a result may settle before the native `close`) is in [harness-adapters](../../docs/agents/harness-adapters.md).
@@ -41,6 +41,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   bridge. The Seam's `redactSecrets` keeps a cause an Error with its name and bounded cause chain; it returns secret-free values unchanged. Redactor
   and translator share one cause-depth bound; a redacted tail beyond it becomes null so translation still marks the cut. The translator redacts each
   string before cutting it; its byte bounds are Interface facts pinned by its tests, in serialized UTF-8 bytes.
+- Steer ids are caller-supplied and opaque. Each accepted Steer emits one `steer` settlement with its text and send time, even before its receipt resolves.
+  Native correlation and pending state stay inside the Adapter; delivery means model exposure, never compliance (#356).
 - Steer is a profile capability like the others (`HarnessProfile.steer`, evidence-bearing). An Adapter derives its `steer` receipt from it rather than
   hard-coding a second rejection; the Claude Code profile declares it unavailable (print mode has no same-Turn guidance frame) and the fake's script
   decides it through the profile it supplies.

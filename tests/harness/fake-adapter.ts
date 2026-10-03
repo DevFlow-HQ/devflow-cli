@@ -73,13 +73,11 @@ export interface FakeTurnScript {
    *  is interrupted or the Harness is closed — the request-free "blocks mid-Turn"
    *  shape the interrupt/recovery cases drive. */
   readonly block?: boolean;
-  /** With `block` and no scripted `requests`, an accepted native `steer` (a profile
-   *  that offers steer) also releases the block, so the steered Turn settles its
-   *  normal `result` — the "steer keeps the Turn working, then it completes" shape a
-   *  native-steer Adapter (Codex) exhibits. Without it a blocking Turn releases only
-   *  on interrupt/close. Ignored when the Turn has awaited `requests`, whose wait
-   *  shares the same release signal and must be answered, not steered, to settle. */
-  readonly settleOnSteer?: boolean;
+  /** A natural native boundary, independent of Steer acceptance or delivery. */
+  readonly finish?: Promise<void>;
+  /** When supplied, model exposure waits for this boundary. The natural result
+   *  cannot settle while an accepted Steer still waits here. */
+  readonly steerBoundary?: Promise<void>;
   /** The result settled when the Turn ends naturally (all awaited requests
    *  answered, or no awaited requests). */
   readonly result: TurnResult;
@@ -341,6 +339,12 @@ class FakeTurn {
   private readonly buffer: TurnEvent[] = [];
   private readonly requests = new Map<string, RequestState>();
   private interruptSignal?: () => void;
+  private readonly steers = new Map<
+    string,
+    SteerInput & { readonly sentAt: string }
+  >();
+  private readonly steerIds = new Set<string>();
+  private steerBoundaryReached = false;
 
   constructor(
     private readonly script: FakeTurnScript,
@@ -378,20 +382,33 @@ class FakeTurn {
     return this.resultPromise;
   }
 
-  async steer(_input: SteerInput): Promise<ControlReceipt> {
+  async steer(input: SteerInput): Promise<ControlReceipt> {
     if (this.terminal) return reject("expired");
-    // The profile is the one statement of native steer: a fake scripted with the
-    // capability accepts it, one without rejects it `unsupported`.
     if (!this.profile.steer.available) return reject("unsupported");
-    this.emit({ kind: "activity", description: "steer accepted" });
-    // A steer that keeps the Turn working then lets it complete: release the block
-    // without marking the Turn interrupted, so `drive` settles the normal result.
-    // Only for the block-only shape — a Turn with awaited requests shares this
-    // release signal, so steering it must not resolve an unanswered request.
-    if (this.script.settleOnSteer === true && !this.script.requests?.length) {
-      this.interruptSignal?.();
+    if (this.steerIds.has(input.steerId)) return reject("already-settled");
+    this.steerIds.add(input.steerId);
+    this.steers.set(input.steerId, {
+      ...input,
+      sentAt: new Date().toISOString(),
+    });
+    if (this.script.steerBoundary !== undefined) {
+      void this.script.steerBoundary.then(() => {
+        this.steerBoundaryReached = true;
+        if (!this.terminal) this.deliverSteers("after-boundary");
+      });
     }
     return accept();
+  }
+
+  private deliverSteers(delivery: "within-turn" | "after-boundary"): void {
+    for (const steer of this.steers.values()) {
+      this.steers.delete(steer.steerId);
+      this.emit({
+        kind: "steer",
+        ...steer,
+        settlement: { kind: "delivered", delivery },
+      });
+    }
   }
 
   async interrupt(): Promise<ControlReceipt> {
@@ -466,7 +483,11 @@ class FakeTurn {
     if (!this.terminal) {
       const pace = this.script.pace;
       if (pace === undefined) {
-        for (const event of this.liveEvents()) this.emit(event);
+        for (const event of this.liveEvents()) {
+          if (this.script.steerBoundary === undefined)
+            this.deliverSteers("within-turn");
+          this.emit(event);
+        }
       } else {
         await this.emitPaced(pace);
       }
@@ -482,6 +503,27 @@ class FakeTurn {
       this.settle(this.script.interruptResult ?? this.defaultInterrupt());
       return;
     }
+    if (this.script.result.kind === "completed" && this.steers.size > 0) {
+      if (
+        this.script.steerBoundary !== undefined &&
+        !this.steerBoundaryReached
+      ) {
+        await Promise.race([
+          this.script.steerBoundary,
+          this.awaitInterrupt(false),
+        ]);
+        if (this.settled) return;
+        if (this.interrupting) {
+          this.settle(this.script.interruptResult ?? this.defaultInterrupt());
+          return;
+        }
+      }
+      this.deliverSteers(
+        this.script.steerBoundary === undefined
+          ? "within-turn"
+          : "after-boundary",
+      );
+    }
     this.settle(withCheckpoint(this.script.result, checkpoint));
   }
 
@@ -491,6 +533,8 @@ class FakeTurn {
     for (const [index, event] of this.liveEvents().entries()) {
       await pace(index);
       if (this.terminal) return;
+      if (this.script.steerBoundary === undefined)
+        this.deliverSteers("within-turn");
       this.emit(event);
     }
   }
@@ -515,10 +559,11 @@ class FakeTurn {
     );
   }
 
-  private awaitInterrupt(): Promise<void> {
+  private awaitInterrupt(natural = true): Promise<void> {
     if (this.interrupting || this.terminal) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.interruptSignal = resolve;
+      if (natural) void this.script.finish?.then(resolve);
     });
   }
 
@@ -593,6 +638,17 @@ class FakeTurn {
   private settle(result: TurnResult): void {
     if (this.settled) return;
     this.terminal = true;
+    for (const steer of this.steers.values()) {
+      this.emit({
+        kind: "steer",
+        ...steer,
+        settlement: {
+          kind: "dropped",
+          reason: result.kind === "interrupted" ? "interrupt" : "loss",
+        },
+      });
+    }
+    this.steers.clear();
     for (const [, state] of this.requests) {
       if (state.status === "outstanding") {
         this.emit({

@@ -728,6 +728,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const tracking = runs.get(runId);
     return {
       ...owner,
+      appendTurnEvent(event) {
+        const receipt = owner.appendTurnEvent(event);
+        if (event.kind === "steer" && receipt.ok) pushRunUpdate(runId);
+        return receipt;
+      },
       selectHarness(selectedHarness) {
         const result = owner.selectHarness(selectedHarness);
         if (result.outcome === "selected") pushRunUpdate(runId);
@@ -2127,7 +2132,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       operation: "steer-turn",
       replayKey: steerTurnReplayKey(input),
       runId: input.runId,
-      settle: () => steerTurnAndSettle(input),
+      settle: () => steerTurnAndSettle(operationId, input),
     });
     return { admitted: true, operationId, runId: input.runId };
   }
@@ -2140,6 +2145,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // the Run. A control naming a Turn that is no longer the live one is rejected as a
   // value, exactly as interrupt is.
   function steerTurnAndSettle(
+    steerId: string,
     input: SteerTurnInput,
   ): OperationOutcome | Promise<OperationOutcome> {
     const tracking = runs.get(input.runId);
@@ -2172,7 +2178,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         problem: turnControlRejected(input.runId, "steer-turn", input.turnId),
       };
     }
-    return tracking.live.steer(input.text).then((result) => {
+    return tracking.live.steer({ steerId, text: input.text }).then((result) => {
       if (result.outcome === "rejected") {
         return {
           status: "not-applied",

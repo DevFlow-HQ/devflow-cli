@@ -5,9 +5,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Invariants
 
 - Every canonical write to a Run must go through `observedOwner`, not the raw `RunOwner`, or an open client's live `run` Projection never updates.
-  `observedOwner` spreads `...owner` and intercepts only seven methods — `selectHarness`, `writeState`, `publishAttempt`, `recordMaterializationConflict`,
-  `recordGateAnswer`, `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own transaction), and `admitTurn` (#290) — pushing a
-  fresh snapshot after each commits. A `run` Projection registers in the Run-scoped observer set even while rested; every later tracking entry reuses that set, so
+  `observedOwner` spreads `...owner` and intercepts eight methods — `selectHarness`, `writeState`, `publishAttempt`, `recordMaterializationConflict`,
+  `recordGateAnswer`, `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own transaction),
+  `admitTurn` (#290), and `appendTurnEvent` for Steer settlements (#356),
+  pushing a fresh snapshot after each commits. A `run` Projection registers in the Run-scoped observer set even while rested; every later tracking entry reuses that set, so
   resume, gate-answer, and interactive drivers cannot orphan the stream. A new `RunOwner` write method compiles and silently pushes nothing (A3).
 - `answer-human-gate` serves two gate mechanisms off one Port operation (#108). The Projection derivation decides which: `derived.pendingGate` present is an
   **authored** gate, answered by settling its producing Attempt through `observedOwner.publishAttempt` (into `attempt_log`, so the resumed walk skips the gate) —
@@ -79,9 +80,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Tracked Operation admission, outcome, and replay carry their `runId`; pre-Run Operations omit it (#331). Application reports its own committed rests
   (cancel, Gate stop, prepare refusal, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
-- The executor's `appendTurnEvent`/`settleTurn` go through the raw owner and push no **durable** snapshot (only `admitTurn` pushes, above); the Turn's durable
-  timeline, Session availability, and effective model surface on the next intercepted write (`publishAttempt`, or the interactive `blocked` write). The live lane is
-  separate — Turn activity reaches an open client through the live overlay (#117, [run-control](../../docs/agents/run-control.md)), not through this durable write.
+- Steer `appendTurnEvent` writes push a durable snapshot immediately (#356). Other Turn events and `settleTurn` push no snapshot until the next intercepted write;
+  activity reaches open clients through the separate live overlay. The Projection validates Steer payloads and exposes full text separately from capped timeline detail.
   Decided, not yet built: ADR 0039 publishes each stored Turn row to the per-Session history family during the Turn, keeping the three admitted writes.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and
   independently exposes the latest Agent-step Attempt's normalized name/executable/version as `run.harness` plus its sibling `effectiveModel` (#125, #147).

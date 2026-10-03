@@ -649,9 +649,12 @@ export function registerHarnessPhaseConformance(
       const prepared = await prepare(codexAdapter(installed), observer);
       const turn = prepared.startTurn(turnRequest());
       await sessionOpen(turn);
-      assert.deepEqual(await turn.steer({ text: "finish now" }), {
-        outcome: "accepted",
-      });
+      assert.deepEqual(
+        await turn.steer({ steerId: "conformance-steer", text: "finish now" }),
+        {
+          outcome: "accepted",
+        },
+      );
       assert.equal((await turn.result()).kind, "completed");
       await prepared.close();
 

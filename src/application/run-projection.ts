@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Catalog, CatalogEntry } from "../catalog/catalog.js";
 import { inspectBundle, type Budgets } from "../bundle/bundle.js";
 import { selectInstalledEntry } from "./entry-selection.js";
@@ -1305,8 +1306,49 @@ function timelineDetail(text: string): string {
   return `${flat.slice(0, contentLimit)} ${RUN_TIMELINE_TRUNCATION_MARKER}`;
 }
 
+const steerEventSchema = z.object({
+  steerId: z.string(),
+  text: z.string(),
+  sentAt: z.iso.datetime(),
+  settlement: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("delivered"),
+      delivery: z.enum(["within-turn", "after-boundary", "re-delivered"]),
+    }),
+    z.object({
+      kind: z.literal("dropped"),
+      reason: z.enum(["interrupt", "loss"]),
+    }),
+  ]),
+});
+
 /** The turn-event timeline entries for one Turn's normalized durable events. */
 function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
+  if (event.kind === "steer") {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(event.payload);
+    } catch {
+      return undefined;
+    }
+    const parsed = steerEventSchema.safeParse(payload);
+    if (!parsed.success) return undefined;
+    const steer = parsed.data;
+    const settlement =
+      steer.settlement.kind === "dropped"
+        ? `dropped by ${steer.settlement.reason}`
+        : {
+            "within-turn": "delivered within Turn",
+            "after-boundary": "delivered after boundary",
+            "re-delivered": "re-delivered",
+          }[steer.settlement.delivery];
+    return {
+      at: event.at,
+      event: "steer",
+      detail: timelineDetail(`${settlement} · ${steer.text}`),
+      steer,
+    };
+  }
   if (event.kind === "assistant-content") {
     const content = safeField(event.payload, "content");
     return {
@@ -1611,6 +1653,7 @@ const TIMELINE_CATEGORY_RANK: Record<RunTimelineKind, number> = {
   "request-raised": 5,
   "request-answered": 6,
   "request-expired": 7,
+  steer: 7,
   "turn-settled": 8,
   "interactive-step-ended": 9,
   "repeat-continued": 9,

@@ -411,12 +411,33 @@ for await (const line of lines) {
       );
       continue;
     }
+    const deliverSteer = () => {
+      for (const phase of ["started", "completed"]) {
+        process.stdout.write(
+          `${JSON.stringify({
+            method: `item/${phase}`,
+            params: {
+              threadId: request.params.threadId,
+              turnId: request.params.expectedTurnId,
+              item: {
+                id: `steer-${steerNumber}`,
+                type: "userMessage",
+                clientId: request.params.clientUserMessageId,
+                content: request.params.input,
+              },
+            },
+          })}\n`,
+        );
+      }
+    };
+    if (scenario.turn?.deliverSteer === "before-response") deliverSteer();
     const turnId = scenario.turn?.mismatchedSteerResponse
       ? "stale-turn"
       : request.params.expectedTurnId;
     process.stdout.write(
       `${JSON.stringify({ id: request.id, result: scenario.turn?.malformedSteerResponse === true ? {} : { turnId } })}\n`,
     );
+    if (scenario.turn?.deliverSteer === "after-response") deliverSteer();
     if (scenario.turn?.steerTerminal === "completed") {
       emitTurnCompleted(request.params.expectedTurnId, "completed");
     }

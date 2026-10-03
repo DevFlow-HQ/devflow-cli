@@ -1184,6 +1184,14 @@ test("a live interactive Turn accepts a Steer and keeps working under a Harness 
     ).state,
     "blocked",
   );
+  const settled = readRun(wired, runId).timeline.find(
+    (event) => event.event === "steer",
+  );
+  assert.equal(settled?.steer?.steerId, "op-steer-live");
+  assert.deepEqual(settled?.steer?.settlement, {
+    kind: "dropped",
+    reason: "interrupt",
+  });
 });
 
 test("a live interactive Turn offers Steer unavailable with the profile's reason and refuses it as a value (#294)", async (t) => {

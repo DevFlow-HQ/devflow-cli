@@ -413,6 +413,9 @@ export function RunWorkbench(props: {
   // whether a Turn is live, so focus stays on the input across the whole Step. `send`
   // and `end` offers are present only at a Turn boundary (no live Turn), so they gate
   // whether Enter dispatches and whether End Step is armable.
+  const [restoredCompose, setRestoredCompose] = createSignal<
+    "interactive" | "steer"
+  >();
   const interactiveStepActive = () => {
     const current = actionableRun();
     // `blocked` is the boundary (between Turns); `running` is a live human Turn (the
@@ -420,7 +423,9 @@ export function RunWorkbench(props: {
     // input across both. Guarded on the Step kind, so ordinary agent-step execution
     // (also `running`, but kind `agent`) never shows the input.
     return (
-      (current?.state === "blocked" || current?.state === "running") &&
+      (current?.state === "blocked" ||
+        current?.state === "running" ||
+        (current?.state === "halted" && restoredCompose() === "interactive")) &&
       current.checkpoint === undefined &&
       current.pendingGate === undefined &&
       current.progress[current.position]?.kind === "interactive-agent"
@@ -530,6 +535,9 @@ export function RunWorkbench(props: {
   const steerAvailable = () => offers().steer?.available === true;
   const [steerComposing, setSteerComposing] = createSignal(false);
   const [steerDraft, setSteerDraft] = createSignal("");
+  // A compose can close before its receipt arrives; its held sent draft is still
+  // accepted text if the later durable drop names it, not a second unsent message.
+  let submittedComposeDraft: string | undefined;
   // A dispatched Steer and the input it came from: the `s` compose, or the
   // interactive input during a live Turn (#294), which keeps its keys while the Steer
   // settles and so records the text it sent. Its settlement clears or keeps that draft.
@@ -558,14 +566,19 @@ export function RunWorkbench(props: {
     if (gateControl.pending()) return "gate answer";
     return undefined;
   };
-  // The Steer input owns the bottom region only when actually composing and the offer
-  // is still available; a request/gate modal (modalControl) always takes precedence.
+  // The Steer input owns the bottom region while composing with an available offer
+  // or holding recovered guidance; a request/gate modal (modalControl) always takes precedence.
   const steerActive = () =>
-    steerComposing() && steerAvailable() && !modalControl();
+    steerComposing() &&
+    (steerAvailable() || restoredCompose() === "steer") &&
+    !modalControl();
   const openSteer = () => {
     const offer = offers().steer;
     if (offer === undefined || !offer.available || modalControl()) return;
-    setSteerDraft("");
+    if (restoredCompose() !== "steer") {
+      setSteerDraft("");
+      submittedComposeDraft = undefined;
+    }
     setSteerRefusal(undefined);
     // Drop any still-pending prior submission so its late settlement never bleeds
     // into this fresh compose (a `… steering…` pending would blur the reopened field
@@ -594,9 +607,11 @@ export function RunWorkbench(props: {
     // Hold the draft until the steer applies: a refused steer (the Turn settled, a
     // stale turnId) keeps the typed text; the settlement effect below clears it only
     // on an applied send.
+    const text = steerDraft();
+    submittedComposeDraft = text;
     setSteerFlight({
       from: "compose",
-      outcome: view.steer(offer.runId, offer.turnId, steerDraft()),
+      outcome: view.steer(offer.runId, offer.turnId, text),
     });
   };
 
@@ -871,7 +886,7 @@ export function RunWorkbench(props: {
     } else if (!active && focus() === "interactive") {
       setFocus("timeline");
     }
-    lastInteractiveStep = active ? stepId : "";
+    if (active) lastInteractiveStep = stepId;
   });
 
   // A settled interactive write: a refusal surfaces and keeps the draft (A9); an
@@ -881,7 +896,10 @@ export function RunWorkbench(props: {
   ) => {
     if (settled.kind === "refused")
       setInteractiveRefusal({ kind: "refused", problem: settled.problem });
-    else setDraft("");
+    else {
+      setDraft("");
+      setRestoredCompose(undefined);
+    }
   };
 
   // Follow a sent Turn / End Step to settlement: a refusal (a Turn still live, a
@@ -901,7 +919,11 @@ export function RunWorkbench(props: {
   // or a request/gate modal takes over, so the input never lingers over a Turn it can
   // no longer steer or under the control that now owns Esc (#148).
   createEffect(() => {
-    if (steerComposing() && (!steerAvailable() || modalControl())) leaveSteer();
+    if (
+      steerComposing() &&
+      ((!steerAvailable() && restoredCompose() !== "steer") || modalControl())
+    )
+      leaveSteer();
   });
 
   // Follow a dispatched Steer to settlement (#148): a refusal (the Turn settled, a
@@ -922,9 +944,68 @@ export function RunWorkbench(props: {
     } else if (settled.kind === "refused") setSteerRefusal(settled.problem);
     else {
       setSteerDraft("");
+      setRestoredCompose(undefined);
       leaveSteer();
     }
     setSteerFlight(undefined);
+  });
+
+  // Restore only newly observed Interrupt drops, once the send receipt has cleared
+  // its original draft. Existing history on first open is not a new draft.
+  const seenSteers = new Set<string>();
+  let steerHistoryOpened = false;
+  createEffect(() => {
+    const current = run();
+    if (current === undefined) return;
+    const entries = current.timeline.flatMap((event) =>
+      event.steer === undefined ? [] : [{ event, steer: event.steer }],
+    );
+    if (!steerHistoryOpened) {
+      for (const { steer } of entries) seenSteers.add(steer.steerId);
+      steerHistoryOpened = true;
+      return;
+    }
+    if (
+      steerPending() ||
+      interactivePending() ||
+      offers().interrupt !== undefined
+    )
+      return;
+    const dropped: string[] = [];
+    for (const { event, steer } of entries) {
+      if (seenSteers.has(steer.steerId)) continue;
+      seenSteers.add(steer.steerId);
+      if (
+        steer.settlement.kind === "dropped" &&
+        steer.settlement.reason === "interrupt" &&
+        event.step === current.progress[current.position]?.id
+      )
+        dropped.push(steer.text);
+    }
+    if (dropped.length === 0) return;
+    const interactive =
+      current.progress[current.position]?.kind === "interactive-agent";
+    const heldDraft = interactive ? draft() : steerDraft();
+    const existing =
+      !interactive &&
+      heldDraft === submittedComposeDraft &&
+      dropped.includes(heldDraft)
+        ? ""
+        : heldDraft;
+    if (!interactive) submittedComposeDraft = undefined;
+    const restored = [...dropped, ...(existing === "" ? [] : [existing])].join(
+      "\n\n",
+    );
+    setRestoredCompose(interactive ? "interactive" : "steer");
+    if (interactive) {
+      setDraft(restored);
+      setInteractiveRefusal(undefined);
+      setFocus("interactive");
+    } else {
+      setSteerDraft(restored);
+      setSteerComposing(true);
+      setFocus("steer");
+    }
   });
 
   // The unavailable Steer's reason speaks for the live Turn only: when the Turn ends
@@ -1330,6 +1411,7 @@ export function RunWorkbench(props: {
               // Actions box never sees those pending states.
               actionPending={railPending}
               interactiveActive={interactiveStepActive}
+              interactiveRestored={() => restoredCompose() === "interactive"}
               interactiveInterrupt={interactiveInterrupt}
               interactiveSteerOffered={() =>
                 interactiveInterrupt() !== undefined && steerAvailable()
@@ -1350,6 +1432,7 @@ export function RunWorkbench(props: {
               interactivePending={interactivePending}
               interactiveRefusal={interactiveRefusal}
               steerActive={steerActive}
+              steerRestored={() => restoredCompose() === "steer"}
               steerDraft={steerDraft}
               onSteerInput={(value) => setSteerDraft(value)}
               steerPending={steerPending}
@@ -1445,6 +1528,7 @@ function Workbench(props: {
   actionRefusal: Accessor<Problem | undefined>;
   actionPending: Accessor<"takeover" | "acknowledge" | undefined>;
   interactiveActive: Accessor<boolean>;
+  interactiveRestored: Accessor<boolean>;
   interactiveInterrupt: Accessor<InterruptTurnOffer | undefined>;
   interactiveSteerOffered: Accessor<boolean>;
   interactiveEndOffered: Accessor<boolean>;
@@ -1459,6 +1543,7 @@ function Workbench(props: {
   interactivePending: Accessor<boolean>;
   interactiveRefusal: Accessor<InteractiveRefusal | undefined>;
   steerActive: Accessor<boolean>;
+  steerRestored: Accessor<boolean>;
   steerDraft: Accessor<string>;
   onSteerInput: (value: string) => void;
   steerPending: Accessor<boolean>;
@@ -1814,6 +1899,10 @@ function Workbench(props: {
                 }
               >
                 <SteerInput
+                  restored={props.steerRestored}
+                  available={() =>
+                    props.actionOffers().steer?.available === true
+                  }
                   draft={props.steerDraft}
                   onInput={props.onSteerInput}
                   pending={props.steerPending}
@@ -1826,6 +1915,7 @@ function Workbench(props: {
             }
           >
             <InteractiveInput
+              restored={props.interactiveRestored}
               draft={props.draft}
               onInput={props.onDraftInput}
               interrupt={props.interactiveInterrupt}

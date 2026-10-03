@@ -62,6 +62,11 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   (`modalControl` wins `bottomHeight`; an effect closes the compose when the offer leaves or a modal appears). The `s`-open and steer-typing key routing sit beside the
   interactive `typing` branch (gated so `q`/`t`/Run-Actions type as text while composing). An unavailable steer shows `steer — unavailable · <reason>` on the rail and `s`
   opens nothing.
+- Interrupt-drop settlements restore full Steer text once, after the live Turn leaves and pending send receipts settle (#356). Delivered and loss-drop rows remain history.
+  New drops join in recorded order before the unsent draft; opening old history restores nothing, and repeated snapshots never duplicate a restore.
+  Full text comes from `RunTimelineEvent.steer`,
+  never its capped `detail`. Restored drafts use a one-row native textarea because `<input>` strips newlines; ordinary M7/M8 inputs keep their existing routing.
+  The recovered compose stays editable at `halted` until resume, without offering a send before its Action Offer exists. Escape returns to the timeline's Run actions.
 - A stale approval answer keeps its inline refusal while the offer re-renders: a genuinely new request (a fresh `requestId`) resets the decision to `allow`
   and clears the refusal, but a stale answer keeps the same id, so its refusal survives while the bumped-generation offer re-renders (`onIdentityChange` on
   the request id).

@@ -399,6 +399,127 @@ function runRecoveryCases(
   );
 }
 
+/** Accepted Steers awaiting model exposure; driven through the Harness Interface. */
+export function runPendingSteerCases(
+  scenarios: {
+    readonly label: string;
+    pendingTurn(stop: "interrupt" | "loss"): TestHarnessAdapterFactory;
+  },
+  register: RegisterConformanceCase,
+): void {
+  for (const stop of ["interrupt", "loss"] as const) {
+    register(
+      `[${scenarios.label}] pending Steers drop before result on ${stop}`,
+      async () => {
+        const prepared = await prepare(scenarios.pendingTurn(stop));
+        const turn = prepared.startTurn(request(recorder().recorder));
+        const events = observe(turn);
+        await events.waitForSession();
+        for (const steerId of ["one", "two"]) {
+          assert.deepEqual(
+            await turn.steer({ steerId, text: `${steerId} guidance` }),
+            { outcome: "accepted" },
+          );
+        }
+        assert.equal(
+          events.all.filter((event) => event.kind === "steer").length,
+          0,
+        );
+        let ended = false;
+        turn.subscribe(() =>
+          assert.equal(ended, false, "no event after result"),
+        );
+        if (stop === "interrupt")
+          assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
+        else await prepared.close();
+        const result = await turn.result();
+        ended = true;
+        assert.equal(
+          result.kind,
+          stop === "interrupt" ? "interrupted" : "lost",
+        );
+        const settlements = events.all.filter(
+          (event) => event.kind === "steer",
+        );
+        assert.deepEqual(
+          settlements.map((event) => [
+            event.steerId,
+            event.text,
+            event.settlement,
+          ]),
+          [
+            ["one", "one guidance", { kind: "dropped", reason: stop }],
+            ["two", "two guidance", { kind: "dropped", reason: stop }],
+          ],
+        );
+        for (const event of settlements)
+          assert.ok(Number.isFinite(Date.parse(event.sentAt)));
+        assert.deepEqual(
+          await turn.steer({ steerId: "late", text: "keep this draft" }),
+          { outcome: "rejected", reason: "expired" },
+        );
+        await prepared.close();
+      },
+    );
+  }
+}
+
+/** A native terminal boundary waits for model exposure of accepted guidance. */
+export function runStretchingSteerCases(
+  scenarios: {
+    readonly label: string;
+    stretchingTurn(): {
+      readonly adapter: TestHarnessAdapterFactory;
+      readonly boundary: () => void;
+      readonly deliver: () => void;
+    };
+  },
+  register: RegisterConformanceCase,
+): void {
+  register(
+    `[${scenarios.label}] Turn stays open across a boundary until every accepted Steer settles`,
+    async () => {
+      const scenario = scenarios.stretchingTurn();
+      const prepared = await prepare(scenario.adapter);
+      const turn = prepared.startTurn(request(recorder().recorder));
+      const events = observe(turn);
+      await events.waitForSession();
+      assert.deepEqual(
+        await turn.steer({ steerId: "first", text: "first guidance" }),
+        { outcome: "accepted" },
+      );
+      scenario.boundary();
+      // Flush the boundary's promise continuation, then exercise the still-live handle.
+      await Promise.resolve();
+      assert.deepEqual(
+        await turn.steer({ steerId: "second", text: "second guidance" }),
+        { outcome: "accepted" },
+      );
+      let ended = false;
+      void turn.result().then(() => {
+        ended = true;
+      });
+      assert.equal(ended, false);
+      assert.equal(
+        events.all.filter((event) => event.kind === "steer").length,
+        0,
+      );
+      scenario.deliver();
+      assert.equal((await turn.result()).kind, "completed");
+      assert.deepEqual(
+        events.all
+          .filter((event) => event.kind === "steer")
+          .map((event) => [event.steerId, event.settlement]),
+        [
+          ["first", { kind: "delivered", delivery: "after-boundary" }],
+          ["second", { kind: "delivered", delivery: "after-boundary" }],
+        ],
+      );
+      await prepared.close();
+    },
+  );
+}
+
 export function runNativeSteerCases(
   scenarios: NativeSteerScenarios,
   register: RegisterConformanceCase,
@@ -417,6 +538,7 @@ export function runNativeSteerCases(
       await events.waitForSession();
       assert.deepEqual(
         await turn.steer({
+          steerId: "conformance-steer",
           text: scenarios.guidanceText ?? "inspect the other seam",
         }),
         {
@@ -424,10 +546,24 @@ export function runNativeSteerCases(
         },
       );
       assert.equal((await turn.result()).kind, "completed");
-      assert.deepEqual(await turn.steer({ text: "too late" }), {
-        outcome: "rejected",
-        reason: "expired",
+      const settlements = events.all.filter((event) => event.kind === "steer");
+      assert.equal(settlements.length, 1);
+      assert.equal(settlements[0]?.steerId, "conformance-steer");
+      assert.equal(
+        settlements[0]?.text,
+        scenarios.guidanceText ?? "inspect the other seam",
+      );
+      assert.deepEqual(settlements[0]?.settlement, {
+        kind: "delivered",
+        delivery: "within-turn",
       });
+      assert.deepEqual(
+        await turn.steer({ steerId: "conformance-steer", text: "too late" }),
+        {
+          outcome: "rejected",
+          reason: "expired",
+        },
+      );
       await prepared.close();
     },
   );
@@ -483,7 +619,10 @@ export function runInterruptRecoveryCases(
       const result = await turn.result();
       detachedCoordinate(result, outcome);
       // New inputs are rejected after an accepted interrupt.
-      const late = await turn.steer({ text: "too late" });
+      const late = await turn.steer({
+        steerId: "conformance-steer",
+        text: "too late",
+      });
       assert.deepEqual(late, { outcome: "rejected", reason: "expired" });
       await prepared.close();
     },
@@ -1145,7 +1284,10 @@ export function runApprovalRequestCases(
         assert.deepEqual(receipt, { outcome: "accepted" });
         detachedCoordinate(await turn.result(), outcome);
         // New inputs are rejected after an accepted interrupt.
-        const late = await turn.steer({ text: "too late" });
+        const late = await turn.steer({
+          steerId: "conformance-steer",
+          text: "too late",
+        });
         assert.deepEqual(late, { outcome: "rejected", reason: "expired" });
         await prepared.close();
       },
@@ -1208,7 +1350,10 @@ export function runConformanceSuite(
     async () => {
       const prepared = await prepare(scenarios.baseline());
       const turn = prepared.startTurn(request(recorder().recorder));
-      const receipt = await turn.steer({ text: "guidance" });
+      const receipt = await turn.steer({
+        steerId: "conformance-steer",
+        text: "guidance",
+      });
       assert.deepEqual(receipt, { outcome: "rejected", reason: "unsupported" });
       await turn.result();
       await prepared.close();

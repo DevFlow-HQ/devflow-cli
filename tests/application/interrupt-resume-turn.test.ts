@@ -531,7 +531,7 @@ test("a resume the Harness does not acknowledge fails the Attempt and never crea
   assert.equal(run.sessions?.[0]?.availability, "unusable");
 });
 
-// A native-steer profile lets the test release an ineffective interrupt naturally.
+// Natural native boundaries release an ineffective interrupt independently of Steer.
 const INTERRUPT_PROFILE: HarnessProfile = {
   ...claudeProfile(),
   steer: { available: true, evidence: "scripted fake" },
@@ -554,6 +554,16 @@ async function failedInterruptScenario(
   });
   const interruptCalls: number[] = [];
   const releases: Array<() => Promise<unknown>> = [];
+  const boundaries = Array.from(
+    { length: 3 },
+    (_, current) =>
+      new Promise<void>((resolve) => {
+        releases[current] = () => {
+          resolve();
+          return Promise.resolve();
+        };
+      }),
+  );
   let index = 0;
   const adapter: HarnessAdapter = {
     async prepare(prepareOptions) {
@@ -564,19 +574,19 @@ async function failedInterruptScenario(
             ? [
                 {
                   block: true,
-                  settleOnSteer: true,
+                  finish: boundaries[index],
                   result: options.firstResult ?? COMPLETED_OPEN,
                 },
                 {
                   block: options.blockNext,
-                  settleOnSteer: true,
+                  finish: boundaries[index + 1],
                   result: COMPLETED_OPEN,
                 },
               ]
             : [
                 {
                   block: options.blockNext,
-                  settleOnSteer: true,
+                  finish: boundaries[index],
                   result: COMPLETED_OPEN,
                 },
               ],
@@ -592,7 +602,6 @@ async function failedInterruptScenario(
           startTurn(request) {
             const turn = harness.startTurn(request);
             const current = index++;
-            releases[current] = () => turn.steer({ text: "finish naturally" });
             return {
               subscribe: (listener) => turn.subscribe(listener),
               answerRequest: (answer) => turn.answerRequest(answer),

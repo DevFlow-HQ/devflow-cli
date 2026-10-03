@@ -385,6 +385,14 @@ export type SessionAvailability =
   | { readonly state: "detached"; readonly coordinate: RecoveryCoordinate }
   | { readonly state: "unusable"; readonly reason: string };
 
+/** Delivery describes model exposure, never whether the model followed the text. */
+export type SteerSettlement =
+  | {
+      readonly kind: "delivered";
+      readonly delivery: "within-turn" | "after-boundary" | "re-delivered";
+    }
+  | { readonly kind: "dropped"; readonly reason: "interrupt" | "loss" };
+
 /** The closed set of Turn event kinds. */
 export type TurnEvent =
   | {
@@ -410,7 +418,14 @@ export type TurnEvent =
   | { readonly kind: "context"; readonly observation: ContextObservation }
   | { readonly kind: "usage"; readonly observation: UsageObservation }
   | { readonly kind: "activity"; readonly description: string }
-  | { readonly kind: "model"; readonly observation: ModelObservation };
+  | { readonly kind: "model"; readonly observation: ModelObservation }
+  | {
+      readonly kind: "steer";
+      readonly steerId: string;
+      readonly text: string;
+      readonly sentAt: string;
+      readonly settlement: SteerSettlement;
+    };
 
 export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "session",
@@ -424,6 +439,7 @@ export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "usage",
   "activity",
   "model",
+  "steer",
 ] as const);
 
 /** A listener on the ordered event stream. Removed by its subscription. */
@@ -443,6 +459,8 @@ export interface TurnSubscription {
 
 /** Native same-Turn guidance. */
 export interface SteerInput {
+  /** Caller-supplied opaque identity, unique within this Turn. */
+  readonly steerId: string;
   readonly text: string;
 }
 

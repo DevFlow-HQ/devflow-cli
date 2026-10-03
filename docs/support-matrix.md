@@ -39,6 +39,10 @@ recordings prove Adapter behavior against recorded bytes; they do **not** prove
 compatibility with a currently installed Harness and do not support a
 real-Harness or three-OS parity claim.
 
+The Steer fixture was refreshed on 2026-10-03 against codex-cli 0.160.0 on Linux x64 for #356. It records `clientUserMessageId` and the matching
+`userMessage.clientId`; standalone conformance checks delivery, while synthetic replay covers Interrupt/loss drops and receipt ordering. This recording
+qualifies those protocol fields, not a full installed-Harness Proof Bundle pass.
+
 The `v0.1.0` release recorded both Harness passes on Windows x64 against candidate
 binary SHA-256 `c1fab9956073b39ab689793f0a4232260986c521b98106fb28a9bd296ffa9577`.
 These rows make no macOS, Linux, or cross-operating-system real-Harness claim.

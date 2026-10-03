@@ -19,6 +19,8 @@ import {
   type ModelDeclarationScenarios,
   runConformanceSuite,
   runModelDeclarationCases,
+  runPendingSteerCases,
+  runStretchingSteerCases,
 } from "./conformance.js";
 import {
   createFake,
@@ -418,3 +420,54 @@ for (const scenario of [
 ]) {
   runModelDeclarationCases(scenario, test);
 }
+const STEER_PROFILE = profile({
+  steer: {
+    available: true,
+    evidence: "fake exposes guidance at scripted boundaries",
+  },
+});
+runPendingSteerCases(
+  {
+    label: "fake-steer",
+    pendingTurn: () =>
+      createFake({
+        profile: STEER_PROFILE,
+        turns: [
+          { events: [SESSION_OPEN], block: true, result: COMPLETED_OPEN },
+        ],
+      }),
+  },
+  test,
+);
+runStretchingSteerCases(
+  {
+    label: "fake-steer",
+    stretchingTurn: () => {
+      let boundary!: () => void;
+      let deliver!: () => void;
+      const finish = new Promise<void>((resolve) => {
+        boundary = resolve;
+      });
+      const steerBoundary = new Promise<void>((resolve) => {
+        deliver = resolve;
+      });
+      return {
+        adapter: createFake({
+          profile: STEER_PROFILE,
+          turns: [
+            {
+              events: [SESSION_OPEN],
+              block: true,
+              finish,
+              steerBoundary,
+              result: COMPLETED_OPEN,
+            },
+          ],
+        }),
+        boundary,
+        deliver,
+      };
+    },
+  },
+  test,
+);

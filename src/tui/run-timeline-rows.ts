@@ -108,6 +108,8 @@ function durableLabel(event: RunTimelineEvent): string {
       return `! Materialization conflict${detail}`;
     case "assistant-content":
       return `◆ Assistant${detail}`;
+    case "steer":
+      return `↳ Steer${detail}`;
     case "tool-activity":
       return `↳ Tool activity${detail}`;
     // The Session names the conversation, so a divider carries it, not the row.
