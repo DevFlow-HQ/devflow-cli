@@ -83,8 +83,7 @@ export type ReadOutcome =
 
 // Every v1 feature maps to the Secant version that introduced format version 1.
 // The builder derives requires.engine as the max over features actually used;
-// today they all share one floor, but the table is where a later feature's
-// higher floor lands. ponytail: one-version table until a feature raises it.
+// features introduced later raise only the floor of Bundles declaring them.
 const V1 = "0.1.0";
 
 /** Build `.wfb` bytes from an authoring folder. Never modifies the folder. */
@@ -560,6 +559,10 @@ const FEATURE_MINIMUMS: Readonly<Record<string, string>> = {
   // Every v1 feature entered at the format's introduction. New entries here
   // when a later feature raises the floor.
   "format:1": V1,
+  "step:agent-completion": "0.2.0",
+  "step:step-done-when": "0.2.0",
+  "step:stage-done-when": "0.2.0",
+  "repeat:human-review-checkpoint": "0.2.0",
 };
 
 function collectStepFeatures(
@@ -568,10 +571,15 @@ function collectStepFeatures(
 ): void {
   if ("repeat" in node) {
     features.add("routing:repeat-group");
+    if ("control" in node.repeat && node.repeat.reviewCheckpoint !== undefined)
+      features.add("repeat:human-review-checkpoint");
     for (const step of node.repeat.steps) collectStepFeatures(step, features);
     return;
   }
   features.add(`step:${node.kind}`);
+  if (node.agentCompletion !== undefined) features.add("step:agent-completion");
+  if (node.stepDoneWhen !== undefined) features.add("step:step-done-when");
+  if (node.stageDoneWhen !== undefined) features.add("step:stage-done-when");
   for (const prereq of node.prerequisites ?? [])
     features.add(`prereq:${prereq}`);
   for (const produced of node.produces ?? []) {

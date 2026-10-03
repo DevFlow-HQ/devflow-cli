@@ -12,6 +12,7 @@ import {
 import { buildBundle, writeZip } from "../../src/bundle/bundle.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
+import type { AgentStep } from "../../src/workflow/workflow.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import type { RunGroup } from "../../src/run/store/store.js";
 import {
@@ -142,7 +143,10 @@ function install(
   return { id: cmd.id, digest: entry.digest };
 }
 
-function installAgentBundle(f: Fixture): { id: string; digest: string } {
+function installAgentBundle(
+  f: Fixture,
+  step: Partial<AgentStep> = {},
+): { id: string; digest: string } {
   const folder = makeTempDir("secant-pf-agent-");
   mkdirSync(join(folder, "prompts"));
   writeFileSync(join(folder, "prompts", "work.md"), "Do the work.\n");
@@ -164,6 +168,7 @@ function installAgentBundle(f: Fixture): { id: string; digest: string } {
         session: "work",
         retry: 0,
         prompt: { asset: "prompts/work.md" },
+        ...step,
       },
     ],
   };
@@ -910,5 +915,119 @@ for (const future of [false, true]) {
       f.catalog.getTrustGrant(bundle.digest, entry.installationGeneration),
       undefined,
     );
+  });
+}
+
+for (const supportsInteractiveTurns of [false, true]) {
+  for (const harness of ["claude-code", "codex"] as const) {
+    test(`Agent-call capability refusal, ${harness}, interactive client=${supportsInteractiveTurns}`, (t) => {
+      let discoveries = 0;
+      const f = fixture(
+        t,
+        workspace(),
+        [
+          registeredHarness({
+            id: harness,
+            name: harness,
+            discover: () => {
+              discoveries++;
+              return { kind: "found", source: "path", description: harness };
+            },
+          }),
+        ],
+        "pass",
+        { supportsInteractiveTurns, engineVersion: "0.2.0" },
+      );
+      const { id, digest } = installAgentBundle(f, {
+        kind: "interactive-agent",
+        agentCompletion: true,
+      });
+      const admission = launch(f, id, { harness, trustDigest: digest });
+      assert.ok(!admission.admitted);
+      assert.equal(
+        admission.problem.code,
+        supportsInteractiveTurns
+          ? "harness-capability-unmet"
+          : "interactive-step-needs-tui",
+      );
+      const view = f.app.projectionPort.openProjection({
+        family: "launch-preparation",
+        draft: {
+          bundle: { id },
+          launchInputs: {},
+          harness,
+          trustDigest: digest,
+        },
+      });
+      assert.equal(view.snapshot.status, "not-ready");
+      const capability = view.snapshot.findings.find(
+        (finding) => finding.code === "harness-capability-unmet",
+      );
+      assert.ok(capability, JSON.stringify(view.snapshot.findings));
+      assert.match(capability.explanation, /agentCalls/);
+      assert.equal(capability.correction, "harness");
+      assert.equal(
+        view.snapshot.findings.some(
+          (finding) => finding.code === "bundle-trust-required",
+        ),
+        false,
+      );
+      view.close();
+      assert.equal(discoveries, 0);
+      assert.deepEqual(f.runGroup.listRuns(), []);
+      const entry = f.catalog
+        .listEntries()
+        .find((entry) => entry.digest === digest);
+      assert.ok(entry);
+      assert.equal(
+        f.catalog.getTrustGrant(digest, entry.installationGeneration),
+        undefined,
+      );
+    });
+  }
+}
+
+for (const agentCompletion of [undefined, false, true, ["step"]] as const) {
+  test(`Preflight requires Agent calls only for enabled calls: ${JSON.stringify(agentCompletion)}`, (t) => {
+    let discoveries = 0;
+    const enabled = agentCompletion === true || Array.isArray(agentCompletion);
+    const f = fixture(
+      t,
+      workspace(),
+      [
+        registeredHarness({
+          id: "codex",
+          name: "Codex",
+          servedCapabilities: [
+            "interactive-turns",
+            ...(enabled ? ["agentCalls"] : []),
+          ],
+          discover: () => {
+            discoveries++;
+            return { kind: "found", source: "path", description: "codex" };
+          },
+        }),
+      ],
+      "pass",
+      { supportsInteractiveTurns: true, engineVersion: "0.2.0" },
+    );
+    const { id, digest } = installAgentBundle(f, {
+      kind: "interactive-agent",
+      agentCompletion,
+    });
+    const view = f.app.projectionPort.openProjection({
+      family: "launch-preparation",
+      draft: {
+        bundle: { id },
+        launchInputs: {},
+        harness: "codex",
+        trustDigest: digest,
+      },
+    });
+    assert.deepEqual(view.snapshot.findings, []);
+    assert.equal(view.snapshot.status, "ready");
+    assert.equal(discoveries, 1);
+    view.close();
+    assert.deepEqual(f.runGroup.listRuns(), []);
   });
 }

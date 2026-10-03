@@ -835,3 +835,259 @@ for (const engine of [
     }
   });
 }
+
+function completionManifest(
+  fields: Record<string, unknown> = {},
+  checkpoint?: unknown,
+) {
+  const step = {
+    id: "work",
+    kind: "interactive-agent",
+    session: "s",
+    prompt: { asset: "p.md" },
+    entryTurn: true,
+    ...fields,
+  };
+  return {
+    ...base(),
+    assets: [{ path: "p.md", kind: "prompt" }],
+    routing: [
+      {
+        repeat: {
+          control: "human",
+          steps: [step],
+          ...(checkpoint === undefined ? {} : { reviewCheckpoint: checkpoint }),
+        },
+      },
+    ],
+  };
+}
+
+test("Agent-completion fields build, round-trip, and derive the 0.2.0 floor", () => {
+  for (const agentCompletion of [
+    true,
+    false,
+    ["step"],
+    ["stage"],
+    ["step", "stage"],
+  ]) {
+    const outcome = buildBundle(
+      authoringFolder(completionManifest({ agentCompletion }), {
+        "p.md": "Work.",
+      }),
+    );
+    assert.ok(outcome.ok, JSON.stringify(outcome));
+    const read = readBundle(outcome.built.bytes, DEFAULT_BUDGETS);
+    assert.ok(read.ok, JSON.stringify(read));
+    assert.equal(
+      JSON.parse(readZipEntry(outcome.built.bytes, "manifest.json").toString())
+        .requires.engine,
+      ">=0.2.0",
+    );
+    assert.deepEqual(
+      JSON.parse(readZipEntry(outcome.built.bytes, "manifest.json").toString())
+        .routing[0].repeat.steps[0].agentCompletion,
+      agentCompletion,
+    );
+  }
+});
+
+test("Agent completion preserves author sentences and normalizes an optional human checkpoint", () => {
+  for (const checkpoint of [
+    {},
+    { message: "Review the work." },
+    { interval: 101 },
+    { interval: 1000000, message: "Review." },
+  ]) {
+    const built = buildBundle(
+      authoringFolder(
+        completionManifest(
+          {
+            agentCompletion: true,
+            stepDoneWhen: "Call step_done with a reason when finished.",
+            stageDoneWhen:
+              "Call stage_done with a reason when no work remains.",
+          },
+          checkpoint,
+        ),
+        { "p.md": "Work." },
+      ),
+    );
+    assert.ok(built.ok, JSON.stringify(built));
+    const inspected = inspectBundle(built.built.bytes, DEFAULT_BUDGETS);
+    assert.ok(inspected.ok);
+    assert.equal(inspected.inspection.engine, ">=0.2.0");
+    const node = inspected.inspection.manifest.routing[0];
+    assert.ok("repeat" in node);
+    assert.deepEqual(node.repeat.reviewCheckpoint, {
+      interval: "interval" in checkpoint ? checkpoint.interval : 100,
+      ...checkpoint,
+    });
+    assert.equal(
+      node.repeat.steps[0].stepDoneWhen,
+      "Call step_done with a reason when finished.",
+    );
+    assert.equal(
+      node.repeat.steps[0].stageDoneWhen,
+      "Call stage_done with a reason when no work remains.",
+    );
+    assert.ok(readBundle(built.built.bytes, DEFAULT_BUDGETS).ok);
+  }
+});
+
+test("malformed Agent-completion fields are refused by authored and packaged validation", () => {
+  const valid = buildBundle(
+    authoringFolder(completionManifest({ agentCompletion: true }), {
+      "p.md": "Work.",
+    }),
+  );
+  assert.ok(valid.ok);
+  const cases: readonly {
+    fields: Record<string, unknown>;
+    checkpoint?: unknown;
+  }[] = [
+    ...["true", 1, null, {}, ["done"], ["step", 1]].map((agentCompletion) => ({
+      fields: { agentCompletion },
+    })),
+    ...["", "  ", true, 42, null].flatMap((text) => [
+      { fields: { stepDoneWhen: text } },
+      { fields: { stageDoneWhen: text } },
+    ]),
+    ...[
+      null,
+      [],
+      1,
+      { unknown: true },
+      { interval: 0 },
+      { interval: -1 },
+      { interval: 1.5 },
+      { interval: "100" },
+      { message: "" },
+      { message: false },
+    ].map((checkpoint) => ({ fields: {}, checkpoint })),
+  ];
+  for (const { fields, checkpoint } of cases) {
+    const manifest = completionManifest(
+      { agentCompletion: true, ...fields },
+      checkpoint,
+    );
+    const authored = buildBundle(
+      authoringFolder(manifest, { "p.md": "Work." }),
+    );
+    assert.ok(
+      !authored.ok && "finding" in authored,
+      JSON.stringify({ fields, checkpoint, authored }),
+    );
+    const received = repack(valid.built.bytes, (entries) =>
+      entries.map((entry) =>
+        entry.path === "manifest.json"
+          ? {
+              path: entry.path,
+              data: Buffer.from(
+                JSON.stringify({
+                  ...manifest,
+                  platforms: ["windows", "macos", "linux"],
+                  requires: { engine: ">=0.2.0" },
+                }),
+              ),
+            }
+          : entry,
+      ),
+    );
+    const packaged = readBundle(received, DEFAULT_BUDGETS);
+    assert.ok(
+      !packaged.ok && "finding" in packaged,
+      JSON.stringify({ fields, checkpoint, packaged }),
+    );
+  }
+});
+
+test("Agent-completion semantic errors reach Workflow composition through the Bundle build and install seams", () => {
+  const valid = buildBundle(
+    authoringFolder(completionManifest({ agentCompletion: true }), {
+      "p.md": "Work.",
+    }),
+  );
+  assert.ok(valid.ok);
+  for (const [fields, checkpoint, code] of [
+    [
+      { kind: "agent", entryTurn: undefined, agentCompletion: true },
+      undefined,
+      "agent-completion-non-interactive",
+    ],
+    [{ agentCompletion: [] }, undefined, "agent-completion-empty"],
+    [
+      { agentCompletion: ["stage"] },
+      {},
+      "agent-completion-checkpoint-without-step",
+    ],
+    [
+      { agentCompletion: false, stepDoneWhen: "Call step_done." },
+      undefined,
+      "agent-completion-call-disabled",
+    ],
+    [
+      {
+        agentCompletion: true,
+        entryTurn: false,
+        stageDoneWhen: "Call stage_done.",
+      },
+      undefined,
+      "agent-completion-text-without-entry-turn",
+    ],
+  ] as const) {
+    const manifest = completionManifest(fields, checkpoint);
+    const build = buildBundle(authoringFolder(manifest, { "p.md": "Work." }));
+    assert.ok(!build.ok && "composition" in build, JSON.stringify(build));
+    assert.equal(
+      build.composition.some((finding) => finding.code === code),
+      true,
+    );
+    const received = repack(valid.built.bytes, (entries) =>
+      entries.map((entry) =>
+        entry.path === "manifest.json"
+          ? {
+              path: entry.path,
+              data: Buffer.from(
+                JSON.stringify({
+                  ...manifest,
+                  platforms: ["windows", "macos", "linux"],
+                  requires: { engine: ">=0.2.0" },
+                }),
+              ),
+            }
+          : entry,
+      ),
+    );
+    const read = readBundle(received, DEFAULT_BUDGETS);
+    assert.ok(!read.ok && "composition" in read, JSON.stringify(read));
+    assert.equal(
+      read.composition.some((finding) => finding.code === code),
+      true,
+    );
+  }
+});
+
+test("a declared opt-out still independently raises the required engine on received bytes", () => {
+  const built = buildBundle(
+    authoringFolder(completionManifest({ agentCompletion: false }), {
+      "p.md": "Work.",
+    }),
+  );
+  assert.ok(built.ok);
+  const understated = repack(built.built.bytes, (entries) =>
+    entries.map((entry) =>
+      entry.path === "manifest.json"
+        ? {
+            path: entry.path,
+            data: Buffer.from(
+              decode(entry.data).replace('">=0.2.0"', '">=0.1.0"'),
+            ),
+          }
+        : entry,
+    ),
+  );
+  const read = readBundle(understated, DEFAULT_BUDGETS);
+  assert.ok(!read.ok && "finding" in read);
+  assert.equal(read.finding.code, "engine-understated");
+});

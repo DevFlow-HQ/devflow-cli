@@ -288,6 +288,10 @@ interface StepCommon {
   readonly produces?: readonly ProducedArtifact[];
   readonly prerequisites?: readonly WorkspacePrerequisite[];
   readonly retry?: number;
+  /** Composition rejects enabled Agent calls on non-interactive Steps. */
+  readonly agentCompletion?: boolean | readonly ("step" | "stage")[];
+  readonly stepDoneWhen?: string;
+  readonly stageDoneWhen?: string;
 }
 export interface AgentStep extends StepCommon {
   readonly kind: "agent" | "interactive-agent";
@@ -326,9 +330,13 @@ interface VerdictRepeat {
 }
 /** Repeats until a human ends the stage (#217, #218): each iteration pauses at its one
  *  interactive-agent Step, and the human's Continue is that iteration's review
- *  decision, so no Verdict is read and no periodic Review checkpoint is raised. */
+ *  decision. Opted-in agent Continues pause at a periodic Review checkpoint. */
 interface HumanRepeat {
   readonly control: "human";
+  readonly reviewCheckpoint?: {
+    readonly interval?: number;
+    readonly message?: string;
+  };
   readonly steps: readonly Step[];
 }
 export interface RepeatGroup {
@@ -348,6 +356,20 @@ export function inHumanRepeat(
       "control" in node.repeat &&
       node.repeat.steps.some((step) => step.id === stepId),
   );
+}
+
+/** Resolve authored opt-in at the Step's position. Composition rejects explicit
+ *  calls that are invalid there before execution or Preflight consumes them. */
+export function agentCompletionCalls(
+  routing: readonly RoutingNode[],
+  step: Step,
+): readonly ("step" | "stage")[] {
+  if (step.kind !== "interactive-agent") return [];
+  if (step.agentCompletion === true)
+    return inHumanRepeat(routing, step.id) ? ["step", "stage"] : ["step"];
+  return step.agentCompletion === false || step.agentCompletion === undefined
+    ? []
+    : step.agentCompletion;
 }
 
 export interface AuthoredManifest {

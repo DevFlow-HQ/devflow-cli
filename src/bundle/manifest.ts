@@ -284,6 +284,12 @@ const stepCommon = {
     )
     .optional(),
   retry: nonNegativeInt.optional(),
+  // Legality belongs to Workflow composition, including non-interactive opt-in.
+  agentCompletion: z
+    .union([z.boolean(), z.array(z.enum(["step", "stage"]))])
+    .optional(),
+  stepDoneWhen: nonEmptyString.optional(),
+  stageDoneWhen: nonEmptyString.optional(),
 };
 
 const executable = checked(
@@ -369,10 +375,20 @@ const verdictRepeat = z.strictObject({
   }),
   steps: z.array(step),
 });
-// A human-controlled Repeat (#217) names no Verdict and no Review checkpoint: the
-// human's Continue at its interactive Step's Turn boundary is each iteration's review.
+// Human-controlled groups have an optional, uncapped agent-Continue checkpoint.
 const humanRepeat = z.strictObject({
   control: z.literal("human"),
+  reviewCheckpoint: z
+    .strictObject({
+      interval: checked(
+        z.number(),
+        (value) => Number.isInteger(value) && value >= 1,
+        "must be a positive integer.",
+        "invalid-review-checkpoint",
+      ).default(100),
+      message: nonEmptyString.optional(),
+    })
+    .optional(),
   steps: z.array(step),
 });
 const repeatGroup = z.strictObject({

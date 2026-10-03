@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentCompletionCalls,
+  type AgentStep,
   checkComposition,
   type AuthoredManifest,
   type RoutingNode,
@@ -633,3 +635,178 @@ for (const [title, produces] of [
     );
   });
 }
+
+function completionStep(fields: Partial<AgentStep> = {}): AgentStep {
+  return {
+    id: "work",
+    kind: "interactive-agent",
+    session: "s",
+    prompt: { asset: "p.md" },
+    requires: ["doc"],
+    entryTurn: true,
+    ...fields,
+  };
+}
+
+for (const [title, step, code] of [
+  [
+    "non-interactive opt-in",
+    completionStep({ kind: "agent", agentCompletion: true }),
+    "agent-completion-non-interactive",
+  ],
+  [
+    "stage outside a human group",
+    completionStep({ agentCompletion: ["stage"] }),
+    "agent-completion-stage-outside-human-repeat",
+  ],
+  [
+    "empty opt-in list",
+    completionStep({ agentCompletion: [] }),
+    "agent-completion-empty",
+  ],
+  [
+    "text for disabled step",
+    completionStep({
+      agentCompletion: false,
+      stepDoneWhen: "Call step_done with a reason.",
+    }),
+    "agent-completion-call-disabled",
+  ],
+  [
+    "text for disabled stage",
+    completionStep({
+      agentCompletion: ["step"],
+      stageDoneWhen: "Call stage_done with a reason.",
+    }),
+    "agent-completion-call-disabled",
+  ],
+  [
+    "step text without Entry Turn",
+    completionStep({
+      agentCompletion: true,
+      entryTurn: false,
+      stepDoneWhen: "Call step_done with a reason.",
+    }),
+    "agent-completion-text-without-entry-turn",
+  ],
+  [
+    "stage text without Entry Turn",
+    completionStep({
+      agentCompletion: ["stage"],
+      entryTurn: undefined,
+      stageDoneWhen: "Call stage_done with a reason.",
+    }),
+    "agent-completion-text-without-entry-turn",
+  ],
+] as const) {
+  test(`Agent-completion composition refuses ${title}`, () => {
+    const human = title.startsWith("stage text");
+    const findings = run(
+      manifest({
+        routing: human
+          ? [{ repeat: { control: "human", steps: [step] } }]
+          : [step],
+      }),
+    );
+    assert.deepEqual(
+      findings.map((finding) => [
+        finding.code,
+        finding.severity,
+        finding.target,
+      ]),
+      [[code, "error", "work"]],
+    );
+  });
+}
+
+test("a human checkpoint requires its interactive Step to enable step done", () => {
+  for (const agentCompletion of [undefined, false, ["stage"]] as const) {
+    const findings = run(
+      manifest({
+        routing: [
+          {
+            repeat: {
+              control: "human",
+              reviewCheckpoint: {},
+              steps: [completionStep({ agentCompletion })],
+            },
+          },
+        ],
+      }),
+    );
+    assert.deepEqual(
+      findings.map((finding) => [finding.code, finding.target]),
+      [
+        [
+          "agent-completion-checkpoint-without-step",
+          "routing[0].repeat.reviewCheckpoint",
+        ],
+      ],
+    );
+  }
+});
+
+test("true enables only the calls valid at a Step's position", () => {
+  const step = completionStep({ agentCompletion: true });
+  const top: RoutingNode[] = [step];
+  const human: RoutingNode[] = [
+    { repeat: { control: "human", steps: [step] } },
+  ];
+  const verdict = routing({
+    group: {
+      repeat: {
+        until: "v",
+        reviewCheckpoint: { interval: 100, message: "Review." },
+        steps: [step],
+      },
+    },
+  });
+  for (const nodes of [top, human, verdict])
+    assert.deepEqual(run(manifest({ routing: nodes })), []);
+  assert.deepEqual(agentCompletionCalls(top, step), ["step"]);
+  assert.deepEqual(agentCompletionCalls(human, step), ["step", "stage"]);
+  assert.deepEqual(agentCompletionCalls(verdict, step), ["step"]);
+  const invalid = completionStep({ agentCompletion: ["stage"] });
+  const invalidVerdict = routing({
+    group: {
+      repeat: {
+        until: "v",
+        reviewCheckpoint: { interval: 100, message: "Review." },
+        steps: [invalid],
+      },
+    },
+  });
+  assert.deepEqual(
+    run(manifest({ routing: invalidVerdict })).map((finding) => finding.code),
+    ["agent-completion-stage-outside-human-repeat"],
+  );
+});
+
+test("human checkpoints allow defaults and uncapped intervals while Verdict checkpoints retain their ceiling", () => {
+  for (const reviewCheckpoint of [
+    {},
+    { message: "Review." },
+    { interval: 101 },
+    { interval: 1000000 },
+  ]) {
+    assert.deepEqual(
+      run(
+        manifest({
+          routing: [
+            {
+              repeat: {
+                control: "human",
+                reviewCheckpoint,
+                steps: [completionStep({ agentCompletion: ["step"] })],
+              },
+            },
+          ],
+        }),
+      ),
+      [],
+    );
+  }
+  const step = completionStep({ agentCompletion: false, entryTurn: undefined });
+  assert.deepEqual(run(manifest({ routing: [step] })), []);
+  assert.deepEqual(agentCompletionCalls([step], step), []);
+});

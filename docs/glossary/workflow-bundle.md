@@ -61,9 +61,13 @@ what integrity and trust mean before execution.
   Secant-owned kind, required and produced artifacts, Harness Session selection when applicable, an optional retry override, and kind-specific
   parameters, plus optional members of Secant's closed **Workspace prerequisite** set. It never repeats the kind's intrinsic capabilities,
   preconditions, outcomes, reconciliation, or other fixed contract.
-- Every Repeat group declares a required `reviewCheckpoint` with a positive-integer `interval` and plain-text `message`. The interval is a review
-  cadence rather than a maximum or launch input; Secant enforces an engine-owned safety ceiling. The one exception is `control: "human"`
-  with only `steps`: it names no `until` or checkpoint and must hold exactly one interactive-agent Step, whose **Continue** is each review.
+- A Verdict-driven Repeat group declares a required `reviewCheckpoint` with a positive-integer `interval` and plain-text `message`.
+  Secant enforces an engine-owned interval ceiling. A `control: "human"` group names no `until` and holds exactly one interactive-agent Step.
+  Its optional `reviewCheckpoint {interval?, message?}` reviews consecutive agent Continues, defaults to interval 100, and has no ceiling.
+  The checkpoint requires its Step to enable step done; a human's **Continue** remains each human review.
+- An Interactive agent step may declare `agentCompletion`: `false` opts out, `true` enables every call valid at its position, and a non-empty list
+  names `"step"`, `"stage"`, or both. Stage done requires a human-controlled Repeat group. Optional `stepDoneWhen` and `stageDoneWhen` sentences
+  require their call to be enabled and an Entry Turn to carry them. Declaring any of these fields or a human checkpoint raises the engine floor to `0.2.0`.
 - The Composition check also proves that every non-manifest archive entry belongs to exactly one declared asset in non-overlapping asset trees,
   every asset and artifact reference resolves with the right kind or type, every Prompt slot names a required artifact, every schema use is valid,
   and every supported platform resolves one valid command invocation.

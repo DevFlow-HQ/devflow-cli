@@ -4,6 +4,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- Completion fields raise the engine floor by presence, including `agentCompletion: false`; enabling calls is a separate Workflow decision (#368).
+  Their schemas retain empty lists and non-interactive declarations so composition can report semantic errors. Human checkpoint intervals default to 100
+  only inside a declared checkpoint; absent checkpoints stay absent, preserving older Bundle bytes.
+
 - The digest is taken over the exact archive bytes, so any change to the ZIP writer's layout (entry order, timestamps, permissions, manifest encoding)
   rewrites every digest. A built archive and an imported one are the same Installed Bundle only when their bytes are identical. The Shipped Bundle
   digests are pinned in `bundles/builtin.lock.json`, so such a change, like any authored byte change, needs a manifest version bump and a lock update.

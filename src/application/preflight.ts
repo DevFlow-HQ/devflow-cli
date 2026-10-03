@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from "node:fs";
 import {
+  agentCompletionCalls,
   flattenSteps,
   STEP_KINDS,
   type AuthoredManifest,
@@ -298,6 +299,8 @@ function checkHarness(
 ): { problems: readonly Problem[]; selectedHarness?: HarnessChoice["id"] } {
   const capabilityNeeds = new Set<string>();
   for (const step of steps) {
+    if (agentCompletionCalls(request.manifest.routing, step).length > 0)
+      capabilityNeeds.add("agentCalls");
     for (const need of STEP_KINDS[step.kind].capabilityNeeds) {
       capabilityNeeds.add(need);
     }

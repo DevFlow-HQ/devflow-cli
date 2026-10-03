@@ -1,4 +1,6 @@
 import {
+  agentCompletionCalls,
+  inHumanRepeat,
   type ArtifactType,
   type AssetKind,
   type AuthoredManifest,
@@ -39,7 +41,7 @@ export interface CompositionFinding {
   readonly explanation: string;
 }
 
-// ponytail: engine-owned ceiling so a Bundle cannot set a huge interval and
+// Verdict-only ceiling so a Bundle cannot set a huge interval and
 // effectively disable review check-ins. 100 iterations between check-ins is
 // already generous; raise here if a real workflow needs a wider cadence.
 export const MAX_REVIEW_CHECKPOINT_INTERVAL = 100;
@@ -127,6 +129,47 @@ export function checkComposition(
   );
 
   const checkStep = (step: Step, scope: Map<string, ArtifactType>): void => {
+    const completion = step.agentCompletion;
+    const calls = agentCompletionCalls(manifest.routing, step);
+    if (completion !== undefined && completion !== false) {
+      if (step.kind !== "interactive-agent")
+        error(
+          "agent-completion-non-interactive",
+          step.id,
+          `Step "${step.id}" opts into Agent completion, which requires an interactive-agent Step.`,
+        );
+      if (Array.isArray(completion) && completion.length === 0)
+        error(
+          "agent-completion-empty",
+          step.id,
+          `Step "${step.id}" declares an empty agentCompletion list; enable step or stage, or use false.`,
+        );
+      if (calls.includes("stage") && !inHumanRepeat(manifest.routing, step.id))
+        error(
+          "agent-completion-stage-outside-human-repeat",
+          step.id,
+          `Step "${step.id}" enables stage done outside a human-controlled Repeat group.`,
+        );
+    }
+    for (const [call, text] of [
+      ["step", step.stepDoneWhen],
+      ["stage", step.stageDoneWhen],
+    ] as const) {
+      if (text === undefined) continue;
+      if (!calls.includes(call))
+        error(
+          "agent-completion-call-disabled",
+          step.id,
+          `Step "${step.id}" declares ${call}DoneWhen but does not enable ${call} done.`,
+        );
+      if (step.kind !== "interactive-agent" || step.entryTurn !== true)
+        error(
+          "agent-completion-text-without-entry-turn",
+          step.id,
+          `Step "${step.id}" declares ${call}DoneWhen without an Entry Turn to carry it.`,
+        );
+    }
+
     const requires = new Set(step.requires ?? []);
     for (const name of requires) {
       if (!scope.has(name)) {
@@ -317,6 +360,18 @@ export function checkComposition(
             "human-repeat-interactive-step",
             `${path}.steps`,
             `A human-controlled Repeat group needs exactly one interactive-agent Step to offer Continue; it has ${interactive}.`,
+          );
+        }
+        if (
+          node.repeat.reviewCheckpoint !== undefined &&
+          !steps.some((step) =>
+            agentCompletionCalls(manifest.routing, step).includes("step"),
+          )
+        ) {
+          error(
+            "agent-completion-checkpoint-without-step",
+            `${path}.reviewCheckpoint`,
+            "A human-controlled Repeat checkpoint needs an interactive-agent Step that enables step done.",
           );
         }
       } else {
