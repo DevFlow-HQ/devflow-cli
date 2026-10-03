@@ -51,8 +51,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Projection — a launched Run reads `running` from admission.
 - The closed registry and prepared Harnesses live in composition, not Application (#116, #146): the Port sees normalized choices/availability, while selected-only
   Preflight sees normalized discovery and capabilities. `makeRunExecution` resolves the durable id and prepares only that Adapter; if it reaches an interactive Step,
-  composition transfers an opaque Step driver onto the tracked Run. Every human Turn reuses it, and End, interrupt, cancel, or shutdown closes it exactly once. Preflight
-  refuses discovery/capability failures before creation. `supportsInteractiveTurns` remains the client fact Application forwards to Preflight.
+  composition transfers an opaque Step driver onto the tracked Run. Every human Turn reuses it, an Interrupt keeps it held (#353), and End, a `halted`
+  Turn rest, cancel, or shutdown closes it exactly once. Preflight refuses discovery/capability failures before creation. `supportsInteractiveTurns`
+  remains the client fact Application forwards to Preflight.
 - A typed `prepare` failure is translated in one place, `haltForHarnessFailure` (#304): every drive reaches it — `executeTrackedRouting` for launch, resume, both
   Gate answers, End Step, Continue, and End Stage, and the reopened human Turn directly. It rests the Run `halted` through `observedOwner`, settles the Operation
   `selected-harness-unavailable`, and releases the owner; an answer or Attempt committed before the drive stays committed. Composition reports the
@@ -74,7 +75,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   admission before scheduling settlement, so the record precedes an inline outcome; `submit` reports only replays and refusals. An Operation stored any
   other way is never logged as admitted. Events carry ids, kinds, Problem codes, and typed failure fields only — never input, Turn text, or Problem prose.
   Tracked Operation admission, outcome, and replay carry their `runId`; pre-Run Operations omit it (#331). Application reports its own committed rests
-  (cancel, Gate stop, prepare refusal, interrupted/lost human Turn, and the normal return to blocked) through `run-rest`; a fenced write reports none.
+  (cancel, Gate stop, prepare refusal, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
 - The executor's `appendTurnEvent`/`settleTurn` go through the raw owner and push no **durable** snapshot (only `admitTurn` pushes, above); the Turn's durable
   timeline, Session availability, and effective model surface on the next intercepted write (`publishAttempt`, or the interactive `blocked` write). The live lane is

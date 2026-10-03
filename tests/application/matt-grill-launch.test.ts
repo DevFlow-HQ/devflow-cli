@@ -374,12 +374,11 @@ test("the grill cannot launch without its required idea (#212)", (t) => {
   assert.deepEqual(wired.runGroup.listRuns(), []);
 });
 
-test("an interrupted entry Turn halts, and resume returns to the same Session without re-sending the idea (#212)", async (t) => {
-  // Launch: the entry Turn blocks until interrupted. Resume and the reopened human
-  // Turn: completing Turns.
-  const { adapter } = scriptedAdapter("claude-code", [
-    [BLOCKS],
-    [completed("Where were we? Recommended: the storage question.")],
+test("an interrupted entry Turn returns the grill to waiting in the same Session without re-sending the idea (#212, #353)", async (t) => {
+  // One Step-scoped Harness: the entry Turn blocks until interrupted, and the
+  // human's next Turn on the same Harness completes.
+  const { adapter, prepares } = scriptedAdapter("claude-code", [
+    [BLOCKS, completed("Where were we? Recommended: the storage question.")],
   ]);
   const { wired, digest } = wire(t, "claude-code", adapter);
   const admission = submitLaunch(wired, digest, "claude-code", { idea: IDEA });
@@ -394,24 +393,19 @@ test("an interrupted entry Turn halts, and resume returns to the same Session wi
   });
   assert.equal(interrupted.status, "applied", JSON.stringify(interrupted));
   await awaitSettled(wired.projectionPort, "op-launch");
-  assert.equal(readRun(wired, runId).state, "halted");
-  assert.deepEqual(
-    turns(wired, runId).map((turn) => [turn.origin, turn.resultKind]),
-    [["managed", "interrupted"]],
-  );
 
-  // Resume re-reaches the grill at its Turn boundary; the interrupted entry Turn
-  // stays in history and is not silently re-sent.
-  const resumed = await submitAndSettle(wired, "op-resume", {
-    operationId: "op-resume",
-    operation: "resume-run",
-    input: { runId },
-  });
-  assert.equal(resumed.status, "applied", JSON.stringify(resumed));
-  const atBoundary = readRun(wired, runId);
-  assert.equal(atBoundary.state, "blocked");
-  assert.equal(atBoundary.turnPosition, 1);
-  assert.ok(offer(atBoundary, "send-interactive-turn"));
+  // The grill waits at its Turn boundary, not halted: the interrupted entry Turn
+  // stays in history, is not re-sent, and the Harness stays held.
+  const waiting = readRun(wired, runId);
+  assert.equal(waiting.state, "blocked");
+  assert.equal(waiting.turnPosition, 1);
+  assert.ok(offer(waiting, "send-interactive-turn"));
+  assert.deepEqual(
+    waiting.timeline
+      .filter((event) => event.event === "turn-settled")
+      .map((event) => event.detail),
+    ["interrupted"],
+  );
 
   // The human continues the same planning Session.
   const sent = await submitAndSettle(wired, "op-continue", {
@@ -433,6 +427,31 @@ test("an interrupted entry Turn halts, and resume returns to the same Session wi
       ["managed", "spec", "interrupted"],
       ["human", "spec", "completed"],
     ],
+  );
+  assert.equal(prepares(), 1);
+});
+
+test("shutdown during the entry Turn still halts the grill (#212, #353, ADR 0019)", async (t) => {
+  const { adapter } = scriptedAdapter("claude-code", [[BLOCKS]]);
+  const { wired, digest } = wire(t, "claude-code", adapter);
+  const admission = submitLaunch(wired, digest, "claude-code", { idea: IDEA });
+  assert.ok(admission.admitted && admission.runId);
+  const runId = admission.runId;
+  await awaitInterruptOffer(wired, runId);
+
+  // The signal settles the entry Turn `interrupted` too, but it is no Interrupt.
+  await wired.shutdown();
+
+  const halted = readRun(wired, runId);
+  assert.equal(halted.state, "halted");
+  assert.ok(offer(halted, "resume-run")?.available);
+  assert.deepEqual(
+    turns(wired, runId).map((turn) => [turn.origin, turn.resultKind]),
+    [["managed", "interrupted"]],
+  );
+  assert.equal(
+    wired.runGroup.listRuns().find((run) => run.runId === runId)?.live,
+    false,
   );
 });
 

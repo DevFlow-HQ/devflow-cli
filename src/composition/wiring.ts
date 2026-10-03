@@ -5,7 +5,6 @@ import {
   canonicalizeWorkspacePath,
   createApplication,
   type Application,
-  type InteractiveTurnReport,
   type PrepareRunInteractiveStep,
   type RunExecution,
   type RunInteractiveStep,
@@ -20,6 +19,7 @@ import {
 import {
   driveInteractiveTurn,
   executeRouting,
+  interactiveTurnRest,
   type AssetResolver,
   type ExecutionObserver,
   type HarnessExecutionDeps,
@@ -550,7 +550,7 @@ function interactiveStepDriver(
         ...(requestChannel !== undefined ? { requestChannel } : {}),
         ...(observe !== undefined ? { observe } : {}),
       });
-      return { outcome: interactiveOutcome(result.kind) };
+      return { rest: interactiveTurnRest(result.kind, cancelSignal) };
     },
     async close() {
       if (closed) return;
@@ -558,25 +558,6 @@ function interactiveStepDriver(
       await prepared.close();
     },
   };
-}
-
-/** Map a Turn result kind to the normalized interactive outcome the Application maps
- *  to a resting state (#122): `not-started` joins `failed` (both leave the Run blocked
- *  for a retry); `interrupted`/`lost` rest it halted. */
-function interactiveOutcome(
-  kind: "not-started" | "completed" | "failed" | "interrupted" | "lost",
-): InteractiveTurnReport["outcome"] {
-  switch (kind) {
-    case "completed":
-      return "completed";
-    case "not-started":
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-    case "lost":
-      return "lost";
-  }
 }
 
 /** The manifest facts Agent-prompt rendering resolves against (#116): each Launch

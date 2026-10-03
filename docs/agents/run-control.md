@@ -24,7 +24,9 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 
 - `interrupt-turn` (#298) reaches only its named live Turn through `RequestChannel.bindInterrupt`, bound and unbound alongside answer and steer in execution's
   Turn driver. A rejected Harness receipt settles `not-applied` immediately; an accepted receipt waits only for that Turn's result: `interrupted` or `lost` settles
-  `applied`, anything else `not-applied` with `interrupt-rejected` and a reason. An applied interrupt still rests the Run `halted`; ADR 0035's redesign is pending.
+  `applied`, anything else `not-applied` with `interrupt-rejected` and a reason. In an Interactive agent Step an applied interrupt returns the Run to `blocked`
+  with the Step's Harness held, like a completed Turn (#353); a `lost` or signal-stopped Turn halts, by
+  [execution's `interactiveTurnRest`](../../src/run/execution/AGENTS.md). An Agent Step still rests `halted`; ADR 0035's redesign there is pending.
   Interrupt never fires the Run's controller, so a refused or ineffective interrupt cannot stop a following human Turn, Agent Turn, or Command step.
 - Both `interrupt-turn` and `steer-turn` are offered only while a live (unsettled) Turn exists in this process; a control naming a settled Turn is rejected as a value.
 - The steer Offer is discriminated on the prepared profile's steer evidence (live first, then persisted with the Attempt), never Adapter prose above the Seam: a Harness

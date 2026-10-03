@@ -29,6 +29,7 @@ import { type ProcessAdapter } from "../../process/process.js";
 import type { HarnessFailure, TurnResult } from "../../harness/harness.js";
 import {
   attemptEvidence,
+  interactiveTurnRest,
   launchInputs,
   RunCancelledError,
   runAgent,
@@ -49,6 +50,7 @@ import { guardedExecutionObserver } from "./observer.js";
 
 export {
   driveInteractiveTurn,
+  interactiveTurnRest,
   openAgentAttemptTurn,
   RUN_CANCEL_ABORT,
   RunCancelledError,
@@ -275,8 +277,9 @@ interface GatePause {
 interface InteractivePause {
   readonly pause: true;
   readonly interactive: true;
-  /** The authored entry Turn was interrupted or lost (#212): rest `halted` for a
-   *  human resume instead of `blocked`, with no Attempt published. */
+  /** The authored entry Turn was lost, or a process signal stopped it (#212, ADR
+   *  0019): rest `halted` for a human resume instead of `blocked`, with no Attempt
+   *  published. An Interrupt alone returns the Step to waiting (#353). */
   readonly halted?: true;
 }
 
@@ -346,8 +349,9 @@ const STEP_EXECUTORS: Readonly<Partial<Record<StepKindName, StepExecutor>>> = {
 /** An interactive-agent Step rests the Run `blocked` and hands its named Session to
  *  the human, who drives each Turn through the Application's `send-interactive-turn`
  *  and settles the Step through `end-interactive-step` (#122). A Step opting into
- *  `entryTurn` first sends its authored prompt as the Session's first Turn (#212);
- *  an interrupted or lost entry Turn rests the Run `halted` instead. Like a Human
+ *  `entryTurn` first sends its authored prompt as the Session's first Turn (#212).
+ *  An interrupted entry Turn still waits for the human (#353, ADR 0035); a lost one,
+ *  or one a process signal stopped, rests the Run `halted` instead. Like a Human
  *  Gate it is a durable pause with the Run stored `blocked`, but it records no gate
  *  — its basis is derived from the current Step being interactive-agent, and no
  *  Attempt is published until the human ends the Step. */
@@ -362,7 +366,9 @@ async function runInteractiveAgent(
     attemptId,
     interactiveSession(context.routing, step, attemptId),
   );
-  const halted = entry?.kind === "interrupted" || entry?.kind === "lost";
+  const halted =
+    entry !== undefined &&
+    interactiveTurnRest(entry.kind, context.cancelSignal) === "halted";
   return {
     pause: true,
     interactive: true,

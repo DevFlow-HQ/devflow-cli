@@ -10,6 +10,7 @@ import type {
 import {
   executeRouting,
   openAgentAttemptTurn,
+  SIGNAL_ABORT,
   type AssetResolver,
   type ExecutionObserver,
 } from "../../../src/run/execution/execution.js";
@@ -309,27 +310,59 @@ for (const [kind, scenario] of Object.entries(RESULT_CASES)) {
   });
 }
 
-// An interrupted or lost Entry Turn rests the Run `halted` with no Attempt, and the
-// resume walk finds the admitted Entry Turn in history: it rests `blocked` for the
-// human without re-sending it, so the Entry Turn is sent exactly once (#212, A24).
-for (const kind of ["interrupted", "lost"] as const) {
-  test(`an Entry Turn result ${kind} rests the Run halted with no Attempt, and resume never re-sends it (#212)`, async (t) => {
+// An Entry Turn is sent once: a later walk finds the admitted Entry Turn in history
+// and rests `blocked` for the human without re-sending it (#212, A24). An interrupted
+// Entry Turn returns the Step to waiting with no Attempt (#353, ADR 0035); a lost one,
+// or one a process signal stopped, rests the Run `halted` instead (ADR 0019).
+const ENTRY_CASES = {
+  interrupted: {
+    turn: { result: RESULT_CASES.interrupted.result },
+    signal: false,
+    firstWalk: "blocked",
+  },
+  lost: {
+    turn: { result: RESULT_CASES.lost.result },
+    signal: false,
+    firstWalk: "halted",
+  },
+  "signal-stopped": {
+    turn: {
+      block: true,
+      result: RESULT_CASES.completed.result,
+      interruptResult: RESULT_CASES.interrupted.result,
+    },
+    signal: true,
+    firstWalk: "halted",
+  },
+} as const satisfies Record<
+  string,
+  {
+    turn: FakeTurnScript;
+    signal: boolean;
+    firstWalk: "blocked" | "halted";
+  }
+>;
+
+for (const [name, scenario] of Object.entries(ENTRY_CASES)) {
+  test(`Entry Turn ${name}: the Run rests ${scenario.firstWalk} with no Attempt, and a later walk never re-sends it (#212, #353)`, async (t) => {
     const f = fixture(t);
     const assets = promptAssets(f.workspace, "Grill the idea.\n");
-    const prepared = await preparedHarness(profile(), [
-      { result: RESULT_CASES[kind].result },
-    ]);
+    const prepared = await preparedHarness(profile(), [scenario.turn]);
     t.after(() => prepared.close());
+    const controller = new AbortController();
     let starts = 0;
     const counted: PreparedHarness = {
       profile: prepared.profile,
       startTurn(request) {
         starts++;
-        return prepared.startTurn(request);
+        const turn = prepared.startTurn(request);
+        // The signal reaches the live Turn, which settles `interrupted` (ADR 0019).
+        if (scenario.signal) controller.abort(SIGNAL_ABORT);
+        return turn;
       },
       close: () => prepared.close(),
     };
-    const walk = () =>
+    const walk = (cancelSignal?: AbortSignal) =>
       executeRouting(
         [agentStep({ kind: "interactive-agent", entryTurn: true })],
         {
@@ -343,13 +376,20 @@ for (const kind of ["interrupted", "lost"] as const) {
             inputTypes: {},
             assetKinds: { "prompt.md": "prompt" },
           },
+          ...(cancelSignal !== undefined ? { cancelSignal } : {}),
         },
       );
 
-    assert.deepEqual(await walk(), { outcome: "halted" });
-    assert.equal(f.state(), "halted");
+    assert.deepEqual(await walk(controller.signal), {
+      outcome: scenario.firstWalk,
+    });
+    assert.equal(f.state(), scenario.firstWalk);
     assert.deepEqual(f.owner.attemptLog(), []);
     assert.equal(starts, 1);
+    assert.deepEqual(
+      f.owner.turns().map((turn) => turn.resultKind),
+      [scenario.signal ? "interrupted" : scenario.turn.result.kind],
+    );
 
     assert.deepEqual(await walk(), { outcome: "blocked" });
     assert.equal(f.state(), "blocked");

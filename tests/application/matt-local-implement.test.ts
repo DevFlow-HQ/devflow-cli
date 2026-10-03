@@ -508,7 +508,7 @@ for (const harness of ["claude-code", "codex"] as const) {
   });
 }
 
-test("[matt-local-implement] a no-work, interrupted or lost implementation Turn stays in the same ticket Session across halt and resume (#224)", async (t) => {
+test("[matt-local-implement] a no-work, interrupted or lost implementation Turn stays in the same ticket Session; only the lost Turn halts (#224, #353)", async (t) => {
   const agent = mattAgent("claude-code");
   agent.implementation.push(
     // The Entry Turn runs until the human interrupts it.
@@ -529,28 +529,21 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
     input: { runId, turnId: interrupt.turnId },
   });
   await awaitSettled(wired.projectionPort, "op-approve-tickets");
-  assert.equal(readRun(wired, runId).state, "halted");
   const published = trackerFiles(area);
   const entry = agent.turns.at(-1)!;
   assert.ok(entry.text.startsWith(IMPLEMENT_HEADING), entry.text);
 
-  // Resume returns to the same ticket Session without re-sending the Entry Turn.
-  const resume = async (operationId: string) => {
-    await settle(wired, {
-      operationId,
-      operation: "resume-run",
-      input: { runId },
-    });
-    const run = readRun(wired, runId);
+  // The interrupted Entry Turn waits at the ticket's Turn boundary, not re-sent.
+  const atBoundary = (run: RunView) => {
     assert.equal(run.state, "blocked");
     assert.equal(run.progress[run.position]?.id, "implement");
     assert.ok(offer(run, "continue-repeat"));
   };
   const sentBefore = agent.turns.length;
-  await resume("op-resume-1");
+  atBoundary(readRun(wired, runId));
   assert.equal(agent.turns.length, sentBefore);
 
-  // A lost Turn halts the Run too, and resume stays in the same Session.
+  // A lost Turn halts the Run, and resume stays in the same Session.
   await settle(wired, {
     operationId: "op-lost",
     operation: "send-interactive-turn",
@@ -558,7 +551,12 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
   });
   await awaitRunRest(wired.projectionPort, runId);
   assert.equal(readRun(wired, runId).state, "halted");
-  await resume("op-resume-2");
+  await settle(wired, {
+    operationId: "op-resume",
+    operation: "resume-run",
+    input: { runId },
+  });
+  atBoundary(readRun(wired, runId));
 
   // The agent reports no work; nothing advances, closes, or ends on its word.
   await settle(wired, {

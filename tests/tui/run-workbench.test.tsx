@@ -3612,24 +3612,18 @@ test("a request during a live interactive Turn owns Esc before the Interrupt (#2
   assert.doesNotMatch(wb.t.captureCharFrame(), /Press esc again to interrupt/);
 });
 
-test("an interrupted interactive Turn rests halted and resume returns to the same Step's input (#219)", async () => {
+test("an interrupted interactive Turn returns to the same Step's input, not a halted Run (#219, #353)", async () => {
   const control = makeRunView(snapshotOf(liveInteractiveRunOf()));
   const renderer = makeFakeRenderer(100, 40);
   const actions = okActions({
     interrupt: () => {
       control.setRun(
         interactiveRunOf({
-          state: "halted",
           timeline: [
             { at: "T1", event: "turn-settled", detail: "interrupted" },
           ],
-          actionOffers: [RESUME_OFFER],
         }),
       );
-      return () => ({ kind: "ok" });
-    },
-    resume: () => {
-      control.setRun(interactiveRunOf());
       return () => ({ kind: "ok" });
     },
   });
@@ -3637,15 +3631,11 @@ test("an interrupted interactive Turn rests halted and resume returns to the sam
   await t.waitForFrame((f) => f.includes("Timeline"));
   await press(t, renderer, "escape");
   await press(t, renderer, "escape");
-  const halted = t.captureCharFrame();
-  assert.match(halted, /HALTED/);
-  assert.match(halted, /r resume/);
-  assert.doesNotMatch(halted, /Your move|The agent is working/);
-  await press(t, renderer, "r");
   const back = t.captureCharFrame();
   assert.match(back, /BLOCKED · interactive Turn/);
   assert.match(back, /◇ Your move/);
   assert.match(back, /enter send Turn/);
+  assert.doesNotMatch(back, /HALTED|r resume|The agent is working/);
 });
 
 test("the live interactive Interrupt reads without colour and fits a small terminal (#219)", async () => {

@@ -717,8 +717,11 @@ test("a preparation refusal after Continue logs the committed halted rest and co
   );
 });
 
-for (const result of ["interrupted", "lost"] as const) {
-  test(`a ${result} human Turn logs the Application's halted Run rest`, async (t) => {
+// An Interrupt returns the human Turn to waiting (#353); a lost Turn halts.
+const HUMAN_TURN_RESTS = { interrupted: "blocked", lost: "halted" } as const;
+
+for (const [result, rest] of Object.entries(HUMAN_TURN_RESTS)) {
+  test(`a ${result} human Turn logs the Application's ${rest} Run rest`, async (t) => {
     let runId = "";
     const logged = await invocation(
       t,
@@ -779,7 +782,7 @@ for (const result of ["interrupted", "lost"] as const) {
             input: { runId, turnId: turn.turnId },
           });
         }
-        assert.equal((await awaitRunRest(port, runId)).state, "halted");
+        assert.equal((await awaitRunRest(port, runId)).state, rest);
       },
     );
     assertNoPayload(logged.text);
@@ -788,12 +791,12 @@ for (const result of ["interrupted", "lost"] as const) {
     );
     assert.deepEqual(
       rests.map((record) => record.outcome),
-      ["blocked", "halted"],
+      ["blocked", rest],
     );
     assert.deepEqual(semantic(rests[1]!), {
       event: "run-end",
       runId,
-      outcome: "halted",
+      outcome: rest,
     });
   });
 }

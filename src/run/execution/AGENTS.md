@@ -26,8 +26,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - An Agent Step Attempt's Turn is `<attemptId>#turn-<n>`, `n` one past that Attempt's admitted Turns (#352): a walk resumed after a crash mid-Turn re-mints the
   same Attempt id behind the Store's UUID marker, so its Turn joins that Attempt rather than colliding with the `lost` row. `openAgentAttemptTurn` derives the
   open Agent Attempt's latest Turn from `turns()` and `attemptLog()` with no new record, counting only `kind: "agent"`; open is not waiting, so callers add the basis.
-- An interactive-agent Step's Entry Turn (`entryTurn`) is due only while no Turn of its Attempt was admitted, so resume never re-sends it; an interrupted or
-  lost Entry Turn rests the Run `halted` without publishing an Attempt, and only `end-interactive-step` publishes one (#212).
+- An interactive-agent Step's Entry Turn (`entryTurn`) is due only while no Turn of its Attempt was admitted, so no later walk re-sends it; none publishes
+  an Attempt, only `end-interactive-step` does (#212). `interactiveTurnRest` decides the rest after every Interactive Turn, Entry or human (#353): an
+  Interrupt waits `blocked`, a `lost` Turn halts. A signal also settles a live Turn `interrupted` without throwing, so the aborted signal, not the result
+  kind, keeps it halting (ADR 0019).
 - `runRepeatGroup` has two branches (#217): the Verdict-driven one re-reads `until` after each iteration and blocks at the Review cadence; the human-controlled
   one (`control: "human"`) reads no Verdict and raises no checkpoint, resting `blocked` at each iteration's interactive Step. Neither reads agent text to choose the exit.
 - `interactiveEndLegality` owns the ending controls' rules, shared by Application settlement and Offers: End Step outside a human-controlled Repeat,

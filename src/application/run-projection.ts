@@ -300,9 +300,10 @@ function runResult(
               ? [resumeRunOffer(runId, derivedRun.state, resumeEvidence())]
               : []),
           // Turn-scoped controls (#118, #148): while a Turn is live in this process, a
-          // user can interrupt it (rests the Run `halted`, resumable) without
-          // cancelling the Run, and steer it when the prepared profile declares native
-          // same-Turn guidance. The steer Offer is discriminated on that profile
+          // user can interrupt it without cancelling the Run (an Agent Step rests the
+          // Run `halted`, resumable; an Interactive Step returns to `blocked`, #353),
+          // and steer it when the prepared profile declares native same-Turn
+          // guidance. The steer Offer is discriminated on that profile
           // evidence (live first, then persisted with the Attempt) — a Harness with
           // steer (Codex) offers it available, one without (Claude Code) offers it
           // unavailable with the evidence, never Adapter-specific prose here.

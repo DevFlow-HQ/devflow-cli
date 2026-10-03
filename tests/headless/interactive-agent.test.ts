@@ -676,6 +676,22 @@ const BLOCKING_TURN: FakeScript["turns"][number] = {
   result: COMPLETED_DETACHED.result,
 };
 
+/** A lost Turn result that keeps its Session recoverable. */
+const LOST_DETACHED = {
+  kind: "lost",
+  detail: {
+    unknown: "interruption",
+    lastObservation: "interrupt requested before transport closed",
+    session: { state: "detached", coordinate: { opaque: "coord-lost" } },
+  },
+} as const;
+
+/** A Turn that blocks until interrupted and then ends lost, which still halts. */
+const LOST_ON_INTERRUPT: FakeScript["turns"][number] = {
+  ...BLOCKING_TURN,
+  interruptResult: LOST_DETACHED,
+};
+
 test("an interactive send settles applied at Turn admission while the Turn is still live (#290)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
     profile: profile(),
@@ -733,7 +749,7 @@ test("an interactive send settles applied at Turn admission while the Turn is st
   );
   assert.equal(
     (await awaitRunRest(wired.projectionPort, runId)).state,
-    "halted",
+    "blocked",
   );
 });
 
@@ -838,9 +854,12 @@ test("a fault after admission reaches the Run, since the send already settled ap
 });
 
 test("a Turn that rejects after admission puts its fault on the Run (#290)", async (t) => {
-  // The interrupted Turn releases the Step's Harness, whose close fails: the Turn's
-  // promise rejects long after the send settled applied at admission.
-  const fake = createFake({ profile: profile(), turns: [BLOCKING_TURN] })();
+  // The interrupted Turn ends lost, which releases the Step's Harness, whose close
+  // fails: the Turn's promise rejects long after the send settled applied at admission.
+  const fake = createFake({
+    profile: profile(),
+    turns: [LOST_ON_INTERRUPT],
+  })();
   const failingClose: HarnessAdapter = {
     async prepare(options) {
       const prepared = await fake.prepare(options);
@@ -949,142 +968,124 @@ test("reopened interactive preparation failure halts with a selected-Harness Pro
   owner.close();
 });
 
-test("interrupt closes the Step-scoped Harness after one qualification (#134 A17)", async (t) => {
+/** A blocking human Turn that an interrupt settles `interrupted`, its Session
+ *  detached by `coord-interrupted` so the next Turn resumes it. */
+const INTERRUPTIBLE_TURN: FakeScript["turns"][number] = {
+  ...BLOCKING_TURN,
+  interruptResult: {
+    kind: "interrupted",
+    detail: {
+      interruption: profile().interruption,
+      session: {
+        state: "detached",
+        coordinate: { opaque: "coord-interrupted" },
+      },
+    },
+  },
+};
+
+test("an interrupted interactive Turn returns to waiting and keeps the Step-scoped Harness held (#353)", async (t) => {
   const counts = { prepares: 0, closes: [] as number[] };
   const { wired, runId } = await launchInteractive(
     t,
-    {
-      profile: profile(),
-      turns: [
-        {
-          block: true,
-          result: {
-            kind: "completed",
-            detail: {
-              finalContent: "unused",
-              effectiveModel: { known: false },
-              session: {
-                state: "detached",
-                coordinate: { opaque: "coord-s" },
-              },
-            },
-          },
-        },
-      ],
-    },
+    { profile: profile(), turns: [INTERRUPTIBLE_TURN] },
     counts,
   );
-  const sent = wired.projectionPort.submit({
-    operationId: "op-send-interrupted",
-    operation: "send-interactive-turn",
-    input: { runId, stepId: "discuss", text: "stop this Turn" },
-  });
-  assert.ok(sent.admitted);
-  const interruptOffer = await awaitInterruptOffer(wired, runId);
-  const interrupted = wired.projectionPort.submit({
-    operationId: "op-interrupt-interactive",
-    operation: "interrupt-turn",
-    input: { runId, turnId: interruptOffer.turnId },
-  });
-  assert.ok(interrupted.admitted);
-  assert.equal(
-    (await awaitSettled(wired.projectionPort, interrupted.operationId)).status,
-    "applied",
-  );
-  await awaitSettled(wired.projectionPort, sent.operationId);
+  const { interrupt } = await sendLiveTurn(wired, runId, "op-send-interrupted");
 
-  assert.equal(readRun(wired, runId).state, "halted");
+  // Waiting for the person, not halted: the interactive input is offered again, and
+  // the Harness qualified once is still held for the next Turn.
+  const waiting = await interruptTurn(
+    wired,
+    runId,
+    interrupt.turnId,
+    "op-interrupt-interrupted",
+  );
+  assert.equal(waiting.state, "blocked");
+  assert.ok(offer(waiting, "send-interactive-turn"));
+  assert.ok(offer(waiting, "end-interactive-step"));
+  assert.equal(offer(waiting, "interrupt-turn"), undefined);
+  assert.equal(offer(waiting, "resume-run")?.available ?? false, false);
   assert.equal(counts.prepares, 1);
+  assert.deepEqual(counts.closes, [0]);
+  assert.equal(
+    wired.runGroup.listRuns().find((run) => run.runId === runId)?.live,
+    true,
+  );
+
+  // Headless gains no Interrupt; its Run view reports the waiting Step.
+  assert.match(await runShow(wired, runId), /Blocked: interactive Turn/);
+
+  // Shutdown closes the held Harness once.
+  await wired.shutdown();
   assert.deepEqual(counts.closes, [1]);
 });
 
-test("an interrupted interactive Turn halts without advancing and resume returns to the same Session (#219)", async (t) => {
+test("an interrupted interactive Turn advances nothing and the next Turn continues the same Session (#219, #353)", async (t) => {
   const counts = {
     prepares: 0,
     closes: [] as number[],
     resumes: [] as (string | undefined)[],
-    laterScript: { profile: profile(), turns: [COMPLETED_DETACHED] },
   };
   const { wired, runId } = await launchInteractive(
     t,
-    {
-      profile: profile(),
-      turns: [
-        {
-          block: true,
-          interruptResult: {
-            kind: "interrupted",
-            detail: {
-              interruption: profile().interruption,
-              session: {
-                state: "detached",
-                coordinate: { opaque: "coord-interrupted" },
-              },
-            },
-          },
-          result: COMPLETED_DETACHED.result,
-        },
-      ],
-    },
+    { profile: profile(), turns: [INTERRUPTIBLE_TURN, COMPLETED_DETACHED] },
     counts,
   );
-  const sent = wired.projectionPort.submit({
-    operationId: "op-send-long",
-    operation: "send-interactive-turn",
-    input: { runId, stepId: "discuss", text: "work on this for a while" },
-  });
-  assert.ok(sent.admitted);
-  const interruptOffer = await awaitInterruptOffer(wired, runId);
-  const interrupted = wired.projectionPort.submit({
-    operationId: "op-interrupt-long",
-    operation: "interrupt-turn",
-    input: { runId, turnId: interruptOffer.turnId },
-  });
-  assert.ok(interrupted.admitted);
-  assert.equal(
-    (await awaitSettled(wired.projectionPort, "op-interrupt-long")).status,
-    "applied",
-  );
-  await awaitSettled(wired.projectionPort, "op-send-long");
+  const { interrupt } = await sendLiveTurn(wired, runId, "op-send-long");
 
-  // Rested `halted` at the same interactive Step: nothing settled, nothing advanced,
-  // and the Session is kept recoverable rather than replaced.
-  const halted = readRun(wired, runId);
-  assert.equal(halted.state, "halted");
-  assert.equal(halted.progress[halted.position]?.id, "discuss");
+  // Waiting at the same interactive Step: nothing settled, nothing advanced, and the
+  // Session is kept recoverable rather than replaced.
+  const waiting = await interruptTurn(
+    wired,
+    runId,
+    interrupt.turnId,
+    "op-interrupt-long",
+  );
+  assert.equal(waiting.state, "blocked");
+  assert.equal(waiting.progress[waiting.position]?.id, "discuss");
   assert.deepEqual(
-    halted.progress.map((s) => s.status === "succeeded"),
+    waiting.progress.map((s) => s.status === "succeeded"),
     [false, false],
   );
-  assert.equal(halted.sessions?.length, 1);
-  assert.equal(halted.sessions?.[0]?.availability, "detached");
-  assert.equal(offer(halted, "end-interactive-step"), undefined);
-  const resumeOffer = offer(halted, "resume-run");
-  assert.ok(resumeOffer?.available, JSON.stringify(halted.actionOffers));
-
-  // Resume returns to the interactive boundary of the same Step.
-  const resumed = wired.projectionPort.submit({
-    operationId: "op-resume",
-    operation: "resume-run",
-    input: { runId },
-  });
-  assert.ok(resumed.admitted, JSON.stringify(resumed));
+  assert.equal(waiting.sessions?.length, 1);
+  assert.equal(waiting.sessions?.[0]?.availability, "detached");
   assert.equal(
-    (await awaitSettled(wired.projectionPort, "op-resume")).status,
-    "applied",
+    waiting.timeline.find((e) => e.event === "turn-settled")?.detail,
+    "interrupted",
   );
-  const boundary = readRun(wired, runId);
-  assert.equal(boundary.state, "blocked");
-  assert.equal(boundary.progress[boundary.position]?.id, "discuss");
-  assert.ok(offer(boundary, "send-interactive-turn"));
 
-  // The next human Turn continues the interrupted native Session.
+  // The next human Turn continues the interrupted native Session on the held Harness.
   await send(wired, runId, "op-send-after", "discuss", "pick up where we were");
   assert.deepEqual(counts.resumes, [undefined, "coord-interrupted"]);
+  assert.equal(counts.prepares, 1);
   const after = readRun(wired, runId);
   assert.equal(after.state, "blocked");
   assert.equal(after.sessions?.length, 1);
   assert.equal(after.sessions?.[0]?.session, "s");
+  assert.ok(offer(after, "end-interactive-step"));
+});
+
+test("shutdown during a live interactive Turn still halts the Run and closes its Harness (#353, ADR 0019)", async (t) => {
+  const counts = { prepares: 0, closes: [] as number[] };
+  const { wired, runId } = await launchInteractive(
+    t,
+    { profile: profile(), turns: [INTERRUPTIBLE_TURN] },
+    counts,
+  );
+  await sendLiveTurn(wired, runId, "op-send-shutdown");
+
+  // The signal settles the live Turn `interrupted` too, but it is no Interrupt.
+  await wired.shutdown();
+
+  const halted = readRun(wired, runId);
+  assert.equal(halted.state, "halted");
+  assert.equal(
+    halted.timeline.find((e) => e.event === "turn-settled")?.detail,
+    "interrupted",
+  );
+  assert.ok(offer(halted, "resume-run")?.available);
+  assert.deepEqual(counts.closes, [1]);
 });
 
 /** Send one human Turn that stays live, and return the Run read once admission
@@ -1123,7 +1124,7 @@ async function steerTurn(
   return awaitSettled(wired.projectionPort, operationId);
 }
 
-/** Interrupt the live Turn so the test leaves no Turn running. */
+/** Interrupt the live Turn, assert the interrupt applied, and return the Run's rest. */
 async function interruptTurn(
   wired: Wiring,
   runId: string,
@@ -1136,7 +1137,8 @@ async function interruptTurn(
     input: { runId, turnId },
   });
   assert.ok(interrupted.admitted, JSON.stringify(interrupted));
-  await awaitSettled(wired.projectionPort, interrupted.operationId);
+  const outcome = await awaitSettled(wired.projectionPort, operationId);
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
   return awaitRunRest(wired.projectionPort, runId);
 }
 
@@ -1177,7 +1179,7 @@ test("a live interactive Turn accepts a Steer and keeps working under a Harness 
         "op-interrupt-steerable",
       )
     ).state,
-    "halted",
+    "blocked",
   );
 });
 
@@ -1220,7 +1222,7 @@ test("a live interactive Turn offers Steer unavailable with the profile's reason
         "op-interrupt-unsteerable",
       )
     ).state,
-    "halted",
+    "blocked",
   );
 });
 
@@ -1402,8 +1404,8 @@ test("an Interactive Step in a Verdict-driven Repeat gives each iteration its ow
       // Launch: iteration 0 at the interactive Step, two human Turns.
       [COMPLETED_DETACHED, COMPLETED_DETACHED],
       // End #1: the span's Agent Step runs in its own Run-wide "impl" Session, then
-      // iteration 1 rests at the interactive Step; its first Turn is interrupted.
-      [COMPLETED_DETACHED, BLOCKING],
+      // iteration 1 rests at the interactive Step; its first Turn ends lost.
+      [COMPLETED_DETACHED, LOST_ON_INTERRUPT],
       // resume-run: iteration 1 again, the same Session takes the next Turn.
       [COMPLETED_DETACHED],
       // End #2: the Agent Step, then check passes and the Run succeeds.
@@ -1439,7 +1441,7 @@ test("an Interactive Step in a Verdict-driven Repeat gives each iteration its ow
   assert.equal(iteration1.progress[iteration1.position]?.id, "implement");
   assert.ok(offer(iteration1, "send-interactive-turn"));
 
-  // Interrupt iteration 1's first Turn: the Run halts, resumable.
+  // Iteration 1's first Turn ends lost under an interrupt: the Run halts, resumable.
   const sent = wired.projectionPort.submit({
     operationId: "op-i1-t1",
     operation: "send-interactive-turn",
@@ -1621,8 +1623,6 @@ test("a human-controlled Repeat offers Continue only at a Turn boundary; one Con
     perPrepareAdapter([
       // Launch: iteration 0, one completed Turn, then one that blocks until interrupt.
       [COMPLETED_DETACHED, BLOCKING],
-      // resume-run: iteration 0 again.
-      [],
       // Continue #1..#3: each opens the next iteration; iteration 1 takes one Turn.
       [COMPLETED_DETACHED],
       [],
@@ -1676,15 +1676,10 @@ test("a human-controlled Repeat offers Continue only at a Turn boundary; one Con
   assert.ok(interrupted.admitted);
   await awaitSettled(wired.projectionPort, "op-interrupt");
   await awaitSettled(wired.projectionPort, "op-i0-t2");
-  assert.equal(readRun(wired, runId).state, "halted");
-  const resumed = wired.projectionPort.submit({
-    operationId: "op-resume",
-    operation: "resume-run",
-    input: { runId },
-  });
-  assert.ok(resumed.admitted);
-  await awaitSettled(wired.projectionPort, "op-resume");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  // The interrupt returns iteration 0 to its Turn boundary (#353).
+  const boundary = await awaitRunRest(wired.projectionPort, runId);
+  assert.equal(boundary.state, "blocked");
+  assert.ok(offer(boundary, "continue-repeat"));
 
   // One Continue settles exactly iteration 0 and rests at iteration 1.
   assert.equal(
@@ -1789,8 +1784,7 @@ test("confirmed End Stage settles a human-controlled Repeat and the Run once as 
     perPrepareAdapter([
       // Launch: iteration 0 claims done in prose, then a Turn that blocks.
       [CLAIMS_DONE, BLOCKING],
-      // resume-run, then Continue into iteration 1, then End Stage.
-      [],
+      // Continue into iteration 1, then End Stage.
       [],
       [],
     ]),
@@ -1835,15 +1829,10 @@ test("confirmed End Stage settles a human-controlled Repeat and the Run once as 
   );
   await awaitSettled(wired.projectionPort, "op-interrupt");
   await awaitSettled(wired.projectionPort, "op-i0-t2");
-  assert.ok(
-    wired.projectionPort.submit({
-      operationId: "op-resume",
-      operation: "resume-run",
-      input: { runId },
-    }).admitted,
-  );
-  await awaitSettled(wired.projectionPort, "op-resume");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  // The interrupt returns iteration 0 to its Turn boundary (#353).
+  const boundary = await awaitRunRest(wired.projectionPort, runId);
+  assert.equal(boundary.state, "blocked");
+  assert.ok(offer(boundary, "end-stage"));
 
   // Continue once, then confirmed End Stage in iteration 1: the Run succeeds, sends
   // no Turn, and records a human declaration rather than a verified completion.

@@ -568,8 +568,8 @@ async function driveHarnessTurn(
     // A full cancel-run of a live Turn stops the Turn but ends the Run `cancelled`
     // (#87/#98): unwind without settling this Attempt, so the Application's cancel
     // path owns the `cancelled` rest — the same RunCancelledError a cancelled
-    // Command throws. An interrupt-turn or an OS signal instead maps the result to
-    // a resumable `halted` rest.
+    // Command throws. An interrupt-turn or an OS signal instead returns the result,
+    // which the caller maps to its rest (`interactiveTurnRest` for an Interactive Step).
     if (signal?.aborted === true && signal.reason === RUN_CANCEL_ABORT) {
       throw new RunCancelledError();
     }
@@ -583,6 +583,20 @@ async function driveHarnessTurn(
     channel?.bindSteer(undefined);
     channel?.bindInterrupt(undefined);
   }
+}
+
+/** The rest an Interactive Step's Turn leaves the Run at (#353, ADR 0035). An
+ *  Interrupt ends only the Turn, so every result but `lost` waits for the person.
+ *  A process signal also settles a live Turn `interrupted` without throwing (a
+ *  cancel throws first), so under an aborted signal it halts (ADR 0019). */
+export function interactiveTurnRest(
+  kind: TurnResult["kind"],
+  cancelSignal: AbortSignal | undefined,
+): "blocked" | "halted" {
+  if (kind === "lost") return "halted";
+  return kind === "interrupted" && cancelSignal?.aborted === true
+    ? "halted"
+    : "blocked";
 }
 
 /** What driving one human interactive Turn needs (#122). */

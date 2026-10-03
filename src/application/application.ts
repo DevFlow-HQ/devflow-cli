@@ -247,11 +247,11 @@ export type PrepareRunInteractiveStep = (context: {
   readonly owner: RunOwner;
 }) => Promise<TRunInteractiveStepPreparation>;
 
-/** The mechanical outcome of one human interactive Turn (#122), normalized so the
- *  Application stays Harness-agnostic. `completed`/`failed` leave the Run `blocked`
- *  for the next Turn; `interrupted`/`lost` rest it `halted` (resumable). */
-export type InteractiveTurnReport = {
-  readonly outcome: "completed" | "failed" | "interrupted" | "lost";
+/** The rest one human interactive Turn leaves the Run at (#122, #353), decided by
+ *  execution so the Application stays Harness-agnostic: `blocked` waits for the next
+ *  Turn with the Step held; `halted` (resumable) releases the Step. */
+type InteractiveTurnReport = {
+  readonly rest: "blocked" | "halted";
 };
 
 // Run-wide cancel ends the Run cancelled; a process signal stops live work and
@@ -2491,7 +2491,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       },
     };
     // The Run stays `blocked` between Turns, so the claim is retained on the normal
-    // path; only an interrupt/cancel releases it.
+    // path and after an Interrupt; only a lost Turn, a signal, or a cancel releases it.
     let leaveClaimLive = true;
     return driveWithAbortProtocol({
       runId: input.runId,
@@ -2530,15 +2530,16 @@ export function createApplication(deps: ApplicationDependencies): Application {
           cancelSignal: tracking.abort.signal,
           requestChannel: liveOverlay.requestChannel(input.runId),
         });
-        if (report.outcome === "interrupted" || report.outcome === "lost") {
-          // An interrupt-turn (or OS signal) stopped the human Turn: rest the Run
-          // `halted`, resumable, through the held owner so observers see it (#118).
+        if (report.rest === "halted") {
+          // A lost or signal-stopped Turn: rest the Run `halted`, resumable, through
+          // the held owner so observers see it (#118).
           restRun(observed, input.runId, "halted");
           leaveClaimLive = false;
           return { status: "applied" };
         }
-        // completed or failed: the Turn is recorded; back to the boundary for the next
-        // Turn. `writeState` pushes the fresh snapshot (with the new transcript entry),
+        // The Turn is recorded, an interrupted one too (#353): back to the boundary
+        // for the next Turn, the Step's Harness still held.
+        // `writeState` pushes the fresh snapshot (with the new transcript entry),
         // which the Turn's event and settle writes bypass observedOwner and would not push.
         restRun(observed, input.runId, "blocked");
         return { status: "applied" };

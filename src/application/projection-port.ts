@@ -190,9 +190,12 @@ export interface AnswerHarnessRequestInput {
  *  stories 18–20, 38; ADR 0022/0019, #118). Relays the Harness Adapter's
  *  `interrupt`: the Step Attempt ends `cancelled`, the Run rests `halted`
  *  (resumable), and the Session detaches; a `lost` termination ends the Attempt
- *  `indeterminate` and still rests the Run `halted`. Offered on the `run`
- *  Projection only while a Turn is live; a control issued once the Turn has
- *  settled is rejected as a value (`not-applied`). Idempotent per operation id. */
+ *  `indeterminate` and still rests the Run `halted`. In an Interactive agent
+ *  Step the Turn ends `interrupted`, the Run returns to `blocked` waiting for the
+ *  person, and no Attempt is published; a `lost` Turn still halts (#353, ADR
+ *  0035). Offered on the `run` Projection only while a Turn is live; a control
+ *  issued once the Turn has settled is rejected as a value (`not-applied`).
+ *  Idempotent per operation id. */
 interface InterruptTurnSubmission {
   readonly operationId: string;
   readonly operation: "interrupt-turn";
