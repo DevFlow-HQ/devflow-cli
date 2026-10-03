@@ -151,11 +151,12 @@ export interface InterruptRecoveryScenarios extends TurnLifecycleScenarios {
   readonly interruptInputText?: string;
   readonly resumeInputText?: string;
   /** A Turn that emits a `session` event then blocks until interrupted; the
-   *  graceful interrupt stops it and it settles `interrupted` with a detached
+   *  confirmed interrupt stops it and it settles `interrupted` with a detached
    *  Session. */
   blockingTurn(): TestHarnessAdapterFactory;
-  /** A blocking Turn whose process does not stop on the graceful signal and must
-   *  be force-killed → `lost` with unknown "interruption". */
+  /** A blocking Turn whose interrupt is never confirmed and whose process does
+   *  not stop on the graceful signal, so it must be force-killed → `lost` with
+   *  unknown "interruption". */
   unresponsiveInterrupt(): TestHarnessAdapterFactory;
   /** A Turn whose producer closes with no authoritative result → `lost` with
    *  unknown "completion". */
@@ -431,17 +432,24 @@ export function runNativeSteerCases(
 
 /**
  * Run the request-free interrupt, lost, recovery, and cleanup cases against one
- * provider. Both the fake and the Claude Code Adapter over the replayer call it.
- * `interruptOutcome` names how the provider's confirmed interrupt of a blocking
- * Turn settles (default `interrupted`); the escalation case runs everywhere.
+ * provider. The fake, Codex, and the Claude Code Adapter over the replayer call
+ * it. `interruptOutcome` names how the provider's confirmed interrupt of a
+ * blocking Turn settles (default `interrupted`); `recoveryInterruptOutcome` names
+ * how the interrupt that detaches each recovery case's first Turn settles
+ * (default `interruptOutcome`), for a provider whose recovery relaunch follows
+ * only its process-stop fallback. The escalation case runs everywhere.
  */
 export function runInterruptRecoveryCases(
   scenarios: InterruptRecoveryScenarios,
   register: RegisterConformanceCase,
-  options: { readonly interruptOutcome?: InterruptOutcome } = {},
+  options: {
+    readonly interruptOutcome?: InterruptOutcome;
+    readonly recoveryInterruptOutcome?: InterruptOutcome;
+  } = {},
 ): void {
   const name = (behaviour: string) => `[${scenarios.label}] ${behaviour}`;
   const outcome = options.interruptOutcome ?? "interrupted";
+  const recoveryOutcome = options.recoveryInterruptOutcome ?? outcome;
 
   runRecoveryCases(register, {
     ...scenarios,
@@ -452,7 +460,7 @@ export function runInterruptRecoveryCases(
       const events = observe(turn);
       await events.waitForSession();
       await turn.interrupt();
-      return detachedCoordinate(await turn.result(), outcome);
+      return detachedCoordinate(await turn.result(), recoveryOutcome);
     },
   });
 

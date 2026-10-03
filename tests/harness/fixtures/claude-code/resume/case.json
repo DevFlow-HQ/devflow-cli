@@ -2,7 +2,10 @@
   "exitCode": 143,
   "turns": [
     {
-      "stdout": "initial.stdout"
+      "steps": [
+        { "emit": "initial.stdout" },
+        { "control": { "subtype": "interrupt" } }
+      ]
     }
   ],
   "resume": {

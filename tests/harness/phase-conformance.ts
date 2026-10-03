@@ -37,10 +37,6 @@ import {
 const CLAUDE_VERSION = "2.1.234 (Claude Code)";
 const SESSION = "planning";
 
-// On Windows a live child has no graceful stop, so an interrupt is a forced
-// kill: the Claude Code control phase fails `interruption-unknown` there.
-const CLAUDE_CONTROL = process.platform === "win32" ? "failed" : "ok";
-
 const claudeCase = (name: string) =>
   join(
     fileURLToPath(new URL(".", import.meta.url)),
@@ -182,6 +178,8 @@ const CLAUDE_FRAME_MARKERS = [
   "subtype",
   "stream_event",
   "content_block",
+  "control_request",
+  "request_id",
 ];
 const CODEX_FRAME_MARKERS = ["jsonrpc", '"method"', '"params"', "thread-1"];
 
@@ -191,7 +189,7 @@ export function registerHarnessPhaseConformance(
   // --- Claude Code ------------------------------------------------------------
 
   register(
-    "[claude-code phases] a fresh Turn launches and handshakes, an interrupt is the control phase, and close is cleanup",
+    "[claude-code phases] a fresh Turn launches and handshakes, a native interrupt is one ok control phase on every OS, and close is cleanup",
     async () => {
       const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
       const replayer = installReplayer(CLAUDE_VERSION, claudeCase("interrupt"));
@@ -213,12 +211,11 @@ export function registerHarnessPhaseConformance(
       await prepared.close();
       await prepared.close();
 
-      const control =
-        CLAUDE_CONTROL === "ok" ? "ok" : "failed:control/interruption-unknown";
+      // The recorded native stop is confirmed, so no process stop follows.
       assert.deepEqual(settlements(facts), {
         [`launch@${SESSION}`]: ["ok"],
         [`handshake@${SESSION}`]: ["ok"],
-        [`control@${SESSION}`]: [control],
+        [`control@${SESSION}`]: ["ok"],
         "cleanup@-": ["ok"],
       });
       const launch = replayer

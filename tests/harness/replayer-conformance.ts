@@ -37,10 +37,14 @@ import {
 } from "./codex-replayer.js";
 import { CODEX_RECORDING_INPUT } from "./codex-recording-cases.js";
 
-// The two interrupt-bearing cases settle per OS: on Windows a live Turn's
-// interrupt is a forced kill and truthfully `lost` (ADR 0022).
-const CLAUDE_INTERRUPT_OUTCOME =
+// A natively confirmed Claude Code interrupt settles `interrupted` on every OS
+// (#346). Its process-stop fallback settles per OS: on Windows the stop is a
+// forced kill and truthfully `lost` (ADR 0022). The recovery cases relaunch with
+// `--resume`, which only the fallback leads to, so they replay an unanswered
+// interrupt bounded by this short control timeout.
+const CLAUDE_FALLBACK_OUTCOME =
   process.platform === "win32" ? "lost" : "interrupted";
+const CLAUDE_FALLBACK_CONTROL_TIMEOUT_MS = 500;
 
 // --- Claude Code over the real replayer --------------------------------------
 
@@ -180,18 +184,18 @@ export function registerClaudeCodeReplayerConformance(
     interruptible: () =>
       claudeApprovalAdapter(OUTSTANDING_SESSION, "approval-outstanding"),
   };
-  runApprovalRequestCases(approvalScenarios, register, {
-    interruptOutcome: CLAUDE_INTERRUPT_OUTCOME,
-  });
+  runApprovalRequestCases(approvalScenarios, register);
 
   const caseScenario =
-    (name: string, id: string) => (): TestHarnessAdapterFactory => {
+    (name: string, id: string, controlTimeoutMs?: number) =>
+    (): TestHarnessAdapterFactory => {
       const replayer = installReplayer(VERSION, protocolCase(name));
       return () =>
         createClaudeCodeAdapter({
           path: replayer.path,
           env: {},
           sessionId: () => id,
+          ...(controlTimeoutMs !== undefined ? { controlTimeoutMs } : {}),
         });
     };
   const interruptScenarios: InterruptRecoveryScenarios = {
@@ -203,6 +207,7 @@ export function registerClaudeCodeReplayerConformance(
     unresponsiveInterrupt: caseScenario(
       "unresponsive",
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      CLAUDE_FALLBACK_CONTROL_TIMEOUT_MS,
     ),
     lostCompletion: caseScenario(
       "lost-completion",
@@ -211,14 +216,16 @@ export function registerClaudeCodeReplayerConformance(
     resumeAcknowledged: caseScenario(
       "resume",
       "55555555-5555-4555-8555-555555555555",
+      CLAUDE_FALLBACK_CONTROL_TIMEOUT_MS,
     ),
     resumeUnacknowledged: caseScenario(
       "resume-unacknowledged",
       "66666666-6666-4666-8666-666666666666",
+      CLAUDE_FALLBACK_CONTROL_TIMEOUT_MS,
     ),
   };
   runInterruptRecoveryCases(interruptScenarios, register, {
-    interruptOutcome: CLAUDE_INTERRUPT_OUTCOME,
+    recoveryInterruptOutcome: CLAUDE_FALLBACK_OUTCOME,
   });
 }
 

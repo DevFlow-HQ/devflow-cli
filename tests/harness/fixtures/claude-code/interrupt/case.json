@@ -1,8 +1,21 @@
 {
-  "exitCode": 143,
+  "exitCode": 0,
   "turns": [
     {
-      "stdout": "turn-1.stdout"
+      "steps": [
+        {
+          "emit": "turn-1.stdout"
+        },
+        {
+          "control": {
+            "subtype": "interrupt",
+            "emit": "interrupted.stdout"
+          }
+        }
+      ]
+    },
+    {
+      "stdout": "turn-2.stdout"
     }
   ]
 }

@@ -4,5 +4,5 @@
   "protocolVersion": "2.1.234",
   "recordedAt": "synthetic",
   "redactions": [],
-  "refreshCommand": "synthetic -- hand-authored; resume init echoes a different id -- a real --resume acknowledges the id; see tests/harness/fixtures/README.md"
+  "refreshCommand": "synthetic -- hand-authored; an unanswered interrupt falls back, then the resume init echoes a different id -- a real --resume acknowledges the id; see tests/harness/fixtures/README.md"
 }

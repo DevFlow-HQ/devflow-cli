@@ -13,10 +13,12 @@ import type {
   OwnedProcessClose,
   ProcessAdapter,
 } from "../process/process.js";
+import { ControlChannel, type ControlOutcome } from "./claude-code/control.js";
 import {
   contentBlocks,
   encodeTurn,
   genericActivity,
+  isAbortedResult,
   isAuthenticationResult,
   parseFrame,
   sessionFacts,
@@ -80,7 +82,7 @@ const DENY_MESSAGE = "The tool use was denied.";
 
 /** This Adapter's revision, stamped onto every profile it produces so a cached
  *  qualification from an older Adapter is never mistaken for a current one. */
-const ADAPTER_REVISION = "claude-code-1";
+const ADAPTER_REVISION = "claude-code-2";
 
 const HARNESS_NAME = "claude-code";
 
@@ -90,6 +92,10 @@ const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 const DEFAULT_LAUNCH_TIMEOUT_MS = 15_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
+/** Bounds a native stop from the `control_request` write through the aborted
+ *  `result` that confirms it. Claude Code answers in milliseconds (#255), so a
+ *  stop still unconfirmed at this bound falls back to the process stop. */
+const DEFAULT_CONTROL_TIMEOUT_MS = 5_000;
 const MAX_STDERR_BYTES = 64 * 1024;
 
 /** The exact remediation surfaced when Claude Code is not authenticated. Secant
@@ -112,6 +118,9 @@ export interface ClaudeCodeAdapterOverrides {
   /** Replace the PATH walk entirely, so the shim rule is testable off Windows. */
   readonly resolve?: (name: string) => string | undefined;
   readonly probeTimeoutMs?: number;
+  /** Bounds a native stop before the process-stop fallback, so a replayed
+   *  unanswered `control_request` falls back within a test's bound. */
+  readonly controlTimeoutMs?: number;
   /** Override UUID generation for deterministic protocol replay. */
   readonly sessionId?: () => string;
 }
@@ -161,6 +170,8 @@ class ClaudeCodeAdapter implements HarnessAdapter {
     const spawn: ProcessAdapter["spawnOwnedProcess"] = (spawnOptions) =>
       processAdapter.spawnOwnedProcess(spawnOptions);
 
+    const controlTimeoutMs =
+      this.overrides.controlTimeoutMs ?? DEFAULT_CONTROL_TIMEOUT_MS;
     const identity = fileIdentity(target.identityPath);
     // Keyed by the target's path and file identity (the spec's cache key); the
     // discovery route is folded in too so a reused profile never reports a stale
@@ -178,6 +189,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
           spawn,
           options.writableDirectory,
           options.phases,
+          controlTimeoutMs,
         ),
       };
     }
@@ -197,6 +209,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
         spawn,
         options.writableDirectory,
         options.phases,
+        controlTimeoutMs,
       ),
     };
   }
@@ -330,6 +343,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
     /** The one additional writable directory, forwarded as --add-dir (#214). */
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
+    private readonly controlTimeoutMs: number,
   ) {}
 
   /** Memoized bridge start. Its router raises each permission prompt on whatever
@@ -383,6 +397,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
         this.profile,
         this.writableDirectory,
         this.phases,
+        this.controlTimeoutMs,
       );
       this.sessions.set(request.session, session);
     }
@@ -488,6 +503,12 @@ class ClaudeCodeSession {
    *  bridge — and the bearer it keeps registered for Seam redaction — outlives
    *  every cause this Session can still send across. */
   private interrupting: Promise<void> | undefined;
+  /** Each spawned process's control channel; request ids are per process. */
+  private readonly controls = new WeakMap<OwnedProcess, ControlChannel>();
+  /** Resolves when `close` begins, so a native stop still awaiting its
+   *  confirmation falls back to the process stop at once. */
+  private readonly closing: Promise<void>;
+  private signalClosing!: () => void;
 
   constructor(
     readonly name: string,
@@ -503,8 +524,12 @@ class ClaudeCodeSession {
      *  launch, fresh or resumed (#214). */
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
+    private readonly controlTimeoutMs: number,
   ) {
     this.coordinate = { opaque: sessionId };
+    this.closing = new Promise((resolve) => {
+      this.signalClosing = resolve;
+    });
   }
 
   start(turn: ClaudeCodeTurn): void {
@@ -535,24 +560,48 @@ class ClaudeCodeSession {
     this.unusableReason = reason;
   }
 
-  /** Confirmed interruption: SIGTERM to the process tree through the process
-   *  Module, drain to exit, and settle. A process that stops on the graceful
-   *  signal ends the Turn `interrupted` (process-only stop); one that has to be
-   *  force-killed, or whose termination is unconfirmed, ends it `lost` with
-   *  `interruption-unknown`. */
+  /** A caller's Interrupt (ADR 0035). When this Turn runs on a live,
+   *  initialized process, a stdin `control_request` `interrupt` keeps the
+   *  process, the active Turn, and process ownership: Claude Code confirms with
+   *  an aborted `result`, which settles the Turn `interrupted` (`active-turn`) and
+   *  leaves the process for the next Turn. Any other state takes the process
+   *  stop at once, and so does a native stop Claude Code does not confirm. */
   async interrupt(turn: ClaudeCodeTurn): Promise<void> {
     if (this.active !== turn) return;
     const owned = this.process;
+    const control =
+      owned !== undefined && this.processTurn === turn && this.initialized
+        ? this.controls.get(owned)
+        : undefined;
+    if (owned === undefined || control === undefined) {
+      await this.stop(turn);
+      return;
+    }
+    this.interrupting = this.interruptNatively(
+      turn,
+      owned,
+      control,
+      startPhase(this.phases, "control", this.name),
+    );
+    await this.interrupting;
+  }
+
+  /** The process stop: SIGTERM to the process tree through the process Module
+   *  (a force-kill on Windows), drain to exit, and settle. The internal stops
+   *  (a failed Turn write, an init timeout or mismatch, protocol corruption) take
+   *  it directly; a caller's Interrupt takes it only as the fallback. */
+  async stop(turn: ClaudeCodeTurn): Promise<void> {
+    if (this.active !== turn) return;
+    const owned = this.process;
     if (owned === undefined) {
-      turn.settleInterrupted();
+      turn.settleInterrupted("process");
       return;
     }
     // Claim sole ownership of the process before awaiting: a concurrent `close`
     // then sees no live process and cannot start its own termination sequence on
     // the same child, so the two never report divergent closes. `onClosed` sees
-    // `this.process !== owned` and yields the result to this interrupt.
-    this.process = undefined;
-    this.processTurn = undefined;
+    // `this.process !== owned` and yields the result to this stop.
+    this.releaseProcess();
     this.active = undefined;
     this.interrupting = this.settleInterruption(
       turn,
@@ -562,8 +611,79 @@ class ClaudeCodeSession {
     await this.interrupting;
   }
 
-  /** The control phase is the process termination itself, so it settles on
-   *  the termination's outcome even when the Turn has already settled. */
+  /** One `control` span covers the native request and, when Claude Code does not
+   *  confirm it, the process-stop fallback. The control bound runs from the
+   *  request's write to the aborted `result`. A result that wins the race keeps
+   *  its own truth and abandons the span. A process that exits on its own first
+   *  leaves the interruption unknown; a refused request, a failed write, an
+   *  unconfirmed stop, or a closing Session falls back. */
+  private async interruptNatively(
+    turn: ClaudeCodeTurn,
+    owned: OwnedProcess,
+    control: ControlChannel,
+    span: PhaseSpan,
+  ): Promise<void> {
+    const started = performance.now();
+    // A result that wins the race settles the Turn without waiting on the
+    // response; the channel still correlates it, or times it out, alone.
+    const outcome = await Promise.race([
+      control.request({ subtype: "interrupt" }),
+      turn.result().then(() => undefined),
+    ]);
+    if (outcome?.kind === "success") {
+      await settlesWithin(
+        turn,
+        this.controlTimeoutMs - (performance.now() - started),
+        Promise.race([this.closing, owned.closed().then(() => undefined)]),
+      );
+    }
+    if (outcome === undefined || turn.settled) {
+      if (turn.settledKind === "interrupted") span.ok();
+      else span.abandoned();
+      return;
+    }
+    if (this.process !== owned) {
+      // `onClosed` released a process that exited on its own before
+      // confirming: nothing stopped it, so the interruption stays unknown.
+      const close = this.scrub(await owned.closed());
+      const failure: HarnessFailure = {
+        phase: "control",
+        category: "interruption-unknown",
+        possibleEffects: "possible",
+        diagnostics: `Claude Code closed before confirming the interrupt (${describeProcessResult(close)}).${this.diagnostics()}`,
+        ...processCode(close),
+        ...(close.kind === "cleanup-error" ? { cause: close.cause } : {}),
+      };
+      span.failed(failure);
+      turn.settleLost("interruption", turn.lastObservation, failure);
+      return;
+    }
+    turn.noteActivity(
+      `${interruptFallbackReason(outcome, this.controlTimeoutMs)}; stopping the Claude Code process.`,
+    );
+    this.releaseProcess();
+    if (this.active === turn) this.active = undefined;
+    await this.settleInterruption(turn, owned, span);
+  }
+
+  /** Give up the current process: its control channel settles every pending
+   *  request `closed`, and the next Turn launches a fresh process. */
+  private releaseProcess(): void {
+    this.closeControl();
+    this.process = undefined;
+    this.processTurn = undefined;
+  }
+
+  /** Settle every control request pending on the current process `closed`. */
+  private closeControl(): void {
+    if (this.process !== undefined) this.controls.get(this.process)?.close();
+  }
+
+  /** A process stop settles the control span on the termination's outcome,
+   *  even when the Turn has already settled. A process that stops on the
+   *  graceful signal ends the Turn `interrupted` (`process-only`); one that has to
+   *  be force-killed, or whose termination is unconfirmed, ends it `lost` with
+   *  `interruption-unknown`. */
   private async settleInterruption(
     turn: ClaudeCodeTurn,
     owned: OwnedProcess,
@@ -579,11 +699,13 @@ class ClaudeCodeSession {
       turn.settleLost("interruption", turn.lastObservation, failure);
       return;
     }
-    turn.settleInterrupted();
+    turn.settleInterrupted("process");
   }
 
   async close(): Promise<SessionCloseOutcome> {
     this.closed = true;
+    this.signalClosing();
+    this.closeControl();
     if (this.process === undefined && this.launchPromise === undefined) {
       const active = this.active;
       if (active !== undefined && !active.settled) {
@@ -651,8 +773,7 @@ class ClaudeCodeSession {
     if (!admission.recorded) {
       const owned = this.process;
       if (owned !== undefined) {
-        this.process = undefined;
-        this.processTurn = undefined;
+        this.releaseProcess();
         this.active = undefined;
         await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS);
       }
@@ -686,10 +807,7 @@ class ClaudeCodeSession {
         prior.closed().then(() => true as const),
         new Promise<false>((resolve) => setImmediate(() => resolve(false))),
       ]);
-      if (closed && this.process === prior) {
-        this.process = undefined;
-        this.processTurn = undefined;
-      }
+      if (closed && this.process === prior) this.releaseProcess();
     }
 
     if (this.process === undefined) {
@@ -734,7 +852,7 @@ class ClaudeCodeSession {
         possibleEffects: "possible",
         cause: redactSecrets(error),
       });
-      void this.interrupt(turn);
+      void this.stop(turn);
       return;
     }
   }
@@ -817,9 +935,14 @@ class ClaudeCodeSession {
     }
 
     const owned = launched.process;
+    const control = new ControlChannel(
+      (bytes) => owned.writeStdin(bytes),
+      this.controlTimeoutMs,
+    );
+    this.controls.set(owned, control);
     this.process = owned;
     this.processTurn = turn;
-    void this.consumeStdout(owned).catch((error) => {
+    void this.consumeStdout(owned, control).catch((error) => {
       const redacted = redactSecrets(error);
       this.active?.protocolCorruption(
         `stdout read failed: ${describe(redacted)}`,
@@ -829,16 +952,22 @@ class ClaudeCodeSession {
     void this.consumeStderr(owned).catch((error) => {
       this.stderr += ` stderr read failed: ${describe(redactSecrets(error))}`;
     });
-    void owned.closed().then((result) => this.onClosed(owned, result));
+    void owned.closed().then((result) => {
+      control.close();
+      this.onClosed(owned, result);
+    });
     return { ok: true };
   }
 
-  private async consumeStdout(owned: OwnedProcess): Promise<void> {
+  private async consumeStdout(
+    owned: OwnedProcess,
+    control: ControlChannel,
+  ): Promise<void> {
     const reader = new JsonlLineReader(owned.stdout);
     for (;;) {
       const next = await reader.next();
       if (next.kind === "line") {
-        this.consumeLine(next.value);
+        this.consumeLine(next.value, control);
         continue;
       }
       if (next.kind === "truncated" && next.value.trim().startsWith("{")) {
@@ -859,7 +988,9 @@ class ClaudeCodeSession {
     if (this.stderr.length < MAX_STDERR_BYTES) this.stderr += decoder.decode();
   }
 
-  private consumeLine(line: string): void {
+  /** A `control_response` belongs to the process's control channel, never to a
+   *  Turn; every other frame is dispatched to the active Turn. */
+  private consumeLine(line: string, control: ControlChannel): void {
     const trimmed = line.trim();
     if (trimmed.length === 0 || !trimmed.startsWith("{")) return;
     let frame: unknown;
@@ -874,23 +1005,25 @@ class ClaudeCodeSession {
     }
     const parsed = parseFrame(frame);
     if (parsed === undefined) return;
+    if (parsed.kind === "control-response") {
+      control.accept(parsed.frame);
+      return;
+    }
     this.active?.acceptFrame(parsed);
   }
 
   private onClosed(owned: OwnedProcess, close: OwnedProcessClose): void {
-    // A confirmed interrupt claims the process before awaiting, so once it is in
-    // flight `this.process !== owned` and the interrupt owns the result here.
+    // A process stop claims the process before awaiting, so once it is in
+    // flight `this.process !== owned` and the stop owns the result here.
     if (this.process !== owned) return;
     const result = this.scrub(close);
     const turn = this.processTurn;
-    this.process = undefined;
-    this.processTurn = undefined;
+    this.releaseProcess();
     if (this.active === turn) this.active = undefined;
     if (turn === undefined || turn.settled) return;
-    if (turn.interrupting) {
-      turn.settleInterrupted();
-      return;
-    }
+    // A native stop in flight owns the result too: its control request just
+    // settled `closed`, so it settles this unconfirmed close itself.
+    if (turn.interrupting) return;
     if (!this.initialized) {
       const diagnostics = `Claude Code closed before init (${describeProcessResult(result)}).${this.diagnostics()}`;
       turn.settleNotStarted(
@@ -940,7 +1073,11 @@ interface PendingApproval {
 }
 
 class ClaudeCodeTurn implements HarnessTurn {
-  settled = false;
+  get settled(): boolean {
+    return this.settledKind !== undefined;
+  }
+  /** The kind the Turn settled with, once it has. */
+  settledKind: TurnResult["kind"] | undefined;
   interrupting = false;
   /** The last authoritative fact observed before truth could be lost — carried
    *  into a `lost` result so a caller sees how far the Turn got. */
@@ -997,7 +1134,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     }
     this.interrupting = true;
     // Expire prompts up front so the live bridge caller receives `expired`
-    // before the process is terminated under it.
+    // before the stop reaches the process.
     this.expireOutstanding();
     await this.session.interrupt(this);
     return { outcome: "accepted" };
@@ -1113,7 +1250,7 @@ class ClaudeCodeTurn implements HarnessTurn {
         "init-timeout",
         `Claude Code did not emit system/init within ${timeoutMs}ms.`,
       );
-      void this.session.interrupt(this);
+      void this.session.stop(this);
     }, timeoutMs);
   }
 
@@ -1158,7 +1295,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       diagnostics: detail,
       ...(cause !== undefined ? { cause } : {}),
     });
-    void this.session.interrupt(this);
+    void this.session.stop(this);
   }
 
   settleNotStarted(
@@ -1173,14 +1310,25 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.settle({ kind: "not-started", detail: { failure } });
   }
 
-  settleInterrupted(): void {
+  /** A native stop leaves the process live, but the Session reports `detached`
+   *  with its coordinate either way, as Codex does: a resuming Turn reuses the
+   *  live process and sends at once, or relaunches with `--resume`. */
+  settleInterrupted(stop: "native" | "process"): void {
     this.settle({
       kind: "interrupted",
       detail: {
-        interruption: {
-          mode: "process-only",
-          evidence: "Claude Code process termination ended the active Turn.",
-        },
+        interruption:
+          stop === "native"
+            ? {
+                mode: "active-turn",
+                evidence:
+                  "Claude Code confirmed the interrupt control request with an aborted result; its process stays live for the next Turn.",
+              }
+            : {
+                mode: "process-only",
+                evidence:
+                  "Claude Code process termination ended the active Turn.",
+              },
         session: {
           state: "detached",
           coordinate: this.session.coordinate,
@@ -1254,7 +1402,7 @@ class ClaudeCodeTurn implements HarnessTurn {
             : "Claude Code init did not acknowledge the minted Session id.",
         );
       }
-      void this.session.interrupt(this);
+      void this.session.stop(this);
       return;
     }
     const modelName = frame.model;
@@ -1333,6 +1481,14 @@ class ClaudeCodeTurn implements HarnessTurn {
   private acceptResult(frame: ResultFrame): void {
     const usage = usageObservation(frame);
     if (usage !== undefined) this.emit({ kind: "usage", observation: usage });
+    // A native stop's confirmation is an `error_during_execution` result, the
+    // same subtype a task failure reports. Only an aborted terminal reason while
+    // this Turn's Interrupt is in flight confirms it; an aborted result without
+    // one, or any other result that wins the race, settles as itself.
+    if (this.interrupting && isAbortedResult(frame)) {
+      this.settleInterrupted("native");
+      return;
+    }
     const subtype = frame.subtype ?? "unknown-result";
     // Authentication is recognized before the success branch: #115's recording
     // pinned the real signal — the not-logged-in result arrives as
@@ -1392,6 +1548,11 @@ class ClaudeCodeTurn implements HarnessTurn {
     });
   }
 
+  /** Report one live activity line, such as why a native stop fell back. */
+  noteActivity(description: string): void {
+    this.emit({ kind: "activity", description });
+  }
+
   private emit(event: TurnEvent): void {
     if (this.settled) return;
     this.events.push(event);
@@ -1431,7 +1592,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     // Terminal ordering: expire every outstanding prompt (its events publish
     // here) before the producer closes and the one result settles.
     this.expireOutstanding();
-    this.settled = true;
+    this.settledKind = result.kind;
     this.onSettled();
     this.resolveResult(result);
   }
@@ -1542,6 +1703,43 @@ function interruptionFailure(
   };
 }
 
+/** Wait up to `ms` for the Turn to settle, cut short when `cutoff` resolves. */
+async function settlesWithin(
+  turn: ClaudeCodeTurn,
+  ms: number,
+  cutoff: Promise<void>,
+): Promise<void> {
+  if (ms <= 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    turn.result(),
+    cutoff,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
+/** Why a native stop fell back to the process stop, as a live activity line. */
+function interruptFallbackReason(
+  outcome: ControlOutcome,
+  timeoutMs: number,
+): string {
+  switch (outcome.kind) {
+    case "success":
+      return `Claude Code acknowledged the interrupt but did not end the Turn within ${timeoutMs}ms`;
+    case "refused":
+      return `Claude Code refused the interrupt (${truncate(redactText(outcome.detail))})`;
+    case "timeout":
+      return `Claude Code did not answer the interrupt within ${timeoutMs}ms`;
+    case "write-failed":
+      return "The interrupt could not be written to Claude Code";
+    case "closed":
+      return "Claude Code closed, or the Session began closing, before the interrupt was confirmed";
+  }
+}
+
 /** The native exit code or terminating signal of a close, as a diagnostic code.
  *  Never a raw frame. */
 function processCode(result: OwnedProcessClose): { nativeCode?: string } {
@@ -1621,11 +1819,12 @@ function buildProfile(
         "Claude Code reattaches a detached Session by resume-by-id (--resume <id>).",
     },
     interruption: {
-      mode: "process-only",
-      evidence:
+      mode: "active-turn",
+      evidence: `A stdin interrupt control request ends the active Turn, confirmed by an aborted result, and keeps the process for the next Turn. Unconfirmed within the control bound, ${
         platform === "windows"
-          ? "A forced process-tree kill ends the Turn and the process; Windows offers a hidden console child no graceful signal, so an interrupt of live work is reported lost, never a confirmed interruption. The Session stays resumable."
-          : "SIGTERM ends the Turn and the process; the Session stays resumable.",
+          ? "it falls back to a forced process-tree kill, reported lost because Windows offers a hidden console child no graceful signal"
+          : "it falls back to SIGTERM of the process, reported interrupted when the process exits on it and lost when it must be force-killed"
+      }; the next Turn then resumes the Session with --resume.`,
     },
     approvals: {
       available: true,

@@ -578,7 +578,9 @@ const scriptedInit = {
 };
 
 /** Prepare the Adapter over the replayer for qualification but launch the
- *  Session on the scripted process; resolve once the Turn is live (init seen). */
+ *  Session on the scripted process; resolve once the Turn is live (init seen).
+ *  The scripted process answers no control request, so a short bound sends an
+ *  interrupt to its process-stop fallback, the path these redaction cases pin. */
 async function scriptedTurn(scripted: ScriptedProcess) {
   const replayer = installReplayer(VERSION, protocolCase("completed"));
   const prepared = await createClaudeCodeAdapter(
@@ -586,6 +588,7 @@ async function scriptedTurn(scripted: ScriptedProcess) {
       path: replayer.path,
       env: {},
       sessionId: () => SCRIPTED_SESSION,
+      controlTimeoutMs: 50,
     },
     processWithSpawn(scripted.spawn),
   ).prepare({ workspace: makeTempDir("secant-claude-workspace-") });
@@ -696,7 +699,7 @@ test("a close before a result carries its cause with the bearer redacted", async
   );
 });
 
-test("an unconfirmed interrupt carries its cause with the bearer redacted", async () => {
+test("an unconfirmed interrupt's process-stop fallback carries its cause with the bearer redacted", async () => {
   const scripted = scriptedProcess({
     frames: [scriptedInit],
     interrupt: (token) => ({
@@ -877,7 +880,7 @@ test("the recorded Test Repair Turn approves an Edit and its patch makes the fai
 
 // --- Steer and interrupt (steer is declared unavailable; see the profile) ----
 
-test("interrupting a live Turn spawns no resume and settles interrupted with a detached Session", async () => {
+test("a recorded native interrupt settles interrupted active-turn on every OS and the next Turn runs on the same process", async () => {
   const replayer = installReplayer(VERSION, protocolCase("interrupt"));
   const prepared = await createClaudeCodeAdapter({
     path: replayer.path,
@@ -886,15 +889,16 @@ test("interrupting a live Turn spawns no resume and settles interrupted with a d
   }).prepare({ workspace: makeTempDir("secant-claude-workspace-") });
   assert.equal(prepared.ok, true);
   if (!prepared.ok) throw new Error("unreachable");
+  const recorder = {
+    admit: () => Promise.resolve({ recorded: true } as const),
+    checkpoint: () => Promise.resolve({ recorded: true } as const),
+  };
   const turn = prepared.harness.startTurn({
     session: "blocking",
     origin: "managed",
     correlationKey: { opaque: "blocking" },
     input: { text: "go" },
-    recorder: {
-      admit: () => Promise.resolve({ recorded: true }),
-      checkpoint: () => Promise.resolve({ recorded: true }),
-    },
+    recorder,
   });
   await new Promise<void>((resolve) => {
     const sub = turn.subscribe((event) => {
@@ -911,39 +915,54 @@ test("interrupting a live Turn spawns no resume and settles interrupted with a d
   });
   assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
   const result = await turn.result();
-  // On Windows a live child is force-killed outright and reported escalated, so
-  // the Turn is truthfully `lost` (see the interrupt cases above).
-  if (process.platform === "win32") {
-    assert.equal(result.kind, "lost");
-    if (result.kind !== "lost") throw new Error("unreachable");
-    assert.equal(result.detail.unknown, "interruption");
-  } else {
-    assert.equal(result.kind, "interrupted");
-    if (result.kind !== "interrupted") throw new Error("unreachable");
-    assert.equal(result.detail.interruption.mode, "process-only");
+  assert.equal(result.kind, "interrupted");
+  if (result.kind !== "interrupted") throw new Error("unreachable");
+  assert.equal(result.detail.interruption.mode, "active-turn");
+  if (result.detail.session.state !== "detached") {
+    throw new Error("the Session reports detached with its coordinate");
   }
-  assert.equal(result.detail.session.state, "detached");
+
+  // The next Turn resumes the coordinate on the same live process.
+  const next = await prepared.harness
+    .startTurn({
+      session: "blocking",
+      origin: "managed",
+      correlationKey: { opaque: "next" },
+      input: { text: "continue" },
+      recorder,
+      resume: result.detail.session.coordinate,
+    })
+    .result();
+  assert.equal(next.kind, "completed");
+  if (next.kind !== "completed") throw new Error("unreachable");
+  assert.match(next.detail.finalContent ?? "", /^continued/);
   await prepared.harness.close();
-  const invocations = replayer.invocations();
-  assert.equal(
-    invocations.filter((i) => i.args.includes("--resume")).length,
-    0,
-    "an interrupt spawns no resume process",
-  );
-  assert.equal(
-    invocations.filter((i) => i.args.includes("--session-id")).length,
-    1,
-  );
+
+  const [invocation, ...relaunches] = replayer
+    .invocations()
+    .filter((launch) => launch.args.includes("-p"));
+  assert.deepEqual(relaunches, [], "a native interrupt spawns no relaunch");
+  assert.ok(invocation?.args.includes("--session-id"));
+  assert.equal(invocation.stdinLines.length, 2);
+  // The one control frame is a plain interrupt; the replayer echoed its
+  // Adapter-minted request id into the recorded confirmation.
+  assert.equal(invocation.controlLines.length, 1);
+  const control = JSON.parse(invocation.controlLines[0]!);
+  assert.deepEqual(control.request, { subtype: "interrupt" });
+  assert.notEqual(control.request_id, "secant-recorded-interrupt");
 });
 
 // --- Recovery ----------------------------------------------------------------
 
-test("a resumed Turn spawns with --resume and not --session-id", async () => {
+test("an unconfirmed interrupt falls back to the process stop and the next Turn spawns with --resume and not --session-id", async () => {
+  // The `resume` case leaves the interrupt control request unanswered, so the
+  // short bound expires into the process stop the recording was made with.
   const replayer = installReplayer(VERSION, protocolCase("resume"));
   const prepared = await createClaudeCodeAdapter({
     path: replayer.path,
     env: {},
     sessionId: () => "55555555-5555-4555-8555-555555555555",
+    controlTimeoutMs: 500,
   }).prepare({ workspace: makeTempDir("secant-claude-workspace-") });
   assert.equal(prepared.ok, true);
   if (!prepared.ok) throw new Error("unreachable");
@@ -968,12 +987,16 @@ test("a resumed Turn spawns with --resume and not --session-id", async () => {
   });
   await turn1.interrupt();
   const result1 = await turn1.result();
-  // `interrupted` off Windows, `lost` on it (a live child is force-killed there);
-  // either way the Session detaches with its coordinate.
-  assert.equal(
-    result1.kind,
-    process.platform === "win32" ? "lost" : "interrupted",
-  );
+  // The fallback is `interrupted` (`process-only`) off Windows and `lost` on it
+  // (a live child is force-killed there); either way the Session detaches with
+  // its coordinate.
+  if (process.platform === "win32") {
+    assert.equal(result1.kind, "lost");
+  } else {
+    assert.equal(result1.kind, "interrupted");
+    if (result1.kind !== "interrupted") throw new Error("unreachable");
+    assert.equal(result1.detail.interruption.mode, "process-only");
+  }
   if (result1.kind !== "interrupted" && result1.kind !== "lost")
     throw new Error("unreachable");
   if (result1.detail.session.state !== "detached")
@@ -1534,7 +1557,7 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
 
   assert.equal(profile.harness, "claude-code");
   assert.equal(profile.executableVersion, VERSION);
-  assert.equal(profile.adapterRevision, "claude-code-1");
+  assert.equal(profile.adapterRevision, "claude-code-2");
   assert.equal(
     profile.platform,
     process.platform === "win32"
@@ -1550,7 +1573,15 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
   );
 
   assert.equal(profile.recovery.mode, "native-reattach");
-  assert.equal(profile.interruption.mode, "process-only");
+  // A native stdin interrupt is the primary stop; the evidence names this OS's
+  // process-stop fallback (#346).
+  assert.equal(profile.interruption.mode, "active-turn");
+  assert.match(
+    profile.interruption.evidence,
+    process.platform === "win32"
+      ? /forced process-tree kill, reported lost/
+      : /SIGTERM of the process, reported interrupted/,
+  );
   assert.equal(profile.approvals.available, true);
   assert.equal(profile.clarifications.available, false);
   // Claude Code accepts any model string via --model at launch: it declares

@@ -1,5 +1,12 @@
 {
   "ignoreSigterm": true,
   "exitCode": 137,
-  "turns": [{ "stdout": "turn-1.stdout" }]
+  "turns": [
+    {
+      "steps": [
+        { "emit": "turn-1.stdout" },
+        { "control": { "subtype": "interrupt" } }
+      ]
+    }
+  ]
 }

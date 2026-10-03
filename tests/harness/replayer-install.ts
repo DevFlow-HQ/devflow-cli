@@ -52,6 +52,8 @@ export interface InstalledReplayer {
     cwd: string;
     stdinBytes: number;
     stdinLines: string[];
+    /** The stdin `control_request` frames, kept apart from Turn frames. */
+    controlLines: string[];
   }[];
   bridges(): BridgeRecord[];
   drift(newVersion: string): void;
@@ -147,6 +149,7 @@ export function installReplayerAt(
           cwd: string;
           stdinBytes: number;
           stdinLines: string[];
+          controlLines: string[];
         }
       >();
       for (const entry of entries) {
@@ -156,12 +159,17 @@ export function installReplayerAt(
             cwd: entry.cwd,
             stdinBytes: 0,
             stdinLines: [],
+            controlLines: [],
           });
           continue;
         }
-        if (entry.type !== "stdin") continue;
         const invocation = invocations.get(entry.id);
         if (!invocation) continue;
+        if (entry.type === "control") {
+          invocation.controlLines.push(entry.line);
+          continue;
+        }
+        if (entry.type !== "stdin") continue;
         invocation.stdinLines.push(entry.line);
         invocation.stdinBytes += Buffer.byteLength(`${entry.line}\n`);
       }

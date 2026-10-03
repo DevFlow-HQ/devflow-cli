@@ -48,6 +48,9 @@ Three-OS replay evidence comes from the `check` job's `Process runtime conforman
 `tests/process/runtime-conformance.ts`), which drives the real Adapters against recorded-protocol replayers; it is replay evidence, not
 installed-Harness evidence.
 
+Recorded versions are replay provenance, not rows: the Claude Code native-interrupt case (`interrupt`, #346) was recorded on Claude Code 2.1.288,
+while the installed-Harness row below stays at the 2.1.283 that `v0.1.0` checked. Each case's version is in its `recording.json`.
+
 | Harness     | OS/architecture | Installed version | Evidence                                                                                                                                    |
 | ----------- | --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claude Code | Windows x64     | 2.1.283           | `v0.1.0` installed-Harness Proof Bundle check, pass ([#234 report](https://github.com/secantdev/secant/issues/234#issuecomment-5845987175)) |

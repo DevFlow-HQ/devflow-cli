@@ -83,8 +83,22 @@ const ResultFrame = z.looseObject({
   subtype: lenientString,
   is_error: z.boolean().optional().catch(undefined),
   result: lenientString,
+  terminal_reason: lenientString,
 });
 export type ResultFrame = z.infer<typeof ResultFrame>;
+
+/** `control_response`: Claude Code's answer to a stdin `control_request` (#346).
+ *  The echoed `request_id` is the one structural field, since a response that
+ *  names no request cannot be correlated; such a frame is generic activity. */
+const ControlResponseFrame = z.looseObject({
+  type: z.literal("control_response"),
+  response: z.looseObject({
+    subtype: lenientString,
+    request_id: z.string(),
+    error: lenientString,
+  }),
+});
+export type ControlResponseFrame = z.infer<typeof ControlResponseFrame>;
 
 const TelemetryFrame = z.looseObject({ type: z.literal("telemetry") });
 
@@ -112,6 +126,11 @@ export type ParsedFrame =
       readonly kind: "result";
       readonly type: string;
       readonly frame: ResultFrame;
+    }
+  | {
+      readonly kind: "control-response";
+      readonly type: string;
+      readonly frame: ControlResponseFrame;
     }
   | { readonly kind: "telemetry"; readonly type: string }
   | { readonly kind: "other"; readonly type: string | undefined };
@@ -152,6 +171,12 @@ export function parseFrame(value: unknown): ParsedFrame | undefined {
         ? { kind: "result", type, frame: parsed.data }
         : { kind: "other", type };
     }
+    case "control_response": {
+      const parsed = ControlResponseFrame.safeParse(value);
+      return parsed.success
+        ? { kind: "control-response", type, frame: parsed.data }
+        : { kind: "other", type };
+    }
     case "telemetry":
       return TelemetryFrame.safeParse(value).success
         ? { kind: "telemetry", type }
@@ -161,7 +186,7 @@ export function parseFrame(value: unknown): ParsedFrame | undefined {
   }
 }
 
-// --- The Turn encoder ----------------------------------------------------------
+// --- The stdin encoders --------------------------------------------------------
 
 export function encodeTurn(request: TurnRequest): Uint8Array {
   return new TextEncoder().encode(
@@ -169,6 +194,23 @@ export function encodeTurn(request: TurnRequest): Uint8Array {
       type: "user",
       message: { role: "user", content: request.input.text },
       parent_tool_use_id: null,
+    })}\n`,
+  );
+}
+
+/** The control requests this Adapter sends. #346 sends only the plain
+ *  `interrupt`; #347, #348, and #359 add their subtypes here. */
+export type ControlRequest = { readonly subtype: "interrupt" };
+
+export function encodeControlRequest(
+  requestId: string,
+  request: ControlRequest,
+): Uint8Array {
+  return new TextEncoder().encode(
+    `${JSON.stringify({
+      type: "control_request",
+      request_id: requestId,
+      request,
     })}\n`,
   );
 }
@@ -226,6 +268,17 @@ export function usageObservation(
     estimate: true,
     summary: parts.join(", ").replace(", cost", "; cost"),
   };
+}
+
+/** Whether a `result` reports a Turn Claude Code aborted (#346): the interrupted
+ *  result of a native stop is `error_during_execution` like a task failure, and
+ *  only its `terminal_reason` (`aborted_streaming` while text streamed,
+ *  `aborted_tools` during a tool call) tells the two apart. */
+export function isAbortedResult(frame: ResultFrame): boolean {
+  return (
+    frame.terminal_reason === "aborted_streaming" ||
+    frame.terminal_reason === "aborted_tools"
+  );
 }
 
 export function genericActivity(type: string | undefined): TurnEvent {

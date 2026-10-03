@@ -143,8 +143,7 @@ function connectBridge() {
 
 // Perform one recorded permission call: invoke the bridge tool with the recorded
 // tool name and input, block until Secant answers, then record and return the
-// verdict. A deny "request expired" means the Turn was torn down under us — stop
-// as Claude Code would when its permission call is refused.
+// verdict.
 async function bridgeCall(spec) {
   let payload;
   try {
@@ -171,11 +170,12 @@ async function bridgeCall(spec) {
       }) + "\n",
     );
   }
-  if (payload.behavior === "deny" && payload.message === "request expired") {
-    await mcpClient?.close().catch(() => {});
-    process.exit(0);
-  }
   return payload;
+}
+
+/** A deny "request expired" means Secant tore the Turn down under the call. */
+function isExpired(payload) {
+  return payload.behavior === "deny" && payload.message === "request expired";
 }
 
 const required = [
@@ -287,10 +287,30 @@ const write = (stream, bytes) =>
     stream.write(bytes, (error) => (error ? reject(error) : resolve()));
   });
 
-let turnIndex = 0;
+// stdin is read for the whole process, not only between Turns: a Turn's steps
+// may still be emitting, or blocked on a bridge call, when the Adapter writes a
+// `control_request` (#346). User Turn frames queue for the main loop; control
+// frames queue for the Turn's `control` steps. A control frame that arrives once
+// the current Turn has no `control` step left to take it is a replay failure.
+const userFrames = [];
+const controlFrames = [];
+let frameWaiter;
+let stdinEnded = false;
+let awaitingTurn = false;
+const wake = () => {
+  const waiter = frameWaiter;
+  frameWaiter = undefined;
+  waiter?.();
+};
+const unexpectedControl = () => {
+  process.stderr.write(
+    "secant replayer: a control request arrived with no control step to take it\n",
+  );
+  process.exit(2);
+};
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-for await (const line of lines) {
-  if (line.length === 0) continue;
+lines.on("line", (line) => {
+  if (line.length === 0) return;
   let frame;
   try {
     frame = JSON.parse(line);
@@ -298,10 +318,72 @@ for await (const line of lines) {
     process.stderr.write("secant replayer: stdin was not JSON\n");
     process.exit(2);
   }
+  if (frame.type === "control_request") {
+    if (recording.log) {
+      appendFileSync(
+        recording.log,
+        JSON.stringify({ type: "control", id: invocationId, line }) + "\n",
+      );
+    }
+    if (awaitingTurn) unexpectedControl();
+    controlFrames.push(frame);
+    wake();
+    return;
+  }
   if (frame.type !== "user" || frame.message?.role !== "user") {
     process.stderr.write("secant replayer: stdin was not a user Turn\n");
     process.exit(2);
   }
+  userFrames.push(line);
+  wake();
+});
+lines.on("close", () => {
+  stdinEnded = true;
+  wake();
+});
+
+/** The next queued frame from `queue`, or undefined once stdin has ended. */
+async function nextFrame(queue) {
+  while (queue.length === 0) {
+    if (stdinEnded) return undefined;
+    await new Promise((resolve) => {
+      frameWaiter = resolve;
+    });
+  }
+  return queue.shift();
+}
+
+/** Perform one `control` step: take the next control request, which must carry
+ *  the step's subtype, then emit the step's recorded bytes (if any) with the
+ *  recorded `request_id` replaced by the one the Adapter minted, the way
+ *  `session_id` is echoed. A step without `emit` swallows the request: it models
+ *  a Claude Code that never confirms. stdin closing first ends the process. */
+async function controlStep(spec) {
+  const frame = await nextFrame(controlFrames);
+  if (frame === undefined) process.exit(playback.exitCode ?? 0);
+  if (frame.request?.subtype !== spec.subtype) {
+    process.stderr.write(
+      `secant replayer: expected a ${spec.subtype} control request\n`,
+    );
+    process.exit(2);
+  }
+  if (typeof spec.emit !== "string") return;
+  const bytes = replayBytes(join(caseDirectory, spec.emit))
+    .toString("utf8")
+    .replace(
+      /"request_id":"[^"]+"/g,
+      `"request_id":${JSON.stringify(frame.request_id)}`,
+    );
+  await write(process.stdout, Buffer.from(bytes));
+}
+
+let turnIndex = 0;
+for (;;) {
+  awaitingTurn = true;
+  if (controlFrames.length > 0) unexpectedControl();
+  const line = await nextFrame(userFrames);
+  awaitingTurn = false;
+  if (line === undefined) break;
   if (recording.log) {
     appendFileSync(
       recording.log,
@@ -350,8 +432,16 @@ for await (const line of lines) {
     // Ordered mix of stdout emissions and permission-bridge calls. A bridge step
     // blocks until Secant answers it, so the recorded stdout after it emits only
     // once the permission verdict is in — the "recorded point in the Turn".
+    // A `control` step blocks until the Adapter's control request arrives.
+    // A bridge call answered "request expired" skips ahead to the Turn's next
+    // `control` step (Claude Code still answers an Interrupt) or, with none,
+    // ends the process as Claude Code would when its permission call is refused.
+    let expired = false;
     for (const step of turn.steps) {
-      if (step.emit) {
+      if (expired && !step.control) continue;
+      if (step.control) {
+        await controlStep(step.control);
+      } else if (step.emit) {
         const bytes = replayBytes(join(caseDirectory, step.emit));
         // A recorded Workspace patch is the effect the Harness completed during
         // this Turn. Make it visible before the terminal result frame can advance
@@ -362,10 +452,16 @@ for await (const line of lines) {
         }
         await write(process.stdout, bytes);
       } else if (step.bridge) {
-        await bridgeCall(step.bridge);
+        expired = isExpired(await bridgeCall(step.bridge));
       } else if (Array.isArray(step.bridgeAll)) {
-        await Promise.all(step.bridgeAll.map(bridgeCall));
+        expired = (await Promise.all(step.bridgeAll.map(bridgeCall))).some(
+          isExpired,
+        );
       }
+    }
+    if (expired && !turn.steps.some((step) => step.control)) {
+      await mcpClient?.close().catch(() => {});
+      process.exit(0);
     }
   } else {
     await write(process.stdout, replayBytes(join(caseDirectory, turn.stdout)));

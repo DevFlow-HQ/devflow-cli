@@ -245,6 +245,9 @@ function baseEnv(): NodeJS.ProcessEnv {
   // used — except the authentication scenario, which sets a bad one deliberately.
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
+  // `--restricted` does not stop the account's claude.ai connectors loading
+  // during a held-open process (#346's second Turn listed them in its init).
+  env.ENABLE_CLAUDEAI_MCP_SERVERS = "false";
   return env;
 }
 
@@ -256,6 +259,15 @@ function hostSecrets(bridgeToken?: string): KnownSecret[] {
     // the scenario never named is still redacted before the bytes are written.
     ...envSecrets(),
   ];
+  // The per-user runtime directory names the recording host's uid in an init's
+  // `messaging_socket_path`.
+  if (process.env.XDG_RUNTIME_DIR !== undefined) {
+    secrets.push({
+      value: process.env.XDG_RUNTIME_DIR,
+      placeholder: "«RUNTIME_DIR»",
+      reason: "user runtime directory",
+    });
+  }
   if (bridgeToken !== undefined) {
     secrets.push({
       value: bridgeToken,
@@ -542,7 +554,22 @@ async function recordTestRepair(): Promise<void> {
   }
 }
 
-/** Record a Turn that emits its session then is interrupted mid-flight. */
+/** The recorder's control-request id. The replayer echoes the Adapter-minted id
+ *  in its place, the way it echoes `session_id`. */
+const RECORDED_INTERRUPT_REQUEST_ID = "secant-recorded-interrupt";
+
+/** The byte offset of the line boundary at or before `offset`: a stdin write
+ *  lands between pipe chunks, not between lines, so a partial line seen before
+ *  the write belongs to the bytes after it. */
+function lineBoundary(stdout: Buffer, offset: number): number {
+  const newline = stdout.lastIndexOf(0x0a, offset - 1);
+  return newline < 0 ? 0 : newline + 1;
+}
+
+/** Record the native Interrupt (#346) on one held-open process: Turn 1 streams,
+ *  receives a stdin `control_request` `interrupt`, and settles with the aborted
+ *  `result`; Turn 2 then runs on the same process with no relaunch. stdout is
+ *  split at the line boundaries where each stdin frame was written. */
 async function recordInterrupt(): Promise<void> {
   const ws = tempWorkspace("secant-rec-ws-");
   const bridge = await startBridge(
@@ -550,38 +577,99 @@ async function recordInterrupt(): Promise<void> {
     () => 0,
   );
   try {
-    const capture = await runTurn({
-      args: launchArgs(["--session-id", SESSION_IDS.interrupt], bridge),
-      cwd: ws,
-      env: baseEnv(),
-      input: userFrame(
+    const child = spawn(
+      "claude",
+      launchArgs(["--session-id", SESSION_IDS.interrupt], bridge),
+      { cwd: ws, env: baseEnv(), stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let stdout = Buffer.alloc(0);
+    let interruptAt: number | undefined;
+    let secondAt: number | undefined;
+    const resultsSince = (from: number) =>
+      stdout.subarray(from).toString("utf8").split('"type":"result"').length -
+      1;
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout = Buffer.concat([stdout, chunk]);
+      if (
+        interruptAt === undefined &&
+        stdout.includes('"subtype":"init"') &&
+        stdout.includes('"text_delta"')
+      ) {
+        interruptAt = stdout.length;
+        child.stdin.write(
+          `${JSON.stringify({
+            type: "control_request",
+            request_id: RECORDED_INTERRUPT_REQUEST_ID,
+            request: { subtype: "interrupt" },
+          })}\n`,
+        );
+        return;
+      }
+      // Once the interrupted result's line is complete, send the next Turn.
+      if (
+        interruptAt !== undefined &&
+        secondAt === undefined &&
+        resultsSince(interruptAt) > 0 &&
+        stdout.at(-1) === 0x0a
+      ) {
+        secondAt = stdout.length;
+        child.stdin.write(
+          userFrame("Never mind. Reply with exactly: continued. Use no tools."),
+        );
+        return;
+      }
+      if (
+        secondAt !== undefined &&
+        resultsSince(secondAt) > 0 &&
+        !child.stdin.writableEnded
+      ) {
+        child.stdin.end();
+      }
+    });
+    child.stderr.resume();
+    child.stdin.write(
+      userFrame(
         "Write a long slow essay about the number seven, at least 500 words, using no tools. Take your time.",
       ),
-      control: {
-        onChunk: (child, stdout) => {
-          // Once init and some assistant streaming has been observed, SIGTERM — the
-          // same graceful stop the Adapter's interrupt performs.
-          if (
-            stdout.includes('"subtype":"init"') &&
-            stdout.includes('"text_delta"') &&
-            !child.killed
-          ) {
-            child.kill("SIGTERM");
-          }
-        },
-      },
+    );
+    const exitCode = await new Promise<number>((resolve) => {
+      child.on("close", (code, signal) => {
+        resolve(code ?? (signal ? 128 + signalNumber(signal) : 0));
+      });
     });
+    if (interruptAt === undefined || secondAt === undefined) {
+      throw new Error("the native interrupt recording never reached Turn 2");
+    }
+    const interruptLine = lineBoundary(stdout, interruptAt);
+    const secondLine = lineBoundary(stdout, secondAt);
     writeCase({
       name: "interrupt",
-      files: [{ name: "turn-1.stdout", bytes: capture.stdout }],
+      files: [
+        { name: "turn-1.stdout", bytes: stdout.subarray(0, interruptLine) },
+        {
+          name: "interrupted.stdout",
+          bytes: stdout.subarray(interruptLine, secondLine),
+        },
+        { name: "turn-2.stdout", bytes: stdout.subarray(secondLine) },
+      ],
       caseJson: {
-        exitCode: capture.exitCode,
-        turns: [{ stdout: "turn-1.stdout" }],
+        exitCode,
+        turns: [
+          {
+            steps: [
+              { emit: "turn-1.stdout" },
+              {
+                control: { subtype: "interrupt", emit: "interrupted.stdout" },
+              },
+            ],
+          },
+          { stdout: "turn-2.stdout" },
+        ],
       },
       workspace: ws,
       secrets: hostSecrets(bridge.token),
       executableVersion: claudeVersion(),
-      protocolVersion: protocolVersionOf(capture.stdout),
+      protocolVersion: protocolVersionOf(stdout),
     });
   } finally {
     await bridge.close();
@@ -632,7 +720,17 @@ async function recordResume(): Promise<void> {
       ],
       caseJson: {
         exitCode: first.exitCode,
-        turns: [{ stdout: "initial.stdout" }],
+        // The first Turn was stopped with SIGTERM, so its control step swallows
+        // the Adapter's interrupt request: the replay models a Claude Code that
+        // never confirms, and the Adapter falls back to that process stop (#346).
+        turns: [
+          {
+            steps: [
+              { emit: "initial.stdout" },
+              { control: { subtype: "interrupt" } },
+            ],
+          },
+        ],
         resume: {
           exitCode: second.exitCode,
           turns: [{ stdout: "resume.stdout" }],

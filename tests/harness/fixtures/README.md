@@ -36,10 +36,20 @@ Six keys, all required (the structural step enforces their presence):
 - `exitCode` — the process exit code the replayer settles with.
 - `turns[]` — one entry per stdin Turn frame the Adapter sends:
   - `stdout` / `stderr` — a byte file emitted for the whole Turn, **or**
-  - `steps[]` — an ordered mix of `{ "emit": "file" }` (stdout bytes) and
+  - `steps[]` — an ordered mix of `{ "emit": "file" }` (stdout bytes),
     `{ "bridge": { tool_name, input } }` / `{ "bridgeAll": [ ... ] }` (a real MCP
     permission round-trip that blocks until Secant answers), so recorded stdout
-    after a bridge step emits only once the verdict is in.
+    after a bridge step emits only once the verdict is in, and
+    `{ "control": { "subtype", "emit"? } }` (#346), which blocks until the
+    Adapter writes a stdin `control_request` of that subtype, then emits `emit`
+    with every recorded `request_id` replaced by the Adapter-minted one (as
+    `session_id` is echoed). A control step without `emit` swallows the request:
+    it models a Claude Code that never confirms, so the Adapter falls back to
+    the process stop. On the recorded `resume` case it overlays that fallback on
+    bytes recorded with a SIGTERM stop. stdin is read while steps run, so a
+    control request may arrive before its step; one that arrives once the Turn
+    has no control step left fails the replay. A bridge call answered "request
+    expired" skips to the Turn's next control step, or exits 0 without one.
   - `workspacePatch` — a git diff file the replayer `git apply`s in the launch
     cwd as the Turn concludes (the "applied at the Turn's result" step).
   - `workingAreaPatch` — the same, applied in the launch's `--add-dir` directory
@@ -70,6 +80,11 @@ scoping `CLAUDE_CONFIG_DIR` instead would drop the login. It never runs in CI.
 The recorder refuses to write a recording whose bytes still match a credential
 pattern after redaction, naming the pattern — a recording must not carry a live
 secret.
+
+The `interrupt` case holds one process's stdin open: it writes the first Turn,
+sends a `control_request` `interrupt` once text streams, sends the next Turn
+once the aborted `result` arrives, then closes stdin. stdout is split at the
+line boundary where each stdin frame was written.
 
 ## Codex replay
 
@@ -104,8 +119,8 @@ systems, not a claim that the currently installed real Codex remains compatible.
 ## Synthetic cases
 
 Some Adapter behaviours a real `claude` cannot be made to emit on demand:
-`error_max_budget_usd` failure, an init-less process, a SIGTERM-swallowing
-process, a mid-frame exit, queued multi-Turn budget failure, and the specific
+`error_max_budget_usd` failure, an init-less process, a process that answers no
+interrupt and swallows SIGTERM, a mid-frame exit, queued multi-Turn budget failure, and the specific
 concurrent/outstanding permission-bridge shapes. These stay hand-authored, moved
 into this tree with a `recording.json` whose `recordedAt` is `"synthetic"` and
 whose `refreshCommand` explains why. They preserve the coverage the deleted
@@ -116,18 +131,18 @@ any of these (a fault-injection flag, a `--max-budget`, a documented corruption
 mode), promote that case from synthetic to a real recording and delete its
 synthetic note. The synthetic inventory below is the pick-up list.
 
-| Case                      | Behaviour                                                                                                                        | Why synthetic                                                 |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `failed`                  | terminal `error_during_execution` result                                                                                         | no on-demand way to force a task error result                 |
-| `two-turns`               | two Turns, second `error_max_budget_usd`                                                                                         | no on-demand budget-exhaustion trigger                        |
-| `no-init`                 | process never emits init                                                                                                         | no way to make a real init hang deterministically             |
-| `unresponsive`            | swallows SIGTERM → force-kill, reported escalated (every OS; on Windows every live child is force-killed and reported escalated) | a real `claude` honours SIGTERM                               |
-| `lost-completion`         | exits mid-stream with no result                                                                                                  | timing-dependent; kept deterministic as synthetic             |
-| `approval`                | one Bash approval, allow/deny/expired                                                                                            | real tool inputs vary run to run                              |
-| `approval-concurrent`     | two coexisting approvals                                                                                                         | real runs raise one prompt at a time                          |
-| `approval-outstanding`    | an approval left outstanding at close                                                                                            | timing-dependent                                              |
-| `codex-approval-contract` | colliding client/server ids plus concurrent command and file approvals                                                           | exact id collision and concurrency are not reliably inducible |
-| `resume-unacknowledged`   | resume init echoes a different id                                                                                                | a real `--resume` acknowledges the id                         |
-| `completed`               | success Turn: tool activity, thinking/telemetry exclusion, preview coalescing, unknown-frame tolerance                           | a real plain Turn does not emit every frame variety on demand |
-| `completed-quotes-login`  | success result whose text quotes "run /login"                                                                                    | guards that a real answer is not misread as auth              |
-| `incompatibility`         | initialize omits one required response field                                                                                     | a compatible real Codex cannot emit this fault on demand      |
+| Case                      | Behaviour                                                                                              | Why synthetic                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| `failed`                  | terminal `error_during_execution` result                                                               | no on-demand way to force a task error result                 |
+| `two-turns`               | two Turns, second `error_max_budget_usd`                                                               | no on-demand budget-exhaustion trigger                        |
+| `no-init`                 | process never emits init                                                                               | no way to make a real init hang deterministically             |
+| `unresponsive`            | leaves the interrupt unanswered, then swallows SIGTERM → force-kill, reported escalated (every OS)     | a real `claude` answers the interrupt and honours SIGTERM     |
+| `lost-completion`         | exits mid-stream with no result                                                                        | timing-dependent; kept deterministic as synthetic             |
+| `approval`                | one Bash approval, allow/deny/expired                                                                  | real tool inputs vary run to run                              |
+| `approval-concurrent`     | two coexisting approvals                                                                               | real runs raise one prompt at a time                          |
+| `approval-outstanding`    | an approval left outstanding at close, or interrupted and answered `aborted_tools`                     | timing-dependent                                              |
+| `codex-approval-contract` | colliding client/server ids plus concurrent command and file approvals                                 | exact id collision and concurrency are not reliably inducible |
+| `resume-unacknowledged`   | an unanswered interrupt falls back; the resume init echoes a different id                              | a real `--resume` acknowledges the id                         |
+| `completed`               | success Turn: tool activity, thinking/telemetry exclusion, preview coalescing, unknown-frame tolerance | a real plain Turn does not emit every frame variety on demand |
+| `completed-quotes-login`  | success result whose text quotes "run /login"                                                          | guards that a real answer is not misread as auth              |
+| `incompatibility`         | initialize omits one required response field                                                           | a compatible real Codex cannot emit this fault on demand      |

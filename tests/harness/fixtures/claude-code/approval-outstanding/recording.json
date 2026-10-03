@@ -4,5 +4,5 @@
   "protocolVersion": "2.1.234",
   "recordedAt": "synthetic",
   "redactions": [],
-  "refreshCommand": "synthetic -- hand-authored; an approval left outstanding at close -- timing-dependent; see tests/harness/fixtures/README.md"
+  "refreshCommand": "synthetic -- hand-authored; an approval left outstanding at close, or interrupted and answered aborted_tools in the control_response and result shapes the native interrupt case recorded on 2.1.288 -- timing-dependent; see tests/harness/fixtures/README.md"
 }

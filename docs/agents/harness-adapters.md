@@ -13,7 +13,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   failure cause originating below launch through the registry's `redactSecrets` (`scrub` on each close observation; the stdin-write and stdout-read
   errors and the captured stderr text too), so the rule is "redact at the Seam", not one spawn-error path (#127 A22).
 - The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `assistant`, `user`,
-  `stream_event`, `result`, `telemetry`), parsed per frame by `parseFrame`, with the pure readers and the only raw-field accessors. Only the fields dispatch
+  `stream_event`, `result`, `control_response`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the only
+  raw-field accessors. Inbound `control_request` and `control_cancel_request` stay generic activity until #371. Only the fields dispatch
   iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
   `unknown-result`); every other field degrades to absent (`.catch(undefined)`), unknown fields pass through, and a known type whose
   parse fails or an unknown type is generic activity — never protocol corruption. `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
@@ -32,10 +33,17 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   settles `is_error:false` and stays a completed Turn. The raw result never crosses the Seam (it may quote a key) — only `AUTHENTICATION_REQUIRED` does.
 - Session child reuse: a Turn result may settle before the child emits `close`. The Session tracks which Turn owns the child, lets an already-settled close
   win before the next send, and never attributes an old child's close to the next Turn; a still-live child may accept the next Turn in place.
-- Interruption uses the process Module's `interrupt(gracefulMs)`, which reports whether a forced escalation was needed: a graceful stop settles
-  `interrupted`, a force-kill `lost`, so a live Claude Code on Windows is force-killed at once and every Windows interrupt of a live Turn settles `lost`.
-  `onClosed` yields to an in-flight interrupt so the two never race the result: a confirmed interrupt claims the process before awaiting, and `onClosed`
-  returns early when `this.process !== owned`, leaving the interrupt to settle the one authoritative result.
+- A caller's Interrupt on a live, initialized process running its Turn is native (#346): `claude-code/control.ts`, one channel per process, mints the
+  `request_id`, writes the stdin `control_request` `interrupt`, and correlates the echoed `control_response`. `controlTimeoutMs` (default 5 s, a named
+  test seam) bounds the write through the aborted `result`. The process, active Turn, and process ownership stay put. The confirming result's subtype
+  is `error_during_execution`, a task failure's too, so only an aborted `terminal_reason` (`aborted_streaming`, `aborted_tools`) while that Interrupt is
+  in flight settles `interrupted` `active-turn`; a natural result that wins the race keeps its own truth. The Session then reports `detached` with its
+  coordinate, as Codex does, and a resuming Turn finds the process live and sends at once.
+- A refused response, failed write, unconfirmed stop, process close, or closing Session falls back to the process stop, which the internal stops
+  (failed Turn write, init timeout or mismatch, corruption) always take. It uses the process Module's `interrupt(gracefulMs)`: graceful settles
+  `interrupted` `process-only`, a force-kill `lost`, and a live child on Windows is force-killed at once, so its fallback settles `lost`. A process stop
+  claims the process before awaiting, and `onClosed` returns early when `this.process !== owned`; during a native stop it yields too, because the
+  closed channel sends that stop to its fallback, which settles the one authoritative result.
 - Resume spawns with `--resume` (never a fresh `--session-id`) for a relaunch of a Session that already ran or any Turn carrying `resume`. Init state is
   per process.
 - Session unusability is stored as a private `unusableReason` on the Session, set by `markUnusable` when a resume is not acknowledged; the Turn-start path
@@ -75,8 +83,9 @@ measures elapsed time on the monotonic clock. A handshake made of several exchan
 - **Claude Code.** `launch` (per Session) spans the bridge start and the child spawn; a close that wins first abandons it. The first init of a fresh
   child is the Session's `handshake`; the init of a `--resume` child is `recovery`, which includes every relaunch of a Session that already ran
   (print mode exits per Turn, so a later Turn reattaches natively unless the child is still live). A Turn that settles before init ends that phase with its own
-  failure, or abandoned when interrupted. `control` is the process termination of an interrupt, settled on the termination outcome even when the
-  Turn already settled (an internal stop after corruption or a refused resume reports it too). `cleanup` spans the prepared Harness's `close`.
+  failure, or abandoned when interrupted. `control` is one span per stop: a native stop's span is ok on confirmation, abandoned when a natural
+  result wins, and otherwise spans the fallback process termination too. A process termination settles the span on its outcome even when the Turn
+  already settled (an internal stop after corruption or a refused resume reports it too). `cleanup` spans the prepared Harness's `close`.
   The `--version` probe reports no phase.
 - **Codex.** `launch` is the app-server spawn and `handshake` the `initialize`/`account/read`/`model/list` exchange, both at `prepare` with no
   Session key. Those three are the handshake's steps `protocol-initialize`, `account-check`, and `model-list`; the step open when the handshake

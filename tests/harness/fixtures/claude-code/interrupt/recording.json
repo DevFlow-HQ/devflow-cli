@@ -1,12 +1,16 @@
 {
   "harness": "claude-code",
-  "executableVersion": "2.1.273 (Claude Code)",
-  "protocolVersion": "2.1.273",
-  "recordedAt": "2026-09-16T10:32:39.991Z",
+  "executableVersion": "2.1.288 (Claude Code)",
+  "protocolVersion": "2.1.288",
+  "recordedAt": "2026-10-03T12:32:31.330Z",
   "redactions": [
     {
       "placeholder": "«WORKSPACE»",
       "reason": "recording workspace path"
+    },
+    {
+      "placeholder": "«RUNTIME_DIR»",
+      "reason": "user runtime directory"
     }
   ],
   "refreshCommand": "bun tests/harness/record.ts interrupt"

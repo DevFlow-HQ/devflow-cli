@@ -9,6 +9,9 @@
             "tool_name": "Bash",
             "input": { "command": "long running" }
           }
+        },
+        {
+          "control": { "subtype": "interrupt", "emit": "interrupted.stdout" }
         }
       ]
     }

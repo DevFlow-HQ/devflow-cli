@@ -63,10 +63,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Codex control timeouts and native RPC errors refuse the call while native terminal truth owns the Turn; unexpected refusals emit a live activity diagnostic.
   A timed-out Interrupt stays sent: retries and Steer are refused, and later connection loss leaves interruption unknown. A native RPC error resets it to idle.
   Refusal alone preserves attachment; malformed responses and transport failures still lose and detach the Turn.
-- A Turn settles `interrupted` only on confirmed interruption; a force-kill, lost connection, or unconfirmed termination settles it `lost` with
-  `interruption-unknown`. Windows has no graceful stage ([process notes](../process/AGENTS.md)), so a live-child interrupt there truthfully settles
-  `lost`; the profile's interruption evidence states what each Harness delivers per OS, and the conformance `interruptOutcome` option (interrupt/recovery
-  and approval-request groups) pins it.
+- A Turn settles `interrupted` only on confirmed interruption: a matching native terminal is `active-turn` (Codex; Claude Code since #346), a graceful
+  process stop `process-only`. A force-kill, lost connection, or unconfirmed termination settles it `lost` with `interruption-unknown`. Windows has no
+  graceful stage ([process notes](../process/AGENTS.md)), so a process stop of a live child there truthfully settles `lost`. The profile's interruption
+  evidence states each Harness's stop and its per-OS fallback; the conformance `interruptOutcome` and `recoveryInterruptOutcome` options pin them.
 - Recovery is caller- and history-driven: a relaunch of a Session that already ran, or any Turn carrying `resume`, resumes that exact native conversation.
   A resume the native side does not acknowledge is a `recovery`-phase failure that marks the Session `unusable`; recovery never silently starts a fresh
   conversation. Each Adapter's resume mechanics are in [harness-adapters](../../docs/agents/harness-adapters.md).
@@ -85,10 +85,12 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   child's top-level code runs hits the default disposition and kills it (this is a startup race, not a `bun test` limitation; plain `bun` shows the same
   window). So the replayer installs its SIGTERM handler at startup, and interrupt/close cases wait for the `session` event (init observed) before
   interrupting. Never signal a freshly spawned child before it has announced readiness.
-- The replayer's `case.json` vocabulary (`tests/harness/fixtures/README.md` is the reference): `ignoreSigterm` (swallow SIGTERM → force-kill path; moot on
-  Windows, where every live child is force-killed regardless), per-turn `exitAfter` (exit without a result → lost/corruption) and `workingAreaPatch` (applied in
-  the launch's `--add-dir` directory), a `resume` section replayed when the launch has `--resume`, and `sessions[]` (#224: the Nth fresh `--session-id` launch
-  after the first plays `sessions[N-1]`, one conversation per human-controlled Repeat iteration).
+- The replayer's `case.json` vocabulary (`tests/harness/fixtures/README.md` is the reference): a `control` step (#346: take the next stdin
+  `control_request` and emit recorded bytes echoing its `request_id`, or swallow it to model an unconfirmed stop; stdin is read while steps run),
+  `ignoreSigterm` (swallow SIGTERM → force-kill path; moot on Windows, where every live child is force-killed regardless), per-turn `exitAfter`
+  (exit without a result → lost/corruption) and `workingAreaPatch` (applied in the launch's `--add-dir` directory), a `resume` section replayed when
+  the launch has `--resume`, and `sessions[]` (#224: the Nth fresh `--session-id` launch after the first plays `sessions[N-1]`, one conversation per
+  human-controlled Repeat iteration).
 
 ## Read next
 
