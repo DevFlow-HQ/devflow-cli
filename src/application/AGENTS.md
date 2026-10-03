@@ -97,6 +97,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   settlement, owner-release, and shutdown ordering visible in one place (#303 A3). Blocks that earned their own ownership already live privately beside it
   (`launch-preparation`, `harness-catalog`, `live-overlay`, `subscription-lifecycle`); the extraction rule is [module design's](../../docs/agents/module-design.md).
 
+## Tests
+
+- A test reads a Run the Application holds through the Projection, never `runGroup.acquireRun`: acquiring bumps the fencing epoch even in-process, so a
+  `blocked` Run's held owner then refuses the next Turn's admission as fenced (#353).
+
 ## Read next
 
 - Read [run-control](../../docs/agents/run-control.md) before changing deferred settlement, cancel or shutdown, Turn interrupt or steer, takeover, the
