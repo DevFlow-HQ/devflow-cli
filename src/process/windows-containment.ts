@@ -38,6 +38,13 @@ function loadKernel() {
     },
     ResumeThread: { args: [T.u64], returns: T.u32 },
     TerminateProcess: { args: [T.u64, T.u32], returns: T.i32 },
+    TerminateJobObject: { args: [T.u64, T.u32], returns: T.i32 },
+    QueryInformationJobObject: {
+      args: [T.u64, T.i32, T.ptr, T.u32, T.ptr],
+      returns: T.i32,
+    },
+    OpenProcess: { args: [T.u32, T.i32, T.u32], returns: T.u64 },
+    IsProcessInJob: { args: [T.u64, T.u64, T.ptr], returns: T.i32 },
     CloseHandle: { args: [T.u64], returns: T.i32 },
     WaitForSingleObject: { args: [T.u64, T.u32], returns: T.u32 },
     GetExitCodeProcess: { args: [T.u64, T.ptr], returns: T.i32 },
@@ -270,6 +277,68 @@ function registerExit(
   }
 }
 
+/** Termination requests stop the tree, but pipe EOF can precede its process
+ * handles being signaled. Retain the job while confirming those handle exits. */
+async function endJob(k: Kernel, job: bigint, deadline: number): Promise<void> {
+  if (!k.TerminateJobObject(job, 1)) throw nativeError(k, "TerminateJobObject");
+  let capacity = 16;
+  let processes: Uint8Array;
+  for (;;) {
+    processes = new Uint8Array(8 + capacity * 8);
+    const queried = k.QueryInformationJobObject(
+      job,
+      3,
+      ptr(processes),
+      processes.byteLength,
+      null,
+    );
+    if (!queried && k.GetLastError() !== 234)
+      throw nativeError(k, "QueryInformationJobObject(processes)");
+    const view = new DataView(processes.buffer);
+    const assigned = view.getUint32(0, true);
+    const listed = view.getUint32(4, true);
+    if (queried && assigned === listed) break;
+    if (Date.now() >= deadline)
+      throw new Error("contained process exit timeout");
+    capacity = Math.max(capacity * 2, assigned);
+  }
+  const handles: bigint[] = [];
+  try {
+    const view = new DataView(processes.buffer);
+    for (let i = 0; i < view.getUint32(4, true); i++) {
+      const pid = Number(view.getBigUint64(8 + i * 8, true));
+      const handle = k.OpenProcess(0x100000 | 0x1000, 0, pid);
+      if (handle === 0n) {
+        if (k.GetLastError() === 87) continue; // Already exited.
+        throw nativeError(k, "OpenProcess(contained descendant)");
+      }
+      handles.push(handle);
+      const member = new Int32Array(1);
+      if (!k.IsProcessInJob(handle, job, ptr(member)))
+        throw nativeError(k, "IsProcessInJob(contained descendant)");
+      // An exited PID may have been reused since the job snapshot.
+      if (member[0] === 0) {
+        handles.pop();
+        k.CloseHandle(handle);
+      }
+    }
+    for (;;) {
+      const pending = handles.some((handle) => {
+        const result = k.WaitForSingleObject(handle, 0);
+        if (result === 0xffffffff)
+          throw nativeError(k, "WaitForSingleObject(contained descendant)");
+        return result === 258;
+      });
+      if (!pending) return;
+      if (Date.now() >= deadline)
+        throw new Error("contained process exit timeout");
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+  } finally {
+    for (const handle of handles) k.CloseHandle(handle);
+  }
+}
+
 /** Creation is suspended only to acquire the exit wait before execution. Job
  * membership itself is attached atomically by CreateProcessW's JOB_LIST. Any
  * failed attempt is fully released before the Node fallback may run. */
@@ -413,19 +482,27 @@ export async function launchContained(
     void drained.catch(() => {});
     const ownedJob = job;
     const ownedProcess = processHandle;
-    const observation = exit.finally(() => {
+    let closeDeadline = 0;
+    const observation = exit.finally(async () => {
       live = false;
-      const released = k.CloseHandle(ownedJob);
-      k.CloseHandle(ownedProcess);
-      input.socket.destroy();
-      if (!released) throw nativeError(k, "CloseHandle(job)");
+      closeDeadline = Date.now() + 1000;
+      let releaseError: Error | undefined;
+      try {
+        await endJob(k, ownedJob, closeDeadline);
+      } finally {
+        if (!k.CloseHandle(ownedJob))
+          releaseError = nativeError(k, "CloseHandle(job)");
+        k.CloseHandle(ownedProcess);
+        input.socket.destroy();
+      }
+      if (releaseError !== undefined) throw releaseError;
     });
     const close = observation
       .then(async (status): Promise<OwnedProcessClose> => {
         // Root exit ends this owned lifetime, including background descendants.
         // Drain the final frames before publishing close to either Harness. The
-        // bound is on output drain, not on detecting exit. A stalled consumer is
-        // a cleanup error, never a claimed successful drain.
+        // The same close bound covers descendant exit and output drain. A stalled
+        // consumer is a cleanup error, never a claimed successful drain.
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
@@ -433,7 +510,7 @@ export async function launchContained(
             new Promise<never>((_, reject) => {
               timer = setTimeout(
                 () => reject(new Error("contained output drain timeout")),
-                1000,
+                Math.max(0, closeDeadline - Date.now()),
               );
             }),
           ]);

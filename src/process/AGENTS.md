@@ -13,7 +13,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   gone reports `false`), and the graceful-stop proof in the spawn suite is POSIX-only by design. Off Windows: SIGTERM to the group, then SIGKILL.
 - Windows owned launches attach a separate kill-on-close, no-breakaway job at creation. Only `windows-containment.ts` imports `bun:ffi`.
   The root starts suspended until its exit wait is registered. Any pre-execution failure releases the attempt before the Node fallback runs.
-  Root-handle exit releases the job, ending background descendants, then drains output before publishing `closed()`; a stalled drain is a cleanup error.
+  Root-handle exit terminates the job and confirms descendant handle exits before releasing it and publishing `closed()`; pipe EOF alone does not prove death.
+  The existing close bound spans descendant-exit confirmation and output drain; a timeout is a cleanup error.
   The `spawn` fact and interruption carry `contained` or `fallback`; Command spawns carry neither. Taskkill stopping stays until #362.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound
   again to die once force-killed. The bound is not split between the stages.
