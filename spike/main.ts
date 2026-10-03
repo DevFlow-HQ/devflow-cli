@@ -184,16 +184,17 @@ async function t5(which: string): Promise<void> {
   }
 }
 
-/** 24 concurrent children with staggered exits on one waiter; also memory and start cost. */
+/** 24 concurrent children with staggered exits on one waiter; also memory and start cost.
+ *  The spawn burst and the wait phase are measured separately. */
 async function t5stress(which: string): Promise<void> {
   const wait = WAITERS[which]!;
   const n = 24;
   const rss0 = process.memoryUsage().rss;
-  const mon = tickMonitor();
+  const spawnMon = tickMonitor();
   const t0 = performance.now();
   const kids = await Promise.all(
     Array.from({ length: n }, async (_, k) => {
-      const argv = self("sleep-child", 300 + 50 * k, k + 1);
+      const argv = self("sleep-child", 400 + 50 * k, k + 1);
       const c = await spawnContained({ app: argv[0], commandLine: commandLine(argv) });
       c.stdout.resume();
       c.stderr.resume();
@@ -202,23 +203,39 @@ async function t5stress(which: string): Promise<void> {
     }),
   );
   const spawnMs = performance.now() - t0;
+  const spawnTicks = spawnMon();
   const rssMid = process.memoryUsage().rss;
+  const waitMon = tickMonitor();
   try {
-    const codes = await withTimeout(Promise.all(kids.map((c) => wait(c.hProcess))), 30000, `stress ${which}`);
-    const lat = kids.map((c) => Number(fileTimeNow() - exitFileTime(c.hProcess)) / 10000);
-    const ticks = mon();
-    const ok = codes.every((c, k) => c === k + 1) && ticks.maxGapMs < 100;
+    const lat: number[] = [];
+    const codes = await withTimeout(
+      Promise.all(
+        kids.map((c) =>
+          wait(c.hProcess).then((code) => {
+            lat.push(Number(fileTimeNow() - exitFileTime(c.hProcess)) / 10000);
+            return code;
+          }),
+        ),
+      ),
+      30000,
+      `stress ${which}`,
+    );
+    const ticks = waitMon();
+    const sorted = [...lat].sort((a, b) => a - b);
+    const ok = codes.every((c, k) => c === k + 1) && ticks.maxGapMs < 50;
     result(`t5.stress.${which}`, ok ? "PASS" : "FAIL", {
       n,
       codesOk: codes.every((c, k) => c === k + 1),
       spawnAllMs: Math.round(spawnMs),
+      spawnPhaseTicks: spawnTicks,
+      waitPhaseTicks: ticks,
       totalMs: Math.round(performance.now() - t0),
-      rssDeltaDuringWaitMB: +((process.memoryUsage().rss - rss0) / 1048576).toFixed(1),
       rssDeltaAfterSpawnMB: +((rssMid - rss0) / 1048576).toFixed(1),
-      lastDetectLagMs: +Math.max(...lat).toFixed(1),
-      ticks,
+      rssDeltaDuringWaitMB: +((process.memoryUsage().rss - rss0) / 1048576).toFixed(1),
+      detectLatencyMs: { p50: +sorted[Math.floor(n / 2)]!.toFixed(1), max: +sorted[n - 1]!.toFixed(1) },
     });
   } catch (err) {
+    waitMon();
     result(`t5.stress.${which}`, "FAIL", { error: String(err) });
   }
   for (const c of kids) c.closeJob();
