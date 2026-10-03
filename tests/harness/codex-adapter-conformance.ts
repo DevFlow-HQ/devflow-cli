@@ -269,74 +269,94 @@ test("a moved file approval exposes both exact paths", async () => {
   await prepared.close();
 });
 
-for (const nativeRace of ["resolution", "terminal"] as const) {
-  test(`${nativeRace} wins while an approval answer write is in flight`, async () => {
-    const installed = installSyntheticCodexReplayer();
-    const controlled = approvalRaceProcess();
-    const preparedResult = await createCodexAdapter(
-      { path: installed.path, env: {} },
-      processWithSpawn(() =>
-        Promise.resolve({ ok: true, process: controlled.process }),
-      ),
-    ).prepare({ workspace: process.cwd() });
-    assert.equal(preparedResult.ok, true);
-    if (!preparedResult.ok) throw new Error("unreachable");
-    const prepared = preparedResult.harness;
-    const turn = prepared.startTurn(turnRequest());
-    const events = observeEvents(turn);
-    await waitForRequestCount(turn, events, 1);
-    const request = events.find((event) => event.kind === "request-raised");
-    assert.ok(request?.kind === "request-raised");
-    const answer = turn.answerRequest({
+for (const [nativeRace, terminalStatus] of [
+  ["resolution", "completed"],
+  ["terminal", "completed"],
+  ["terminal", "interrupted"],
+  ["terminal", "failed"],
+] as const) {
+  test(`${nativeRace} confirms an approval answer while its write is in flight (${terminalStatus})`, async () => {
+    const { controlled, prepared, turn, events, request } =
+      await approvalRaceFixture();
+    const humanAnswer = {
       requestId: request.request.requestId,
       kind: "approval",
       decision: "allow",
-    });
+    } satisfies Parameters<typeof turn.answerRequest>[0];
+    const answer = turn.answerRequest(humanAnswer);
     await controlled.responseWriteStarted;
     if (nativeRace === "resolution") {
       controlled.emitResolution();
-      await waitForExpiredRequestCount(turn, events, 1);
+      await waitForEventCount(turn, events, "request-answered", 1);
+      controlled.emitResolution();
       controlled.releaseResponseWrite();
-      assert.deepEqual(await answer, {
-        outcome: "rejected",
-        reason: "already-settled",
-      });
-      controlled.emitTerminal();
+      assert.deepEqual(await answer, { outcome: "accepted" });
+    }
+    controlled.emitTerminal(terminalStatus);
+    assert.equal((await turn.result()).kind, terminalStatus);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "request-answered"),
+      [
+        {
+          kind: "request-answered",
+          requestId: humanAnswer.requestId,
+          by: "human",
+          answer: humanAnswer,
+        },
+      ],
+    );
+    assert.equal(
+      events.filter((event) => event.kind === "request-expired").length,
+      0,
+    );
+    const eventCountAtResult = events.length;
+    controlled.releaseResponseWrite();
+    assert.deepEqual(await answer, { outcome: "accepted" });
+    assert.equal(events.length, eventCountAtResult);
+    await prepared.close();
+  });
+}
+
+for (const nativeRace of ["resolution", "terminal"] as const) {
+  test(`${nativeRace} expires an approval before its answer write starts`, async () => {
+    const { controlled, prepared, turn, events, request } =
+      await approvalRaceFixture();
+    if (nativeRace === "resolution") {
+      controlled.emitResolution();
+      await waitForExpiredRequestCount(turn, events, 1);
     } else {
       controlled.emitTerminal();
       assert.equal((await turn.result()).kind, "completed");
-      controlled.releaseResponseWrite();
-      assert.deepEqual(await answer, {
-        outcome: "rejected",
-        reason: "expired",
-      });
     }
-    assert.equal((await turn.result()).kind, "completed");
-    assert.equal(
-      events.filter((event) => event.kind === "request-expired").length,
-      1,
+    assert.deepEqual(
+      await turn.answerRequest({
+        requestId: request.request.requestId,
+        kind: "approval",
+        decision: "allow",
+      }),
+      {
+        outcome: "rejected",
+        reason: nativeRace === "resolution" ? "already-settled" : "expired",
+      },
     );
+    assert.equal(controlled.responseWriteCount, 0);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "request-expired"),
+      [{ kind: "request-expired", requestId: request.request.requestId }],
+    );
+    assert.equal(
+      events.filter((event) => event.kind === "request-answered").length,
+      0,
+    );
+    if (nativeRace === "resolution") controlled.emitTerminal();
+    assert.equal((await turn.result()).kind, "completed");
     await prepared.close();
   });
 }
 
 test("approval response write failure preserves its cause and expires the request", async () => {
-  const installed = installSyntheticCodexReplayer();
-  const controlled = approvalRaceProcess();
-  const preparedResult = await createCodexAdapter(
-    { path: installed.path, env: {} },
-    processWithSpawn(() =>
-      Promise.resolve({ ok: true, process: controlled.process }),
-    ),
-  ).prepare({ workspace: process.cwd() });
-  assert.equal(preparedResult.ok, true);
-  if (!preparedResult.ok) throw new Error("unreachable");
-  const prepared = preparedResult.harness;
-  const turn = prepared.startTurn(turnRequest());
-  const events = observeEvents(turn);
-  await waitForRequestCount(turn, events, 1);
-  const request = events.find((event) => event.kind === "request-raised");
-  assert.ok(request?.kind === "request-raised");
+  const { controlled, prepared, turn, events, request } =
+    await approvalRaceFixture();
   const answer = turn.answerRequest({
     requestId: request.request.requestId,
     kind: "approval",
@@ -356,6 +376,114 @@ test("approval response write failure preserves its cause and expires the reques
   );
   await prepared.close();
 });
+
+for (const nativeRace of ["resolution", "terminal"] as const) {
+  test(`${nativeRace} confirmation survives a subsequent approval write failure`, async () => {
+    const { controlled, prepared, turn, events, request } =
+      await approvalRaceFixture();
+    const humanAnswer = {
+      requestId: request.request.requestId,
+      kind: "approval",
+      decision: "deny",
+    } satisfies Parameters<typeof turn.answerRequest>[0];
+    const answer = turn.answerRequest(humanAnswer);
+    await controlled.responseWriteStarted;
+    if (nativeRace === "resolution") {
+      controlled.emitResolution();
+      await waitForEventCount(turn, events, "request-answered", 1);
+    } else {
+      controlled.emitTerminal();
+      assert.equal((await turn.result()).kind, "completed");
+    }
+    const cause = new Error("write failed after native confirmation");
+    controlled.rejectResponseWrite(cause);
+    assert.deepEqual(await answer, { outcome: "accepted" });
+    const result = await turn.result();
+    assert.equal(
+      result.kind,
+      nativeRace === "resolution" ? "lost" : "completed",
+    );
+    if (result.kind === "lost")
+      assert.equal(result.detail.failure?.cause, cause);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "request-answered"),
+      [
+        {
+          kind: "request-answered",
+          requestId: humanAnswer.requestId,
+          by: "human",
+          answer: humanAnswer,
+        },
+      ],
+    );
+    assert.equal(
+      events.filter((event) => event.kind === "request-expired").length,
+      0,
+    );
+    await prepared.close();
+  });
+}
+
+test("close expires an approval answer whose write is in flight", async () => {
+  const { controlled, prepared, turn, events, request } =
+    await approvalRaceFixture();
+  const answer = turn.answerRequest({
+    requestId: request.request.requestId,
+    kind: "approval",
+    decision: "allow",
+  });
+  await controlled.responseWriteStarted;
+  const closing = prepared.close();
+  await waitForExpiredRequestCount(turn, events, 1);
+  controlled.emitResolution();
+  controlled.emitTerminal();
+  assert.equal((await turn.result()).kind, "completed");
+  controlled.releaseResponseWrite();
+  assert.deepEqual(await answer, { outcome: "rejected", reason: "expired" });
+  assert.deepEqual(
+    events.filter((event) => event.kind === "request-expired"),
+    [{ kind: "request-expired", requestId: request.request.requestId }],
+  );
+  assert.equal(
+    events.filter((event) => event.kind === "request-answered").length,
+    0,
+  );
+  assert.equal((await closing).clean, true);
+});
+
+for (const failure of [
+  "connection loss",
+  "protocol corruption",
+  "nonterminal completion",
+] as const) {
+  test(`${failure} expires an unconfirmed approval answer while its write is in flight`, async () => {
+    const { controlled, prepared, turn, events, request } =
+      await approvalRaceFixture();
+    const answer = turn.answerRequest({
+      requestId: request.request.requestId,
+      kind: "approval",
+      decision: "allow",
+    });
+    await controlled.responseWriteStarted;
+    if (failure === "connection loss") controlled.endConnection();
+    else if (failure === "protocol corruption") controlled.emitCorruption();
+    else controlled.emitTerminal("inProgress");
+    assert.equal((await turn.result()).kind, "lost");
+    const eventCountAtResult = events.length;
+    controlled.releaseResponseWrite();
+    assert.deepEqual(await answer, { outcome: "rejected", reason: "expired" });
+    assert.deepEqual(
+      events.filter((event) => event.kind === "request-expired"),
+      [{ kind: "request-expired", requestId: request.request.requestId }],
+    );
+    assert.equal(
+      events.filter((event) => event.kind === "request-answered").length,
+      0,
+    );
+    assert.equal(events.length, eventCountAtResult);
+    await prepared.close();
+  });
+}
 
 test("terminal truth expires an outstanding approval before settling", async () => {
   const installed = installSyntheticCodexReplayer();
@@ -2751,11 +2879,36 @@ function stalledProcess(): OwnedProcess {
   };
 }
 
+async function approvalRaceFixture() {
+  const installed = installSyntheticCodexReplayer();
+  const controlled = approvalRaceProcess();
+  const preparedResult = await createCodexAdapter(
+    { path: installed.path, env: {} },
+    processWithSpawn(() =>
+      Promise.resolve({ ok: true, process: controlled.process }),
+    ),
+  ).prepare({ workspace: process.cwd() });
+  assert.equal(preparedResult.ok, true);
+  if (!preparedResult.ok) throw new Error("unreachable");
+  const prepared = preparedResult.harness;
+  const turn = prepared.startTurn(turnRequest());
+  const events = observeEvents(turn);
+  await waitForRequestCount(turn, events, 1);
+  const request = events.find((event) => event.kind === "request-raised");
+  assert.ok(request?.kind === "request-raised");
+  return { controlled, prepared, turn, events, request };
+}
+
 interface TControlledApprovalProcess {
   readonly process: OwnedProcess;
   readonly responseWriteStarted: Promise<void>;
+  readonly responseWriteCount: number;
   emitResolution(): void;
-  emitTerminal(): void;
+  endConnection(): void;
+  emitCorruption(): void;
+  emitTerminal(
+    status?: "completed" | "interrupted" | "failed" | "inProgress",
+  ): void;
   releaseResponseWrite(): void;
   rejectResponseWrite(cause: unknown): void;
 }
@@ -2764,6 +2917,7 @@ function approvalRaceProcess(): TControlledApprovalProcess {
   const output = asyncByteQueue();
   const responseWriteStarted = deferred<void>();
   const responseWrite = deferred<void>();
+  let responseWriteCount = 0;
   const encoder = new TextEncoder();
   const enqueue = (message: object): void => {
     output.push(encoder.encode(`${JSON.stringify(message)}\n`));
@@ -2833,8 +2987,12 @@ function approvalRaceProcess(): TControlledApprovalProcess {
           result: { turn: { id: "turn-1", items: [], status: "inProgress" } },
         });
         return Promise.resolve();
+      case "turn/interrupt":
+        enqueue({ id: message.id, result: {} });
+        return Promise.resolve();
       default:
         if (message.id === "native-approval" && message.result !== undefined) {
+          responseWriteCount += 1;
           responseWriteStarted.resolve();
           return responseWrite.promise;
         }
@@ -2860,21 +3018,33 @@ function approvalRaceProcess(): TControlledApprovalProcess {
   return {
     process,
     responseWriteStarted: responseWriteStarted.promise,
+    get responseWriteCount() {
+      return responseWriteCount;
+    },
     emitResolution() {
       enqueue({
         method: "serverRequest/resolved",
         params: { requestId: "native-approval", threadId: "thread-1" },
       });
     },
-    emitTerminal() {
+    emitTerminal(status = "completed") {
       enqueue({
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          turn: { id: "turn-1", items: [], status: "completed" },
+          turn: {
+            id: "turn-1",
+            items: [],
+            status,
+            ...(status === "failed"
+              ? { error: { message: "scripted native Turn failure" } }
+              : {}),
+          },
         },
       });
     },
+    endConnection: () => output.end(),
+    emitCorruption: () => output.push(encoder.encode("{malformed\n")),
     releaseResponseWrite: () => responseWrite.resolve(),
     rejectResponseWrite: (cause) => responseWrite.reject(cause),
   };

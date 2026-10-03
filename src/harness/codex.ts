@@ -869,7 +869,11 @@ type RuntimeNotification = NonNullable<
 interface PendingCodexApproval {
   readonly request: HarnessRequest;
   readonly nativeRequestId: string | number;
-  status: "outstanding" | "answering" | "settled";
+  state:
+    | { readonly kind: "outstanding" }
+    | { readonly kind: "answering"; readonly answer: RequestAnswer }
+    | { readonly kind: "answered" }
+    | { readonly kind: "expired" };
 }
 
 type TCodexNativeTarget = {
@@ -1051,7 +1055,7 @@ class CodexTurn implements HarnessTurn {
 
   beginClose(): void {
     this.closing = true;
-    this.expireOutstanding();
+    this.settleApprovals(false);
   }
 
   interruptForClose(timeoutMs: number): Promise<ControlReceipt> {
@@ -1266,37 +1270,38 @@ class CodexTurn implements HarnessTurn {
     if (pending === undefined) {
       return { outcome: "rejected", reason: "expired" };
     }
-    if (pending.status !== "outstanding") {
+    if (pending.state.kind !== "outstanding") {
       return { outcome: "rejected", reason: "already-settled" };
     }
     if (answer.kind !== "approval") {
       return { outcome: "rejected", reason: "shape-mismatch" };
     }
-    pending.status = "answering";
+    pending.state = { kind: "answering", answer };
     try {
       await this.session.respondToServerRequest(
         pending.nativeRequestId,
         answer.decision === "allow" ? "accept" : "decline",
       );
     } catch (cause) {
-      if (pending.status === "answering") pending.status = "outstanding";
+      if (pending.state.kind === "answering") {
+        pending.state = { kind: "outstanding" };
+      }
       this.protocolFailure(
         "Codex approval response could not be written to app-server.",
         cause,
       );
-      return { outcome: "rejected", reason: "expired" };
+      return this.approvals.get(answer.requestId.opaque)?.state.kind ===
+        "answered"
+        ? { outcome: "accepted" }
+        : { outcome: "rejected", reason: "expired" };
     }
+    const state = this.approvals.get(answer.requestId.opaque)?.state;
+    if (state?.kind === "answered") return { outcome: "accepted" };
     if (this.settled) return { outcome: "rejected", reason: "expired" };
-    if (pending.status !== "answering") {
+    if (state?.kind !== "answering") {
       return { outcome: "rejected", reason: "already-settled" };
     }
-    pending.status = "settled";
-    this.emit({
-      kind: "request-answered",
-      requestId: answer.requestId,
-      by: "human",
-      answer,
-    });
+    this.settleApproval(pending, true);
     return { outcome: "accepted" };
   }
 
@@ -1600,7 +1605,7 @@ class CodexTurn implements HarnessTurn {
     const pending: PendingCodexApproval = {
       request,
       nativeRequestId: notification.nativeRequestId,
-      status: "outstanding",
+      state: { kind: "outstanding" },
     };
     this.approvals.set(requestId.opaque, pending);
     this.approvalsByNativeId.set(nativeKey, pending);
@@ -1611,22 +1616,37 @@ class CodexTurn implements HarnessTurn {
     const pending = this.approvalsByNativeId.get(
       nativeRequestKey(nativeRequestId),
     );
-    if (pending === undefined || pending.status === "settled") return;
-    pending.status = "settled";
+    if (pending !== undefined) this.settleApproval(pending, true);
+  }
+
+  private settleApproval(
+    pending: PendingCodexApproval,
+    confirmAnswer: boolean,
+  ): void {
+    if (pending.state.kind === "answered" || pending.state.kind === "expired") {
+      return;
+    }
+    if (confirmAnswer && pending.state.kind === "answering") {
+      const { answer } = pending.state;
+      pending.state = { kind: "answered" };
+      this.emit({
+        kind: "request-answered",
+        requestId: pending.request.requestId,
+        by: "human",
+        answer,
+      });
+      return;
+    }
+    pending.state = { kind: "expired" };
     this.emit({
       kind: "request-expired",
       requestId: pending.request.requestId,
     });
   }
 
-  private expireOutstanding(): void {
+  private settleApprovals(confirmAnswers: boolean): void {
     for (const pending of this.approvals.values()) {
-      if (pending.status === "settled") continue;
-      pending.status = "settled";
-      this.emit({
-        kind: "request-expired",
-        requestId: pending.request.requestId,
-      });
+      this.settleApproval(pending, confirmAnswers);
     }
   }
 
@@ -1649,6 +1669,7 @@ class CodexTurn implements HarnessTurn {
       );
       return;
     }
+    this.settleApprovals(true);
     if (notification.status === "completed") {
       this.settle({
         kind: "completed",
@@ -1736,7 +1757,7 @@ class CodexTurn implements HarnessTurn {
     if (this.settled) return;
     this.resolveTarget(undefined);
     this.clearPreview();
-    this.expireOutstanding();
+    this.settleApprovals(false);
     this.settled = true;
     this.listeners.clear();
     this.onSettled();

@@ -200,6 +200,12 @@ for await (const line of lines) {
   const request = JSON.parse(line);
   if (request.method === undefined && outstandingApprovals.has(request.id)) {
     outstandingApprovals.delete(request.id);
+    process.stdout.write(
+      `${JSON.stringify({
+        method: "serverRequest/resolved",
+        params: { requestId: request.id, threadId: "thread-1" },
+      })}\n`,
+    );
     if (outstandingApprovals.size === 0) completeActiveTurn();
     continue;
   }
