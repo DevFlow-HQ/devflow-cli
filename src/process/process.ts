@@ -673,26 +673,31 @@ async function spawnOwnedProcess(
     env[key] = value;
   }
   const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH");
-  const target =
-    isAbsolute(options.executable) || /[\\/]/.test(options.executable)
-      ? {
-          kind: "found" as const,
-          executable: resolve(options.cwd, options.executable),
-          prefixArgs: [],
-        }
-      : resolveExecutableWithNode(
-          options.executable,
-          {
-            path:
-              pathKey === undefined
-                ? ""
-                : (env[pathKey] ?? "")
-                    .split(";")
-                    .map((entry) => resolve(options.cwd, entry))
-                    .join(";"),
-          },
-          notify,
-        );
+  const hasExecutablePath =
+    isAbsolute(options.executable) || /[\\/]/.test(options.executable);
+  // A bare executable without a child PATH stays on the existing spawn route.
+  // Do not start where.exe for a PATH lookup the child environment cannot supply.
+  if (pathKey === undefined && !hasExecutablePath)
+    return spawnOwnedProcessWithNode(options, notify, "fallback");
+  const target = hasExecutablePath
+    ? {
+        kind: "found" as const,
+        executable: resolve(options.cwd, options.executable),
+        prefixArgs: [],
+      }
+    : resolveExecutableWithNode(
+        options.executable,
+        {
+          path:
+            pathKey === undefined
+              ? ""
+              : (env[pathKey] ?? "")
+                  .split(";")
+                  .map((entry) => resolve(options.cwd, entry))
+                  .join(";"),
+        },
+        notify,
+      );
   if (target.kind !== "found")
     return spawnOwnedProcessWithNode(options, notify, "fallback");
   const resolved = {
