@@ -1,0 +1,6 @@
+{
+  "name": "spike-echo",
+  "version": "1.0.0",
+  "private": false,
+  "bin": { "spike-echo": "bin.js" }
+}

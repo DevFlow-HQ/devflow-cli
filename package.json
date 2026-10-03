@@ -1,0 +1,6 @@
+{
+  "name": "secant-spike-338",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2"
+}

@@ -1,0 +1,46 @@
+name: Windows contained-spawn spike (#338)
+
+on:
+  push:
+    branches: [spike/issue-338-windows-contained-spawn]
+
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      SPIKE_PARENT_ONLY: parent-only-value
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Versions
+        run: |
+          bun --version
+          node --version
+          npm --version
+          [System.Environment]::OSVersion.VersionString
+      - name: Compile spike (bun-windows-x64)
+        run: bun spike/build.ts
+      - name: T1 bun script
+        continue-on-error: true
+        run: bun spike/main.ts t1
+      - name: T1 compiled
+        continue-on-error: true
+        run: dist/spike.exe t1
+      - name: T5 poll20 compiled
+        continue-on-error: true
+        run: dist/spike.exe t5 poll20
+      - name: T5 poll5 compiled
+        continue-on-error: true
+        run: dist/spike.exe t5 poll5
+      - name: T5 register compiled
+        continue-on-error: true
+        run: dist/spike.exe t5 register
+      - name: T5 worker compiled
+        continue-on-error: true
+        run: dist/spike.exe t5 worker
+      - name: T5 eof compiled
+        continue-on-error: true
+        run: dist/spike.exe t5-eof
