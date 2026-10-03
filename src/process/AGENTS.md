@@ -26,6 +26,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   executable. A sync child killed for overrunning `maxBuffer` returns an error and a PID, so it is a `reap`. A throwing observer is swallowed.
 - Because the primary PATH walk cannot see a Windows App Execution Alias, a miss falls back to the first `where.exe` match (#165). The `.cmd`/`.bat` shim
   rule still applies to that path; Secant passes an alias path to the OS at spawn and never reads or resolves its AppExecLink target itself.
+- An owned Windows launch with a bare name and no child PATH uses the Node fallback without a `where.exe` probe (#361). A missing executable keeps
+  its typed `spawn-error` outcome.
 
 ## Tests
 
