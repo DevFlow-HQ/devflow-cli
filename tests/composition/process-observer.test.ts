@@ -253,3 +253,98 @@ test("a refused spawn and a timed-out child warn, with the native code and no PI
   ]);
   assert.equal(log.text.includes("spawnSync git"), false);
 });
+
+for (const containment of ["fallback", "contained"] as const) {
+  test(`operational log retains ${containment} launch evidence and translates only fallback causes`, async () => {
+    const { folder, overrides } = home();
+    const status = await withClients(
+      async (clients) => {
+        const opened = clients.projectionPort.openProjection({
+          family: "harness-catalog",
+          focus: { id: "claude-code" },
+        });
+        await opened.updates[Symbol.asyncIterator]().next();
+        opened.close();
+        return 0;
+      },
+      {
+        ...overrides,
+        process: undefined,
+        processFactory: (options) =>
+          createFakeProcess(
+            {
+              ownedProcesses: [
+                {
+                  kind: "launched",
+                  containment,
+                  containmentCause: Object.assign(
+                    new Error("forced CreateJobObjectW failure"),
+                    { code: "EACCES", argv: "seeded-private-argv" },
+                  ),
+                  emissions: [
+                    {
+                      kind: "terminal",
+                      trigger: "automatic",
+                      close: { kind: "exited", status: 0 },
+                    },
+                  ],
+                },
+              ],
+            },
+            options,
+          ),
+        discoverClaudeCode: () => ({
+          kind: "found",
+          attempt: {
+            source: "path",
+            name: "claude",
+            description: "PATH name 'claude'",
+          },
+        }),
+        harnessAdapter: {
+          async prepare(options) {
+            const result = await options.process.spawnOwnedProcess({
+              role: "harness-runtime",
+              executable: "seeded-private-executable",
+              args: ["seeded-private-argv"],
+              cwd: options.workspace,
+              env: {},
+              launchTimeoutMs: 10,
+            });
+            assert.ok(result.ok);
+            return {
+              ok: false,
+              failure: {
+                phase: "prepare",
+                category: "script-finished",
+                possibleEffects: "none",
+              },
+            };
+          },
+        },
+      },
+    );
+    assert.equal(status, 0);
+    const log = readLog(folder);
+    const spawn = log.records.find((record) => record.event === "child-spawn");
+    assert.ok(spawn);
+    assert.equal(spawn.containment, containment);
+    if (containment === "fallback") {
+      assert.ok(
+        spawn.containmentCause && typeof spawn.containmentCause === "object",
+      );
+      assert.ok(
+        "type" in spawn.containmentCause &&
+          "message" in spawn.containmentCause &&
+          "code" in spawn.containmentCause,
+      );
+      assert.equal(spawn.containmentCause.type, "Error");
+      assert.equal(
+        spawn.containmentCause.message,
+        "forced CreateJobObjectW failure",
+      );
+      assert.equal(spawn.containmentCause.code, "EACCES");
+    } else assert.equal(spawn.containmentCause, undefined);
+    assert.doesNotMatch(JSON.stringify(log.records), /seeded-private/);
+  });
+}

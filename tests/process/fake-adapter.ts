@@ -74,6 +74,13 @@ type FakeOwnedProcessScript =
   | {
       readonly kind: "launched";
       readonly containment?: ProcessInterruption["containment"];
+      readonly containmentCause?: unknown;
+      readonly stdinReplies?: (
+        bytes: Uint8Array,
+      ) => readonly Extract<
+        FakeOwnedProcessEmission,
+        { kind: "stdout" | "stderr" }
+      >[];
       readonly emissions: readonly FakeOwnedProcessEmission[];
     };
 
@@ -359,18 +366,21 @@ class FakeProcessAdapter implements ProcessAdapter {
       }
       return Promise.resolve(entry.failure);
     }
-    const owned = new FakeOwnedProcess(entry.emissions, (settled) =>
-      this.report(
-        settled.interruption === undefined
-          ? closeSettlement(role, pid, "exit", settled.close)
-          : [
-              { kind: "cancellation", role, pid },
-              ...(settled.interruption.escalated
-                ? [{ kind: "kill-escalation" as const, role, pid }]
-                : []),
-              ...closeSettlement(role, pid, "reap", settled.close),
-            ],
-      ),
+    const owned = new FakeOwnedProcess(
+      entry.emissions,
+      (settled) =>
+        this.report(
+          settled.interruption === undefined
+            ? closeSettlement(role, pid, "exit", settled.close)
+            : [
+                { kind: "cancellation", role, pid },
+                ...(settled.interruption.escalated
+                  ? [{ kind: "kill-escalation" as const, role, pid }]
+                  : []),
+                ...closeSettlement(role, pid, "reap", settled.close),
+              ],
+        ),
+      entry.stdinReplies,
     );
     this.report([
       {
@@ -379,11 +389,27 @@ class FakeProcessAdapter implements ProcessAdapter {
         pid,
         ...(entry.containment === undefined
           ? {}
-          : { containment: entry.containment }),
+          : entry.containment === "contained"
+            ? { containment: "contained" as const }
+            : {
+                containment: "fallback" as const,
+                containmentCause: entry.containmentCause,
+              }),
       },
     ]);
     owned.start();
-    return Promise.resolve({ ok: true, process: owned });
+    return Promise.resolve({
+      ok: true,
+      process: owned,
+      ...(entry.containment === undefined
+        ? {}
+        : {
+            containment:
+              entry.containment === "contained"
+                ? { kind: "contained" as const }
+                : { kind: "fallback" as const, cause: entry.containmentCause },
+          }),
+    });
   }
 }
 
@@ -406,6 +432,12 @@ class FakeOwnedProcess implements OwnedProcess {
       readonly close: OwnedProcessClose;
       readonly interruption?: ProcessInterruption;
     }) => void,
+    private readonly stdinReplies?: (
+      bytes: Uint8Array,
+    ) => readonly Extract<
+      FakeOwnedProcessEmission,
+      { kind: "stdout" | "stderr" }
+    >[],
   ) {
     let terminal:
       | Extract<FakeOwnedProcessEmission, { readonly kind: "terminal" }>
@@ -439,7 +471,11 @@ class FakeOwnedProcess implements OwnedProcess {
     if (this.terminal.trigger === "automatic") this.settle(this.terminal.close);
   }
 
-  writeStdin(_bytes: Uint8Array): Promise<void> {
+  writeStdin(bytes: Uint8Array): Promise<void> {
+    for (const emission of this.stdinReplies?.(bytes) ?? []) {
+      if (emission.kind === "stdout") this.stdoutStream.emit(emission.bytes);
+      else this.stderrStream.emit(emission.bytes);
+    }
     return Promise.resolve();
   }
 

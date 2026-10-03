@@ -1,3 +1,4 @@
+import { reportContainment } from "./containment.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -213,6 +214,7 @@ class CodexAdapter implements HarnessAdapter {
       options.phases,
       discovery.target,
       options.workspace,
+      options.containment,
     );
     if (!live.ok) return { ok: false, failure: live.failure };
     const profile = buildProfile({
@@ -292,6 +294,7 @@ class CodexAdapter implements HarnessAdapter {
       options.phases,
       target,
       options.workspace,
+      options.containment,
     );
     return live.ok
       ? { ok: true, value: live }
@@ -434,6 +437,7 @@ class CodexAdapter implements HarnessAdapter {
     phases: HarnessPhaseObserver | undefined,
     target: TDiscoveredTarget,
     workspace: string,
+    containment: PrepareOptions["containment"],
   ): Promise<TLiveQualification> {
     const launch = startPhase(phases, "launch");
     const spawned = await processAdapter.spawnOwnedProcess({
@@ -454,6 +458,7 @@ class CodexAdapter implements HarnessAdapter {
       launch.failed(launchFailure);
       return { ok: false, failure: launchFailure };
     }
+    reportContainment(containment, spawned.containment);
     launch.ok();
     // Protocol initialization through the account and model reads is the open
     // handshake. Each exchange is a semantic step nested inside it (#325); the

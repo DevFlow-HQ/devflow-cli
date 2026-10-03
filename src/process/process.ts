@@ -273,12 +273,15 @@ type ChildRole = SpawnRole | "executable-lookup" | "tree-kill";
 type WindowsContainment = "contained" | "fallback";
 
 export type ChildFact =
-  | {
+  | ({
       readonly kind: "spawn";
-      readonly containment?: WindowsContainment;
       readonly role: ChildRole;
       readonly pid?: number;
-    }
+    } & (
+      | { readonly containment?: never; readonly containmentCause?: never }
+      | { readonly containment: "contained"; readonly containmentCause?: never }
+      | { readonly containment: "fallback"; readonly containmentCause: unknown }
+    ))
   | {
       readonly kind: "spawn-error";
       readonly role: ChildRole;
@@ -337,7 +340,7 @@ class ChildWatch {
   constructor(
     private readonly notify: Notify,
     private readonly role: ChildRole,
-    private readonly containment?: WindowsContainment,
+    private readonly containment?: ProcessLaunchContainment,
   ) {}
 
   /** A synchronous spawn is about to block; its PID is not known yet. */
@@ -354,7 +357,12 @@ class ChildWatch {
       pid,
       ...(this.containment === undefined
         ? {}
-        : { containment: this.containment }),
+        : this.containment.kind === "contained"
+          ? { containment: "contained" as const }
+          : {
+              containment: "fallback" as const,
+              containmentCause: this.containment.cause,
+            }),
     });
   }
 
@@ -441,7 +449,7 @@ function watchChild(
   child: ChildProcess,
   notify: Notify,
   role: ChildRole,
-  containment?: WindowsContainment,
+  containment?: ProcessLaunchContainment,
 ): ChildWatch {
   const watch = new ChildWatch(notify, role, containment);
   if (child.pid !== undefined) watch.spawned(child.pid);
@@ -566,8 +574,16 @@ export interface OwnedProcess {
   closed(): Promise<OwnedProcessClose>;
 }
 
+export type ProcessLaunchContainment =
+  | { readonly kind: "contained" }
+  | { readonly kind: "fallback"; readonly cause: unknown };
+
 export type SpawnOwnedProcessResult =
-  | { readonly ok: true; readonly process: OwnedProcess }
+  | {
+      readonly ok: true;
+      readonly process: OwnedProcess;
+      readonly containment?: ProcessLaunchContainment;
+    }
   | {
       readonly ok: false;
       readonly failure:
@@ -678,7 +694,10 @@ async function spawnOwnedProcess(
   // A bare executable without a child PATH stays on the existing spawn route.
   // Do not start where.exe for a PATH lookup the child environment cannot supply.
   if (pathKey === undefined && !hasExecutablePath)
-    return spawnOwnedProcessWithNode(options, notify, "fallback");
+    return spawnOwnedProcessWithNode(options, notify, {
+      kind: "fallback",
+      cause: new Error("Windows containment target could not be resolved"),
+    });
   const target = hasExecutablePath
     ? {
         kind: "found" as const,
@@ -699,7 +718,10 @@ async function spawnOwnedProcess(
         notify,
       );
   if (target.kind !== "found")
-    return spawnOwnedProcessWithNode(options, notify, "fallback");
+    return spawnOwnedProcessWithNode(options, notify, {
+      kind: "fallback",
+      cause: new Error("Windows containment target could not be resolved"),
+    });
   const resolved = {
     ...options,
     executable: resolve(options.cwd, target.executable),
@@ -708,8 +730,8 @@ async function spawnOwnedProcess(
   };
   const result = await launchContained(resolved, failAt);
   if (result.kind === "fallback")
-    return spawnOwnedProcessWithNode(resolved, notify, "fallback");
-  const watch = new ChildWatch(notify, options.role, "contained");
+    return spawnOwnedProcessWithNode(resolved, notify, result);
+  const watch = new ChildWatch(notify, options.role, { kind: "contained" });
   if (result.kind === "failed") {
     watch.failed(result.cause);
     return { ok: false, failure: { kind: "spawn-error", cause: result.cause } };
@@ -721,6 +743,7 @@ async function spawnOwnedProcess(
   });
   return {
     ok: true,
+    containment: { kind: "contained" },
     process: new ManagedOwnedProcess(
       { kind: "contained", child: result.child },
       watch,
@@ -735,7 +758,7 @@ async function spawnOwnedProcess(
 function spawnOwnedProcessWithNode(
   options: OwnedProcessOptions,
   notify: Notify,
-  containment?: WindowsContainment,
+  containment?: ProcessLaunchContainment,
 ): Promise<SpawnOwnedProcessResult> {
   const pipe: "pipe" | "overlapped" =
     process.platform === "win32" ? "overlapped" : "pipe";
@@ -780,10 +803,11 @@ function spawnOwnedProcessWithNode(
     const onSpawn = (): void => {
       finish({
         ok: true,
+        ...(containment === undefined ? {} : { containment }),
         process: new ManagedOwnedProcess(
           { kind: "node", child: child as ChildProcessWithoutNullStreams },
           watch,
-          containment,
+          containment?.kind,
         ),
       });
     };

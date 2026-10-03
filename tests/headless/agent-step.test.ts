@@ -5,6 +5,7 @@ import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
+  createClaudeCodeAdapter,
   type HarnessAdapter,
   type HarnessProfile,
 } from "../../src/harness/harness.js";
@@ -13,6 +14,8 @@ import type {
   RunTranscriptEntryView,
   RunView,
 } from "../../src/application/projection-port.js";
+import type { ProcessAdapter } from "../../src/process/process.js";
+import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
@@ -109,7 +112,7 @@ function codexProfile(): HarnessProfile {
 /** Author a `command -> agent -> command` Bundle folder: a `file` Launch input
  *  fills the prompt's `{{artifact:doc}}` slot, and a `skill` asset in the agent's
  *  `uses` appends a SKILL.md line. Command-only bookends run the runtime binary. */
-function writeAgentBundle(): { folder: string; id: string } {
+function writeAgentBundle(repeated = false): { folder: string; id: string } {
   const folder = makeTempDir("secant-agent-bundle-");
   mkdirSync(join(folder, "prompts"), { recursive: true });
   mkdirSync(join(folder, "guide"), { recursive: true });
@@ -163,6 +166,15 @@ function writeAgentBundle(): { folder: string; id: string } {
       },
     ],
   };
+  if (repeated)
+    manifest.routing.splice(2, 0, {
+      id: "fix-again",
+      kind: "agent",
+      session: "second",
+      requires: ["doc"],
+      prompt: { asset: "prompts/fix.md" },
+      uses: [{ asset: "guide" }],
+    });
   writeFileSync(
     join(folder, "manifest.json"),
     JSON.stringify(manifest, null, 2),
@@ -172,7 +184,14 @@ function writeAgentBundle(): { folder: string; id: string } {
 
 /** Wire the Application against a temporary home and the deterministic fake Claude
  *  Code Adapter, install the Agent Bundle, and approve the Workspace. */
-function wireAgent(t: TestContext): {
+function wireAgent(
+  t: TestContext,
+  options: {
+    adapter?: HarnessAdapter;
+    process?: ProcessAdapter;
+    repeated?: boolean;
+  } = {},
+): {
   wired: Wiring;
   bundleId: string;
   digest: string;
@@ -188,16 +207,18 @@ function wireAgent(t: TestContext): {
     launchCwd: workspace,
     // A deterministic Process double: the Command bookends and the Run Store's Git
     // go through the fake, so no child spawns.
-    process: createFakeBundleProcess({ executables: [process.execPath] }),
+    process:
+      options.process ??
+      createFakeBundleProcess({ executables: [process.execPath] }),
     // The fake Adapter reproduces the plain Turn's observed identity and events.
-    harnessAdapter: createFake(plainScript())(),
+    harnessAdapter: options.adapter ?? createFake(plainScript())(),
   });
   t.after(() => {
     wired.runGroup.close();
     wired.catalog.close();
   });
 
-  const bundle = writeAgentBundle();
+  const bundle = writeAgentBundle(options.repeated);
   assert.ok(
     wired.bundleManagement.build(bundle.folder, { noInstall: false }).ok,
   );
@@ -852,3 +873,139 @@ test("run answer settles a refused Harness preparation after the Gate as a non-s
   assert.match(out.join(""), /^State: halted$/m);
   assert.equal(prepares, 2);
 });
+
+for (const containment of ["fallback", "contained", undefined] as const) {
+  test(`[windows-cleanup-notice] headless ${containment ?? "non-Windows"} launch preserves JSON and emits only fallback once across Sessions`, async (t) => {
+    let release!: () => void;
+    let noticed!: () => void;
+    const delivery = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const noticeSeen = new Promise<void>((resolve) => {
+      noticed = resolve;
+    });
+    t.after(() => release());
+    const sessionId = "12121212-1212-4121-8121-121212121212";
+    const owned = createFakeProcess({
+      ownedProcesses: [0, 1].map(() => ({
+        kind: "launched",
+        containment,
+        containmentCause: new Error("forced CreateJobObjectW failure"),
+        emissions: [
+          {
+            kind: "stdout",
+            bytes: new TextEncoder().encode(
+              `${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model: "scripted-model" })}\n${JSON.stringify({ type: "result", subtype: "success", result: "done" })}\n`,
+            ),
+          },
+          {
+            kind: "terminal",
+            trigger: "close-stdin",
+            close: { kind: "exited", status: 0 },
+          },
+        ],
+      })),
+    });
+    const base = createFakeBundleProcess({ executables: [process.execPath] });
+    const { wired, bundleId, digest, docPath } = wireAgent(t, {
+      repeated: true,
+      adapter: createClaudeCodeAdapter({
+        env: { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath },
+        sessionId: () => sessionId,
+      }),
+      process: {
+        ...base,
+        resolveExecutable: (name, options) =>
+          base.resolveExecutable(name, options),
+        spawnCommandSync: (options) => base.spawnCommandSync(options),
+        spawnCommand: (options) =>
+          options.role === "harness-probe"
+            ? Promise.resolve({
+                kind: "exited",
+                status: 0,
+                text: new TextEncoder().encode("2.1.288 (Claude Code)"),
+              })
+            : base.spawnCommand(options),
+        spawnOwnedProcess: async (options) => {
+          const launched = await owned.spawnOwnedProcess(options);
+          if (!launched.ok || containment !== "fallback") return launched;
+          const child = launched.process;
+          return {
+            ...launched,
+            process: {
+              ...child,
+              stdout: (async function* () {
+                await delivery;
+                yield* child.stdout;
+              })(),
+              stderr: child.stderr,
+              writeStdin: (bytes) => child.writeStdin(bytes),
+              closeStdin: (timeout) => child.closeStdin(timeout),
+              interrupt: (timeout) => child.interrupt(timeout),
+              closed: () => child.closed(),
+            },
+          };
+        },
+      },
+    });
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: HeadlessIO = {
+      out: (text) => out.push(text),
+      err: (text) => {
+        err.push(text);
+        noticed();
+      },
+      cwd: () => process.cwd(),
+    };
+    const launching = runHeadless(
+      wired,
+      [
+        "run",
+        "launch",
+        bundleId,
+        "--harness",
+        "claude-code",
+        "--trust",
+        digest,
+        "--input",
+        `doc=${docPath}`,
+        "--json",
+      ],
+      io,
+    );
+    if (containment === "fallback") {
+      await noticeSeen;
+      assert.deepEqual(out, []);
+      assert.deepEqual(err, [
+        "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.\n",
+      ]);
+      release();
+    }
+    const status = await launching;
+    assert.equal(status, 0, out.join("") + err.join(""));
+    const notice =
+      "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.\n";
+    assert.equal(err.join(""), containment === "fallback" ? notice : "");
+    assert.doesNotMatch(
+      out.join(""),
+      /windowsCleanupNotice|usual Windows cleanup|CreateJobObjectW/,
+    );
+    const snapshot = JSON.parse(out.join(""));
+    assert.equal(snapshot.result.run.state, "succeeded");
+    assert.equal(snapshot.result.run.sessions.length, 2);
+    const opened = wired.projectionPort.openProjection({
+      family: "run",
+      runId: snapshot.runId,
+    });
+    assert.ok(opened.snapshot.result.found);
+    assert.equal(
+      opened.snapshot.result.run.windowsCleanupNotice,
+      containment === "fallback" ? notice.trim() : undefined,
+    );
+    const { windowsCleanupNotice: _notice, ...run } =
+      opened.snapshot.result.run;
+    assert.deepEqual(snapshot.result.run, JSON.parse(JSON.stringify(run)));
+    opened.close();
+  });
+}

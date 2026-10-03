@@ -4,6 +4,7 @@ import type {
   ApprovalDecisionName,
   Problem,
   ProjectionPort,
+  RunSnapshot,
 } from "../application/projection-port.js";
 
 // The one owner of the headless `--harness-requests` policy (A34): the option, its
@@ -58,16 +59,20 @@ export function parseHarnessRequestPolicy(
 function followHarnessRequests(
   port: ProjectionPort,
   runId: string,
-  policy: HarnessRequestPolicy,
+  policy: HarnessRequestPolicy | undefined,
+  reportSnapshot: ((snapshot: RunSnapshot) => void) | undefined,
 ): { stop: () => void } {
   let opened = port.openProjection({ family: "run", runId });
+  reportSnapshot?.(opened.snapshot);
   const attempted = new Set<string>();
   let stopped = false;
   const followUntilLagged = async (): Promise<boolean> => {
     for await (const update of opened.updates) {
       if (stopped) return false;
       if (update.kind === "closed") return update.reason === "observer-lagged";
-      if (update.kind !== "live") continue;
+      if (update.kind === "durable" && update.snapshot.family === "run")
+        reportSnapshot?.(update.snapshot);
+      if (update.kind !== "live" || policy === undefined) continue;
       for (const offer of update.overlay.offers) {
         const key = `${offer.generation}:${offer.requestId}`;
         if (attempted.has(key)) continue;
@@ -94,6 +99,7 @@ function followHarnessRequests(
       opened.close();
       if (stopped) return;
       opened = port.openProjection({ family: "run", runId });
+      reportSnapshot?.(opened.snapshot);
     }
   };
   const done = loop();
@@ -113,10 +119,11 @@ function followHarnessRequests(
 export async function withHarnessRequests<T>(
   port: ProjectionPort,
   runId: string,
-  policy: HarnessRequestPolicy,
+  policy: HarnessRequestPolicy | undefined,
   body: () => Promise<T>,
+  reportSnapshot?: (snapshot: RunSnapshot) => void,
 ): Promise<T> {
-  const follower = followHarnessRequests(port, runId, policy);
+  const follower = followHarnessRequests(port, runId, policy, reportSnapshot);
   try {
     return await body();
   } finally {

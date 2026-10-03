@@ -4,6 +4,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- The Run notice follower starts before launch/resume/answer settlement (#363), reopens on observer lag, and writes fallback information once to stderr.
+  Run snapshot JSON serialization explicitly omits the transient notice; `show` also writes it to stderr.
+
 - Exit-code contract: the headless Run commands exit 0 only when the Run rests exactly `succeeded`, **2** when it rests `blocked` at its Human Gate
   checkpoint (the M2 gate's expected outcome — distinguished from a failure so CI can assert it), and 1 for every other rest (A36, `exitForState` in
   `run-commands.ts`). Because `blocked` now has its own code, the package smoke asserts a rest-state exit through its `run()` helper (its `expect` option) rather

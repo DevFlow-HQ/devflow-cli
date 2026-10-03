@@ -15,7 +15,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   The root starts suspended until its exit wait is registered. Any pre-execution failure releases the attempt before the Node fallback runs.
   Root-handle exit terminates the job and confirms descendant handle exits before releasing it and publishing `closed()`; pipe EOF alone does not prove death.
   The existing close bound spans descendant-exit confirmation and output drain; a timeout is a cleanup error.
-  The `spawn` fact and interruption carry `contained` or `fallback`; Command spawns carry neither.
+  The owned launch result, `spawn` fact, and interruption carry `contained` or `fallback`; Command spawns carry neither.
+  Fallback launch results and facts retain the acquisition cause for translated operational logging (#363).
   Interrupt and stdin-close escalation terminate the whole job with a private stop code and record a reap only after a successful kill request;
   callers use child facts and cleanup outcomes, never exit codes, because kill-on-close can report zero. Failed termination records no kill.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound

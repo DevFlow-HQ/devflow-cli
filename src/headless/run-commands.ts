@@ -1,3 +1,4 @@
+import { createRunNoticeReporter, runSnapshotJson } from "./run-notice.js";
 import { randomUUID } from "node:crypto";
 import stripAnsi from "strip-ansi";
 import type { Command } from "commander";
@@ -509,31 +510,44 @@ async function settleAndReportRun(
   operationId: string,
   runId: string,
   heading: (run: RunView) => readonly string[],
+  policy?: HarnessRequestPolicy,
 ): Promise<number> {
-  const outcome = await settledOutcome(port, operationId);
-  if (outcome.status === "not-applied") return fail(io, json, outcome.problem);
+  const reportNotice = createRunNoticeReporter((text) => io.err(text));
+  return withHarnessRequests(
+    port,
+    runId,
+    policy,
+    async () => {
+      const outcome = await settledOutcome(port, operationId);
+      if (outcome.status === "not-applied")
+        return fail(io, json, outcome.problem);
 
-  const opened = port.openProjection({ family: "run", runId });
-  try {
-    const snapshot = opened.snapshot;
-    if (json) {
-      io.out(`${JSON.stringify(snapshot, null, 2)}\n`);
-      return snapshot.result.found
-        ? exitForState(snapshot.result.run.state)
-        : 1;
-    }
-    if (!snapshot.result.found) return fail(io, false, snapshot.result.problem);
-    const run = snapshot.result.run;
-    for (const line of heading(run)) io.out(`${line}\n`);
-    io.out(`State: ${run.state}\n`);
-    // A Run that rests `blocked` names the follow-up answer command so a headless
-    // operator knows how to continue (A36, spec stories 33/34): a free-text gate
-    // names `--text`, an approve/reject gate (or checkpoint) names `--continue`/`--stop`.
-    for (const line of answerHint(run)) io.out(`${line}\n`);
-    return exitForState(run.state);
-  } finally {
-    opened.close();
-  }
+      const opened = port.openProjection({ family: "run", runId });
+      try {
+        const snapshot = opened.snapshot;
+        reportNotice(snapshot);
+        if (json) {
+          io.out(`${runSnapshotJson(snapshot)}\n`);
+          return snapshot.result.found
+            ? exitForState(snapshot.result.run.state)
+            : 1;
+        }
+        if (!snapshot.result.found)
+          return fail(io, false, snapshot.result.problem);
+        const run = snapshot.result.run;
+        for (const line of heading(run)) io.out(`${line}\n`);
+        io.out(`State: ${run.state}\n`);
+        // A Run that rests `blocked` names the follow-up answer command so a headless
+        // operator knows how to continue (A36, spec stories 33/34): a free-text gate
+        // names `--text`, an approve/reject gate (or checkpoint) names `--continue`/`--stop`.
+        for (const line of answerHint(run)) io.out(`${line}\n`);
+        return exitForState(run.state);
+      } finally {
+        opened.close();
+      }
+    },
+    reportNotice,
+  );
 }
 
 /** The follow-up answer command to name when a Run rests `blocked` at a gate, or
@@ -641,18 +655,15 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
   // Follow the live Run and answer each approval request by the policy while execution
   // drives it (#117); the follower must be running before settlement is awaited, so an
   // Agent Turn that pauses on an approval is unblocked and can rest (A34).
-  return withHarnessRequests(port, runId, harnessRequests, () =>
-    // The launch drives execution (async now); await settlement, then report the
-    // Run and exit by its rest state — exit-when-blocked (A36).
-    settleAndReportRun(
-      port,
-      io,
-      fail,
-      json,
-      admission.operationId,
-      runId,
-      (run) => [`Run ${run.runId}`],
-    ),
+  return settleAndReportRun(
+    port,
+    io,
+    fail,
+    json,
+    admission.operationId,
+    runId,
+    (run) => [`Run ${run.runId}`],
+    harnessRequests,
   );
 }
 
@@ -666,8 +677,13 @@ async function showRun(
   const opened = port.openProjection({ family: "run", runId });
   try {
     const snapshot = opened.snapshot;
+    if (
+      snapshot.result.found &&
+      snapshot.result.run.windowsCleanupNotice !== undefined
+    )
+      io.err(`${snapshot.result.run.windowsCleanupNotice}\n`);
     if (json) {
-      io.out(`${JSON.stringify(snapshot, null, 2)}\n`);
+      io.out(`${runSnapshotJson(snapshot)}\n`);
       return snapshot.result.found ? 0 : 1;
     }
     if (!snapshot.result.found) return fail(io, false, snapshot.result.problem);
@@ -774,22 +790,15 @@ async function resumeRun(params: TResumeRunParams): Promise<number> {
   }
   // Follow the live Run and answer approval requests by the policy while execution
   // drives it (#117), like `run launch` (A34).
-  return withHarnessRequests(
+  return settleAndReportRun(
     params.port,
+    params.io,
+    params.fail,
+    params.json,
+    admission.operationId,
     params.runId,
+    (run) => [`Run ${run.runId}`],
     params.harnessRequests,
-    () =>
-      // The resume drives execution (async now); await settlement and report, like
-      // `run launch`.
-      settleAndReportRun(
-        params.port,
-        params.io,
-        params.fail,
-        params.json,
-        admission.operationId,
-        params.runId,
-        (run) => [`Run ${run.runId}`],
-      ),
   );
 }
 

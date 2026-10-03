@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   createClaudeCodeAdapter,
   type HarnessPhaseFact,
+  type HarnessContainmentObserver,
   type HarnessTurn,
   type PreparedHarness,
   type TurnEvent,
@@ -18,6 +19,7 @@ import type {
   OwnedProcessClose,
   ProcessAdapter,
   ProcessInterruption,
+  ProcessLaunchContainment,
 } from "../../src/process/process.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -51,6 +53,7 @@ interface ScriptedClaude {
  *  `answer`; a stop settles the process with `interruption`. */
 function scriptedClaude(options: {
   readonly answer: ControlAnswer;
+  readonly containment?: ProcessLaunchContainment;
   readonly interruption?: ProcessInterruption;
   readonly userFrame?: (index: number) => readonly Frame[];
 }): ScriptedClaude {
@@ -151,7 +154,11 @@ function scriptedClaude(options: {
       },
       closed: () => closed,
     };
-    return Promise.resolve({ ok: true, process: owned });
+    return Promise.resolve({
+      ok: true,
+      process: owned,
+      containment: options.containment,
+    });
   };
   return {
     process: {
@@ -237,6 +244,7 @@ async function prepare(
   options: {
     readonly controlTimeoutMs?: number;
     readonly phases?: HarnessPhaseFact[];
+    readonly containment?: HarnessContainmentObserver;
   } = {},
 ): Promise<PreparedHarness> {
   const prepared = await createClaudeCodeAdapter({
@@ -248,6 +256,7 @@ async function prepare(
   }).prepare({
     workspace: makeTempDir("secant-claude-interrupt-ws-"),
     process: scripted.process,
+    containment: options.containment,
     ...(options.phases !== undefined
       ? { phases: (fact) => options.phases!.push(fact) }
       : {}),
@@ -567,3 +576,28 @@ test("a refusal's detail is bounded in the fallback activity", async () => {
   assert.ok(refusal.description.length < 400);
   await harness.close();
 });
+
+for (const kind of ["contained", "fallback"] as const) {
+  test(`Claude reports ${kind} only on a lazy Session launch`, async () => {
+    const facts: { kind: string; session?: string }[] = [];
+    const scripted = scriptedClaude({
+      answer: "confirm",
+      containment:
+        kind === "contained"
+          ? { kind }
+          : { kind, cause: new Error("forced job failure") },
+    });
+    const harness = await prepare(scripted, {
+      containment: (fact) => facts.push(fact),
+    });
+    assert.deepEqual(facts, []);
+    const first = await liveTurnOn(harness);
+    assert.deepEqual(facts, [{ kind, session: "planning" }]);
+    await first.turn.interrupt();
+    await first.turn.result();
+    const second = await liveTurnOn(harness, "next");
+    assert.deepEqual(facts, [{ kind, session: "planning" }]);
+    await second.turn.interrupt();
+    await harness.close();
+  });
+}

@@ -332,6 +332,7 @@ function runOf(over: Partial<RunView> = {}): RunView {
     ...(over.conflict !== undefined ? { conflict: over.conflict } : {}),
     ...(over.completion !== undefined ? { completion: over.completion } : {}),
     problem: over.problem,
+    windowsCleanupNotice: over.windowsCleanupNotice,
     ...(over.sessions !== undefined ? { sessions: over.sessions } : {}),
     ...(over.effectiveModel !== undefined
       ? { effectiveModel: over.effectiveModel }
@@ -5231,3 +5232,29 @@ for (const close of ["offer-ended", "escaped"] as const) {
     assert.equal(wb.control.steers[1]?.text, "guidance awaiting receipt");
   });
 }
+
+test("[windows-cleanup-notice] the Workbench shows one informational notice across updates and resize", async () => {
+  const notice =
+    "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.";
+  const run = runOf({ windowsCleanupNotice: notice });
+  const { t, control, renderer } = await mountWorkbench(run, 40, 16);
+  try {
+    for (const width of [40, 70, 110, 40]) {
+      t.resize(width, 16);
+      renderer.resize(width, 16);
+      control.setRun({ ...run });
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      const text = frame.replace(/\s+/g, " ");
+      assert.equal(text.match(/Info: Secant/g)?.length, 1);
+      assert.match(
+        text,
+        /Secant will use its usual Windows cleanup\. Some tool processes may continue after you stop or close it\./,
+      );
+      assert.doesNotMatch(text, /Warning/);
+      noOverflow(frame, width);
+    }
+  } finally {
+    t.renderer.destroy();
+  }
+});

@@ -961,6 +961,9 @@ export interface RunTranscriptEntryView {
 
 /** A Run's bounded snapshot. Outputs carry references, not bytes. */
 export interface RunView {
+  /** Informational limit of an observed Windows fallback launch. Retained once
+   * per Run in this Application; excluded from headless JSON. */
+  readonly windowsCleanupNotice?: string;
   readonly runId: string;
   readonly bundle: {
     readonly id: string;

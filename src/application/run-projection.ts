@@ -101,6 +101,7 @@ export interface RunSteerCapability {
  *  read never fences the executing owner; otherwise the join acquires a
  *  short-lived owner and closes it. */
 export interface RunReadContext {
+  readonly windowsCleanupFallback?: boolean;
   readonly facts?: RunFacts; // present for a Run launched in this process
   readonly liveOwner?: RunOwner; // present while live in this process
   readonly state?: string; // the in-memory latest state while tracked
@@ -252,6 +253,12 @@ function runResult(
         launchedAt: record.createdAt,
         state: derivedRun.state,
         problem: context.problem,
+        ...(context.windowsCleanupFallback
+          ? {
+              windowsCleanupNotice:
+                "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.",
+            }
+          : {}),
         liveness: runLiveness(listing),
         progress: derivedRun.statuses,
         position: derivedRun.position,

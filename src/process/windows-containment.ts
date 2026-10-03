@@ -92,7 +92,7 @@ export interface ContainedChild {
 
 type LaunchResult =
   | { readonly kind: "contained"; readonly child: ContainedChild }
-  | { readonly kind: "fallback" }
+  | { readonly kind: "fallback"; readonly cause: unknown }
   | { readonly kind: "failed"; readonly cause: unknown };
 
 function wide(text: string): Uint16Array {
@@ -363,7 +363,11 @@ export async function launchContained(
   options: OwnedProcessOptions,
   failAt: ContainmentFailureStage | undefined,
 ): Promise<LaunchResult> {
-  if (process.platform !== "win32") return { kind: "fallback" };
+  if (process.platform !== "win32")
+    return {
+      kind: "fallback",
+      cause: new Error("Windows containment is unavailable on this platform"),
+    };
   if (
     [
       options.executable,
@@ -375,7 +379,10 @@ export async function launchContained(
       ]),
     ].some((value) => value.includes("\0"))
   )
-    return { kind: "fallback" };
+    return {
+      kind: "fallback",
+      cause: new Error("Windows containment input contains a NUL"),
+    };
   const check = (stage: ContainmentFailureStage): void => {
     if (stage === failAt)
       throw new Error(`forced containment failure: ${stage}`);
@@ -384,8 +391,8 @@ export async function launchContained(
   try {
     kernel ??= loadKernel().symbols;
     k = kernel;
-  } catch {
-    return { kind: "fallback" };
+  } catch (cause) {
+    return { kind: "fallback", cause };
   }
   let job = 0n;
   let processHandle = 0n;
@@ -585,7 +592,7 @@ export async function launchContained(
       if (exit !== undefined) await exit.catch(() => {});
     }
     for (const pipe of pipes) pipe.socket.destroy();
-    return { kind: "fallback" };
+    return { kind: "fallback", cause };
   } finally {
     if (initialized && attributes !== undefined)
       k.DeleteProcThreadAttributeList(ptr(attributes));

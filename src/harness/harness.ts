@@ -743,7 +743,17 @@ export interface PreparedHarness {
  *  Process and phase observer belong to this prepare alone, so each Prepared
  *  Harness spawns and reports through its caller's own scope while the Adapter
  *  keeps its qualification cache across prepares. */
+/** Windows launch evidence, reported at Codex prepare and each lazy Claude
+ * Session launch. Absence means no Windows containment path was used. */
+export type HarnessContainmentObserver = (fact: {
+  readonly kind: "contained" | "fallback";
+  readonly session?: string;
+}) => void;
+
 export interface PrepareOptions {
+  /** Launch evidence for this prepare and every replacement process it owns.
+   * Throwing observers never change launch or Turn outcomes. */
+  readonly containment?: HarnessContainmentObserver;
   /** The resolved absolute Workspace directory every Session runs against. */
   readonly workspace: string;
   /** The Process Interface this prepare and its Prepared Harness spawn through:

@@ -1,3 +1,4 @@
+import { reportContainment } from "./containment.js";
 // The Claude Code Harness Adapter — private to the Harness Module, re-exported
 // from `harness.ts` only through its factory. It discovers and qualifies the
 // executable, then owns named stream-json Sessions and normalizes their Turns.
@@ -37,6 +38,7 @@ import type {
   HarnessDefaults,
   HarnessFailure,
   HarnessPhaseObserver,
+  HarnessContainmentObserver,
   HarnessPlatform,
   HarnessProfile,
   HarnessRequest,
@@ -192,6 +194,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
           options.writableDirectory,
           options.phases,
           controlTimeoutMs,
+          options.containment,
         ),
       };
     }
@@ -212,6 +215,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
         options.writableDirectory,
         options.phases,
         controlTimeoutMs,
+        options.containment,
       ),
     };
   }
@@ -346,6 +350,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
     private readonly controlTimeoutMs: number,
+    private readonly containment: HarnessContainmentObserver | undefined,
   ) {}
 
   /** Memoized bridge start. Its router raises each permission prompt on whatever
@@ -409,6 +414,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
         this.writableDirectory,
         this.phases,
         this.controlTimeoutMs,
+        this.containment,
       );
       this.sessions.set(request.session, session);
     }
@@ -536,6 +542,7 @@ class ClaudeCodeSession {
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
     private readonly controlTimeoutMs: number,
+    private readonly containment: HarnessContainmentObserver | undefined,
   ) {
     this.coordinate = { opaque: sessionId };
     this.closing = new Promise((resolve) => {
@@ -945,6 +952,7 @@ class ClaudeCodeSession {
       };
     }
 
+    reportContainment(this.containment, launched.containment, this.name);
     const owned = launched.process;
     const control = new ControlChannel(
       (bytes) => owned.writeStdin(bytes),

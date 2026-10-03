@@ -36,6 +36,14 @@ export function buildTimelineRows(
 ): readonly TimelineRow[] {
   return [
     ...durableTimelineRows(run.timeline),
+    ...(run.windowsCleanupNotice === undefined
+      ? []
+      : [
+          {
+            key: "notice:windows-cleanup-fallback",
+            text: `Info: ${run.windowsCleanupNotice}`,
+          },
+        ]),
     ...liveTimelineRows(run, overlay, preview),
   ];
 }

@@ -394,6 +394,7 @@ for (const containment of ["contained", "fallback"] as const) {
     );
     const launched = await adapter.spawnOwnedProcess(basicOwnedOptions);
     assert.ok(launched.ok);
+    assert.equal(launched.containment?.kind, containment);
     assert.equal(await launched.process.interrupt(100), interruption);
     assert.equal(await launched.process.closed(), interruption.close);
     assert.deepEqual(facts[0], {
@@ -401,6 +402,7 @@ for (const containment of ["contained", "fallback"] as const) {
       role: "harness-runtime",
       pid: 40_000,
       containment,
+      ...(containment === "fallback" ? { containmentCause: undefined } : {}),
     });
   });
 }

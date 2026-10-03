@@ -196,6 +196,7 @@ export type RunExecution = (context: {
   /** Current prepared-profile evidence projected while the Attempt is still live;
    *  the settled Attempt persists the same fact for reopen/resume. */
   readonly observeSteer?: (capability: RunSteerCapability) => void;
+  readonly observeWindowsCleanupFallback?: () => void;
 }) => Promise<RunExecutionReport>;
 
 /** Either the routing ran to a rest, or the selected Harness refused preparation
@@ -244,6 +245,7 @@ type TRunInteractiveStepPreparation =
   | { readonly ok: false; readonly failure: RunHarnessPreparationFailure };
 
 export type PrepareRunInteractiveStep = (context: {
+  readonly observeWindowsCleanupFallback?: () => void;
   readonly owner: RunOwner;
 }) => Promise<TRunInteractiveStepPreparation>;
 
@@ -441,6 +443,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // (cancel-run and process signals abort it), the settlement promise a cancel
   // awaits, and the streams watching it (#98).
   const runs = new Map<string, TrackedRun>();
+  const windowsCleanupFallbacks = new Set<string>();
   // A Run's observer set outlives any one live tracking entry. A Projection opened
   // while the Run rests joins here before a later Operation creates or replaces
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
@@ -608,6 +611,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
 
   // Push the current Run snapshot to every observer watching this Run. Called
   // after each publication (via the wrapped owner) while the Run is live.
+  function observeWindowsCleanupFallback(runId: string): void {
+    if (windowsCleanupFallbacks.has(runId)) return;
+    windowsCleanupFallbacks.add(runId);
+    pushRunUpdate(runId);
+  }
+
   function pushRunUpdate(runId: string): void {
     if (runProjection === undefined) return;
     const tracking = runs.get(runId);
@@ -617,8 +626,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
         runProjection,
         runId,
         tracking === undefined
-          ? {}
+          ? { windowsCleanupFallback: windowsCleanupFallbacks.has(runId) }
           : {
+              windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
               facts: {
                 routing: tracking.routing,
                 name: tracking.name,
@@ -957,6 +967,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
       owner: params.executionOwner,
       cancelSignal: params.tracking.abort.signal,
       requestChannel: liveOverlay.requestChannel(params.runId),
+      observeWindowsCleanupFallback: () =>
+        observeWindowsCleanupFallback(params.runId),
       observeSteer: (capability) => {
         params.tracking.steer = capability;
       },
@@ -1301,8 +1313,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
       runProjection,
       runId,
       tracking === undefined
-        ? {}
+        ? { windowsCleanupFallback: windowsCleanupFallbacks.has(runId) }
         : {
+            windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
             facts: {
               routing: tracking.routing,
               name: tracking.name,
@@ -2506,6 +2519,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
       drive: async () => {
         if (tracking.interactiveStep === undefined) {
           const prepared = await prepareRunInteractiveStep!({
+            observeWindowsCleanupFallback: () =>
+              observeWindowsCleanupFallback(input.runId),
             owner,
           });
           if (!prepared.ok) {
@@ -2909,6 +2924,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     // Tell any observer its subject is gone before the tracking entry is dropped (#98).
     pushRunClosed(runId);
     runs.delete(runId);
+    windowsCleanupFallbacks.delete(runId);
     return { status: "applied" };
   }
 

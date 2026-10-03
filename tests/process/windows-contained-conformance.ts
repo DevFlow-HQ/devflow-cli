@@ -190,6 +190,10 @@ async function fallback(): Promise<void> {
         options("echo", [marker]),
       );
       assert.ok(launched.ok);
+      assert.equal(launched.containment?.kind, "fallback");
+      assert.ok(launched.containment?.kind === "fallback");
+      assert.ok(launched.containment.cause instanceof Error);
+      assert.match(launched.containment.cause.message, new RegExp(failAt));
       const ready = await line(launched.process);
       assert.equal(ready.text, "ready\n");
       const reply = ready.iterator.next();

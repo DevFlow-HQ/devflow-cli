@@ -96,6 +96,7 @@ function fixture(
   t: TestContext,
   overrides: {
     scheduleSettlement?: (settle: () => void) => void;
+    runExecution?: RunExecution;
   } = {},
 ): Fixture {
   const catalog = openCatalog(makeTempDir("secant-run-home-"));
@@ -109,7 +110,7 @@ function fixture(
     launchWorkspacePath: workspace,
     hostPlatform: hostPlatform(),
     runGroup,
-    runExecution,
+    runExecution: overrides.runExecution ?? runExecution,
     ...(overrides.scheduleSettlement !== undefined
       ? { scheduleSettlement: overrides.scheduleSettlement }
       : {}),
@@ -1419,4 +1420,71 @@ test("an earlier iteration's unusable Session leaves resume available; the curre
   assert.equal(refused.available, false);
   if (refused.available) throw new Error("unreachable");
   assert.match(refused.reason, /"impl-1\.0:implement" Session/);
+});
+
+test("Windows cleanup fallback is published once per Run and retained on reopen", async (t) => {
+  let reportFallback: (() => void) | undefined;
+  let ready!: () => void;
+  let finish!: () => void;
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const continuing = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = fixture(t, {
+    runExecution: async (context) => {
+      reportFallback = context.observeWindowsCleanupFallback;
+      ready();
+      await continuing;
+      assert.ok(context.owner.writeState("halted").ok);
+      return runExecution(context);
+    },
+  });
+  const { id, digest } = installCommandBundle(f);
+  f.catalog.approveWorkspace(f.workspace, new Date());
+  const launch = f.app.projectionPort.submit({
+    operationId: "notice-launch",
+    operation: "launch-run",
+    input: { bundle: { id }, launchInputs: {}, trustDigest: digest },
+  });
+  assert.ok(launch.admitted && launch.runId);
+  const opened = f.app.projectionPort.openProjection({
+    family: "run",
+    runId: launch.runId,
+  });
+  t.after(() => opened.close());
+  const updates = opened.updates[Symbol.asyncIterator]();
+  await started;
+  assert.ok(reportFallback);
+  reportFallback();
+  const update = await updates.next();
+  assert.ok(
+    !update.done &&
+      update.value.kind === "durable" &&
+      update.value.snapshot.family === "run" &&
+      update.value.snapshot.result.found,
+  );
+  assert.equal(
+    update.value.snapshot.result.run.windowsCleanupNotice,
+    "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.",
+  );
+  reportFallback();
+  finish();
+  const next = await updates.next();
+  assert.ok(
+    !next.done &&
+      next.value.kind === "durable" &&
+      next.value.snapshot.family === "run" &&
+      next.value.snapshot.result.found,
+  );
+  assert.equal(next.value.snapshot.result.run.state, "halted");
+  opened.close();
+  await settled(f.app, "notice-launch");
+  const result = runResult(f.app, launch.runId);
+  assert.ok(result.found);
+  assert.equal(
+    result.run.windowsCleanupNotice,
+    "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.",
+  );
 });

@@ -61,6 +61,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Tests
 
+- Workbench resize evidence resizes both `testRender` and the injected Renderer Port: changing only the Port leaves the captured terminal at its original width.
 - Screens are exercised in-memory over fake Projection snapshots with `@opentui/solid` `testRender` (`tests/tui/*.test.tsx`): assert content, key
   dispatch, and small-width/resize relayout without overflow. A lone Escape is held briefly by OpenTUI key disambiguation — poll in real time, not by
   frame count.

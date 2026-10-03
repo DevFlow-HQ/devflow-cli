@@ -1,3 +1,4 @@
+import { translateCause } from "../harness/harness.js";
 import type { ChildFact, ProcessAdapterOptions } from "../process/process.js";
 import type { OperationalLog, OperationalRecord } from "./operational-log.js";
 
@@ -16,10 +17,15 @@ export function processObserver(
 }
 
 function childRecord(fact: ChildFact): OperationalRecord {
-  const record: Record<string, string | number> = {
+  const record: Record<string, OperationalRecord[string]> = {
     event: `child-${fact.kind}`,
     childRole: fact.role,
   };
+  if (fact.kind === "spawn" && fact.containment !== undefined) {
+    record.containment = fact.containment;
+    if (fact.containment === "fallback")
+      record.containmentCause = translateCause(fact.containmentCause);
+  }
   if ("pid" in fact && fact.pid !== undefined) record.childPid = fact.pid;
   if (fact.kind === "spawn-error" && fact.code !== undefined) {
     record.code = fact.code;

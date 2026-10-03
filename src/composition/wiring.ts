@@ -370,6 +370,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
     cancelSignal,
     requestChannel,
     observeSteer,
+    observeWindowsCleanupFallback,
   }) => {
     // Command Steps and the Run's Harness share the Run's scope.
     const scope = runScope(owner.record.runId);
@@ -404,6 +405,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
       selectedHarness,
       owner,
       scope,
+      observeWindowsCleanupFallback,
     );
     if (!prepared.ok) {
       const harnessFailure = harnessRegistry.preparationFailure(
@@ -444,7 +446,7 @@ function makePrepareRunInteractiveStep(
   runScope: ScopeForRun,
   observe: ExecutionObserver | undefined,
 ): PrepareRunInteractiveStep {
-  return async ({ owner }) => {
+  return async ({ owner, observeWindowsCleanupFallback }) => {
     const selectedHarness = owner.record.selectedHarness;
     if (selectedHarness === undefined) {
       throw new Error(
@@ -456,6 +458,7 @@ function makePrepareRunInteractiveStep(
       selectedHarness,
       owner,
       runScope(owner.record.runId),
+      observeWindowsCleanupFallback,
     );
     if (!prepared.ok) {
       return {
@@ -484,6 +487,7 @@ async function prepareRunHarness(
   selectedHarness: SelectedHarnessId,
   owner: RunOwner,
   scope: ReportingScope,
+  observeWindowsCleanupFallback: (() => void) | undefined,
 ): Promise<PrepareResult> {
   const area = owner.workingArea();
   if (!area.ok) {
@@ -503,6 +507,9 @@ async function prepareRunHarness(
     {
       workspace: owner.record.workspacePath,
       writableDirectory: area.path,
+      containment: (fact) => {
+        if (fact.kind === "fallback") observeWindowsCleanupFallback?.();
+      },
     },
     scope,
   );

@@ -198,6 +198,7 @@ function writeAgentBundle(): { folder: string; id: string } {
 function wireAgent(
   t: TestContext,
   script: FakeScript = agentScript(),
+  fallback = false,
 ): {
   wired: Wiring;
   bundleId: string;
@@ -210,7 +211,14 @@ function wireAgent(
     secantHome: makeTempDir("secant-reqp-home-"),
     launchCwd: workspace,
     process: createFakeBundleProcess(),
-    harnessAdapter: spy.adapter,
+    harnessAdapter: fallback
+      ? {
+          prepare(options) {
+            options.containment?.({ kind: "fallback" });
+            return spy.adapter.prepare(options);
+          },
+        }
+      : spy.adapter,
     discoverClaudeCode: () => ({
       kind: "found",
       attempt: {
@@ -416,4 +424,38 @@ test("an invalid --harness-requests policy is refused precisely", async (t) => {
   ]);
   assert.notEqual(launched.code, 0);
   assert.match(launched.err, /invalid-harness-requests/);
+});
+
+test("[windows-cleanup-notice] observer lag reopens the Run and retains one stderr notice", async (t) => {
+  const script = agentScript();
+  const { wired, bundleId, digest } = wireAgent(
+    t,
+    {
+      ...script,
+      turns: [
+        {
+          ...script.turns[0]!,
+          events: previewEvents(UNREAD_UPDATE_BOUND + 50),
+        },
+      ],
+    },
+    true,
+  );
+  const launched = await headless(wired, [
+    "run",
+    "launch",
+    bundleId,
+    "--trust",
+    digest,
+    "--harness",
+    "claude-code",
+    "--harness-requests",
+    "allow",
+  ]);
+  assert.equal(launched.code, 0, launched.out + launched.err);
+  assert.equal(
+    launched.err,
+    "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.\n",
+  );
+  assert.match(launched.out, /State: succeeded/);
 });

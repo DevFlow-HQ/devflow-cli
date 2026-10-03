@@ -4,6 +4,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- Windows fallback notices are live launch evidence retained per Run for this Application lifetime (#363), across tracking replacement and Projection reopen.
+  A fresh Application learns a notice only from a new fallback launch; the notice is not persisted Run truth.
+
 - Every canonical write to a Run must go through `observedOwner`, not the raw `RunOwner`, or an open client's live `run` Projection never updates.
   `observedOwner` spreads `...owner` and intercepts eight methods — `selectHarness`, `writeState`, `publishAttempt`, `recordMaterializationConflict`,
   `recordGateAnswer`, `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own transaction),
