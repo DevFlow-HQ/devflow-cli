@@ -172,6 +172,7 @@ function noRun(): RunWorkbenchView {
     readTranscript: unused,
     answer: unused,
     sendInteractiveTurn: unused,
+    sendFollowUpTurn: unused,
     endInteractiveStep: unused,
     continueRepeat: unused,
     endStage: unused,

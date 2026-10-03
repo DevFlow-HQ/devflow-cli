@@ -17,6 +17,7 @@ import {
 import {
   interactiveEndLegality,
   interactiveStepTarget,
+  type AgentFollowUp,
   type RequestChannel,
   type RunReport,
   RUN_CANCEL_ABORT as CANCEL_ABORT,
@@ -54,7 +55,9 @@ import {
   deriveRun,
   deriveRunFacts,
   GATE_ANSWER_ARTIFACT,
+  holdBasis,
   runSnapshot,
+  type HoldBasis,
   type RunFacts,
   type RunProjectionDependencies,
   type RunSteerCapability,
@@ -63,6 +66,9 @@ import {
   bundleBytesCorrupt,
   bundleBytesMissing,
   bundleTrustRequired,
+  followUpTurnBlank,
+  followUpTurnNotAdmitted,
+  followUpTurnNotWaiting,
   gateShapeMismatch,
   gateStale,
   harnessRequestExpired,
@@ -118,6 +124,7 @@ import {
   interruptTurnReplayKey,
   launchReplayKey,
   resumeReplayKey,
+  sendFollowUpTurnReplayKey,
   sendInteractiveTurnReplayKey,
   steerTurnReplayKey,
 } from "./replay-keys.js";
@@ -139,6 +146,7 @@ import type {
   LaunchPreparationSnapshot,
   LaunchRunInput,
   ResumeRunInput,
+  SendFollowUpTurnInput,
   SendInteractiveTurnInput,
   SteerTurnInput,
   OpenedProjection,
@@ -197,6 +205,13 @@ export type RunExecution = (context: {
    *  the settled Attempt persists the same fact for reopen/resume. */
   readonly observeSteer?: (capability: RunSteerCapability) => void;
   readonly observeWindowsCleanupFallback?: () => void;
+  /** The Step's Harness the Application held across a waiting rest (#354), handed
+   *  back so the walk reuses it instead of preparing another. Ownership transfers
+   *  with the call: the walk closes it, or hands it back on a `blocked` rest. */
+  readonly heldStep?: RunInteractiveStep;
+  /** The human's follow-up to the Agent Turn an Interrupt left waiting (#354).
+   *  Execution decides whether it still applies; the Application only forwards it. */
+  readonly followUp?: AgentFollowUp;
 }) => Promise<RunExecutionReport>;
 
 /** Either the routing ran to a rest, or the selected Harness refused preparation
@@ -206,9 +221,11 @@ type RunExecutionReport = ExecutedRunReport | HarnessUnavailableReport;
 
 interface ExecutedRunReport extends RunReport {
   /** An already-qualified Harness whose ownership transfers to the Application
-   *  when execution rests at an interactive Step. The Application treats it as
-   *  opaque and closes it when that Step ends or the Run releases ownership. */
-  readonly interactiveStep?: RunInteractiveStep;
+   *  when execution rests `blocked`. The Application holds it while the Run holds
+   *  its Step for the human (an interactive Step, or an Agent Step waiting after an
+   *  Interrupt, #354), treats it as opaque, and closes it otherwise and whenever
+   *  the Step ends or the Run releases ownership. */
+  readonly heldStep?: RunInteractiveStep;
 }
 
 interface HarnessUnavailableReport {
@@ -218,9 +235,11 @@ interface HarnessUnavailableReport {
   readonly harnessFailure: RunHarnessPreparationFailure;
 }
 
-/** The opaque Step-scoped interactive driver composition transfers to a tracked
- *  Run. It reuses one prepared Harness across human Turns and exposes only the
- *  normalized control evidence and Turn outcome the Application owns. */
+/** The opaque Step-scoped driver composition transfers to a tracked Run. It reuses
+ *  one prepared Harness across an interactive Step's human Turns, or holds an Agent
+ *  Step's Harness across its wait after an Interrupt (#354, which never calls
+ *  `turn`), and exposes only the normalized control evidence and Turn outcome the
+ *  Application owns. */
 export interface RunInteractiveStep {
   readonly steer: RunSteerCapability;
   turn(context: {
@@ -279,21 +298,27 @@ interface TrackedRun {
   readonly takeover?: boolean;
   readonly observers: Set<UpdateStream>;
   readonly live: LiveOverlayState;
-  interactiveStep?: RunInteractiveStep;
+  /** The Step's Harness held while the Run holds that Step for the human. */
+  heldStep?: RunInteractiveStep;
   steer?: RunSteerCapability;
   problem?: Problem;
 }
 
-/** What `beginInteractive` returns once a Run is confirmed to rest at the named
- *  interactive-agent Step (#122): the claimed owner and its tracking, whether the
- *  ownership was already held, and the resolved Step/record/facts. */
-interface InteractiveContext {
+/** A Run claimed to act on the Step it holds for the human (#122, #354): the
+ *  claimed owner and its tracking, whether the ownership was already held, and the
+ *  resolved record/facts. */
+interface ClaimedRun {
   readonly tracking: TrackedRun;
   readonly owner: RunOwner;
   readonly ownershipWasHeld: boolean;
-  readonly step: AgentStep;
   readonly record: RunRecord;
   readonly facts: RunFacts;
+}
+
+/** What `beginInteractive` returns once a Run is confirmed to rest at the named
+ *  interactive-agent Step (#122): the claim plus the resolved Step. */
+interface InteractiveContext extends ClaimedRun {
+  readonly step: AgentStep;
 }
 
 // Application owns the Workspace-approval use case behind the Projection Port.
@@ -824,51 +849,49 @@ export function createApplication(deps: ApplicationDependencies): Application {
       : "fenced";
   }
 
-  function restsAtInteractiveStep(
-    tracking: TrackedRun,
+  // Why the Run holds its current Step for the human, by the Projection's one
+  // derivation (#354), read through the owner this process holds.
+  function currentHoldBasis(
+    routing: readonly RoutingNode[],
+    state: string,
     owner: RunOwner,
     runId: string,
-  ): boolean {
+  ): HoldBasis | undefined {
     const derived = deriveRun(
-      tracking.routing,
+      routing,
       owner.attemptLog(),
-      tracking.state,
+      state,
       runId,
       owner,
       owner.gateAnswers(),
     );
-    const current = derived.statuses[derived.position];
-    return (
-      derived.state === "blocked" &&
-      derived.checkpoint === undefined &&
-      derived.pendingGate === undefined &&
-      current?.kind === "interactive-agent"
-    );
+    return holdBasis(derived, owner);
   }
 
-  async function adoptInteractiveStep(
+  async function adoptHeldStep(
     report: ExecutedRunReport,
     tracking: TrackedRun,
     owner: RunOwner,
     runId: string,
   ): Promise<void> {
-    if (report.interactiveStep === undefined) return;
+    if (report.heldStep === undefined) return;
     if (
       report.outcome === "blocked" &&
-      restsAtInteractiveStep(tracking, owner, runId)
+      currentHoldBasis(tracking.routing, tracking.state, owner, runId) !==
+        undefined
     ) {
-      tracking.interactiveStep = report.interactiveStep;
-      tracking.steer = report.interactiveStep.steer;
+      tracking.heldStep = report.heldStep;
+      tracking.steer = report.heldStep.steer;
       return;
     }
-    await report.interactiveStep.close();
+    await report.heldStep.close();
   }
 
-  async function closeInteractiveStep(tracking: TrackedRun): Promise<void> {
-    const interactiveStep = tracking.interactiveStep;
-    if (interactiveStep === undefined) return;
-    tracking.interactiveStep = undefined;
-    await interactiveStep.close();
+  async function closeHeldStep(tracking: TrackedRun): Promise<void> {
+    const heldStep = tracking.heldStep;
+    if (heldStep === undefined) return;
+    tracking.heldStep = undefined;
+    await heldStep.close();
   }
 
   async function driveWithAbortProtocol(params: {
@@ -902,7 +925,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         tracking.done = false;
       } else {
         try {
-          await closeInteractiveStep(tracking);
+          await closeHeldStep(tracking);
         } finally {
           tracking.owner = undefined;
           tracking.done = true;
@@ -946,6 +969,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
     readonly executionOwner: RunOwner;
     readonly routing: readonly RoutingNode[];
     readonly digest: string;
+    /** A held Step Harness the walk takes over (#354); closed here if the walk
+     *  never starts. */
+    readonly heldStep?: RunInteractiveStep;
+    readonly followUp?: AgentFollowUp;
   }): Promise<{
     readonly outcome: OperationOutcome;
     readonly retainOwner: boolean;
@@ -957,6 +984,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         params.runId,
       ) === "fenced"
     ) {
+      await params.heldStep?.close();
       throw new Error(
         "application: legacy Harness selection write was fenced.",
       );
@@ -972,6 +1000,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
       observeSteer: (capability) => {
         params.tracking.steer = capability;
       },
+      ...(params.heldStep !== undefined ? { heldStep: params.heldStep } : {}),
+      ...(params.followUp !== undefined ? { followUp: params.followUp } : {}),
     });
     if (report.outcome === "harness-unavailable") {
       return {
@@ -984,12 +1014,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         retainOwner: false,
       };
     }
-    await adoptInteractiveStep(
-      report,
-      params.tracking,
-      params.owner,
-      params.runId,
-    );
+    await adoptHeldStep(report, params.tracking, params.owner, params.runId);
     return {
       outcome: { status: "applied" },
       retainOwner: report.outcome === "blocked",
@@ -2212,14 +2237,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // drives against the held owner; a reopened blocked Run is resumed and re-acquired
   // like the answer path (ADR 0031). Neither branches on Bundle identity.
 
-  /** Claim the owner of a Run blocked at the named interactive-agent Step and prove
-   *  the Run currently rests there (#122). Reuses the held owner when the Run is live
-   *  in this process; otherwise resumes and acquires it and creates a tracking entry,
-   *  mirroring the answer path. Returns everything a Turn or End needs, or a Problem. */
-  function beginInteractive(
+  /** Claim the owner of a Run to act on the Step it holds for the human (#122,
+   *  #354). Reuses the held owner when the Run is live in this process; otherwise
+   *  resumes and acquires it and creates a tracking entry, mirroring the answer path.
+   *  `admit` refuses from the durable record before any claim is touched, so acting
+   *  on a Run that clearly cannot take the control toggles no claim and bumps no
+   *  epoch; `confirm` then re-derives through the claimed owner. A refusal releases
+   *  an owner freshly acquired for it; a held owner stays live. */
+  function claimHeldRun(
     runId: string,
-    stepId: string,
-  ): InteractiveContext | { readonly problem: Problem } {
+    admit: (record: RunRecord, facts: RunFacts) => Problem | undefined,
+    confirm: (claimed: ClaimedRun) => Problem | undefined,
+  ): ClaimedRun | { readonly problem: Problem } {
     if (runGroup === undefined || runProjection === undefined) {
       return { problem: runSupportUnavailable() };
     }
@@ -2243,23 +2272,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
     );
     if ("problem" in derivedFacts) return { problem: derivedFacts.problem };
     const facts = derivedFacts.facts;
-    const step = flattenSteps(facts.routing).find(
-      (candidate): candidate is AgentStep =>
-        candidate.id === stepId && candidate.kind === "interactive-agent",
-    );
-    if (step === undefined) {
-      return { problem: interactiveStepNotActive(runId, stepId, record.state) };
-    }
-    // Reject a clearly non-blocked record before touching coordination, so acting on
-    // a Run that is not blocked toggles no claim and bumps no epoch. (A `running`
-    // record still needs the owner to tell blocked from a live mid-execution Run.)
-    if (
-      record.state !== "blocked" &&
-      record.state !== "running" &&
-      record.state !== "created"
-    ) {
-      return { problem: interactiveStepNotActive(runId, stepId, record.state) };
-    }
+    const refused = admit(record, facts);
+    if (refused !== undefined) return { problem: refused };
     let tracking = runs.get(runId);
     let owner =
       tracking !== undefined && !tracking.done ? tracking.owner : undefined;
@@ -2292,52 +2306,83 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (tracking === undefined || owner === undefined) {
       return { problem: runStoreDamaged(runId) };
     }
+    const releaseFresh = (): void => {
+      if (ownershipWasHeld) return;
+      tracking.owner = undefined;
+      tracking.done = true;
+      owner.release();
+      owner.close();
+      runs.delete(runId);
+    };
     if (
       upgradeLegacyHarnessSelection(owner, facts.routing, runId) === "fenced"
     ) {
-      if (!ownershipWasHeld) {
-        tracking.owner = undefined;
-        tracking.done = true;
-        owner.release();
-        owner.close();
-        runs.delete(runId);
-      }
+      releaseFresh();
       return { problem: runStoreDamaged(runId) };
     }
-    // Confirm the Run derives to `blocked` at this exact interactive Step — not a
-    // derived checkpoint, an authored gate, or a Step it has moved past.
-    const derived = deriveRun(
-      facts.routing,
-      owner.attemptLog(),
-      record.state,
-      runId,
-      owner,
-      owner.gateAnswers(),
-    );
-    const current = derived.statuses[derived.position];
-    // `blocked` is the boundary (between Turns); `running` is a live human Turn, which
-    // runs under `running` so a crash reconciles it via the #118 path (#122). Both are
-    // "at the Step"; the caller's Turn-live check then tells a boundary from a live Turn.
-    const atStep =
-      (derived.state === "blocked" || derived.state === "running") &&
-      derived.checkpoint === undefined &&
-      derived.pendingGate === undefined &&
-      current?.id === stepId &&
-      current.kind === "interactive-agent";
-    if (!atStep) {
-      // Release an owner freshly acquired for this refusal; a held owner stays live.
-      if (!ownershipWasHeld) {
-        tracking.owner = undefined;
-        tracking.done = true;
-        owner.release();
-        owner.close();
-        runs.delete(runId);
-      }
-      return {
-        problem: interactiveStepNotActive(runId, stepId, derived.state),
-      };
+    const claimed = { tracking, owner, ownershipWasHeld, record, facts };
+    const unconfirmed = confirm(claimed);
+    if (unconfirmed !== undefined) {
+      releaseFresh();
+      return { problem: unconfirmed };
     }
-    return { tracking, owner, ownershipWasHeld, step, record, facts };
+    return claimed;
+  }
+
+  /** Claim the owner of a Run blocked at the named interactive-agent Step and prove
+   *  the Run currently rests there (#122). Returns everything a Turn or End needs,
+   *  or a Problem. */
+  function beginInteractive(
+    runId: string,
+    stepId: string,
+  ): InteractiveContext | { readonly problem: Problem } {
+    let step: AgentStep | undefined;
+    const claimed = claimHeldRun(
+      runId,
+      (record, facts) => {
+        step = flattenSteps(facts.routing).find(
+          (candidate): candidate is AgentStep =>
+            candidate.id === stepId && candidate.kind === "interactive-agent",
+        );
+        // Reject a clearly non-blocked record before touching coordination. (A
+        // `running` record still needs the owner to tell blocked from a live
+        // mid-execution Run.)
+        return step === undefined ||
+          (record.state !== "blocked" &&
+            record.state !== "running" &&
+            record.state !== "created")
+          ? interactiveStepNotActive(runId, stepId, record.state)
+          : undefined;
+      },
+      ({ owner, record, facts }) => {
+        // Confirm the Run derives to `blocked` at this exact interactive Step — not
+        // a derived checkpoint, an authored gate, or a Step it has moved past.
+        const derived = deriveRun(
+          facts.routing,
+          owner.attemptLog(),
+          record.state,
+          runId,
+          owner,
+          owner.gateAnswers(),
+        );
+        const current = derived.statuses[derived.position];
+        // `blocked` is the boundary (between Turns); `running` is a live human Turn,
+        // which runs under `running` so a crash reconciles it via the #118 path
+        // (#122). Both are "at the Step"; the caller's Turn-live check then tells a
+        // boundary from a live Turn.
+        const atStep =
+          (derived.state === "blocked" || derived.state === "running") &&
+          derived.checkpoint === undefined &&
+          derived.pendingGate === undefined &&
+          current?.id === stepId &&
+          current.kind === "interactive-agent";
+        return atStep
+          ? undefined
+          : interactiveStepNotActive(runId, stepId, derived.state);
+      },
+    );
+    if ("problem" in claimed) return claimed;
+    return { ...claimed, step: step! };
   }
 
   /** Whether a Turn is currently live for this Run: a settlement promise in flight
@@ -2374,37 +2419,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (input.text.trim() === "") {
       return { admitted: false, problem: interactiveTurnBlank(input.runId) };
     }
-    const read = runGroup.readRun(input.runId);
-    if (!read.ok) {
-      return {
-        admitted: false,
-        problem:
-          read.problem.kind === "unknown-run"
-            ? runNotFound(input.runId)
-            : runStoreDamaged(input.runId),
-      };
-    }
-    // Reopen/resume upgrades pre-M4 Harness Runs to Claude Code; enforce the same
-    // selection here without acquiring ownership or writing during admission.
-    const registration = harnessInputRegistrations.get(
-      read.run.selectedHarness ?? "claude-code",
-    );
-    if (registration !== undefined) {
-      const word = matchHarnessInputRule({
-        text: input.text,
-        rules: registration.inputRules,
-      });
-      if (word !== undefined) {
-        return {
-          admitted: false,
-          problem: harnessInputReserved({
-            runId: input.runId,
-            harness: registration.choice.name,
-            word,
-          }),
-        };
-      }
-    }
+    const refused = admitHumanTurnText(input.runId, input.text);
+    if (refused !== undefined) return { admitted: false, ...refused };
     admit(operationId, {
       operation: "send-interactive-turn",
       replayKey: sendInteractiveTurnReplayKey(input),
@@ -2412,6 +2428,51 @@ export function createApplication(deps: ApplicationDependencies): Application {
       settle: () => startSendInteractiveTurn(operationId, input),
     });
     return { admitted: true, operationId, runId: input.runId };
+  }
+
+  // Read the Run a human Turn is admitted against (#122, #354), refusing a missing
+  // or damaged store and a leading word that would change Harness state Secant owns
+  // (#358) — admission acquires no owner and writes nothing.
+  function admitHumanTurnText(
+    runId: string,
+    text: string,
+  ): { readonly problem: Problem } | undefined {
+    const read = runGroup!.readRun(runId);
+    if (!read.ok) {
+      return {
+        problem:
+          read.problem.kind === "unknown-run"
+            ? runNotFound(runId)
+            : runStoreDamaged(runId),
+      };
+    }
+    const reserved = reservedHarnessWord(runId, read.run, text);
+    return reserved === undefined ? undefined : { problem: reserved };
+  }
+
+  // A human Turn's leading word that would change Harness state Secant owns (#358).
+  // Reopen/resume upgrades pre-M4 Harness Runs to Claude Code; enforce the same
+  // selection here without acquiring ownership or writing during admission.
+  function reservedHarnessWord(
+    runId: string,
+    record: RunRecord,
+    text: string,
+  ): Problem | undefined {
+    const registration = harnessInputRegistrations.get(
+      record.selectedHarness ?? "claude-code",
+    );
+    if (registration === undefined) return undefined;
+    const word = matchHarnessInputRule({
+      text,
+      rules: registration.inputRules,
+    });
+    return word === undefined
+      ? undefined
+      : harnessInputReserved({
+          runId,
+          harness: registration.choice.name,
+          word,
+        });
   }
 
   // Decide send synchronously, then run the Turn asynchronously. A refusal (support
@@ -2447,21 +2508,42 @@ export function createApplication(deps: ApplicationDependencies): Application {
         problem: interactiveTurnBusy(input.runId),
       });
     }
+    return settleAtAdmission({
+      runId: input.runId,
+      operationId,
+      tracking: begun.tracking,
+      notAdmitted: () => interactiveTurnNotAdmitted(input.runId),
+      drive: (onAdmitted) =>
+        runInteractiveSend(operationId, input, begun, onAdmitted),
+    });
+  }
+
+  // Run a human Turn's drive and settle its Operation at the Turn's durable
+  // admission (#290, #354), while `tracking.promise` spans the whole drive for
+  // cancel and shutdown. After admission the Operation has already settled, so a
+  // later fault reaches clients on the Run; a drive that rests without admitting
+  // the Turn settles `not-applied` with its own Problem, else `notAdmitted`.
+  function settleAtAdmission(params: {
+    readonly runId: string;
+    readonly operationId: string;
+    readonly tracking: TrackedRun;
+    readonly notAdmitted: () => Problem;
+    readonly drive: (onAdmitted: () => void) => Promise<OperationOutcome>;
+  }): Promise<OperationOutcome> {
+    const { runId, operationId, tracking } = params;
     let admitted = false;
     let settleAdmitted: (outcome: OperationOutcome) => void = () => {};
     const admission = new Promise<OperationOutcome>((resolve) => {
       settleAdmitted = resolve;
     });
-    const turn = runInteractiveSend(operationId, input, begun, () => {
+    const turn = params.drive(() => {
       admitted = true;
       settleAdmitted({ status: "applied" });
     });
-    begun.tracking.promise = turn;
-    // After admission the Operation has already settled, so a later fault reaches
-    // clients on the Run instead.
+    tracking.promise = turn;
     const faultOnRun = (problem: Problem): OperationOutcome => {
-      begun.tracking.problem = problem;
-      pushRunUpdate(input.runId);
+      tracking.problem = problem;
+      pushRunUpdate(runId);
       return { status: "applied" };
     };
     const turnEnd = turn.then(
@@ -2473,14 +2555,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
         }
         return outcome.status === "not-applied"
           ? outcome
-          : {
-              status: "not-applied",
-              problem: interactiveTurnNotAdmitted(input.runId),
-            };
+          : { status: "not-applied", problem: params.notAdmitted() };
       },
       (error: unknown): OperationOutcome => {
         if (!admitted) throw error;
-        return faultOnRun(runExecutionFault(input.runId, error, operationId));
+        return faultOnRun(runExecutionFault(runId, error, operationId));
       },
     );
     return Promise.race([admission, turnEnd]);
@@ -2517,7 +2596,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       tracking,
       owner,
       drive: async () => {
-        if (tracking.interactiveStep === undefined) {
+        if (tracking.heldStep === undefined) {
           const prepared = await prepareRunInteractiveStep!({
             observeWindowsCleanupFallback: () =>
               observeWindowsCleanupFallback(input.runId),
@@ -2532,8 +2611,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
               prepared.failure,
             );
           }
-          tracking.interactiveStep = prepared.interactiveStep;
-          tracking.steer = tracking.interactiveStep.steer;
+          tracking.heldStep = prepared.interactiveStep;
+          tracking.steer = tracking.heldStep.steer;
         }
         // A live human Turn is running work, so the Run reads `running` while it runs and
         // returns to `blocked` at the next boundary. This is what makes a crash mid-Turn
@@ -2541,7 +2620,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         // rested `halted`, its Session detached), rather than strand the Run blocked with
         // a Turn that can never settle (#122).
         observed.writeState("running");
-        const report = await tracking.interactiveStep.turn({
+        const report = await tracking.heldStep.turn({
           runId: input.runId,
           owner: turnOwner,
           session,
@@ -2564,6 +2643,136 @@ export function createApplication(deps: ApplicationDependencies): Application {
         // which the Turn's event and settle writes bypass observedOwner and would not push.
         restRun(observed, input.runId, "blocked");
         return { status: "applied" };
+      },
+      retainOwner: () => leaveClaimLive,
+      setRetainOwner: (retain) => {
+        leaveClaimLive = retain;
+      },
+    });
+  }
+
+  // --- Follow-up after an Interrupt in an Agent Step (#354) -----------------
+  //
+  // An Interrupt leaves an Agent Step's Attempt open and the Run `blocked` with the
+  // Step's Harness held. The follow-up is its own Operation, admitted only on that
+  // derived waiting basis: it re-walks the Routing with the human's text, so Run
+  // execution sends it as a human-origin Turn of the open Attempt and applies the
+  // receipt validation and retry policy. It is not the interactive send.
+
+  function submitSendFollowUpTurn(
+    operationId: string,
+    input: SendFollowUpTurnInput,
+  ): SubmissionAdmission {
+    const existing = operations.get(operationId);
+    if (existing !== undefined) {
+      if (existing.replayKey === sendFollowUpTurnReplayKey(input)) {
+        return { admitted: true, operationId, runId: input.runId };
+      }
+      return { admitted: false, problem: operationIdReused(operationId) };
+    }
+    if (
+      runGroup === undefined ||
+      runExecution === undefined ||
+      runProjection === undefined
+    ) {
+      return { admitted: false, problem: runSupportUnavailable() };
+    }
+    // Secant authors nothing: a blank follow-up is refused before it is admitted.
+    if (input.text.trim() === "") {
+      return { admitted: false, problem: followUpTurnBlank(input.runId) };
+    }
+    const refused = admitHumanTurnText(input.runId, input.text);
+    if (refused !== undefined) return { admitted: false, ...refused };
+    admit(operationId, {
+      operation: "send-follow-up-turn",
+      replayKey: sendFollowUpTurnReplayKey(input),
+      runId: input.runId,
+      settle: () => startSendFollowUpTurn(operationId, input),
+    });
+    return { admitted: true, operationId, runId: input.runId };
+  }
+
+  // Legality is re-derived at settle time, synchronously, so a refusal never
+  // overwrites a live drive's `tracking.promise`. The Operation settles at the
+  // follow-up Turn's admission, as a send does (#290).
+  function startSendFollowUpTurn(
+    operationId: string,
+    input: SendFollowUpTurnInput,
+  ): Promise<OperationOutcome> {
+    const notWaiting = (state: string) =>
+      followUpTurnNotWaiting(input.runId, input.turnId, state);
+    const claimed = claimHeldRun(
+      input.runId,
+      (record) =>
+        record.state === "blocked" ? undefined : notWaiting(record.state),
+      ({ tracking, owner, record, facts }) => {
+        // A drive already in flight (a follow-up not yet admitted) holds the Step.
+        if (tracking.promise !== undefined) return notWaiting("running");
+        const basis = currentHoldBasis(
+          facts.routing,
+          record.state,
+          owner,
+          input.runId,
+        );
+        return basis?.kind === "follow-up" && basis.turn.turnId === input.turnId
+          ? undefined
+          : notWaiting(record.state);
+      },
+    );
+    if ("problem" in claimed) {
+      return Promise.resolve({
+        status: "not-applied",
+        problem: claimed.problem,
+      });
+    }
+    return settleAtAdmission({
+      runId: input.runId,
+      operationId,
+      tracking: claimed.tracking,
+      notAdmitted: () => followUpTurnNotAdmitted(input.runId),
+      drive: (onAdmitted) => runFollowUp(input, claimed, onAdmitted),
+    });
+  }
+
+  async function runFollowUp(
+    input: SendFollowUpTurnInput,
+    claimed: ClaimedRun,
+    onAdmitted: () => void,
+  ): Promise<OperationOutcome> {
+    const { tracking, owner, record, facts } = claimed;
+    const observed = observedOwner(owner, input.runId);
+    // The walk admits only one human-origin Turn — the follow-up — so its durable
+    // admission settles the Operation; execution owns the Turn id.
+    const executionOwner: RunOwner = {
+      ...observed,
+      admitTurn(request) {
+        const result = observed.admitTurn(request);
+        if (result.ok && request.origin === "human") onAdmitted();
+        return result;
+      },
+    };
+    // The walk takes the held Harness over; without one (after a reopen) composition
+    // prepares another, which resumes the detached Session.
+    const heldStep = tracking.heldStep;
+    tracking.heldStep = undefined;
+    let leaveClaimLive = false;
+    return driveWithAbortProtocol({
+      runId: input.runId,
+      tracking,
+      owner,
+      drive: async () => {
+        const driven = await executeTrackedRouting({
+          runId: input.runId,
+          tracking,
+          owner,
+          executionOwner,
+          routing: facts.routing,
+          digest: record.bundleSnapshotDigest,
+          ...(heldStep !== undefined ? { heldStep } : {}),
+          followUp: { turnId: input.turnId, text: input.text },
+        });
+        leaveClaimLive = driven.retainOwner;
+        return driven.outcome;
       },
       retainOwner: () => leaveClaimLive,
       setRetainOwner: (retain) => {
@@ -2672,7 +2881,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       tracking,
       owner,
       drive: async () => {
-        await closeInteractiveStep(tracking);
+        await closeHeldStep(tracking);
         // Settle the interactive Step's Attempt succeeded (no outputs — an
         // interactive-agent Step produces no Artifacts, #215), then drive the Run to
         // its next rest. The empty succeeded Attempt stages no commit (store/AGENTS),
@@ -2842,7 +3051,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   ): Promise<OperationOutcome> {
     restRun(observedOwner(owner, runId), runId, "cancelled");
     try {
-      await closeInteractiveStep(tracking);
+      await closeHeldStep(tracking);
     } finally {
       tracking.owner = undefined;
       tracking.done = true;
@@ -2981,6 +3190,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
           submission.operationId,
           submission.input,
         );
+      case "send-follow-up-turn":
+        return submitSendFollowUpTurn(submission.operationId, submission.input);
       case "end-interactive-step":
       case "continue-repeat":
       case "end-stage":
@@ -3100,7 +3311,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       // the state and release only ownership so the gate remains answerable after
       // restart (ADR 0031's shutdown rule, #134 A21).
       try {
-        await closeInteractiveStep(tracking);
+        await closeHeldStep(tracking);
       } finally {
         tracking.owner = undefined;
         tracking.done = true;

@@ -26,6 +26,7 @@ import type {
   RunStepStatus,
   SteerTurnOffer,
   RunView,
+  SendFollowUpTurnOffer,
   SendInteractiveTurnOffer,
 } from "../application/projection-port.js";
 import type { RendererKeyEvent, RendererPort } from "./renderer/renderer.js";
@@ -214,6 +215,8 @@ export function RunWorkbench(props: {
         offer.action === "answer-human-gate",
     );
     if (gateOffer !== undefined) return gateOffer.basis;
+    const followUp = followUpOfferOf(current);
+    if (followUp !== undefined) return followUp.basis;
     if (current.progress[current.position]?.kind === "interactive-agent")
       return "interactive Turn";
     return undefined;
@@ -380,7 +383,7 @@ export function RunWorkbench(props: {
     if (modalControl()) return false; // a request/gate modal hides the Actions rail
     const current = offers();
     // Mirrors actionLines: the interactive input carries its own Interrupt (#219).
-    if (interactiveStepActive()) return current.resume !== undefined;
+    if (inputActive()) return current.resume !== undefined;
     return (
       current.resume !== undefined ||
       current.interrupt !== undefined ||
@@ -392,7 +395,7 @@ export function RunWorkbench(props: {
     const current = offers();
     // Interrupt/steer leave the rail while the interactive input owns the interaction
     // (its hint line carries the Interrupt, #219), so they must not be counted.
-    const liveTurn = interactiveStepActive()
+    const liveTurn = inputActive()
       ? 0
       : (current.interrupt ? 1 : 0) + (current.steer ? 1 : 0);
     const count = (current.resume ? 1 : 0) + liveTurn;
@@ -400,7 +403,7 @@ export function RunWorkbench(props: {
     return (
       1 /*heading*/ +
       count +
-      (!interactiveStepActive() && interruptArmed()
+      (!inputActive() && interruptArmed()
         ? 1
         : 0) /*the "again to interrupt" hint*/ +
       (railPending() !== undefined ? 1 : 0)
@@ -413,9 +416,9 @@ export function RunWorkbench(props: {
   // whether a Turn is live, so focus stays on the input across the whole Step. `send`
   // and `end` offers are present only at a Turn boundary (no live Turn), so they gate
   // whether Enter dispatches and whether End Step is armable.
-  const [restoredCompose, setRestoredCompose] = createSignal<
-    "interactive" | "steer"
-  >();
+  // Interrupt-dropped Steers restored into the bottom input (#356, #354): it then
+  // holds a multi-line draft until a send applies.
+  const [draftRestored, setDraftRestored] = createSignal(false);
   const interactiveStepActive = () => {
     const current = actionableRun();
     // `blocked` is the boundary (between Turns); `running` is a live human Turn (the
@@ -425,7 +428,7 @@ export function RunWorkbench(props: {
     return (
       (current?.state === "blocked" ||
         current?.state === "running" ||
-        (current?.state === "halted" && restoredCompose() === "interactive")) &&
+        (current?.state === "halted" && draftRestored())) &&
       current.checkpoint === undefined &&
       current.pendingGate === undefined &&
       current.progress[current.position]?.kind === "interactive-agent"
@@ -453,6 +456,14 @@ export function RunWorkbench(props: {
       ),
     };
   });
+  // The follow-up compose (#354): an Interrupt that leaves an Agent Step's Attempt
+  // waiting hands the bottom input to the person as their reply to the agent. It
+  // mounts from the Offer alone, never the Step kind, and hands back to the rail once
+  // the follow-up Turn is live, where the Agent-step Steer and Esc rules apply.
+  const followUpOffer = createMemo(() => followUpOfferOf(actionableRun()));
+  // The bottom input owns the interaction: an interactive Step, or a follow-up.
+  const inputActive = () =>
+    interactiveStepActive() || followUpOffer() !== undefined;
   // The Projection's live Turn in the interactive Step, read from its interrupt Offer
   // (which carries the live turnId), never from a missing send Offer (#290): present
   // exactly while the agent holds the Turn, so the input says it is working.
@@ -470,19 +481,29 @@ export function RunWorkbench(props: {
   };
 
   const dispatchSend = () => {
+    const followUp = followUpOffer();
     const offer = interactiveOffers().send;
     // A Steer still settling after its Turn ended holds the send back, so its late
     // outcome can never act on the draft a send is holding.
-    if (offer === undefined || interactivePending() || steerPending()) return;
+    if (
+      (followUp === undefined && offer === undefined) ||
+      interactivePending() ||
+      steerPending()
+    )
+      return;
     // Secant authors nothing: a blank or whitespace-only Turn is not sent (AC1).
     if (draft().trim() === "") return;
     setInteractiveRefusal(undefined);
     // The draft is held, not cleared, until the send applies: a refused send (a Turn
     // still live, a Step that moved) keeps the typed text in the input (A9). The
     // settlement effect below clears it only on an applied send, which settles when
-    // Secant admits the Turn, not when the Turn ends (#290).
+    // Secant admits the Turn, not when the Turn ends (#290). A follow-up (#354)
+    // follows the same rule against its own Offer.
+    const text = draft();
     setInteractiveOutcome(() =>
-      view.sendInteractiveTurn(offer.runId, offer.stepId, draft()),
+      followUp !== undefined
+        ? view.sendFollowUpTurn(followUp, text)
+        : view.sendInteractiveTurn(offer!.runId, offer!.stepId, text),
     );
   };
   // Enter during a live interactive Turn steers it (#294) through the same
@@ -569,16 +590,12 @@ export function RunWorkbench(props: {
   // The Steer input owns the bottom region while composing with an available offer
   // or holding recovered guidance; a request/gate modal (modalControl) always takes precedence.
   const steerActive = () =>
-    steerComposing() &&
-    (steerAvailable() || restoredCompose() === "steer") &&
-    !modalControl();
+    steerComposing() && steerAvailable() && !modalControl();
   const openSteer = () => {
     const offer = offers().steer;
     if (offer === undefined || !offer.available || modalControl()) return;
-    if (restoredCompose() !== "steer") {
-      setSteerDraft("");
-      submittedComposeDraft = undefined;
-    }
+    setSteerDraft("");
+    submittedComposeDraft = undefined;
     setSteerRefusal(undefined);
     // Drop any still-pending prior submission so its late settlement never bleeds
     // into this fresh compose (a `… steering…` pending would blur the reopened field
@@ -709,7 +726,7 @@ export function RunWorkbench(props: {
         ? gateHeight(gateControl.active()!)
         : checkpointActive()
           ? CHECKPOINT_HEIGHT
-          : interactiveStepActive()
+          : inputActive()
             ? INTERACTIVE_HEIGHT
             : steerActive()
               ? STEER_HEIGHT
@@ -867,26 +884,45 @@ export function RunWorkbench(props: {
     lastGateKey = active ? key : "";
   });
 
-  // Focus lands on the interactive input while the Run rests at an interactive Step
-  // and returns to the timeline when the Step ends (#122 AC), keyed on the Step so a
-  // fresh interactive Step re-focuses and clears the draft. It does not yank focus
-  // back while the user has tabbed away during the same Step.
-  let lastInteractiveStep = "";
+  // Focus lands on the bottom input while it owns the interaction and returns to the
+  // timeline when it leaves (#122 AC). The draft clears only for a fresh input: a new
+  // interactive Step, or a follow-up to a new Attempt (#354), so a second Interrupt
+  // of the same Attempt keeps it. A follow-up input leaves while its Turn is live, so
+  // each newly interrupted Turn focuses it again; otherwise focus is never yanked
+  // back while the user has tabbed away, even across a catch-up.
+  let lastInputKey = "";
+  let lastFollowUpTurn = "";
+  // The input a restore last filled: the two effects run in no fixed order, so a
+  // fresh input never clears a draft restored into it on the same snapshot.
+  let restoredInputKey = "";
   createEffect(() => {
-    const active = interactiveStepActive();
+    const active = inputActive();
     const current = run();
-    const stepId =
-      active && current !== undefined
-        ? (current.progress[current.position]?.id ?? "")
-        : "";
-    if (active && stepId !== lastInteractiveStep) {
+    const followUp = followUpOffer();
+    const key =
+      !active || current === undefined ? "" : inputKeyOf(current, followUp);
+    if (active && key !== lastInputKey) {
       setFocus("interactive");
-      setDraft("");
+      if (restoredInputKey !== key) setDraft("");
       setInteractiveRefusal(undefined);
-    } else if (!active && focus() === "interactive") {
+    } else if (followUp !== undefined && followUp.turnId !== lastFollowUpTurn) {
+      setFocus("interactive");
+    } else if (!active && viewCurrent() && focus() === "interactive") {
+      // A catch-up withdraws every control for a moment; focus waits it out.
       setFocus("timeline");
     }
-    if (active) lastInteractiveStep = stepId;
+    if (active) lastInputKey = key;
+    if (followUp !== undefined) lastFollowUpTurn = followUp.turnId;
+  });
+
+  // The follow-up compose replaces the Interrupt's receipt (#354): the compose says
+  // the agent is waiting, and the receipt's `d` would type into the focused field.
+  createEffect(() => {
+    if (
+      followUpOffer() !== undefined &&
+      actionReceipt()?.operation === "interrupt"
+    )
+      setActionReceipt(undefined);
   });
 
   // A settled interactive write: a refusal surfaces and keeps the draft (A9); an
@@ -898,7 +934,7 @@ export function RunWorkbench(props: {
       setInteractiveRefusal({ kind: "refused", problem: settled.problem });
     else {
       setDraft("");
-      setRestoredCompose(undefined);
+      setDraftRestored(false);
     }
   };
 
@@ -919,11 +955,7 @@ export function RunWorkbench(props: {
   // or a request/gate modal takes over, so the input never lingers over a Turn it can
   // no longer steer or under the control that now owns Esc (#148).
   createEffect(() => {
-    if (
-      steerComposing() &&
-      ((!steerAvailable() && restoredCompose() !== "steer") || modalControl())
-    )
-      leaveSteer();
+    if (steerComposing() && (!steerAvailable() || modalControl())) leaveSteer();
   });
 
   // Follow a dispatched Steer to settlement (#148): a refusal (the Turn settled, a
@@ -944,14 +976,16 @@ export function RunWorkbench(props: {
     } else if (settled.kind === "refused") setSteerRefusal(settled.problem);
     else {
       setSteerDraft("");
-      setRestoredCompose(undefined);
       leaveSteer();
     }
     setSteerFlight(undefined);
   });
 
   // Restore only newly observed Interrupt drops, once the send receipt has cleared
-  // its original draft. Existing history on first open is not a new draft.
+  // its original draft. Existing history on first open is not a new draft. They go
+  // into the bottom input that can send them: an interactive Step's, or an Agent
+  // Step's follow-up compose (#354). An Agent Step a signal halted has no such
+  // input, so its drops stay history rather than park in a compose that cannot send.
   const seenSteers = new Set<string>();
   let steerHistoryOpened = false;
   createEffect(() => {
@@ -971,6 +1005,14 @@ export function RunWorkbench(props: {
       offers().interrupt !== undefined
     )
       return;
+    const interactive =
+      current.progress[current.position]?.kind === "interactive-agent";
+    // Read from the snapshot itself, not the freshness-gated Offers, so a drop seen
+    // during a catch-up still restores. An Agent Step still `running` with neither
+    // its Turn nor its follow-up offered has not rested yet: wait for its rest.
+    const followUp = followUpOfferOf(current);
+    if (!interactive && followUp === undefined && current.state === "running")
+      return;
     const dropped: string[] = [];
     for (const { event, steer } of entries) {
       if (seenSteers.has(steer.steerId)) continue;
@@ -983,29 +1025,27 @@ export function RunWorkbench(props: {
         dropped.push(steer.text);
     }
     if (dropped.length === 0) return;
-    const interactive =
-      current.progress[current.position]?.kind === "interactive-agent";
-    const heldDraft = interactive ? draft() : steerDraft();
-    const existing =
-      !interactive &&
-      heldDraft === submittedComposeDraft &&
-      dropped.includes(heldDraft)
+    if (!interactive && followUp === undefined) return;
+    // The Steer compose's unsent text joins after the drops, unless it is the very
+    // guidance the drop restores.
+    const composed = steerDraft();
+    const unsentSteer =
+      interactive ||
+      (composed === submittedComposeDraft && dropped.includes(composed))
         ? ""
-        : heldDraft;
-    if (!interactive) submittedComposeDraft = undefined;
-    const restored = [...dropped, ...(existing === "" ? [] : [existing])].join(
-      "\n\n",
-    );
-    setRestoredCompose(interactive ? "interactive" : "steer");
-    if (interactive) {
-      setDraft(restored);
-      setInteractiveRefusal(undefined);
-      setFocus("interactive");
-    } else {
-      setSteerDraft(restored);
-      setSteerComposing(true);
-      setFocus("steer");
+        : composed;
+    if (!interactive) {
+      submittedComposeDraft = undefined;
+      setSteerDraft("");
     }
+    const restored = [...dropped, unsentSteer, draft()]
+      .filter((text) => text !== "")
+      .join("\n\n");
+    setDraftRestored(true);
+    setDraft(restored);
+    restoredInputKey = inputKeyOf(current, followUp);
+    setInteractiveRefusal(undefined);
+    setFocus("interactive");
   });
 
   // The unavailable Steer's reason speaks for the live Turn only: when the Turn ends
@@ -1023,7 +1063,7 @@ export function RunWorkbench(props: {
   const focusOrder = (): Focus[] => {
     const order: Focus[] = [];
     if (checkpointActive()) order.push("checkpoint");
-    if (interactiveStepActive()) order.push("interactive");
+    if (inputActive()) order.push("interactive");
     order.push("timeline");
     if (detailsShown()) order.push("details");
     return order;
@@ -1152,7 +1192,7 @@ export function RunWorkbench(props: {
     // Beyond the request/gate modals, the interactive input owns keys too (#122): a
     // bare letter typed into a Turn must not fire its command, so `q`/`t` and the
     // Run Actions are gated on not typing.
-    const typing = focus() === "interactive" && interactiveStepActive();
+    const typing = focus() === "interactive" && inputActive();
     // The Steer compose input owns keys as text too (#148): a bare letter typed as
     // guidance must not fire its command, so `q`/`t` and the Run Actions gate on it.
     const steerTyping = focus() === "steer" && steerActive();
@@ -1216,7 +1256,7 @@ export function RunWorkbench(props: {
     if (
       name === "escape" &&
       offers().interrupt !== undefined &&
-      !interactiveStepActive() &&
+      !inputActive() &&
       focus() === "timeline"
     ) {
       armOrDispatchInterrupt();
@@ -1230,7 +1270,7 @@ export function RunWorkbench(props: {
     if (
       name === "s" &&
       steerAvailable() &&
-      !interactiveStepActive() &&
+      !inputActive() &&
       focus() === "timeline"
     ) {
       openSteer();
@@ -1410,8 +1450,9 @@ export function RunWorkbench(props: {
               // confirm in the panel, and End Step in the interactive input, so the
               // Actions box never sees those pending states.
               actionPending={railPending}
-              interactiveActive={interactiveStepActive}
-              interactiveRestored={() => restoredCompose() === "interactive"}
+              interactiveActive={inputActive}
+              interactiveFollowUp={() => followUpOffer() !== undefined}
+              interactiveRestored={draftRestored}
               interactiveInterrupt={interactiveInterrupt}
               interactiveSteerOffered={() =>
                 interactiveInterrupt() !== undefined && steerAvailable()
@@ -1420,7 +1461,8 @@ export function RunWorkbench(props: {
                 interactiveOffers().end !== undefined
               }
               interactiveSendOffered={() =>
-                interactiveOffers().send !== undefined
+                interactiveOffers().send !== undefined ||
+                followUpOffer() !== undefined
               }
               draft={draft}
               onDraftInput={(value) => setDraft(value)}
@@ -1432,7 +1474,6 @@ export function RunWorkbench(props: {
               interactivePending={interactivePending}
               interactiveRefusal={interactiveRefusal}
               steerActive={steerActive}
-              steerRestored={() => restoredCompose() === "steer"}
               steerDraft={steerDraft}
               onSteerInput={(value) => setSteerDraft(value)}
               steerPending={steerPending}
@@ -1528,6 +1569,7 @@ function Workbench(props: {
   actionRefusal: Accessor<Problem | undefined>;
   actionPending: Accessor<"takeover" | "acknowledge" | undefined>;
   interactiveActive: Accessor<boolean>;
+  interactiveFollowUp: Accessor<boolean>;
   interactiveRestored: Accessor<boolean>;
   interactiveInterrupt: Accessor<InterruptTurnOffer | undefined>;
   interactiveSteerOffered: Accessor<boolean>;
@@ -1543,7 +1585,6 @@ function Workbench(props: {
   interactivePending: Accessor<boolean>;
   interactiveRefusal: Accessor<InteractiveRefusal | undefined>;
   steerActive: Accessor<boolean>;
-  steerRestored: Accessor<boolean>;
   steerDraft: Accessor<string>;
   onSteerInput: (value: string) => void;
   steerPending: Accessor<boolean>;
@@ -1899,10 +1940,6 @@ function Workbench(props: {
                 }
               >
                 <SteerInput
-                  restored={props.steerRestored}
-                  available={() =>
-                    props.actionOffers().steer?.available === true
-                  }
                   draft={props.steerDraft}
                   onInput={props.onSteerInput}
                   pending={props.steerPending}
@@ -1915,6 +1952,7 @@ function Workbench(props: {
             }
           >
             <InteractiveInput
+              followUp={props.interactiveFollowUp}
               restored={props.interactiveRestored}
               draft={props.draft}
               onInput={props.onDraftInput}
@@ -1983,6 +2021,27 @@ function Workbench(props: {
         </Match>
       </Switch>
     </box>
+  );
+}
+
+/** Which bottom input a Run's snapshot holds: the interactive Step, or a follow-up's
+ *  Step and Attempt (#354) — never a parsed Turn id. */
+function inputKeyOf(
+  run: RunView,
+  followUp: SendFollowUpTurnOffer | undefined,
+): string {
+  return followUp !== undefined
+    ? `${followUp.stepId}:${followUp.attemptId}`
+    : (run.progress[run.position]?.id ?? "");
+}
+
+/** The follow-up Offer of an Agent Step waiting after an Interrupt (#354). */
+function followUpOfferOf(
+  run: RunView | undefined,
+): SendFollowUpTurnOffer | undefined {
+  return run?.actionOffers.find(
+    (offer): offer is SendFollowUpTurnOffer =>
+      offer.action === "send-follow-up-turn",
   );
 }
 

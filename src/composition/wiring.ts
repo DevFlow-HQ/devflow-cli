@@ -371,6 +371,8 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
     requestChannel,
     observeSteer,
     observeWindowsCleanupFallback,
+    heldStep,
+    followUp,
   }) => {
     // Command Steps and the Run's Harness share the Run's scope.
     const scope = runScope(owner.record.runId);
@@ -386,37 +388,58 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
       // The Application's per-Run live request-answer channel (#117): an Agent
       // Turn's approval requests reach the observing client through it.
       ...(requestChannel !== undefined ? { requestChannel } : {}),
+      // The human's follow-up after an Interrupt (#354); execution decides whether
+      // it still applies.
+      ...(followUp !== undefined ? { followUp } : {}),
     };
     // A Command-only Run needs no Harness. A Bundle carrying an Agent Step prepares
     // one once, reused across every Agent Step of the Run, and closes it when the
     // Run rests — the ownership ADR 0022 requires to transfer exactly once to the
     // Run (#116). A typed preparation failure is returned to Application so it can
     // rest the created Run halted and project a selected-Harness Problem.
-    if (!routingNeedsHarness(routing)) return executeRouting(routing, deps);
+    if (!routingNeedsHarness(routing)) {
+      await heldStep?.close();
+      return executeRouting(routing, deps);
+    }
     const selectedHarness = owner.record.selectedHarness;
     if (selectedHarness === undefined) {
+      await heldStep?.close();
       throw new Error(
         "composition: an Agent-bearing Run has no selected Harness.",
       );
     }
     const facts = harnessFacts(catalog, digest);
-    const prepared = await prepareRunHarness(
-      harnessRegistry,
-      selectedHarness,
-      owner,
-      scope,
-      observeWindowsCleanupFallback,
-    );
-    if (!prepared.ok) {
-      const harnessFailure = harnessRegistry.preparationFailure(
+    // A Step Harness the Application held across a waiting rest (#354) is this
+    // walk's again: reuse its prepared Harness and hand the same handle back on a
+    // `blocked` rest, so it closes exactly once. A handle not minted here is closed
+    // and a fresh Harness prepared.
+    const held =
+      heldStep !== undefined ? heldHarnesses.get(heldStep) : undefined;
+    if (heldStep !== undefined && held === undefined) await heldStep.close();
+    let step: RunInteractiveStep;
+    if (heldStep !== undefined && held !== undefined) {
+      step = heldStep;
+    } else {
+      const prepared = await prepareRunHarness(
+        harnessRegistry,
         selectedHarness,
-        prepared.failure,
+        owner,
+        scope,
+        observeWindowsCleanupFallback,
       );
-      return { outcome: "harness-unavailable", harnessFailure };
+      if (!prepared.ok) {
+        const harnessFailure = harnessRegistry.preparationFailure(
+          selectedHarness,
+          prepared.failure,
+        );
+        return { outcome: "harness-unavailable", harnessFailure };
+      }
+      step = interactiveStepDriver(prepared.harness, observe);
     }
-    observeSteer?.(prepared.harness.profile.steer);
+    const preparedHarness = heldHarnesses.get(step)!;
+    observeSteer?.(preparedHarness.profile.steer);
     const harness: HarnessExecutionDeps = {
-      prepared: prepared.harness,
+      prepared: preparedHarness,
       inputTypes: facts.inputTypes,
       assetKinds: facts.assetKinds,
     };
@@ -425,17 +448,20 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
       const report = await executeRouting(routing, { ...deps, harness });
       if (report.outcome === "blocked") {
         transferred = true;
-        return {
-          ...report,
-          interactiveStep: interactiveStepDriver(prepared.harness, observe),
-        };
+        return { ...report, heldStep: step };
       }
       return report;
     } finally {
-      if (!transferred) await prepared.harness.close();
+      if (!transferred) await step.close();
     }
   };
 }
+
+// The prepared Harness behind each Step handle composition mints, so a handle the
+// Application hands back across a waiting rest (#354) resolves to its Harness
+// without the Application ever seeing one. Weak, so a closed handle the
+// Application drops is collected with its entry.
+const heldHarnesses = new WeakMap<RunInteractiveStep, PreparedHarness>();
 
 // Prepare the opaque Step-scoped interactive driver (#134 A17). A handle transferred
 // from `makeRunExecution` is preferred; this path prepares one after reopening a Run
@@ -533,7 +559,7 @@ function interactiveStepDriver(
   observe: ExecutionObserver | undefined,
 ): RunInteractiveStep {
   let closed = false;
-  return {
+  const step: RunInteractiveStep = {
     steer: prepared.profile.steer,
     async turn({
       owner,
@@ -563,6 +589,8 @@ function interactiveStepDriver(
       await prepared.close();
     },
   };
+  heldHarnesses.set(step, prepared);
+  return step;
 }
 
 /** The manifest facts Agent-prompt rendering resolves against (#116): each Launch

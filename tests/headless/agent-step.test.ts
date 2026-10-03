@@ -213,7 +213,8 @@ function wireAgent(
     // The fake Adapter reproduces the plain Turn's observed identity and events.
     harnessAdapter: options.adapter ?? createFake(plainScript())(),
   });
-  t.after(() => {
+  t.after(async () => {
+    await wired.shutdown();
     wired.runGroup.close();
     wired.catalog.close();
   });
@@ -238,13 +239,19 @@ function wireAgent(
   return { wired, bundleId: bundle.id, digest: entry.digest, docPath };
 }
 
-async function launchAgentRun(t: TestContext): Promise<{
+async function launchAgentRun(
+  t: TestContext,
+  script?: FakeScript,
+): Promise<{
   wired: Wiring;
   runId: string;
   run: RunView;
   docPath: string;
 }> {
-  const { wired, bundleId, digest, docPath } = wireAgent(t);
+  const { wired, bundleId, digest, docPath } = wireAgent(
+    t,
+    script !== undefined ? { adapter: createFake(script)() } : {},
+  );
   const admission = wired.projectionPort.submit({
     operationId: "op-launch",
     operation: "launch-run",
@@ -472,6 +479,30 @@ async function runShow(wired: Wiring, runId: string): Promise<string> {
   assert.equal(code, 0);
   return out.join("");
 }
+
+test("run show names the waiting basis of an Agent Step an Interrupt left open, and headless offers no follow-up command (#354)", async (t) => {
+  const { wired, runId, run } = await launchAgentRun(t, {
+    profile: claudeCodeProfile(),
+    turns: [
+      {
+        result: {
+          kind: "interrupted",
+          detail: {
+            interruption: { mode: "process-only", evidence: "scripted fake" },
+            session: { state: "detached", coordinate: { opaque: "s" } },
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(run.state, "blocked");
+
+  const shown = await runShow(wired, runId);
+
+  assert.match(shown, /Blocked: interrupted Agent Turn/);
+  // Headless gains no follow-up (its parity record): no command is named for it.
+  assert.doesNotMatch(shown, /follow-up/);
+});
 
 test("[requested-model-durability] run launch --model is accepted for an Agent Bundle and run show prints it beside the effective model", async (t) => {
   const { wired, bundleId, digest, docPath } = wireAgent(t);

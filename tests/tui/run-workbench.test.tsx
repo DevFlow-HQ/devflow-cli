@@ -184,6 +184,8 @@ function makeRunView(initial: RunSnapshot) {
   const [interactiveOutcome, setInteractiveOutcome] =
     createSignal<AnswerOutcome>({ kind: "pending" });
   const sends: { runId: string; stepId: string; text: string }[] = [];
+  // A follow-up after an Interrupt (#354) shares the interactive outcome accessor.
+  const followUps: { runId: string; turnId: string; text: string }[] = [];
   const ends: { runId: string; stepId: string }[] = [];
   const continues: { runId: string; stepId: string }[] = [];
   const endStages: { runId: string; stepId: string }[] = [];
@@ -224,6 +226,10 @@ function makeRunView(initial: RunSnapshot) {
     },
     sendInteractiveTurn: (runId, stepId, text) => {
       sends.push({ runId, stepId, text });
+      return interactiveOutcome;
+    },
+    sendFollowUpTurn: (offer, text) => {
+      followUps.push({ runId: offer.runId, turnId: offer.turnId, text });
       return interactiveOutcome;
     },
     endInteractiveStep: (runId, stepId) => {
@@ -293,6 +299,7 @@ function makeRunView(initial: RunSnapshot) {
     requests,
     setAnswerOutcome,
     sends,
+    followUps,
     ends,
     continues,
     endStages,
@@ -3302,7 +3309,8 @@ const INTERRUPT_OFFER = {
   action: "interrupt-turn" as const,
   runId: "run-1",
   turnId: "turn-7",
-  consequence: "stop this Turn and rest the Run halted (resumable).",
+  consequence:
+    "stop the live Turn; the agent then waits for your next message in the same Session.",
 };
 const STEER_OFFER = {
   action: "steer-turn" as const,
@@ -3695,7 +3703,7 @@ test("a live interactive Turn leads its interrupt hint with a moving scanner bes
     frame,
     /◆ The agent is working — wait for its reply or interrupt it/,
   );
-  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop this Turn/m);
+  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop the live Turn/m);
   // It moves on its own 40 ms clock: a later frame shows the cells changed.
   const first = scannerOf(frame);
   await until(() => {
@@ -3717,7 +3725,7 @@ test("an Agent-step live Turn leads the rail's interrupt row with the scanner an
   const frame = wb.t.captureCharFrame();
   assert.match(
     frame,
-    /^ {3}[■⬝]{8} working · esc esc interrupt — stop this Turn/m,
+    /^ {3}[■⬝]{8} working · esc esc interrupt — stop the live Turn/m,
   );
   assert.equal(frame.match(/[■⬝]{8}/g)?.length, 1);
   const first = scannerOf(frame);
@@ -3768,7 +3776,7 @@ test("with reduced motion the scanner is a static [⋯] and the working words st
   );
   let frame = interactive.t.captureCharFrame();
   assert.match(frame, /◆ The agent is working/);
-  assert.match(frame, /^ {3}\[⋯\] esc esc interrupt — stop this Turn/m);
+  assert.match(frame, /^ {3}\[⋯\] esc esc interrupt — stop the live Turn/m);
   assert.doesNotMatch(frame, /[■⬝]/);
 
   const agent = await mountWorkbench(
@@ -3830,7 +3838,7 @@ test("the scanner and its words fit a small terminal, long history, and a resize
   wb.renderer.resize(100, 24);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
-  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop this Turn/m);
+  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop the live Turn/m);
   noOverflow(frame, 100);
 });
 
@@ -4577,7 +4585,7 @@ test("Enter in the interactive input steers a live Turn with the draft, with no 
   // without a Steer row, since the input carries the controls.
   assert.match(
     frame,
-    /^ {3}[■⬝]{8} enter steer · esc esc interrupt — stop this Turn/m,
+    /^ {3}[■⬝]{8} enter steer · esc esc interrupt — stop the live Turn/m,
   );
   assert.doesNotMatch(frame, /s steer —|Steer — guide/);
 
@@ -4734,7 +4742,7 @@ test("an unavailable Steer shows its reason at Enter, sends nothing, and keeps t
   const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 40, actions);
   // Unavailable, the hint never names Enter; the reason waits for the attempt.
   let frame = wb.t.captureCharFrame();
-  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop this Turn/m);
+  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop the live Turn/m);
   assert.doesNotMatch(frame, /enter steer|unavailable/);
 
   await type(wb.t, "wrap up");
@@ -4822,7 +4830,7 @@ test("with reduced motion the Steer cue follows a static [⋯] (#294)", async ()
   const frame = wb.t.captureCharFrame();
   assert.match(
     frame,
-    /^ {3}\[⋯\] enter steer · esc esc interrupt — stop this Turn/m,
+    /^ {3}\[⋯\] enter steer · esc esc interrupt — stop the live Turn/m,
   );
   assert.doesNotMatch(frame, /[■⬝]/);
 });
@@ -4845,7 +4853,7 @@ test("the Steer cue keeps its words in a small terminal, the scanner yielding fi
   frame = wb.t.captureCharFrame();
   assert.match(
     frame,
-    /^ {3}[■⬝]{8} enter steer · esc esc interrupt — stop this Turn/m,
+    /^ {3}[■⬝]{8} enter steer · esc esc interrupt — stop the live Turn/m,
   );
   noOverflow(frame, 100);
 });
@@ -4956,22 +4964,44 @@ test("any other key cancels an armed Interrupt without dispatching or leaving", 
   assert.equal(interrupted, 0);
 });
 
-test("interrupt rests the Run halted with the Attempt cancelled and offers resume", async () => {
+// After an Interrupt an Agent Step's Attempt stays open and the Run waits for the
+// person's follow-up (#354): the bottom input becomes "Reply to the agent", mounted
+// from the follow-up Offer, and hands back to the rail once that Turn is live.
+const FOLLOW_UP_OFFER = {
+  action: "send-follow-up-turn" as const,
+  runId: "run-1",
+  stepId: "repair",
+  attemptId: "0.0:repair",
+  turnId: "turn-7",
+  basis: "interrupted Agent Turn" as const,
+  consequence:
+    "send the typed text to the agent as your next message in the same Session; the Step continues from that Turn.",
+};
+
+function waitingRunOf(over: Partial<RunView> = {}): RunView {
+  return runOf({
+    state: "blocked",
+    progress: [{ id: "repair", kind: "agent", status: "blocked" }],
+    timeline: [
+      {
+        at: "T1",
+        event: "turn-settled",
+        detail: "interrupted",
+        turnKind: "agent",
+      },
+    ],
+    actionOffers: [FOLLOW_UP_OFFER, CANCEL_OFFER],
+    ...over,
+  });
+}
+
+test("an Agent-step Interrupt hands the bottom input to the person, and Enter sends the follow-up from the compose (#354)", async () => {
   const control = makeRunView(snapshotOf(liveTurnRunOf()));
   const renderer = makeFakeRenderer(100, 40);
   const actions = okActions({
     interrupt: () => {
-      // The live snapshot carries the halted rest in, exactly as production does.
-      control.setRun(
-        runOf({
-          state: "halted",
-          timeline: [
-            { at: "T0", event: "attempt-settled", detail: "cancelled" },
-            { at: "T1", event: "turn-settled", detail: "interrupted" },
-          ],
-          actionOffers: [RESUME_OFFER],
-        }),
-      );
+      // The live snapshot carries the waiting rest in, exactly as production does.
+      control.setRun(waitingRunOf());
       return () => ({ kind: "ok" });
     },
   });
@@ -4979,11 +5009,146 @@ test("interrupt rests the Run halted with the Attempt cancelled and offers resum
   await t.waitForFrame((f) => f.includes("Timeline"));
   await press(t, renderer, "escape"); // arm
   await press(t, renderer, "escape"); // interrupt
+
   const frame = t.captureCharFrame();
-  assert.match(frame, /HALTED/);
-  assert.match(frame, /▸ Step Attempt cancelled/);
-  assert.match(frame, /r resume/); // resumable
+  assert.match(frame, /BLOCKED · interrupted Agent Turn/);
+  // Timeline mechanics: the interrupted Turn stays in history and the Step waits.
+  assert.match(frame, /Agent Turn settled · interrupted/);
+  assert.match(frame, /Progress: ⏸ repair/);
+  assert.match(
+    frame,
+    /Reply to the agent — you stopped it, and it is waiting on you/,
+  );
+  assert.match(frame, /enter send reply · esc back/);
+  // A follow-up ends no Step and resumes nothing; the Interrupt's receipt and its
+  // `d` (which would type into the focused field) give way to the compose.
+  assert.doesNotMatch(frame, /\^E|end step|r resume|HALTED/);
+  assert.doesNotMatch(frame, /Turn interrupted · d dismiss/);
+  assert.doesNotMatch(frame, /esc esc interrupt/);
+
+  // `q`, `t`, and `d` type into the focused compose rather than fire commands.
+  await type(t, "quit the docs, then test");
+  await press(t, renderer, "return");
+  assert.deepEqual(control.followUps, [
+    { runId: "run-1", turnId: "turn-7", text: "quit the docs, then test" },
+  ]);
+  assert.deepEqual(control.sends, []);
+  assert.match(t.captureCharFrame(), /… sending…/);
+
+  // Admission applies the send and clears the draft; the follow-up Turn goes live and
+  // the rail's Agent-step controls take over again.
+  control.setInteractiveOutcome({ kind: "applied" });
+  control.setRun(
+    liveTurnRunOf({
+      timeline: [
+        {
+          at: "T1",
+          event: "turn-settled",
+          detail: "interrupted",
+          turnKind: "agent",
+        },
+        { at: "T2", event: "turn-started", detail: "s", turnKind: "agent" },
+      ],
+    }),
+  );
+  await t.renderOnce();
+  const working = t.captureCharFrame();
+  // The follow-up Turn appends below the interrupted one in the same Step.
+  assert.match(working, /settled · interrupted[\s\S]*Agent Turn started/);
+  assert.doesNotMatch(working, /Reply to the agent/);
+  assert.match(working, /working · esc esc interrupt/);
+  assert.match(working, /› Timeline/);
 });
+
+test("a refused follow-up keeps its draft, and Enter on a blank compose sends nothing (#354)", async () => {
+  const wb = await mountWorkbench(waitingRunOf());
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.followUps, []);
+
+  await type(wb.t, "try again");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setInteractiveOutcome({
+    kind: "refused",
+    problem: {
+      code: "follow-up-turn-not-waiting",
+      explanation: "Run run-1 is running and is not waiting for a follow-up.",
+      remediation: "Open the Run.",
+      possibleEffects: "none",
+    },
+  });
+  await wb.t.renderOnce();
+  const frame = wb.t.captureCharFrame();
+  assert.match(frame, /✗ Run run-1 is running and is not waiting/);
+  assert.match(frame, /> try again/);
+});
+
+test("the follow-up compose keeps its draft and focus while its Attempt waits, and a new Attempt starts it empty (#354)", async () => {
+  const wb = await mountWorkbench(waitingRunOf());
+  await type(wb.t, "half a thought");
+  // A catch-up briefly withdraws every control; the same Attempt's compose returns
+  // focused with its draft.
+  wb.control.setFreshness({
+    kind: "catching-up",
+    catchUp: "rebased",
+    lastConfirmedAt: "2026-09-22T10:30:00.000Z",
+  });
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Reply to the agent/);
+  wb.control.setFreshness({
+    kind: "current",
+    catchUp: "fresh",
+    lastConfirmedAt: "2026-09-22T10:30:01.000Z",
+  });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /> half a thought/);
+  await type(wb.t, " more");
+  assert.match(wb.t.captureCharFrame(), /> half a thought more/);
+
+  // A later Attempt of the Step waits on its own Interrupt: a fresh, empty compose.
+  wb.control.setRun(
+    waitingRunOf({
+      actionOffers: [
+        { ...FOLLOW_UP_OFFER, attemptId: "0.1:repair", turnId: "turn-9" },
+        CANCEL_OFFER,
+      ],
+    }),
+  );
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /half a thought/);
+});
+
+test("the follow-up compose owns its keys as the interactive input does, and Esc leaves the Workbench (#354)", async () => {
+  const wb = await mountWorkbench(waitingRunOf());
+  // Ctrl+E ends no Step here and Ctrl+N continues nothing: no confirm arms.
+  await press(wb.t, wb.renderer, "e", { ctrl: true });
+  await press(wb.t, wb.renderer, "n", { ctrl: true });
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Press y|y continue/);
+  await type(wb.t, "back");
+  assert.match(wb.t.captureCharFrame(), /> back/);
+  await press(wb.t, wb.renderer, "escape");
+  await wb.t.waitForFrame((f) => f.includes("Secant"));
+});
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`the follow-up compose reads in words and fits ${width}x${height} across a resize (#354)`, async () => {
+    const wb = await mountWorkbench(waitingRunOf(), width, height);
+    const frame = wb.t.captureCharFrame();
+    noOverflow(frame, width);
+    // Meaning without colour: the state word, the basis, and who holds the Turn.
+    assert.match(frame, /BLOCKED/);
+    assert.match(frame, /Reply to the agent/);
+    assert.match(frame, /enter send reply/);
+    const other = width === 60 ? 140 : 60;
+    wb.renderer.resize(other, 24);
+    await wb.t.renderOnce();
+    const resized = wb.t.captureCharFrame();
+    noOverflow(resized, other);
+    assert.match(resized, /Reply to the agent/);
+  });
+}
 
 test("resume on a halted Run dispatches resume-run and live rows resume", async () => {
   const control = makeRunView(
@@ -5124,7 +5289,7 @@ for (const [width, height] of [
   });
 }
 
-test("an Agent Interrupt restores a long Steer in its compose while halted (#356)", async () => {
+test("an Agent Interrupt restores a long Steer into the follow-up compose and Enter sends it as the follow-up (#356, #354)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 60, 24, okActions());
   await press(wb.t, wb.renderer, "s");
   await type(wb.t, "sent guidance");
@@ -5140,17 +5305,76 @@ test("an Agent Interrupt restores a long Steer in its compose while halted (#356
       "repair",
     ),
   ];
-  wb.control.setRun(
-    steerableRunOf({ state: "halted", actionOffers: [RESUME_OFFER], timeline }),
-  );
+  wb.control.setRun(waitingRunOf({ timeline }));
+  await wb.t.renderOnce();
+  const frame = wb.t.captureCharFrame();
+  assert.match(frame, /draft restored/);
+  assert.match(frame, /enter send reply/);
+  assert.doesNotMatch(frame, /r resume from timeline/);
+  noOverflow(frame, 60);
+  // The original text survives the 160-character timeline cap, sent as the reply.
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.followUps, [
+    { runId: "run-1", turnId: "turn-7", text },
+  ]);
+  assert.equal(wb.control.steers.length, 1);
+});
+
+test("a drop seen before the Agent Step rests restores once the follow-up is offered (#354)", async () => {
+  const wb = await mountWorkbench(steerableRunOf(), 100, 30, okActions());
+  await press(wb.t, wb.renderer, "s");
+  await type(wb.t, "guidance in flight");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  const timeline = [
+    steerSettlement(
+      "in-flight",
+      "guidance in flight",
+      { kind: "dropped", reason: "interrupt" },
+      "repair",
+    ),
+  ];
+  // The Turn settled, but the walk has not yet written its waiting rest.
+  wb.control.setRun(steerableRunOf({ actionOffers: [CANCEL_OFFER], timeline }));
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /draft restored/);
+  wb.control.setRun(waitingRunOf({ timeline }));
   await wb.t.renderOnce();
   assert.match(wb.t.captureCharFrame(), /draft restored/);
-  noOverflow(wb.t.captureCharFrame(), 60);
-  // When the Run is live again, the original text survives the 160-character timeline cap.
-  wb.control.setRun(steerableRunOf({ timeline }));
-  await wb.t.renderOnce();
   await press(wb.t, wb.renderer, "return");
-  assert.equal(wb.control.steers[1]?.text, text);
+  assert.deepEqual(wb.control.followUps, [
+    { runId: "run-1", turnId: "turn-7", text: "guidance in flight" },
+  ]);
+});
+
+test("a signal-halted Agent Step parks no compose for Steers its Turn dropped (#354)", async () => {
+  const wb = await mountWorkbench(steerableRunOf(), 100, 30, okActions());
+  await press(wb.t, wb.renderer, "s");
+  await type(wb.t, "guidance that cannot be sent");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  wb.control.setRun(
+    steerableRunOf({
+      state: "halted",
+      progress: [{ id: "repair", kind: "agent", status: "blocked" }],
+      actionOffers: [RESUME_OFFER],
+      timeline: [
+        steerSettlement(
+          "dropped",
+          "guidance that cannot be sent",
+          { kind: "dropped", reason: "interrupt" },
+          "repair",
+        ),
+      ],
+    }),
+  );
+  await wb.t.renderOnce();
+  const frame = wb.t.captureCharFrame();
+  assert.doesNotMatch(frame, /draft restored/);
+  assert.doesNotMatch(frame, /Steer — guide/);
+  assert.match(frame, /r resume/);
 });
 
 test("settlement observed before its receipt restores only after acceptance clears the original draft (#356)", async () => {
@@ -5201,7 +5425,7 @@ test("historic drops and loss drops do not replace the compose on open or repeat
 });
 
 for (const close of ["offer-ended", "escaped"] as const) {
-  test(`an Agent Steer accepted after compose ${close} restores its text once (#356)`, async () => {
+  test(`an Agent Steer accepted after compose ${close} restores its text once into the follow-up compose (#356, #354)`, async () => {
     const wb = await mountWorkbench(steerableRunOf(), 100, 30, okActions());
     await press(wb.t, wb.renderer, "s");
     await type(wb.t, "guidance awaiting receipt");
@@ -5215,21 +5439,18 @@ for (const close of ["offer-ended", "escaped"] as const) {
         "repair",
       ),
     ];
-    wb.control.setRun(
-      steerableRunOf({
-        state: "halted",
-        actionOffers: [RESUME_OFFER],
-        timeline,
-      }),
-    );
+    wb.control.setRun(waitingRunOf({ timeline }));
     await wb.t.renderOnce();
     wb.control.setSteerOutcome({ kind: "applied" });
     await wb.t.renderOnce();
     assert.match(wb.t.captureCharFrame(), /draft restored/);
-    wb.control.setRun(steerableRunOf({ timeline }));
+    // A repeated snapshot restores nothing twice.
+    wb.control.setRun(waitingRunOf({ timeline }));
     await wb.t.renderOnce();
     await press(wb.t, wb.renderer, "return");
-    assert.equal(wb.control.steers[1]?.text, "guidance awaiting receipt");
+    assert.deepEqual(wb.control.followUps, [
+      { runId: "run-1", turnId: "turn-7", text: "guidance awaiting receipt" },
+    ]);
   });
 }
 

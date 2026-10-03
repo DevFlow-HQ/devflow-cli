@@ -62,6 +62,7 @@ export type Submission =
   | InterruptTurnSubmission
   | SteerTurnSubmission
   | SendInteractiveTurnSubmission
+  | SendFollowUpTurnSubmission
   | EndInteractiveStepSubmission
   | ContinueRepeatSubmission
   | EndStageSubmission
@@ -187,15 +188,14 @@ export interface AnswerHarnessRequestInput {
 }
 
 /** Interrupt the live Turn of a running Run without cancelling the Run (spec
- *  stories 18–20, 38; ADR 0022/0019, #118). Relays the Harness Adapter's
- *  `interrupt`: the Step Attempt ends `cancelled`, the Run rests `halted`
- *  (resumable), and the Session detaches; a `lost` termination ends the Attempt
- *  `indeterminate` and still rests the Run `halted`. In an Interactive agent
- *  Step the Turn ends `interrupted`, the Run returns to `blocked` waiting for the
- *  person, and no Attempt is published; a `lost` Turn still halts (#353, ADR
- *  0035). Offered on the `run` Projection only while a Turn is live; a control
- *  issued once the Turn has settled is rejected as a value (`not-applied`).
- *  Idempotent per operation id. */
+ *  stories 18–20, 38, 55, 59; ADR 0022/0019/0035, #118). Relays the Harness
+ *  Adapter's `interrupt`, which ends only the Turn: the Run returns to `blocked`
+ *  waiting for the person and no Attempt is published. In an Agent Step the
+ *  Attempt stays open and `send-follow-up-turn` continues it (#354); in an
+ *  Interactive agent Step the next Turn is an ordinary send (#353). A `lost`
+ *  termination still halts the Run. Offered on the `run` Projection only while a
+ *  Turn is live; a control issued once the Turn has settled is rejected as a value
+ *  (`not-applied`). Idempotent per operation id. */
 interface InterruptTurnSubmission {
   readonly operationId: string;
   readonly operation: "interrupt-turn";
@@ -241,6 +241,29 @@ export interface SendInteractiveTurnInput {
    *  that moved past it is rejected as stale. */
   readonly stepId: string;
   /** The human's verbatim Turn text; blank/whitespace-only is rejected. */
+  readonly text: string;
+}
+
+/** Continue an Agent Step's Attempt after an Interrupt (spec stories 56–58, ADR
+ *  0035, #354). Admitted only while the Run rests `blocked` with that Step's open
+ *  Attempt waiting on the named interrupted Turn: the human's verbatim `text` is
+ *  sent as a human-origin Turn in the same Session and Attempt through a Run
+ *  execution re-walk, and the Attempt takes its outcome from that Turn — a clean
+ *  one advances the Routing, a failed one takes the ordinary retry, another
+ *  Interrupt waits again, and a `lost` one halts. Blank text is refused at
+ *  admission. Settles `applied` once the Turn is admitted; a stale `turnId` is
+ *  rejected as a value. Idempotent per operation id. Not the interactive send. */
+interface SendFollowUpTurnSubmission {
+  readonly operationId: string;
+  readonly operation: "send-follow-up-turn";
+  readonly input: SendFollowUpTurnInput;
+}
+export interface SendFollowUpTurnInput {
+  readonly runId: string;
+  /** The interrupted Turn the follow-up answers, read from the Offer; a Run no
+   *  longer waiting on it is rejected as stale. */
+  readonly turnId: string;
+  /** The human's verbatim message; blank/whitespace-only is rejected. */
   readonly text: string;
 }
 
@@ -1135,6 +1158,7 @@ export type ActionOffer =
   | InterruptTurnOffer
   | SteerTurnOffer
   | SendInteractiveTurnOffer
+  | SendFollowUpTurnOffer
   | EndInteractiveStepOffer
   | ContinueRepeatOffer
   | EndStageOffer
@@ -1268,6 +1292,22 @@ export interface SendInteractiveTurnOffer {
   readonly runId: string;
   readonly stepId: string;
   readonly basis: "interactive Turn";
+  readonly consequence: string;
+}
+
+/** Continue an Agent Step's Attempt after an Interrupt (#354). Offered on the `run`
+ *  Projection only on the derived waiting basis: the Run rests `blocked` with no
+ *  gate or checkpoint, and the current Agent Step's open Attempt ends on an
+ *  `interrupted` Turn. `turnId` is that Turn — the staleness key a submission
+ *  carries — and `attemptId` lets a client key its draft on the Attempt without
+ *  parsing Turn ids. `basis` names the waiting for presentation by either client. */
+export interface SendFollowUpTurnOffer {
+  readonly action: "send-follow-up-turn";
+  readonly runId: string;
+  readonly stepId: string;
+  readonly attemptId: string;
+  readonly turnId: string;
+  readonly basis: "interrupted Agent Turn";
   readonly consequence: string;
 }
 

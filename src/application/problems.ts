@@ -513,6 +513,49 @@ export function interactiveTurnNotAdmitted(runId: string): Problem {
   };
 }
 
+/** A follow-up after an Interrupt with no text (#354): a human Turn must carry text. */
+export function followUpTurnBlank(runId: string): Problem {
+  return {
+    code: "follow-up-turn-blank",
+    explanation: `Run ${runId} was sent a follow-up with no text; the message continuing the agent must carry text.`,
+    remediation:
+      "Type the message for the agent, then send it; blank messages are not sent.",
+    possibleEffects: "none",
+    details: { runId },
+  };
+}
+
+/** A follow-up naming a Turn the Run no longer waits on (#354): it is not blocked
+ *  after that Interrupt, or a later Turn or Step has moved it on. */
+export function followUpTurnNotWaiting(
+  runId: string,
+  turnId: string,
+  state: string,
+): Problem {
+  return {
+    code: "follow-up-turn-not-waiting",
+    explanation: `Run ${runId} is ${state} and is not waiting for a follow-up to interrupted Turn ${turnId}.`,
+    remediation:
+      "Open the Run to read the Turn it waits on, then send the follow-up from its current offer.",
+    possibleEffects: "none",
+    details: { runId, turnId, state },
+  };
+}
+
+/** A follow-up whose walk rested without admitting it (#354): the Harness could not
+ *  be prepared, the receipt directory was unusable, or the Run stopped first. No
+ *  text reached the agent. */
+export function followUpTurnNotAdmitted(runId: string): Problem {
+  return {
+    code: "follow-up-turn-not-admitted",
+    explanation: `Run ${runId} did not admit the follow-up; the text was not sent to the agent.`,
+    remediation:
+      "Open the Run to read its current state, then send the follow-up again from its offer or resume the Run.",
+    possibleEffects: "none",
+    details: { runId },
+  };
+}
+
 /** An interactive-agent Step cannot be ended: the Run is not blocked at that Step
  *  (it never reached it, or it has already advanced past it) (#122). */
 export function interactiveStepNotActive(

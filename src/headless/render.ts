@@ -13,6 +13,7 @@ import type {
   RunListGroup,
   RunListSnapshot,
   RunView,
+  SendFollowUpTurnOffer,
   SendInteractiveTurnOffer,
 } from "../application/projection-port.js";
 
@@ -372,6 +373,15 @@ export function renderRun(run: RunView): string {
   );
   if (interactiveOffer !== undefined) {
     lines.push("", `Blocked: ${interactiveOffer.basis}`);
+  }
+  // An Agent Step waiting after an Interrupt (#354) names its basis from the
+  // follow-up Offer. Headless sends no follow-up (its parity record); the TUI does.
+  const followUpOffer = run.actionOffers.find(
+    (offer): offer is SendFollowUpTurnOffer =>
+      offer.action === "send-follow-up-turn",
+  );
+  if (followUpOffer !== undefined) {
+    lines.push("", `Blocked: ${followUpOffer.basis}`);
   }
 
   // The answer-human-gate offer appears only while blocked (#85, #108); print each

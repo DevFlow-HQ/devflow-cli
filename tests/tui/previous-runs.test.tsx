@@ -119,6 +119,7 @@ function runViewOf(run: RunView): RunWorkbenchView {
     // satisfy the seam.
     answer: () => () => ({ kind: "applied" }),
     sendInteractiveTurn: () => () => ({ kind: "applied" }),
+    sendFollowUpTurn: () => () => ({ kind: "applied" }),
     endInteractiveStep: () => () => ({ kind: "applied" }),
     continueRepeat: () => () => ({ kind: "applied" }),
     endStage: () => () => ({ kind: "applied" }),
@@ -155,6 +156,7 @@ function disappearingRunView(run: RunView): {
       readTranscript: base.readTranscript,
       answer: base.answer,
       sendInteractiveTurn: base.sendInteractiveTurn,
+      sendFollowUpTurn: base.sendFollowUpTurn,
       endInteractiveStep: base.endInteractiveStep,
       continueRepeat: base.continueRepeat,
       endStage: base.endStage,
@@ -211,6 +213,7 @@ function missingRunView(run: RunView): RunWorkbenchView {
     readTranscript: base.readTranscript,
     answer: base.answer,
     sendInteractiveTurn: base.sendInteractiveTurn,
+    sendFollowUpTurn: base.sendFollowUpTurn,
     endInteractiveStep: base.endInteractiveStep,
     continueRepeat: base.continueRepeat,
     endStage: base.endStage,

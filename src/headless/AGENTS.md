@@ -23,9 +23,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `--text <value>` (a free-text authored gate, #108) — exactly one, tested by presence so `--text ""` is a valid empty answer. The client never re-classifies
   the gate shape: a `--text` answer to an approve-reject gate (or vice versa) is forwarded and the Application refuses it as `gate-shape-mismatch`.
 - A Run that rests `blocked` at a gate names its follow-up answer command in the plain-text tail (`settleAndReportRun`'s `answerHint`, #108): a free-text
-  gate names `--text`, an approve-reject gate names `--continue`/`--stop`. `run show` names the blocked basis for all three cases (A15): the durable Human Gate
+  gate names `--text`, an approve-reject gate names `--continue`/`--stop`. `run show` names the blocked basis in every case (A15): the durable Human Gate
   (the authored pending gate's shape/message/output and the derived Review checkpoint, both under the `answer-human-gate` Offer's `basis`), the interactive Turn
-  (from the `send-interactive-turn` Offer's `basis`), and the ephemeral Harness Request. The first two are durable `RunView` fields renderRun prints; the ephemeral
+  (from the `send-interactive-turn` Offer's `basis`), an Agent Step waiting after an Interrupt (the `send-follow-up-turn` Offer's `basis`, #354; headless
+  names no follow-up command), and the ephemeral Harness Request. The first two are durable `RunView` fields renderRun prints; the ephemeral
   request is never durable, so `showRun` peeks the live overlay (`peekLiveOverlay` — a bounded first-update read that returns the overlay buffered at open while a
   Turn is live here, else nothing) and names the outstanding request. All of it is additive to the frozen `--json`, whose shape is the durable snapshot alone.
 - `run show` keeps raw event kinds and ids (it is the diagnostic surface) and ends each Step-scoped timeline line with ` · step <id>` (#289); the TUI shows

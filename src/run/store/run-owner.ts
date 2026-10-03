@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -869,7 +870,7 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
           };
         });
     },
-    outputReceiptDirectory(attemptId) {
+    outputReceiptDirectory(attemptId, options) {
       // Hashed, because an Attempt id carries characters (`:`) Windows forbids in
       // a file name; the digest is a stable, portable name for the same Attempt.
       const name = createHash("sha256")
@@ -906,6 +907,19 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
         return unavailable(root, cause);
       }
       try {
+        if (options?.keep === true) {
+          // Kept for a follow-up Turn (#354): nothing is emptied, so a link or a
+          // file the agent planted at `dir` is refused rather than removed.
+          const existing = lstatSync(dir, { throwIfNoEntry: false });
+          if (existing === undefined) mkdirSync(dir);
+          else if (!existing.isDirectory()) {
+            return unavailable(
+              dir,
+              new Error(`'${dir}' is not a receipt directory.`),
+            );
+          }
+          return { ok: true, path: dir };
+        }
         // A link planted at `dir` itself is removed, never followed.
         rmSync(dir, { recursive: true, force: true });
         mkdirSync(dir, { recursive: true });

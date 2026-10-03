@@ -30,6 +30,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - An Agent Step Attempt's Turn is `<attemptId>#turn-<n>`, `n` one past that Attempt's admitted Turns (#352): a walk resumed after a crash mid-Turn re-mints the
   same Attempt id behind the Store's UUID marker, so its Turn joins that Attempt rather than colliding with the `lost` row. `openAgentAttemptTurn` derives the
   open Agent Attempt's latest Turn from `turns()` and `attemptLog()` with no new record, counting only `kind: "agent"`; open is not waiting, so callers add the basis.
+- A Port Interrupt of an Agent Step's Turn pauses with no Attempt published (#354): `waitingAgentTurn` (an open Attempt ending `interrupted`) is the
+  Attempt-level waiting basis, and the walk rests `blocked`. A re-walk re-minting that Attempt sends `ExecutionDeps.followUp` verbatim as an `agent`,
+  `human`-origin `#turn-<n>` only while its `turnId` is still that latest Turn; otherwise it pauses again and never re-sends the prompt. The follow-up
+  keeps the Attempt's receipt directory, adds no receipt lines, and its Turn gives the Attempt its outcome. A signal still cancels the Attempt and halts.
 - An interactive-agent Step's Entry Turn (`entryTurn`) is due only while no Turn of its Attempt was admitted, so no later walk re-sends it; none publishes
   an Attempt, only `end-interactive-step` does (#212). `interactiveTurnRest` decides the rest after every Interactive Turn, Entry or human (#353): an
   Interrupt waits `blocked`, a `lost` Turn halts. A signal also settles a live Turn `interrupted` without throwing, so the aborted signal, not the result

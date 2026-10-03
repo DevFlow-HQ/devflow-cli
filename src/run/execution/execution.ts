@@ -34,6 +34,7 @@ import {
   RunCancelledError,
   runAgent,
   runInteractiveEntryTurn,
+  type AgentFollowUp,
   type HarnessExecutionDeps,
   type RequestChannel,
   type StepAttempt,
@@ -55,8 +56,10 @@ export {
   RUN_CANCEL_ABORT,
   RunCancelledError,
   SIGNAL_ABORT,
+  waitingAgentTurn,
 } from "./agent.js";
 export type {
+  AgentFollowUp,
   HarnessExecutionDeps,
   LiveInterruptFn,
   LiveObservation,
@@ -137,6 +140,10 @@ export interface ExecutionDeps {
    *  Composition fills it from the Secant invocation's operational log; absent, the
    *  lifecycle is reported nowhere. */
   readonly observe?: ExecutionObserver;
+  /** The human's follow-up to the Agent Turn an Interrupt left waiting (#354): sent
+   *  verbatim only while `turnId` is still the open Attempt's latest, interrupted
+   *  Turn. Otherwise, or when absent, a waiting Attempt pauses again. */
+  readonly followUp?: AgentFollowUp;
 }
 
 /** One of Run execution's own Run Store writes, each one transaction (#325),
@@ -228,7 +235,8 @@ export type TurnFailureFacts = Pick<
 export type ExecutionObserver = (event: ExecutionEvent) => void;
 
 /** How a Run came to rest. `blocked` is a durable pause awaiting a human: an
- *  authored Human Gate, an interactive-agent Step, or a Review checkpoint. The
+ *  authored Human Gate, an interactive-agent Step, an Agent Step's Attempt an
+ *  Interrupt left open (#354), or a Review checkpoint. The
  *  stored `blocked` state is always written; a Review checkpoint's Gate facts are
  *  derived evidence, re-derived from the Attempt log, Verdict binding, and Gate
  *  answers (#84, #85, #108). `halted` is
@@ -262,11 +270,10 @@ export const TRUNCATION_MARKER = `\n[secant: output truncated at ${MAX_CAPTURE_B
 /** A durable pause an executor returns instead of an Attempt (#108, #122): the Step
  *  did not run to a settled outcome — it rests the Run `blocked` and waits for a
  *  human. A Human Gate pause carries the gate the scheduler records (with the minted
- *  Attempt id); an interactive-agent pause records no gate — the Run's stored state
- *  is still `blocked`, its controls are derived from the current Step being
- *  interactive-agent, and its Attempt settles later through `end-interactive-step`.
- *  The scheduler branches on this shape, not on the Step kind (#13 rule 6). */
-type StepPause = GatePause | InteractivePause;
+ *  Attempt id); a human-Turn pause records no gate — the Run's stored state is still
+ *  `blocked` and its controls are derived (#122, #354). The scheduler branches on
+ *  this shape, not on the Step kind (#13 rule 6). */
+type StepPause = GatePause | HumanTurnPause;
 interface GatePause {
   readonly pause: true;
   readonly shape: HumanGateShape;
@@ -274,9 +281,13 @@ interface GatePause {
   readonly outputArtifactName?: string; // free-text's declared output artifact
   readonly suggestions?: readonly string[]; // free-text's authored quick choices
 }
-interface InteractivePause {
+/** The Step awaits the human's next Turn, with no Attempt published: an
+ *  interactive-agent Step between Turns (settled later by `end-interactive-step`,
+ *  #122), or an Agent Step whose Attempt an Interrupt left open, continued by the
+ *  follow-up (#354). Both derive their controls rather than record a gate. */
+export interface HumanTurnPause {
   readonly pause: true;
-  readonly interactive: true;
+  readonly awaitsHumanTurn: true;
   /** The authored entry Turn was lost, or a process signal stopped it (#212, ADR
    *  0019): rest `halted` for a human resume instead of `blocked`, with no Attempt
    *  published. An Interrupt alone returns the Step to waiting (#353). */
@@ -297,6 +308,8 @@ interface StepContext {
   readonly requestChannel?: RequestChannel;
   /** The Routing, so an interactive Step's Session follows its Repeat scope (#216). */
   readonly routing: readonly RoutingNode[];
+  /** The follow-up an Agent Step's waiting Attempt may take (#354). */
+  readonly followUp?: AgentFollowUp;
 }
 
 type StepExecutor = (
@@ -308,7 +321,8 @@ type StepExecutor = (
 // The closed executable Step-kind dispatch table (#13). A `command` runs to an
 // Attempt; a `human-gate` returns a durable pause the scheduler records as a
 // pending gate and rests `blocked` at (#108); an `agent` runs one autonomous
-// Harness Turn to an Attempt (#116); an `interactive-agent` returns a durable pause
+// Harness Turn to an Attempt (#116), or pauses for the human's follow-up after an
+// Interrupt (#354); an `interactive-agent` returns a durable pause
 // that rests `blocked` for human turn-taking, driven from the Application and
 // settled by `end-interactive-step` (#122). The scheduler learns nothing per kind —
 // it branches only on an Attempt vs the pause shape.
@@ -371,7 +385,7 @@ async function runInteractiveAgent(
     interactiveTurnRest(entry.kind, context.cancelSignal) === "halted";
   return {
     pause: true,
-    interactive: true,
+    awaitsHumanTurn: true,
     ...(halted ? { halted: true } : {}),
   };
 }
@@ -437,6 +451,7 @@ async function walkRouting(
       ...(deps.requestChannel !== undefined
         ? { requestChannel: deps.requestChannel }
         : {}),
+      ...(deps.followUp !== undefined ? { followUp: deps.followUp } : {}),
       routing,
     },
     budget: deps.defaultRetryBudget ?? DEFAULT_RETRY_BUDGET,
@@ -759,10 +774,11 @@ async function runStepAttempts(
       // re-reaches the gate re-rests `blocked` and re-records nothing. A fenced owner
       // means another process took over; throw as the publication path does.
       if ("pause" in result) {
-        // An interactive-agent pause: a durable block with no gate record (#122). The
-        // Run rests `blocked` (executeRouting writes it) and the human drives Turns;
-        // `end-interactive-step` publishes this Step's Attempt. No Attempt here, no retry.
-        if ("interactive" in result) {
+        // A human-Turn pause: a durable block with no gate record (#122, #354). The
+        // Run rests `blocked` (executeRouting writes it) and the human drives the next
+        // Turn — `end-interactive-step` or the Agent Step's follow-up re-walk settles
+        // this Step's Attempt. No Attempt here, no retry.
+        if ("awaitsHumanTurn" in result) {
           if (result.halted !== true) {
             pause();
             return "blocked";
@@ -805,9 +821,9 @@ async function runStepAttempts(
       // result: it is settled `indeterminate`, never retried, and rests the Run
       // `halted` in the same transaction for human resume (ADR 0019, #86). A `lost`
       // Agent Turn maps to `indeterminate` too (#116): terminal truth is unknown.
-      // A `cancelled` Attempt is an interrupted Agent Turn (#116): the Turn's native
-      // work stopped, so the Attempt ends `cancelled` and the Run rests `halted` for
-      // human resume, never retried — the same resumable rest an interrupt leaves.
+      // A `cancelled` Attempt is an Agent Turn a process signal stopped (#116, ADR
+      // 0019): the Attempt ends `cancelled` and the Run rests `halted` for human
+      // resume, never retried. A Port Interrupt pauses above instead (#354).
       if (
         result.outcome === "indeterminate" ||
         result.outcome === "cancelled"

@@ -76,10 +76,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   durable End Stage fact, read back as `AttemptLogEntry.endsStage` only when stored `true` — a stored `false` reads absent exactly like
   `null`.
 - `outputReceiptDirectory` (#215) hands execution one emptied `.receipts/<first 32 hex characters of sha256(attemptId)>` directory inside the Run working
-  area (#220), so the one Harness grant covers it; hashed because Attempt ids carry `:`.
-  It is candidate storage, never canonical and never fenced; only `publishAttempt` binds validated receipt bytes, and Run deletion removes it with the directory.
-  It returns a typed result, never an operational throw (#305): `working-area-unavailable`, or `output-receipt-directory-unavailable` for a squatted root,
-  a root that does not resolve to itself (an agent-planted link, refused before emptying through it), or a failed removal/creation.
+  area (#220), so the one Harness grant covers it; hashed because Attempt ids carry `:`. `keep` (#354, a follow-up Turn) skips emptying, so it refuses any
+  non-directory there (a planted link too). Candidate storage, never canonical or fenced: only `publishAttempt` binds receipt bytes; Run deletion removes it.
+  A typed result, never a throw (#305): `working-area-unavailable`, or `output-receipt-directory-unavailable` for a squatted root, a root that does not
+  resolve to itself (an agent-planted link, refused before emptying through it), or a failed removal/creation.
 - Harness Turn records (#116): `admitTurn` writes the `turn` row **before** the stdin frame is sent (the durable admission the Adapter awaits) — it upserts the named Session
   `open` and the rendered input as a `user` transcript entry in one transaction, and a fenced owner refuses it, proving the Turn `not-started` so no stdin is sent.
 - `settleTurn` is immutable: it no-ops once the `turn` row's `result_kind` is set, so a second settle rewrites neither the result nor the Session availability. `turn_event`s

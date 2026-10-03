@@ -541,9 +541,14 @@ export interface RunOwner {
    * Attempt, and removed with the Run. Receipt files are candidate input only;
    * nothing is canonical until `publishAttempt` binds the validated bytes. An
    * unusable working area or receipt path is a typed Problem (#305), so a caller
-   * needs no separate working-area check first.
+   * needs no separate working-area check first. `keep` returns the same Attempt's
+   * directory without emptying it, for a follow-up Turn whose receipts the agent
+   * may already have written (#354); it refuses anything but a directory there.
    */
-  outputReceiptDirectory(attemptId: string): OutputReceiptDirectoryResult;
+  outputReceiptDirectory(
+    attemptId: string,
+    options?: { readonly keep?: boolean },
+  ): OutputReceiptDirectoryResult;
   /**
    * Record a durable Human Gate answer as a bound Artifact (#85): stage its bytes
    * as one commit, then a single `run.db` transaction records the version, moves

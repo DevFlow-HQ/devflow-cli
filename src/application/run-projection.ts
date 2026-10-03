@@ -30,6 +30,7 @@ import {
   attemptStepId,
   interactiveEndLegality,
   interactiveStepTarget,
+  waitingAgentTurn,
 } from "../run/execution/execution.js";
 import type {
   ActionOffer,
@@ -187,20 +188,18 @@ function runResult(
     const liveTurn = !liveElsewhere
       ? turns.find((turn) => turn.resultKind === undefined)
       : undefined;
-    // The interactive-agent Step the Run rests `blocked` at, at a Turn boundary
-    // (#122): no derived checkpoint, no authored gate, and no live Turn. The block is
-    // read from the current Step's kind — the same signal the TUI blocked-basis uses —
-    // so it needs no durable gate record.
+    // Why the Run holds its current Step for the human, read by the one hold-basis
+    // derivation the Application also admits and adopts by (#122, #354): an
+    // interactive-agent Step at a Turn boundary, or an Agent Step's Attempt an
+    // Interrupt left waiting. Neither needs a durable gate record.
     const current = derivedRun.statuses[derivedRun.position];
-    const interactiveStep =
-      !liveElsewhere &&
-      derivedRun.state === "blocked" &&
-      derivedRun.checkpoint === undefined &&
-      derivedRun.pendingGate === undefined &&
-      liveTurn === undefined &&
-      current?.kind === "interactive-agent"
-        ? current
+    const held =
+      !liveElsewhere && owner !== undefined && liveTurn === undefined
+        ? holdBasis(derivedRun, owner)
         : undefined;
+    const interactiveStep =
+      held?.kind === "interactive" ? held.step : undefined;
+    const followUp = held?.kind === "follow-up" ? held : undefined;
     const turnEvents = owner?.turnEvents() ?? [];
     const sessions = owner?.harnessSessions() ?? [];
     const names = sessionNames(facts.routing, turns);
@@ -308,10 +307,10 @@ function runResult(
               ? [resumeRunOffer(runId, derivedRun.state, resumeEvidence())]
               : []),
           // Turn-scoped controls (#118, #148): while a Turn is live in this process, a
-          // user can interrupt it without cancelling the Run (an Agent Step rests the
-          // Run `halted`, resumable; an Interactive Step returns to `blocked`, #353),
-          // and steer it when the prepared profile declares native same-Turn
-          // guidance. The steer Offer is discriminated on that profile
+          // user can interrupt it without cancelling the Run (the Step returns to
+          // `blocked` waiting for the person, #353, #354), and steer it when the
+          // prepared profile declares native same-Turn guidance. The steer Offer is
+          // discriminated on that profile
           // evidence (live first, then persisted with the Attempt) — a Harness with
           // steer (Codex) offers it available, one without (Claude Code) offers it
           // unavailable with the evidence, never Adapter-specific prose here.
@@ -349,6 +348,11 @@ function runResult(
                     : [],
                 ),
               ]
+            : []),
+          // An Agent Step's Attempt an Interrupt left waiting (#354): the person's
+          // next message continues it as a follow-up Turn.
+          ...(followUp !== undefined
+            ? [sendFollowUpTurnOffer(runId, followUp.step.id, followUp.turn)]
             : []),
           isLive || derivedRun.state === "blocked"
             ? cancelRunOffer(runId)
@@ -672,6 +676,25 @@ function sendInteractiveTurnOffer(runId: string, stepId: string): ActionOffer {
   };
 }
 
+/** The `send-follow-up-turn` offer for an Agent Step's Attempt waiting after an
+ *  Interrupt (#354), keyed on the interrupted Turn. */
+function sendFollowUpTurnOffer(
+  runId: string,
+  stepId: string,
+  turn: TurnRecord,
+): ActionOffer {
+  return {
+    action: "send-follow-up-turn",
+    runId,
+    stepId,
+    attemptId: turn.attemptId,
+    turnId: turn.turnId,
+    basis: "interrupted Agent Turn",
+    consequence:
+      "send the typed text to the agent as your next message in the same Session; the Step continues from that Turn.",
+  };
+}
+
 /** The `end-interactive-step` offer for a Run blocked at an interactive-agent Step
  *  at a Turn boundary (#122): offered only when it can be taken (no live Turn). */
 function endInteractiveStepOffer(runId: string, stepId: string): ActionOffer {
@@ -726,7 +749,7 @@ function interruptTurnOffer(runId: string, turnId: string): ActionOffer {
     runId,
     turnId,
     consequence:
-      "stop the live Turn and rest the Run halted (resumable), keeping its history.",
+      "stop the live Turn; the agent then waits for your next message in the same Session.",
   };
 }
 
@@ -764,6 +787,38 @@ function deleteRunOffer(runId: string): ActionOffer {
     consequence:
       "remove the Run and its stored history and Artifacts from disk.",
   };
+}
+
+/** Why a `blocked` Run holds its current Step for the human, with no gate or
+ *  checkpoint (#122, #354): an interactive-agent Step between Turns, or an Agent
+ *  Step whose open Attempt an Interrupt left waiting — execution's Attempt-level
+ *  basis, on that Step. Its single-derivation rule is run-control's. */
+export type HoldBasis =
+  | { readonly kind: "interactive"; readonly step: RunStepProgress }
+  | {
+      readonly kind: "follow-up";
+      readonly step: RunStepProgress;
+      readonly turn: TurnRecord;
+    };
+
+export function holdBasis(
+  derived: DerivedRun,
+  run: Pick<RunOwner, "turns" | "attemptLog">,
+): HoldBasis | undefined {
+  if (
+    derived.state !== "blocked" ||
+    derived.checkpoint !== undefined ||
+    derived.pendingGate !== undefined
+  ) {
+    return undefined;
+  }
+  const step = derived.statuses[derived.position];
+  if (step?.kind === "interactive-agent") return { kind: "interactive", step };
+  if (step?.kind !== "agent") return undefined;
+  const turn = waitingAgentTurn(run);
+  return turn !== undefined && attemptStepId(turn.attemptId) === step.id
+    ? { kind: "follow-up", step, turn }
+    : undefined;
 }
 
 /** Map a stored/tracked canonical state to the client vocabulary (#98 A7). The
@@ -1144,10 +1199,15 @@ function finishTerminalGroup(
 
   // Short of the cadence but resting `blocked` or `halted` with an interactive
   // first span Step: the next iteration opened on it and it awaits Turns without
-  // an Attempt (#216), so the log ends exactly at the iteration boundary.
+  // an Attempt (#216), so the log ends exactly at the iteration boundary. An Agent
+  // first span Step an Interrupt holds open waits the same way (#354).
+  const waiting = owner !== undefined ? waitingAgentTurn(owner) : undefined;
   if (
-    (state === "blocked" || state === "halted") &&
-    span[0]!.kind === "interactive-agent"
+    ((state === "blocked" || state === "halted") &&
+      span[0]!.kind === "interactive-agent") ||
+    (state === "blocked" &&
+      waiting !== undefined &&
+      attemptStepId(waiting.attemptId) === span[0]!.id)
   ) {
     mark(span[0]!, "blocked");
     return {

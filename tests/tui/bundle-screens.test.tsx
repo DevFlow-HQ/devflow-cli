@@ -226,6 +226,9 @@ function noRunView(): RunWorkbenchView {
     sendInteractiveTurn() {
       throw new Error("run workbench not used in this test");
     },
+    sendFollowUpTurn() {
+      throw new Error("run workbench not used in this test");
+    },
     endInteractiveStep() {
       throw new Error("run workbench not used in this test");
     },

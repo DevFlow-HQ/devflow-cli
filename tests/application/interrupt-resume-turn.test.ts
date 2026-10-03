@@ -15,6 +15,7 @@ import type {
   InterruptTurnOffer,
   ProjectionPort,
   RunView,
+  SendFollowUpTurnOffer,
   SteerTurnOffer,
 } from "../../src/application/projection-port.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
@@ -30,11 +31,10 @@ import { makeTempDir } from "../helpers/tempDir.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 
-// Interrupt a live Turn through the Port, resume the same Session, and reject the
-// unavailable steer control (#118). Each test wires the Application against the
-// deterministic fake Claude Code Harness (native steer unavailable) and an injected
-// fake Process — no child spawns (#184). No real Harness runs (ADR 0027).
-
+// Interrupt a live Turn through the Port, continue it with the follow-up, and reject
+// the unavailable steer control (#118, #354). Each test wires the Application against
+// the deterministic fake Claude Code Harness (native steer unavailable) and an
+// injected fake Process — no child spawns (#184). No real Harness runs (ADR 0027).
 // Claude Code's stream-json print mode has no same-Turn guidance frame, so the steer
 // Offer is unavailable and its `reason` is exactly this profile evidence.
 const STEER_EVIDENCE =
@@ -163,36 +163,83 @@ function unacknowledgedTurn(): FakeScript["turns"][number] {
   return { result: FAILED_UNACKNOWLEDGED };
 }
 
-/** The scripts one wiring hands out, one per Harness preparation. A launch prepares
- *  once; a resume prepares a fresh Harness, so the second script drives the resumed
- *  Turn. Extra preparations reuse the last script. */
-function scriptsFor(scenario: string): readonly FakeScript[] {
-  const blocking: FakeScript = {
-    profile: claudeProfile(),
-    turns: [blockingTurn()],
-  };
-  if (scenario === "resume") {
-    return [blocking, { profile: claudeProfile(), turns: [completedTurn()] }];
+/** The Turns the launch's prepared Harness drives, in order: the Run holds that
+ *  Harness across the wait after an Interrupt, so a follow-up is its next Turn. */
+function turnsFor(scenario: string): readonly FakeScript["turns"][number][] {
+  switch (scenario) {
+    case "follow-up":
+      return [blockingTurn(), completedTurn()];
+    case "follow-up-unacknowledged":
+      return [blockingTurn(), unacknowledgedTurn()];
+    case "interrupt-again":
+      return [blockingTurn(), blockingTurn()];
+    default:
+      return [blockingTurn()];
   }
-  if (scenario === "resume-unacknowledged") {
-    return [
-      blocking,
-      { profile: claudeProfile(), turns: [unacknowledgedTurn()] },
-    ];
-  }
-  return [blocking];
 }
 
-/** A Harness Adapter that prepares one scripted fake Harness per `prepare` call. The
- *  Application re-prepares a fresh Harness for each execution (launch, then resume), so
- *  a scenario's successive Turn behaviours are keyed to the preparation sequence. */
-function sequencedAdapter(scripts: readonly FakeScript[]): HarnessAdapter {
+/** What the wired fake Harness saw: each preparation and close, and each Turn
+ *  request's Session, origin, verbatim input, and resume coordinate. */
+interface HarnessRecord {
+  prepares: number;
+  closes: number;
+  /** Resolves at the first close, which follows the Run's last pushed rest. */
+  readonly closed: Promise<void>;
+  readonly onClose: () => void;
+  readonly requests: {
+    readonly session: string;
+    readonly origin: string;
+    readonly text: string;
+    readonly resume?: string;
+  }[];
+}
+
+function harnessRecord(): HarnessRecord {
+  let onClose: () => void = () => undefined;
+  const closed = new Promise<void>((resolve) => {
+    onClose = resolve;
+  });
+  return { prepares: 0, closes: 0, closed, onClose, requests: [] };
+}
+
+/** A Harness Adapter that prepares one scripted fake Harness per `prepare` call,
+ *  recording what it saw. Extra preparations reuse the last script. */
+function sequencedAdapter(
+  scripts: readonly FakeScript[],
+  record?: HarnessRecord,
+): HarnessAdapter {
   let index = 0;
   return {
-    prepare(options) {
+    async prepare(options) {
       const script = scripts[Math.min(index, scripts.length - 1)]!;
       index += 1;
-      return createFake(script)().prepare(options);
+      const prepared = await createFake(script)().prepare(options);
+      if (!prepared.ok || record === undefined) return prepared;
+      record.prepares += 1;
+      const harness = prepared.harness;
+      return {
+        ok: true,
+        harness: {
+          profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
+          close() {
+            record.closes += 1;
+            record.onClose();
+            return harness.close();
+          },
+          startTurn(request) {
+            record.requests.push({
+              session: request.session,
+              origin: request.origin,
+              text: request.input.text,
+              ...(request.resume !== undefined
+                ? { resume: request.resume.opaque }
+                : {}),
+            });
+            return harness.startTurn(request);
+          },
+        },
+      };
     },
   };
 }
@@ -254,19 +301,19 @@ function writeAgentBundle(): { folder: string; id: string } {
   return { folder, id: manifest.bundle.id };
 }
 
-/** Wire the Application against the fake Claude Code Harness for `scenario` and an
- *  injected fake Process. Installs the single-Agent Bundle and approves the Workspace;
- *  returns the wired clients. */
-function wire(
+/** One wiring over `home`/`workspace` whose Harness Adapter prepares `scripts` in
+ *  order; closed (shut down first, so a held Harness closes) after the test. */
+function wireOver(
   t: TestContext,
-  scenario: string,
-): { wired: Wiring; bundleId: string; digest: string } {
-  const workspace = makeTempDir("secant-interrupt-ws-");
+  dirs: { readonly home: string; readonly workspace: string },
+  scripts: readonly FakeScript[],
+  record?: HarnessRecord,
+): Wiring {
   const wired = wireApplication({
-    secantHome: makeTempDir("secant-interrupt-home-"),
-    launchCwd: workspace,
+    secantHome: dirs.home,
+    launchCwd: dirs.workspace,
     process: fakeProcess(),
-    harnessAdapter: sequencedAdapter(scriptsFor(scenario)),
+    harnessAdapter: sequencedAdapter(scripts, record),
     discoverClaudeCode: () => ({
       kind: "found",
       attempt: {
@@ -276,10 +323,39 @@ function wire(
       },
     }),
   });
-  t.after(() => {
+  t.after(async () => {
+    await wired.shutdown();
     wired.runGroup.close();
     wired.catalog.close();
   });
+  return wired;
+}
+
+/** Wire the Application against the fake Claude Code Harness for `scenario` and an
+ *  injected fake Process. Installs the single-Agent Bundle and approves the Workspace;
+ *  returns the wired clients and what the Harness saw. */
+function wire(
+  t: TestContext,
+  scenario: string,
+): {
+  wired: Wiring;
+  bundleId: string;
+  digest: string;
+  harness: HarnessRecord;
+  dirs: { readonly home: string; readonly workspace: string };
+} {
+  const dirs = {
+    home: makeTempDir("secant-interrupt-home-"),
+    workspace: makeTempDir("secant-interrupt-ws-"),
+  };
+  const workspace = dirs.workspace;
+  const harness = harnessRecord();
+  const wired = wireOver(
+    t,
+    dirs,
+    [{ profile: claudeProfile(), turns: turnsFor(scenario) }],
+    harness,
+  );
 
   const bundle = writeAgentBundle();
   assert.ok(
@@ -293,7 +369,7 @@ function wire(
     input: { path: workspace },
   });
   assert.ok(approve.admitted);
-  return { wired, bundleId: bundle.id, digest: entry.digest };
+  return { wired, bundleId: bundle.id, digest: entry.digest, harness, dirs };
 }
 
 /** Follow the run Projection until a live Turn offers `interrupt-turn`, so a control
@@ -325,9 +401,7 @@ function runView(port: ProjectionPort, runId: string): RunView {
   }
 }
 
-test("interrupt-turn stops a live Turn, rests the Run halted, detaches the Session, and settles the Turn interrupted (#118)", async (t) => {
-  const { wired, digest } = wire(t, "interrupt");
-  const port = wired.projectionPort;
+function launchAgent(port: ProjectionPort, digest: string): string {
   const launch = port.submit({
     operationId: "op-launch",
     operation: "launch-run",
@@ -339,7 +413,80 @@ test("interrupt-turn stops a live Turn, rests the Run halted, detaches the Sessi
     },
   });
   assert.ok(launch.admitted, JSON.stringify(launch));
-  const runId = launch.runId!;
+  return launch.runId!;
+}
+
+/** Interrupt the live Turn `offer` names and await its own outcome. */
+async function interrupt(
+  port: ProjectionPort,
+  runId: string,
+  offer: InterruptTurnOffer,
+  operationId = "op-interrupt",
+): Promise<void> {
+  assert.ok(
+    port.submit({
+      operationId,
+      operation: "interrupt-turn",
+      input: { runId, turnId: offer.turnId },
+    }).admitted,
+  );
+  const outcome = await awaitSettled(port, operationId);
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+}
+
+function followUpOffer(run: RunView): SendFollowUpTurnOffer | undefined {
+  return run.actionOffers.find(
+    (candidate): candidate is SendFollowUpTurnOffer =>
+      candidate.action === "send-follow-up-turn",
+  );
+}
+
+/** The follow-up Offer once the launch drive has rested: its `blocked` write pushes
+ *  the Offer just before the drive ends, and a follow-up sent while that drive is
+ *  still in flight is refused, as an interactive send is. */
+async function awaitFollowUpOffer(
+  port: ProjectionPort,
+  runId: string,
+): Promise<SendFollowUpTurnOffer> {
+  assert.equal((await awaitSettled(port, "op-launch")).status, "applied");
+  const offer = followUpOffer(runView(port, runId));
+  assert.ok(offer, "expected the follow-up offered");
+  return offer;
+}
+
+function sendFollowUp(
+  port: ProjectionPort,
+  offer: SendFollowUpTurnOffer,
+  text: string,
+  operationId = "op-follow-up",
+) {
+  return port.submit({
+    operationId,
+    operation: "send-follow-up-turn",
+    input: { runId: offer.runId, turnId: offer.turnId, text },
+  });
+}
+
+function awaitState(
+  port: ProjectionPort,
+  runId: string,
+  state: RunView["state"],
+): Promise<RunView> {
+  return followRun(port, runId, (run) =>
+    run.state === state ? run : undefined,
+  );
+}
+
+function timelineDetails(run: RunView, event: string): (string | undefined)[] {
+  return run.timeline
+    .filter((entry) => entry.event === event)
+    .map((entry) => entry.detail);
+}
+
+test("interrupt-turn ends only the Agent Turn: the Attempt stays open and the Run waits blocked with the follow-up offered and the Harness held (#354)", async (t) => {
+  const { wired, digest, harness } = wire(t, "interrupt");
+  const port = wired.projectionPort;
+  const runId = launchAgent(port, digest);
 
   const offer = await awaitLiveTurn(port, runId);
   // A steer-turn offer stands beside it, marked unavailable with the exact reason.
@@ -350,28 +497,39 @@ test("interrupt-turn stops a live Turn, rests the Run halted, detaches the Sessi
   assert.ok(steer, "expected a steer-turn offer while the Turn is live");
   assert.equal(steer!.available, false);
   assert.equal(steer!.reason, STEER_EVIDENCE);
-
-  const interrupt = port.submit({
-    operationId: "op-interrupt",
-    operation: "interrupt-turn",
-    input: { runId, turnId: offer.turnId },
-  });
-  assert.ok(interrupt.admitted);
-  const interruptOutcome = await awaitSettled(port, "op-interrupt");
   assert.equal(
-    interruptOutcome.status,
-    "applied",
-    JSON.stringify(interruptOutcome),
+    offer.consequence,
+    "stop the live Turn; the agent then waits for your next message in the same Session.",
   );
 
-  // The launch Operation settles once the interrupted Turn rests the Run halted.
-  await awaitSettled(port, "op-launch");
+  await interrupt(port, runId, offer);
+
+  // The launch Operation settles once the walk rests at the waiting Step.
+  assert.equal((await awaitSettled(port, "op-launch")).status, "applied");
   const run = runView(port, runId);
-  assert.equal(run.state, "halted");
+  assert.equal(run.state, "blocked");
+  assert.equal(run.progress[run.position]?.status, "blocked");
+  assert.deepEqual(followUpOffer(run), {
+    action: "send-follow-up-turn",
+    runId,
+    stepId: "work",
+    attemptId: "0.0:work",
+    turnId: offer.turnId,
+    basis: "interrupted Agent Turn",
+    consequence:
+      "send the typed text to the agent as your next message in the same Session; the Step continues from that Turn.",
+  });
+  // No Attempt settled, nothing to resume, and the waiting Run is cancellable.
+  assert.deepEqual(timelineDetails(run, "attempt-settled"), []);
+  assert.deepEqual(
+    run.actionOffers.map((candidate) => candidate.action).sort(),
+    ["cancel-run", "send-follow-up-turn"],
+  );
   assert.equal(run.sessions?.[0]?.session, "s");
   assert.equal(run.sessions?.[0]?.availability, "detached");
-  const settled = run.timeline.find((event) => event.event === "turn-settled");
-  assert.equal(settled?.detail, "interrupted");
+  assert.deepEqual(timelineDetails(run, "turn-settled"), ["interrupted"]);
+  // The Step's Harness is held across the wait, not closed.
+  assert.deepEqual([harness.prepares, harness.closes], [1, 0]);
 
   // A control issued after acceptance is rejected as a value: the Turn has settled.
   const after = port.submit({
@@ -390,18 +548,7 @@ test("interrupt-turn stops a live Turn, rests the Run halted, detaches the Sessi
 test("steer-turn is rejected as a value when submitted (#118)", async (t) => {
   const { wired, digest } = wire(t, "interrupt");
   const port = wired.projectionPort;
-  const launch = port.submit({
-    operationId: "op-launch",
-    operation: "launch-run",
-    input: {
-      bundle: { id: "dev.secant.interrupt-e2e" },
-      launchInputs: {},
-      trustDigest: digest,
-      harness: "claude-code",
-    },
-  });
-  assert.ok(launch.admitted);
-  const runId = launch.runId!;
+  const runId = launchAgent(port, digest);
   const offer = await awaitLiveTurn(port, runId);
 
   const steer = port.submit({
@@ -417,118 +564,191 @@ test("steer-turn is rejected as a value when submitted (#118)", async (t) => {
     assert.match(outcome.problem.explanation, /stream-json print mode/);
   }
 
-  // Interrupt so the Run rests and the wired process does not leak a live child.
-  port.submit({
-    operationId: "op-interrupt",
-    operation: "interrupt-turn",
-    input: { runId, turnId: offer.turnId },
-  });
+  // Interrupt so the Run rests waiting and the wired process leaks no live Turn.
+  await interrupt(port, runId, offer);
   await awaitSettled(port, "op-launch");
+  assert.equal(runView(port, runId).state, "blocked");
 });
 
-test("resume-run continues a detached Session in the same Claude Code Session via --resume (#118)", async (t) => {
-  const { wired, digest } = wire(t, "resume");
+test("the follow-up runs as a human Turn in the same Session and Attempt on the held Harness, and a clean one advances the Run (#354)", async (t) => {
+  const { wired, digest, harness } = wire(t, "follow-up");
   const port = wired.projectionPort;
-  const launch = port.submit({
-    operationId: "op-launch",
-    operation: "launch-run",
-    input: {
-      bundle: { id: "dev.secant.interrupt-e2e" },
-      launchInputs: {},
-      trustDigest: digest,
-      harness: "claude-code",
+  const runId = launchAgent(port, digest);
+  await interrupt(port, runId, await awaitLiveTurn(port, runId));
+  const offer = await awaitFollowUpOffer(port, runId);
+
+  const sent = sendFollowUp(port, offer, "Keep going, but skip the docs.");
+
+  assert.ok(sent.admitted, JSON.stringify(sent));
+  // It settles at the follow-up Turn's admission (#290).
+  assert.equal((await awaitSettled(port, "op-follow-up")).status, "applied");
+  const run = await awaitState(port, runId, "succeeded");
+  // The human's text went verbatim to the same Session on the held Harness.
+  assert.deepEqual(harness.requests.slice(1), [
+    {
+      session: "s",
+      origin: "human",
+      text: "Keep going, but skip the docs.",
+      resume: "s",
     },
-  });
-  assert.ok(launch.admitted);
-  const runId = launch.runId!;
-
-  const offer = await awaitLiveTurn(port, runId);
-  port.submit({
-    operationId: "op-interrupt",
-    operation: "interrupt-turn",
-    input: { runId, turnId: offer.turnId },
-  });
-  await awaitSettled(port, "op-launch");
-  assert.equal(runView(port, runId).state, "halted");
-
-  // Resume: the new process starts with --resume, init acknowledges the session, and
-  // the Run continues in the same Session to its outcome.
-  const resume = port.submit({
-    operationId: "op-resume",
-    operation: "resume-run",
-    input: { runId },
-  });
-  assert.ok(resume.admitted, JSON.stringify(resume));
-  const resumeOutcome = await awaitSettled(port, "op-resume");
-  assert.equal(resumeOutcome.status, "applied", JSON.stringify(resumeOutcome));
-  assert.equal(runView(port, runId).state, "succeeded");
+  ]);
+  assert.equal(harness.requests[0]?.origin, "managed");
+  // One Attempt took its outcome from its last Turn; both Turns are Agent Turns.
+  assert.deepEqual(timelineDetails(run, "attempt-settled"), ["succeeded"]);
+  assert.deepEqual(timelineDetails(run, "turn-settled"), [
+    "interrupted",
+    "completed",
+  ]);
+  assert.deepEqual(
+    run.timeline
+      .filter((entry) => entry.event === "turn-started")
+      .map((entry) => [entry.detail, entry.turnKind, entry.step]),
+    [
+      ["s", "agent", "work"],
+      ["s", "agent", "work"],
+    ],
+  );
+  // The held Harness served the follow-up and closed once at rest.
+  await harness.closed;
+  assert.deepEqual([harness.prepares, harness.closes], [1, 1]);
+  assert.equal(followUpOffer(run), undefined);
 });
 
-test("a signal (Ctrl+C) mid-Turn interrupts the Turn and rests the Run halted, not cancelled (#118, AC5)", async (t) => {
+test("a failed follow-up fails the Attempt by the ordinary retry policy and never opens a fresh Session (#354)", async (t) => {
+  const { wired, digest, harness } = wire(t, "follow-up-unacknowledged");
+  const port = wired.projectionPort;
+  const runId = launchAgent(port, digest);
+  await interrupt(port, runId, await awaitLiveTurn(port, runId));
+  const offer = await awaitFollowUpOffer(port, runId);
+
+  assert.ok(sendFollowUp(port, offer, "Try again from the plan.").admitted);
+  assert.equal((await awaitSettled(port, "op-follow-up")).status, "applied");
+
+  // The recovery failure leaves Session "s" unusable, so every retry the default
+  // budget allows fails without a Turn and the Run rests failed (ADR 0022).
+  const run = await awaitState(port, runId, "failed");
+  assert.deepEqual(timelineDetails(run, "attempt-settled"), [
+    "failed",
+    "failed",
+    "failed",
+  ]);
+  assert.equal(harness.requests.length, 2);
+  assert.equal(run.sessions?.[0]?.session, "s");
+  assert.equal(run.sessions?.[0]?.availability, "unusable");
+});
+
+test("a second Interrupt holds the Step again with the follow-up offered on the new Turn (#354)", async (t) => {
+  const { wired, digest } = wire(t, "interrupt-again");
+  const port = wired.projectionPort;
+  const runId = launchAgent(port, digest);
+  const first = await awaitLiveTurn(port, runId);
+  await interrupt(port, runId, first);
+  const offer = await awaitFollowUpOffer(port, runId);
+
+  assert.ok(sendFollowUp(port, offer, "first correction").admitted);
+  assert.equal((await awaitSettled(port, "op-follow-up")).status, "applied");
+  const second = await awaitLiveTurn(port, runId, first.turnId);
+  await interrupt(port, runId, second, "op-interrupt-2");
+
+  const waiting = await followRun(port, runId, (run) => {
+    const next = run.state === "blocked" ? followUpOffer(run) : undefined;
+    return next?.turnId === second.turnId ? { run, next } : undefined;
+  });
+  assert.equal(waiting.next.attemptId, offer.attemptId);
+  assert.notEqual(second.turnId, first.turnId);
+  assert.deepEqual(timelineDetails(waiting.run, "attempt-settled"), []);
+  assert.deepEqual(timelineDetails(waiting.run, "turn-settled"), [
+    "interrupted",
+    "interrupted",
+  ]);
+});
+
+test("a blank or stale follow-up changes nothing (#354)", async (t) => {
+  const { wired, digest, harness } = wire(t, "follow-up");
+  const port = wired.projectionPort;
+  const runId = launchAgent(port, digest);
+  await interrupt(port, runId, await awaitLiveTurn(port, runId));
+  const offer = await awaitFollowUpOffer(port, runId);
+
+  const blank = sendFollowUp(port, offer, "  \n ");
+  assert.equal(blank.admitted, false);
+  if (!blank.admitted) assert.equal(blank.problem.code, "follow-up-turn-blank");
+
+  assert.ok(
+    port.submit({
+      operationId: "op-stale",
+      operation: "send-follow-up-turn",
+      input: { runId, turnId: `${offer.turnId}-old`, text: "hello" },
+    }).admitted,
+  );
+  const stale = await awaitSettled(port, "op-stale");
+  assert.equal(stale.status, "not-applied");
+  if (stale.status === "not-applied") {
+    assert.equal(stale.problem.code, "follow-up-turn-not-waiting");
+  }
+  const run = runView(port, runId);
+  assert.equal(run.state, "blocked");
+  assert.deepEqual(followUpOffer(run), offer);
+  assert.equal(harness.requests.length, 1);
+});
+
+test("after a reopen the follow-up re-prepares the Harness and resumes the detached Session (#354)", async (t) => {
+  const { wired, digest, dirs } = wire(t, "interrupt");
+  const runId = launchAgent(wired.projectionPort, digest);
+  await interrupt(
+    wired.projectionPort,
+    runId,
+    await awaitLiveTurn(wired.projectionPort, runId),
+  );
+  await awaitSettled(wired.projectionPort, "op-launch");
+  // Until #355, closing Secant keeps the waiting Run blocked and releases it.
+  await wired.shutdown();
+  wired.runGroup.close();
+  wired.catalog.close();
+
+  const reopened = harnessRecord();
+  const next = wireOver(
+    t,
+    dirs,
+    [{ profile: claudeProfile(), turns: [completedTurn()] }],
+    reopened,
+  );
+  const port = next.projectionPort;
+  const offer = followUpOffer(runView(port, runId));
+  assert.ok(offer, "expected the follow-up offered after a reopen");
+
+  assert.ok(sendFollowUp(port, offer, "Continue where you stopped.").admitted);
+  assert.equal((await awaitSettled(port, "op-follow-up")).status, "applied");
+  await awaitState(port, runId, "succeeded");
+  assert.deepEqual(reopened.requests, [
+    {
+      session: "s",
+      origin: "human",
+      text: "Continue where you stopped.",
+      resume: "s",
+    },
+  ]);
+  await reopened.closed;
+  assert.deepEqual([reopened.prepares, reopened.closes], [1, 1]);
+});
+
+test("a signal (Ctrl+C) mid-Turn cancels the Agent Attempt and rests the Run halted, not waiting (#118, #354, AC5)", async (t) => {
   // The headless OS-signal path (withClients) drives Application.shutdown(), which
   // aborts every live Run; a live Agent Turn interrupts at the Harness Seam and the
-  // Run rests `halted` (resumable) — never `cancelled`. Exit-code (1 vs 130) is a
-  // separate concern flagged as a spec conflict; the resting state is the AC value.
+  // Run rests `halted` (resumable) — never `cancelled` and never waiting for a
+  // follow-up (ADR 0019, ADR 0035). Exit-code (1 vs 130) is a separate concern
+  // flagged as a spec conflict; the resting state is the AC value.
   const { wired, digest } = wire(t, "interrupt");
   const port = wired.projectionPort;
-  const launch = port.submit({
-    operationId: "op-launch",
-    operation: "launch-run",
-    input: {
-      bundle: { id: "dev.secant.interrupt-e2e" },
-      launchInputs: {},
-      trustDigest: digest,
-      harness: "claude-code",
-    },
-  });
-  assert.ok(launch.admitted);
-  const runId = launch.runId!;
+  const runId = launchAgent(port, digest);
   await awaitLiveTurn(port, runId);
 
   await wired.shutdown();
   const run = runView(port, runId);
   assert.equal(run.state, "halted");
-  const settled = run.timeline.find((event) => event.event === "turn-settled");
-  assert.equal(settled?.detail, "interrupted");
-});
-
-test("a resume the Harness does not acknowledge fails the Attempt and never creates a fresh Session (#118)", async (t) => {
-  const { wired, digest } = wire(t, "resume-unacknowledged");
-  const port = wired.projectionPort;
-  const launch = port.submit({
-    operationId: "op-launch",
-    operation: "launch-run",
-    input: {
-      bundle: { id: "dev.secant.interrupt-e2e" },
-      launchInputs: {},
-      trustDigest: digest,
-      harness: "claude-code",
-    },
-  });
-  assert.ok(launch.admitted);
-  const runId = launch.runId!;
-
-  const offer = await awaitLiveTurn(port, runId);
-  port.submit({
-    operationId: "op-interrupt",
-    operation: "interrupt-turn",
-    input: { runId, turnId: offer.turnId },
-  });
-  await awaitSettled(port, "op-launch");
-
-  const resume = port.submit({
-    operationId: "op-resume",
-    operation: "resume-run",
-    input: { runId },
-  });
-  assert.ok(resume.admitted);
-  await awaitSettled(port, "op-resume");
-  const run = runView(port, runId);
-  // The recovery failure rests the Run failed; the Session went unusable and no
-  // fresh Session was ever opened in its place (ADR 0022).
-  assert.equal(run.state, "failed");
-  assert.equal(run.sessions?.[0]?.session, "s");
-  assert.equal(run.sessions?.[0]?.availability, "unusable");
+  assert.deepEqual(timelineDetails(run, "turn-settled"), ["interrupted"]);
+  assert.deepEqual(timelineDetails(run, "attempt-settled"), ["cancelled"]);
+  assert.equal(followUpOffer(run), undefined);
 });
 
 // Natural native boundaries release an ineffective interrupt independently of Steer.
@@ -850,6 +1070,35 @@ test("a failed Turn despite interrupt settles not-applied and permits the next h
   assert.deepEqual(f.interruptCalls, [0]);
 });
 
+test("an accepted interrupt whose Agent Turn ends lost applies and still halts, with no follow-up offered (#354)", async (t) => {
+  const f = await failedInterruptScenario(t, {
+    first: "agent",
+    next: "agent",
+    firstResult: {
+      kind: "lost",
+      detail: {
+        failure: {
+          phase: "turn",
+          category: "transport-lost",
+          possibleEffects: "possible",
+          diagnostics: "Windows-style interrupted transport",
+        },
+        unknown: "interruption",
+        lastObservation: "interrupt requested before transport closed",
+        session: { state: "detached", coordinate: { opaque: "coord-s" } },
+      },
+    },
+  });
+  await f.release(0);
+  assert.equal((await awaitSettled(f.port, "interrupt")).status, "applied");
+  await awaitSettled(f.port, "launch");
+  const run = runView(f.port, f.runId);
+  assert.equal(run.state, "halted");
+  assert.deepEqual(timelineDetails(run, "turn-settled"), ["lost"]);
+  assert.deepEqual(timelineDetails(run, "attempt-settled"), ["indeterminate"]);
+  assert.equal(followUpOffer(run), undefined);
+});
+
 test("an accepted interrupt whose Turn ends lost applies and still rests halted (#298)", async (t) => {
   const f = await failedInterruptScenario(t, {
     first: "human",
@@ -878,4 +1127,146 @@ test("an accepted interrupt whose Turn ends lost applies and still rests halted 
     run.timeline.find((e) => e.event === "turn-settled")?.detail,
     "lost",
   );
+});
+
+// In a Repeat group whose first span Step is an Agent Step, an Interrupt in a later
+// pass leaves the attempt log ending exactly at the iteration boundary. The
+// Projection must still name that Agent Step as the waiting current Step, not the
+// group's last Step (#216's boundary case, #354).
+test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as the current Step with the follow-up offered (#354)", async (t) => {
+  const workspace = makeTempDir("secant-interrupt-ws-");
+  const git = createFakeGitProcess();
+  // Every test run exits non-zero, so the `until` Verdict reads `fail` and loops.
+  const commands = createFakeProcess({
+    resolutionHandler: (name) => ({
+      kind: "found",
+      executable: name,
+      prefixArgs: [],
+    }),
+    commandHandler: () => ({
+      kind: "exited",
+      status: 1,
+      text: new Uint8Array(),
+    }),
+  });
+  const wired = wireApplication({
+    secantHome: makeTempDir("secant-interrupt-home-"),
+    launchCwd: workspace,
+    process: {
+      resolveExecutable: (name, options) =>
+        commands.resolveExecutable(name, options),
+      spawnCommand: (options) => commands.spawnCommand(options),
+      spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
+      spawnCommandSync: (options) => git.spawnCommandSync(options),
+    },
+    harnessAdapter: sequencedAdapter([
+      { profile: claudeProfile(), turns: [completedTurn(), blockingTurn()] },
+    ]),
+    discoverClaudeCode: () => ({
+      kind: "found",
+      attempt: {
+        source: "path",
+        name: "claude",
+        description: "PATH name 'claude'",
+      },
+    }),
+  });
+  t.after(async () => {
+    await wired.shutdown();
+    wired.runGroup.close();
+    wired.catalog.close();
+  });
+  const folder = makeTempDir("secant-interrupt-bundle-");
+  mkdirSync(join(folder, "prompts"));
+  writeFileSync(join(folder, "prompts", "fix.md"), "Fix the test.\n");
+  const runTest = (id: string) => ({
+    id,
+    kind: "command",
+    produces: [{ name: "verdict", type: "verdict" }],
+    command: { executable: RUNTIME_NAME, arguments: ["test"] },
+  });
+  writeFileSync(
+    join(folder, "manifest.json"),
+    JSON.stringify({
+      formatVersion: 1,
+      bundle: {
+        id: "dev.secant.interrupt-repeat",
+        version: "1.0.0",
+        name: "Interrupt Repeat",
+        description: "An Agent Step opening each Repeat pass.",
+      },
+      platforms: ["windows", "macos", "linux"],
+      inputs: {},
+      assets: [{ path: "prompts/fix.md", kind: "prompt" }],
+      routing: [
+        runTest("baseline"),
+        {
+          repeat: {
+            until: "verdict",
+            reviewCheckpoint: { interval: 5, message: "Keep repairing?" },
+            steps: [
+              {
+                id: "fix",
+                kind: "agent",
+                session: "s",
+                prompt: { asset: "prompts/fix.md" },
+              },
+              runTest("run-test"),
+            ],
+          },
+        },
+      ],
+    }),
+  );
+  assert.ok(wired.bundleManagement.build(folder, { noInstall: false }).ok);
+  const entry = wired.catalog
+    .listEntries()
+    .find((e) => e.id === "dev.secant.interrupt-repeat")!;
+  const port = wired.projectionPort;
+  assert.ok(
+    port.submit({
+      operationId: "op-approve",
+      operation: "approve-workspace",
+      input: { path: workspace },
+    }).admitted,
+  );
+  const launch = port.submit({
+    operationId: "op-launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: entry.id },
+      launchInputs: {},
+      trustDigest: entry.digest,
+      harness: "claude-code",
+    },
+  });
+  assert.ok(launch.admitted, JSON.stringify(launch));
+  const runId = launch.runId!;
+
+  // The first pass completes; interrupt the second pass's `fix` Turn.
+  const live = await followRun(port, runId, (run) =>
+    run.actionOffers.find(
+      (candidate): candidate is InterruptTurnOffer =>
+        candidate.action === "interrupt-turn" &&
+        candidate.turnId.startsWith("1.0:fix#"),
+    ),
+  );
+  await interrupt(port, runId, live);
+
+  const offer = await awaitFollowUpOffer(port, runId);
+  const run = runView(port, runId);
+  assert.equal(run.state, "blocked");
+  assert.deepEqual(
+    run.progress.map((step) => [step.id, step.status]),
+    [
+      ["baseline", "succeeded"],
+      ["fix", "blocked"],
+      // Still marked from the completed first pass, as at an interactive Step's
+      // iteration boundary (#216).
+      ["run-test", "succeeded"],
+    ],
+  );
+  assert.equal(run.progress[run.position]?.id, "fix");
+  assert.equal(offer.stepId, "fix");
+  assert.equal(offer.attemptId, "1.0:fix");
 });

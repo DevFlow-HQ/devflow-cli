@@ -5,13 +5,17 @@ import test, { type TestContext } from "node:test";
 import type {
   HarnessProfile,
   PreparedHarness,
+  TurnRequest,
   TurnResult,
 } from "../../../src/harness/harness.js";
 import {
   executeRouting,
   openAgentAttemptTurn,
   SIGNAL_ABORT,
+  waitingAgentTurn,
   type AssetResolver,
+  type ExecutionDeps,
+  type ExecutionEvent,
   type ExecutionObserver,
 } from "../../../src/run/execution/execution.js";
 import type { RunOwner, TurnRecord } from "../../../src/run/store/store.js";
@@ -153,7 +157,7 @@ interface ResultCase {
     "succeeded" | "failed" | "cancelled" | "indeterminate"
   )[];
   readonly expectedAvailability: "open" | "detached" | "unusable";
-  readonly expectedRunOutcome: "succeeded" | "failed" | "halted";
+  readonly expectedRunOutcome: "succeeded" | "failed" | "blocked" | "halted";
   readonly starts: number;
 }
 
@@ -225,9 +229,11 @@ const RESULT_CASES = {
         },
       },
     },
-    expectedAttempts: ["cancelled"],
+    // An Interrupt ends only the Turn: the Attempt stays open and the Run waits for
+    // the person's follow-up (#354, ADR 0035).
+    expectedAttempts: [],
     expectedAvailability: "detached",
-    expectedRunOutcome: "halted",
+    expectedRunOutcome: "blocked",
     starts: 1,
   },
   lost: {
@@ -499,6 +505,292 @@ test("a Turn resumed into an open Agent Attempt takes the next id in order, and 
   assert.equal(owner.attemptLog()[1]?.attemptId, "0.0:agent");
   // The published Attempt is closed, so no open Attempt remains.
   assert.equal(openAgentAttemptTurn(owner), undefined);
+});
+
+// --- An Interrupt holds the Agent Attempt open (#354) -----------------------
+//
+// A Port Interrupt settles the Turn `interrupted` with the Run's cancel signal
+// untouched, which is how these walks drive it: the fake Turn settles
+// `interrupted`. The follow-up rides `ExecutionDeps.followUp` into a re-walk.
+
+const FAILED_TURN: TurnResult = {
+  kind: "failed",
+  detail: {
+    failure: {
+      phase: "turn",
+      category: "native-failure",
+      possibleEffects: "possible",
+      diagnostics: "the follow-up failed",
+    },
+    effectiveModel: { known: false },
+    session: { state: "detached", coordinate: { opaque: "failed-coordinate" } },
+  },
+};
+
+const FOLLOW_UP_TEXT = "Keep going, but skip the docs.";
+
+/** A held Harness whose Turns run in script order, recording each request; the
+ *  `onStart` hook runs as a Turn starts (to write a receipt, or abort a signal). */
+async function recordingHarness(
+  t: TestContext,
+  turns: readonly FakeTurnScript[],
+  onStart?: (request: TurnRequest, index: number) => void,
+): Promise<{
+  readonly prepared: PreparedHarness;
+  readonly requests: readonly TurnRequest[];
+}> {
+  const prepared = await preparedHarness(profile(), turns);
+  t.after(() => prepared.close());
+  const requests: TurnRequest[] = [];
+  return {
+    requests,
+    prepared: {
+      profile: prepared.profile,
+      readDefaults: () => prepared.readDefaults(),
+      startTurn(request) {
+        requests.push(request);
+        onStart?.(request, requests.length - 1);
+        return prepared.startTurn(request);
+      },
+      close: () => prepared.close(),
+    },
+  };
+}
+
+function walkAgent(
+  f: Fixture,
+  step: AgentStep,
+  prepared: PreparedHarness,
+  extra: Partial<
+    Pick<ExecutionDeps, "followUp" | "cancelSignal" | "observe">
+  > = {},
+) {
+  const assets = promptAssets(
+    makeTempDir("secant-agent-assets-"),
+    "Do the work.\n",
+  );
+  return executeRouting([step], {
+    owner: f.owner,
+    platform: HOST,
+    resolveAsset: assets.resolveAsset,
+    now: () => AT,
+    process: executionProcess,
+    harness: {
+      prepared,
+      inputTypes: {},
+      assetKinds: { "prompt.md": "prompt" },
+    },
+    ...extra,
+  });
+}
+
+/** The receipt path a rendered prompt names for a declared output. */
+function receiptPath(request: TurnRequest, name: string): string {
+  const match = new RegExp(
+    `"${name}" as UTF-8 text to (.+) before you finish`,
+  ).exec(request.input.text);
+  assert.ok(match, request.input.text);
+  return match[1]!;
+}
+
+function turnRows(owner: RunOwner) {
+  return owner
+    .turns()
+    .map((turn) => [turn.turnId, turn.origin, turn.kind, turn.resultKind]);
+}
+
+test("an interrupted Agent Turn holds its Attempt open and the Run blocked, and a walk without its follow-up sends nothing (#354)", async (t) => {
+  const f = fixture(t);
+  const { prepared, requests } = await recordingHarness(t, [
+    { result: RESULT_CASES.interrupted.result },
+  ]);
+  const events: ExecutionEvent[] = [];
+
+  assert.deepEqual(
+    await walkAgent(f, agentStep(), prepared, {
+      observe: (event) => events.push(event),
+    }),
+    { outcome: "blocked" },
+  );
+
+  assert.equal(f.state(), "blocked");
+  assert.deepEqual(f.owner.attemptLog(), []);
+  assert.equal(waitingAgentTurn(f.owner)?.turnId, "0.0:agent#turn-1");
+  assert.deepEqual(
+    events
+      .filter((event) => event.kind.startsWith("attempt-"))
+      .map((event) => event.kind),
+    ["attempt-start", "attempt-pause"],
+  );
+  // No follow-up, or one naming another Turn, waits again: the prompt is never
+  // re-sent as a managed Turn and no retry is counted.
+  for (const followUp of [
+    undefined,
+    { turnId: "0.0:agent#turn-0", text: FOLLOW_UP_TEXT },
+  ]) {
+    assert.deepEqual(
+      await walkAgent(f, agentStep(), prepared, {
+        ...(followUp !== undefined ? { followUp } : {}),
+      }),
+      { outcome: "blocked" },
+    );
+  }
+  assert.equal(requests.length, 1);
+  assert.deepEqual(f.owner.attemptLog(), []);
+  assert.equal(waitingAgentTurn(f.owner)?.turnId, "0.0:agent#turn-1");
+});
+
+test("the follow-up is a human Turn in the same Session and Attempt; a clean one keeps and validates the receipts and advances (#354)", async (t) => {
+  const f = fixture(t);
+  const step = agentStep({
+    session: "fresh",
+    produces: [{ name: "summary", type: "text" }],
+  });
+  const { prepared, requests } = await recordingHarness(
+    t,
+    [
+      { result: RESULT_CASES.interrupted.result },
+      { result: RESULT_CASES.completed.result },
+    ],
+    (request, index) => {
+      // The agent wrote its receipt during the interrupted Turn.
+      if (index === 0) writeFileSync(receiptPath(request, "summary"), "done");
+    },
+  );
+  assert.deepEqual(await walkAgent(f, step, prepared), { outcome: "blocked" });
+
+  const report = await walkAgent(f, step, prepared, {
+    followUp: { turnId: "0.0:agent#turn-1", text: FOLLOW_UP_TEXT },
+  });
+
+  assert.deepEqual(report, { outcome: "succeeded" });
+  assert.deepEqual(turnRows(f.owner), [
+    ["0.0:agent#turn-1", "managed", "agent", "interrupted"],
+    ["0.0:agent#turn-2", "human", "agent", "completed"],
+  ]);
+  // The human's text is sent verbatim, in the Attempt's own fresh Session.
+  assert.equal(requests[1]?.input.text, FOLLOW_UP_TEXT);
+  assert.equal(requests[1]?.origin, "human");
+  assert.equal(requests[1]?.session, requests[0]?.session);
+  assert.equal(requests[0]?.session, "fresh-0.0:agent");
+  assert.deepEqual(
+    f.owner.attemptLog().map((entry) => [entry.attemptId, entry.outcome]),
+    [["0.0:agent", "succeeded"]],
+  );
+  const version = f.owner.currentVersion("summary");
+  assert.ok(version !== undefined);
+  assert.equal(
+    new TextDecoder().decode(f.owner.readArtifact(version, "summary")),
+    "done",
+  );
+  assert.equal(waitingAgentTurn(f.owner), undefined);
+});
+
+test("a failed follow-up takes the ordinary retry, whose fresh Attempt re-sends the prompt (#354)", async (t) => {
+  const f = fixture(t);
+  const step = agentStep({ retry: 1 });
+  const { prepared, requests } = await recordingHarness(t, [
+    { result: RESULT_CASES.interrupted.result },
+    { result: FAILED_TURN },
+    { result: RESULT_CASES.completed.result },
+  ]);
+  assert.deepEqual(await walkAgent(f, step, prepared), { outcome: "blocked" });
+
+  // The retry budget counts within one walk, as resume's does: the follow-up's
+  // re-walk starts a fresh budget, so `retry: 1` still buys one more Attempt.
+  const report = await walkAgent(f, step, prepared, {
+    followUp: { turnId: "0.0:agent#turn-1", text: FOLLOW_UP_TEXT },
+  });
+
+  assert.deepEqual(report, { outcome: "succeeded" });
+  assert.deepEqual(
+    f.owner.attemptLog().map((entry) => [entry.attemptId, entry.outcome]),
+    [
+      ["0.0:agent", "failed"],
+      ["0.1:agent", "succeeded"],
+    ],
+  );
+  assert.deepEqual(turnRows(f.owner), [
+    ["0.0:agent#turn-1", "managed", "agent", "interrupted"],
+    ["0.0:agent#turn-2", "human", "agent", "failed"],
+    ["0.1:agent#turn-1", "managed", "agent", "completed"],
+  ]);
+  assert.equal(requests[2]?.input.text, "Do the work.\n");
+});
+
+test("a second Interrupt holds the Step again, and a lost follow-up halts (#354)", async (t) => {
+  const f = fixture(t);
+  const { prepared } = await recordingHarness(t, [
+    { result: RESULT_CASES.interrupted.result },
+    { result: RESULT_CASES.interrupted.result },
+    { result: RESULT_CASES.lost.result },
+  ]);
+  assert.deepEqual(await walkAgent(f, agentStep(), prepared), {
+    outcome: "blocked",
+  });
+
+  assert.deepEqual(
+    await walkAgent(f, agentStep(), prepared, {
+      followUp: { turnId: "0.0:agent#turn-1", text: "first correction" },
+    }),
+    { outcome: "blocked" },
+  );
+  assert.deepEqual(f.owner.attemptLog(), []);
+  assert.equal(waitingAgentTurn(f.owner)?.turnId, "0.0:agent#turn-2");
+
+  assert.deepEqual(
+    await walkAgent(f, agentStep(), prepared, {
+      followUp: { turnId: "0.0:agent#turn-2", text: "second correction" },
+    }),
+    { outcome: "halted" },
+  );
+  assert.equal(f.state(), "halted");
+  assert.deepEqual(
+    f.owner.attemptLog().map((entry) => entry.outcome),
+    ["indeterminate"],
+  );
+  assert.deepEqual(
+    turnRows(f.owner).map(([turnId, origin, , result]) => [
+      turnId,
+      origin,
+      result,
+    ]),
+    [
+      ["0.0:agent#turn-1", "managed", "interrupted"],
+      ["0.0:agent#turn-2", "human", "interrupted"],
+      ["0.0:agent#turn-3", "human", "lost"],
+    ],
+  );
+});
+
+test("a process signal stopping an Agent Turn still cancels the Attempt and halts (#354, ADR 0019)", async (t) => {
+  const f = fixture(t);
+  const controller = new AbortController();
+  const { prepared } = await recordingHarness(
+    t,
+    [
+      {
+        block: true,
+        result: RESULT_CASES.completed.result,
+        interruptResult: RESULT_CASES.interrupted.result,
+      },
+    ],
+    () => controller.abort(SIGNAL_ABORT),
+  );
+
+  assert.deepEqual(
+    await walkAgent(f, agentStep(), prepared, {
+      cancelSignal: controller.signal,
+    }),
+    { outcome: "halted" },
+  );
+
+  assert.equal(f.state(), "halted");
+  assert.deepEqual(
+    f.owner.attemptLog().map((entry) => entry.outcome),
+    ["cancelled"],
+  );
+  assert.equal(waitingAgentTurn(f.owner), undefined);
 });
 
 // A Run written before #352 holds its Agent Turn under the one-per-Attempt id. A Turn

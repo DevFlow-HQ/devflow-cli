@@ -372,7 +372,15 @@ test("[codex-shared-client-interactions] Interrupt records every pending Steer v
   assert.equal((await awaitSettled(port, "stop")).status, "applied");
   await awaitSettled(port, "op-launch");
   const run = runView(port, runId);
-  assert.equal(run.state, "halted");
+  // The Interrupt ends only the Turn: the Agent Step waits for the follow-up (#354).
+  assert.equal(run.state, "blocked");
+  assert.ok(
+    run.actionOffers.some(
+      (candidate) =>
+        candidate.action === "send-follow-up-turn" &&
+        candidate.turnId === offer.turnId,
+    ),
+  );
   const events = run.timeline.filter((event) => event.event === "steer");
   assert.deepEqual(
     events.map((event) => [

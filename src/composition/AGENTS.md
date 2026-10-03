@@ -22,6 +22,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 - `prepareRunHarness` (`wiring.ts`) is the one prepare site for launch, resume, and the interactive reopen: it threads `writableDirectory: owner.workingArea().path`
   identically, and an unusable area is a typed `working-area-unavailable` prepare failure, so the Run halts before any Turn rather than writing planning
   files anywhere else (#214). Execution never passes the area itself.
+- Each Step handle composition mints (`interactiveStepDriver`) is registered in the private `heldHarnesses` map, so a `heldStep` the Application hands
+  back to `makeRunExecution` (#354) resolves to its prepared Harness without the Application seeing one. The walk reuses it and returns the same handle
+  on a `blocked` rest, or closes it; an unregistered handle is closed and a fresh Harness prepared.
 - Composition owns the operational log (`operational-log.ts`, #318, #328): builtin JSONL serialization and synchronous `node:fs` writes
   on an owner-only file. Both client entries (and the runner entry below) run as one Secant invocation under
   `runSecantInvocation`, which starts the sink before `wireApplication` (for the TUI, before the no-TTY rejection) and synchronously writes the

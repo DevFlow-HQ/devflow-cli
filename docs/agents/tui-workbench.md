@@ -30,8 +30,15 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   it and the field refocuses with its draft.
   The Step is "active" whenever the Run is blocked at an `interactive-agent` Step (independent of a live Turn), so focus stays on the input across the whole
   Step and returns to the timeline when it ends.
-- Typed-but-unsent interactive text (the `draft` signal) clears only on a **fresh** interactive Step (the focus effect keyed on the Step id), so it survives a
-  Turn settle and a tab away within the same Step; a refused send keeps it (the refusal surfaces beside it, A9), and only an applied send
+- The same input is an Agent Step's follow-up compose after an Interrupt (#354): it mounts from the `send-follow-up-turn` Offer alone, never the Step kind,
+  reads "Reply to the agent", and its Enter dispatches the follow-up against the Offer's `turnId`; it shows no `^E` and arms no ending control. It leaves
+  once the follow-up Turn is live, so the rail's Agent-step Steer (`s`) and two-press Esc apply again, and each newly interrupted Turn refocuses it;
+  a catch-up never moves focus. The
+  Interrupt's `d dismiss` receipt clears when the Offer arrives, since `d` would type into the field. `inputActive` is the one "input owns the
+  interaction" predicate; `interactiveStepActive` stays the Step-kind fact for the interactive controls.
+- Typed-but-unsent interactive text (the `draft` signal) clears only on a **fresh** input — a new interactive Step, or a follow-up to a new Attempt (the focus
+  effect keys on the Step id, or Step and Attempt for a follow-up; never a parsed Turn id) — so it survives a Turn settle, a second Interrupt of the same
+  Attempt, and a tab away within the same Step; a refused send keeps it (the refusal surfaces beside it, A9), and only an applied send
   clears it. A send applies at Turn admission (#290), so the draft clears while the agent works; the `… sending…` hint and the blurred field last only until then.
   An input Steer (#294) follows the same rule with no pending state at all: the field keeps its keys, a second Enter in flight is ignored, and a send waits
   until it settles. Its settlement rides the compose's Steer path (`steerFlight`, tagged with its source and the sent text), and an applied Steer clears the
@@ -66,7 +73,9 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   New drops join in recorded order before the unsent draft; opening old history restores nothing, and repeated snapshots never duplicate a restore.
   Full text comes from `RunTimelineEvent.steer`,
   never its capped `detail`. Restored drafts use a one-row native textarea because `<input>` strips newlines; ordinary M7/M8 inputs keep their existing routing.
-  The recovered compose stays editable at `halted` until resume, without offering a send before its Action Offer exists. Escape returns to the timeline's Run actions.
+  They restore only into an input that can send them: the interactive Step's, or an Agent Step's follow-up compose, whose Enter sends them as the follow-up
+  (#354), with the Steer compose's unsent text after them. An Agent Step a signal halted has no such input, so its drops stay history; the Steer compose
+  never parks a restored draft. An interactive Step's recovered input stays editable at `halted` until resume. Escape returns to the timeline's Run actions.
 - A stale approval answer keeps its inline refusal while the offer re-renders: a genuinely new request (a fresh `requestId`) resets the decision to `allow`
   and clears the refusal, but a stale answer keeps the same id, so its refusal survives while the bumped-generation offer re-renders (`onIdentityChange` on
   the request id).

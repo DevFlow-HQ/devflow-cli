@@ -55,14 +55,16 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The client `RunStateName` has no `created` and gains `cancelled` (A7); the Run Store still records `created` internally, and `toRunState` maps it to `running` for the
   Projection — a launched Run reads `running` from admission.
 - The closed registry and prepared Harnesses live in composition, not Application (#116, #146): the Port sees normalized choices/availability, while selected-only
-  Preflight sees normalized discovery and capabilities. `makeRunExecution` resolves the durable id and prepares only that Adapter; if it reaches an interactive Step,
-  composition transfers an opaque Step driver onto the tracked Run. Every human Turn reuses it, an Interrupt keeps it held (#353), and End, a `halted`
-  Turn rest, cancel, or shutdown closes it exactly once. Preflight refuses discovery/capability failures before creation. `supportsInteractiveTurns`
-  remains the client fact Application forwards to Preflight.
+  Preflight sees normalized discovery and capabilities. `makeRunExecution` resolves the durable id and prepares only that Adapter; on a `blocked` rest
+  composition transfers an opaque Step driver (`heldStep`), kept only on the hold basis ([run-control](../../docs/agents/run-control.md)) and closed
+  otherwise. Every human Turn reuses it, an Interrupt keeps it held (#353), a follow-up hands it back to the re-walk, and End, a `halted` Turn rest,
+  cancel, or shutdown closes it exactly once. Preflight refuses discovery/capability failures before creation.
+  `supportsInteractiveTurns` remains the client fact Application forwards to Preflight.
 - A typed `prepare` failure is translated in one place, `haltForHarnessFailure` (#304): every drive reaches it — `executeTrackedRouting` for launch, resume, both
-  Gate answers, End Step, Continue, and End Stage, and the reopened human Turn directly. It rests the Run `halted` through `observedOwner`, settles the Operation
-  `selected-harness-unavailable`, and releases the owner; an answer or Attempt committed before the drive stays committed. Composition reports the
-  preparation refusal as `harness-unavailable`; Application reports its committed `halted` rest separately, so neither observer claims the other's outcome.
+  Gate answers, End Step, Continue, End Stage, and the follow-up (#354), and the reopened human Turn directly. It rests the Run `halted` through
+  `observedOwner`, settles the Operation `selected-harness-unavailable`, and releases the owner; an answer or Attempt committed before the drive stays
+  committed. Composition reports the preparation refusal as `harness-unavailable`; Application reports its committed `halted` rest separately, so
+  neither observer claims the other's outcome.
 - Every opened Projection owns one `UpdateStream` (#306): a FIFO that never coalesces or evicts, bounded at 1,000 unread updates and 8 Mi payload units (T3 Code's
   limits). Overflow ends only that subscription through `end("observer-lagged")`, which releases the backlog and delivers one `closed` ahead of it; `pushRunClosed`
   uses the same `end`. The producer never waits or fails, so the Run and its other observers continue, and a reopen reads a fresh snapshot and live catch-up.
@@ -114,4 +116,4 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `createApplication`'s regions, in order: (1) state, observers, `observedOwner`, and the execution drivers (`runAndSettle`, `startRun`); (2) Projection dispatch
   (`openProjection`, `openRunProjection`), with the catalog and launch-preparation families in their own files; (3) approval, launch, and resume (`submitApprove`,
   `submitLaunch`, `resumePreconditions`, `submitResume`); (4) gate and Harness-request answering, then Turn interrupt and steer (`submitAnswer` through `steerTurnAndSettle`);
-  (5) interactive turns (`beginInteractive` through `runInteractiveEnd`), then cancel, delete, read-acquire, and `shutdown`.
+  (5) interactive turns (`claimHeldRun` through `runInteractiveEnd`, the follow-up included), then cancel, delete, read-acquire, and `shutdown`.

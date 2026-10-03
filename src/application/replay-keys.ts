@@ -7,6 +7,7 @@ import type {
   EndInteractiveStepInput,
   LaunchRunInput,
   ResumeRunInput,
+  SendFollowUpTurnInput,
   SendInteractiveTurnInput,
   SteerTurnInput,
   InterruptTurnInput,
@@ -79,6 +80,17 @@ export function sendInteractiveTurnReplayKey(
     "send-interactive-turn",
     input.runId,
     input.stepId,
+    input.text,
+  ]);
+}
+
+export function sendFollowUpTurnReplayKey(
+  input: SendFollowUpTurnInput,
+): string {
+  return JSON.stringify([
+    "send-follow-up-turn",
+    input.runId,
+    input.turnId,
     input.text,
   ]);
 }

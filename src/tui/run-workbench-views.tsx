@@ -42,7 +42,9 @@ export type InteractiveRefusal =
       readonly offer: Extract<SteerTurnOffer, { available: false }>;
     };
 
-/** The interactive-agent human input (#122): a label saying who holds the Turn, a
+/** The interactive-agent human input (#122), which is also an Agent Step's
+ *  follow-up compose after an Interrupt (#354, "Reply to the agent", with no Step
+ *  ending): a label saying who holds the Turn, a
  *  native OpenTUI text field (D9 — the field draws its own caret), and a hint/status
  *  line — the live Turn's Interrupt (and Enter to Steer it, when offered, #294), the
  *  Enter/End Step controls at a boundary, or the End Step confirm. The label reads the live Turn from its interrupt Offer (#290): the
@@ -53,6 +55,8 @@ export type InteractiveRefusal =
  *  while an answer is in flight (until the send is admitted) and while the End Step
  *  confirm is armed, so a confirming `y` never types into it (D9 freeze). */
 export function InteractiveInput(props: {
+  /** An Agent Step's follow-up compose (#354): its Enter sends the reply. */
+  followUp: Accessor<boolean>;
   restored: Accessor<boolean>;
   draft: Accessor<string>;
   onInput: (value: string) => void;
@@ -114,6 +118,8 @@ export function InteractiveInput(props: {
         return props.interruptArmed()
           ? text("  ⚠ Press esc again to interrupt · any other key cancels")
           : { interrupt };
+      if (props.sendOffered() && props.followUp())
+        return text("  enter send reply · esc back");
       if (props.sendOffered())
         return text(
           continueOffer !== undefined
@@ -149,7 +155,9 @@ export function InteractiveInput(props: {
             ? "◇ Steer dropped by interrupt · draft restored"
             : props.interrupt() !== undefined
               ? "◆ The agent is working — wait for its reply or interrupt it"
-              : "◇ Your move — the agent is waiting for your next Turn",
+              : props.followUp()
+                ? "◇ Reply to the agent — you stopped it, and it is waiting on you"
+                : "◇ Your move — the agent is waiting for your next Turn",
           w(),
         )}
       </text>
@@ -227,10 +235,9 @@ function refusalText(refusal: InteractiveRefusal): string {
  *  field draws its own caret), and a hint/status line. Same-Turn guidance goes to the
  *  running agent without ending the Turn. Every line is plain text so it reads
  *  distinctly without colour (AC4). The field is blurred while a send is in flight so
- *  a submitting Enter never types into it (D9 freeze). */
+ *  a submitting Enter never types into it (D9 freeze). Guidance an Interrupt drops
+ *  returns in the follow-up compose instead (#354). */
 export function SteerInput(props: {
-  restored: Accessor<boolean>;
-  available: Accessor<boolean>;
   draft: Accessor<string>;
   onInput: (value: string) => void;
   pending: Accessor<boolean>;
@@ -242,12 +249,10 @@ export function SteerInput(props: {
   const { theme } = props;
   const w = () => props.width();
   const fieldFocused = () => props.focused() && !props.pending();
-  const hint = () => {
-    if (props.pending()) return "  … steering…";
-    if (!props.available())
-      return "  draft restored · esc back · r resume from timeline";
-    return "  enter send guidance · esc back — the Turn keeps running";
-  };
+  const hint = () =>
+    props.pending()
+      ? "  … steering…"
+      : "  enter send guidance · esc back — the Turn keeps running";
   return (
     <box flexDirection="column" flexShrink={0}>
       <text
@@ -255,35 +260,18 @@ export function SteerInput(props: {
         attributes={props.focused() ? TextAttributes.BOLD : 0}
         flexShrink={0}
       >
-        {clip(
-          props.restored()
-            ? "➤ Steer dropped by interrupt · draft restored"
-            : "➤ Steer — guide the running Turn",
-          w(),
-        )}
+        {clip("➤ Steer — guide the running Turn", w())}
       </text>
       <box flexDirection="row" flexShrink={0}>
         <text fg={theme.text} flexShrink={0}>
           {"> "}
         </text>
-        <Show
-          when={props.restored()}
-          fallback={
-            <input
-              value={props.draft()}
-              onInput={props.onInput}
-              focused={fieldFocused()}
-              width={Math.max(1, w() - 2)}
-            />
-          }
-        >
-          <RestoredDraftInput
-            draft={props.draft}
-            onInput={props.onInput}
-            focused={fieldFocused}
-            width={() => Math.max(1, w() - 2)}
-          />
-        </Show>
+        <input
+          value={props.draft()}
+          onInput={props.onInput}
+          focused={fieldFocused()}
+          width={Math.max(1, w() - 2)}
+        />
       </box>
       <Show
         when={props.refusal()}

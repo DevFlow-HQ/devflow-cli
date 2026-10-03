@@ -33,7 +33,11 @@ import type {
   TurnOrigin,
   TurnResult,
 } from "../../harness/harness.js";
-import type { ExecutionObserver, TurnFailureFacts } from "./execution.js";
+import type {
+  ExecutionObserver,
+  HumanTurnPause,
+  TurnFailureFacts,
+} from "./execution.js";
 import { observedWrite } from "./store-write.js";
 import { guardedExecutionObserver } from "./observer.js";
 
@@ -171,6 +175,13 @@ export interface StepAttempt {
   readonly harnessIdentity?: HarnessIdentityRecord;
 }
 
+/** The human's message continuing an Agent Step's Attempt after an Interrupt
+ *  (#354), keyed on the interrupted Turn it answers. */
+export interface AgentFollowUp {
+  readonly turnId: string;
+  readonly text: string;
+}
+
 interface StepContext {
   readonly owner: RunOwner;
   readonly resolveAsset: (assetPath: string) => string | undefined;
@@ -178,7 +189,11 @@ interface StepContext {
   readonly harness?: HarnessExecutionDeps;
   readonly requestChannel?: RequestChannel;
   readonly observe: ExecutionObserver;
+  readonly followUp?: AgentFollowUp;
 }
+
+/** An Agent Step's Attempt waits for the human's follow-up (#354). */
+const AWAITS_FOLLOW_UP: HumanTurnPause = { pause: true, awaitsHumanTurn: true };
 
 // --- Agent step (a Harness Turn dispatch entry, #116) ----------------------
 
@@ -191,16 +206,22 @@ interface StepContext {
  * is sent (the durable recorder the Adapter awaits: a write failure proves the Turn
  * `not-started`), events drain into the Store as they arrive, and the settled result
  * maps: `completed` → `succeeded`; `failed` and `not-started` → `failed` (retryable
- * within budget); `interrupted` → `cancelled` (Run `halted`); `lost` →
- * `indeterminate` (Run `halted`). A Step declaring
+ * within budget); `interrupted` by a process signal → `cancelled` (Run `halted`);
+ * `lost` → `indeterminate` (Run `halted`). A Step declaring
  * `text` outputs succeeds only when each validated receipt file is present after a
  * completed Turn (#215); a Step declaring none publishes an empty output set.
+ *
+ * A Port Interrupt ends only the Turn (#354, ADR 0035): the Attempt stays open and
+ * the Step pauses for the human. A later walk re-minting that Attempt sends the
+ * human's follow-up verbatim as a human-origin Turn of it, keeping its receipts, and
+ * the Attempt takes its outcome from that Turn; without the matching follow-up it
+ * pauses again rather than re-send the prompt.
  */
 export async function runAgent(
   step: AgentStep,
   context: StepContext,
   attemptId: string,
-): Promise<StepAttempt> {
+): Promise<StepAttempt | HumanTurnPause> {
   const harness = context.harness;
   if (harness === undefined) {
     // Preflight guarantees a prepared Harness for a Bundle carrying an Agent Step;
@@ -208,7 +229,21 @@ export async function runAgent(
     throw new Error("execution: an Agent Step ran without a prepared Harness.");
   }
   const owner = context.owner;
-  const rendered = renderAgentPrompt(step, context, harness);
+  // Waiting is decided here alone, so a stale or absent follow-up can never send a
+  // Turn anywhere: it only pauses the Step again.
+  const waiting = waitingAgentTurn(owner);
+  const followUp =
+    waiting?.attemptId === attemptId &&
+    context.followUp?.turnId === waiting.turnId
+      ? context.followUp
+      : undefined;
+  if (waiting?.attemptId === attemptId && followUp === undefined) {
+    return AWAITS_FOLLOW_UP;
+  }
+  const rendered =
+    followUp === undefined
+      ? renderAgentPrompt(step, context, harness)
+      : ({ ok: true, prompt: followUp.text } as const);
   if (!rendered.ok) {
     return mapTurnResult(rendered.result, harness.prepared.profile);
   }
@@ -237,8 +272,11 @@ export async function runAgent(
   // Each declared output is captured only from a receipt file at a fresh per-Attempt
   // path the prompt names (#215) — never parsed from assistant prose. Receipts live
   // in the working area (#220); preparing them is the one typed check (#305), so a
-  // failure admits and sends no Turn.
-  const prepared = prepareReceipts(step, owner, attemptId);
+  // failure admits and sends no Turn. A follow-up keeps the Attempt's directory: the
+  // receipt lines went into its first Turn, and the agent may have written there.
+  const prepared = prepareReceipts(step, owner, attemptId, {
+    keep: followUp !== undefined,
+  });
   if (!prepared.ok) {
     return mapTurnResult(
       unusableDirectoryFailure(prepared.problem),
@@ -246,18 +284,20 @@ export async function runAgent(
     );
   }
   const receipts = prepared.receipts;
-  const prompt =
-    receipts.length === 0
+  // The human's text is the Turn's input verbatim; only the prompt carries the
+  // receipt lines.
+  const input =
+    followUp !== undefined || receipts.length === 0
       ? rendered.prompt
       : `${rendered.prompt}\n\n${receipts.map(receiptInstruction).join("\n")}`;
 
   const result = await driveHarnessTurn(owner, harness.prepared, {
     session,
-    origin: "managed",
+    origin: followUp !== undefined ? "human" : "managed",
     kind: "agent",
     attemptId,
     turnId,
-    input: prompt,
+    input,
     observe: context.observe,
     ...(recovery.resume !== undefined ? { resume: recovery.resume } : {}),
     ...(context.requestChannel !== undefined
@@ -267,6 +307,9 @@ export async function runAgent(
       ? { cancelSignal: context.cancelSignal }
       : {}),
   });
+  if (interruptWaits(result.kind, context.cancelSignal)) {
+    return AWAITS_FOLLOW_UP;
+  }
   const attempt = mapTurnResult(result, harness.prepared.profile);
   if (attempt.outcome !== "succeeded" || receipts.length === 0) return attempt;
   // A completed Turn is only a Harness boundary: the Step succeeds only when every
@@ -323,6 +366,17 @@ export function openAgentAttemptTurn(
     .at(-1);
 }
 
+/** The Attempt-level waiting basis (#354): the open Agent Attempt's latest Turn
+ *  when an Interrupt ended it. A process signal cancels its Attempt instead, and a
+ *  crash leaves the Turn `lost`, so neither waits. The Run-level rest — `blocked`,
+ *  with no gate or checkpoint — is the caller's to add. */
+export function waitingAgentTurn(
+  run: Pick<RunOwner, "turns" | "attemptLog">,
+): TurnRecord | undefined {
+  const open = openAgentAttemptTurn(run);
+  return open?.resultKind === "interrupted" ? open : undefined;
+}
+
 // --- Required text output receipts (#215) ----------------------------------
 
 /** The byte cap on one receipt: a reference, not a document. */
@@ -339,12 +393,13 @@ function prepareReceipts(
   step: AgentStep,
   owner: RunOwner,
   attemptId: string,
+  options: { readonly keep: boolean },
 ):
   | { readonly ok: true; readonly receipts: readonly Receipt[] }
   | Extract<OutputReceiptDirectoryResult, { ok: false }> {
   const produces = step.produces ?? [];
   if (produces.length === 0) return { ok: true, receipts: [] };
-  const dir = owner.outputReceiptDirectory(attemptId);
+  const dir = owner.outputReceiptDirectory(attemptId, options);
   if (!dir.ok) return dir;
   return {
     ok: true,
@@ -606,18 +661,28 @@ async function driveHarnessTurn(
   }
 }
 
+/** Whether a Turn's result is an Interrupt that leaves its Step waiting for the
+ *  person (#353, #354, ADR 0035). A process signal also settles a live Turn
+ *  `interrupted` without throwing (a cancel throws first), so under an aborted
+ *  signal it does not wait (ADR 0019). */
+function interruptWaits(
+  kind: TurnResult["kind"],
+  cancelSignal: AbortSignal | undefined,
+): boolean {
+  return kind === "interrupted" && cancelSignal?.aborted !== true;
+}
+
 /** The rest an Interactive Step's Turn leaves the Run at (#353, ADR 0035). An
- *  Interrupt ends only the Turn, so every result but `lost` waits for the person.
- *  A process signal also settles a live Turn `interrupted` without throwing (a
- *  cancel throws first), so under an aborted signal it halts (ADR 0019). */
+ *  Interrupt ends only the Turn, so every result but `lost` and a signal-stopped
+ *  Turn waits for the person. */
 export function interactiveTurnRest(
   kind: TurnResult["kind"],
   cancelSignal: AbortSignal | undefined,
 ): "blocked" | "halted" {
   if (kind === "lost") return "halted";
-  return kind === "interrupted" && cancelSignal?.aborted === true
-    ? "halted"
-    : "blocked";
+  return kind !== "interrupted" || interruptWaits(kind, cancelSignal)
+    ? "blocked"
+    : "halted";
 }
 
 /** What driving one human interactive Turn needs (#122). */

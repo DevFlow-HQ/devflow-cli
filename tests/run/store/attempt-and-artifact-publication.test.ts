@@ -720,6 +720,54 @@ test("a link planted at an Attempt's own receipt path is replaced, never emptied
   );
 });
 
+test("keeping an Attempt's receipt directory returns it without emptying it (#354)", (t) => {
+  const owner = acquiredOwner(t);
+  const dir = receiptDirOf(owner, "0.0:publish");
+  writeFileSync(join(dir, "summary"), "written in the first Turn");
+
+  const kept = owner.outputReceiptDirectory("0.0:publish", { keep: true });
+
+  assert.deepEqual(kept, { ok: true, path: dir });
+  assert.equal(
+    readFileSync(join(dir, "summary"), "utf8"),
+    "written in the first Turn",
+  );
+  // The agent removed its directory: keeping creates it again, empty.
+  rmSync(dir, { recursive: true });
+  assert.deepEqual(
+    owner.outputReceiptDirectory("0.0:publish", { keep: true }),
+    { ok: true, path: dir },
+  );
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test("keeping refuses a link or a file at the Attempt's own receipt path (#354)", (t) => {
+  const owner = acquiredOwner(t);
+  const dir = receiptDirOf(owner, "0.0:publish");
+  const elsewhere = makeTempDir("secant-store-elsewhere-");
+  writeFileSync(join(elsewhere, "summary"), "outside the working area");
+  rmSync(dir, { recursive: true });
+  symlinkSync(elsewhere, dir, "junction");
+
+  const linked = owner.outputReceiptDirectory("0.0:publish", { keep: true });
+
+  assert.equal(linked.ok, false, JSON.stringify(linked));
+  if (linked.ok) throw new Error("unreachable");
+  assert.equal(linked.problem.kind, "output-receipt-directory-unavailable");
+  assert.equal(linked.problem.path, dir);
+  // Nothing is followed or removed: the target keeps its file.
+  assert.equal(
+    readFileSync(join(elsewhere, "summary"), "utf8"),
+    "outside the working area",
+  );
+
+  rmSync(dir, { recursive: true, force: true });
+  writeFileSync(dir, "squatter");
+  const squatted = owner.outputReceiptDirectory("0.0:publish", { keep: true });
+  assert.equal(squatted.ok, false, JSON.stringify(squatted));
+  assert.equal(readFileSync(dir, "utf8"), "squatter");
+});
+
 // Named gap: a removal or creation that fails after the root check (EPERM/EBUSY on
 // the per-Attempt directory) shares the conflict's catch-and-type path, but no
 // deterministic, portable fault can be injected there without a production

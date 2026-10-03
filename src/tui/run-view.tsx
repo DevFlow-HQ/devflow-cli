@@ -7,6 +7,7 @@ import {
 } from "solid-js";
 import type {
   AnswerHarnessRequestOffer,
+  SendFollowUpTurnOffer,
   ApprovalDecisionName,
   DiagnosticReference,
   OpenedProjection,
@@ -91,6 +92,14 @@ export interface RunWorkbenchView {
     stepId: string,
     text: string,
   ): Accessor<AnswerOutcome>;
+  /** Sends the human's follow-up to the Agent Step an Interrupt left waiting (#354),
+   *  against the interrupted Turn its Offer names: the verbatim text continues the
+   *  same Session and Attempt. The accessor starts `pending` and settles at the
+   *  follow-up Turn's admission, refused when it is stale or not admitted. */
+  sendFollowUpTurn(
+    offer: SendFollowUpTurnOffer,
+    text: string,
+  ): Accessor<AnswerOutcome>;
   /** Ends the interactive-agent Step the Run is blocked at (#122): settles the Step
    *  succeeded and advances the Run. Offered only at a Turn boundary. */
   endInteractiveStep(runId: string, stepId: string): Accessor<AnswerOutcome>;
@@ -172,6 +181,12 @@ export function createLiveRunWorkbenchView(
         operationId: randomUUID(),
         operation: "send-interactive-turn",
         input: { runId, stepId, text },
+      }),
+    sendFollowUpTurn: (offer, text) =>
+      submitAndSettle(port, {
+        operationId: randomUUID(),
+        operation: "send-follow-up-turn",
+        input: { runId: offer.runId, turnId: offer.turnId, text },
       }),
     endInteractiveStep: (runId, stepId) =>
       submitAndSettle(port, {
