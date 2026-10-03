@@ -46,7 +46,9 @@ These rows make no macOS, Linux, or cross-operating-system real-Harness claim.
 Three-OS replay evidence comes from the `check` job's `Process runtime conformance` step (standalone runtime conformance,
 [ADR 0027 amendment 2026-09-21](./adr/0027-gate-releases-on-three-os-ci-and-recorded-human-evidence.md);
 `tests/process/runtime-conformance.ts`), which drives the real Adapters against recorded-protocol replayers; it is replay evidence, not
-installed-Harness evidence.
+installed-Harness evidence. The Codex qualification and defaults recordings (`model/list` efforts and `config/read`, #341) come from codex-cli
+0.160.0 and its stable schema; the Codex Turn recordings come from 0.155.0. The installed-version rows below change only with a new
+installed-Harness report.
 
 Recorded versions are replay provenance, not rows: the Claude Code native-interrupt case (`interrupt`, #346) was recorded on Claude Code 2.1.288,
 while the installed-Harness row below stays at the 2.1.283 that `v0.1.0` checked. Each case's version is in its `recording.json`.

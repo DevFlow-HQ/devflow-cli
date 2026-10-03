@@ -34,6 +34,7 @@ import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 import { createFake } from "../harness/fake-adapter.js";
 import {
+  QUALIFICATION_DEFAULTS,
   QUALIFICATION_PROFILE,
   qualificationAdapter,
   wiringProcess,
@@ -57,7 +58,7 @@ async function settled(wired: Wiring, operationId: string): Promise<void> {
   await awaitSettled(wired.projectionPort, operationId);
 }
 
-test("Harness catalog qualification prepares and immediately closes before publishing the profile", async (t) => {
+test("Harness catalog qualification prepares, reads the Harness defaults, and immediately closes before publishing the profile", async (t) => {
   const workspace = realpathSync.native(makeTempDir("secant-wire-qualify-ws-"));
   const trace: string[] = [];
   const wired = wireApplication({
@@ -78,7 +79,7 @@ test("Harness catalog qualification prepares and immediately closes before publi
   t.after(() => opened.close());
   const update = await opened.updates[Symbol.asyncIterator]().next();
   assert.ok(update.value && update.value.kind === "durable");
-  assert.deepEqual(trace, [`prepare:${workspace}`, "close"]);
+  assert.deepEqual(trace, [`prepare:${workspace}`, "defaults", "close"]);
   if (update.value?.kind !== "durable") throw new Error("unreachable");
   assert.equal(update.value.snapshot.result.found, true);
   if (!update.value.snapshot.result.found) throw new Error("unreachable");
@@ -90,6 +91,56 @@ test("Harness catalog qualification prepares and immediately closes before publi
     update.value.snapshot.result.harness.configurationPosture,
     QUALIFICATION_PROFILE.configurationPosture,
   );
+  assert.deepEqual(
+    update.value.snapshot.result.harness.harnessDefaults,
+    QUALIFICATION_DEFAULTS,
+  );
+});
+
+test("Harness catalog still closes the qualification when the defaults read throws, and reports it not-ready", async (t) => {
+  const trace: string[] = [];
+  const reads = qualificationAdapter(trace);
+  const wired = wireApplication({
+    secantHome: makeTempDir("secant-wire-defaults-throw-home-"),
+    launchCwd: makeTempDir("secant-wire-defaults-throw-ws-"),
+    harnessAdapter: {
+      async prepare(options) {
+        const prepared = await reads.prepare(options);
+        if (!prepared.ok) return prepared;
+        return {
+          ok: true,
+          harness: {
+            ...prepared.harness,
+            async readDefaults() {
+              throw new Error("defaults read threw");
+            },
+          },
+        };
+      },
+    },
+    process: wiringProcess(),
+  });
+  t.after(() => {
+    wired.runGroup.close();
+    wired.catalog.close();
+  });
+
+  const opened = wired.projectionPort.openProjection({
+    family: "harness-catalog",
+    focus: { id: "claude-code" },
+  });
+  t.after(() => opened.close());
+  const update = await opened.updates[Symbol.asyncIterator]().next();
+  if (update.value?.kind !== "durable") throw new Error("expected a snapshot");
+  assert.deepEqual(
+    trace.map((entry) => entry.split(":", 1)[0]),
+    ["prepare", "close"],
+  );
+  if (!update.value.snapshot.result.found) throw new Error("unreachable");
+  const harness = update.value.snapshot.result.harness;
+  assert.equal(harness.qualification.state, "not-ready");
+  assert.equal(harness.harnessDefaults, undefined);
+  assert.match(harness.unavailable?.explanation ?? "", /defaults read threw/);
 });
 
 test("Harness catalog reports an unclean immediate close as not-ready", async (t) => {
@@ -123,7 +174,7 @@ test("Harness catalog reports an unclean immediate close as not-ready", async (t
   assert.ok(update.value && update.value.kind === "durable");
   assert.deepEqual(
     trace.map((entry) => entry.split(":", 1)[0]),
-    ["prepare", "close"],
+    ["prepare", "defaults", "close"],
   );
   if (update.value?.kind !== "durable") throw new Error("unreachable");
   assert.equal(update.value.snapshot.result.found, true);
@@ -178,6 +229,9 @@ const qualificationFailureCases: readonly {
           ok: true,
           harness: {
             profile: QUALIFICATION_PROFILE,
+            async readDefaults() {
+              return QUALIFICATION_DEFAULTS;
+            },
             startTurn() {
               throw new Error("qualification must not start a Turn");
             },
@@ -672,7 +726,7 @@ for (const throwingRecord of [
     );
     assert.deepEqual(
       trace.map((entry) => entry.split(":", 1)[0]),
-      ["prepare", "close"],
+      ["prepare", "defaults", "close"],
     );
   });
 }

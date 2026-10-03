@@ -83,18 +83,47 @@ export function harnessFocusStatus(focus: HarnessFocus | undefined): string {
 export const FREE_TEXT_MODEL_ENTRY = "Free-text model entry";
 
 /**
- * The Harness catalog row's model line: what a qualified Harness observed, or
- * nothing when it offers no model selection. An unqualified Harness has not
- * shown its models yet, whatever its registration declares.
+ * The Harness catalog row's model line: what a qualified Harness observed or
+ * suggests, or nothing when it offers no model selection. An unqualified Harness
+ * has not shown its models yet, whatever its registration declares.
  */
 export function harnessModelLine(
   qualification: HarnessQualificationView,
-  declaration: HarnessFocus["supportedModels"],
+  declaration: HarnessFocus["modelDeclaration"],
 ): string | undefined {
   if (!isQualified(qualification)) return "Models not yet observed";
   if (declaration === undefined) return undefined;
   if (declaration.kind === "free-text") return FREE_TEXT_MODEL_ENTRY;
-  return `${declaration.models.length} models observed`;
+  const count = declaration.models.length;
+  const models = count === 1 ? "model" : "models";
+  return declaration.kind === "suggested"
+    ? `${count} suggested ${models}`
+    : `${count} ${models} observed`;
+}
+
+/** A model's name for a person: its label and exact name, or the name alone
+ *  when the Harness gives no other label. Headless `render.ts` uses the same
+ *  words for models and efforts. */
+export function modelName(entry: {
+  readonly model: string;
+  readonly label?: string;
+}): string {
+  return entry.label === undefined || entry.label === entry.model
+    ? entry.model
+    : `${entry.label} · ${entry.model}`;
+}
+
+/** A model's efforts in words, the default marked in text rather than colour. */
+export function effortsLine(
+  efforts: readonly string[],
+  defaultEffort?: string,
+): string {
+  if (efforts.length === 0) return "No effort setting";
+  return `Efforts · ${efforts
+    .map((effort) =>
+      effort === defaultEffort ? `${effort} (default)` : effort,
+    )
+    .join(", ")}`;
 }
 
 function titleCase(value: string): string {

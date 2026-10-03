@@ -57,7 +57,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   one breaks the gate. They are not uniform — `bundle inspect --json` prints the inner bundle while `bundle list --json` prints the snapshot — so match
   the existing shape a command already emits.
 - The `harness` command group lives in `harness-commands.ts`. `harness inspect` waits for the first durable focus update when its initial snapshot is
-  `not-checked` (#188). Its frozen JSON is the inner focused Harness; `harness list --json` prints the whole list snapshot, and neither command derives or
+  `not-checked` (#188). Its frozen JSON is the inner focused Harness, where `supportedModels` keeps its names-only shape (a `suggested` declaration
+  reads as `free-text`) and #341 adds `modelDeclaration` and `harnessDefaults` beside it; `harness list --json` prints the whole list snapshot, and neither command derives or
   exposes Action Offers.
 - Every command prints the startup notices (`clients.startupNotices`, the ADR 0029 Shipped Bundle ensure) to stderr before executing (`buildProgram`'s
   `execute`). A failed ensure never blocks the command, and stdout, the `--json` shapes, and exit codes are untouched by the notices.

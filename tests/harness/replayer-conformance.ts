@@ -75,14 +75,34 @@ export function registerClaudeCodeReplayerConformance(
   };
   runPrepareProfileCases(scenarios, register);
 
-  // Claude Code declares free-text model entry and forwards each Turn's requested
-  // model as --model on the launch serving it; the effective model stays the
-  // init/result observation.
+  // Claude Code suggests its documented aliases with the five `--help` efforts,
+  // admits any other name, and starts from its declared fallback until its
+  // settings are read (#347); each Turn's requested model is forwarded as --model on
+  // the launch serving it.
+  const claudeEfforts = ["low", "medium", "high", "xhigh", "max"];
   runModelDeclarationCases(
     {
       label: "claude-code",
       baseline: scenarios.baseline,
-      expectedDeclaration: { kind: "free-text" },
+      expectedDeclaration: {
+        kind: "suggested",
+        includes: [
+          { model: "opus", label: "Opus (latest)", efforts: claudeEfforts },
+          { model: "default", label: "Default", efforts: claudeEfforts },
+          { model: "opusplan", label: "Opus Plan", efforts: claudeEfforts },
+          {
+            model: "sonnet[1m]",
+            label: "Sonnet (latest) with 1M context",
+            efforts: claudeEfforts,
+          },
+        ],
+        efforts: claudeEfforts,
+      },
+      expectedDefaults: {
+        kind: "fallback",
+        choice: { model: "opus", effort: "medium" },
+        reason: "Claude Code's own settings were not read before launch.",
+      },
     },
     register,
   );
@@ -250,16 +270,51 @@ export function registerCodexReplayerConformance(
     register,
   );
 
-  // Codex declares the supported-model list its qualification observed; each
-  // Turn's requested model is applied natively on its turn/start, and one the list
-  // rejects settles that Turn not-started. `gpt-6-astra` is the default recorded model; `gpt-5.6-sol` a
-  // non-default one, distinct from the thread's observed effective model.
+  // Codex declares the models its recorded `model/list` observed, each with its
+  // efforts and default effort, and reads its defaults from the recorded
+  // `config/read`: one Codex home names gpt-5.5 at high, the other names no
+  // model, so the `model/list` default stands in at its own default effort. Each
+  // Turn's requested model rides its turn/start; one the list rejects settles
+  // that Turn not-started.
+  const gpt55 = {
+    model: "gpt-5.5",
+    label: "GPT-5.5",
+    efforts: ["low", "medium", "high", "xhigh"],
+    defaultEffort: "medium",
+  };
+  const gpt61Sol = {
+    model: "gpt-6.1-sol",
+    label: "GPT-6.1-Sol",
+    efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+    defaultEffort: "low",
+  };
+  const configured = installCodexReplayer("codex-qualification");
   runModelDeclarationCases(
     {
       label: "codex",
       baseline: () => () =>
-        createCodexAdapter({ path: replayer.path, env: {} }),
-      expectedDeclaration: { kind: "list", includes: ["gpt-6-astra"] },
+        createCodexAdapter({ path: configured.path, env: {} }),
+      expectedDeclaration: { kind: "list", includes: [gpt55, gpt61Sol] },
+      expectedDefaults: {
+        kind: "reported",
+        choice: { model: "gpt-5.5", effort: "high" },
+      },
+    },
+    register,
+  );
+  const unconfigured = installCodexReplayer("codex-qualification-unconfigured");
+  runModelDeclarationCases(
+    {
+      label: "codex unconfigured",
+      baseline: () => () =>
+        createCodexAdapter({ path: unconfigured.path, env: {} }),
+      expectedDeclaration: { kind: "list", includes: [gpt55, gpt61Sol] },
+      expectedDefaults: {
+        kind: "fallback",
+        choice: { model: "gpt-6.1-sol", effort: "low" },
+        reason:
+          "Codex's configuration names no model. Starting from Codex's default model at its default effort.",
+      },
     },
     register,
   );

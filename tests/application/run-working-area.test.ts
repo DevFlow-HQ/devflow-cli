@@ -106,6 +106,7 @@ function planningAgent(kind: "completed" | "failed", file: string) {
         ok: true,
         harness: {
           profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
           startTurn(request) {
             inputs.push(request.input.text);
             if (options.writableDirectory !== undefined) {

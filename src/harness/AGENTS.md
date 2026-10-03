@@ -45,18 +45,26 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   hard-coding a second rejection; the Claude Code profile declares it unavailable (print mode has no same-Turn guidance frame) and the fake's script
   decides it through the profile it supplies.
 - Model selection is a profile fact. `modelSelection` declares where a model can be chosen (`launch`, `per-turn`, both, or `unavailable`) and carries a
-  `ModelDeclaration`: a `list` of admitted models or `free-text`. `modelObservation` separately declares whether the effective model is read from native
-  evidence. Codex declares `launch-and-per-turn` with the `model/list` result observed at qualification; Claude Code declares `launch` with free text
-  (`--model`). Both observe the effective model.
+  `ModelDeclaration` (ADR 0034): an exhaustive `list`, `suggested` picks that are neither exhaustive nor validated, or `free-text`. `list` and
+  `suggested` entries share `{model, label, efforts, defaultEffort?}`; empty `efforts` is a model without an effort setting, and `suggested` and
+  `free-text` carry a declaration-level `efforts` for any other name. Codex declares `launch-and-per-turn` with the `model/list` entries observed at
+  qualification; Claude Code declares `launch` with its documented aliases as `suggested`, each offering the five `--help` efforts and no default
+  effort, since which levels a Claude model honours is observed, never catalogued. `modelObservation` separately declares whether the effective
+  model is read from native evidence; both observe it.
+- `PreparedHarness.readDefaults()` (#341) is the Harness's own default Model choice, read lazily and once per Prepared Harness so a Run's prepare never
+  pays for it: `reported`, or the Adapter's declared `fallback` with its reason (Codex: the `model/list` default at its own default effort; Claude
+  Code: Opus (latest) at medium until #347 reads `get_settings`), or `unavailable`. A read the Harness cannot answer falls back, never throws; an
+  `effortLock` carries an opaque `source`. Composition's qualify path is its one caller.
 - `PrepareOptions.process` and `phases` (#333) serve that prepare and its Prepared Harness alone; an Adapter keeps only its qualification cache across
   prepares, so a cache hit never reuses an earlier caller's Process or observer.
 - `PrepareOptions.writableDirectory` (#214) is validated by the one shared `writableDirectoryFailure` (`writable-directory.ts`) before anything
   native runs (not an existing absolute directory ⇒ typed `writable-directory-unavailable`). Claude Code forwards it as `--add-dir` on every launch; Codex
   sends a per-thread `sandbox_workspace_write.writable_roots` config override and refuses the Turn `writable-directory-refused` only when an acknowledged
   `workspaceWrite` sandbox omits it (read-only defers to approvals).
-- Each `TurnRequest` carries its `modelChoice` (ADR 0034); `modelChoiceRefusal` refuses one outside a declared list, even an empty one, as a `not-started`
-  `model-unavailable` Turn before admission, never a substitution. Codex sends it on `turn/start`, Claude Code as `--model` on the launch serving the Turn
-  (a reused live child keeps its model, #348); neither sends effort yet (#345, #348). The observed effective model never copies the request.
+- Each `TurnRequest` carries its `modelChoice` (ADR 0034); `modelChoiceRefusal` refuses one outside a declared `list`, even an empty one
+  (`suggested` and `free-text` admit any), as a `not-started` `model-unavailable` Turn before admission, never a substitution. Codex sends it
+  on `turn/start`, Claude Code as `--model` on the launch serving the Turn (a reused live child keeps its model, #348); neither sends effort
+  yet (#345, #348). The observed effective model never copies the request.
 
 ### Interrupt, recovery, and cleanup
 

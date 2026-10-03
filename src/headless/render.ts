@@ -119,6 +119,64 @@ export function renderHarnessRow(harness: HarnessSummary): string {
   return `${lines.join("\n")}\n`;
 }
 
+/** The models a Harness declares, each with its efforts, then the Model choice
+ * the Harness itself reports or falls back to (#341). */
+function renderHarnessModels(harness: HarnessFocus): string[] {
+  const declaration = harness.modelDeclaration;
+  if (declaration === undefined) return ["Supported models: Not checked"];
+  const lines =
+    declaration.kind === "list"
+      ? ["Supported models: Listed by the Harness"]
+      : declaration.kind === "suggested"
+        ? ["Supported models: Suggested; any model name is accepted"]
+        : ["Supported models: Free-text model entry"];
+  const entries = declaration.kind === "free-text" ? [] : declaration.models;
+  for (const entry of entries) {
+    lines.push(
+      `  ${modelName(entry.label, entry.model)}: ${renderEfforts(entry.efforts, entry.defaultEffort)}`,
+    );
+  }
+  if (declaration.kind !== "list") {
+    lines.push(`  Other model names: ${renderEfforts(declaration.efforts)}`);
+  }
+  const defaults = harness.harnessDefaults;
+  if (defaults === undefined) return lines;
+  if (defaults.kind === "unavailable") {
+    lines.push(`Harness default: None. ${defaults.reason}`);
+    return lines;
+  }
+  const label = entries.find(
+    (entry) => entry.model === defaults.choice.model,
+  )?.label;
+  const choice = `${modelName(label ?? defaults.choice.model, defaults.choice.model)} ${defaults.choice.effort === undefined ? "with no effort setting" : `at ${defaults.choice.effort}`}`;
+  lines.push(
+    defaults.kind === "reported"
+      ? `Harness default: ${choice}, reported by the Harness`
+      : `Harness default: ${choice}, the fallback. ${defaults.reason}`,
+  );
+  if (defaults.effortLock !== undefined) {
+    lines.push(`Effort locked by ${defaults.effortLock.source}`);
+  }
+  return lines;
+}
+
+// The TUI inspector (`src/tui/harness-format.ts`) mirrors these model words.
+function modelName(label: string, model: string): string {
+  return label === model ? model : `${label} · ${model}`;
+}
+
+function renderEfforts(
+  efforts: readonly string[],
+  defaultEffort?: string,
+): string {
+  if (efforts.length === 0) return "no effort setting";
+  return `efforts ${efforts
+    .map((effort) =>
+      effort === defaultEffort ? `${effort} (default)` : effort,
+    )
+    .join(", ")}`;
+}
+
 export function renderHarnessFocus(harness: HarnessFocus): string {
   const lines = [
     `${harness.name} (${harness.id})`,
@@ -134,16 +192,7 @@ export function renderHarnessFocus(harness: HarnessFocus): string {
     lines.push(`Checked at: ${harness.qualification.checkedAt}`);
   }
 
-  lines.push("");
-  if (harness.supportedModels === undefined) {
-    lines.push("Supported models: Not checked");
-  } else if (harness.supportedModels.kind === "free-text") {
-    lines.push("Supported models: Free-text model entry");
-  } else {
-    lines.push(
-      `Supported models: ${harness.supportedModels.models.join(", ")}`,
-    );
-  }
+  lines.push("", ...renderHarnessModels(harness));
 
   lines.push("", "Capabilities:");
   // The TUI inspector adds a blank line between capabilities on purpose;

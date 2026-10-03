@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
@@ -45,6 +46,7 @@ const REFRESH_COMMAND = "bun tests/harness/record-codex.ts";
 const recorderTempDirectories: string[] = [];
 const REAL_CASES = new Set([
   "codex-qualification",
+  "codex-qualification-unconfigured",
   "completion",
   "two-turns",
   "approval",
@@ -61,8 +63,8 @@ process.on("exit", () => {
   }
 });
 
-function recorderTempDir(prefix: string): string {
-  const directory = mkdtempSync(join(tmpdir(), prefix));
+function recorderTempDir(prefix: string, base = tmpdir()): string {
+  const directory = mkdtempSync(join(base, prefix));
   recorderTempDirectories.push(directory);
   return directory;
 }
@@ -82,11 +84,23 @@ if (!REAL_CASES.has(caseName)) {
   );
 }
 
+// The qualification cases read Codex's defaults (#341), so each runs against a
+// Codex home holding only the user's login and a known configuration: one names
+// a model and effort, the other none. The user's own configuration (trusted
+// project paths, instructions, hooks) never reaches a recording.
+const QUALIFICATION_CONFIG: Readonly<Record<string, string | undefined>> = {
+  "codex-qualification": 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n',
+  "codex-qualification-unconfigured": undefined,
+};
+const qualificationCase = caseName in QUALIFICATION_CONFIG;
+
 const workspace = recorderTempDir(`secant-codex-${caseName}-`);
 if (caseName === "authentication") {
   process.env.CODEX_HOME = recorderTempDir(
     "secant-codex-unauthenticated-home-",
   );
+} else if (qualificationCase) {
+  process.env.CODEX_HOME = isolatedCodexHome(QUALIFICATION_CONFIG[caseName]);
 }
 const capture = createCodexRecordingCapture();
 const prepared = await createCodexAdapter({
@@ -122,7 +136,10 @@ if (!prepared.ok) {
 }
 
 let workspacePatch: string | undefined;
-if (caseName !== "codex-qualification") {
+if (qualificationCase) {
+  const defaults = await prepared.harness.readDefaults();
+  process.stdout.write(`Read defaults: ${JSON.stringify(defaults)}\n`);
+} else {
   if (caseName === "test-repair") seedTestRepairWorkspace(workspace);
   await driveCase(caseName, prepared.harness.startTurn.bind(prepared.harness));
   if (caseName === "test-repair") {
@@ -474,6 +491,7 @@ function qualificationResponses(
       ["initialize", 1],
       ["account/read", 2],
       ["model/list", 3],
+      ["config/read", 4],
     ].map(([method, id]) => {
       const entry = traffic.find((candidate) => {
         if (candidate.direction !== "stdout" || candidate.line === undefined) {
@@ -538,6 +556,7 @@ function recordingSecrets(
       const codexHome = message.result?.codexHome;
       const email = message.result?.account?.email;
       const installationId = message.params?.installationId;
+      const accountId = message.result?.workspaceRouting?.chatgptAccountId;
       if (typeof codexHome === "string") {
         secrets.push({
           value: codexHome,
@@ -550,6 +569,13 @@ function recordingSecrets(
           value: email,
           placeholder: "recorded@example.invalid",
           reason: "Codex account email",
+        });
+      }
+      if (typeof accountId === "string") {
+        secrets.push({
+          value: accountId,
+          placeholder: "recorded-chatgpt-account-id",
+          reason: "Codex ChatGPT account id",
         });
       }
       if (typeof installationId === "string") {
@@ -580,6 +606,19 @@ function requiredProvenance(label: string, value: string | undefined): string {
     throw new Error(`The production Codex Adapter observed no ${label}.`);
   }
   return value;
+}
+
+/** A temporary Codex home with only a link to the user's login and, when given,
+ *  a `config.toml`. It sits under the user's home, not the temp folder: Codex
+ *  warns about a home under the temp folder on its `--version` output, which
+ *  would reach the recorded version. Refresh on macOS or Linux, where a file link
+ *  needs no privilege. */
+function isolatedCodexHome(config: string | undefined): string {
+  const userHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  const home = recorderTempDir(".secant-codex-recording-home-", homedir());
+  symlinkSync(join(userHome, "auth.json"), join(home, "auth.json"));
+  if (config !== undefined) writeFileSync(join(home, "config.toml"), config);
+  return home;
 }
 
 function approvalExecutable(): string {

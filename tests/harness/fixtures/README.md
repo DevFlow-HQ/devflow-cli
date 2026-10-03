@@ -101,9 +101,20 @@ terminal Turn event. The replayer substitutes only the recorded `«WORKSPACE»`
 path; it does not fabricate ids, requests, controls, or terminal facts.
 
 Qualification contains only pre-thread traffic: `initialize`, `initialized`,
-`account/read`, and `model/list`. It must not contain `thread/*`, `turn/*`, prompt,
-or input content. Real completion, approval, Steer, Interrupt, resume,
-authentication, and Test Repair cases extend that production-path traffic. The
+`account/read`, and `model/list`, then the `config/read` defaults read the qualify
+path adds (#341). It must not contain `thread/*`, `turn/*`, prompt, or input
+content. Real completion, approval, Steer, Interrupt, resume, authentication, and
+Test Repair cases extend the handshake without `config/read`, since a Run's
+prepare never reads the defaults; a synthetic replay therefore plays the
+qualification traffic only up to `config/read` and answers it from `responses`
+when a test asks.
+
+The two qualification cases record against a temporary Codex home under the
+user's home directory (Codex warns about one under the temp folder on its
+`--version` output) that holds only a link to the user's `auth.json` and a known
+`config.toml`: `codex-qualification` names `gpt-5.5` at `high` (reported
+defaults), and `codex-qualification-unconfigured` names no model (the `model/list`
+default stands in). The user's own configuration never reaches a recording. The
 approval recorder uses a temporary pass-through executable with the per-process
 `approvals_reviewer=user` Codex override; it does not change user configuration
 or broaden Secant's one-time `allow` decision.
@@ -116,7 +127,8 @@ not expose a schema-generation qualification command; its native evidence is the
 recorded stdout stream instead. Refresh one case with
 `bun tests/harness/record-codex.ts <case>` while logged in through Codex; omitting
 the case refreshes `codex-qualification`. Authentication uses an empty temporary
-`CODEX_HOME`. Replay is deterministic Adapter evidence on all three CI operating
+`CODEX_HOME`. The qualification cases are recorded on codex-cli 0.160.0 and the
+Turn cases on 0.155.0; every case shares the `codex-qualification` schema. Replay is deterministic Adapter evidence on all three CI operating
 systems, not a claim that the currently installed real Codex remains compatible.
 
 ## Synthetic cases

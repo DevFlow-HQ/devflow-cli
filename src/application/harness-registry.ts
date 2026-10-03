@@ -3,6 +3,7 @@ import type { HarnessChoice } from "./projection-port.js";
 import type {
   EffectScope,
   FailurePhase,
+  HarnessDefaults,
   HarnessFailure,
   HarnessProfile,
 } from "../harness/harness.js";
@@ -52,9 +53,14 @@ export interface ApplicationHarnessQualificationFailure {
   readonly cause?: HarnessFailure["cause"];
 }
 
-/** The normalized result Application caches for one registered Harness. */
+/** The normalized result Application caches for one registered Harness: its
+ * profile and the defaults the same bounded qualification read (#341). */
 export type ApplicationHarnessQualification =
-  | { readonly ok: true; readonly profile: HarnessProfile }
+  | {
+      readonly ok: true;
+      readonly profile: HarnessProfile;
+      readonly defaults: HarnessDefaults;
+    }
   | {
       readonly ok: false;
       readonly failure: ApplicationHarnessQualificationFailure;

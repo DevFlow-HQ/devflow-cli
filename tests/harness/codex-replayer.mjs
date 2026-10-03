@@ -67,8 +67,10 @@ function expectedStdinLine(recordedLine, actualLine) {
   if (!recordedLine.includes("«WORKSPACE»")) return replayLine(recordedLine);
   try {
     const actual = JSON.parse(actualLine);
+    // The Workspace the Adapter names first: `config/read` on a qualification
+    // that reads the defaults, else `thread/start`.
     if (
-      actual.method === "thread/start" &&
+      (actual.method === "thread/start" || actual.method === "config/read") &&
       typeof actual.params?.cwd === "string"
     ) {
       requestedWorkspace = actual.params.cwd;
@@ -462,6 +464,15 @@ for await (const line of lines) {
   if (response === undefined) {
     process.stdout.write(
       `${JSON.stringify({ id: request.id, error: { code: -32601, message: "method not found" } })}\n`,
+    );
+    continue;
+  }
+  // Synthetic faults a test configures over one recorded response: never
+  // answering, or answering with a JSON-RPC error.
+  if (response.stall === true) continue;
+  if (response.error !== undefined) {
+    process.stdout.write(
+      `${JSON.stringify({ id: request.id, error: response.error })}\n`,
     );
     continue;
   }

@@ -98,6 +98,7 @@ function trackerAgent(
           ok: true,
           harness: {
             profile: profile(harness),
+            readDefaults: () => prepared[0]!.readDefaults(),
             startTurn(request) {
               const index = inputs.length;
               inputs.push(request.input.text);

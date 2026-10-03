@@ -106,6 +106,7 @@ function planningAgent(harness: HarnessId, writeReceipt: boolean) {
         ok: true,
         harness: {
           profile: inner.profile,
+          readDefaults: () => inner.readDefaults(),
           startTurn(request) {
             inputs.push(request.input.text);
             resumes.push(request.resume !== undefined);

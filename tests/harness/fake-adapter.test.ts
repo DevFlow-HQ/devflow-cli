@@ -39,7 +39,7 @@ function profile(): HarnessProfile {
     steer: { available: false, evidence: "scripted fake" },
     modelSelection: {
       at: "launch",
-      declaration: { kind: "free-text" },
+      declaration: { kind: "free-text", efforts: [] },
       evidence: "fake takes any model at launch",
     },
     modelObservation: {

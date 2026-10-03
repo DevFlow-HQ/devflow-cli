@@ -565,7 +565,10 @@ test("a model the Harness no longer lists fails the resumed Turn not-started, ad
   const workspace = makeTempDir("secant-requested-model-ws-");
   const listing = (models: string[]): HarnessProfile["modelSelection"] => ({
     at: "launch",
-    declaration: { kind: "list", models },
+    declaration: {
+      kind: "list",
+      models: models.map((model) => ({ model, label: model, efforts: [] })),
+    },
     evidence: "scripted fake",
   });
   const { wired, digest } = wire(

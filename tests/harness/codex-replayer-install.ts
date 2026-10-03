@@ -89,6 +89,21 @@ export interface InstalledCodexReplayer {
   failCleanup(status: number): void;
   removeResponseField(method: string, field: string): void;
   requireLogin(): void;
+  /** Replace the recorded `config/read` answer: a configuration naming the given
+   *  model and effort (`null` names none), a JSON-RPC error, a reply that is not
+   *  a configuration, or no reply at all. */
+  configureConfigRead(
+    answer:
+      | {
+          readonly model: string | null;
+          readonly effort: string | null;
+        }
+      | "rpc-error"
+      | "malformed"
+      | "stall",
+  ): void;
+  /** Mark no `model/list` entry as Codex's default. */
+  clearDefaultModel(): void;
   failTurn(message: string): void;
   configureTurn(options: CodexTurnReplayOptions): void;
   configureRecovery(options: CodexRecoveryReplayOptions): void;
@@ -221,11 +236,26 @@ export function installCodexReplayerAt(
   );
   const strictReplay =
     !syntheticFaultInjection && selectedCase.replay === "strict";
+  // A synthetic case replays only the handshake every prepare sends; the
+  // recorded `config/read` answer stays in `responses` for a test that asks.
+  const handshakeTraffic = (traffic: readonly { line?: string }[]) => {
+    const defaultsAt = traffic.findIndex(
+      (entry) => entry.line?.includes('"method":"config/read"') === true,
+    );
+    return defaultsAt < 0 ? traffic : traffic.slice(0, defaultsAt);
+  };
   writeFileSync(
     join(installedFixtureDirectory, "case.json"),
     JSON.stringify({
       ...qualificationCase,
       ...selectedCase,
+      ...(strictReplay
+        ? {}
+        : {
+            traffic: handshakeTraffic(
+              selectedCase.traffic ?? qualificationCase.traffic ?? [],
+            ),
+          }),
       // Protocol-private tests deliberately inject deterministic faults over the
       // recorded qualification exchange. Only that explicit synthetic mode may
       // use the configurable response generator; real cases stay strict.
@@ -438,6 +468,42 @@ export function installCodexReplayerAt(
           requiresOpenaiAuth: true,
         };
       }
+      writeFileSync(casePath, JSON.stringify(protocolCase));
+    },
+    configureConfigRead(answer) {
+      const casePath = join(installedFixtureDirectory, "case.json");
+      const protocolCase = JSON.parse(readFileSync(casePath, "utf8"));
+      if (answer === "stall") {
+        protocolCase.responses["config/read"] = { stall: true };
+      } else if (answer === "rpc-error") {
+        protocolCase.responses["config/read"] = {
+          error: { code: -32603, message: "config unavailable" },
+        };
+      } else if (answer === "malformed") {
+        protocolCase.responses["config/read"] = { config: "not an object" };
+      } else {
+        const recorded = JSON.parse(
+          protocolCase.responses["config/read"].line,
+        ).result;
+        protocolCase.responses["config/read"] = {
+          ...recorded,
+          config: {
+            ...recorded.config,
+            model: answer.model,
+            model_reasoning_effort: answer.effort,
+          },
+        };
+      }
+      writeFileSync(casePath, JSON.stringify(protocolCase));
+    },
+    clearDefaultModel() {
+      const casePath = join(installedFixtureDirectory, "case.json");
+      const protocolCase = JSON.parse(readFileSync(casePath, "utf8"));
+      const response = protocolCase.responses["model/list"];
+      const message = JSON.parse(response.line);
+      for (const model of message.result.data) model.isDefault = false;
+      response.line = `${JSON.stringify(message)}\n`;
+      synchronizeTraffic(protocolCase, response);
       writeFileSync(casePath, JSON.stringify(protocolCase));
     },
     failTurn(message) {

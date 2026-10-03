@@ -45,6 +45,22 @@ const QUALIFIED_CODEX: HarnessFocus = {
     },
   },
   supportedModels: { kind: "list", models: ["gpt-5", "gpt-5-mini"] },
+  modelDeclaration: {
+    kind: "list",
+    models: [
+      {
+        model: "gpt-5",
+        label: "GPT-5",
+        efforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      },
+      { model: "gpt-5-mini", label: "GPT-5 mini", efforts: [] },
+    ],
+  },
+  harnessDefaults: {
+    kind: "reported",
+    choice: { model: "gpt-5", effort: "high" },
+  },
   capabilities: [
     {
       capability: "session-recovery",
@@ -322,7 +338,7 @@ function inspectorPane(frame: string): string {
 }
 
 test("harness-catalog-screen renders normalized rows and every inspector section", async () => {
-  const { t, focused } = await mount();
+  const { t, focused } = await mount({ width: 140, height: 44 });
   await t.waitForFrame((frame) => frame.includes("2 discovered"));
   const frame = t.captureCharFrame();
 
@@ -345,8 +361,12 @@ test("harness-catalog-screen renders normalized rows and every inspector section
   assert.match(frame, /Platform · linux/);
   assert.match(frame, /Checked · 2026-09-22T00:00:00\.000Z/);
   assert.match(frame, /Authentication · Ready/);
-  assert.match(frame, /Supported models/);
-  assert.match(frame, /gpt-5-mini · Available for Run selection/);
+  // Each model reads with its efforts, the default marked in words; then the
+  // Harness's own default and where it came from.
+  assert.match(
+    inspectorPane(frame),
+    /^ Supported models *\n Listed by the Harness · only these can be chosen *\n · GPT-5 · gpt-5 *\n {3}Efforts · low, medium \(default\), high *\n · GPT-5 mini · gpt-5-mini *\n {3}No effort setting *\n *\n Harness default *\n GPT-5 · gpt-5 at high *\n Reported by the Harness *$/m,
+  );
   assert.match(frame, /Capabilities/);
   assert.match(frame, /Session recovery · Available with limits/);
   // Each capability's description and limits sit indented under its name,
@@ -416,6 +436,14 @@ test("Harness search uses held names, models, and capabilities and explains no m
   assert.match(t.captureCharFrame(), /Codex/);
 
   for (let index = 0; index < "gpt-5-mini".length; index += 1) {
+    t.mockInput.pressBackspace();
+  }
+  // A model's friendly label matches as well as its exact name.
+  await t.mockInput.typeText("GPT-5 mini");
+  await t.waitForFrame((frame) => !frame.includes("Claude Code · Not ready"));
+  assert.match(t.captureCharFrame(), /Codex/);
+
+  for (let index = 0; index < "GPT-5 mini".length; index += 1) {
     t.mockInput.pressBackspace();
   }
   await t.mockInput.typeText("effective model");
@@ -522,6 +550,7 @@ test("unchecked discovery variants, free-text models, and a focus Problem remain
     },
     qualification: { state: "not-checked" },
     supportedModels: { kind: "free-text" },
+    modelDeclaration: { kind: "free-text", efforts: [] },
     capabilities: QUALIFIED_CODEX.capabilities.map((capability) => ({
       capability: capability.capability,
       name: capability.name,
@@ -613,6 +642,7 @@ test("qualified rows name free-text entry, and a Harness without model selection
       observation: qualification.observation,
     },
     supportedModels: { kind: "free-text" },
+    modelDeclaration: { kind: "free-text", efforts: ["low", "high"] },
     capabilities: QUALIFIED_CODEX.capabilities,
   };
   const noModels: HarnessFocus = {
@@ -638,6 +668,130 @@ test("qualified rows name free-text entry, and a Harness without model selection
     /› Codex · Qualified *\n {3}Free-text model entry *\n {3}Claude Code · Qualified *\n *\n/,
   );
   assert.doesNotMatch(frame, /Models not yet observed/);
+});
+
+/** The inspector panel's content rows in a frame, between its title and its
+ *  bottom border, with the borders and padding cut away. */
+function inspectorWindow(frame: string): string[] {
+  const lines = frame.split("\n");
+  const top = lines.findIndex((line) => line.includes("Inspector"));
+  const rows: string[] = [];
+  for (const line of lines.slice(top + 1)) {
+    if (line.includes("└")) break;
+    const columns = line.split("│");
+    rows.push((columns[columns.length - 2] ?? "").trim());
+  }
+  return rows;
+}
+
+/** How many of `next`'s leading rows repeat the tail of `seen`. */
+function longestOverlap(seen: readonly string[], next: readonly string[]) {
+  for (let size = Math.min(seen.length, next.length); size > 0; size -= 1) {
+    if (seen.slice(-size).every((row, index) => row === next[index])) {
+      return size;
+    }
+  }
+  return 0;
+}
+
+// #23 evidence for the model catalog (#341): a large suggested list with long
+// labels, the declaration-level efforts, and a fallback default under an effort
+// lock, read at small sizes and across a resize from text-only frames, so every
+// meaning (the default effort, where the default came from, the lock) is words.
+test("the inspector's models, efforts, and Harness default survive small sizes, resize, and a large list without colour", async () => {
+  const qualification = QUALIFIED_CODEX.qualification;
+  if (!("observation" in qualification)) {
+    throw new Error("qualified fixture lost its observation");
+  }
+  const efforts = ["low", "medium", "high", "xhigh", "max"];
+  const models = Array.from({ length: 30 }, (_, index) => {
+    const number = String(index + 1).padStart(2, "0");
+    return {
+      model: `family-${number}[1m]`,
+      label: `Family ${number} (latest) with a long friendly label and 1M context`,
+      efforts,
+      ...(index === 0 ? { defaultEffort: "medium" } : {}),
+    };
+  });
+  const suggested: HarnessFocus = {
+    id: "claude-code",
+    name: "Claude Code",
+    discovery: UNAVAILABLE_CLAUDE.discovery,
+    qualification: {
+      state: "qualified",
+      observation: qualification.observation,
+    },
+    supportedModels: { kind: "free-text" },
+    modelDeclaration: { kind: "suggested", models, efforts },
+    harnessDefaults: {
+      kind: "fallback",
+      choice: { model: "family-30[1m]", effort: "xhigh" },
+      reason: "Claude Code's own settings were not read before launch.",
+      effortLock: { effort: "xhigh", source: "CLAUDE_CODE_EFFORT_LEVEL=xhigh" },
+    },
+    capabilities: QUALIFIED_CODEX.capabilities,
+  };
+  const catalog = staticCatalog([suggested], () => ({
+    found: true,
+    harness: suggested,
+  }));
+  const { t } = await mount({ catalog, width: 50, height: 24 });
+  await t.waitForFrame((frame) => frame.includes("30 suggested models"));
+  const assertWidth = (width: number) => {
+    for (const line of t.captureCharFrame().split("\n")) {
+      assert.ok(
+        line.length <= width,
+        `line overflows ${width} cols: ${JSON.stringify(line)}`,
+      );
+    }
+  };
+  assertWidth(50);
+
+  // Scroll the inspector to its end, stitching each window into one transcript:
+  // every model is reachable and every phrase reads whole once unwrapped.
+  t.mockInput.pressArrow("right");
+  const transcript: string[] = [];
+  for (let press = 0, unchanged = 0; press < 400 && unchanged < 3; press += 1) {
+    const window = inspectorWindow(t.captureCharFrame());
+    const overlap = longestOverlap(transcript, window);
+    unchanged = overlap === window.length ? unchanged + 1 : 0;
+    transcript.push(...window.slice(overlap));
+    t.mockInput.pressArrow("down");
+    await t.renderOnce();
+    assertWidth(50);
+  }
+  const read = transcript.join(" ").replace(/\s+/g, " ");
+  for (let index = 1; index <= 30; index += 1) {
+    const number = String(index).padStart(2, "0");
+    assert.match(
+      read,
+      new RegExp(
+        `· Family ${number} \\(latest\\) with a long friendly label and 1M context · family-${number}\\[1m\\] Efforts · low, medium${index === 1 ? " \\(default\\)" : ""}, high, xhigh, max`,
+      ),
+    );
+  }
+  assert.match(
+    read,
+    /· Any other model Efforts · low, medium, high, xhigh, max Harness default Family 30 \(latest\) with a long friendly label and 1M context · family-30\[1m\] at xhigh Fallback · Claude Code's own settings were not read before launch\. Effort locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh/,
+  );
+
+  // A resize keeps the selection and the inspector's focus, rewrapped within
+  // the width. At 38×20 the stacked catalog has no rows left for the inspector,
+  // so only the selection and the width hold there; 140×44 shows it again.
+  t.resize(38, 20);
+  await t.renderOnce();
+  assertWidth(38);
+  assert.match(t.captureCharFrame(), /│ › Claude Code/);
+  t.resize(140, 44);
+  await t.renderOnce();
+  assertWidth(140);
+  const wide = t.captureCharFrame();
+  assert.match(wide, /│ › Claude Code/);
+  assert.match(wide, /› Inspector/);
+  assert.match(
+    wide,
+    /Family \d\d \(latest\) with a long friendly label and 1M context · family-\d\d\[1m\]/,
+  );
 });
 
 test("Harness catalog stacks and resizes without horizontal overflow", async () => {

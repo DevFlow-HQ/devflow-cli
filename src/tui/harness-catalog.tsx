@@ -227,12 +227,7 @@ function filterHarnesses(params: THarnessFilterParams) {
     .filter(({ harness }) => {
       if (needle.length === 0) return true;
       const focused = params.heldHarness(harness.id);
-      const models =
-        focused?.supportedModels?.kind === "list"
-          ? focused.supportedModels.models.join(" ")
-          : focused?.supportedModels?.kind === "free-text"
-            ? "free-text"
-            : "";
+      const models = modelSearchText(focused?.modelDeclaration);
       const capabilities =
         focused?.capabilities
           .flatMap((capability) => [
@@ -252,6 +247,21 @@ function filterHarnesses(params: THarnessFilterParams) {
     });
 }
 
+/** What a model search matches: each model's exact name and label, and for a
+ *  non-exhaustive declaration its kind, so "suggested" or "free-text" finds it. */
+function modelSearchText(
+  declaration: HarnessFocus["modelDeclaration"],
+): string {
+  if (declaration === undefined) return "";
+  const entries =
+    declaration.kind === "free-text"
+      ? []
+      : declaration.models.flatMap((entry) => [entry.model, entry.label]);
+  return (
+    declaration.kind === "list" ? entries : [...entries, declaration.kind]
+  ).join(" ");
+}
+
 function ResultRow(props: {
   harness: HarnessSummary;
   focusedHarness: Accessor<HarnessFocus | undefined>;
@@ -262,7 +272,7 @@ function ResultRow(props: {
   const details = () => {
     const line = harnessModelLine(
       props.harness.qualification,
-      props.focusedHarness()?.supportedModels,
+      props.focusedHarness()?.modelDeclaration,
     );
     return line === undefined ? [] : [line];
   };

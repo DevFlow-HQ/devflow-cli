@@ -587,6 +587,7 @@ async function failedInterruptScenario(
         ok: true,
         harness: {
           profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
           close: () => harness.close(),
           startTurn(request) {
             const turn = harness.startTurn(request);

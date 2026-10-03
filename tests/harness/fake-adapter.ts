@@ -30,6 +30,7 @@ import type {
   HarnessPhaseStep,
   HarnessProfile,
   HarnessRequest,
+  HarnessDefaults,
   HarnessFailure,
   ModelChoice,
   PrepareResult,
@@ -101,6 +102,9 @@ export interface FakeScript {
   /** Handshake sub-steps each `prepare` reports inside its handshake, in order;
    *  the last fails with a scripted `prepareFailure` (#325). */
   readonly handshakeSteps?: readonly HarnessPhaseStep[];
+  /** What `readDefaults` reports: the Harness's own Model choice, a fallback with
+   *  its reason, or none to fall back to (the default). */
+  readonly defaults?: HarnessDefaults;
   /** When given, each `startTurn` appends what its request carried, in order:
    *  the fake's record of the Model choice every Turn asked for. */
   readonly turnRequests?: FakeTurnRequestRecord[];
@@ -111,6 +115,11 @@ export interface FakeTurnRequestRecord {
   readonly session: string;
   readonly modelChoice?: ModelChoice;
 }
+
+const NO_DEFAULTS: HarnessDefaults = {
+  kind: "unavailable",
+  reason: "The fake Harness scripts no defaults.",
+};
 
 const DEFAULT_CLEANUP: CleanupReport = {
   clean: true,
@@ -254,6 +263,15 @@ class FakePreparedHarness implements PreparedHarness {
   ) {
     this.profile = script.profile;
     this.cleanup = script.cleanup ?? DEFAULT_CLEANUP;
+  }
+
+  readDefaults(): Promise<HarnessDefaults> {
+    if (this.closed) {
+      return Promise.reject(
+        new Error("readDefaults after close: the prepared Harness is closed"),
+      );
+    }
+    return Promise.resolve(this.script.defaults ?? NO_DEFAULTS);
   }
 
   startTurn(request: TurnRequest): FakeTurn {
@@ -406,15 +424,15 @@ class FakeTurn {
 
   private async drive(): Promise<void> {
     // A model the profile's declared list does not admit refuses the Turn before
-    // admission, never a substitution (ADR 0034). A free-text declaration admits
-    // any value; a selection-unavailable profile ignores the request.
+    // admission, never a substitution (ADR 0034). A suggested or free-text
+    // declaration admits any value; a selection-unavailable profile ignores it.
     const selection = this.profile.modelSelection;
     const model = this.request.modelChoice?.model;
     if (
       model !== undefined &&
       selection.at !== "unavailable" &&
       selection.declaration.kind === "list" &&
-      !selection.declaration.models.includes(model)
+      !selection.declaration.models.some((entry) => entry.model === model)
     ) {
       this.settle({
         kind: "not-started",

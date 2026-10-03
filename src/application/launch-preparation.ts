@@ -305,8 +305,10 @@ export function createLaunchPreparation(
     const { modelSelection } = qualification.profile;
     if (modelSelection.at === "unavailable") return undefined;
     const declaration = modelSelection.declaration;
-    if (declaration.kind === "list" && !declaration.models.includes(model)) {
-      return requestedModelUnavailable(choice, model, declaration.models);
+    if (declaration.kind !== "list") return undefined;
+    const names = declaration.models.map((entry) => entry.model);
+    if (!names.includes(model)) {
+      return requestedModelUnavailable(choice, model, names);
     }
     return undefined;
   }

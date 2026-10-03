@@ -52,6 +52,15 @@ interface Fixture {
   readonly workspace: string;
 }
 
+/** A qualification whose profile lists `models`. */
+function listed(models: readonly string[]): ApplicationHarnessQualification {
+  return {
+    ok: true,
+    profile: listProfile(models),
+    defaults: { kind: "unavailable", reason: "Not part of these cases." },
+  };
+}
+
 function listProfile(models: readonly string[]): HarnessProfile {
   return {
     harness: "Codex",
@@ -67,7 +76,10 @@ function listProfile(models: readonly string[]): HarnessProfile {
     steer: { available: true, evidence: "scripted" },
     modelSelection: {
       at: "launch",
-      declaration: { kind: "list", models },
+      declaration: {
+        kind: "list",
+        models: models.map((model) => ({ model, label: model, efforts: [] })),
+      },
       evidence: "Observed from model/list.",
     },
     modelObservation: { available: true, evidence: "scripted" },
@@ -569,7 +581,7 @@ test("a requested model in the Harness's declared list assesses ready", async (t
       name: "Codex",
       qualify: async () => {
         qualificationCalls++;
-        return { ok: true, profile: listProfile(["m1", "m2"]) };
+        return listed(["m1", "m2"]);
       },
     }),
   ]);
@@ -636,7 +648,7 @@ test("shutdown ends assessing, qualifying, cached and idle subscriptions and ign
       done: false,
       value: { kind: "closed", reason: "application-shutdown" },
     });
-  release({ ok: true, profile: listProfile(["m1"]) });
+  release(listed(["m1"]));
   await qualification;
   // Wait on the observable cached qualification, bounding microtasks rather than time.
   let cached = port.openProjection({
@@ -695,7 +707,7 @@ test("a requested model outside the declared list is a not-ready model finding a
     registeredHarness({
       id: "codex",
       name: "Codex",
-      qualify: async () => ({ ok: true, profile: listProfile(["m1", "m2"]) }),
+      qualify: async () => listed(["m1", "m2"]),
     }),
   ]);
   approve(f);
@@ -756,7 +768,7 @@ test("an Agent draft with no requested model never qualifies the Harness", async
       name: "Codex",
       qualify: async () => {
         qualificationCalls++;
-        return { ok: true, profile: listProfile(["m1"]) };
+        return listed(["m1"]);
       },
     }),
   ]);
@@ -780,7 +792,7 @@ test("a draft already not-ready for another reason never qualifies the Harness f
       name: "Codex",
       qualify: async () => {
         qualificationCalls++;
-        return { ok: true, profile: listProfile(["m1"]) };
+        return listed(["m1"]);
       },
     }),
   ]);
@@ -851,7 +863,7 @@ test("changing the requested model re-assesses against the new draft", async (t)
     registeredHarness({
       id: "codex",
       name: "Codex",
-      qualify: async () => ({ ok: true, profile: listProfile(["m1", "m2"]) }),
+      qualify: async () => listed(["m1", "m2"]),
     }),
   ]);
   approve(f);

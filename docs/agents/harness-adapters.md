@@ -56,6 +56,12 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - Every `prepare` observes `codex --version`; cached schema evidence is keyed by discovery source, path, SHA-256 identity, version, platform, and revision.
   The host platform driving discovery/profile is immutable; only the cache-key test seam varies platform evidence. A hit skips schema generation only.
 - Live qualification sends one `initialize` then `initialized`, runs bounded `account/read` and `model/list`, and transfers its child and connection.
+  `model/list` entries keep each model's `supportedReasoningEfforts` and `defaultReasoningEffort` as reported (a model with no efforts gets no
+  default), and its `isDefault` model is the defaults fallback. One page is read (`cursor: null`); `nextCursor` is not followed.
+- `readDefaults` sends `config/read` for the Workspace on the transferred connection, bounded by `controlTimeoutMs`, only when called (the qualify
+  path), so Run prepares and their strict recordings never carry it. It is not in `required-schema.ts`: a failed, timed-out, or malformed read falls
+  back with its reason instead of failing qualification, and a configured model outside `model/list` or an unoffered effort falls back or takes the
+  model's default effort. A fallback reason is read by a person, so it names no RPC and carries no native message. It reports no phase.
 - A fresh Session gets `thread.id` before admission; a detached Session requires its exact `thread/resume` id. Any bad acknowledgement makes it
   `unusable`; no fallback. A caller's resume matching the thread still live on this connection skips `thread/resume` and sends the next `turn/start`.
 - The Prepared Harness owns one replaceable app-server generation. An Adapter-ended generation detaches every Session before EOF;
@@ -96,7 +102,8 @@ measures elapsed time on the monotonic clock. A handshake made of several exchan
   Session key. Replacement also reports the triggering Session's `recovery` around identity checks, launch and handshake.
   The handshake's steps are `protocol-initialize`, `account-check`, and `model-list`; the step open when the handshake
   ends settles with its outcome, so a login refusal fails `account-check`. `model-list` only reads the list; each Turn's model is checked against it
-  at Turn start before native recovery, never at prepare. Per Session,
+  at Turn start before native recovery, never at prepare. The lazy `config/read` defaults read is outside the handshake and reports no
+  phase. Per Session,
   `thread/start` is a `handshake` and `thread/resume` is `recovery`. `control` spans the `turn/interrupt` or `turn/steer`
   RPC: ok on a parsed acknowledgement, abandoned on an expected race, otherwise failed (`control-refused` with the RPC code, `control-timeout`,
   `control-transport`, or `protocol-corruption`). `cleanup` spans `close`, including its bounded interrupt.

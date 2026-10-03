@@ -132,6 +132,7 @@ function mattAgent(harness: HarnessId) {
         ok: true,
         harness: {
           profile: inner.profile,
+          readDefaults: () => inner.readDefaults(),
           startTurn(request) {
             const text = request.input.text;
             turns.push({ text, session: request.session });

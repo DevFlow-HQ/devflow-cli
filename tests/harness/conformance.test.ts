@@ -5,15 +5,20 @@
 import test from "node:test";
 import type {
   ApprovalDecision,
+  HarnessDefaults,
   HarnessProfile,
   LostUnknown,
+  ModelDeclaration,
+  ModelEntry,
   RequestShape,
   TurnEvent,
   TurnResult,
 } from "../../src/harness/harness.js";
 import {
   type ConformanceScenarios,
+  type ModelDeclarationScenarios,
   runConformanceSuite,
+  runModelDeclarationCases,
 } from "./conformance.js";
 import {
   createFake,
@@ -25,6 +30,20 @@ import {
 } from "./fake-adapter.js";
 
 const DECISIONS: readonly ApprovalDecision[] = ["allow", "deny"];
+
+const FAKE_MODEL_A: ModelEntry = {
+  model: "fake-model-a",
+  label: "Fake Model A",
+  efforts: ["low", "medium", "high"],
+  defaultEffort: "medium",
+};
+/** A listed model without an effort setting. */
+const FAKE_MODEL_B: ModelEntry = {
+  model: "fake-model-b",
+  label: "Fake Model B",
+  efforts: [],
+};
+const FIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 function profile(overrides?: Partial<HarnessProfile>): HarnessProfile {
   return {
@@ -44,7 +63,7 @@ function profile(overrides?: Partial<HarnessProfile>): HarnessProfile {
     steer: { available: false, evidence: "fake rejects steer unless scripted" },
     modelSelection: {
       at: "launch",
-      declaration: { kind: "list", models: ["fake-model-a", "fake-model-b"] },
+      declaration: { kind: "list", models: [FAKE_MODEL_A, FAKE_MODEL_B] },
       evidence: "fake declares a supported-model list",
     },
     modelObservation: {
@@ -132,7 +151,14 @@ const FAILED_RECOVERY: TurnResult = {
 };
 
 function fake(...turns: FakeTurnScript[]): FakeScript {
-  return { profile: profile(), turns };
+  return {
+    profile: profile(),
+    turns,
+    defaults: {
+      kind: "reported",
+      choice: { model: "fake-model-a", effort: "high" },
+    },
+  };
 }
 
 const scenarios: ConformanceScenarios = {
@@ -140,7 +166,11 @@ const scenarios: ConformanceScenarios = {
   concurrentCount: 3,
   // The fake declares a supported-model list, so the declaration case sees a list
   // and the requested-model cases exercise both admission and typed rejection.
-  expectedDeclaration: { kind: "list", includes: ["fake-model-a"] },
+  expectedDeclaration: { kind: "list", includes: [FAKE_MODEL_A, FAKE_MODEL_B] },
+  expectedDefaults: {
+    kind: "reported",
+    choice: { model: "fake-model-a", effort: "high" },
+  },
   requestedModel: "fake-model-a",
   // The fake records each request's effort, so the opaque effort path is proven
   // here before any Run carries one (#342).
@@ -314,3 +344,77 @@ const scenarios: ConformanceScenarios = {
 };
 
 runConformanceSuite(scenarios, test);
+
+// Every declaration kind and defaults outcome the Interface admits (#341), so the
+// shared declaration cases cover what neither native Adapter scripts on demand.
+function declaring(
+  label: string,
+  declaration: ModelDeclaration,
+  defaults: HarnessDefaults,
+): ModelDeclarationScenarios {
+  return {
+    label,
+    baseline: () =>
+      createFake({
+        profile: profile({
+          modelSelection: {
+            at: "launch",
+            declaration,
+            evidence: "fake declares what its script names",
+          },
+        }),
+        turns: [],
+        defaults,
+      }),
+    expectedDeclaration:
+      declaration.kind === "free-text"
+        ? declaration
+        : declaration.kind === "suggested"
+          ? {
+              kind: "suggested",
+              includes: declaration.models,
+              efforts: declaration.efforts,
+            }
+          : { kind: "list", includes: declaration.models },
+    expectedDefaults: defaults,
+  };
+}
+
+const FAKE_LATEST: ModelEntry = {
+  model: "fake-latest",
+  label: "Fake (latest)",
+  efforts: FIVE_EFFORTS,
+};
+
+for (const scenario of [
+  declaring(
+    "fake suggested, fallback",
+    { kind: "suggested", models: [FAKE_LATEST], efforts: FIVE_EFFORTS },
+    {
+      kind: "fallback",
+      choice: { model: "fake-latest", effort: "medium" },
+      reason: "The fake Harness did not report its settings.",
+    },
+  ),
+  declaring(
+    "fake free-text, locked effort",
+    { kind: "free-text", efforts: FIVE_EFFORTS },
+    {
+      kind: "reported",
+      choice: { model: "any-typed-model", effort: "xhigh" },
+      effortLock: { effort: "xhigh", source: "FAKE_EFFORT_LEVEL=xhigh" },
+    },
+  ),
+  declaring(
+    "fake list, default without effort",
+    { kind: "list", models: [FAKE_MODEL_A, FAKE_MODEL_B] },
+    { kind: "reported", choice: { model: "fake-model-b" } },
+  ),
+  declaring(
+    "fake list, nothing to fall back to",
+    { kind: "list", models: [FAKE_MODEL_A] },
+    { kind: "unavailable", reason: "The fake Harness names no default model." },
+  ),
+]) {
+  runModelDeclarationCases(scenario, test);
+}

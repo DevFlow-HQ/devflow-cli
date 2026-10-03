@@ -23,7 +23,14 @@ const QUALIFIED: HarnessQualificationView = {
   state: "qualified",
   observation: OBSERVATION,
 };
-const LIST = { kind: "list", models: ["gpt-5", "gpt-5-mini"] } as const;
+const LIST = {
+  kind: "list",
+  models: [
+    { model: "gpt-5", label: "GPT-5", efforts: ["low", "high"] },
+    { model: "gpt-5-mini", label: "GPT-5 mini", efforts: [] },
+  ],
+} as const;
+const FREE_TEXT = { kind: "free-text", efforts: [] } as const;
 
 test("an unqualified Harness has not observed its models, whatever it declares", () => {
   const unqualified: HarnessQualificationView[] = [
@@ -36,7 +43,7 @@ test("an unqualified Harness has not observed its models, whatever it declares",
       "Models not yet observed",
     );
     assert.equal(
-      harnessModelLine(qualification, { kind: "free-text" }),
+      harnessModelLine(qualification, FREE_TEXT),
       "Models not yet observed",
     );
     assert.equal(
@@ -57,11 +64,20 @@ test("a qualified Harness counts a model list, with or without limits", () => {
   );
 });
 
-test("a qualified free-text Harness reads as free-text model entry", () => {
+test("a qualified Harness counts its suggested models, one in the singular", () => {
+  const opus = { model: "opus", label: "Opus (latest)", efforts: [] };
+  const suggested = (models: (typeof opus)[]) =>
+    harnessModelLine(QUALIFIED, { kind: "suggested", models, efforts: [] });
+  assert.equal(suggested([opus]), "1 suggested model");
+  assert.equal(suggested([opus, opus]), "2 suggested models");
   assert.equal(
-    harnessModelLine(QUALIFIED, { kind: "free-text" }),
-    "Free-text model entry",
+    harnessModelLine(QUALIFIED, { kind: "list", models: [opus] }),
+    "1 model observed",
   );
+});
+
+test("a qualified free-text Harness reads as free-text model entry", () => {
+  assert.equal(harnessModelLine(QUALIFIED, FREE_TEXT), "Free-text model entry");
 });
 
 test("a qualified Harness without model selection shows no model line", () => {

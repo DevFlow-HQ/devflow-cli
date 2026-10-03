@@ -9,6 +9,7 @@ import { openCatalog } from "../../src/catalog/catalog.js";
 import { buildBundle } from "../../src/bundle/bundle.js";
 import { openHeadlessHarness } from "../helpers/headlessHarness.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import type { ApplicationHarnessQualification } from "../../src/application/application.js";
 import type { HarnessProfile } from "../../src/harness/harness.js";
 
 // This suite exercises Bundle and Workspace commands only, so it wires no Run
@@ -34,7 +35,18 @@ const HEADLESS_HARNESS_PROFILE: HarnessProfile = {
   steer: { available: true, evidence: "Native steering." },
   modelSelection: {
     at: "launch",
-    declaration: { kind: "list", models: ["gpt-5", "gpt-5-mini"] },
+    declaration: {
+      kind: "list",
+      models: [
+        {
+          model: "gpt-5",
+          label: "GPT-5",
+          efforts: ["low", "medium", "high"],
+          defaultEffort: "medium",
+        },
+        { model: "gpt-5-mini", label: "GPT-5 mini", efforts: [] },
+      ],
+    },
     evidence: "Observed models.",
   },
   modelObservation: { available: true, evidence: "Model events." },
@@ -46,7 +58,17 @@ const HEADLESS_HARNESS_PROFILE: HarnessProfile = {
   fileDelivery: { mode: "plain-path", evidence: "Path delivery." },
 };
 
-function harnessCatalog(t: TestContext) {
+function harnessCatalog(
+  t: TestContext,
+  qualification: ApplicationHarnessQualification = {
+    ok: true,
+    profile: HEADLESS_HARNESS_PROFILE,
+    defaults: {
+      kind: "reported",
+      choice: { model: "gpt-5", effort: "high" },
+    },
+  },
+) {
   let qualificationCalls = 0;
   const opened = openHeadlessHarness(t, {
     slug: "secant-headless-harness-catalog",
@@ -64,7 +86,7 @@ function harnessCatalog(t: TestContext) {
         }),
         qualify: async () => {
           qualificationCalls++;
-          return { ok: true, profile: HEADLESS_HARNESS_PROFILE };
+          return qualification;
         },
       },
     ],
@@ -234,7 +256,16 @@ test("harness inspect awaits qualification and freezes text and inner JSON", asy
   const text = h.stdout();
   assert.match(text, /^Codex \(codex\)$/m);
   assert.match(text, /Qualification: qualified/);
-  assert.match(text, /Supported models: gpt-5, gpt-5-mini/);
+  assert.match(text, /^Supported models: Listed by the Harness$/m);
+  assert.match(
+    text,
+    /^ {2}GPT-5 · gpt-5: efforts low, medium \(default\), high$/m,
+  );
+  assert.match(text, /^ {2}GPT-5 mini · gpt-5-mini: no effort setting$/m);
+  assert.match(
+    text,
+    /^Harness default: GPT-5 · gpt-5 at high, reported by the Harness$/m,
+  );
   assert.match(text, /Session recovery: Available/);
   assert.match(
     text,
@@ -244,7 +275,28 @@ test("harness inspect awaits qualification and freezes text and inner JSON", asy
 
   h.reset();
   assert.equal(await h.run(["harness", "inspect", "codex", "--json"]), 0);
-  assert.deepEqual(JSON.parse(h.stdout()), {
+  // #341 adds `modelDeclaration` and `harnessDefaults`; every earlier field,
+  // `supportedModels` included, keeps its frozen shape.
+  const { modelDeclaration, harnessDefaults, ...frozen } = JSON.parse(
+    h.stdout(),
+  );
+  assert.deepEqual(modelDeclaration, {
+    kind: "list",
+    models: [
+      {
+        model: "gpt-5",
+        label: "GPT-5",
+        efforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      },
+      { model: "gpt-5-mini", label: "GPT-5 mini", efforts: [] },
+    ],
+  });
+  assert.deepEqual(harnessDefaults, {
+    kind: "reported",
+    choice: { model: "gpt-5", effort: "high" },
+  });
+  assert.deepEqual(frozen, {
     id: "codex",
     name: "Codex",
     discovery: {
@@ -303,6 +355,65 @@ test("harness inspect awaits qualification and freezes text and inner JSON", asy
     configurationPosture: "Uses the user's existing Codex configuration.",
   });
   assert.equal(h.qualificationCalls(), 1);
+});
+
+test("harness inspect text names suggested models, efforts for any other name, and the fallback with its effort lock", async (t) => {
+  const h = harnessCatalog(t, {
+    ok: true,
+    profile: {
+      ...HEADLESS_HARNESS_PROFILE,
+      modelSelection: {
+        at: "launch",
+        declaration: {
+          kind: "suggested",
+          models: [
+            { model: "opus", label: "Opus (latest)", efforts: ["low", "max"] },
+          ],
+          efforts: ["low", "max"],
+        },
+        evidence: "Suggested aliases.",
+      },
+    },
+    defaults: {
+      kind: "fallback",
+      choice: { model: "opus", effort: "max" },
+      reason: "The settings were not read.",
+      effortLock: { effort: "max", source: "EFFORT_LEVEL=max" },
+    },
+  });
+  assert.equal(await h.run(["harness", "inspect", "codex"]), 0);
+  const text = h.stdout();
+  assert.match(
+    text,
+    /^Supported models: Suggested; any model name is accepted$/m,
+  );
+  assert.match(text, /^ {2}Opus \(latest\) · opus: efforts low, max$/m);
+  assert.match(text, /^ {2}Other model names: efforts low, max$/m);
+  assert.match(
+    text,
+    /^Harness default: Opus \(latest\) · opus at max, the fallback\. The settings were not read\.$/m,
+  );
+  assert.match(text, /^Effort locked by EFFORT_LEVEL=max$/m);
+});
+
+test("harness inspect text says when the Harness has no default to start from", async (t) => {
+  const h = harnessCatalog(t, {
+    ok: true,
+    profile: {
+      ...HEADLESS_HARNESS_PROFILE,
+      modelSelection: {
+        at: "launch",
+        declaration: { kind: "free-text", efforts: [] },
+        evidence: "Any model name.",
+      },
+    },
+    defaults: { kind: "unavailable", reason: "No default model is marked." },
+  });
+  assert.equal(await h.run(["harness", "inspect", "codex"]), 0);
+  const text = h.stdout();
+  assert.match(text, /^Supported models: Free-text model entry$/m);
+  assert.match(text, /^ {2}Other model names: no effort setting$/m);
+  assert.match(text, /^Harness default: None\. No default model is marked\.$/m);
 });
 
 test("harness inspect refuses a missing or unknown semantic id", async (t) => {

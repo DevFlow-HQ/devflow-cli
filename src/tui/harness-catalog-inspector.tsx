@@ -7,7 +7,9 @@ import type {
 import {
   capabilityLabel,
   discoveryLabel,
+  effortsLine,
   FREE_TEXT_MODEL_ENTRY,
+  modelName,
   qualificationLabel,
   qualificationObservation,
 } from "./harness-format.js";
@@ -73,6 +75,9 @@ export function HarnessCatalogInspector(props: {
       <Section title="Supported models">
         <SupportedModels harness={harness} />
       </Section>
+      <Section title="Harness default">
+        <HarnessDefaults harness={harness} />
+      </Section>
       <Section title="Capabilities">
         <box flexDirection="column" gap={1} flexShrink={0}>
           <For each={harness().capabilities}>
@@ -112,34 +117,119 @@ function Section(props: { title: string; children: JSX.Element }) {
 
 function SupportedModels(props: { harness: Accessor<HarnessFocus> }) {
   const { theme } = useTheme();
-  const models = () => props.harness().supportedModels;
-  const listedModels = () => {
-    const declaration = models();
-    return declaration?.kind === "list" ? declaration.models : undefined;
+  const declaration = () => props.harness().modelDeclaration;
+  const entries = () => {
+    const current = declaration();
+    return current === undefined || current.kind === "free-text"
+      ? []
+      : current.models;
+  };
+  // Efforts for a name typed outside the entries; a `list` admits none.
+  const otherEfforts = () => {
+    const current = declaration();
+    return current === undefined || current.kind === "list"
+      ? undefined
+      : current.efforts;
+  };
+  const kindLine = () => {
+    const current = declaration();
+    return current === undefined
+      ? "Models not available yet"
+      : current.kind === "list"
+        ? "Listed by the Harness · only these can be chosen"
+        : current.kind === "suggested"
+          ? "Suggested · any other model name is accepted"
+          : FREE_TEXT_MODEL_ENTRY;
   };
   return (
-    <Show
-      when={listedModels()}
-      fallback={
-        <text
-          fg={models()?.kind === "free-text" ? theme.text : theme.textMuted}
-        >
-          {models()?.kind === "free-text"
-            ? FREE_TEXT_MODEL_ENTRY
-            : "Models not available yet"}
-        </text>
-      }
-    >
-      {(models) => (
-        <For each={models()}>
-          {(model) => (
-            <text fg={theme.text}>
-              {`${model} · Available for Run selection`}
-            </text>
-          )}
-        </For>
-      )}
-    </Show>
+    <box flexDirection="column" flexShrink={0}>
+      <text fg={declaration() === undefined ? theme.textMuted : theme.text}>
+        {kindLine()}
+      </text>
+      <For each={entries()}>
+        {(entry) => (
+          <ModelLines
+            name={modelName(entry)}
+            efforts={effortsLine(entry.efforts, entry.defaultEffort)}
+          />
+        )}
+      </For>
+      <Show when={otherEfforts()}>
+        {(efforts) => (
+          <ModelLines name="Any other model" efforts={effortsLine(efforts())} />
+        )}
+      </Show>
+    </box>
+  );
+}
+
+function ModelLines(props: { name: string; efforts: string }) {
+  const { theme } = useTheme();
+  return (
+    <box flexDirection="column" flexShrink={0}>
+      <text fg={theme.text}>{`· ${props.name}`}</text>
+      <box paddingLeft={2} flexShrink={0}>
+        <text fg={theme.textMuted}>{props.efforts}</text>
+      </box>
+    </box>
+  );
+}
+
+/** The Model choice the Harness itself reports, or the fallback and why. The
+ *  source is a word, never only a colour. */
+function HarnessDefaults(props: { harness: Accessor<HarnessFocus> }) {
+  const { theme } = useTheme();
+  const defaults = () => props.harness().harnessDefaults;
+  const choiceLine = () => {
+    const current = defaults();
+    if (current === undefined) return "Not checked";
+    if (current.kind === "unavailable") return "None";
+    const declaration = props.harness().modelDeclaration;
+    const label =
+      declaration === undefined || declaration.kind === "free-text"
+        ? undefined
+        : declaration.models.find(
+            (entry) => entry.model === current.choice.model,
+          )?.label;
+    const name = modelName({
+      model: current.choice.model,
+      ...(label === undefined ? {} : { label }),
+    });
+    return current.choice.effort === undefined
+      ? `${name} · no effort setting`
+      : `${name} at ${current.choice.effort}`;
+  };
+  const sourceLine = () => {
+    const current = defaults();
+    if (current === undefined) return undefined;
+    return current.kind === "reported"
+      ? "Reported by the Harness"
+      : current.kind === "fallback"
+        ? `Fallback · ${current.reason}`
+        : current.reason;
+  };
+  const lock = () => {
+    const current = defaults();
+    return current === undefined || current.kind === "unavailable"
+      ? undefined
+      : current.effortLock;
+  };
+  return (
+    <box flexDirection="column" flexShrink={0}>
+      <text fg={defaults() === undefined ? theme.textMuted : theme.text}>
+        {choiceLine()}
+      </text>
+      <Show when={sourceLine()}>
+        {(line) => <text fg={theme.textMuted}>{line()}</text>}
+      </Show>
+      <Show when={lock()}>
+        {(locked) => (
+          <text
+            fg={theme.textMuted}
+          >{`Effort locked by ${locked().source}`}</text>
+        )}
+      </Show>
+    </box>
   );
 }
 

@@ -1,4 +1,9 @@
-import type { HarnessProfile } from "../harness/harness.js";
+import type {
+  HarnessDefaults,
+  HarnessProfile,
+  ModelDeclaration,
+  ModelEntry,
+} from "../harness/harness.js";
 import type {
   ApplicationHarnessQualification,
   ApplicationHarnessRegistration,
@@ -18,6 +23,8 @@ import type {
   HarnessFocusSnapshot,
   HarnessQualificationView,
   HarnessSummary,
+  HarnessDefaultsView,
+  ModelEntryView,
   OpenedProjection,
   Problem,
   ResourceRead,
@@ -272,15 +279,73 @@ function focusOf(
     };
   }
 
-  const { profile } = held.result;
+  const { profile, defaults } = held.result;
   return {
     ...summary,
     ...(profile.modelSelection.at === "unavailable"
       ? {}
-      : { supportedModels: profile.modelSelection.declaration }),
+      : modelViews(profile.modelSelection.declaration)),
+    harnessDefaults: defaultsView(defaults),
     capabilities: capabilitiesOf(profile),
     configurationPosture: profile.configurationPosture,
   };
+}
+
+/** The frozen `supportedModels` beside the additive `modelDeclaration` (#341):
+ * the frozen view keeps its names-only `list` and reads a `suggested` declaration,
+ * which admits any model, as free text. */
+function modelViews(
+  declaration: ModelDeclaration,
+): Pick<HarnessFocus, "supportedModels" | "modelDeclaration"> {
+  const models =
+    declaration.kind === "free-text" ? [] : declaration.models.map(entryView);
+  return {
+    supportedModels:
+      declaration.kind === "list"
+        ? { kind: "list", models: models.map((entry) => entry.model) }
+        : { kind: "free-text" },
+    modelDeclaration:
+      declaration.kind === "list"
+        ? { kind: "list", models }
+        : declaration.kind === "suggested"
+          ? { kind: "suggested", models, efforts: [...declaration.efforts] }
+          : { kind: "free-text", efforts: [...declaration.efforts] },
+  };
+}
+
+function entryView(entry: ModelEntry): ModelEntryView {
+  return {
+    model: entry.model,
+    label: entry.label,
+    efforts: [...entry.efforts],
+    ...(entry.defaultEffort === undefined
+      ? {}
+      : { defaultEffort: entry.defaultEffort }),
+  };
+}
+
+function defaultsView(defaults: HarnessDefaults): HarnessDefaultsView {
+  if (defaults.kind === "unavailable") {
+    return { kind: "unavailable", reason: defaults.reason };
+  }
+  const choice = {
+    model: defaults.choice.model,
+    ...(defaults.choice.effort === undefined
+      ? {}
+      : { effort: defaults.choice.effort }),
+  };
+  const effortLock =
+    defaults.effortLock === undefined
+      ? {}
+      : {
+          effortLock: {
+            effort: defaults.effortLock.effort,
+            source: defaults.effortLock.source,
+          },
+        };
+  return defaults.kind === "reported"
+    ? { kind: "reported", choice, ...effortLock }
+    : { kind: "fallback", choice, reason: defaults.reason, ...effortLock };
 }
 
 function discoveryView(

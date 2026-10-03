@@ -262,6 +262,7 @@ for (const [kind, scenario] of Object.entries(RESULT_CASES)) {
     const availabilityBeforeStarts: string[] = [];
     const counted: PreparedHarness = {
       profile: prepared.profile,
+      readDefaults: () => prepared.readDefaults(),
       startTurn(request) {
         starts++;
         const recorded = f.owner
@@ -353,6 +354,7 @@ for (const [name, scenario] of Object.entries(ENTRY_CASES)) {
     let starts = 0;
     const counted: PreparedHarness = {
       profile: prepared.profile,
+      readDefaults: () => prepared.readDefaults(),
       startTurn(request) {
         starts++;
         const turn = prepared.startTurn(request);
@@ -628,6 +630,7 @@ for (const delivery of ["skill", "file"] as const) {
     let starts = 0;
     const counted: PreparedHarness = {
       profile: prepared.profile,
+      readDefaults: () => prepared.readDefaults(),
       startTurn(request) {
         starts++;
         return prepared.startTurn(request);
@@ -726,6 +729,7 @@ function receiptWriting(
     inputs,
     harness: {
       profile: prepared.profile,
+      readDefaults: () => prepared.readDefaults(),
       startTurn(request) {
         inputs.push(request.input.text);
         write(receiptPaths(request.input.text), inputs.length - 1);

@@ -1,7 +1,9 @@
 import { z } from "zod";
 import type { OwnedProcess } from "../../process/process.js";
+import type { HarnessDefaults, ModelChoice, ModelEntry } from "../harness.js";
 import {
   boundedCodexExchange,
+  CodexExchangeTimeoutError,
   CodexJsonlConnection,
   type CodexProtocolObserver,
 } from "./runtime-protocol.js";
@@ -35,9 +37,26 @@ const modelResultSchema = z.looseObject({
       displayName: z.string().min(1),
       hidden: z.boolean(),
       isDefault: z.boolean(),
+      supportedReasoningEfforts: z.array(
+        z.looseObject({ reasoningEffort: z.string().min(1) }),
+      ),
+      defaultReasoningEffort: z.string().min(1),
     }),
   ),
 });
+const configReadResultSchema = z.looseObject({
+  config: z.looseObject({
+    model: z.string().min(1).nullish(),
+    model_reasoning_effort: z.string().min(1).nullish(),
+  }),
+});
+
+/** What `model/list` observed: the non-hidden models in order, each with its
+ *  efforts and default effort, and the model Codex marks as its default. */
+export interface CodexModelList {
+  readonly models: readonly ModelEntry[];
+  readonly defaultModel?: string;
+}
 
 export interface CodexRecordingObserver extends CodexProtocolObserver {
   version(version: string): void;
@@ -77,19 +96,35 @@ export class CodexQualificationConnection {
     return parseResult(result, accountResultSchema, "account/read");
   }
 
-  /** Run `model/list` and return the observed, non-hidden model ids in order —
-   *  the supported-model list Codex's profile declares and a requested model is
-   *  validated against. Previously the parsed list was validated and discarded. */
-  async listModels(): Promise<readonly string[]> {
+  /** Run `model/list` and return the observed, non-hidden models in order with
+   *  their efforts as reported — the list Codex's profile declares and a requested
+   *  model is validated against — and Codex's default model among them. */
+  async listModels(): Promise<CodexModelList> {
     const result = await this.request("model/list", {
       cursor: null,
       includeHidden: false,
       limit: null,
     });
     const parsed = parseResult(result, modelResultSchema, "model/list");
-    return parsed.data
-      .filter((entry) => !entry.hidden)
-      .map((entry) => entry.model);
+    const listed = parsed.data.filter((entry) => !entry.hidden);
+    const defaultModel = listed.find((entry) => entry.isDefault)?.model;
+    return {
+      models: listed.map((entry) => {
+        const efforts = entry.supportedReasoningEfforts.map(
+          (option) => option.reasoningEffort,
+        );
+        // A model without efforts has no default effort, whatever the field says.
+        return {
+          model: entry.model,
+          label: entry.displayName,
+          efforts,
+          ...(efforts.length === 0
+            ? {}
+            : { defaultEffort: entry.defaultReasoningEffort }),
+        };
+      }),
+      ...(defaultModel === undefined ? {} : { defaultModel }),
+    };
   }
 
   runtimeConnection(): CodexJsonlConnection {
@@ -122,6 +157,73 @@ export class CodexQualificationConnection {
       label: `${method} qualification notification`,
     });
   }
+}
+
+/** Codex's default Model choice for the Workspace (ADR 0034): the model and
+ *  effort `config/read` names, else the `model/list` default model at its own
+ *  default effort, the fallback, with the reason. `read` is the bounded exchange;
+ *  any failure of it falls back too. A configured effort the model does not offer
+ *  gives way to that model's default effort, as a model change does. */
+export async function readCodexDefaults(
+  read: () => Promise<unknown>,
+  list: CodexModelList,
+): Promise<HarnessDefaults> {
+  let configured: z.infer<typeof configReadResultSchema>["config"];
+  try {
+    configured = parseResult(
+      await read(),
+      configReadResultSchema,
+      "config/read",
+    ).config;
+  } catch (cause) {
+    // The reason crosses the Seam to a person, so it names no RPC and carries no
+    // raw native message; only whether Codex answered at all.
+    return codexFallback(
+      list,
+      cause instanceof CodexExchangeTimeoutError
+        ? "Codex did not report its configuration in time."
+        : "Codex could not report its configuration.",
+    );
+  }
+  if (configured.model === undefined || configured.model === null) {
+    return codexFallback(list, "Codex's configuration names no model.");
+  }
+  const entry = list.models.find(
+    (candidate) => candidate.model === configured.model,
+  );
+  if (entry === undefined) {
+    return codexFallback(
+      list,
+      `Codex's configuration names '${configured.model}', which is not one of Codex's listed models.`,
+    );
+  }
+  const effort =
+    typeof configured.model_reasoning_effort === "string" &&
+    entry.efforts.includes(configured.model_reasoning_effort)
+      ? configured.model_reasoning_effort
+      : entry.defaultEffort;
+  return { kind: "reported", choice: choiceOf(entry.model, effort) };
+}
+
+function codexFallback(list: CodexModelList, reason: string): HarnessDefaults {
+  const entry = list.models.find(
+    (candidate) => candidate.model === list.defaultModel,
+  );
+  if (entry === undefined) {
+    return {
+      kind: "unavailable",
+      reason: `${reason} Codex lists no default model to start from.`,
+    };
+  }
+  return {
+    kind: "fallback",
+    choice: choiceOf(entry.model, entry.defaultEffort),
+    reason: `${reason} Starting from Codex's default model at its default effort.`,
+  };
+}
+
+function choiceOf(model: string, effort: string | undefined): ModelChoice {
+  return effort === undefined ? { model } : { model, effort };
 }
 
 /** Drains stderr independently of protocol stdout and retains bounded evidence. */

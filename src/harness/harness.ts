@@ -102,15 +102,33 @@ export type SteerCapability =
   | { readonly available: true; readonly evidence: string }
   | { readonly available: false; readonly evidence: string };
 
-/** What models a Harness admits: an exact supported list the Adapter observed
- *  during qualification, or free-text entry of any model string. The profile
- *  supplies the list when the Harness exposes one and declares free-text otherwise
- *  (ADR 0022, 2026-09-07 amendment). */
-type ModelDeclaration =
-  | { readonly kind: "list"; readonly models: readonly string[] }
-  | { readonly kind: "free-text" };
+/** One model a declaration names (#341): its exact name, the Harness's friendly
+ *  label for it, the effort levels it offers, and the effort it uses when none is
+ *  chosen. An empty `efforts` is a model without an effort setting, which then has
+ *  no `defaultEffort`; an Adapter that does not know a model's own default leaves
+ *  `defaultEffort` absent rather than inventing one. */
+export interface ModelEntry {
+  readonly model: string;
+  readonly label: string;
+  readonly efforts: readonly string[];
+  readonly defaultEffort?: string;
+}
 
-/** Where model selection can occur and what the Harness admits, or that Crucible
+/** What models a Harness admits (ADR 0034). `list` is the exhaustive set the
+ *  Adapter observed during qualification, and a request outside it is refused.
+ *  `suggested` names picks that are neither exhaustive nor validated: any model
+ *  string is still admitted. `free-text` names none. The declaration-level
+ *  `efforts` serve a model typed outside the named entries. */
+export type ModelDeclaration =
+  | { readonly kind: "list"; readonly models: readonly ModelEntry[] }
+  | {
+      readonly kind: "suggested";
+      readonly models: readonly ModelEntry[];
+      readonly efforts: readonly string[];
+    }
+  | { readonly kind: "free-text"; readonly efforts: readonly string[] };
+
+/** Where model selection can occur and what the Harness admits, or that Secant
  *  cannot select a model. Every selectable variant carries the declaration each
  *  Turn's requested model is checked against. */
 type ModelSelectionCapability =
@@ -257,8 +275,8 @@ export interface TurnRequest {
   readonly resume?: RecoveryCoordinate;
   /** The Model choice this Turn requests, applied at the Adapter's native point for
    *  this Turn. A model outside a declared `list` settles the Turn `not-started`
-   *  (`model-unavailable`) before admission, never a substitution; a free-text
-   *  declaration forwards any value. Absent, the Harness's own default applies. The
+   *  (`model-unavailable`) before admission, never a substitution; a suggested
+   *  or free-text declaration forwards any value. Absent, the Harness's own default applies. The
    *  effective model a Turn reports is observed and never copies this request. */
   readonly modelChoice?: ModelChoice;
 }
@@ -655,6 +673,32 @@ export interface HarnessTurn {
   answerRequest(answer: RequestAnswer): Promise<ControlReceipt>;
 }
 
+/** An effort the user's own environment fixes, which Secant shows and never
+ *  overrides. `source` is the Adapter's opaque statement of what fixes it, such
+ *  as the setting and its value. */
+interface EffortLock {
+  readonly effort: string;
+  readonly source: string;
+}
+
+/** The Model choice the Harness itself would use for the Workspace (#341):
+ *  `reported` when the Harness said so, `fallback` when it could not be read and
+ *  the Adapter's declared fallback stands in, with the reason, or `unavailable`
+ *  when the Harness offers nothing to fall back to. */
+export type HarnessDefaults =
+  | {
+      readonly kind: "reported";
+      readonly choice: ModelChoice;
+      readonly effortLock?: EffortLock;
+    }
+  | {
+      readonly kind: "fallback";
+      readonly choice: ModelChoice;
+      readonly reason: string;
+      readonly effortLock?: EffortLock;
+    }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
 /**
  * A qualified Harness ready for Turns. Allows one active Turn at a time while
  * privately retaining idle named conversations. Ownership transfers once from
@@ -663,6 +707,12 @@ export interface HarnessTurn {
 export interface PreparedHarness {
   /** The immutable profile from qualification. */
   readonly profile: HarnessProfile;
+  /** The Harness's own default Model choice for the prepared Workspace, read on
+   *  the first call and the same value on every later one. Only a caller that
+   *  needs it pays the native read. A read the Harness cannot answer settles the
+   *  Adapter's declared fallback with its reason, never a throw; calling it after
+   *  `close` is a caller-contract violation. */
+  readDefaults(): Promise<HarnessDefaults>;
   /** Begin one Turn in the named Session. Returns before native acceptance.
    *  Starting a second concurrent Turn is a caller-contract violation. */
   startTurn(request: TurnRequest): HarnessTurn;

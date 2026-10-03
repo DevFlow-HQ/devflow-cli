@@ -18,6 +18,7 @@ import {
   discoverCodex,
   type HarnessDiscovery,
   type HarnessAdapter,
+  type HarnessDefaults,
   type HarnessFailure,
   type PrepareResult,
 } from "../harness/harness.js";
@@ -189,6 +190,15 @@ async function qualifyAdapter(
   }
 
   const profile = prepared.harness.profile;
+  // The Harness's own defaults ride the same bounded qualification (#341): read
+  // before the close, so the prepared child that answers them is still open.
+  let defaults: HarnessDefaults | undefined;
+  let defaultsError: unknown;
+  try {
+    defaults = await prepared.harness.readDefaults();
+  } catch (error) {
+    defaultsError = error;
+  }
   try {
     const cleanup = await prepared.harness.close();
     if (!cleanup.clean) {
@@ -208,7 +218,10 @@ async function qualifyAdapter(
   } catch (error) {
     return qualificationException("cleanup", error);
   }
-  return { ok: true, profile };
+  if (defaults === undefined) {
+    return qualificationException("prepare", defaultsError);
+  }
+  return { ok: true, profile, defaults };
 }
 
 function qualificationFailure(

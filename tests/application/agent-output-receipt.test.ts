@@ -120,6 +120,7 @@ function receiptAgent(
           ok: true,
           harness: {
             profile: harness.profile,
+            readDefaults: () => harness.readDefaults(),
             startTurn(request) {
               const receipt = receipts[inputs.length];
               inputs.push(request.input.text);

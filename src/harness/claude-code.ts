@@ -34,12 +34,14 @@ import type {
   CleanupReport,
   ControlReceipt,
   HarnessAdapter,
+  HarnessDefaults,
   HarnessFailure,
   HarnessPhaseObserver,
   HarnessPlatform,
   HarnessProfile,
   HarnessRequest,
   HarnessTurn,
+  ModelEntry,
   ModelObservation,
   PrepareOptions,
   PrepareResult,
@@ -371,6 +373,15 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
       return Promise.resolve({ decision: "deny", message: EXPIRED_MESSAGE });
     }
     return turn.raiseApproval(request.tool, request.input);
+  }
+
+  readDefaults(): Promise<HarnessDefaults> {
+    if (this.closed) {
+      return Promise.reject(
+        new Error("readDefaults after close: the prepared Harness is closed"),
+      );
+    }
+    return Promise.resolve(CLAUDE_CODE_FALLBACK);
   }
 
   startTurn(request: TurnRequest): HarnessTurn {
@@ -1794,6 +1805,38 @@ function cleanupFailure(
   };
 }
 
+/** The five effort levels `claude --help` documents for `--effort`. Claude Code
+ *  publishes no per-model query, so every suggestion offers all five and names
+ *  no default effort: which levels a model honours, or that it has none, is
+ *  observed, never declared (ADR 0034 rejects a Claude model catalogue). */
+const CLAUDE_CODE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/** Claude Code's documented model aliases (ADR 0034): each family's latest
+ *  model, Default, Opus Plan, and the 1M-context variants. Suggestions, never a
+ *  list Secant validates; any exact name is still admitted. */
+const CLAUDE_CODE_SUGGESTIONS: readonly ModelEntry[] = [
+  suggestion("fable", "Fable (latest)"),
+  suggestion("opus", "Opus (latest)"),
+  suggestion("sonnet", "Sonnet (latest)"),
+  suggestion("haiku", "Haiku (latest)"),
+  suggestion("default", "Default"),
+  suggestion("opusplan", "Opus Plan"),
+  suggestion("opus[1m]", "Opus (latest) with 1M context"),
+  suggestion("sonnet[1m]", "Sonnet (latest) with 1M context"),
+];
+
+function suggestion(model: string, label: string): ModelEntry {
+  return { model, label, efforts: CLAUDE_CODE_EFFORTS };
+}
+
+/** The Model choice Claude Code starts from when its own settings are not read
+ *  (ADR 0034): Opus (latest) at medium. */
+const CLAUDE_CODE_FALLBACK: HarnessDefaults = {
+  kind: "fallback",
+  choice: { model: "opus", effort: "medium" },
+  reason: "Claude Code's own settings were not read before launch.",
+};
+
 /** The immutable profile, tied to the observed executable, version, platform,
  *  posture, and Adapter revision. Every capability is an M3 fact (#107) with
  *  the evidence it rests on. */
@@ -1843,9 +1886,13 @@ function buildProfile(
     },
     modelSelection: {
       at: "launch",
-      declaration: { kind: "free-text" },
+      declaration: {
+        kind: "suggested",
+        models: CLAUDE_CODE_SUGGESTIONS,
+        efforts: CLAUDE_CODE_EFFORTS,
+      },
       evidence:
-        "Claude Code accepts any model string at launch via --model; Secant forwards a caller-requested model and selects none otherwise.",
+        "Claude Code accepts any model string at launch via --model, an alias for the latest model or a full name, and lists no models; Secant suggests its documented aliases, validates nothing, and forwards a caller-requested model.",
     },
     modelObservation: {
       available: true,

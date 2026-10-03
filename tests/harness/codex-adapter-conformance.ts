@@ -52,6 +52,7 @@ import {
   type RegisterConformanceCase,
 } from "./conformance.js";
 import { createCodexRecordingCapture } from "./codex-recording.js";
+import { replayRecordedLine } from "./codex-replay-path.js";
 
 // Each `test(...)` below registers with the runtime-conformance runner instead of
 // the test runner; the shared collector carries `node:test`'s `{ skip }` option.
@@ -2704,7 +2705,7 @@ async function waitForEventCount(
 
 // --- Replay: recorded conformance --------------------------------------------
 
-test("[codex-recorded-conformance] qualification initializes once without creating a conversation", async () => {
+test("[codex-recorded-conformance] qualification initializes once and reads the defaults without creating a conversation", async () => {
   const installed = installCodexReplayer("codex-qualification");
   const result = await createCodexAdapter({
     path: installed.path,
@@ -2713,6 +2714,10 @@ test("[codex-recorded-conformance] qualification initializes once without creati
 
   assert.equal(result.ok, true);
   if (!result.ok) throw new Error("unreachable");
+  assert.deepEqual(await result.harness.readDefaults(), {
+    kind: "reported",
+    choice: { model: "gpt-5.5", effort: "high" },
+  });
   const invocations = installed.invocations();
   assert.deepEqual(
     invocations.map((invocation) => invocation.args),
@@ -2728,7 +2733,7 @@ test("[codex-recorded-conformance] qualification initializes once without creati
   const messages = appServer.stdinLines.map((line) => JSON.parse(line));
   assert.deepEqual(
     messages.map((message) => message.method),
-    ["initialize", "initialized", "account/read", "model/list"],
+    ["initialize", "initialized", "account/read", "model/list", "config/read"],
   );
   assert.equal(
     messages.filter((message) => message.method === "initialize").length,
@@ -2757,7 +2762,9 @@ test("[codex-recorded-conformance] qualification initializes once without creati
   );
   const recordedStdin = recordedCase.traffic
     .filter((entry: { direction: string }) => entry.direction === "stdin")
-    .map((entry: { line: string }) => entry.line);
+    .map((entry: { line: string }) =>
+      replayRecordedLine(entry.line, process.cwd()),
+    );
   assert.deepEqual(
     appServer.stdinLines.map((line) => `${line}\n`),
     recordedStdin,
@@ -2817,7 +2824,15 @@ test("the recorder observer captures runtime traffic and shutdown through the pr
       (method) => method?.startsWith("thread/") || method?.startsWith("turn/"),
     );
   assert.deepEqual(runtimeMethods, ["thread/start", "turn/start"]);
-  assert.equal(executableVersion, "codex-cli 0.155.0");
+  // A Run's own prepare never pays for the defaults read.
+  assert.ok(
+    observed.every(
+      (entry) =>
+        entry.direction !== "stdin" ||
+        JSON.parse(entry.line).method !== "config/read",
+    ),
+  );
+  assert.equal(executableVersion, "codex-cli 0.160.0");
   assert.equal(protocolVersion, "codex-probe-2");
   assert.ok(schemaBytes > 0);
   assert.ok(
@@ -3103,7 +3118,7 @@ test("configured Codex wins over PATH and Claude Code is never a fallback", asyn
   }).prepare({ workspace: process.cwd() });
   assert.equal(result.ok, true);
   if (!result.ok) throw new Error("unreachable");
-  assert.equal(result.harness.profile.executableVersion, "codex-cli 0.155.0");
+  assert.equal(result.harness.profile.executableVersion, "codex-cli 0.160.0");
   assert.match(result.harness.profile.executable, /configured command/);
   await result.harness.close();
 
@@ -3166,14 +3181,24 @@ test("Codex profile is truthful and user-compatible", async () => {
   if (profile.modelSelection.at !== "launch-and-per-turn") {
     throw new Error("unreachable");
   }
-  // Codex declares the supported-model list its qualification observed and a
+  // Codex declares the supported-model list its qualification observed, each
+  // model with the efforts and default effort `model/list` reports, and a
   // source for the effective-model observation.
   assert.equal(profile.modelSelection.declaration.kind, "list");
   if (profile.modelSelection.declaration.kind !== "list") {
     throw new Error("unreachable");
   }
-  assert.ok(profile.modelSelection.declaration.models.includes("gpt-6-astra"));
-  assert.ok(profile.modelSelection.declaration.models.includes("gpt-5.6-sol"));
+  assert.deepEqual(
+    profile.modelSelection.declaration.models.find(
+      (entry) => entry.model === "gpt-6-luna",
+    ),
+    {
+      model: "gpt-6-luna",
+      label: "GPT-6-Luna",
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "medium",
+    },
+  );
   assert.equal(profile.modelObservation.available, true);
   assert.equal(profile.recoveryCoordinate.timing, "before-submission");
   assert.equal(profile.skillDelivery.mode, "plain-path");
@@ -3243,6 +3268,11 @@ test("a Turn requesting a model the observed list rejects settles not-started be
   assert.equal(result.detail.failure.phase, "turn");
   assert.equal(result.detail.failure.category, "model-unavailable");
   assert.match(result.detail.failure.diagnostics ?? "", /no-such-secant-model/);
+  // The refusal names the models Codex does offer, by name.
+  assert.match(
+    result.detail.failure.diagnostics ?? "",
+    /Available models: gpt-6\.1-sol, gpt-6-astra, /,
+  );
   assert.equal(admitted, false, "a refused Turn is never admitted");
   await prepared.harness.close();
 
@@ -3341,6 +3371,118 @@ test("version and generated-schema probe failures stay typed", async () => {
   if (schemaResult.ok) throw new Error("unreachable");
   assert.equal(schemaResult.failure.category, "protocol-incompatible");
   assert.ok(schemaResult.failure.cause instanceof Error);
+});
+
+// --- Defaults: config/read, its fallback, and the declared efforts (#341) ----
+
+async function defaultsAfter(
+  configure: (
+    installed: ReturnType<typeof installSyntheticCodexReplayer>,
+  ) => void,
+  controlTimeoutMs = 5_000,
+) {
+  const installed = installSyntheticCodexReplayer();
+  configure(installed);
+  const prepared = await createCodexAdapter({
+    path: installed.path,
+    env: {},
+    controlTimeoutMs,
+  }).prepare({ workspace: process.cwd() });
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) throw new Error("unreachable");
+  try {
+    return await prepared.harness.readDefaults();
+  } finally {
+    await prepared.harness.close();
+  }
+}
+
+const FALLBACK_DEFAULT = { model: "gpt-6.1-sol", effort: "low" };
+
+test("a configured model without an effort reports that model at its own default effort", async () => {
+  assert.deepEqual(
+    await defaultsAfter((installed) =>
+      installed.configureConfigRead({ model: "gpt-6-astra", effort: null }),
+    ),
+    { kind: "reported", choice: { model: "gpt-6-astra", effort: "medium" } },
+  );
+});
+
+test("a configured effort the model does not offer gives way to the model's default effort", async () => {
+  assert.deepEqual(
+    await defaultsAfter((installed) =>
+      installed.configureConfigRead({ model: "gpt-5.5", effort: "ultra" }),
+    ),
+    { kind: "reported", choice: { model: "gpt-5.5", effort: "medium" } },
+  );
+});
+
+test("a configured model model/list does not offer falls back and names it", async () => {
+  const defaults = await defaultsAfter((installed) =>
+    installed.configureConfigRead({ model: "gpt-private", effort: "high" }),
+  );
+  assert.equal(defaults.kind, "fallback");
+  if (defaults.kind !== "fallback") throw new Error("unreachable");
+  assert.deepEqual(defaults.choice, FALLBACK_DEFAULT);
+  assert.match(
+    defaults.reason,
+    /^Codex's configuration names 'gpt-private', which is not one of Codex's listed models\. Starting from Codex's default model at its default effort\.$/,
+  );
+});
+
+for (const [answer, reason] of [
+  ["rpc-error", "Codex could not report its configuration."],
+  ["malformed", "Codex could not report its configuration."],
+  ["stall", "Codex did not report its configuration in time."],
+] as const) {
+  test(`a config/read ${answer} falls back to the model/list default with the reason`, async () => {
+    const defaults = await defaultsAfter(
+      (installed) => installed.configureConfigRead(answer),
+      answer === "stall" ? 300 : 5_000,
+    );
+    assert.equal(defaults.kind, "fallback");
+    if (defaults.kind !== "fallback") throw new Error("unreachable");
+    assert.deepEqual(defaults.choice, FALLBACK_DEFAULT);
+    // A person reads the reason: no RPC name and no raw native message.
+    assert.equal(
+      defaults.reason,
+      `${reason} Starting from Codex's default model at its default effort.`,
+    );
+  });
+}
+
+test("with no configured model and no model/list default, Codex has nothing to start from", async () => {
+  const defaults = await defaultsAfter((installed) => {
+    installed.configureConfigRead({ model: null, effort: null });
+    installed.clearDefaultModel();
+  });
+  assert.equal(defaults.kind, "unavailable");
+  if (defaults.kind !== "unavailable") throw new Error("unreachable");
+  assert.match(
+    defaults.reason,
+    /^Codex's configuration names no model\. Codex lists no default model to start from\.$/,
+  );
+});
+
+test("the defaults are read once per prepared Harness", async () => {
+  const installed = installSyntheticCodexReplayer();
+  const prepared = await createCodexAdapter({
+    path: installed.path,
+    env: {},
+  }).prepare({ workspace: process.cwd() });
+  if (!prepared.ok) throw new Error("expected a prepared Harness");
+  const first = await prepared.harness.readDefaults();
+  assert.deepEqual(await prepared.harness.readDefaults(), first);
+  await prepared.harness.close();
+  const sent = installed
+    .invocations()
+    .flatMap((invocation) => invocation.stdinLines)
+    .filter((line) => JSON.parse(line).method === "config/read");
+  assert.equal(sent.length, 1);
+  assert.deepEqual(JSON.parse(sent[0]!).params, {
+    cwd: process.cwd(),
+    includeLayers: false,
+  });
 });
 
 test("required live response drift fails closed and reaps the child", async () => {
@@ -3678,6 +3820,8 @@ function approvalRaceProcess(): TControlledApprovalProcess {
                 displayName: "Model",
                 hidden: false,
                 isDefault: true,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
               },
             ],
           },
@@ -3867,7 +4011,7 @@ function qualificationProcess(options: TQualificationProcess): OwnedProcess {
       `${JSON.stringify({ id: 2, result: { account: { type: "apiKey" }, requiresOpenaiAuth: true } })}\n`,
     );
     yield encoder.encode(
-      `${JSON.stringify({ id: 3, result: { data: [{ id: "model", model: "model", displayName: "Model", hidden: false, isDefault: true }] } })}\n`,
+      `${JSON.stringify({ id: 3, result: { data: [{ id: "model", model: "model", displayName: "Model", hidden: false, isDefault: true, supportedReasoningEfforts: [], defaultReasoningEffort: "medium" }] } })}\n`,
     );
   };
   const stderr: AsyncIterable<Uint8Array> = {

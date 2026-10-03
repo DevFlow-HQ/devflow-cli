@@ -171,6 +171,7 @@ async function launchInteractive(
               ok: true,
               harness: {
                 profile: harness.profile,
+                readDefaults: () => harness.readDefaults(),
                 startTurn: (request) => {
                   counts.resumes?.push(request.resume?.opaque);
                   return harness.startTurn(request);
@@ -815,6 +816,7 @@ test("a fault after admission reaches the Run, since the send already settled ap
         ok: true,
         harness: {
           profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
           close: () => harness.close(),
           startTurn(request) {
             const turn = harness.startTurn(request);
@@ -869,6 +871,7 @@ test("a Turn that rejects after admission puts its fault on the Run (#290)", asy
         ok: true,
         harness: {
           profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
           startTurn: (request) => harness.startTurn(request),
           async close() {
             await harness.close();

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type {
   CleanupReport,
   HarnessAdapter,
+  HarnessDefaults,
   HarnessProfile,
 } from "../../src/harness/harness.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
@@ -26,7 +27,7 @@ export const QUALIFICATION_PROFILE: HarnessProfile = {
   steer: { available: true, evidence: "Native steering." },
   modelSelection: {
     at: "launch",
-    declaration: { kind: "free-text" },
+    declaration: { kind: "free-text", efforts: ["low", "medium", "high"] },
     evidence: "Launch model flag.",
   },
   modelObservation: { available: true, evidence: "Model events." },
@@ -36,6 +37,12 @@ export const QUALIFICATION_PROFILE: HarnessProfile = {
   },
   skillDelivery: { mode: "plain-path", evidence: "Path delivery." },
   fileDelivery: { mode: "plain-path", evidence: "Path delivery." },
+};
+
+/** What the qualification double reports as the Harness's own defaults. */
+export const QUALIFICATION_DEFAULTS: HarnessDefaults = {
+  kind: "reported",
+  choice: { model: "wired-model", effort: "high" },
 };
 
 export function qualificationAdapter(
@@ -49,6 +56,10 @@ export function qualificationAdapter(
         ok: true,
         harness: {
           profile: QUALIFICATION_PROFILE,
+          async readDefaults() {
+            trace.push("defaults");
+            return QUALIFICATION_DEFAULTS;
+          },
           startTurn() {
             throw new Error("qualification must not start a Turn");
           },

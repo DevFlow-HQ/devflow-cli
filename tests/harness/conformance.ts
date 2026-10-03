@@ -13,9 +13,12 @@ import { isDeepStrictEqual } from "node:util";
 import {
   LOST_UNKNOWNS,
   type DurableTurnRecorder,
+  type HarnessDefaults,
   type HarnessRequest,
   type HarnessTurn,
   type LostUnknown,
+  type ModelDeclaration,
+  type ModelEntry,
   type ModelChoice,
   type PreparedHarness,
   type RecoveryCoordinate,
@@ -771,22 +774,35 @@ async function prepareGranting(
 }
 
 /**
- * The model-declaration and model-observation profile facts every shipped Adapter
- * and the fake must carry (ADR 0022, 2026-09-07 amendment): the model-selection
- * capability declares either a supported-model list or free-text entry, and the
- * profile declares a source for the effective-model observation.
+ * The model-declaration, reported-defaults, and model-observation facts every
+ * shipped Adapter and the fake must carry (ADR 0022's model amendment, ADR 0034):
+ * the model-selection capability declares a `list`, `suggested`, or `free-text`
+ * declaration whose entries carry their efforts, the prepared Harness reports its
+ * own default Model choice or its declared fallback, and the profile declares a
+ * source for the effective-model observation.
  */
 export interface ModelDeclarationScenarios {
   readonly label: string;
   baseline(): TestHarnessAdapterFactory;
-  /** What the baseline profile's model-selection capability must declare. A list
-   *  Adapter names models the list must include; a free-text Adapter names none. */
+  /** What the baseline profile's model-selection capability must declare. A
+   *  `list` or `suggested` Adapter names entries the declaration must include
+   *  exactly; `suggested` and `free-text` name the declaration-level efforts. */
   readonly expectedDeclaration:
-    | { readonly kind: "free-text" }
-    | { readonly kind: "list"; readonly includes: readonly string[] };
+    | {
+        readonly kind: "list";
+        readonly includes: readonly ModelEntry[];
+      }
+    | {
+        readonly kind: "suggested";
+        readonly includes: readonly ModelEntry[];
+        readonly efforts: readonly string[];
+      }
+    | { readonly kind: "free-text"; readonly efforts: readonly string[] };
+  /** What the baseline's prepared Harness reports as its defaults. */
+  readonly expectedDefaults: HarnessDefaults;
 }
 
-/** Run the model-declaration cases against one provider. */
+/** Run the model-declaration and reported-defaults cases against one provider. */
 export function runModelDeclarationCases(
   scenarios: ModelDeclarationScenarios,
   register: RegisterConformanceCase,
@@ -798,31 +814,32 @@ export function runModelDeclarationCases(
     async () => {
       const prepared = await prepare(scenarios.baseline());
       const { modelSelection, modelObservation } = prepared.profile;
-      assert.notEqual(
-        modelSelection.at,
-        "unavailable",
-        "a shipped Adapter declares where selection can occur",
-      );
-      if (modelSelection.at === "unavailable") {
-        throw new Error("unreachable");
-      }
-      const declaration = modelSelection.declaration;
-      assert.equal(declaration.kind, scenarios.expectedDeclaration.kind);
-      if (
-        declaration.kind === "list" &&
-        scenarios.expectedDeclaration.kind === "list"
-      ) {
+      const declaration = selectableDeclaration(prepared);
+      const expected = scenarios.expectedDeclaration;
+      assert.equal(declaration.kind, expected.kind);
+      if (declaration.kind !== "free-text" && expected.kind !== "free-text") {
         assert.ok(
           declaration.models.length > 0,
-          "a list declaration is non-empty",
+          "a named declaration is non-empty",
         );
-        for (const model of scenarios.expectedDeclaration.includes) {
-          assert.ok(
-            declaration.models.includes(model),
-            `the declared list includes ${model}`,
+        for (const entry of expected.includes) {
+          assert.deepEqual(
+            declaration.models.find(
+              (candidate) => candidate.model === entry.model,
+            ),
+            entry,
+            `the declaration names ${entry.model} with its label and efforts`,
           );
         }
       }
+      if (declaration.kind !== "list" && expected.kind !== "list") {
+        assert.deepEqual(
+          declaration.efforts,
+          expected.efforts,
+          "the declaration-level efforts serve a model typed outside the entries",
+        );
+      }
+      assert.ok(modelSelection.evidence.length > 0);
       assert.ok(
         modelObservation.evidence.length > 0,
         "the model-observation capability carries evidence",
@@ -830,6 +847,101 @@ export function runModelDeclarationCases(
       await prepared.close();
     },
   );
+
+  register(
+    name("every declared model carries a label and a coherent effort set"),
+    async () => {
+      const prepared = await prepare(scenarios.baseline());
+      const declaration = selectableDeclaration(prepared);
+      const entries =
+        declaration.kind === "free-text" ? [] : declaration.models;
+      const names = entries.map((entry) => entry.model);
+      assert.equal(new Set(names).size, names.length, "model names are unique");
+      for (const entry of entries) {
+        assert.ok(entry.model.length > 0 && entry.label.length > 0);
+        assert.equal(
+          new Set(entry.efforts).size,
+          entry.efforts.length,
+          `${entry.model} lists each effort once`,
+        );
+        if (entry.efforts.length === 0) {
+          assert.equal(
+            entry.defaultEffort,
+            undefined,
+            `${entry.model} has no effort setting, so no default effort`,
+          );
+        } else if (entry.defaultEffort !== undefined) {
+          assert.ok(
+            entry.efforts.includes(entry.defaultEffort),
+            `${entry.model}'s default effort is one it offers`,
+          );
+        }
+      }
+      await prepared.close();
+    },
+  );
+
+  register(
+    name("the prepared Harness reports its own defaults or its fallback"),
+    async () => {
+      const prepared = await prepare(scenarios.baseline());
+      const defaults = await prepared.readDefaults();
+      assert.deepEqual(defaults, scenarios.expectedDefaults);
+      assert.deepEqual(
+        await prepared.readDefaults(),
+        defaults,
+        "a second read reports the same defaults",
+      );
+      if (defaults.kind !== "unavailable") {
+        const declaration = selectableDeclaration(prepared);
+        const entry =
+          declaration.kind === "free-text"
+            ? undefined
+            : declaration.models.find(
+                (candidate) => candidate.model === defaults.choice.model,
+              );
+        if (declaration.kind === "list") {
+          assert.ok(entry, "a listed Harness defaults to a listed model");
+        }
+        const efforts =
+          entry?.efforts ??
+          (declaration.kind === "list" ? [] : declaration.efforts);
+        if (defaults.choice.effort === undefined) {
+          assert.deepEqual(efforts, [], "only a model without effort omits it");
+        } else {
+          assert.ok(
+            efforts.includes(defaults.choice.effort),
+            "the default effort is one the model offers",
+          );
+        }
+        if (defaults.effortLock !== undefined) {
+          assert.equal(defaults.choice.effort, defaults.effortLock.effort);
+          assert.ok(defaults.effortLock.source.length > 0);
+        }
+      }
+      await prepared.close();
+    },
+  );
+
+  register(
+    name("reading defaults after close is a caller-contract violation"),
+    async () => {
+      const prepared = await prepare(scenarios.baseline());
+      await prepared.close();
+      await assert.rejects(async () => prepared.readDefaults());
+    },
+  );
+}
+
+function selectableDeclaration(prepared: PreparedHarness): ModelDeclaration {
+  const { modelSelection } = prepared.profile;
+  assert.notEqual(
+    modelSelection.at,
+    "unavailable",
+    "a shipped Adapter declares where selection can occur",
+  );
+  if (modelSelection.at === "unavailable") throw new Error("unreachable");
+  return modelSelection.declaration;
 }
 
 /**

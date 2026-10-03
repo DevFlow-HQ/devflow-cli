@@ -1236,14 +1236,18 @@ test("a Turn's requested model is forwarded to its launch as --model, distinct f
   }).prepare({ workspace });
   assert.equal(prepared.ok, true);
   if (!prepared.ok) throw new Error("unreachable");
-  // Free-text profile: the Turn's model is admitted with no list check.
+  // Suggested, not validated: a full name outside the suggestions is admitted
+  // on the Turn with no list check.
   assert.equal(prepared.harness.profile.modelSelection.at, "launch");
   if (prepared.harness.profile.modelSelection.at !== "launch") {
     throw new Error("unreachable");
   }
-  assert.deepEqual(prepared.harness.profile.modelSelection.declaration, {
-    kind: "free-text",
-  });
+  const declaration = prepared.harness.profile.modelSelection.declaration;
+  assert.equal(declaration.kind, "suggested");
+  if (declaration.kind !== "suggested") throw new Error("unreachable");
+  assert.ok(
+    declaration.models.every((entry) => entry.model !== "claude-opus-4-1"),
+  );
 
   const turn = prepared.harness.startTurn({
     session: "repair",
@@ -1584,11 +1588,33 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
   );
   assert.equal(profile.approvals.available, true);
   assert.equal(profile.clarifications.available, false);
-  // Claude Code accepts any model string via --model at launch: it declares
-  // free-text entry, and observes the effective model from init/result.
+  // Claude Code accepts any model string via --model at launch: it suggests
+  // its documented aliases, each with the five `--help` efforts and no declared
+  // default effort, and observes the effective model from init/result.
   assert.equal(profile.modelSelection.at, "launch");
   if (profile.modelSelection.at !== "launch") throw new Error("unreachable");
-  assert.equal(profile.modelSelection.declaration.kind, "free-text");
+  const declaration = profile.modelSelection.declaration;
+  assert.equal(declaration.kind, "suggested");
+  if (declaration.kind !== "suggested") throw new Error("unreachable");
+  const efforts = ["low", "medium", "high", "xhigh", "max"];
+  assert.deepEqual(
+    declaration.models.map((entry) => [entry.model, entry.label]),
+    [
+      ["fable", "Fable (latest)"],
+      ["opus", "Opus (latest)"],
+      ["sonnet", "Sonnet (latest)"],
+      ["haiku", "Haiku (latest)"],
+      ["default", "Default"],
+      ["opusplan", "Opus Plan"],
+      ["opus[1m]", "Opus (latest) with 1M context"],
+      ["sonnet[1m]", "Sonnet (latest) with 1M context"],
+    ],
+  );
+  for (const entry of declaration.models) {
+    assert.deepEqual(entry.efforts, efforts);
+    assert.equal(entry.defaultEffort, undefined);
+  }
+  assert.deepEqual(declaration.efforts, efforts);
   assert.equal(profile.modelObservation.available, true);
   assert.equal(profile.recoveryCoordinate.timing, "before-submission");
   assert.equal(profile.skillDelivery.mode, "plain-path");

@@ -128,6 +128,7 @@ function recordingPrepared(
   let closing: Promise<CleanupReport> | undefined;
   return {
     profile: prepared.profile,
+    readDefaults: () => prepared.readDefaults(),
     startTurn(request) {
       const turn = prepared.startTurn(request);
       void turn.result().then(

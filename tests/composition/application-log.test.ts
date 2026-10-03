@@ -420,7 +420,10 @@ test("an assessment's model check is its own stage, and the qualification it nee
             ...QUALIFICATION_PROFILE,
             modelSelection: {
               at: "launch",
-              declaration: { kind: "list", models: ["m1"] },
+              declaration: {
+                kind: "list",
+                models: [{ model: "m1", label: "M1", efforts: [] }],
+              },
               evidence: "Launch model flag.",
             },
           },

@@ -109,6 +109,7 @@ function secondPrepareRefuses(
         ok: true,
         harness: {
           profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
           startTurn(request) {
             evidence.turns += 1;
             return harness.startTurn(request);

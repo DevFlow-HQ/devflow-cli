@@ -8,6 +8,7 @@ import {
   type CleanupReport,
   type ControlReceipt,
   type HarnessAdapter,
+  type HarnessDefaults,
   type HarnessFailure,
   type HarnessPhaseObserver,
   type HarnessPhaseStep,
@@ -15,6 +16,7 @@ import {
   type HarnessProfile,
   type HarnessRequest,
   type HarnessTurn,
+  type ModelEntry,
   type ModelObservation,
   type PrepareOptions,
   type PrepareResult,
@@ -40,6 +42,8 @@ import {
 import {
   CodexDiagnosticCapture,
   CodexQualificationConnection,
+  readCodexDefaults,
+  type CodexModelList,
   type CodexRecordingObserver,
 } from "./codex/qualification.js";
 import { validateRequiredSchema } from "./codex/required-schema.js";
@@ -136,8 +140,9 @@ type TLiveQualification =
       readonly process: OwnedProcess;
       readonly diagnostics: CodexDiagnosticCapture;
       readonly connection: CodexJsonlConnection;
-      /** The non-hidden models `model/list` observed, in order. */
-      readonly models: readonly string[];
+      /** What `model/list` observed: the non-hidden models with their efforts,
+       *  and Codex's default model. */
+      readonly modelList: CodexModelList;
     }
   | {
       readonly ok: false;
@@ -214,7 +219,7 @@ class CodexAdapter implements HarnessAdapter {
       version: version.value,
       platform,
       probeRevision,
-      models: live.models,
+      models: live.modelList.models,
     });
     const harness = new CodexPreparedHarness(
       profile,
@@ -234,6 +239,7 @@ class CodexAdapter implements HarnessAdapter {
       this.overrides.recordingObserver,
       options.writableDirectory,
       options.phases,
+      live.modelList,
     );
     this.overrides.observeAppServerLifecycle?.({
       end: () => harness.endAppServer(),
@@ -510,13 +516,13 @@ class CodexAdapter implements HarnessAdapter {
         return refuse(authFailure, false);
       }
       nextStep("model-list");
-      const models = await connection.listModels();
+      const modelList = await connection.listModels();
       return {
         ok: true,
         process: child,
         diagnostics: diagnosticCapture,
         connection: connection.runtimeConnection(),
-        models,
+        modelList,
       };
     } catch (cause) {
       const failureDiagnostics =
@@ -535,6 +541,7 @@ class CodexAdapter implements HarnessAdapter {
 
 class CodexPreparedHarness implements PreparedHarness {
   private closePromise: Promise<CleanupReport> | undefined;
+  private defaults: Promise<HarnessDefaults> | undefined;
   private readonly sessions = new Map<string, CodexSession>();
   private active: CodexTurn | undefined;
   private closed = false;
@@ -558,6 +565,9 @@ class CodexPreparedHarness implements PreparedHarness {
      *  with (#214). */
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
+    /** The qualification's `model/list`, which the defaults read resolves
+     *  against. */
+    private readonly modelList: CodexModelList,
   ) {
     this.attachGeneration(generation);
   }
@@ -579,6 +589,34 @@ class CodexPreparedHarness implements PreparedHarness {
         active.connectionEnded(cause);
       },
     });
+  }
+
+  readDefaults(): Promise<HarnessDefaults> {
+    if (this.closed) {
+      return Promise.reject(
+        new Error("readDefaults after close: the prepared Harness is closed"),
+      );
+    }
+    // `config/read` for the Workspace, sent only when a caller asks, so a Run's
+    // own prepare never pays for it.
+    this.defaults ??= readCodexDefaults(
+      () =>
+        boundedCodexExchange({
+          operation: () => {
+            const connection = this.generation?.connection;
+            return connection === undefined
+              ? Promise.reject(new Error("Codex app-server has ended"))
+              : connection.request("config/read", {
+                  cwd: this.workspace,
+                  includeLayers: false,
+                });
+          },
+          timeoutMs: this.controlTimeoutMs,
+          label: "config/read runtime exchange",
+        }),
+      this.modelList,
+    );
+    return this.defaults;
   }
 
   startTurn(request: TurnRequest): HarnessTurn {
@@ -2156,7 +2194,7 @@ interface TBuildProfile {
   readonly platform: HarnessPlatform;
   readonly probeRevision: string;
   /** The non-hidden models `model/list` observed during qualification. */
-  readonly models: readonly string[];
+  readonly models: readonly ModelEntry[];
 }
 
 function buildProfile(options: TBuildProfile): HarnessProfile {
@@ -2198,7 +2236,7 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
       at: "launch-and-per-turn",
       declaration: { kind: "list", models: options.models },
       evidence:
-        "The stable protocol accepts native model selection at thread and Turn start; model/list enumerates the supported models observed during qualification.",
+        "The stable protocol accepts native model selection at thread and Turn start; model/list enumerates the supported models, each with its reasoning efforts and default effort, observed during qualification.",
     },
     modelObservation: {
       available: true,

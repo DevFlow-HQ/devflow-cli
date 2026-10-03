@@ -142,6 +142,7 @@ function spyAdapter(inner: HarnessAdapter): {
         ok: true,
         harness: {
           profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
           startTurn: (request) => harness.startTurn(request),
           close: () => {
             closes++;

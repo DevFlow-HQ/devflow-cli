@@ -8,7 +8,11 @@ import type {
   ProjectionPort,
 } from "../../src/application/projection-port.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
-import type { HarnessProfile } from "../../src/harness/harness.js";
+import type {
+  HarnessDefaults,
+  HarnessProfile,
+  ModelEntry,
+} from "../../src/harness/harness.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
 interface Fixture {
@@ -16,6 +20,23 @@ interface Fixture {
   readonly discoveryCalls: () => number;
   readonly qualificationCalls: () => number;
 }
+
+const GPT_5: ModelEntry = {
+  model: "gpt-5",
+  label: "GPT-5",
+  efforts: ["low", "medium", "high"],
+  defaultEffort: "medium",
+};
+/** A listed model without an effort setting. */
+const GPT_5_MINI: ModelEntry = {
+  model: "gpt-5-mini",
+  label: "GPT-5 mini",
+  efforts: [],
+};
+const DEFAULTS: HarnessDefaults = {
+  kind: "reported",
+  choice: { model: "gpt-5", effort: "high" },
+};
 
 const PROFILE: HarnessProfile = {
   harness: "Codex",
@@ -43,7 +64,7 @@ const PROFILE: HarnessProfile = {
   },
   modelSelection: {
     at: "launch-and-per-turn",
-    declaration: { kind: "list", models: ["gpt-5", "gpt-5-mini"] },
+    declaration: { kind: "list", models: [GPT_5, GPT_5_MINI] },
     evidence: "Observed from model/list.",
   },
   modelObservation: {
@@ -203,7 +224,7 @@ test("a harness focus qualifies only the selected id, and listing qualifies none
         }),
         qualify: async () => {
           qualifyCalls.codex++;
-          return { ok: true, profile: PROFILE };
+          return { ok: true, profile: PROFILE, defaults: DEFAULTS };
         },
       },
     ],
@@ -256,11 +277,61 @@ async function portWithRegistration(
   return application.projectionPort;
 }
 
+test("a suggested declaration keeps the frozen view free-text and carries its entries, efforts, and the Harness fallback with its effort lock", async (t) => {
+  const latest: ModelEntry = {
+    model: "family-latest",
+    label: "Family (latest)",
+    efforts: ["low", "medium"],
+  };
+  const port = await portWithRegistration(t, async () => ({
+    ok: true,
+    profile: {
+      ...PROFILE,
+      modelSelection: {
+        at: "launch",
+        declaration: {
+          kind: "suggested",
+          models: [latest],
+          efforts: ["low", "medium"],
+        },
+        evidence: "Suggested aliases.",
+      },
+    },
+    defaults: {
+      kind: "fallback",
+      choice: { model: "family-latest", effort: "medium" },
+      reason: "The Harness did not report its settings.",
+      effortLock: { effort: "medium", source: "EFFORT_SETTING=medium" },
+    },
+  }));
+  const opened = port.openProjection({
+    family: "harness-catalog",
+    focus: { id: "codex" },
+  });
+  t.after(() => opened.close());
+  const update = await opened.updates[Symbol.asyncIterator]().next();
+  if (update.value?.kind !== "durable") throw new Error("expected a snapshot");
+  const result = (update.value.snapshot as HarnessFocusSnapshot).result;
+  if (!result.found) throw new Error("unreachable");
+  assert.deepEqual(result.harness.supportedModels, { kind: "free-text" });
+  assert.deepEqual(result.harness.modelDeclaration, {
+    kind: "suggested",
+    models: [latest],
+    efforts: ["low", "medium"],
+  });
+  assert.deepEqual(result.harness.harnessDefaults, {
+    kind: "fallback",
+    choice: { model: "family-latest", effort: "medium" },
+    reason: "The Harness did not report its settings.",
+    effortLock: { effort: "medium", source: "EFFORT_SETTING=medium" },
+  });
+});
+
 test("harness focus qualifies once, maps normalized capabilities, and reuses the process cache", async (t) => {
   let qualificationCalls = 0;
   const port = await portWithRegistration(t, async () => {
     qualificationCalls++;
-    return { ok: true, profile: PROFILE };
+    return { ok: true, profile: PROFILE, defaults: DEFAULTS };
   });
 
   const watchingList = port.openProjection({ family: "harness-catalog" });
@@ -306,6 +377,11 @@ test("harness focus qualifies once, maps normalized capabilities, and reuses the
         },
       },
       supportedModels: { kind: "list", models: ["gpt-5", "gpt-5-mini"] },
+      modelDeclaration: { kind: "list", models: [GPT_5, GPT_5_MINI] },
+      harnessDefaults: {
+        kind: "reported",
+        choice: { model: "gpt-5", effort: "high" },
+      },
       capabilities: [
         {
           capability: "session-recovery",
@@ -392,9 +468,8 @@ test("harness focus qualifies once, maps normalized capabilities, and reuses the
 
 test("concurrent Harness focus opens share one pending qualification", async (t) => {
   let qualificationCalls = 0;
-  let release:
-    ((value: { ok: true; profile: HarnessProfile }) => void) | undefined;
-  const qualification = new Promise<{ ok: true; profile: HarnessProfile }>(
+  let release: ((value: ApplicationHarnessQualification) => void) | undefined;
+  const qualification = new Promise<ApplicationHarnessQualification>(
     (resolve) => {
       release = resolve;
     },
@@ -416,7 +491,7 @@ test("concurrent Harness focus opens share one pending qualification", async (t)
   t.after(() => second.close());
   assert.equal(qualificationCalls, 1);
 
-  release?.({ ok: true, profile: PROFILE });
+  release?.({ ok: true, profile: PROFILE, defaults: DEFAULTS });
   const [firstUpdate, secondUpdate] = await Promise.all([
     first.updates[Symbol.asyncIterator]().next(),
     second.updates[Symbol.asyncIterator]().next(),
@@ -550,7 +625,7 @@ test("unknown Harness focus is a Problem and performs no qualification", async (
   let qualificationCalls = 0;
   const port = await portWithRegistration(t, async () => {
     qualificationCalls++;
-    return { ok: true, profile: PROFILE };
+    return { ok: true, profile: PROFILE, defaults: DEFAULTS };
   });
   const opened = port.openProjection({
     family: "harness-catalog",

@@ -451,12 +451,64 @@ export interface HarnessCapabilityView {
   readonly limits?: string;
 }
 
+/** The frozen model view (#191): the names a `list` admits, or free-text entry.
+ * A `suggested` declaration admits any model, so it reads as free text here;
+ * `modelDeclaration` carries its entries. */
 type SupportedModelDeclarationView =
   | { readonly kind: "list"; readonly models: readonly string[] }
   | { readonly kind: "free-text" };
 
+/** One model a Harness names, with the efforts it offers and its own default
+ * effort when the Harness reports one; no efforts means no effort setting. */
+export interface ModelEntryView {
+  readonly model: string;
+  readonly label: string;
+  readonly efforts: readonly string[];
+  readonly defaultEffort?: string;
+}
+
+/** What a Harness admits (#341): an exhaustive `list`, `suggested` picks that
+ * admit any other name too, or `free-text`. `efforts` serves a typed name. */
+type ModelDeclarationView =
+  | { readonly kind: "list"; readonly models: readonly ModelEntryView[] }
+  | {
+      readonly kind: "suggested";
+      readonly models: readonly ModelEntryView[];
+      readonly efforts: readonly string[];
+    }
+  | { readonly kind: "free-text"; readonly efforts: readonly string[] };
+
+interface ModelChoiceView {
+  readonly model: string;
+  readonly effort?: string;
+}
+
+/** An effort the user's environment fixes; `source` says what fixes it. */
+interface EffortLockView {
+  readonly effort: string;
+  readonly source: string;
+}
+
+/** The Model choice the Harness itself reports for the Workspace, or the
+ * Harness's declared fallback with the reason it stands in (#341). */
+export type HarnessDefaultsView =
+  | {
+      readonly kind: "reported";
+      readonly choice: ModelChoiceView;
+      readonly effortLock?: EffortLockView;
+    }
+  | {
+      readonly kind: "fallback";
+      readonly choice: ModelChoiceView;
+      readonly reason: string;
+      readonly effortLock?: EffortLockView;
+    }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
 export interface HarnessFocus extends HarnessSummary {
   readonly supportedModels?: SupportedModelDeclarationView;
+  readonly modelDeclaration?: ModelDeclarationView;
+  readonly harnessDefaults?: HarnessDefaultsView;
   readonly capabilities: readonly HarnessCapabilityView[];
   readonly configurationPosture?: string;
   readonly authenticationInstructions?: string;
