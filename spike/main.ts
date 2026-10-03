@@ -314,10 +314,18 @@ async function t2(shim: string): Promise<void> {
     const hn = openProcess(nodePid);
     const hc = openProcess(c.pid, true);
     const events: string[] = [];
-    for (const ev of ["end", "close", "error"]) c.stdout.on(ev, (x?: unknown) => events.push(`${ev}${x instanceof Error ? ":" + x.message : ""}`));
+    let killAt = 0;
+    const rel = () => Math.round(performance.now() - killAt);
+    for (const ev of ["end", "close", "error"]) c.stdout.on(ev, (x?: unknown) => events.push(`${ev}@${rel()}${x instanceof Error ? ":" + x.message : ""}`));
+    c.stdout.on("data", (d: string) => {
+      if (killAt) events.push(`data(${String(d).length})@${rel()}`);
+    });
     await Bun.sleep(600);
     const ticksBefore = (o.text().match(/tick/g) ?? []).length;
+    killAt = performance.now();
     k32.TerminateProcess(hc, 9);
+    setTimeout(() => events.push(`nodeAlive=${isAlive(hn)}@${rel()}`), 1100);
+    setTimeout(() => events.push(`closeJob@${rel()}`), 1450);
     await Bun.sleep(1000);
     const cmdDead = !isAlive(hc);
     const nodeAlive = isAlive(hn);
@@ -326,6 +334,7 @@ async function t2(shim: string): Promise<void> {
     o.ended.then(() => (eof = true));
     await Bun.sleep(200);
     const membersAfter = describePids(c.jobPids());
+    await Bun.sleep(250);
     c.closeJob();
     await Bun.sleep(500);
     result("t2.cmd-route.kill-direct-child", "INFO", {
