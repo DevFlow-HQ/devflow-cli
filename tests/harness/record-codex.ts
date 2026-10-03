@@ -19,6 +19,7 @@ import {
   type ControlReceipt,
   type HarnessRequest,
   type HarnessTurn,
+  type ModelChoice,
   type RecoveryCoordinate,
   type TurnEvent,
   type TurnRequest,
@@ -34,6 +35,7 @@ import {
 } from "./redact.js";
 import {
   CODEX_RECORDING_INPUT,
+  CODEX_RECORDING_MODEL_CHOICE,
   codexTestRepairPrompt,
 } from "./codex-recording-cases.js";
 import {
@@ -223,12 +225,16 @@ async function driveCase(
     case "two-turns":
       await expectResult(
         startTurn,
-        turnRequest("two-turns", CODEX_RECORDING_INPUT.completion),
+        turnRequest("two-turns", CODEX_RECORDING_INPUT.completion, {
+          modelChoice: CODEX_RECORDING_MODEL_CHOICE.first,
+        }),
         "completed",
       );
       await expectResult(
         startTurn,
-        turnRequest("two-turns", CODEX_RECORDING_INPUT.secondCompletion),
+        turnRequest("two-turns", CODEX_RECORDING_INPUT.secondCompletion, {
+          modelChoice: CODEX_RECORDING_MODEL_CHOICE.second,
+        }),
         "completed",
       );
       return true;
@@ -294,7 +300,9 @@ async function driveCase(
       );
       await expectResult(
         startTurn,
-        turnRequest("resume", CODEX_RECORDING_INPUT.resume, coordinate),
+        turnRequest("resume", CODEX_RECORDING_INPUT.resume, {
+          resume: coordinate,
+        }),
         "completed",
       );
       return true;
@@ -393,7 +401,10 @@ function stopHookTrigger(observer: CodexRecordingObserver): TStopHookTrigger {
 function turnRequest(
   session: string,
   text: string,
-  resume?: RecoveryCoordinate,
+  options: {
+    readonly resume?: RecoveryCoordinate;
+    readonly modelChoice?: ModelChoice;
+  } = {},
 ): TurnRequest {
   return {
     session,
@@ -404,7 +415,10 @@ function turnRequest(
       admit: () => Promise.resolve({ recorded: true }),
       checkpoint: () => Promise.resolve({ recorded: true }),
     },
-    ...(resume === undefined ? {} : { resume }),
+    ...(options.resume === undefined ? {} : { resume: options.resume }),
+    ...(options.modelChoice === undefined
+      ? {}
+      : { modelChoice: options.modelChoice }),
   };
 }
 

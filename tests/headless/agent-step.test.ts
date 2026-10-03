@@ -63,15 +63,22 @@ function claudeCodeProfile(): HarnessProfile {
   };
 }
 
-/** A single-Turn plain script: it emits authoritative assistant content, then
- *  settles `completed` with the observed effective model and an open Session — the
- *  timeline kinds, model, and Session availability the plain replayer produced. */
+/** A single-Turn plain script: it observes the effective model (as Claude Code does
+ *  at init), emits authoritative assistant content, then settles `completed` with
+ *  that model and an open Session — the timeline kinds, model, and Session
+ *  availability the plain replayer produced. */
 function plainScript(): FakeScript {
   return {
     profile: claudeCodeProfile(),
     turns: [
       {
-        events: [{ kind: "assistant-content", content: "hello" }],
+        events: [
+          {
+            kind: "model",
+            observation: { known: true, model: PLAIN_EFFECTIVE_MODEL },
+          },
+          { kind: "assistant-content", content: "hello" },
+        ],
         result: {
           kind: "completed",
           detail: {
@@ -566,6 +573,26 @@ test("[requested-model-durability] run launch --model is accepted for an Agent B
     session: "s",
     sessionName: "s",
   });
+  // Each effective model the Turn's Harness reported is its own `effective-model`
+  // entry, additively (#345); the last is the run-level effective model, and
+  // Claude Code reports no effort yet (#347).
+  const effective = run.timeline.filter(
+    (event) => event.event === "effective-model",
+  );
+  assert.ok(effective.length > 0, JSON.stringify(run.timeline));
+  for (const entry of effective) {
+    assert.deepEqual(entry, {
+      at: entry.at,
+      event: "effective-model",
+      detail: entry.effectiveModel,
+      effectiveModel: entry.effectiveModel,
+      step: "fix",
+      session: "s",
+      sessionName: "s",
+    });
+  }
+  assert.equal(effective.at(-1)?.effectiveModel, run.effectiveModel);
+  assert.match(shown, /effective-model claude-\S+ · step fix/);
 });
 
 test("a command -> agent -> command Bundle runs the plain Turn to succeeded (#116)", async (t) => {

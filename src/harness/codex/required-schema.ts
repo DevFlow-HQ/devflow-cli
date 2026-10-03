@@ -51,6 +51,8 @@ const generatedSchema = z.looseObject({
       ThreadStartResponse: shapeSchema,
       ThreadResumeParams: shapeSchema,
       ThreadResumeResponse: shapeSchema,
+      ThreadReadParams: shapeSchema,
+      ThreadReadResponse: shapeSchema,
       TurnStartParams: shapeSchema,
       TurnStartResponse: shapeSchema,
       TurnSteerParams: shapeSchema,
@@ -62,6 +64,7 @@ const generatedSchema = z.looseObject({
       GetAccountParams: shapeSchema,
       GetAccountResponse: shapeSchema,
       ErrorNotification: shapeSchema,
+      ModelReroutedNotification: shapeSchema,
       TurnStartedNotification: shapeSchema,
       TurnCompletedNotification: shapeSchema,
       ItemStartedNotification: shapeSchema,
@@ -83,6 +86,7 @@ const CLIENT_REQUESTS: TRequiredVariants = {
   initialize: ["id", "method", "params"],
   "thread/start": ["id", "method", "params"],
   "thread/resume": ["id", "method", "params"],
+  "thread/read": ["id", "method", "params"],
   "turn/start": ["id", "method", "params"],
   "turn/steer": ["id", "method", "params"],
   "turn/interrupt": ["id", "method", "params"],
@@ -107,6 +111,7 @@ const SERVER_NOTIFICATIONS: TRequiredVariants = {
   "item/fileChange/patchUpdated": ["method", "params"],
   "serverRequest/resolved": ["method", "params"],
   "item/mcpToolCall/progress": ["method", "params"],
+  "model/rerouted": ["method", "params"],
 };
 
 const SERVER_REQUESTS: TRequiredVariants = {
@@ -139,6 +144,7 @@ const CLIENT_REQUEST_PARAM_REFS: Readonly<Record<string, string>> = {
   initialize: "#/definitions/InitializeParams",
   "thread/start": "#/definitions/v2/ThreadStartParams",
   "thread/resume": "#/definitions/v2/ThreadResumeParams",
+  "thread/read": "#/definitions/v2/ThreadReadParams",
   "turn/start": "#/definitions/v2/TurnStartParams",
   "turn/steer": "#/definitions/v2/TurnSteerParams",
   "turn/interrupt": "#/definitions/v2/TurnInterruptParams",
@@ -164,6 +170,7 @@ const SERVER_NOTIFICATION_PARAM_REFS: Readonly<Record<string, string>> = {
     "#/definitions/v2/ServerRequestResolvedNotification",
   "item/mcpToolCall/progress":
     "#/definitions/v2/McpToolCallProgressNotification",
+  "model/rerouted": "#/definitions/v2/ModelReroutedNotification",
 };
 
 const SERVER_REQUEST_PARAM_REFS: Readonly<Record<string, string>> = {
@@ -326,6 +333,68 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "TurnStartParams",
     "properties",
     "input",
+    "type",
+  ),
+  fact(
+    "turn/start effort",
+    "#/definitions/v2/ReasoningEffort",
+    "definitions",
+    "v2",
+    "TurnStartParams",
+    "properties",
+    "effort",
+    "anyOf",
+    "0",
+    "$ref",
+  ),
+  fact(
+    "reasoning effort",
+    "string",
+    "definitions",
+    "v2",
+    "ReasoningEffort",
+    "type",
+  ),
+  fact(
+    "thread/read id",
+    "string",
+    "definitions",
+    "v2",
+    "ThreadReadParams",
+    "properties",
+    "threadId",
+    "type",
+  ),
+  fact(
+    "thread/read response",
+    "#/definitions/v2/Thread",
+    "definitions",
+    "v2",
+    "ThreadReadResponse",
+    "properties",
+    "thread",
+    "$ref",
+  ),
+  fact(
+    "thread reasoning effort",
+    "#/definitions/v2/ReasoningEffort",
+    "definitions",
+    "v2",
+    "Thread",
+    "properties",
+    "reasoningEffort",
+    "anyOf",
+    "0",
+    "$ref",
+  ),
+  fact(
+    "rerouted model",
+    "string",
+    "definitions",
+    "v2",
+    "ModelReroutedNotification",
+    "properties",
+    "toModel",
     "type",
   ),
   fact(
@@ -798,7 +867,7 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
     validateShape(definitions.v2.ThreadStartParams, [], "thread/start params"),
     validateShape(
       definitions.v2.ThreadStartResponse,
-      ["approvalPolicy", "cwd", "model", "modelProvider", "sandbox", "thread"],
+      ["approvalPolicy", "cwd", "modelProvider", "sandbox", "thread"],
       "thread/start response",
     ),
     validateShape(
@@ -808,12 +877,27 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
     ),
     validateShape(
       definitions.v2.ThreadResumeResponse,
-      ["approvalPolicy", "cwd", "model", "modelProvider", "sandbox", "thread"],
+      ["approvalPolicy", "cwd", "modelProvider", "sandbox", "thread"],
       "thread/resume response",
+    ),
+    validateShape(
+      definitions.v2.ThreadReadParams,
+      ["threadId"],
+      "thread/read params",
+    ),
+    validateShape(
+      definitions.v2.ThreadReadResponse,
+      ["thread"],
+      "thread/read response",
     ),
     validateShape(
       definitions.v2.TurnStartParams,
       ["input", "threadId"],
+      "turn/start params",
+    ),
+    validateNullableStringProperty(
+      definitions.v2.TurnStartParams,
+      "model",
       "turn/start params",
     ),
     validateShape(
@@ -854,6 +938,12 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       "account/read response",
     ),
     validateShape(definitions.v2.Thread, ["id", "status"], "thread"),
+    validateNullableStringProperty(definitions.v2.Thread, "model", "thread"),
+    validateShape(
+      definitions.v2.ModelReroutedNotification,
+      ["threadId", "toModel", "turnId"],
+      "model reroute notification",
+    ),
     validateShape(definitions.v2.Turn, ["id", "items", "status"], "Turn"),
     validateShape(
       definitions.v2.ErrorNotification,

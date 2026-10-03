@@ -107,6 +107,11 @@ const COMPLETED_OPEN: TurnResult = {
   },
 };
 
+const FAKE_OBSERVATIONS = [
+  { known: true, model: "fake-model-b", effort: "high" },
+  { known: true, model: "fake-model-rerouted", effort: "high" },
+] as const;
+
 const SESSION_OPEN = {
   kind: "session",
   availability: { state: "open" },
@@ -178,6 +183,26 @@ const scenarios: ConformanceScenarios = {
   // here before any Run carries one (#342).
   requestedEffort: "high",
   unknownModel: "fake-model-z",
+  // The fake reports what its script says: a model at an effort, then a reroute
+  // to another model at the same effort, and settles on the reroute.
+  modelChoice: { model: "fake-model-a", effort: "low" },
+  observations: FAKE_OBSERVATIONS,
+  observing: () =>
+    createFake(
+      fake({
+        events: FAKE_OBSERVATIONS.map((observation) => ({
+          kind: "model",
+          observation,
+        })),
+        result: {
+          kind: "completed",
+          detail: {
+            effectiveModel: FAKE_OBSERVATIONS[1],
+            session: { state: "open" },
+          },
+        },
+      }),
+    ),
   requesting: () => {
     const turnRequests: FakeTurnRequestRecord[] = [];
     return {

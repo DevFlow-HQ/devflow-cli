@@ -1073,9 +1073,11 @@ export function launchInputs(
 }
 
 /** Drain the meaningful Turn events into the Store as durable timeline entries
- *  (#116): authoritative assistant content, tool activity, and Steer settlements. Session facts and the
- *  effective model reach the durable view through the settled result; previews,
- *  usage, and context are live-only in M3. Best-effort: `appendTurnEvent` (and
+ *  (#116): authoritative assistant content, tool activity, Steer settlements, and
+ *  each known effective model and effort the Harness observed (#345, ADR 0034), so
+ *  the settlement stays immutable while a reroute adds a second. Session facts and
+ *  the Attempt's effective model reach the durable view through the settled
+ *  result; previews, usage, and context are live-only. Best-effort: `appendTurnEvent` (and
  *  `settleTurn` below) no-op on a fenced owner rather than throw — a fenced owner
  *  means another process took over the Run, and that is surfaced authoritatively
  *  when this Attempt's `publishAttempt` is refused and the walk unwinds. */
@@ -1094,6 +1096,20 @@ function recordTurnEvent(
         text: event.text,
         sentAt: event.sentAt,
         settlement: event.settlement,
+      }),
+      at: new Date(),
+    });
+  } else if (event.kind === "model") {
+    // An unknown observation says nothing durable.
+    if (!event.observation.known) return;
+    owner.appendTurnEvent({
+      turnId,
+      kind: "model",
+      payload: JSON.stringify({
+        model: event.observation.model,
+        ...(event.observation.effort !== undefined
+          ? { effort: event.observation.effort }
+          : {}),
       }),
       at: new Date(),
     });

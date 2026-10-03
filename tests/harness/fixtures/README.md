@@ -127,6 +127,19 @@ prepare never reads the defaults; a synthetic replay therefore plays the
 qualification traffic only up to `config/read` and answers it from `responses`
 when a test asks.
 
+Every real Turn case carries the Turn's `thread/read` right after the
+`turn/start` response (#345); `two-turns` also requests `gpt-5.5` at `low`, then
+`medium`, so its `turn/start` frames carry effort and each read reports it back.
+In `test-repair` Codex refused that first read while the fresh thread's rollout
+was still empty, and the read sent again at the Turn's next item answered.
+A synthetic replay holds the rest of a Turn until its `thread/read` arrives, as
+Codex answers it within milliseconds, then answers with the thread's latest
+`turn/start` model and effort (else `recorded-model` with no effort), or with a
+case's `threadRead` (a `{model, effort}` answer, `rpc-error`, `malformed`, or
+`stall`; `rpc-error-once` refuses the first read, emits the user message, and
+holds the Turn until the next). A case's `turn.reroute` (`{toModel, at, foreignTurn?}`) emits
+`model/rerouted` before or after that read is answered.
+
 The two qualification cases record against a temporary Codex home under the
 user's home directory (Codex warns about one under the temp folder on its
 `--version` output) that holds only a link to the user's `auth.json` and a known
@@ -145,9 +158,9 @@ not expose a schema-generation qualification command; its native evidence is the
 recorded stdout stream instead. Refresh one case with
 `bun tests/harness/record-codex.ts <case>` while logged in through Codex; omitting
 the case refreshes `codex-qualification`. Authentication uses an empty temporary
-`CODEX_HOME`. The qualification cases are recorded on codex-cli 0.160.0 and the
-Turn cases on 0.155.0, except the Steer cases (`steer`, `steer-leftover`, `steer-leftover-resend`) on 0.160.0; every case shares the
-`codex-qualification` schema. Replay is deterministic Adapter evidence on all three CI operating
+`CODEX_HOME`. The qualification and Turn cases are recorded on codex-cli 0.160.0
+and authentication on 0.155.0; every case shares the `codex-qualification`
+schema. Replay is deterministic Adapter evidence on all three CI operating
 systems, not a claim that the currently installed real Codex remains compatible.
 
 The leftover Steer cases (#357) catch a race: Codex takes a Steer after its last
@@ -157,8 +170,8 @@ The recorder sends the Steer the moment the first native turn's Stop hook report
 over instead of refusing or answering it. Like `steer`, they run against the
 user's own Codex home, which must define a Stop hook, so these recordings carry
 that home's hook runs and MCP server names (paths redacted), unlike the
-qualification cases. On Linux x64 that took 4 attempts for `steer-leftover` and 22 for
-`steer-leftover-resend`. A real Codex accepts empty input on an idle thread, so
+qualification cases. On Linux x64 the #345 refresh took 10 attempts for `steer-leftover` and
+14 for `steer-leftover-resend`. A real Codex accepts empty input on an idle thread, so
 `steer-leftover-resend` records through a pass-through app-server that refuses the
 first empty-input `turn/start` with the bytes Codex sends for empty input on a busy
 thread (`-32603 failed to submit turn input: EmptyInput`, seen on 0.157.1). That
@@ -191,6 +204,7 @@ synthetic note. The synthetic inventory below is the pick-up list.
 | `approval-concurrent`     | two coexisting approvals                                                                               | real runs raise one prompt at a time                          |
 | `approval-outstanding`    | an approval left outstanding at close, or interrupted and answered `aborted_tools`                     | timing-dependent                                              |
 | `codex-approval-contract` | colliding client/server ids plus concurrent command and file approvals                                 | exact id collision and concurrency are not reliably inducible |
+| `model-rerouted`          | `thread/read` reports a model and effort, then `model/rerouted` replaces the model for that Turn       | Codex reroutes only for `highRiskCyberActivity`               |
 | `resume-unacknowledged`   | an unanswered interrupt falls back; the resume init echoes a different id                              | a real `--resume` acknowledges the id                         |
 | `completed`               | success Turn: tool activity, thinking/telemetry exclusion, preview coalescing, unknown-frame tolerance | a real plain Turn does not emit every frame variety on demand |
 | `completed-quotes-login`  | success result whose text quotes "run /login"                                                          | guards that a real answer is not misread as auth              |

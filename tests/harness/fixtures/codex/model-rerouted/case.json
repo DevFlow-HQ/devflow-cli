@@ -1,0 +1,4 @@
+{
+  "threadRead": { "model": "gpt-6.1-sol", "effort": "high" },
+  "turn": { "reroute": { "toModel": "gpt-5.5", "at": "after-read" } }
+}

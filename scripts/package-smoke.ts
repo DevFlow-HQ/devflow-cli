@@ -703,18 +703,19 @@ await withCleanup(
         },
         {
           harness: "codex",
-          effectiveModel: "gpt-5.6-sol",
+          effectiveModel: "gpt-6.1-sol",
           replayerDirectory: join(smokeRoot, "codex-replayer"),
           install() {
             installCodexReplayerAt(this.replayerDirectory, "test-repair");
           },
           // Codex auto-approves the edit internally: no approval request crosses to the
-          // client; the edit is observable only as a generic tool-activity event.
+          // client; the edit is observable only as a generic tool-activity event. The
+          // codex-cli 0.160.0 recording (#345) writes it with a shell command.
           evidence: (timeline) =>
             timeline.some(
               (event) =>
                 event.event === "tool-activity" &&
-                event.detail === "file-change completed",
+                event.detail === "command completed",
             ) && !timeline.some((event) => event.event === "request-raised"),
         },
       ];

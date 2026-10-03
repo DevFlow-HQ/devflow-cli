@@ -18,6 +18,7 @@ import {
   type HarnessRequest,
   type HarnessTurn,
   type ModelEntry,
+  type ModelChoice,
   type ModelObservation,
   type PrepareOptions,
   type PrepareResult,
@@ -57,6 +58,7 @@ import {
   CodexRpcResponseError,
   type CodexRpcEnvelope,
   parseRuntimeNotification,
+  parseThreadReadResult,
   parseThreadResumeResult,
   parseThreadStartResult,
   sandboxAdmitsDirectory,
@@ -71,7 +73,7 @@ import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
 export type { CodexRecordingObserver } from "./codex/qualification.js";
 
 const HARNESS_NAME = "codex";
-const PROBE_REVISION = "codex-probe-2";
+const PROBE_REVISION = "codex-probe-3";
 const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 const DEFAULT_LAUNCH_TIMEOUT_MS = 15_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
@@ -697,7 +699,7 @@ class CodexPreparedHarness implements PreparedHarness {
           diagnostics:
             "Codex app-server cleanup is incomplete; replacement cannot start until that process is reaped.",
         },
-        session.effectiveModel(),
+        UNKNOWN_MODEL,
         session.availability(),
       );
       return;
@@ -731,7 +733,7 @@ class CodexPreparedHarness implements PreparedHarness {
         recovery.failed(replacement.failure);
         turn.settleRecoveryFailure(
           replacement.failure,
-          session.effectiveModel(),
+          UNKNOWN_MODEL,
           session.availability(),
         );
         return;
@@ -916,7 +918,6 @@ class CodexPreparedHarness implements PreparedHarness {
 
 class CodexSession {
   private coordinate: RecoveryCoordinate | undefined;
-  private model: ModelObservation = { known: false };
   private detached = false;
   private unusableFailure: HarnessFailure | undefined;
 
@@ -967,12 +968,8 @@ class CodexSession {
 
   refusesUnusableTurn(turn: CodexTurn): boolean {
     if (this.unusableFailure === undefined) return false;
-    turn.settleRecoveryFailure(this.unusableFailure, this.model);
+    turn.settleRecoveryFailure(this.unusableFailure, UNKNOWN_MODEL);
     return true;
-  }
-
-  effectiveModel(): ModelObservation {
-    return this.model;
   }
 
   availability(): SessionAvailability {
@@ -1024,15 +1021,13 @@ class CodexSession {
           timeoutMs: this.controlTimeoutMs,
           label: "thread/resume runtime exchange",
         });
-        const resumed = parseThreadResumeResult(result);
-        if (resumed.threadId !== recoveryCoordinate.opaque) {
+        if (parseThreadResumeResult(result) !== recoveryCoordinate.opaque) {
           throw new CodexProtocolError(
             "thread/resume acknowledged a different Codex thread",
           );
         }
         if (this.refusesWritableDirectory(turn, result, recovery)) return;
         this.coordinate = recoveryCoordinate;
-        this.model = { known: true, model: resumed.model };
         this.detached = false;
         turn.recovered();
         recovery.ok();
@@ -1056,10 +1051,9 @@ class CodexSession {
           timeoutMs: this.controlTimeoutMs,
           label: "thread/start runtime exchange",
         });
-        const started = parseThreadStartResult(result);
+        const threadId = parseThreadStartResult(result);
         if (this.refusesWritableDirectory(turn, result, handshake)) return;
-        this.coordinate = { opaque: started.threadId };
-        this.model = { known: true, model: started.model };
+        this.coordinate = { opaque: threadId };
         handshake.ok();
       } catch (cause) {
         const threadFailure = notStartedFailure(
@@ -1084,7 +1078,7 @@ class CodexSession {
       return;
     }
     if (turn.settled) return;
-    turn.admitted(coordinate, this.model);
+    turn.admitted(coordinate);
     turn.submitting();
     try {
       const turnId = await turn.requestTurnStart({
@@ -1112,7 +1106,7 @@ class CodexSession {
       ...(cause !== undefined ? { cause } : {}),
     };
     this.unusableFailure = failure;
-    turn.settleRecoveryFailure(failure, this.model);
+    turn.settleRecoveryFailure(failure, UNKNOWN_MODEL);
     return failure;
   }
 }
@@ -1212,7 +1206,14 @@ class CodexTurn implements HarnessTurn {
   private submitted = false;
   private threadId: string | undefined;
   private turnId: string | undefined;
-  private model: ModelObservation = { known: false };
+  private model: ModelObservation = UNKNOWN_MODEL;
+  /** A `model/rerouted` for this Turn named the model; `thread/read`, which
+   *  reports the configured model, then supplies only the effort. */
+  private rerouted = false;
+  /** Whether this Turn sent its `thread/read`. */
+  private effectiveValuesRead = false;
+  /** Codex refused the first `thread/read`; the Turn's next item reads again. */
+  private rereadPending = false;
   private finalContent: string | undefined;
   private terminalError: string | undefined;
   private readonly pendingNotifications: RuntimeNotification[] = [];
@@ -1664,10 +1665,9 @@ class CodexTurn implements HarnessTurn {
     }
   }
 
-  admitted(coordinate: RecoveryCoordinate, model: ModelObservation): void {
+  admitted(coordinate: RecoveryCoordinate): void {
     this.admittedToRuntime = true;
     this.threadId = coordinate.opaque;
-    this.model = model;
     this.lastObservation = "Codex acknowledged the Session thread";
     this.emit({
       kind: "session",
@@ -1679,7 +1679,6 @@ class CodexTurn implements HarnessTurn {
         commands: [],
       },
     });
-    this.emit({ kind: "model", observation: model });
   }
 
   submitting(): void {
@@ -1693,12 +1692,10 @@ class CodexTurn implements HarnessTurn {
         start.connection.request("turn/start", {
           threadId: start.threadId,
           input: start.input,
-          // This Turn's requested model is applied at the native per-Turn point;
-          // the effective model stays what thread/start observed, never the
-          // request. Its effort is not sent yet (#345).
-          ...(this.request.modelChoice !== undefined
-            ? { model: this.request.modelChoice.model }
-            : {}),
+          // This Turn's Model choice applies at Codex's stable per-Turn fields,
+          // which also stick for later Turns; the effective values are read
+          // back once Codex accepts the Turn, never copied from the request.
+          ...turnModelChoice(this.request.modelChoice),
         }),
       timeoutMs: this.controlTimeoutMs,
       label: start.label,
@@ -1717,6 +1714,13 @@ class CodexTurn implements HarnessTurn {
     }
     this.turnId = turnId;
     this.lastObservation = "Codex accepted turn/start";
+    // Sent before any control or answer can follow acceptance, so its place in
+    // the native exchange is fixed. A Steer re-delivery's native turn carries
+    // the same Model choice, so the Turn reads once.
+    if (!this.effectiveValuesRead) {
+      this.effectiveValuesRead = true;
+      this.readEffectiveValues(threadId, { rereadOnRefusal: true });
+    }
     this.resolveTarget({ threadId, turnId });
     this.flushPendingNotifications();
   }
@@ -1761,12 +1765,20 @@ class CodexTurn implements HarnessTurn {
       return;
     }
     switch (notification.kind) {
+      case "model-rerouted":
+        this.rerouted = true;
+        this.observeModel(
+          notification.toModel,
+          this.model.known ? this.model.effort : undefined,
+        );
+        return;
       case "preview":
         this.lastObservation = "Codex emitted assistant preview content";
         this.deliverSteersInHistory();
         this.emitPreview(notification.delta);
         return;
       case "item-event":
+        this.rereadEffectiveValues();
         if (notification.userMessageClientId !== undefined) {
           const pending = this.steers.get(notification.userMessageClientId);
           if (pending !== undefined) pending.inHistory = true;
@@ -1920,6 +1932,73 @@ class CodexTurn implements HarnessTurn {
         },
       },
     });
+  }
+
+  /** Read the effective model and effort Codex applied to this Turn (ADR 0034):
+   *  `thread/read` reports the thread's configured values, which the Turn's own
+   *  override set. Bounded, and never a Turn outcome: a read that fails or does not
+   *  answer leaves the values unknown with a live diagnostic, and a Turn that
+   *  settles first keeps what it observed. Codex can refuse a fresh thread's read
+   *  while its rollout is still empty (recorded on 0.160.0), so a first read it
+   *  refuses is sent once more at the Turn's next item. */
+  private readEffectiveValues(
+    threadId: string,
+    { rereadOnRefusal }: { readonly rereadOnRefusal: boolean },
+  ): void {
+    const connection = this.connection;
+    void boundedCodexExchange({
+      operation: () => connection.request("thread/read", { threadId }),
+      timeoutMs: this.controlTimeoutMs,
+      label: "thread/read runtime exchange",
+    }).then(
+      (result) => {
+        let read: ReturnType<typeof parseThreadReadResult>;
+        try {
+          read = parseThreadReadResult(result, threadId);
+        } catch (cause) {
+          this.reportUnreadEffectiveValues(cause);
+          return;
+        }
+        // A reroute named this Turn's model; the read then adds only the effort.
+        const current = this.model;
+        const model =
+          this.rerouted && current.known ? current.model : read.model;
+        if (model === undefined) return;
+        this.observeModel(model, read.effort);
+      },
+      (cause: unknown) => {
+        const reread =
+          rereadOnRefusal && cause instanceof CodexRpcResponseError;
+        this.rereadPending = reread;
+        this.reportUnreadEffectiveValues(cause, { reread });
+      },
+    );
+  }
+
+  private rereadEffectiveValues(): void {
+    if (!this.rereadPending || this.threadId === undefined) return;
+    this.rereadPending = false;
+    this.readEffectiveValues(this.threadId, { rereadOnRefusal: false });
+  }
+
+  private reportUnreadEffectiveValues(
+    cause: unknown,
+    { reread }: { readonly reread: boolean } = { reread: false },
+  ): void {
+    this.emit({
+      kind: "activity",
+      description: `Codex did not report this Turn's effective model and effort${reread ? " yet, so its next item reads them again" : ""}: ${cause instanceof Error ? cause.message : String(cause)}`,
+    });
+  }
+
+  private observeModel(model: string, effort: string | undefined): void {
+    if (this.settled) return;
+    this.model = {
+      known: true,
+      model,
+      ...(effort !== undefined ? { effort } : {}),
+    };
+    this.emit({ kind: "model", observation: this.model });
   }
 
   private matchesTurn(turnId: string): boolean {
@@ -2270,6 +2349,22 @@ class CodexTurn implements HarnessTurn {
   }
 }
 
+/** A Turn's effective values before Codex reports any. */
+const UNKNOWN_MODEL: ModelObservation = { known: false };
+
+/** The `turn/start` fields carrying a Turn's Model choice: its model, and its
+ *  effort when it has one. */
+function turnModelChoice(choice: ModelChoice | undefined): {
+  readonly model?: string;
+  readonly effort?: string;
+} {
+  if (choice === undefined) return {};
+  return {
+    model: choice.model,
+    ...(choice.effort !== undefined ? { effort: choice.effort } : {}),
+  };
+}
+
 function nativeTargetSlot(): TNativeTargetSlot {
   let resolve!: (target: TCodexNativeTarget | undefined) => void;
   const promise = new Promise<TCodexNativeTarget | undefined>((settle) => {
@@ -2440,7 +2535,7 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
     platform: options.platform,
     adapterRevision: options.probeRevision,
     configurationPosture:
-      "user-compatible: inherits the user's Codex home and environment; experimental API is disabled, a caller-requested model is applied natively per Turn and none is set otherwise, while reasoning effort, personality, approval policy, and sandbox policy remain unset by Secant.",
+      "user-compatible: inherits the user's Codex home and environment; experimental API is disabled, a caller-requested model and reasoning effort are applied natively per Turn and none is set otherwise, while personality, approval policy, and sandbox policy remain unset by Secant.",
     recovery: {
       mode: "native-reattach",
       evidence:
@@ -2470,12 +2565,12 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
       at: "launch-and-per-turn",
       declaration: { kind: "list", models: options.models },
       evidence:
-        "The stable protocol accepts native model selection at thread and Turn start; model/list enumerates the supported models, each with its reasoning efforts and default effort, observed during qualification.",
+        "The stable protocol accepts native model and reasoning-effort selection at Turn start; model/list enumerates the supported models, each with its reasoning efforts and default effort, observed during qualification.",
     },
     modelObservation: {
       available: true,
       evidence:
-        "thread/start and thread/resume report the effective model, distinct from any requested model.",
+        "thread/read after each Turn starts reports the effective model and reasoning effort, and model/rerouted for that Turn replaces the model; both are distinct from any requested Model choice.",
     },
     recoveryCoordinate: {
       timing: "before-submission",

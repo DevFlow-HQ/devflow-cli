@@ -376,10 +376,14 @@ export interface UsageObservation {
   readonly summary: string;
 }
 
-/** The effective model, distinct from any requested model. Stays unknown rather
- *  than copying the request when unconfirmed. */
+/** The effective model and effort (ADR 0034), distinct from any requested Model
+ *  choice. Stays unknown rather than copying the request when unconfirmed. A
+ *  known model's `effort` is absent when the Harness reported none; it is then
+ *  unknown, never the requested effort. An effort is observed only beside a
+ *  known model. */
 export type ModelObservation =
-  { readonly known: true; readonly model: string } | { readonly known: false };
+  | { readonly known: true; readonly model: string; readonly effort?: string }
+  | { readonly known: false };
 
 /** Whether a Session can take a next Turn now, holds a recovery coordinate, or
  *  cannot continue. */
@@ -421,6 +425,8 @@ export type TurnEvent =
   | { readonly kind: "context"; readonly observation: ContextObservation }
   | { readonly kind: "usage"; readonly observation: UsageObservation }
   | { readonly kind: "activity"; readonly description: string }
+  // Each observation replaces the Turn's last one (a reroute is a second); the
+  // result's `effectiveModel` is the last observed.
   | { readonly kind: "model"; readonly observation: ModelObservation }
   | {
       readonly kind: "steer";

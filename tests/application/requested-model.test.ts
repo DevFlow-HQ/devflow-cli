@@ -384,6 +384,107 @@ test("[requested-model-durability] a requested model is pinned, sent on the Turn
   assert.deepEqual(startedTurns(reopenedRun), startedTurns(run));
 });
 
+test("each effective model and effort a Turn observes is recorded as a Turn event and projected per Turn, while the Run's effective model stays the settled result's (#345)", async (t) => {
+  const home = makeTempDir("secant-effective-model-home-");
+  const workspace = makeTempDir("secant-effective-model-ws-");
+  const read = { known: true, model: "observed-sonnet", effort: "high" };
+  const rerouted = { known: true, model: "observed-haiku", effort: "high" };
+  const script: FakeScript = {
+    profile: profile(),
+    turns: [
+      {
+        // A reroute replaces the first observation; an unknown one records
+        // nothing, and no effort is ever the request's.
+        events: [
+          { kind: "model", observation: { known: false } },
+          { kind: "model", observation: read },
+          { kind: "model", observation: { known: true, model: "no-effort" } },
+          { kind: "model", observation: rerouted },
+        ],
+        result: {
+          kind: "completed",
+          detail: {
+            finalContent: "done",
+            effectiveModel: rerouted,
+            session: { state: "open" },
+          },
+        },
+      },
+    ],
+  };
+  const { wired, digest } = wire(
+    t,
+    createFake(script)(),
+    writeAgentBundle(),
+    home,
+    workspace,
+  );
+  const admission = wired.projectionPort.submit({
+    operationId: "op-launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: "dev.secant.requested-model" },
+      launchInputs: {},
+      trustDigest: digest,
+      harness: "claude-code",
+      requestedModel: "requested-opus",
+    },
+  });
+  assert.ok(admission.admitted, JSON.stringify(admission));
+  const runId = admission.runId;
+  assert.ok(runId);
+  await awaitSettled(wired.projectionPort, "op-launch");
+
+  const run = readRun(wired, runId);
+  assert.equal(run.state, "succeeded");
+  assert.equal(run.effectiveModel, "observed-haiku");
+  const turnEntries = run.timeline.filter(
+    (event) =>
+      event.event === "turn-started" ||
+      event.event === "effective-model" ||
+      event.event === "turn-settled",
+  );
+  const scope = { step: "work", session: "s", sessionName: "s" };
+  assert.deepEqual(
+    turnEntries.map(({ at: _at, ...entry }) => entry),
+    [
+      {
+        event: "turn-started",
+        detail: "s",
+        turnKind: "agent",
+        requestedModel: "requested-opus",
+        ...scope,
+      },
+      {
+        event: "effective-model",
+        detail: "observed-sonnet · high",
+        effectiveModel: "observed-sonnet",
+        effectiveEffort: "high",
+        ...scope,
+      },
+      {
+        event: "effective-model",
+        detail: "no-effort",
+        effectiveModel: "no-effort",
+        ...scope,
+      },
+      {
+        event: "effective-model",
+        detail: "observed-haiku · high",
+        effectiveModel: "observed-haiku",
+        effectiveEffort: "high",
+        ...scope,
+      },
+      {
+        event: "turn-settled",
+        detail: "completed",
+        turnKind: "agent",
+        ...scope,
+      },
+    ],
+  );
+});
+
 test("[requested-model-durability] resume reuses the stored model with no fallback", async (t) => {
   const home = makeTempDir("secant-requested-model-home-");
   const workspace = makeTempDir("secant-requested-model-ws-");

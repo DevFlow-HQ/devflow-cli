@@ -1,0 +1,8 @@
+{
+  "harness": "codex",
+  "executableVersion": "codex-cli 0.160.0",
+  "protocolVersion": "codex-probe-3",
+  "recordedAt": "synthetic",
+  "redactions": [],
+  "refreshCommand": "synthetic -- hand-authored; Codex reroutes a Turn only for highRiskCyberActivity, which a recording cannot reliably or appropriately induce; see tests/harness/fixtures/README.md"
+}

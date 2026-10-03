@@ -1,8 +1,8 @@
 {
   "harness": "codex",
   "executableVersion": "codex-cli 0.160.0",
-  "protocolVersion": "codex-probe-2",
-  "recordedAt": "2026-10-03T19:27:30.708Z",
+  "protocolVersion": "codex-probe-3",
+  "recordedAt": "2026-10-03T20:59:34.331Z",
   "redactions": [
     {
       "placeholder": "«WORKSPACE»",

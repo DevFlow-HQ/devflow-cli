@@ -20,6 +20,7 @@ import {
   type ModelDeclaration,
   type ModelEntry,
   type ModelChoice,
+  type ModelObservation,
   type PreparedHarness,
   type RecoveryCoordinate,
   type TurnAdmission,
@@ -183,7 +184,8 @@ export interface ConformanceScenarios
     InterruptRecoveryScenarios,
     ApprovalRequestScenarios,
     ModelDeclarationScenarios,
-    RequestedModelScenarios {
+    RequestedModelScenarios,
+    Omit<ModelObservationScenarios, "label" | "inputText"> {
   /** A Turn that raises one request it does not await, expiring it at terminal. */
   expiringRequest(): TestHarnessAdapterFactory;
   /** A Turn that ends `lost` with the given unknown. */
@@ -1193,6 +1195,58 @@ export function runRequestedModelCases(
   }
 }
 
+/**
+ * The effective model and effort a Turn reports (ADR 0034, ADR 0022): each `model`
+ * event is the Harness's own report, a later one replaces an earlier one (a
+ * reroute), and the settled result's effective model is the last. Observed
+ * values are never the request copied back, so the scenario requests a Model
+ * choice its Harness reports differently.
+ */
+export interface ModelObservationScenarios {
+  readonly label: string;
+  readonly inputText?: string;
+  /** An Adapter whose one Turn completes after its Harness reports
+   *  `observations`, in order. */
+  observing(): TestHarnessAdapterFactory;
+  readonly observations: readonly ModelObservation[];
+  /** The Model choice the Turn requests, which no observation copies. */
+  readonly modelChoice: ModelChoice;
+}
+
+/** Run the effective model-and-effort observation cases against one provider. */
+export function runModelObservationCases(
+  scenarios: ModelObservationScenarios,
+  register: RegisterConformanceCase,
+): void {
+  register(
+    `[${scenarios.label}] each reported model and effort is a model event, and the result carries the last`,
+    async () => {
+      const prepared = await prepare(scenarios.observing());
+      const turn = prepared.startTurn(
+        request(recorder().recorder, {
+          text: scenarios.inputText,
+          modelChoice: scenarios.modelChoice,
+        }),
+      );
+      const events = observe(turn);
+      const result = await turn.result();
+      await prepared.close();
+      assert.equal(result.kind, "completed");
+      if (result.kind !== "completed") throw new Error("unreachable");
+      assert.deepEqual(
+        events.all.flatMap((event) =>
+          event.kind === "model" ? [event.observation] : [],
+        ),
+        scenarios.observations,
+      );
+      assert.deepEqual(
+        result.detail.effectiveModel,
+        scenarios.observations.at(-1) ?? { known: false },
+      );
+    },
+  );
+}
+
 /** Run the approval request/answer/expiry cases against one provider. Both the
  *  full suite (for the fake) and the Claude Code Adapter over the bridge call it.
  *  `interruptOutcome` names how the provider's interrupt of a live Turn settles
@@ -1322,6 +1376,7 @@ export function runConformanceSuite(
   runPrepareProfileCases(scenarios, register);
   runModelDeclarationCases(scenarios, register);
   runRequestedModelCases(scenarios, register);
+  runModelObservationCases(scenarios, register);
   runTurnLifecycleCases(scenarios, register);
   runInterruptRecoveryCases(scenarios, register);
   runApprovalRequestCases(scenarios, register);

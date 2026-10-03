@@ -70,6 +70,8 @@ export interface InstalledCodexReplayer {
   changeVersionOnly(version: string): void;
   removeSchemaMethod(method: string): void;
   changeTurnStatusShape(): void;
+  /** Drop `effort` from the schema's `turn/start` params (#345). */
+  removeTurnStartEffort(): void;
   changeApprovalSchemaShape(
     field:
       | "path"
@@ -102,6 +104,21 @@ export interface InstalledCodexReplayer {
       | "malformed"
       | "stall",
   ): void;
+  /** Replace each `thread/read` answer (#345), which otherwise reports the
+   *  thread's latest `turn/start` model and effort: a configured model and effort
+   *  (`null` reports none), a JSON-RPC error, one error and then the usual answer
+   *  after the Turn's user message, a reply that is not a thread, or no reply. */
+  configureThreadRead(
+    answer:
+      | {
+          readonly model: string | null;
+          readonly effort: string | null;
+        }
+      | "rpc-error"
+      | "rpc-error-once"
+      | "malformed"
+      | "stall",
+  ): void;
   /** Mark no `model/list` entry as Codex's default. */
   clearDefaultModel(): void;
   failTurn(message: string): void;
@@ -110,6 +127,14 @@ export interface InstalledCodexReplayer {
 }
 
 interface CodexTurnReplayOptions {
+  /** Emit `model/rerouted` to `toModel` (#345) right after `turn/start` is
+   *  accepted, before `thread/read` is answered, or after it; with
+   *  `foreignTurn`, naming another Turn. */
+  readonly reroute?: {
+    readonly toModel: string;
+    readonly at: "before-read" | "after-read";
+    readonly foreignTurn?: boolean;
+  };
   /** Acknowledge workspace-write without the requested writable root (#214). */
   readonly ignoreWritableRoots?: boolean;
   readonly stopAfter?: "accepted" | "item-completed";
@@ -386,6 +411,12 @@ export function installCodexReplayerAt(
       schema.definitions.v2.Turn.properties.status = { type: "number" };
       writeFileSync(schemaPath, JSON.stringify(schema));
     },
+    removeTurnStartEffort() {
+      const schemaPath = mutableSchemaPath();
+      const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+      delete schema.definitions.v2.TurnStartParams.properties.effort;
+      writeFileSync(schemaPath, JSON.stringify(schema));
+    },
     changeApprovalSchemaShape(field) {
       const schemaPath = mutableSchemaPath();
       const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
@@ -504,6 +535,12 @@ export function installCodexReplayerAt(
           },
         };
       }
+      writeFileSync(casePath, JSON.stringify(protocolCase));
+    },
+    configureThreadRead(answer) {
+      const casePath = join(installedFixtureDirectory, "case.json");
+      const protocolCase = JSON.parse(readFileSync(casePath, "utf8"));
+      protocolCase.threadRead = answer;
       writeFileSync(casePath, JSON.stringify(protocolCase));
     },
     clearDefaultModel() {

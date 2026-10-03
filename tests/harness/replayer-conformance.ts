@@ -19,6 +19,7 @@ import {
   runExactThreadRecoveryCases,
   runInterruptRecoveryCases,
   runModelDeclarationCases,
+  runModelObservationCases,
   runNativeSteerCases,
   runPendingSteerCases,
   runPrepareProfileCases,
@@ -349,11 +350,16 @@ export function registerCodexReplayerConformance(
       label: "codex",
       inputText: CODEX_RECORDING_INPUT.completion,
       requestedModel: "gpt-5.6-sol",
+      requestedEffort: "high",
       requesting: () => {
         const installed = installSyntheticCodexReplayer();
+        // Codex reports a configured model other than the request, so an
+        // effective model equal to the request would be a copy.
+        installed.configureThreadRead({ model: "gpt-6-astra", effort: "low" });
         return {
           factory: () => createCodexAdapter({ path: installed.path, env: {} }),
-          // Each turn/start the app-server received: its model is the request.
+          // Each turn/start the app-server received: its model and effort are
+          // the request.
           requests: () =>
             installed
               .invocations()
@@ -363,11 +369,36 @@ export function registerCodexReplayerConformance(
               .map((frame) =>
                 frame.params?.model === undefined
                   ? undefined
-                  : { model: frame.params.model },
+                  : {
+                      model: frame.params.model,
+                      ...(frame.params.effort === undefined
+                        ? {}
+                        : { effort: frame.params.effort }),
+                    },
               ),
         };
       },
       unknownModel: "no-such-secant-model",
+    },
+    register,
+  );
+  // Codex's effective values (#345): thread/read after the Turn starts reports
+  // the model and effort, and a model/rerouted for the Turn replaces the model.
+  // The synthetic `model-rerouted` case stands in for a reroute a recording
+  // cannot induce.
+  runModelObservationCases(
+    {
+      label: "codex model-rerouted",
+      inputText: CODEX_RECORDING_INPUT.completion,
+      modelChoice: { model: "gpt-5.6-sol", effort: "medium" },
+      observations: [
+        { known: true, model: "gpt-6.1-sol", effort: "high" },
+        { known: true, model: "gpt-5.5", effort: "high" },
+      ],
+      observing: () => {
+        const installed = installCodexReplayer("model-rerouted");
+        return () => createCodexAdapter({ path: installed.path, env: {} });
+      },
     },
     register,
   );

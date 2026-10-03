@@ -225,7 +225,6 @@ function responseResult(method: string, message: CodexRpcEnvelope): unknown {
 }
 
 const threadResultSchema = z.looseObject({
-  model: z.string().min(1),
   thread: z.looseObject({ id: z.string().min(1) }),
   sandbox: z
     .looseObject({
@@ -271,20 +270,42 @@ const turnSteerResultSchema = z.looseObject({
 });
 const turnInterruptResultSchema = z.looseObject({});
 
-export function parseThreadStartResult(value: unknown): {
-  readonly threadId: string;
-  readonly model: string;
-} {
-  const result = parseResult(value, threadResultSchema, "thread/start");
-  return { threadId: result.thread.id, model: result.model };
+export function parseThreadStartResult(value: unknown): string {
+  return parseResult(value, threadResultSchema, "thread/start").thread.id;
 }
 
-export function parseThreadResumeResult(value: unknown): {
-  readonly threadId: string;
-  readonly model: string;
-} {
-  const result = parseResult(value, threadResultSchema, "thread/resume");
-  return { threadId: result.thread.id, model: result.model };
+export function parseThreadResumeResult(value: unknown): string {
+  return parseResult(value, threadResultSchema, "thread/resume").thread.id;
+}
+
+// The thread's configured model and effort (#345): null or absent is a value
+// Codex did not report; any other non-string is incompatible data.
+const threadReadResultSchema = z.looseObject({
+  thread: z.looseObject({
+    id: z.string().min(1),
+    model: z.string().min(1).nullish(),
+    reasoningEffort: z.string().min(1).nullish(),
+  }),
+});
+
+/** The model and effort `thread/read` reports for `threadId`, each absent when
+ *  Codex reports none. A reply for another thread is incompatible data. */
+export function parseThreadReadResult(
+  value: unknown,
+  threadId: string,
+): { readonly model?: string; readonly effort?: string } {
+  const { thread } = parseResult(value, threadReadResultSchema, "thread/read");
+  if (thread.id !== threadId) {
+    throw new CodexProtocolError(
+      "thread/read reported a different Codex thread",
+    );
+  }
+  return {
+    ...(thread.model != null ? { model: thread.model } : {}),
+    ...(thread.reasoningEffort != null
+      ? { effort: thread.reasoningEffort }
+      : {}),
+  };
 }
 
 export function parseTurnStartResult(value: unknown): string {
@@ -375,6 +396,9 @@ const commandApprovalSchema = correlatedParamsSchema.extend({
 const fileApprovalSchema = correlatedParamsSchema.extend({
   itemId: z.string().min(1),
 });
+const modelReroutedSchema = correlatedParamsSchema.extend({
+  toModel: z.string().min(1),
+});
 const requestResolvedSchema = z.looseObject({
   requestId: rpcIdSchema,
   threadId: z.string().min(1),
@@ -435,6 +459,12 @@ export type CodexRuntimeNotification =
   | {
       readonly kind: "unsupported-server-request";
       readonly method: string;
+    }
+  | {
+      readonly kind: "model-rerouted";
+      readonly threadId: string;
+      readonly turnId: string;
+      readonly toModel: string;
     };
 
 export function parseRuntimeNotification(
@@ -520,6 +550,15 @@ export function parseRuntimeNotification(
         turnId: params.turnId,
         message: params.error.message,
         willRetry: params.willRetry,
+      };
+    }
+    case "model/rerouted": {
+      const params = parseResult(message.params, modelReroutedSchema, method);
+      return {
+        kind: "model-rerouted",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        toModel: params.toModel,
       };
     }
     case "serverRequest/resolved": {

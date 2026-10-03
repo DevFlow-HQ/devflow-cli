@@ -1,8 +1,8 @@
 {
   "harness": "codex",
-  "executableVersion": "codex-cli 0.155.0",
-  "protocolVersion": "codex-probe-2",
-  "recordedAt": "2026-09-18T18:32:37.659Z",
+  "executableVersion": "codex-cli 0.160.0",
+  "protocolVersion": "codex-probe-3",
+  "recordedAt": "2026-10-03T19:55:04.414Z",
   "redactions": [
     {
       "placeholder": "«WORKSPACE»",
@@ -13,20 +13,24 @@
       "reason": "Codex installation id"
     },
     {
-      "placeholder": "/recorded/codex-home",
-      "reason": "Codex home path"
-    },
-    {
-      "placeholder": "«HOSTNAME»",
-      "reason": "recording host name"
+      "placeholder": "recorded-chatgpt-account-id",
+      "reason": "Codex ChatGPT account id"
     },
     {
       "placeholder": "recorded@example.invalid",
       "reason": "Codex account email"
     },
     {
+      "placeholder": "/recorded/codex-home",
+      "reason": "Codex home path"
+    },
+    {
       "placeholder": "«HOME»",
       "reason": "user home path"
+    },
+    {
+      "placeholder": "«HOSTNAME»",
+      "reason": "recording host name"
     }
   ],
   "refreshCommand": "bun tests/harness/record-codex.ts test-repair"

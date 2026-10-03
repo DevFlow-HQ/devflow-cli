@@ -53,7 +53,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `free-text` carry a declaration-level `efforts` for any other name. Codex declares `launch-and-per-turn` with the `model/list` entries observed at
   qualification; Claude Code declares `launch` with its documented aliases as `suggested`, each offering the five `--help` efforts and no default
   effort, since which levels a Claude model honours is observed, never catalogued. `modelObservation` separately declares whether the effective
-  model is read from native evidence; both observe it.
+  model is read from native evidence; both observe it. A `model` event's `ModelObservation` carries the effort beside a known model (absent: unknown);
+  each event replaces the last, and the result's `effectiveModel` is the last observed (#345).
 - `PreparedHarness.readDefaults()` (#341) is the Harness's own default Model choice, read lazily and once per Prepared Harness so a Run's prepare never
   pays for it: `reported`, or the Adapter's declared `fallback` with its reason (Codex: the `model/list` default at its own default effort; Claude
   Code: Opus (latest) at medium until #347 reads `get_settings`), or `unavailable`. A read the Harness cannot answer falls back, never throws; an
@@ -65,9 +66,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   sends a per-thread `sandbox_workspace_write.writable_roots` config override and refuses the Turn `writable-directory-refused` only when an acknowledged
   `workspaceWrite` sandbox omits it (read-only defers to approvals).
 - Each `TurnRequest` carries its `modelChoice` (ADR 0034); `modelChoiceRefusal` refuses one outside a declared `list`, even an empty one
-  (`suggested` and `free-text` admit any), as a `not-started` `model-unavailable` Turn before admission, never a substitution. Codex sends it
-  on `turn/start`, Claude Code as `--model` on the launch serving the Turn (a reused live child keeps its model, #348); neither sends effort
-  yet (#345, #348). The observed effective model never copies the request.
+  (`suggested` and `free-text` admit any), as a `not-started` `model-unavailable` Turn before admission, never a substitution. Codex sends model
+  and effort on `turn/start` (#345), Claude Code the model as `--model` on the launch serving the Turn (a reused live child keeps its model, #348)
+  and no effort yet (#348). The observed effective model never copies the request.
 
 ### Interrupt, recovery, and cleanup
 

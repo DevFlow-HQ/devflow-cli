@@ -58,6 +58,15 @@ let activeTurnId;
 const outstandingApprovals = new Map();
 let steerNumber = 0;
 const stalledControls = [];
+// The thread's configured model and effort as `thread/read` reports them (#345):
+// the latest `turn/start` override sticks, as recorded on codex-cli 0.160.0;
+// before any, the thread/start model with no effort.
+let configuredModel = "recorded-model";
+let configuredEffort = null;
+// A synthetic Turn's remaining traffic waits for the Adapter's `thread/read`,
+// which real Codex answers within milliseconds of accepting the Turn.
+let deferredTurn;
+let threadReads = 0;
 // A scripted leftover Steer leaves the next `turn/start` to re-deliver it.
 let leftoverPending = false;
 
@@ -242,6 +251,18 @@ for await (const line of lines) {
     );
     continue;
   }
+  if (request.method === "thread/read") {
+    if (answerThreadRead(request)) {
+      // Refused while the rollout is empty: the Turn persists its user message,
+      // and its remaining traffic waits for the next read.
+      emitUserMessageItem();
+      continue;
+    }
+    const next = deferredTurn;
+    deferredTurn = undefined;
+    next?.();
+    continue;
+  }
   if (request.method === "turn/start" && leftoverPending) {
     const redelivery = scenario.turn?.redelivery;
     if (redelivery === "stall") continue;
@@ -279,6 +300,12 @@ for await (const line of lines) {
   }
   if (request.method === "turn/start") {
     activeThreadId = request.params.threadId;
+    if (request.params.model !== undefined) {
+      configuredModel = request.params.model;
+    }
+    if (request.params.effort !== undefined) {
+      configuredEffort = request.params.effort;
+    }
     turnNumber += 1;
     const turnId = `turn-${turnNumber}`;
     activeTurnId = turnId;
@@ -329,97 +356,106 @@ for await (const line of lines) {
     );
     if (scenario.turn?.withholdTerminal === true) continue;
     if (scenario.turn?.stopAfter === "accepted") process.exit(0);
-    const status = scenario.turn?.status ?? "completed";
-    if (scenario.turn?.retryingError !== undefined) {
-      process.stdout.write(
-        `${JSON.stringify({
-          method: "error",
-          params: {
-            error: { message: scenario.turn.retryingError },
-            threadId: activeThreadId,
-            turnId,
-            willRetry: true,
+    emitReroute("before-read", turnId);
+    deferredTurn = () => {
+      emitReroute("after-read", turnId);
+      const status = scenario.turn?.status ?? "completed";
+      if (scenario.turn?.retryingError !== undefined) {
+        process.stdout.write(
+          `${JSON.stringify({
+            method: "error",
+            params: {
+              error: { message: scenario.turn.retryingError },
+              threadId: activeThreadId,
+              turnId,
+              willRetry: true,
+            },
+          })}\n`,
+        );
+      }
+      if (scenario.turn?.malformedItem === true) {
+        process.stdout.write(
+          `${JSON.stringify({
+            method: "item/completed",
+            params: {
+              completedAtMs: 1,
+              item: { id: "broken-command", type: "commandExecution" },
+              threadId: activeThreadId,
+              turnId,
+            },
+          })}\n`,
+        );
+      }
+      if (scenario.turn?.fullActivity === true) emitActivityItems();
+      if (status === "completed") {
+        process.stdout.write(
+          `${JSON.stringify({
+            method: "item/agentMessage/delta",
+            params: {
+              delta: "preview",
+              itemId: "item-1",
+              threadId: activeThreadId,
+              turnId,
+            },
+          })}\n`,
+        );
+        process.stdout.write(
+          `${JSON.stringify({
+            method: "item/completed",
+            params: {
+              completedAtMs: 1,
+              item: {
+                id: "item-1",
+                type: "agentMessage",
+                text: "final answer",
+              },
+              threadId: activeThreadId,
+              turnId,
+            },
+          })}\n`,
+        );
+      }
+      if (scenario.turn?.stopAfter === "item-completed") process.exit(0);
+      if (scenario.turn?.malformedFrame === true) {
+        process.stdout.write("{malformed\n");
+        process.exit(0);
+      }
+      if (scenario.turn?.truncatedFrame === true) {
+        process.stdout.write('{"method":');
+        process.exit(0);
+      }
+      if (scenario.turn?.mismatchedTerminal === true) {
+        process.stdout.write(
+          `${JSON.stringify({
+            method: "turn/completed",
+            params: {
+              threadId: activeThreadId,
+              turn: { id: "stale-turn", items: [], status: "completed" },
+            },
+          })}\n`,
+        );
+      }
+      const terminalLine = JSON.stringify({
+        method: "turn/completed",
+        params: {
+          threadId: activeThreadId,
+          turn: {
+            id: turnId,
+            items: [],
+            status:
+              scenario.turn?.malformedTerminal === true ? "failed" : status,
+            ...(scenario.turn?.malformedTerminal === true
+              ? { error: { message: 42 } }
+              : status === "failed"
+                ? { error: { message: scenario.turn.message } }
+                : {}),
           },
-        })}\n`,
-      );
-    }
-    if (scenario.turn?.malformedItem === true) {
-      process.stdout.write(
-        `${JSON.stringify({
-          method: "item/completed",
-          params: {
-            completedAtMs: 1,
-            item: { id: "broken-command", type: "commandExecution" },
-            threadId: activeThreadId,
-            turnId,
-          },
-        })}\n`,
-      );
-    }
-    if (scenario.turn?.fullActivity === true) emitActivityItems();
-    if (status === "completed") {
-      process.stdout.write(
-        `${JSON.stringify({
-          method: "item/agentMessage/delta",
-          params: {
-            delta: "preview",
-            itemId: "item-1",
-            threadId: activeThreadId,
-            turnId,
-          },
-        })}\n`,
-      );
-      process.stdout.write(
-        `${JSON.stringify({
-          method: "item/completed",
-          params: {
-            completedAtMs: 1,
-            item: { id: "item-1", type: "agentMessage", text: "final answer" },
-            threadId: activeThreadId,
-            turnId,
-          },
-        })}\n`,
-      );
-    }
-    if (scenario.turn?.stopAfter === "item-completed") process.exit(0);
-    if (scenario.turn?.malformedFrame === true) {
-      process.stdout.write("{malformed\n");
-      process.exit(0);
-    }
-    if (scenario.turn?.truncatedFrame === true) {
-      process.stdout.write('{"method":');
-      process.exit(0);
-    }
-    if (scenario.turn?.mismatchedTerminal === true) {
-      process.stdout.write(
-        `${JSON.stringify({
-          method: "turn/completed",
-          params: {
-            threadId: activeThreadId,
-            turn: { id: "stale-turn", items: [], status: "completed" },
-          },
-        })}\n`,
-      );
-    }
-    const terminalLine = JSON.stringify({
-      method: "turn/completed",
-      params: {
-        threadId: activeThreadId,
-        turn: {
-          id: turnId,
-          items: [],
-          status: scenario.turn?.malformedTerminal === true ? "failed" : status,
-          ...(scenario.turn?.malformedTerminal === true
-            ? { error: { message: 42 } }
-            : status === "failed"
-              ? { error: { message: scenario.turn.message } }
-              : {}),
         },
-      },
-    });
-    process.stdout.write(
-      `${terminalLine}${scenario.turn?.terminalLineEnding === "crlf" ? "\r\n" : "\n"}`,
-    );
+      });
+      process.stdout.write(
+        `${terminalLine}${scenario.turn?.terminalLineEnding === "crlf" ? "\r\n" : "\n"}`,
+      );
+    };
     continue;
   }
   if (request.method === "turn/steer") {
@@ -576,6 +612,70 @@ if (scenario.replay === "strict" && trafficAt < scenario.traffic.length) {
   process.exit(4);
 }
 process.exit(scenario.exitCode ?? 0);
+
+// `thread/read` (#345): the thread's configured model and effort, or the
+// scenario's scripted answer or fault. Returns true when it refused a first read
+// as Codex does while a fresh thread's rollout is empty (`rpc-error-once`).
+function answerThreadRead(request) {
+  const answer = scenario.threadRead;
+  threadReads += 1;
+  if (answer === "stall") return false;
+  const refusedOnce = answer === "rpc-error-once" && threadReads === 1;
+  if (answer === "rpc-error" || refusedOnce) {
+    process.stdout.write(
+      `${JSON.stringify({ id: request.id, error: { code: -32603, message: "failed to read thread: rollout is empty" } })}\n`,
+    );
+    return refusedOnce;
+  }
+  const configured = answer === undefined || answer === "rpc-error-once";
+  const thread =
+    answer === "malformed"
+      ? "not a thread"
+      : {
+          id: request.params.threadId,
+          model: configured ? configuredModel : answer.model,
+          reasoningEffort: configured ? configuredEffort : answer.effort,
+          status: { type: "active", activeFlags: [] },
+        };
+  process.stdout.write(
+    `${JSON.stringify({ id: request.id, result: { thread } })}\n`,
+  );
+  return false;
+}
+
+function emitUserMessageItem() {
+  for (const phase of ["started", "completed"]) {
+    process.stdout.write(
+      `${JSON.stringify({
+        method: `item/${phase}`,
+        params: {
+          threadId: activeThreadId,
+          turnId: activeTurnId,
+          item: { id: "user-message", type: "userMessage", content: [] },
+        },
+      })}\n`,
+    );
+  }
+}
+
+// `model/rerouted` (#345) at the scenario's point in the Turn, for that Turn or,
+// with `foreignTurn`, another.
+function emitReroute(at, turnId) {
+  const reroute = scenario.turn?.reroute;
+  if (reroute === undefined || reroute.at !== at) return;
+  process.stdout.write(
+    `${JSON.stringify({
+      method: "model/rerouted",
+      params: {
+        threadId: activeThreadId,
+        turnId: reroute.foreignTurn === true ? "stale-turn" : turnId,
+        fromModel: configuredModel,
+        toModel: reroute.toModel,
+        reason: "highRiskCyberActivity",
+      },
+    })}\n`,
+  );
+}
 
 function threadStartResponse(threadId = "thread-1", params = {}) {
   return {

@@ -15,6 +15,14 @@ export const CODEX_RECORDING_INPUT = {
   resume: "Reply with exactly: recorded resume.",
 } as const;
 
+/** The Model choice each `two-turns` Turn requests (#345): one model at two
+ *  efforts, so the recording carries per-Turn effort on `turn/start` and what
+ *  `thread/read` reports back for each Turn. Every other case requests none. */
+export const CODEX_RECORDING_MODEL_CHOICE = {
+  first: { model: "gpt-5.5", effort: "low" },
+  second: { model: "gpt-5.5", effort: "medium" },
+} as const;
+
 export function codexTestRepairPrompt(workspace: string): string {
   return readFileSync(
     join(

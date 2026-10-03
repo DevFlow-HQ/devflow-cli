@@ -810,7 +810,10 @@ export type RunTimelineKind =
   | "request-raised"
   | "request-answered"
   | "request-expired"
-  | "steer";
+  | "steer"
+  // The effective model and effort a Turn's Harness reported (#345, ADR 0034),
+  // one entry per observation: a reroute adds a second.
+  | "effective-model";
 
 /** The Crucible Step kind a durable Turn was produced by (#126): an autonomous
  *  `agent` Step's Turn or an `interactive-agent` Step's human Turn. Carried on the
@@ -864,6 +867,14 @@ export interface RunTimelineEvent {
   /** The effort that `turn-started` Turn requested beside `requestedModel`;
    *  absent when the request had none. */
   readonly requestedEffort?: string;
+  /** The model an `effective-model` entry's Turn ran on, as its Harness reported
+   *  it (#345, ADR 0034), additive to the frozen `--json`. A Turn's last entry is
+   *  its effective model; a Turn with none has an unknown one, never its request.
+   *  Absent on every other event. */
+  readonly effectiveModel?: string;
+  /** The effort reported beside `effectiveModel`; absent when the Harness reported
+   *  none, which leaves it unknown. */
+  readonly effectiveEffort?: string;
   /** The Step this event belongs to (#289), additive to the frozen `--json`: set on
    *  every Attempt settle and Turn-scoped event, decoded from its stored Attempt id.
    *  Absent on Run-scoped events (`run-created`, `trust-granted`), Repeat-group

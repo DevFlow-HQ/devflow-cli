@@ -74,6 +74,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   that Session. An incompletely reaped generation is retained for cleanup and refuses replacement until it is reaped, preventing duplicate app-servers.
   Sessions resend their thread config on resume. Turns bind after replacement; retired generations cannot dispatch into newer Turns.
 - Fresh and resumed Turns preserve admission-before-content and matching terminal authority; completed items supersede delta previews.
+- Effective values (#345): `turn/start` carries the Model choice; first acceptance sends one bounded `thread/read` (a refusal re-sent at the next item)
+  as the observation, and a matching `model/rerouted` replaces the model. A failed or late read leaves values unknown, never holding the Turn.
 - Codex client RPC and reverse-request ids have separate private maps. Approvals expose exact actions. A native resolution or terminal confirms an answer
   whose send has started, emitting `request-answered` before settlement; earlier resolution or terminal expires it. Close and local failures expire
   unconfirmed answers, including in-flight writes. A write failure after native confirmation cannot retract the answer.
@@ -112,6 +114,6 @@ measures elapsed time on the monotonic clock. A handshake made of several exchan
   ends settles with its outcome, so a login refusal fails `account-check`. `model-list` only reads the list; each Turn's model is checked against it
   at Turn start before native recovery, never at prepare. The lazy `config/read` defaults read is outside the handshake and reports no
   phase. Per Session,
-  `thread/start` is a `handshake` and `thread/resume` is `recovery`. `control` spans the `turn/interrupt` or `turn/steer`
+  `thread/start` is a `handshake` and `thread/resume` is `recovery`; a Turn's `thread/read` reports no phase. `control` spans the `turn/interrupt` or `turn/steer`
   RPC: ok on a parsed acknowledgement, abandoned on an expected race, otherwise failed (`control-refused` with the RPC code, `control-timeout`,
   `control-transport`, or `protocol-corruption`). `cleanup` spans `close`, including its bounded interrupt.

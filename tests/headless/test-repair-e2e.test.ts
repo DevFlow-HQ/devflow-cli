@@ -165,13 +165,19 @@ function codexScript(): FakeScript {
     }),
     turns: [
       {
+        // As the codex-cli 0.160.0 recording (#345): thread/read reports the
+        // effective model and effort, and the repair is written by a command.
         events: [
+          {
+            kind: "model",
+            observation: { known: true, model: "gpt-6.1-sol", effort: "high" },
+          },
           {
             kind: "tool-activity",
             activity: {
-              tool: "file-change",
+              tool: "command",
               phase: "completed",
-              summary: "applied the repair",
+              summary: "wrote the repair",
             },
           },
         ],
@@ -179,7 +185,11 @@ function codexScript(): FakeScript {
           kind: "completed",
           detail: {
             finalContent: "repaired the failing test",
-            effectiveModel: { known: true, model: "gpt-5.6-sol" },
+            effectiveModel: {
+              known: true,
+              model: "gpt-6.1-sol",
+              effort: "high",
+            },
             session: { state: "open" },
           },
         },
@@ -242,7 +252,7 @@ const SCENARIOS: readonly Scenario[] = [
   },
   {
     harness: "codex",
-    effectiveModel: "gpt-5.6-sol",
+    effectiveModel: "gpt-6.1-sol",
     evidence: (run) => {
       // Codex auto-approves the edit internally, so no approval request crosses
       // to the client; the edit is observable as a generic tool-activity event.
@@ -250,7 +260,7 @@ const SCENARIOS: readonly Scenario[] = [
         run.timeline.some(
           (event) =>
             event.event === "tool-activity" &&
-            event.detail === "file-change completed",
+            event.detail === "command completed",
         ),
         JSON.stringify(run.timeline),
       );

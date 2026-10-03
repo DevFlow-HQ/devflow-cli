@@ -22,11 +22,14 @@ import {
   type CodexRecordingObserver,
   type DurableTurnRecorder,
   type HarnessPlatform,
+  type ModelChoice,
+  type ModelObservation,
   type PrepareOptions,
   type PreparedHarness,
   type RecoveryCoordinate,
   type TurnEvent,
   type TurnRequest,
+  type TurnResult,
 } from "../../src/harness/harness.js";
 import { createCodexAdapter } from "./test-adapters.js";
 import {
@@ -45,6 +48,7 @@ import {
 } from "./codex-replayer.js";
 import {
   CODEX_RECORDING_INPUT,
+  CODEX_RECORDING_MODEL_CHOICE,
   codexTestRepairPrompt,
 } from "./codex-recording-cases.js";
 import {
@@ -784,30 +788,30 @@ test("only the matching terminal Turn event can settle", async () => {
 test("later fresh Turns reuse one private thread and continue RPC ids", async () => {
   const installed = installCodexReplayer("two-turns");
   const prepared = await prepareCodex(installed.path);
-  assert.equal(
-    (
-      await prepared
-        .startTurn(
-          turnRequest(undefined, {
-            text: CODEX_RECORDING_INPUT.completion,
-          }),
-        )
-        .result()
-    ).kind,
-    "completed",
-  );
-  assert.equal(
-    (
-      await prepared
-        .startTurn(
-          turnRequest(undefined, {
-            text: CODEX_RECORDING_INPUT.secondCompletion,
-          }),
-        )
-        .result()
-    ).kind,
-    "completed",
-  );
+  // Recorded on codex-cli 0.160.0 (#345): each turn/start carries its Model
+  // choice, and thread/read reports each Turn's effort back.
+  const first = await prepared
+    .startTurn({
+      ...turnRequest(undefined, { text: CODEX_RECORDING_INPUT.completion }),
+      modelChoice: CODEX_RECORDING_MODEL_CHOICE.first,
+    })
+    .result();
+  assert.deepEqual(effectiveModel(first), {
+    known: true,
+    ...CODEX_RECORDING_MODEL_CHOICE.first,
+  });
+  const second = await prepared
+    .startTurn({
+      ...turnRequest(undefined, {
+        text: CODEX_RECORDING_INPUT.secondCompletion,
+      }),
+      modelChoice: CODEX_RECORDING_MODEL_CHOICE.second,
+    })
+    .result();
+  assert.deepEqual(effectiveModel(second), {
+    known: true,
+    ...CODEX_RECORDING_MODEL_CHOICE.second,
+  });
   const appServer = installed
     .invocations()
     .find((invocation) => invocation.args.join(" ") === "app-server");
@@ -823,7 +827,9 @@ test("later fresh Turns reuse one private thread and continue RPC ids", async ()
       [3, "model/list"],
       [4, "thread/start"],
       [5, "turn/start"],
-      [6, "turn/start"],
+      [6, "thread/read"],
+      [7, "turn/start"],
+      [8, "thread/read"],
     ],
   );
   await prepared.close();
@@ -832,9 +838,10 @@ test("later fresh Turns reuse one private thread and continue RPC ids", async ()
 test("a second human Turn uses the live Codex thread without a redundant resume", async () => {
   const installed = installCodexReplayer("two-turns");
   const prepared = await prepareCodex(installed.path);
-  const firstTurn = prepared.startTurn(
-    turnRequest(undefined, { text: CODEX_RECORDING_INPUT.completion }),
-  );
+  const firstTurn = prepared.startTurn({
+    ...turnRequest(undefined, { text: CODEX_RECORDING_INPUT.completion }),
+    modelChoice: CODEX_RECORDING_MODEL_CHOICE.first,
+  });
   const events = observeEvents(firstTurn);
   const first = await firstTurn.result();
   assert.equal(first.kind, "completed");
@@ -851,6 +858,7 @@ test("a second human Turn uses the live Codex thread without a redundant resume"
         text: CODEX_RECORDING_INPUT.secondCompletion,
       }),
       resume: coordinate,
+      modelChoice: CODEX_RECORDING_MODEL_CHOICE.second,
     })
     .result();
   assert.equal(second.kind, "completed");
@@ -874,7 +882,9 @@ test("a second human Turn uses the live Codex thread without a redundant resume"
       [3, "model/list", undefined],
       [4, "thread/start", undefined],
       [5, "turn/start", coordinate.opaque],
-      [6, "turn/start", coordinate.opaque],
+      [6, "thread/read", coordinate.opaque],
+      [7, "turn/start", coordinate.opaque],
+      [8, "thread/read", coordinate.opaque],
     ],
   );
   await prepared.close();
@@ -1532,8 +1542,10 @@ for (const control of ["steer", "interrupt"] as const) {
               "model/list",
               "thread/start",
               "turn/start",
+              "thread/read",
               `turn/${control}`,
               "turn/start",
+              "thread/read",
             ],
           );
         }
@@ -1881,8 +1893,10 @@ test("codex replacement resumes two Sessions on one new app-server before admiss
         "model/list",
         "thread/resume",
         "turn/start",
+        "thread/read",
         "thread/resume",
         "turn/start",
+        "thread/read",
       ],
     );
     assert.deepEqual(
@@ -2555,7 +2569,11 @@ test("a newly materialized Codex Session resumes from the caller coordinate with
     .filter(
       (method) => method.startsWith("thread/") || method === "turn/start",
     );
-  assert.deepEqual(runtimeMethods, ["thread/resume", "turn/start"]);
+  assert.deepEqual(runtimeMethods, [
+    "thread/resume",
+    "turn/start",
+    "thread/read",
+  ]);
   await prepared.close();
 });
 
@@ -2936,7 +2954,11 @@ test("the recorder observer captures runtime traffic and shutdown through the pr
     .filter(
       (method) => method?.startsWith("thread/") || method?.startsWith("turn/"),
     );
-  assert.deepEqual(runtimeMethods, ["thread/start", "turn/start"]);
+  assert.deepEqual(runtimeMethods, [
+    "thread/start",
+    "turn/start",
+    "thread/read",
+  ]);
   // A Run's own prepare never pays for the defaults read.
   assert.ok(
     observed.every(
@@ -2946,7 +2968,7 @@ test("the recorder observer captures runtime traffic and shutdown through the pr
     ),
   );
   assert.equal(executableVersion, "codex-cli 0.160.0");
-  assert.equal(protocolVersion, "codex-probe-2");
+  assert.equal(protocolVersion, "codex-probe-3");
   assert.ok(schemaBytes > 0);
   assert.ok(
     observed.some(
@@ -3003,7 +3025,13 @@ test("[codex-recorded-conformance] completion replays exact client traffic", asy
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
   assert.equal(result.detail.finalContent, "recorded completion.");
-  assert.equal(result.detail.effectiveModel.known, true);
+  // A Turn requesting no Model choice observes the configured model and effort
+  // thread/read recorded (codex-cli 0.160.0, #345).
+  assert.deepEqual(result.detail.effectiveModel, {
+    known: true,
+    model: "gpt-6.1-sol",
+    effort: "high",
+  });
   assert.ok(events.some((event) => event.kind === "preview"));
   assert.deepEqual(
     events.filter((event) => event.kind === "assistant-content"),
@@ -3025,6 +3053,7 @@ test("[codex-recorded-conformance] completion replays exact client traffic", asy
       "model/list",
       "thread/start",
       "turn/start",
+      "thread/read",
     ],
   );
 });
@@ -3115,8 +3144,17 @@ for (const recorded of [
       },
       ...recorded.redelivery.map((input) => ({ threadId, input })),
     ]);
+    assert.equal(threadReads(installed), 1);
     await prepared.close();
   });
+}
+
+/** How many `thread/read` requests the replayer received (#345). */
+function threadReads(installed: InstalledCodexReplayer): number {
+  return installed
+    .invocations()
+    .flatMap((invocation) => invocation.stdinLines)
+    .filter((line) => JSON.parse(line).method === "thread/read").length;
 }
 
 test("[codex-recorded-conformance] approval exposes the action and replays allow once", async () => {
@@ -3233,6 +3271,14 @@ test("[codex-recorded-conformance] Test Repair applies its recorded Workspace pa
     })
     .result();
   assert.equal(result.kind, "completed", JSON.stringify(result));
+  // Codex refused the first thread/read while the fresh thread's rollout was
+  // empty; the read sent again at the Turn's next item answered (#345).
+  if (result.kind !== "completed") throw new Error("unreachable");
+  assert.deepEqual(result.detail.effectiveModel, {
+    known: true,
+    model: "gpt-6.1-sol",
+    effort: "high",
+  });
   execFileSync(process.execPath, ["test", "sum.test.mjs"], {
     cwd: workspace,
     stdio: "pipe",
@@ -3338,7 +3384,7 @@ test("Codex profile is truthful and user-compatible", async () => {
   if (!result.ok) throw new Error("unreachable");
   const { profile } = result.harness;
   assert.equal(profile.harness, "codex");
-  assert.equal(profile.adapterRevision, "codex-probe-2");
+  assert.equal(profile.adapterRevision, "codex-probe-3");
   assert.equal(profile.recovery.mode, "native-reattach");
   assert.match(profile.recovery.evidence, /thread\/resume.*exact/i);
   assert.equal(profile.interruption.mode, "active-turn");
@@ -3376,36 +3422,211 @@ test("Codex profile is truthful and user-compatible", async () => {
   await result.harness.close();
 });
 
-test("each Turn's requested model reaches its turn/start natively and the effective model stays separate", async () => {
+/** Prepare the synthetic Codex replayer, run one Turn requesting `modelChoice`,
+ *  and return its result, its `model` and `activity` events, and the stdin frames
+ *  of its app-server (#345). */
+async function effectiveValuesTurn(
+  configure: (installed: InstalledCodexReplayer) => void,
+  // `null` requests no Model choice.
+  modelChoice: ModelChoice | null = {
+    model: "gpt-5.6-sol",
+    effort: "high",
+  },
+) {
   const installed = installSyntheticCodexReplayer();
+  configure(installed);
   const prepared = await createCodexAdapter({
     path: installed.path,
     env: {},
   }).prepare({ workspace: process.cwd() });
   assert.equal(prepared.ok, true);
   if (!prepared.ok) throw new Error("unreachable");
-
-  const result = await prepared.harness
-    .startTurn({ ...turnRequest(), modelChoice: { model: "gpt-5.6-sol" } })
-    .result();
-  assert.equal(result.kind, "completed");
-  if (result.kind !== "completed") throw new Error("unreachable");
-  // The effective model is what thread/start observed, never the request.
-  assert.deepEqual(result.detail.effectiveModel, {
-    known: true,
-    model: "recorded-model",
+  const turn = prepared.harness.startTurn({
+    ...turnRequest(),
+    ...(modelChoice !== null ? { modelChoice } : {}),
   });
+  const events: TurnEvent[] = [];
+  turn.subscribe((event) => events.push(event));
+  const result = await turn.result();
   await prepared.harness.close();
-
   const appServer = installed
     .invocations()
     .find((invocation) => invocation.args.join(" ") === "app-server");
   assert.ok(appServer !== undefined);
-  const turnStart = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .find((message) => message.method === "turn/start");
-  assert.ok(turnStart, "the Adapter sent a turn/start");
-  assert.equal(turnStart.params.model, "gpt-5.6-sol");
+  return {
+    result,
+    observations: events.flatMap((event) =>
+      event.kind === "model" ? [event.observation] : [],
+    ),
+    activity: events.flatMap((event) =>
+      event.kind === "activity" ? [event.description] : [],
+    ),
+    frames: appServer.stdinLines.map(
+      (line) =>
+        JSON.parse(line) as {
+          readonly method?: string;
+          readonly params?: Record<string, unknown>;
+        },
+    ),
+  };
+}
+
+function effectiveModel(result: TurnResult): ModelObservation {
+  assert.equal(result.kind, "completed");
+  if (result.kind !== "completed") throw new Error("unreachable");
+  return result.detail.effectiveModel;
+}
+
+test("each Turn's model and effort reach its turn/start, and thread/read after acceptance reports what Codex applied", async () => {
+  // Codex reports a configured model and effort other than the request, so the
+  // observation is evidence, never the request copied back.
+  const { result, observations, frames } = await effectiveValuesTurn(
+    (installed) =>
+      installed.configureThreadRead({ model: "gpt-6-astra", effort: "medium" }),
+  );
+  const applied = { known: true, model: "gpt-6-astra", effort: "medium" };
+  assert.deepEqual(effectiveModel(result), applied);
+  // One observation, from thread/read: thread/start's model never reads as
+  // effective, and nothing is observed before the Turn starts.
+  assert.deepEqual(observations, [applied]);
+  const runtime = frames.filter(
+    (frame) =>
+      frame.method?.startsWith("thread/") || frame.method?.startsWith("turn/"),
+  );
+  assert.deepEqual(
+    runtime.map((frame) => frame.method),
+    ["thread/start", "turn/start", "thread/read"],
+  );
+  assert.equal(runtime[1]!.params?.model, "gpt-5.6-sol");
+  assert.equal(runtime[1]!.params?.effort, "high");
+  assert.deepEqual(runtime[2]!.params, { threadId: "thread-1" });
+});
+
+test("a Turn requesting no Model choice sends neither model nor effort and observes Codex's configured values", async () => {
+  const { result, frames } = await effectiveValuesTurn(() => {}, null);
+  // thread/read names the thread's configured model and no effort.
+  assert.deepEqual(effectiveModel(result), {
+    known: true,
+    model: "recorded-model",
+  });
+  const turnStart = frames.find((frame) => frame.method === "turn/start");
+  assert.ok(turnStart?.params !== undefined);
+  assert.equal("model" in turnStart.params, false);
+  assert.equal("effort" in turnStart.params, false);
+});
+
+test("a thread/read reporting a model that is not a string is incompatible: the values stay unknown with a diagnostic", async () => {
+  const { result, observations, activity } = await effectiveValuesTurn(
+    (installed) =>
+      installed.configureThreadRead({ model: 42 as never, effort: "high" }),
+  );
+  assert.deepEqual(effectiveModel(result), { known: false });
+  assert.deepEqual(observations, []);
+  assert.ok(
+    activity.some((description) =>
+      /thread\/read returned incompatible data/.test(description),
+    ),
+    activity.join("; "),
+  );
+});
+
+test("a thread/read reporting no model leaves the observation unknown, and one reporting no effort leaves only the effort unknown", async () => {
+  const noEffort = await effectiveValuesTurn((installed) =>
+    installed.configureThreadRead({ model: "gpt-6-astra", effort: null }),
+  );
+  assert.deepEqual(effectiveModel(noEffort.result), {
+    known: true,
+    model: "gpt-6-astra",
+  });
+  const noModel = await effectiveValuesTurn((installed) =>
+    installed.configureThreadRead({ model: null, effort: "medium" }),
+  );
+  assert.deepEqual(effectiveModel(noModel.result), { known: false });
+  assert.deepEqual(noModel.observations, []);
+});
+
+for (const at of ["after-read", "before-read"] as const) {
+  test(`a model/rerouted for this Turn ${at === "after-read" ? "after" : "before"} thread/read answers replaces the model and keeps the read effort`, async () => {
+    const { result, observations } = await effectiveValuesTurn((installed) => {
+      installed.configureThreadRead({ model: "gpt-6-astra", effort: "medium" });
+      installed.configureTurn({ reroute: { toModel: "gpt-5.5", at } });
+    });
+    const rerouted = { known: true, model: "gpt-5.5", effort: "medium" };
+    assert.deepEqual(effectiveModel(result), rerouted);
+    // A later thread/read reports the configured model, which never undoes a
+    // reroute; before it answers, the rerouted model's effort is unknown.
+    assert.deepEqual(
+      observations,
+      at === "after-read"
+        ? [{ known: true, model: "gpt-6-astra", effort: "medium" }, rerouted]
+        : [{ known: true, model: "gpt-5.5" }, rerouted],
+    );
+  });
+}
+
+test("a model/rerouted naming another Turn changes nothing", async () => {
+  const { result, observations } = await effectiveValuesTurn((installed) => {
+    installed.configureThreadRead({ model: "gpt-6-astra", effort: "medium" });
+    installed.configureTurn({
+      reroute: { toModel: "gpt-5.5", at: "after-read", foreignTurn: true },
+    });
+  });
+  const applied = { known: true, model: "gpt-6-astra", effort: "medium" };
+  assert.deepEqual(effectiveModel(result), applied);
+  assert.deepEqual(observations, [applied]);
+});
+
+for (const fault of ["rpc-error", "malformed"] as const) {
+  test(`a thread/read answered with ${fault === "rpc-error" ? "an RPC error, twice," : "something other than a thread"} leaves the effective values unknown and the Turn's outcome alone`, async () => {
+    const { result, observations, activity, frames } =
+      await effectiveValuesTurn((installed) =>
+        installed.configureThreadRead(fault),
+      );
+    assert.deepEqual(effectiveModel(result), { known: false });
+    assert.deepEqual(observations, []);
+    // Only a refusal is read again, and only once.
+    assert.equal(
+      frames.filter((frame) => frame.method === "thread/read").length,
+      fault === "rpc-error" ? 2 : 1,
+    );
+    assert.ok(
+      activity.some((description) =>
+        /did not report this Turn's effective model and effort/.test(
+          description,
+        ),
+      ),
+      activity.join("; "),
+    );
+  });
+}
+
+test("a first thread/read Codex refuses is read again at the Turn's next item", async () => {
+  const { result, observations, activity, frames } = await effectiveValuesTurn(
+    (installed) => installed.configureThreadRead("rpc-error-once"),
+  );
+  const applied = { known: true, model: "gpt-5.6-sol", effort: "high" };
+  assert.deepEqual(effectiveModel(result), applied);
+  assert.deepEqual(observations, [applied]);
+  assert.equal(
+    frames.filter((frame) => frame.method === "thread/read").length,
+    2,
+  );
+  assert.ok(
+    activity.some((description) =>
+      /effective model and effort yet, so its next item reads them again/.test(
+        description,
+      ),
+    ),
+    activity.join("; "),
+  );
+});
+
+test("an unanswered thread/read never holds the Turn: it settles on its own terminal with the effective values unknown", async () => {
+  const { result, observations } = await effectiveValuesTurn((installed) =>
+    installed.configureThreadRead("stall"),
+  );
+  assert.deepEqual(effectiveModel(result), { known: false });
+  assert.deepEqual(observations, []);
 });
 
 test("a Turn requesting a model the observed list rejects settles not-started before any thread exchange", async () => {
@@ -3452,9 +3673,37 @@ test("a Turn requesting a model the observed list rejects settles not-started be
   assert.ok(!methods.includes("turn/start"), methods.join(", "));
 });
 
-test("required schema drift fails closed before app-server launch", async () => {
+// The effective-value exchange (#345) is as required as the Turn terminal.
+for (const method of ["turn/completed", "thread/read", "model/rerouted"]) {
+  test(`required schema drift (${method}) fails closed before app-server launch`, async () => {
+    const installed = installSyntheticCodexReplayer();
+    installed.removeSchemaMethod(method);
+    const result = await createCodexAdapter({
+      path: installed.path,
+      env: {},
+    }).prepare({ workspace: process.cwd() });
+    assert.equal(result.ok, false);
+    if (result.ok) throw new Error("unreachable");
+    assert.equal(result.failure.category, "protocol-incompatible");
+    assert.ok(
+      (result.failure.diagnostics ?? "").includes(method),
+      result.failure.diagnostics,
+    );
+    assert.equal(
+      installed
+        .invocations()
+        .filter(
+          (invocation) =>
+            invocation.args.length === 1 && invocation.args[0] === "app-server",
+        ).length,
+      0,
+    );
+  });
+}
+
+test("a schema whose turn/start no longer takes an effort fails closed", async () => {
   const installed = installSyntheticCodexReplayer();
-  installed.removeSchemaMethod("turn/completed");
+  installed.removeTurnStartEffort();
   const result = await createCodexAdapter({
     path: installed.path,
     env: {},
@@ -3462,16 +3711,7 @@ test("required schema drift fails closed before app-server launch", async () => 
   assert.equal(result.ok, false);
   if (result.ok) throw new Error("unreachable");
   assert.equal(result.failure.category, "protocol-incompatible");
-  assert.match(result.failure.diagnostics ?? "", /turn\/completed/);
-  assert.equal(
-    installed
-      .invocations()
-      .filter(
-        (invocation) =>
-          invocation.args.length === 1 && invocation.args[0] === "app-server",
-      ).length,
-    0,
-  );
+  assert.match(result.failure.diagnostics ?? "", /turn\/start effort/);
 });
 
 test("a changed required schema field type fails closed", async () => {
@@ -4273,6 +4513,9 @@ for (const terminal of ["leftover", "leftover-failed"] as const) {
       },
       { threadId: "thread-1", input: [] },
     ]);
+    // The re-delivery's native turn carries the same Model choice, so the
+    // Turn reads its effective values once (#345).
+    assert.equal(threadReads(installed), 1);
     await prepared.close();
   });
 }

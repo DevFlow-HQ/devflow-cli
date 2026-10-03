@@ -1389,8 +1389,33 @@ const steerEventSchema = z.object({
   ]),
 });
 
+const effectiveModelEventSchema = z.object({
+  model: z.string().min(1),
+  effort: z.string().min(1).optional(),
+});
+
 /** The turn-event timeline entries for one Turn's normalized durable events. */
 function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
+  // The effective model and effort a Turn's Harness reported (#345), copied as
+  // stored; a malformed payload projects nothing rather than a guess.
+  if (event.kind === "model") {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(event.payload);
+    } catch {
+      return undefined;
+    }
+    const parsed = effectiveModelEventSchema.safeParse(payload);
+    if (!parsed.success) return undefined;
+    const { model, effort } = parsed.data;
+    return {
+      at: event.at,
+      event: "effective-model",
+      detail: effort !== undefined ? `${model} · ${effort}` : model,
+      effectiveModel: model,
+      ...(effort !== undefined ? { effectiveEffort: effort } : {}),
+    };
+  }
   if (event.kind === "steer") {
     let payload: unknown;
     try {
@@ -1713,6 +1738,7 @@ const TIMELINE_CATEGORY_RANK: Record<RunTimelineKind, number> = {
   // A Turn's own events sort before the Attempt that settles after it, so an
   // equal-instant ordering reads start → content → tool → settled → attempt.
   "turn-started": 2,
+  "effective-model": 3,
   "assistant-content": 3,
   "tool-activity": 4,
   // An approval request's lifecycle sorts between tool activity and the Turn's
