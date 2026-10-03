@@ -14,8 +14,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   recorder composes the production bridge instead of a copy (#127 D3); its surface is launch flags, the bearer, and a teardown, never an MCP type;
   and the safe cause translator (`translateCause`, #316), the one bounded, redacting record of a failure cause that M8's operational log and
   M11's Detailed diagnostics write; and the optional phase observer each factory takes (`HarnessPhaseObserver`, #322), which carries only the
-  semantic phase, an optional closed semantic `step` (#325), the Session key, elapsed time, and a typed `HarnessFailure`, never a frame, argv,
-  RPC name, or coordinate (mapping in harness-adapters).
+  semantic phase, an optional closed semantic `step` (#325), the Session key, elapsed time, and a typed `HarnessFailure`; no typed field carries a
+  frame, argv, RPC name, or coordinate (mapping in harness-adapters), though a translated Codex cause may name its RPC method in bounded message or stack text.
   Recovery coordinates cross the Seam only as opaque `RecoveryCoordinate` values, never Run truth; callers never decide from their contents. Native
   protocol models and qualification stay private to each Adapter and re-export nothing native.
 - No Routing, Step kind, retry budget, or Run policy knowledge lives here; those are above the Seam. A Turn is one mechanical exchange, not a
@@ -34,11 +34,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `close` is idempotent and returns the same report each call; cleanup failure is separate and cannot rewrite a settled Turn.
 - Secrets Secant itself introduces are redacted from failures and diagnostics. Excluding raw protocol, private reasoning, and duplicate transcript
   content is Interface design, not generic secret redaction — a `HarnessFailure` still preserves all useful Harness-originated diagnostics and its cause.
-  One private registry (`secrets.ts`) owns it: a minter registers a secret while live and releases it on teardown (the bridge: listen to `close`,
-  which follows every Session's close and in-flight interrupt); nothing registers through the Interface. The Seam's `redactSecrets` keeps a cause an
-  Error with its name and bounded cause chain; it returns secret-free values unchanged. Redactor and translator share one cause-depth bound;
-  a redacted tail beyond it becomes null so translation still marks the cut. The translator redacts each string before cutting it; its byte bounds
-  are Interface facts pinned by its tests, in serialized UTF-8 bytes.
+  One private registry (`secrets.ts`) owns it: a minter registers a secret when it hands it out, and nothing registers through the Interface. A secret
+  stays registered for the whole Secant invocation, so a cause translated after its bridge closes still redacts it; the cost is one short token per
+  bridge. The Seam's `redactSecrets` keeps a cause an Error with its name and bounded cause chain; it returns secret-free values unchanged. Redactor
+  and translator share one cause-depth bound; a redacted tail beyond it becomes null so translation still marks the cut. The translator redacts each
+  string before cutting it; its byte bounds are Interface facts pinned by its tests, in serialized UTF-8 bytes.
 - Steer is a profile capability like the others (`HarnessProfile.steer`, evidence-bearing). An Adapter derives its `steer` receipt from it rather than
   hard-coding a second rejection; the Claude Code profile declares it unavailable (print mode has no same-Turn guidance frame) and the fake's script
   decides it through the profile it supplies.

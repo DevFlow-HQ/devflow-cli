@@ -84,8 +84,8 @@ export interface PermissionBridge {
    *  composer can list it as a known secret rather than parse it back out of
    *  `launchArgs`. */
   readonly bearer: string;
-  /** Idempotent teardown: closes the MCP sessions and the loopback listener,
-   *  then releases the bearer from the secret registry. */
+  /** Idempotent teardown: closes the MCP sessions and the loopback listener.
+   *  The bearer stays in the secret registry for the invocation. */
   close(): Promise<void>;
 }
 
@@ -167,7 +167,7 @@ export function startPermissionBridge(
         },
       });
       // Registered once handed out; nothing carries the token before this.
-      const release = registerSecret(token, "bearer-token");
+      registerSecret(token, "bearer-token");
       let closed: Promise<void> | undefined;
       resolve({
         launchArgs: [
@@ -186,7 +186,7 @@ export function startPermissionBridge(
             for (const server of servers) await server.close().catch(() => {});
             for (const socket of sockets) socket.destroy();
             await new Promise<void>((done) => http.close(() => done()));
-          })().finally(release);
+          })();
           return closed;
         },
       });

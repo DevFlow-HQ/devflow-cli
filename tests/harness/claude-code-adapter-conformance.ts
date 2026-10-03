@@ -721,8 +721,8 @@ test("an unconfirmed interrupt carries its cause with the bearer redacted", asyn
 });
 
 test("an interrupt still in flight when the Harness closes carries its cause with the bearer redacted", async () => {
-  // The interrupt settles only after `close` has had its turn: the bridge must
-  // not release its bearer while a Session can still send a cause across.
+  // The interrupt settles only after `close` has had its turn: the bearer must
+  // stay redacted after the bridge closes, while a Session can still send a cause.
   let finishInterrupt!: () => void;
   const interrupting = new Promise<void>((resolve) => {
     finishInterrupt = resolve;

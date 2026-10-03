@@ -20,14 +20,20 @@ const REDACTED = "«redacted-bearer-token»";
 
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
+const denyAll = async () => ({
+  decision: "deny" as const,
+  message: "unused",
+});
+
+/** The translated message of an Error naming `token`. */
+const translatedMessage = (token: string) =>
+  translateCause(new Error(`token ${token}`)).message;
+
 /** Run `body` with a live bridge whose bearer is registered, closing it after. */
 async function withBearer(
   body: (token: string) => void | Promise<void>,
 ): Promise<void> {
-  const bridge = await startPermissionBridge(async () => ({
-    decision: "deny",
-    message: "unused",
-  }));
+  const bridge = await startPermissionBridge(denyAll);
   try {
     await body(bridge.bearer);
   } finally {
@@ -283,24 +289,25 @@ test("a secret split across a truncation boundary leaves no fragment", async () 
   });
 });
 
-test("closing the bridge releases its token, idempotently, and leaves others redacted", async () => {
-  const router = async () => ({ decision: "deny" as const, message: "unused" });
-  const first = await startPermissionBridge(router);
-  const second = await startPermissionBridge(router);
+test("a bearer stays redacted while its bridge is live and after it closes", async () => {
+  const bridge = await startPermissionBridge(denyAll);
   try {
-    const probe = (token: string) =>
-      translateCause(new Error(`token ${token}`)).message;
-    assert.equal(probe(first.bearer), `token ${REDACTED}`);
-
-    await first.close();
-    await first.close();
-
-    // Released: the registry no longer holds a closed bridge's token.
-    assert.equal(probe(first.bearer), `token ${first.bearer}`);
-    // A token stays redacted for as long as its own bridge is open.
-    assert.equal(probe(second.bearer), `token ${REDACTED}`);
+    assert.equal(translatedMessage(bridge.bearer), `token ${REDACTED}`);
   } finally {
-    await second.close();
+    await bridge.close();
   }
-  assert.equal(translateCause(new Error(second.bearer)).message, second.bearer);
+  // Teardown stays idempotent and never evicts the bearer.
+  await bridge.close();
+  assert.equal(translatedMessage(bridge.bearer), `token ${REDACTED}`);
+});
+
+test("both bearers stay redacted after two bridges in one invocation close", async () => {
+  const first = await startPermissionBridge(denyAll);
+  const second = await startPermissionBridge(denyAll);
+  await first.close();
+  await second.close();
+
+  assert.notEqual(first.bearer, second.bearer);
+  assert.equal(translatedMessage(first.bearer), `token ${REDACTED}`);
+  assert.equal(translatedMessage(second.bearer), `token ${REDACTED}`);
 });

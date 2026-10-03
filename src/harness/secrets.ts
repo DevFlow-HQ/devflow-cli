@@ -1,20 +1,17 @@
 // The registry of secrets Secant itself introduces — private to the Harness
 // Module, with no register function on its Interface. Whatever mints a secret
 // (today the permission bridge's bearer; the ADR 0033 agent-call token when it
-// lands) registers it while the secret is live and releases it when it is torn
-// down, so the registry never grows across bridges in a long session.
+// lands) registers it once it is handed out, and the registry keeps it for the
+// rest of the Secant invocation: a cause translated after its minter is torn
+// down (M11's Detailed diagnostics may translate late) still redacts it. The
+// cost is one short token per bridge for the life of the process.
 //
 // One redaction mechanism serves both outputs: the Seam's shape-preserving
 // `redactSecrets` (a failure cause stays an Error on a `HarnessFailure`) and the
 // safe cause translator's `redactText`, applied to every string before any cut.
 
-/** One live registration; releasing it removes exactly this entry. */
-interface Registration {
-  readonly secret: string;
-  readonly placeholder: string;
-}
-
-const registrations = new Set<Registration>();
+/** Each registered secret and its placeholder, kept for the invocation. */
+const registrations = new Map<string, string>();
 
 /** Nested causes kept by the Seam redactor and the safe cause translator. */
 export const CAUSE_DEPTH = 4;
@@ -31,20 +28,16 @@ const ARGV_BEARING_KEYS = [
   "stack",
 ] as const;
 
-/** Register a live secret under a label naming its kind; its placeholder is
- *  `«redacted-<label>»`. Returns the idempotent release. */
-export function registerSecret(secret: string, label: string): () => void {
-  const registration = { secret, placeholder: `«redacted-${label}»` };
-  registrations.add(registration);
-  return () => {
-    registrations.delete(registration);
-  };
+/** Register a secret under a label naming its kind; its placeholder is
+ *  `«redacted-<label>»`. There is no release: it stays redacted until exit. */
+export function registerSecret(secret: string, label: string): void {
+  registrations.set(secret, `«redacted-${label}»`);
 }
 
 /** Replace every occurrence of every registered secret. */
 export function redactText(text: string): string {
   let out = text;
-  for (const { secret, placeholder } of registrations) {
+  for (const [secret, placeholder] of registrations) {
     out = out.split(secret).join(placeholder);
   }
   return out;
