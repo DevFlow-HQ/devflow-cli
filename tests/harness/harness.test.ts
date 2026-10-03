@@ -11,6 +11,8 @@ import { createProcessAdapter } from "../../src/process/process.js";
 import {
   APPROVAL_DECISIONS,
   CLAUDE_CODE_SERVED_CAPABILITIES,
+  CLAUDE_CODE_INPUT_RULES,
+  CODEX_INPUT_RULES,
   CODEX_SERVED_CAPABILITIES,
   CONTROL_REJECTIONS,
   discoverClaudeCode,
@@ -98,4 +100,29 @@ test("Claude Code discovery shares configured-then-PATH order and served capabil
     "agent-turn": true,
     "interactive-turns": true,
   });
+});
+
+test("Adapters declare frozen transport-independent input rules (#358)", () => {
+  assert.deepEqual(CLAUDE_CODE_INPUT_RULES, [
+    {
+      kind: "reserved-leading-words",
+      words: [
+        "/clear",
+        "/new",
+        "/reset",
+        "/resume",
+        "/continue",
+        "/fork",
+        "/model",
+        "/effort",
+        "/fast",
+        "/config",
+      ],
+    },
+  ]);
+  assert.deepEqual(CODEX_INPUT_RULES, []);
+  assert.ok(Object.isFrozen(CLAUDE_CODE_INPUT_RULES));
+  assert.ok(Object.isFrozen(CLAUDE_CODE_INPUT_RULES[0]));
+  assert.ok(Object.isFrozen(CLAUDE_CODE_INPUT_RULES[0]?.words));
+  assert.ok(Object.isFrozen(CODEX_INPUT_RULES));
 });

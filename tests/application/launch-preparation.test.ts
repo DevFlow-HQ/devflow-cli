@@ -93,6 +93,7 @@ function registeredHarness(params: {
       availability: params.availability ?? "available",
       unavailableReason: params.unavailableReason,
     },
+    inputRules: [],
     servedCapabilities: params.servedCapabilities ?? [
       "agent-turn",
       "interactive-turns",

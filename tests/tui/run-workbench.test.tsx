@@ -4048,6 +4048,46 @@ test("a refused send surfaces the refusal and keeps the typed draft (#122, A9, #
   assert.match(wb.t.captureCharFrame(), /> hi!/);
 });
 
+test("a reserved-word refusal keeps the draft and focus through small terminals and resize (#358, #23)", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 100, 24);
+  assert.match(wb.t.captureCharFrame(), /enter send Turn/);
+  await type(wb.t, "/clear");
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends, [
+    { runId: "run-1", stepId: "discuss", text: "/clear" },
+  ]);
+  wb.control.setInteractiveOutcome({
+    kind: "refused",
+    problem: {
+      code: "harness-input-reserved",
+      explanation:
+        "/clear is reserved by Claude Code; Secant owns the conversation, Model choice, or permission change it requests.",
+      remediation:
+        "Use Secant's controls for these changes, or send text with a different first word.",
+      possibleEffects: "none",
+    },
+  });
+  for (const width of [100, 48, 60, 140]) {
+    wb.renderer.resize(width, 24);
+    wb.t.resize(width, 24);
+    await wb.t.renderOnce();
+    const frame = wb.t.captureCharFrame();
+    assert.match(frame, /✗ \/clear is reserved by Claude Code/);
+    assert.match(frame, /> \/clear/);
+    assert.match(frame, /◇ Your move/);
+    assert.doesNotMatch(frame, /sending/);
+    noOverflow(frame, width);
+  }
+  await type(wb.t, "!");
+  assert.match(wb.t.captureCharFrame(), /> \/clear!/);
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends[1], {
+    runId: "run-1",
+    stepId: "discuss",
+    text: "/clear!",
+  });
+});
+
 test("the interactive input reads without colour and fits a narrow terminal (#122)", async () => {
   const wb = await mountWorkbench(interactiveRunOf(), 48, 24);
   const frame = wb.t.captureCharFrame();

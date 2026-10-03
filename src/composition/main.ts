@@ -31,8 +31,8 @@ export { runRunnerInvocation } from "./runner-log.js";
  *  It also owns the headless OS-signal exit path (#98): a headless process spawns
  *  each Run in its own detached process group, so a bare SIGINT/SIGHUP/SIGTERM
  *  would kill this process and leave the child running. The handler aborts every
- *  live Run and awaits its rest — killing the child's group and leaving the Run's
- *  Workspace claim live so the next open reconciles it `halted` (ADR 0019) — then
+ *  live Run and awaits its rest — killing the child's group and leaving the Run
+ *  owner record live so the next open reconciles it `halted` (ADR 0019) — then
  *  closes the stores and re-raises the signal for the conventional exit. */
 export async function withClients(
   fn: (clients: HeadlessClients) => number | Promise<number>,

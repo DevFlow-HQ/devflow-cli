@@ -55,6 +55,7 @@ function harnessCatalog(t: TestContext) {
     harnessRegistry: [
       {
         choice: { id: "codex", name: "Codex", availability: "available" },
+        inputRules: [],
         servedCapabilities: ["agent-turn", "interactive-turns"],
         discover: () => ({
           kind: "found",
@@ -341,6 +342,7 @@ test("harness inspect renders a registered authentication refusal as inspectable
     harnessRegistry: [
       {
         choice: { id: "codex", name: "Codex", availability: "available" },
+        inputRules: [],
         servedCapabilities: ["agent-turn", "interactive-turns"],
         discover: () => ({
           kind: "found",

@@ -21,6 +21,34 @@ export const CODEX_SERVED_CAPABILITIES: Readonly<Record<string, true>> =
     "interactive-turns": true,
   });
 
+// Harness imports only Process. Composition checks this local declaration
+// structurally against Workflow's HarnessInputRule when it registers the Adapter.
+type HarnessInputRule = {
+  readonly kind: "reserved-leading-words";
+  readonly words: readonly string[];
+};
+
+export const CLAUDE_CODE_INPUT_RULES: readonly HarnessInputRule[] =
+  Object.freeze([
+    Object.freeze({
+      kind: "reserved-leading-words",
+      words: Object.freeze([
+        "/clear",
+        "/new",
+        "/reset",
+        "/resume",
+        "/continue",
+        "/fork",
+        "/model",
+        "/effort",
+        "/fast",
+        "/config",
+      ]),
+    }),
+  ]);
+
+export const CODEX_INPUT_RULES: readonly HarnessInputRule[] = Object.freeze([]);
+
 const CLAUDE_CODE_PATH_NAME = "claude";
 const CODEX_PATH_NAME = "codex";
 

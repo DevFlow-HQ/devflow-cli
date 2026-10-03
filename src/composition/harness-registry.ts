@@ -8,6 +8,8 @@ import type { HarnessChoice } from "../application/projection-port.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   CLAUDE_CODE_SERVED_CAPABILITIES,
+  CLAUDE_CODE_INPUT_RULES,
+  CODEX_INPUT_RULES,
   CODEX_EXECUTABLE_ENV,
   CODEX_SERVED_CAPABILITIES,
   createClaudeCodeAdapter,
@@ -66,6 +68,7 @@ export class HarnessRegistry {
           availability: "available",
         },
         servedCapabilities: Object.keys(CLAUDE_CODE_SERVED_CAPABILITIES),
+        inputRules: CLAUDE_CODE_INPUT_RULES,
         discover: () => {
           const discovery =
             overrides.discoverClaudeCode === undefined
@@ -88,6 +91,7 @@ export class HarnessRegistry {
       application: {
         choice: { id: "codex", name: "Codex", availability: "available" },
         servedCapabilities: Object.keys(CODEX_SERVED_CAPABILITIES),
+        inputRules: CODEX_INPUT_RULES,
         discover: () => {
           const discovery =
             overrides.discoverCodex === undefined

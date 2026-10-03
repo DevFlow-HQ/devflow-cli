@@ -31,6 +31,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
 - A pre-M4 Run with no selection upgrades only after its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume
   write `claude-code` once through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems remain unselected (#139).
+- Human Turn admission reads the Run's selected Harness and its registration's static input rules before `admit` (#358). The read acquires no owner;
+  a pre-M4 unselected Run uses Claude Code's rules, matching its reopen/resume upgrade. A refusal consumes no Operation id and records no Turn.
 - Never `acquireRun` a Run merely to read it when it is live in another process: acquiring bumps the owner-fencing epoch and would abort the process
   running it. `readResource`/`runResult` read through the live in-process owner when present, else acquire-and-close a rested Run, else refuse with
   `run-live-elsewhere`.

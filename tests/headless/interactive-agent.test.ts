@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
@@ -12,6 +12,7 @@ import {
 import type {
   ActionOffer,
   RunView,
+  HarnessChoice,
 } from "../../src/application/projection-port.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
@@ -138,7 +139,8 @@ async function launchInteractive(
     readonly laterScript?: FakeScript;
   },
   routing?: readonly unknown[],
-): Promise<{ wired: Wiring; runId: string; run: RunView }> {
+  harness: HarnessChoice["id"] = "claude-code",
+): Promise<{ wired: Wiring; runId: string; run: RunView; home: string }> {
   // A resolvable executable so Preflight's Harness discovery passes; the fake
   // Adapter is what actually runs, never this path.
   setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
@@ -181,11 +183,24 @@ async function launchInteractive(
             };
           },
         };
+  const home = makeTempDir("secant-interactive-home-");
   const wired = wireApplication({
-    secantHome: makeTempDir("secant-interactive-home-"),
+    secantHome: home,
     launchCwd: workspace,
     supportsInteractiveTurns: true,
-    harnessAdapter: adapter,
+    ...(harness === "claude-code"
+      ? { harnessAdapter: adapter }
+      : {
+          codexHarnessAdapter: adapter,
+          discoverCodex: () => ({
+            kind: "found" as const,
+            attempt: {
+              source: "path" as const,
+              name: "codex",
+              description: "scripted Codex",
+            },
+          }),
+        }),
     process: createFakeBundleProcess({ executables: [process.execPath] }),
   });
   t.after(() => {
@@ -215,14 +230,14 @@ async function launchInteractive(
       bundle: { id: bundle.id },
       launchInputs: {},
       trustDigest: entry.digest,
-      harness: "claude-code",
+      harness,
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));
   const runId = admission.runId;
   assert.ok(runId);
   await awaitSettled(wired.projectionPort, "op-launch");
-  return { wired, runId, run: readRun(wired, runId) };
+  return { wired, runId, run: readRun(wired, runId), home };
 }
 
 /** Read the current `run` snapshot. */
@@ -444,6 +459,214 @@ test("a blank interactive Turn is refused before any stdin is sent (#122)", asyn
   const run = readRun(wired, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.turnPosition, undefined);
+});
+
+test("Claude Code reserved Human Turns are refused before Operation or Turn admission (#358)", async (t) => {
+  const { wired, runId } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [COMPLETED_DETACHED],
+  });
+  for (const text of [
+    "/clear",
+    " \t/Clear now",
+    "/new",
+    "/reset",
+    "/resume",
+    "/continue",
+    "/fork",
+    "/model",
+    "/effort",
+    "/fast",
+    "/config",
+  ]) {
+    const admission = wired.projectionPort.submit({
+      operationId: "op-reserved",
+      operation: "send-interactive-turn",
+      input: { runId, stepId: "discuss", text },
+    });
+    assert.equal(admission.admitted, false);
+    if (admission.admitted) throw new Error("unreachable");
+    assert.equal(admission.problem.code, "harness-input-reserved");
+    assert.match(admission.problem.explanation, /Claude Code/);
+    assert.match(admission.problem.explanation, /Secant/);
+    assert.match(
+      admission.problem.explanation,
+      /conversation, Model choice, or permission/,
+    );
+    assert.equal(admission.problem.possibleEffects, "none");
+    const run = readRun(wired, runId);
+    assert.equal(run.state, "blocked");
+    assert.equal(run.turnPosition, undefined);
+  }
+  // A refusal consumes no Operation id: the same id can admit corrected text.
+  const admission = wired.projectionPort.submit({
+    operationId: "op-reserved",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "please explain /clear" },
+  });
+  assert.ok(admission.admitted);
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "op-reserved")).status,
+    "applied",
+  );
+  await awaitRunRest(wired.projectionPort, runId);
+});
+
+test("a Human Turn for an unknown Run is refused before Operation admission (#358)", async (t) => {
+  const { wired } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [COMPLETED_DETACHED],
+  });
+  const admission = wired.projectionPort.submit({
+    operationId: "op-unknown",
+    operation: "send-interactive-turn",
+    input: { runId: "missing-run", stepId: "discuss", text: "hello" },
+  });
+  assert.equal(admission.admitted, false);
+  if (admission.admitted) throw new Error("unreachable");
+  assert.equal(admission.problem.code, "run-not-found");
+});
+
+test("an unselected legacy Run uses Claude Code's rules without upgrading or admitting (#358)", async (t) => {
+  const { wired, runId } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [COMPLETED_DETACHED],
+  });
+  const original = wired.runGroup.readRun(runId);
+  assert.ok(original.ok);
+  const legacy = wired.runGroup.createRun({
+    operationId: "legacy-seed",
+    bundleSnapshotDigest: original.run.bundleSnapshotDigest,
+    launch: {},
+    at: new Date("2026-10-03T00:00:00Z"),
+  });
+  const owner = wired.runGroup.acquireRun(legacy.runId);
+  assert.ok(owner);
+  assert.deepEqual(owner.writeState("blocked"), { ok: true });
+  owner.close();
+  const admission = wired.projectionPort.submit({
+    operationId: "op-legacy-reserved",
+    operation: "send-interactive-turn",
+    input: { runId: legacy.runId, stepId: "discuss", text: "/clear" },
+  });
+  assert.equal(admission.admitted, false);
+  if (admission.admitted) throw new Error("unreachable");
+  assert.equal(admission.problem.code, "harness-input-reserved");
+  // Opening a Run Projection would itself upgrade this fixture. Read through the
+  // Store Interface to prove refusal did not persist a selection or change state.
+  const unchanged = wired.runGroup.readRun(legacy.runId);
+  assert.ok(unchanged.ok);
+  assert.equal(unchanged.run.selectedHarness, undefined);
+  assert.equal(unchanged.run.state, "blocked");
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "op-legacy-reserved",
+      operation: "send-interactive-turn",
+      input: { runId, stepId: "discuss", text: "hello" },
+    }).admitted,
+  );
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "op-legacy-reserved")).status,
+    "applied",
+  );
+  await awaitRunRest(wired.projectionPort, runId);
+});
+
+test("a damaged Run store refuses a Human Turn before Operation admission (#358)", async (t) => {
+  const { wired, runId, home } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [COMPLETED_DETACHED],
+  });
+  const original = wired.runGroup.readRun(runId);
+  assert.ok(original.ok);
+  const damaged = wired.runGroup.createRun({
+    operationId: "damaged-seed",
+    bundleSnapshotDigest: original.run.bundleSnapshotDigest,
+    launch: {},
+    at: new Date("2026-10-03T00:00:00Z"),
+  });
+  const directory = readdirSync(home, {
+    recursive: true,
+    withFileTypes: true,
+  }).find((entry) => entry.isDirectory() && entry.name === damaged.runId);
+  assert.ok(directory);
+  writeFileSync(
+    join(directory.parentPath, damaged.runId, "run.db"),
+    "damaged database",
+  );
+  const admission = wired.projectionPort.submit({
+    operationId: "op-damaged",
+    operation: "send-interactive-turn",
+    input: { runId: damaged.runId, stepId: "discuss", text: "hello" },
+  });
+  assert.equal(admission.admitted, false);
+  if (admission.admitted) throw new Error("unreachable");
+  assert.equal(admission.problem.code, "run-store-damaged");
+});
+
+test("Codex admits reserved-looking Human Turns unchanged (#358)", async (t) => {
+  const { wired, runId } = await launchInteractive(
+    t,
+    {
+      profile: { ...profile(), harness: "Codex" },
+      turns: Array.from({ length: 11 }, () => COMPLETED_DETACHED),
+    },
+    undefined,
+    undefined,
+    "codex",
+  );
+  for (const [index, text] of [
+    "/clear",
+    " \t/Clear now",
+    "/new",
+    "/reset",
+    "/resume",
+    "/continue",
+    "/fork",
+    "/model",
+    "/effort",
+    "/fast",
+    "/config",
+  ].entries()) {
+    const operationId = `op-codex-${index}`;
+    const admission = wired.projectionPort.submit({
+      operationId,
+      operation: "send-interactive-turn",
+      input: { runId, stepId: "discuss", text },
+    });
+    assert.ok(admission.admitted, JSON.stringify(admission));
+    const outcome = await awaitSettled(wired.projectionPort, operationId);
+    assert.equal(outcome.status, "applied", JSON.stringify({ text, outcome }));
+    await awaitRunRest(wired.projectionPort, runId);
+    const reference = readRun(wired, runId).sessions?.[0]?.transcriptPage;
+    assert.ok(reference);
+    const transcript = wired.projectionPort.readTranscript(reference);
+    assert.ok(transcript.found);
+    if (!transcript.found) throw new Error("unreachable");
+    assert.ok(
+      transcript.entries.some(
+        (entry) => entry.role === "user" && entry.content === text,
+      ),
+    );
+  }
+});
+
+test("Claude Code admits a non-reserved leading command (#358)", async (t) => {
+  const { wired, runId } = await launchInteractive(t, {
+    profile: profile(),
+    turns: [COMPLETED_DETACHED],
+  });
+  const admission = wired.projectionPort.submit({
+    operationId: "op-compact",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "discuss", text: "/compact" },
+  });
+  assert.ok(admission.admitted);
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "op-compact")).status,
+    "applied",
+  );
+  await awaitRunRest(wired.projectionPort, runId);
 });
 
 /** A human Turn that stays live after admission until it is interrupted or the

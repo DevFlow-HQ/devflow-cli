@@ -7,6 +7,7 @@ import {
 import type { Catalog } from "../catalog/catalog.js";
 import {
   flattenSteps,
+  matchHarnessInputRule,
   inHumanRepeat,
   routingNeedsHarness,
   type AgentStep,
@@ -68,6 +69,7 @@ import {
   harnessRequestIndeterminate,
   harnessRequestRejected,
   harnessRequestStale,
+  harnessInputReserved,
   interactiveControlMismatch,
   interactiveStepMidTurn,
   interactiveStepNotActive,
@@ -403,6 +405,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
     now,
     subscriptions,
     observe,
+  );
+  const harnessInputRegistrations = new Map(
+    (deps.harnessRegistry ?? []).map((entry) => [entry.choice.id, entry]),
   );
   const budgets = deps.bundleBudgets ?? DEFAULT_BUDGETS;
   const engineVersion = deps.engineVersion ?? "0.0.0-dev";
@@ -2349,6 +2354,37 @@ export function createApplication(deps: ApplicationDependencies): Application {
     // Turn is recorded and no stdin is ever written (AC1).
     if (input.text.trim() === "") {
       return { admitted: false, problem: interactiveTurnBlank(input.runId) };
+    }
+    const read = runGroup.readRun(input.runId);
+    if (!read.ok) {
+      return {
+        admitted: false,
+        problem:
+          read.problem.kind === "unknown-run"
+            ? runNotFound(input.runId)
+            : runStoreDamaged(input.runId),
+      };
+    }
+    // Reopen/resume upgrades pre-M4 Harness Runs to Claude Code; enforce the same
+    // selection here without acquiring ownership or writing during admission.
+    const registration = harnessInputRegistrations.get(
+      read.run.selectedHarness ?? "claude-code",
+    );
+    if (registration !== undefined) {
+      const word = matchHarnessInputRule({
+        text: input.text,
+        rules: registration.inputRules,
+      });
+      if (word !== undefined) {
+        return {
+          admitted: false,
+          problem: harnessInputReserved({
+            runId: input.runId,
+            harness: registration.choice.name,
+            word,
+          }),
+        };
+      }
     }
     admit(operationId, {
       operation: "send-interactive-turn",

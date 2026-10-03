@@ -713,6 +713,8 @@ export type { CodexRecordingObserver } from "./codex.js";
 export {
   CLAUDE_CODE_EXECUTABLE_ENV,
   CLAUDE_CODE_SERVED_CAPABILITIES,
+  CLAUDE_CODE_INPUT_RULES,
+  CODEX_INPUT_RULES,
   CODEX_EXECUTABLE_ENV,
   CODEX_SERVED_CAPABILITIES,
   discoverCodex,

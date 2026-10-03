@@ -29,6 +29,7 @@ async function fixture(
           name: "Claude Code",
           availability: "available",
         },
+        inputRules: [],
         servedCapabilities: ["agent-turn", "interactive-turns"],
         discover: () => ({
           kind: "found",
@@ -46,6 +47,7 @@ async function fixture(
       },
       {
         choice: { id: "codex", name: "Codex", availability: "available" },
+        inputRules: [],
         servedCapabilities: ["agent-turn", "interactive-turns"],
         discover: () => ({
           kind: "found",

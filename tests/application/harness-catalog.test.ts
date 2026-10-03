@@ -75,6 +75,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
         name: "Claude Code",
         availability: "available" as const,
       },
+      inputRules: [],
       servedCapabilities: ["agent-turn", "interactive-turns"],
       discover: () => {
         discoveryCalls++;
@@ -95,6 +96,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
         name: "Codex",
         availability: "available" as const,
       },
+      inputRules: [],
       servedCapabilities: ["agent-turn", "interactive-turns"],
       discover: () => {
         discoveryCalls++;
@@ -178,6 +180,7 @@ test("a harness focus qualifies only the selected id, and listing qualifies none
           name: "Claude Code",
           availability: "available",
         },
+        inputRules: [],
         servedCapabilities: ["agent-turn", "interactive-turns"],
         discover: () => ({
           kind: "found",
@@ -191,6 +194,7 @@ test("a harness focus qualifies only the selected id, and listing qualifies none
       },
       {
         choice: { id: "codex", name: "Codex", availability: "available" },
+        inputRules: [],
         servedCapabilities: ["agent-turn", "interactive-turns"],
         discover: () => ({
           kind: "found",
@@ -237,6 +241,7 @@ async function portWithRegistration(
     harnessRegistry: [
       {
         choice: { id: "codex", name: "Codex", availability: "available" },
+        inputRules: [],
         servedCapabilities: ["agent-turn", "interactive-turns"],
         discover: () => ({
           kind: "found",

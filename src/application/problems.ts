@@ -466,6 +466,26 @@ export function interactiveTurnBlank(runId: string): Problem {
   };
 }
 
+/** A leading word would change Harness state Secant owns (ADR 0040). */
+export function harnessInputReserved({
+  runId,
+  harness,
+  word,
+}: {
+  readonly runId: string;
+  readonly harness: string;
+  readonly word: string;
+}): Problem {
+  return {
+    code: "harness-input-reserved",
+    explanation: `${word} is reserved by ${harness}; Secant owns the conversation, Model choice, or permission change it requests.`,
+    remediation:
+      "Use Secant's controls for these changes, or send text with a different first word.",
+    possibleEffects: "none",
+    details: { runId, harness, word },
+  };
+}
+
 /** A second interactive Turn was sent while one is still live (#122): the Step
  *  takes one Turn at a time, and between Turns the Run stays blocked. */
 export function interactiveTurnBusy(runId: string): Problem {

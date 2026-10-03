@@ -7,6 +7,8 @@ import {
   STEP_KIND_NAMES,
   WORKSPACE_PREREQUISITES,
   hasOnlyValidPromptSlots,
+  matchHarnessInputRule,
+  type HarnessInputRule,
   promptSlotReferences,
   WORKING_AREA_SLOT,
 } from "../../src/workflow/workflow.js";
@@ -59,4 +61,47 @@ test("the one Run-owned reference slot names the Run working area (#214)", () =>
   assert.deepEqual(promptSlotReferences(WORKING_AREA_SLOT), []);
   assert.equal(hasOnlyValidPromptSlots("no {{run:store-root}}"), false);
   assert.equal(hasOnlyValidPromptSlots("no {{run:}}"), false);
+});
+
+test("Harness input rules match only the first word, ignoring case and Unicode whitespace (#358)", () => {
+  const rules: readonly HarnessInputRule[] = [
+    { kind: "reserved-leading-words", words: ["/clear", "/MODEL"] },
+  ];
+  for (const text of [
+    "/clear",
+    "  /Clear now",
+    "\n\t/CLEAR\nnext",
+    "\u00a0\u2003/clear\r\nnext",
+  ]) {
+    assert.equal(matchHarnessInputRule({ text, rules }), "/clear");
+  }
+  assert.equal(
+    matchHarnessInputRule({ text: "/model haiku", rules }),
+    "/MODEL",
+  );
+  for (const text of [
+    "",
+    " \n\t",
+    "please /clear",
+    "/clearer",
+    "/clear/path",
+    "/compact",
+  ]) {
+    assert.equal(matchHarnessInputRule({ text, rules }), undefined);
+  }
+  assert.equal(matchHarnessInputRule({ text: "/clear", rules: [] }), undefined);
+});
+
+test("Harness input matching reaches later rules after empty or non-matching rules (#358)", () => {
+  assert.equal(
+    matchHarnessInputRule({
+      text: " /MODEL high",
+      rules: [
+        { kind: "reserved-leading-words", words: [] },
+        { kind: "reserved-leading-words", words: ["/clear"] },
+        { kind: "reserved-leading-words", words: ["/model"] },
+      ],
+    }),
+    "/model",
+  );
 });

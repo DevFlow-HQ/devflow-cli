@@ -5,6 +5,40 @@
 // authority for what a manifest may legally say. Step *execution* is a private
 // table added beside this in M2; only the static contract lives here.
 
+/** Transport-independent restrictions declared by a Harness (ADR 0040). */
+export type HarnessInputRule = {
+  readonly kind: "reserved-leading-words";
+  readonly words: readonly string[];
+};
+
+/** Returns the declared reserved word, or undefined when the text satisfies every
+ *  rule. JavaScript's Unicode whitespace separates words and is skipped at start. */
+export function matchHarnessInputRule({
+  text,
+  rules,
+}: {
+  readonly text: string;
+  readonly rules: readonly HarnessInputRule[];
+}): string | undefined {
+  const firstWord = text.trimStart().split(/\s/, 1)[0]?.toLowerCase();
+  for (const rule of rules) {
+    switch (rule.kind) {
+      case "reserved-leading-words": {
+        const word = rule.words.find(
+          (word) => word.toLowerCase() === firstWord,
+        );
+        if (word !== undefined) return word;
+        break;
+      }
+      default: {
+        const exhaustive: never = rule.kind;
+        return exhaustive;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** The five closed Run Artifact types. */
 export type ArtifactType = "text" | "file" | "file-set" | "verdict" | "choice";
 export const ARTIFACT_TYPES: readonly ArtifactType[] = [

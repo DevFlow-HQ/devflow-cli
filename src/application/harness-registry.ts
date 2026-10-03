@@ -1,3 +1,4 @@
+import type { HarnessInputRule } from "../workflow/workflow.js";
 import type { HarnessChoice } from "./projection-port.js";
 import type {
   EffectScope,
@@ -31,6 +32,7 @@ export type THarnessDiscovery =
 export interface ApplicationHarnessRegistration {
   readonly choice: HarnessChoice;
   readonly servedCapabilities: readonly string[];
+  readonly inputRules: readonly HarnessInputRule[];
   discover(): THarnessDiscovery;
   qualify(): Promise<ApplicationHarnessQualification>;
 }

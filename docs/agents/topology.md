@@ -13,7 +13,7 @@ One ESM package contains these ownership areas. Every path exists; new files lan
 | `src/cli/`                 | CLI hosting and dispatch to the selected client; one executable entry                                                          |
 | `src/composition/`         | Outermost construction, configuration wiring, and lifecycle wiring                                                             |
 | `src/application/`         | Projection Port, separate Bundle-management Interface, Preferences use cases, Preflight, launch, and cross-domain coordination |
-| `src/workflow/`            | Execution-free Routing composition, static Step-kind contracts, and their authored value vocabulary                            |
+| `src/workflow/`            | Execution-free Routing composition, static Step-kind contracts, authored values, and Harness input-rule matching               |
 | `src/bundle/`              | Non-executing archive validation/build, Bundle Asset capture, and managed Bundle bytes                                         |
 | `src/catalog/`             | `catalog.db`, Preferences persistence, installation lifetime, Trust grants and their Operation receipts, replaceable Run index |
 | `src/drizzle/`             | Generated per-database SQL migrations and the embedded ordered migration journals                                              |
