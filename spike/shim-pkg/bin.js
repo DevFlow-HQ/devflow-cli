@@ -10,5 +10,5 @@ else if (mode === "echo") {
   process.stdin.on("data", (d) => process.stdout.write("echo:" + d));
   process.stdin.on("end", () => process.exit(42));
 }
-else if (mode === "hang") { line({}); setInterval(() => {}, 1000); }
+else if (mode === "hang") { line({}); setInterval(() => process.stdout.write("tick\n"), 100); }
 else { process.stderr.write("unknown mode " + mode + "\n"); process.exit(2); }

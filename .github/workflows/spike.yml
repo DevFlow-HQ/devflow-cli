@@ -41,6 +41,15 @@ jobs:
       - name: T5 worker compiled
         continue-on-error: true
         run: dist/spike.exe t5 worker
+      - name: T5 stress poll20 compiled
+        continue-on-error: true
+        run: dist/spike.exe t5-stress poll20
+      - name: T5 stress register compiled
+        continue-on-error: true
+        run: dist/spike.exe t5-stress register
+      - name: T5 stress worker compiled
+        continue-on-error: true
+        run: dist/spike.exe t5-stress worker
       - name: T5 eof compiled
         continue-on-error: true
         run: dist/spike.exe t5-eof
@@ -77,6 +86,12 @@ jobs:
       - name: T6 parent crash compiled
         continue-on-error: true
         run: dist/spike.exe t6-crash "$env:RUNNER_TEMP"
+      - name: T6 escape control (no kill-on-close) compiled
+        continue-on-error: true
+        run: dist/spike.exe t6-escape control
+      - name: T6 parent crash control (no kill-on-close) compiled
+        continue-on-error: true
+        run: dist/spike.exe t6-crash "$env:RUNNER_TEMP" control
       - name: Leftover sleep.exe check
         if: always()
         run: Get-Process sleep -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime

@@ -162,6 +162,7 @@ export type SpawnOpts = {
   commandLine: string;
   cwd?: string;
   envBlock?: Uint16Array;
+  killOnClose?: boolean;
 };
 
 export class SpawnError extends Error {
@@ -174,7 +175,7 @@ export async function spawnContained(o: SpawnOpts): Promise<Contained> {
   const job = k32.CreateJobObjectW(null, null) as bigint;
   if (!job) fail("CreateJobObjectW");
   const limits = new Uint8Array(144);
-  new DataView(limits.buffer).setUint32(16, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, true);
+  new DataView(limits.buffer).setUint32(16, o.killOnClose === false ? 0 : JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, true);
   if (!k32.SetInformationJobObject(job, JobObjectExtendedLimitInformation, ptr(limits), 144)) fail("SetInformationJobObject");
 
   const i = await pipe(true);

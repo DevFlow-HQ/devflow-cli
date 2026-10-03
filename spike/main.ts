@@ -184,6 +184,46 @@ async function t5(which: string): Promise<void> {
   }
 }
 
+/** 24 concurrent children with staggered exits on one waiter; also memory and start cost. */
+async function t5stress(which: string): Promise<void> {
+  const wait = WAITERS[which]!;
+  const n = 24;
+  const rss0 = process.memoryUsage().rss;
+  const mon = tickMonitor();
+  const t0 = performance.now();
+  const kids = await Promise.all(
+    Array.from({ length: n }, async (_, k) => {
+      const argv = self("sleep-child", 300 + 50 * k, k + 1);
+      const c = await spawnContained({ app: argv[0], commandLine: commandLine(argv) });
+      c.stdout.resume();
+      c.stderr.resume();
+      c.stdin.end();
+      return c;
+    }),
+  );
+  const spawnMs = performance.now() - t0;
+  const rssMid = process.memoryUsage().rss;
+  try {
+    const codes = await withTimeout(Promise.all(kids.map((c) => wait(c.hProcess))), 30000, `stress ${which}`);
+    const lat = kids.map((c) => Number(fileTimeNow() - exitFileTime(c.hProcess)) / 10000);
+    const ticks = mon();
+    const ok = codes.every((c, k) => c === k + 1) && ticks.maxGapMs < 100;
+    result(`t5.stress.${which}`, ok ? "PASS" : "FAIL", {
+      n,
+      codesOk: codes.every((c, k) => c === k + 1),
+      spawnAllMs: Math.round(spawnMs),
+      totalMs: Math.round(performance.now() - t0),
+      rssDeltaDuringWaitMB: +((process.memoryUsage().rss - rss0) / 1048576).toFixed(1),
+      rssDeltaAfterSpawnMB: +((rssMid - rss0) / 1048576).toFixed(1),
+      lastDetectLagMs: +Math.max(...lat).toFixed(1),
+      ticks,
+    });
+  } catch (err) {
+    result(`t5.stress.${which}`, "FAIL", { error: String(err) });
+  }
+  for (const c of kids) c.closeJob();
+}
+
 /** Pipe EOF is not process exit: a grandchild that inherited stdout delays EOF. */
 async function t5eof(kind: string): Promise<void> {
   const argv = self("hold-child");
@@ -273,10 +313,15 @@ async function t2(shim: string): Promise<void> {
     const nodePid = JSON.parse(first.split("\n")[0]!).pid as number;
     const hn = openProcess(nodePid);
     const hc = openProcess(c.pid, true);
+    const events: string[] = [];
+    for (const ev of ["end", "close", "error"]) c.stdout.on(ev, (x?: unknown) => events.push(`${ev}${x instanceof Error ? ":" + x.message : ""}`));
+    await Bun.sleep(600);
+    const ticksBefore = (o.text().match(/tick/g) ?? []).length;
     k32.TerminateProcess(hc, 9);
     await Bun.sleep(1000);
     const cmdDead = !isAlive(hc);
     const nodeAlive = isAlive(hn);
+    const ticksAfter = (o.text().match(/tick/g) ?? []).length;
     let eof = false;
     o.ended.then(() => (eof = true));
     await Bun.sleep(200);
@@ -287,6 +332,9 @@ async function t2(shim: string): Promise<void> {
       cmdDead,
       nodeAliveAfterCmdKilled: nodeAlive,
       stdoutEofAfterCmdKilled: eof,
+      stdoutEvents: events,
+      heartbeatsBeforeKill: ticksBefore,
+      heartbeatsInSecondAfterKill: ticksAfter - ticksBefore,
       jobMembersAfterCmdKilled: membersAfter,
       nodeAliveAfterJobClose: isAlive(hn),
     });
@@ -326,11 +374,11 @@ const ARGS = [
   "-flag=a b",
 ];
 
-function compareArgv(got: unknown): { exact: boolean; mismatches: unknown[] } {
+function compareArgv(got: unknown, want: readonly string[] = ARGS): { exact: boolean; mismatches: unknown[] } {
   const g = Array.isArray(got) ? (got as string[]) : [];
   const mismatches: unknown[] = [];
-  for (let k = 0; k < Math.max(ARGS.length, g.length); k++) {
-    if (ARGS[k] !== g[k]) mismatches.push({ k, want: ARGS[k], got: g[k] });
+  for (let k = 0; k < Math.max(want.length, g.length); k++) {
+    if (want[k] !== g[k]) mismatches.push({ k, want: want[k]?.slice(0, 80), wantLen: want[k]?.length, got: g[k]?.slice(0, 80), gotLen: g[k]?.length });
   }
   return { exact: mismatches.length === 0, mismatches };
 }
@@ -369,6 +417,35 @@ async function t3(shim: string): Promise<void> {
       c.closeJob();
     } catch (err) {
       result(`t3.${name}`, "FAIL", { error: String(err) });
+    }
+  }
+  const extras: Record<string, string[]> = {
+    newline: ["line1\nline2", "after"],
+    crlf: ["a\r\nb", "after"],
+    long9000: ["x".repeat(9000), "after"],
+    long30000: ["y".repeat(30000), "after"],
+  };
+  for (const [label, want] of Object.entries(extras)) {
+    const routes: Record<string, { app: string; line: string; strict: boolean }> = {
+      "direct-node": { app: node, line: commandLine([node, script, "argv", ...want]), strict: true },
+      "cmd-shim": { app: CMD, line: cmdShimCommandLine(CMD, shim, ["argv", ...want]), strict: false },
+    };
+    for (const [rname, r] of Object.entries(routes)) {
+      try {
+        const c = await spawnContained({ app: r.app, commandLine: r.line });
+        const { code, out, err } = await runToEnd(c);
+        const res = compareArgv(parseArgvOut(out), want);
+        result(`t3.${label}.${rname}`, res.exact ? "PASS" : r.strict ? "FAIL" : "INFO", {
+          code,
+          commandLineLength: r.line.length,
+          exact: res.exact,
+          mismatches: res.mismatches,
+          err: err.slice(0, 300),
+        });
+        c.closeJob();
+      } catch (err) {
+        result(`t3.${label}.${rname}`, r.strict ? "FAIL" : "INFO", { commandLineLength: r.line.length, error: String(err) });
+      }
     }
   }
   const cmp = (name: string, run: () => { out: string; err?: string; error?: unknown; code?: number | null }) => {
@@ -517,9 +594,9 @@ async function t4(shim: string, scratch: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------- T6 Git Bash escape + parent crash
-async function bashTree(): Promise<{ c: Contained; members: string[]; handles: { pid: number; h: bigint }[] }> {
+async function bashTree(killOnClose = true): Promise<{ c: Contained; members: string[]; handles: { pid: number; h: bigint }[] }> {
   const line = `${quoteArg(BASH)} -c "sleep 300 >/dev/null 2>&1 </dev/null & sleep 301 & echo started"`;
-  const c = await spawnContained({ app: BASH, commandLine: line });
+  const c = await spawnContained({ app: BASH, commandLine: line, killOnClose });
   const o = collect(c.stdout);
   c.stderr.resume();
   for (let k = 0; k < 250 && !o.text().includes("started"); k++) await Bun.sleep(20);
@@ -528,20 +605,21 @@ async function bashTree(): Promise<{ c: Contained; members: string[]; handles: {
   await Bun.sleep(500);
   const pids = c.jobPids();
   const members = describePids(pids);
-  const handles = pids.map((pid) => ({ pid, h: openProcess(pid) })).filter((x) => x.h !== 0n);
+  const handles = pids.map((pid) => ({ pid, h: openProcess(pid, true) })).filter((x) => x.h !== 0n);
   return { c, members, handles };
 }
 
-async function t6escape(): Promise<void> {
-  const { c, members, handles } = await bashTree();
+async function t6escape(control: boolean): Promise<void> {
+  const { c, members, handles } = await bashTree(!control);
   const bashExited = !isAlive(c.hProcess);
   const sleeps = members.filter((m) => /sleep\.exe/i.test(m));
   c.closeJob();
   const t0 = performance.now();
   while (handles.some((x) => isAlive(x.h)) && performance.now() - t0 < 5000) await Bun.sleep(20);
   const survivors = handles.filter((x) => isAlive(x.h)).map((x) => x.pid);
-  const ok = bashExited && sleeps.length >= 2 && survivors.length === 0;
-  result(`t6.escape.${compiled ? "compiled" : "bun-script"}`, ok ? "PASS" : "FAIL", {
+  const ok = bashExited && sleeps.length >= 2 && (control ? survivors.length >= 2 : survivors.length === 0);
+  for (const x of handles) k32.TerminateProcess(x.h, 1);
+  result(`t6.escape.${compiled ? "compiled" : "bun-script"}${control ? ".control-no-kill-on-close" : ""}`, ok ? "PASS" : "FAIL", {
     bashExitedBeforeClose: bashExited,
     jobMembersBeforeClose: members,
     killedWithinMs: Math.round(performance.now() - t0),
@@ -550,30 +628,32 @@ async function t6escape(): Promise<void> {
   });
 }
 
-async function t6crashParent(readyFile: string): Promise<void> {
-  const { members, handles } = await bashTree();
+async function t6crashParent(readyFile: string, control: boolean): Promise<void> {
+  const { members, handles } = await bashTree(!control);
   writeFileSync(readyFile, JSON.stringify({ parentPid: process.pid, members, pids: handles.map((x) => x.pid) }));
   await Bun.sleep(600000);
 }
 
-async function t6crash(scratch: string): Promise<void> {
+async function t6crash(scratch: string, control: boolean): Promise<void> {
   const ready = join(scratch, "crash-ready.json");
   rmSync(ready, { force: true });
-  const argv = self("t6-crash-parent", ready);
+  const argv = self("t6-crash-parent", ready, control ? "nokill" : "kill");
   const p = nodeSpawn(argv[0]!, argv.slice(1), { detached: true, stdio: "ignore", windowsHide: true });
   for (let k = 0; k < 500 && !existsSync(ready); k++) await Bun.sleep(20);
   if (!existsSync(ready)) return result("t6.crash", "FAIL", { error: "crash parent never became ready" });
   await Bun.sleep(100);
   const info = JSON.parse(readFileSync(ready, "utf8")) as { parentPid: number; members: string[]; pids: number[] };
-  const handles = info.pids.map((pid) => ({ pid, h: openProcess(pid) })).filter((x) => x.h !== 0n);
+  const handles = info.pids.map((pid) => ({ pid, h: openProcess(pid, true) })).filter((x) => x.h !== 0n);
   const aliveBefore = handles.filter((x) => isAlive(x.h)).map((x) => x.pid);
   // Kill only the parent (no /T): the OS closes its job handle.
   const tk = nodeSpawnSync("taskkill", ["/F", "/PID", String(p.pid)], { encoding: "utf8" });
   const t0 = performance.now();
   while (handles.some((x) => isAlive(x.h)) && performance.now() - t0 < 5000) await Bun.sleep(20);
   const survivors = handles.filter((x) => isAlive(x.h)).map((x) => x.pid);
-  const ok = info.members.some((m) => /sleep\.exe/i.test(m)) && aliveBefore.length > 0 && survivors.length === 0;
-  result(`t6.crash.${compiled ? "compiled" : "bun-script"}`, ok ? "PASS" : "FAIL", {
+  const ok =
+    info.members.some((m) => /sleep\.exe/i.test(m)) && aliveBefore.length > 0 && (control ? survivors.length >= 2 : survivors.length === 0);
+  for (const x of handles) k32.TerminateProcess(x.h, 1);
+  result(`t6.crash.${compiled ? "compiled" : "bun-script"}${control ? ".control-no-kill-on-close" : ""}`, ok ? "PASS" : "FAIL", {
     parentPid: info.parentPid,
     jobMembers: info.members,
     aliveBeforeKill: aliveBefore,
@@ -593,6 +673,9 @@ if (!(await childModes())) {
       case "t5":
         await t5(args[1]!);
         break;
+      case "t5-stress":
+        await t5stress(args[1]!);
+        break;
       case "t5-eof":
         await t5eof(args[1] ?? "bun");
         break;
@@ -606,13 +689,13 @@ if (!(await childModes())) {
         await t4(args[1]!, args[2]!);
         break;
       case "t6-escape":
-        await t6escape();
+        await t6escape(args[1] === "control");
         break;
       case "t6-crash-parent":
-        await t6crashParent(args[1]!);
+        await t6crashParent(args[1]!, args[2] === "nokill");
         break;
       case "t6-crash":
-        await t6crash(args[1]!);
+        await t6crash(args[1]!, args[2] === "control");
         break;
       default:
         throw new Error(`unknown mode ${mode}`);
