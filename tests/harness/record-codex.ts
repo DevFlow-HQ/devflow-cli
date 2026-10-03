@@ -15,6 +15,8 @@ import {
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import {
+  type CodexRecordingObserver,
+  type ControlReceipt,
   type HarnessRequest,
   type HarnessTurn,
   type RecoveryCoordinate,
@@ -51,6 +53,8 @@ const REAL_CASES = new Set([
   "two-turns",
   "approval",
   "steer",
+  "steer-leftover",
+  "steer-leftover-resend",
   "interrupt",
   "resume",
   "authentication",
@@ -102,87 +106,112 @@ if (caseName === "authentication") {
 } else if (qualificationCase) {
   process.env.CODEX_HOME = isolatedCodexHome(QUALIFICATION_CONFIG[caseName]);
 }
-const capture = createCodexRecordingCapture();
-const prepared = await createCodexAdapter({
-  recordingObserver: capture.observer,
-}).prepare({
-  workspace,
-  ...(caseName === "approval"
-    ? { configuredExecutable: approvalExecutable() }
-    : {}),
-});
+// A leftover Steer is a race (Codex takes it after its last pending-input
+// check), so its cases retry whole recordings until one lands in the window.
+const attempts = caseName.startsWith("steer-leftover") ? 60 : 1;
+for (let attempt = 1; ; attempt += 1) {
+  const capture = createCodexRecordingCapture();
+  const trigger = stopHookTrigger(capture.observer);
+  const prepared = await createCodexAdapter({
+    recordingObserver: trigger.observer,
+  }).prepare({
+    workspace,
+    ...(caseName === "approval"
+      ? { configuredExecutable: approvalExecutable() }
+      : caseName === "steer-leftover-resend"
+        ? { configuredExecutable: emptyInputRefusalExecutable() }
+        : {}),
+  });
 
-if (caseName === "authentication") {
-  if (prepared.ok || prepared.failure.category !== "authentication") {
-    if (prepared.ok) await prepared.harness.close();
+  if (caseName === "authentication") {
+    if (prepared.ok || prepared.failure.category !== "authentication") {
+      if (prepared.ok) await prepared.harness.close();
+      throw new Error(
+        "The authentication case requires an unauthenticated Codex home. Run with CODEX_HOME set to an empty temporary directory.",
+      );
+    }
+    writeRecording({
+      caseName,
+      workspace,
+      capture,
+    });
+    process.stdout.write(`Recorded ${caseName}.\n`);
+    process.exit(0);
+  }
+
+  if (!prepared.ok) {
     throw new Error(
-      "The authentication case requires an unauthenticated Codex home. Run with CODEX_HOME set to an empty temporary directory.",
+      `The production Codex Adapter did not qualify this install: ${prepared.failure.diagnostics ?? prepared.failure.category}`,
+      { cause: prepared.failure.cause },
     );
   }
+
+  let workspacePatch: string | undefined;
+  let recorded = true;
+  if (qualificationCase) {
+    const defaults = await prepared.harness.readDefaults();
+    process.stdout.write(`Read defaults: ${JSON.stringify(defaults)}\n`);
+  } else {
+    if (caseName === "test-repair") seedTestRepairWorkspace(workspace);
+    recorded = await driveCase(
+      caseName,
+      prepared.harness.startTurn.bind(prepared.harness),
+      trigger,
+    );
+    if (caseName === "test-repair") {
+      workspacePatch = git(workspace, ["diff", "--binary"]);
+      if (workspacePatch.length === 0) {
+        throw new Error(
+          "The Codex Test Repair recording produced no Workspace patch.",
+        );
+      }
+    }
+  }
+
+  const cleanup = await prepared.harness.close();
+  if (!cleanup.clean) {
+    throw new Error("The production Codex Adapter did not close cleanly.", {
+      cause: cleanup.failure?.cause,
+    });
+  }
+  if (capture.schema === undefined) {
+    throw new Error(
+      "The production Codex Adapter produced no schema observation.",
+    );
+  }
+  if (capture.exit?.kind !== "exited" || capture.exit.status !== 0) {
+    throw new Error(
+      "The production Codex Adapter produced no clean exit observation.",
+    );
+  }
+  if (!recorded) {
+    if (attempt >= attempts) {
+      throw new Error(
+        `No leftover Steer in ${attempts} attempts; Codex answered or refused every Steer.`,
+      );
+    }
+    process.stdout.write(`Attempt ${attempt} missed the leftover window.\n`);
+    continue;
+  }
+
   writeRecording({
     caseName,
     workspace,
     capture,
+    workspacePatch,
   });
-  process.stdout.write(`Recorded ${caseName}.\n`);
-  process.exit(0);
-}
-
-if (!prepared.ok) {
-  throw new Error(
-    `The production Codex Adapter did not qualify this install: ${prepared.failure.diagnostics ?? prepared.failure.category}`,
-    { cause: prepared.failure.cause },
+  process.stdout.write(
+    `Recorded ${caseName} from ${prepared.harness.profile.executableVersion} on attempt ${attempt}.\n`,
   );
+  break;
 }
 
-let workspacePatch: string | undefined;
-if (qualificationCase) {
-  const defaults = await prepared.harness.readDefaults();
-  process.stdout.write(`Read defaults: ${JSON.stringify(defaults)}\n`);
-} else {
-  if (caseName === "test-repair") seedTestRepairWorkspace(workspace);
-  await driveCase(caseName, prepared.harness.startTurn.bind(prepared.harness));
-  if (caseName === "test-repair") {
-    workspacePatch = git(workspace, ["diff", "--binary"]);
-    if (workspacePatch.length === 0) {
-      throw new Error(
-        "The Codex Test Repair recording produced no Workspace patch.",
-      );
-    }
-  }
-}
-
-const cleanup = await prepared.harness.close();
-if (!cleanup.clean) {
-  throw new Error("The production Codex Adapter did not close cleanly.", {
-    cause: cleanup.failure?.cause,
-  });
-}
-if (capture.schema === undefined) {
-  throw new Error(
-    "The production Codex Adapter produced no schema observation.",
-  );
-}
-if (capture.exit?.kind !== "exited" || capture.exit.status !== 0) {
-  throw new Error(
-    "The production Codex Adapter produced no clean exit observation.",
-  );
-}
-
-writeRecording({
-  caseName,
-  workspace,
-  capture,
-  workspacePatch,
-});
-process.stdout.write(
-  `Recorded ${caseName} from ${prepared.harness.profile.executableVersion}.\n`,
-);
-
+/** Drive one case; false means a leftover case missed its race window. */
 async function driveCase(
   name: string,
   startTurn: (request: TurnRequest) => HarnessTurn,
-): Promise<void> {
+  trigger: TStopHookTrigger,
+): Promise<boolean> {
   switch (name) {
     case "completion":
       await expectResult(
@@ -190,7 +219,7 @@ async function driveCase(
         turnRequest("completion", CODEX_RECORDING_INPUT.completion),
         "completed",
       );
-      return;
+      return true;
     case "two-turns":
       await expectResult(
         startTurn,
@@ -202,14 +231,14 @@ async function driveCase(
         turnRequest("two-turns", CODEX_RECORDING_INPUT.secondCompletion),
         "completed",
       );
-      return;
+      return true;
     case "approval": {
       const turn = startTurn(
         turnRequest("approval", CODEX_RECORDING_INPUT.approval),
       );
       await answerApproval(turn, await firstRequest(turn), "allow");
       await expectTurnResult(turn, "completed");
-      return;
+      return true;
     }
     case "steer": {
       const turn = startTurn(turnRequest("steer", CODEX_RECORDING_INPUT.steer));
@@ -224,8 +253,11 @@ async function driveCase(
         );
       }
       await expectTurnResult(turn, "completed");
-      return;
+      return true;
     }
+    case "steer-leftover":
+    case "steer-leftover-resend":
+      return driveLeftover(name, startTurn, trigger);
     case "interrupt": {
       const turn = startTurn(
         turnRequest("interrupt", CODEX_RECORDING_INPUT.sleep),
@@ -242,7 +274,7 @@ async function driveCase(
         );
       }
       await expectTurnResult(turn, "interrupted");
-      return;
+      return true;
     }
     case "resume": {
       const first = startTurn(
@@ -265,7 +297,7 @@ async function driveCase(
         turnRequest("resume", CODEX_RECORDING_INPUT.resume, coordinate),
         "completed",
       );
-      return;
+      return true;
     }
     case "test-repair": {
       const turn = startTurn(
@@ -278,11 +310,84 @@ async function driveCase(
         cwd: workspace,
         stdio: "pipe",
       });
-      return;
+      return true;
     }
     default:
       throw new Error(`No Turn driver for '${name}'.`);
   }
+}
+
+/** Steer the first native turn the moment its Stop hook completes, the window
+ *  after Codex's last pending-input check. Codex then either refuses the Steer,
+ *  answers it, or leaves it over; only the last is recorded. */
+async function driveLeftover(
+  name: string,
+  startTurn: (request: TurnRequest) => HarnessTurn,
+  trigger: TStopHookTrigger,
+): Promise<boolean> {
+  const turn = startTurn(turnRequest(name, CODEX_RECORDING_INPUT.leftover));
+  const settlements: TurnEvent[] = [];
+  turn.subscribe((event) => {
+    if (event.kind === "steer") settlements.push(event);
+  });
+  let receipt: Promise<ControlReceipt> | undefined;
+  trigger.arm(() => {
+    receipt = turn.steer({
+      steerId: "conformance-leftover",
+      text: CODEX_RECORDING_INPUT.leftoverGuidance,
+    });
+  });
+  await expectTurnResult(turn, "completed");
+  if (receipt === undefined) {
+    throw new Error("The leftover recording saw no Stop hook complete.");
+  }
+  if ((await receipt).outcome !== "accepted") return false;
+  const [settled] = settlements;
+  if (settled?.kind !== "steer" || settlements.length !== 1) {
+    throw new Error("The leftover recording settled its Steer more than once.");
+  }
+  if (settled.settlement.kind !== "delivered") {
+    throw new Error(
+      `The leftover recording dropped its Steer: ${settled.settlement.reason}.`,
+    );
+  }
+  return settled.settlement.delivery === "re-delivered";
+}
+
+type TStopHookTrigger = {
+  readonly observer: CodexRecordingObserver;
+  arm(action: () => void): void;
+};
+
+function stopHookTrigger(observer: CodexRecordingObserver): TStopHookTrigger {
+  const decoder = new TextDecoder();
+  let armed: (() => void) | undefined;
+  return {
+    observer: {
+      ...observer,
+      stdout(bytes) {
+        observer.stdout(bytes);
+        if (armed === undefined) return;
+        try {
+          const message = JSON.parse(decoder.decode(bytes));
+          if (
+            message.method !== "hook/completed" ||
+            message.params?.run?.eventName !== "stop"
+          ) {
+            return;
+          }
+        } catch {
+          return;
+        }
+        const action = armed;
+        armed = undefined;
+        action();
+      },
+    },
+    arm(action) {
+      armed = action;
+    },
+  };
 }
 
 function turnRequest(
@@ -620,6 +725,81 @@ function isolatedCodexHome(config: string | undefined): string {
   symlinkSync(join(userHome, "auth.json"), join(home, "auth.json"));
   if (config !== undefined) writeFileSync(join(home, "config.toml"), config);
   return home;
+}
+
+/** A pass-through app-server that refuses the first empty-input `turn/start`
+ *  with the bytes Codex sends for empty input on a busy thread (codex-cli
+ *  0.157.1: -32603 `failed to submit turn input: EmptyInput`), so the Adapter's
+ *  text re-delivery is recorded against the real Codex. Every other byte is the
+ *  real app-server's, line for line. */
+function emptyInputRefusalExecutable(): string {
+  if (process.platform === "win32") {
+    throw new Error(
+      "Refresh the Codex leftover re-send recording on macOS or Linux; replay remains cross-platform.",
+    );
+  }
+  const executable = execFileSync("which", ["codex"], {
+    encoding: "utf8",
+  }).trim();
+  const directory = recorderTempDir("secant-codex-empty-refusal-");
+  const shim = join(directory, "shim.mjs");
+  writeFileSync(
+    shim,
+    `import { spawn } from "node:child_process";
+const [codex, ...args] = process.argv.slice(2);
+const serving = args[0] === "app-server" && args.length === 1;
+const child = spawn(codex, args, {
+  stdio: serving ? ["pipe", "pipe", "inherit"] : "inherit",
+});
+child.on("exit", (code) => process.exit(code ?? 1));
+if (serving) {
+  // Raw chunks keep the leftover race window; the refusal waits for a line end.
+  let lineEnded = true;
+  let refusal;
+  child.stdout.on("data", (chunk) => {
+    process.stdout.write(chunk);
+    lineEnded = chunk[chunk.length - 1] === 10;
+    if (lineEnded && refusal !== undefined) {
+      process.stdout.write(refusal);
+      refusal = undefined;
+    }
+  });
+  let refused = false;
+  process.stdin.on("data", (chunk) => {
+    if (refused || !chunk.includes('"turn/start"')) {
+      child.stdin.write(chunk);
+      return;
+    }
+    for (const line of chunk.toString().split(/(?<=\\n)/)) {
+      const message = JSON.parse(line);
+      if (message.method !== "turn/start" || message.params.input.length > 0) {
+        child.stdin.write(line);
+        continue;
+      }
+      refused = true;
+      refusal =
+        JSON.stringify({
+          id: message.id,
+          error: { code: -32603, message: "failed to submit turn input: EmptyInput" },
+        }) + "\\n";
+      if (lineEnded) {
+        process.stdout.write(refusal);
+        refusal = undefined;
+      }
+    }
+  });
+  process.stdin.on("end", () => child.stdin.end());
+}
+`,
+  );
+  const wrapper = join(directory, "codex-empty-refusal");
+  const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+  writeFileSync(
+    wrapper,
+    `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(shim)} ${quote(executable)} "$@"\n`,
+  );
+  chmodSync(wrapper, 0o755);
+  return wrapper;
 }
 
 function approvalExecutable(): string {

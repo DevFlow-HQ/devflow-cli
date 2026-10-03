@@ -1,0 +1,33 @@
+{
+  "harness": "codex",
+  "executableVersion": "codex-cli 0.160.0",
+  "protocolVersion": "codex-probe-2",
+  "recordedAt": "2026-10-03T19:27:30.708Z",
+  "redactions": [
+    {
+      "placeholder": "«WORKSPACE»",
+      "reason": "recording Workspace path"
+    },
+    {
+      "placeholder": "recorded-installation-id",
+      "reason": "Codex installation id"
+    },
+    {
+      "placeholder": "recorded-chatgpt-account-id",
+      "reason": "Codex ChatGPT account id"
+    },
+    {
+      "placeholder": "recorded@example.invalid",
+      "reason": "Codex account email"
+    },
+    {
+      "placeholder": "/recorded/codex-home",
+      "reason": "Codex home path"
+    },
+    {
+      "placeholder": "«HOSTNAME»",
+      "reason": "recording host name"
+    }
+  ],
+  "refreshCommand": "bun tests/harness/record-codex.ts steer-leftover-resend"
+}

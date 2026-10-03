@@ -9,6 +9,8 @@ export const CODEX_RECORDING_INPUT = {
   steer:
     "Think silently about the number one until you receive more guidance. Do not inspect files or run tools.",
   steerGuidance: "Finish now with exactly: recorded steer.",
+  leftover: "Reply with exactly: recorded leftover.",
+  leftoverGuidance: "Now reply with exactly: recorded re-delivery.",
   sleep: "Run `sleep 30` now. Do not inspect files or do anything else.",
   resume: "Reply with exactly: recorded resume.",
 } as const;

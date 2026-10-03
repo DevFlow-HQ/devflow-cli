@@ -128,8 +128,24 @@ recorded stdout stream instead. Refresh one case with
 `bun tests/harness/record-codex.ts <case>` while logged in through Codex; omitting
 the case refreshes `codex-qualification`. Authentication uses an empty temporary
 `CODEX_HOME`. The qualification cases are recorded on codex-cli 0.160.0 and the
-Turn cases on 0.155.0; every case shares the `codex-qualification` schema. Replay is deterministic Adapter evidence on all three CI operating
+Turn cases on 0.155.0, except the Steer cases (`steer`, `steer-leftover`, `steer-leftover-resend`) on 0.160.0; every case shares the
+`codex-qualification` schema. Replay is deterministic Adapter evidence on all three CI operating
 systems, not a claim that the currently installed real Codex remains compatible.
+
+The leftover Steer cases (#357) catch a race: Codex takes a Steer after its last
+pending-input check, writes its `userMessage`, and completes with no model output.
+The recorder sends the Steer the moment the first native turn's Stop hook reports
+`hook/completed` and re-records the whole session until Codex leaves the Steer
+over instead of refusing or answering it. Like `steer`, they run against the
+user's own Codex home, which must define a Stop hook, so these recordings carry
+that home's hook runs and MCP server names (paths redacted), unlike the
+qualification cases. On Linux x64 that took 4 attempts for `steer-leftover` and 22 for
+`steer-leftover-resend`. A real Codex accepts empty input on an idle thread, so
+`steer-leftover-resend` records through a pass-through app-server that refuses the
+first empty-input `turn/start` with the bytes Codex sends for empty input on a busy
+thread (`-32603 failed to submit turn input: EmptyInput`, seen on 0.157.1). That
+one response line is injected; every other byte, including the re-sent text's
+answer, is the real app-server's.
 
 ## Synthetic cases
 

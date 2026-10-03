@@ -58,6 +58,8 @@ let activeTurnId;
 const outstandingApprovals = new Map();
 let steerNumber = 0;
 const stalledControls = [];
+// A scripted leftover Steer leaves the next `turn/start` to re-deliver it.
+let leftoverPending = false;
 
 function replayLine(line) {
   return replayRecordedLine(line, requestedWorkspace ?? process.cwd());
@@ -240,6 +242,41 @@ for await (const line of lines) {
     );
     continue;
   }
+  if (request.method === "turn/start" && leftoverPending) {
+    const redelivery = scenario.turn?.redelivery;
+    if (redelivery === "stall") continue;
+    if (
+      redelivery === "refuse-all" ||
+      (redelivery === "refuse-empty" && request.params.input.length === 0)
+    ) {
+      process.stdout.write(
+        `${JSON.stringify({ id: request.id, error: { code: -32603, message: "failed to submit turn input: EmptyInput" } })}\n`,
+      );
+      continue;
+    }
+    leftoverPending = false;
+    turnNumber += 1;
+    const turnId = `turn-${turnNumber}`;
+    activeTurnId = turnId;
+    process.stdout.write(
+      `${JSON.stringify({ id: request.id, result: { turn: { id: turnId, items: [], status: "inProgress" } } })}\n`,
+    );
+    if (redelivery === "withhold") continue;
+    for (const [index, input] of request.params.input.entries()) {
+      emitItemCompleted(turnId, {
+        id: `redelivered-input-${index}`,
+        type: "userMessage",
+        content: [input],
+      });
+    }
+    emitItemCompleted(turnId, {
+      id: `redelivered-answer`,
+      type: "agentMessage",
+      text: "re-delivered answer",
+    });
+    emitTurnCompleted(turnId, "completed");
+    continue;
+  }
   if (request.method === "turn/start") {
     activeThreadId = request.params.threadId;
     turnNumber += 1;
@@ -411,6 +448,13 @@ for await (const line of lines) {
       );
       continue;
     }
+    const leftoverStatus = {
+      leftover: "completed",
+      "leftover-failed": "failed",
+    }[scenario.turn?.steerTerminal];
+    const historyOnly =
+      leftoverStatus !== undefined ||
+      scenario.turn?.steerTerminal === "history-only";
     const deliverSteer = () => {
       for (const phase of ["started", "completed"]) {
         process.stdout.write(
@@ -429,6 +473,21 @@ for await (const line of lines) {
           })}\n`,
         );
       }
+      // A delivered Steer is followed by model output; a leftover is not, and
+      // compaction after it is not model output.
+      if (scenario.turn?.leftoverCompaction === true) {
+        emitItemCompleted(request.params.expectedTurnId, {
+          id: `compaction-${steerNumber}`,
+          type: "contextCompaction",
+        });
+      }
+      if (!historyOnly) {
+        emitItemCompleted(request.params.expectedTurnId, {
+          id: `steer-answer-${steerNumber}`,
+          type: "agentMessage",
+          text: "steered answer",
+        });
+      }
     };
     if (scenario.turn?.deliverSteer === "before-response") deliverSteer();
     const turnId = scenario.turn?.mismatchedSteerResponse
@@ -440,6 +499,13 @@ for await (const line of lines) {
     if (scenario.turn?.deliverSteer === "after-response") deliverSteer();
     if (scenario.turn?.steerTerminal === "completed") {
       emitTurnCompleted(request.params.expectedTurnId, "completed");
+    }
+    if (historyOnly && scenario.turn?.deliverSteer === undefined) {
+      deliverSteer();
+    }
+    if (leftoverStatus !== undefined) {
+      leftoverPending = true;
+      emitTurnCompleted(request.params.expectedTurnId, leftoverStatus);
     }
     continue;
   }
@@ -642,6 +708,15 @@ function emitTurnStarted(turnId) {
         threadId: activeThreadId,
         turn: { id: turnId, items: [], status: "inProgress" },
       },
+    })}\n`,
+  );
+}
+
+function emitItemCompleted(turnId, item) {
+  process.stdout.write(
+    `${JSON.stringify({
+      method: "item/completed",
+      params: { completedAtMs: 1, item, threadId: activeThreadId, turnId },
     })}\n`,
   );
 }

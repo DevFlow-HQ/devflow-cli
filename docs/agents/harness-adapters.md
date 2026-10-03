@@ -74,6 +74,10 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   whose send has started, emitting `request-answered` before settlement; earlier resolution or terminal expires it. Close and local failures expire
   unconfirmed answers, including in-flight writes. A write failure after native confirmation cannot retract the answer.
 - Native Steer and Interrupt await bounded RPC acknowledgement for exact active ids. Only matching interrupted completion proves interruption; connection loss stays `lost`.
+- A Steer's `userMessage` (`clientId`) puts it in history, which delivers it (ADR 0035) at the next model output (agent, reasoning, plan, or tool
+  item, delta, approval; never hook prompt or compaction) or any other end. In history with none by a `completed`/`failed` terminal, it is a
+  leftover (#357): absent an Interrupt or close it is re-sent once, empty input then text on RPC refusal, on a new native turn id whose target slot
+  waiting controls follow, settling `re-delivered`. Refused twice, the terminal stands; an unanswered re-send start loses the Turn.
 - `CodexTurn` keeps approval correlation and native control together because both share terminal-ordering state. A third Harness needing the same shapes
   triggers their split; before then, splitting only relocates coupling.
 - Codex close rejects new work, expires requests, attempts bounded native interruption, closes stdin, and reaps the tree; cleanup cannot rewrite Turn truth.

@@ -1087,22 +1087,13 @@ class CodexSession {
     turn.admitted(coordinate, this.model);
     turn.submitting();
     try {
-      const result = await boundedCodexExchange({
-        operation: () =>
-          connection.request("turn/start", {
-            threadId: coordinate.opaque,
-            input: [{ type: "text", text: turn.request.input.text }],
-            // This Turn's requested model is applied at the native per-Turn point;
-            // the effective model stays what thread/start observed, never the
-            // request. Its effort is not sent yet (#345).
-            ...(turn.request.modelChoice !== undefined
-              ? { model: turn.request.modelChoice.model }
-              : {}),
-          }),
-        timeoutMs: this.controlTimeoutMs,
+      const turnId = await turn.requestTurnStart({
+        connection,
+        threadId: coordinate.opaque,
+        input: [{ type: "text", text: turn.request.input.text }],
         label: "turn/start runtime exchange",
       });
-      turn.acceptTurn(parseTurnStartResult(result));
+      turn.acceptTurn(turnId);
     } catch (cause) {
       if (!turn.settled) turn.lostAcceptance(cause);
     }
@@ -1176,8 +1167,33 @@ interface PendingCodexSteer {
   readonly input: SteerInput;
   readonly sentAt: string;
   accepted: boolean;
-  delivered: boolean;
+  /** Codex wrote its `userMessage` into history; model output after it delivers it. */
+  inHistory: boolean;
+  /** Model output followed it in history: the model saw it. */
+  exposed: boolean;
+  /** Re-delivered after it was left over, so its delivery is `re-delivered`. */
+  redelivered: boolean;
 }
+
+type TCodexTurnInput = { readonly type: "text"; readonly text: string };
+
+type TTurnStart = {
+  readonly connection: CodexJsonlConnection;
+  readonly threadId: string;
+  readonly input: readonly TCodexTurnInput[];
+  readonly label: string;
+};
+
+type TNativeTargetSlot = {
+  readonly promise: Promise<TCodexNativeTarget | undefined>;
+  readonly resolve: (target: TCodexNativeTarget | undefined) => void;
+  resolved: boolean;
+};
+
+type TTurnCompleted = Extract<
+  RuntimeNotification,
+  { readonly kind: "turn-completed" }
+>;
 
 class CodexTurn implements HarnessTurn {
   settled = false;
@@ -1213,11 +1229,9 @@ class CodexTurn implements HarnessTurn {
   >();
   private readonly approvalInputsByItemId = new Map<string, string>();
   private approvalSequence = 0;
-  private readonly nativeTargetPromise: Promise<TCodexNativeTarget | undefined>;
-  private resolveNativeTarget!: (
-    target: TCodexNativeTarget | undefined,
-  ) => void;
-  private nativeTargetResolved = false;
+  // Replaced when a leftover Steer's re-delivery moves the Turn to a new native
+  // turn id; a control waiting meanwhile targets the re-delivery.
+  private nativeTarget = nativeTargetSlot();
   private interruptState: TInterruptControlState = { kind: "idle" };
   private closing = false;
 
@@ -1230,9 +1244,6 @@ class CodexTurn implements HarnessTurn {
     this.onSettled = params.onSettled;
     this.resultPromise = new Promise((resolve) => {
       this.resolveResult = resolve;
-    });
-    this.nativeTargetPromise = new Promise((resolve) => {
-      this.resolveNativeTarget = resolve;
     });
   }
 
@@ -1291,7 +1302,9 @@ class CodexTurn implements HarnessTurn {
       input,
       sentAt: new Date().toISOString(),
       accepted: false,
-      delivered: false,
+      inHistory: false,
+      exposed: false,
+      redelivered: false,
     };
     this.steers.set(clientId, pending);
     let result: unknown;
@@ -1320,11 +1333,7 @@ class CodexTurn implements HarnessTurn {
                 this.steers.get(clientId) === pending;
               if (!acceptedWhileLive) return;
               pending.accepted = true;
-              if (pending.delivered)
-                this.settleSteer(clientId, pending, {
-                  kind: "delivered",
-                  delivery: "within-turn",
-                });
+              this.settleDelivered(clientId, pending);
             },
           }),
         timeoutMs: this.controlTimeoutMs,
@@ -1488,8 +1497,9 @@ class CodexTurn implements HarnessTurn {
     params: TNativeTargetWait,
   ): Promise<TCodexNativeTarget | undefined> {
     try {
+      const { promise } = this.nativeTarget;
       return await boundedCodexExchange({
-        operation: () => this.nativeTargetPromise,
+        operation: () => promise,
         timeoutMs: params.timeoutMs,
         label: params.label,
       });
@@ -1671,6 +1681,26 @@ class CodexTurn implements HarnessTurn {
     this.submitted = true;
   }
 
+  /** Start a native turn for this Turn's thread and input; its native turn id. */
+  async requestTurnStart(start: TTurnStart): Promise<string> {
+    const result = await boundedCodexExchange({
+      operation: () =>
+        start.connection.request("turn/start", {
+          threadId: start.threadId,
+          input: start.input,
+          // This Turn's requested model is applied at the native per-Turn point;
+          // the effective model stays what thread/start observed, never the
+          // request. Its effort is not sent yet (#345).
+          ...(this.request.modelChoice !== undefined
+            ? { model: this.request.modelChoice.model }
+            : {}),
+        }),
+      timeoutMs: this.controlTimeoutMs,
+      label: start.label,
+    });
+    return parseTurnStartResult(result);
+  }
+
   acceptTurn(turnId: string): void {
     if (this.settled) return;
     const threadId = this.threadId;
@@ -1678,10 +1708,6 @@ class CodexTurn implements HarnessTurn {
       this.protocolFailure(
         "turn/start was acknowledged before thread creation.",
       );
-      return;
-    }
-    if (this.turnId !== undefined && this.turnId !== turnId) {
-      this.protocolFailure("turn/start acknowledged a different Codex Turn.");
       return;
     }
     this.turnId = turnId;
@@ -1721,6 +1747,7 @@ class CodexTurn implements HarnessTurn {
     }
     if (!this.matchesTurn(notification.turnId)) return;
     if (notification.kind === "approval-request") {
+      this.deliverSteersInHistory();
       this.raiseApproval(notification);
       return;
     }
@@ -1731,20 +1758,15 @@ class CodexTurn implements HarnessTurn {
     switch (notification.kind) {
       case "preview":
         this.lastObservation = "Codex emitted assistant preview content";
+        this.deliverSteersInHistory();
         this.emitPreview(notification.delta);
         return;
       case "item-event":
         if (notification.userMessageClientId !== undefined) {
           const pending = this.steers.get(notification.userMessageClientId);
-          if (pending !== undefined) {
-            pending.delivered = true;
-            if (pending.accepted)
-              this.settleSteer(notification.userMessageClientId, pending, {
-                kind: "delivered",
-                delivery: "within-turn",
-              });
-          }
+          if (pending !== undefined) pending.inHistory = true;
         }
+        if (notification.modelOutput) this.deliverSteersInHistory();
         if (notification.approvalInput !== undefined) {
           this.approvalInputsByItemId.set(
             notification.itemId,
@@ -1985,13 +2007,96 @@ class CodexTurn implements HarnessTurn {
     }
   }
 
-  private acceptTerminal(
-    notification: Extract<
-      RuntimeNotification,
-      { readonly kind: "turn-completed" }
-    >,
-  ): void {
+  private acceptTerminal(notification: TTurnCompleted): void {
     this.lastObservation = `Codex emitted turn/completed: ${notification.status}`;
+    const leftovers = this.leftoverSteers();
+    if (
+      leftovers.length > 0 &&
+      (notification.status === "completed" ||
+        notification.status === "failed") &&
+      this.acceptsNewInput()
+    ) {
+      void this.redeliver(notification, leftovers);
+      return;
+    }
+    this.settleTerminal(notification);
+  }
+
+  /** Steers Codex wrote into history after the model's last request: a native
+   *  terminal with no model output after them leaves them unanswered. */
+  private leftoverSteers(): PendingCodexSteer[] {
+    return [...this.steers.values()].filter(
+      (pending) =>
+        pending.inHistory && !pending.exposed && !pending.redelivered,
+    );
+  }
+
+  /** Re-deliver leftover Steers inside this Turn with a native `turn/start` on
+   *  the idle thread: empty input, so the model answers them from history, or
+   *  their text when Codex refuses empty input. The Turn re-targets the new
+   *  native turn id privately and stays open until that turn's terminal. */
+  private async redeliver(
+    terminal: TTurnCompleted,
+    leftovers: readonly PendingCodexSteer[],
+  ): Promise<void> {
+    const threadId = terminal.threadId;
+    this.turnId = undefined;
+    this.nativeTarget = nativeTargetSlot();
+    this.settleApprovals(true);
+    this.clearPreview();
+    this.terminalError = undefined;
+    this.lastObservation = "Codex left an accepted Steer unanswered";
+    try {
+      const empty = await this.startRedelivery(threadId, []);
+      // Nothing is re-sent once the human stopped the Turn or Secant closes.
+      const started =
+        typeof empty === "string" || this.settled || !this.acceptsNewInput()
+          ? empty
+          : await this.startRedelivery(
+              threadId,
+              leftovers.map((pending) => ({
+                type: "text",
+                text: pending.input.text,
+              })),
+            );
+      if (this.settled) return;
+      if (typeof started === "string") {
+        for (const pending of leftovers) pending.redelivered = true;
+        this.acceptTurn(started);
+        return;
+      }
+      if (started !== empty) {
+        this.emit({
+          kind: "activity",
+          description: `Codex refused to re-deliver a Steer. ${started.message}`,
+        });
+      }
+      // The native terminal stands; the Steers stay in history, delivered.
+      this.settleTerminal(terminal);
+    } catch (cause) {
+      if (!this.settled) this.lostAcceptance(cause);
+    }
+  }
+
+  /** A re-delivery's native turn id, or Codex's refusal of it. */
+  private async startRedelivery(
+    threadId: string,
+    input: readonly TCodexTurnInput[],
+  ): Promise<string | CodexRpcResponseError> {
+    try {
+      return await this.requestTurnStart({
+        connection: this.connection,
+        threadId,
+        input,
+        label: "turn/start Steer re-delivery exchange",
+      });
+    } catch (cause) {
+      if (cause instanceof CodexRpcResponseError) return cause;
+      throw cause;
+    }
+  }
+
+  private settleTerminal(notification: TTurnCompleted): void {
     if (notification.status === "inProgress") {
       this.protocolFailure(
         "Codex turn/completed carried nonterminal status 'inProgress'.",
@@ -2090,6 +2195,25 @@ class CodexTurn implements HarnessTurn {
     this.preview = "";
   }
 
+  /** Model output proves the model saw every Steer already in history. */
+  private deliverSteersInHistory(): void {
+    for (const [clientId, pending] of this.steers) {
+      if (!pending.inHistory) continue;
+      pending.exposed = true;
+      this.settleDelivered(clientId, pending);
+    }
+  }
+
+  /** A Steer settles delivered once Codex both accepted it and exposed it,
+   *  in either order. */
+  private settleDelivered(clientId: string, pending: PendingCodexSteer): void {
+    if (!pending.accepted || !pending.exposed) return;
+    this.settleSteer(clientId, pending, {
+      kind: "delivered",
+      delivery: pending.redelivered ? "re-delivered" : "within-turn",
+    });
+  }
+
   private settleSteer(
     clientId: string,
     pending: PendingCodexSteer,
@@ -2109,11 +2233,22 @@ class CodexTurn implements HarnessTurn {
     this.resolveTarget(undefined);
     this.clearPreview();
     for (const [clientId, pending] of this.steers) {
-      if (pending.accepted)
-        this.settleSteer(clientId, pending, {
-          kind: "dropped",
-          reason: result.kind === "interrupted" ? "interrupt" : "loss",
-        });
+      if (!pending.accepted) continue;
+      // Codex delivers a Steer by writing it into history (ADR 0035); only a
+      // leftover awaits model output, so any other end settles it delivered.
+      this.settleSteer(
+        clientId,
+        pending,
+        pending.inHistory
+          ? {
+              kind: "delivered",
+              delivery: pending.redelivered ? "re-delivered" : "within-turn",
+            }
+          : {
+              kind: "dropped",
+              reason: result.kind === "interrupted" ? "interrupt" : "loss",
+            },
+      );
     }
     this.steers.clear();
     this.settleApprovals(confirmAnswers);
@@ -2124,10 +2259,18 @@ class CodexTurn implements HarnessTurn {
   }
 
   private resolveTarget(target: TCodexNativeTarget | undefined): void {
-    if (this.nativeTargetResolved) return;
-    this.nativeTargetResolved = true;
-    this.resolveNativeTarget(target);
+    if (this.nativeTarget.resolved) return;
+    this.nativeTarget.resolved = true;
+    this.nativeTarget.resolve(target);
   }
+}
+
+function nativeTargetSlot(): TNativeTargetSlot {
+  let resolve!: (target: TCodexNativeTarget | undefined) => void;
+  const promise = new Promise<TCodexNativeTarget | undefined>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve, resolved: false };
 }
 
 /** The failure a Turn that never started carries. */

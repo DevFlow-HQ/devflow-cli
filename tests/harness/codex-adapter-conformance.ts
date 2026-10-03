@@ -3067,6 +3067,58 @@ test("[codex-recorded-conformance] native Steer replays its exact active Turn", 
   await prepared.close();
 });
 
+for (const recorded of [
+  { fixture: "steer-leftover", redelivery: [[]] },
+  {
+    fixture: "steer-leftover-resend",
+    redelivery: [
+      [],
+      [{ type: "text", text: CODEX_RECORDING_INPUT.leftoverGuidance }],
+    ],
+  },
+] as const) {
+  test(`[codex-recorded-conformance] ${recorded.fixture} re-delivers a leftover Steer within one Secant Turn`, async () => {
+    const installed = installCodexReplayer(recorded.fixture);
+    const prepared = await prepareCodex(installed.path);
+    const turn = prepared.startTurn({
+      ...turnRequest(),
+      session: recorded.fixture,
+      correlationKey: { opaque: `record-${recorded.fixture}` },
+      input: { text: CODEX_RECORDING_INPUT.leftover },
+    });
+    const events = observeEvents(turn);
+    await waitForSession(turn);
+    assert.deepEqual(
+      await turn.steer({
+        steerId: "conformance-leftover",
+        text: CODEX_RECORDING_INPUT.leftoverGuidance,
+      }),
+      { outcome: "accepted" },
+    );
+
+    const result = await turn.result();
+    assert.equal(result.kind, "completed");
+    if (result.kind !== "completed") throw new Error("unreachable");
+    assert.equal(result.detail.finalContent, "recorded re-delivery.");
+    assert.deepEqual(
+      events.flatMap((event) =>
+        event.kind === "steer" ? [event.settlement] : [],
+      ),
+      [{ kind: "delivered", delivery: "re-delivered" }],
+    );
+    const threadId = (turnStarts(installed)[0] as { threadId: string })
+      .threadId;
+    assert.deepEqual(turnStarts(installed), [
+      {
+        threadId,
+        input: [{ type: "text", text: CODEX_RECORDING_INPUT.leftover }],
+      },
+      ...recorded.redelivery.map((input) => ({ threadId, input })),
+    ]);
+    await prepared.close();
+  });
+}
+
 test("[codex-recorded-conformance] approval exposes the action and replays allow once", async () => {
   const prepared = await prepareCodex(installCodexReplayer("approval").path);
   const turn = prepared.startTurn({
@@ -4190,4 +4242,263 @@ for (const order of ["before-response", "after-response"] as const) {
     });
     await prepared.close();
   });
+}
+
+for (const terminal of ["leftover", "leftover-failed"] as const) {
+  test(`codex-live-controls re-delivers a ${terminal} Steer by empty turn/start inside the same Turn`, async () => {
+    const { installed, prepared, turn, events } = await steerLeftover({
+      steerTerminal: terminal,
+    });
+
+    const result = await turn.result();
+    assert.equal(result.kind, "completed");
+    if (result.kind !== "completed") throw new Error("unreachable");
+    assert.equal(result.detail.finalContent, "re-delivered answer");
+    assert.deepEqual(
+      events.flatMap((event) => (event.kind === "steer" ? [event] : [])),
+      [
+        {
+          kind: "steer",
+          steerId: "leftover",
+          text: "answer me too",
+          sentAt: steerSentAt(events),
+          settlement: { kind: "delivered", delivery: "re-delivered" },
+        },
+      ],
+    );
+    assert.deepEqual(turnStarts(installed), [
+      {
+        threadId: "thread-1",
+        input: [{ type: "text", text: "private prompt" }],
+      },
+      { threadId: "thread-1", input: [] },
+    ]);
+    await prepared.close();
+  });
+}
+
+test("codex-live-controls counts compaction after a Steer as no model output", async () => {
+  const { installed, prepared, turn, events } = await steerLeftover({
+    steerTerminal: "leftover",
+    leftoverCompaction: true,
+  });
+
+  assert.equal((await turn.result()).kind, "completed");
+  assert.deepEqual(steerSettlements(events), [
+    { kind: "delivered", delivery: "re-delivered" },
+  ]);
+  assert.equal(turnStarts(installed).length, 2);
+  await prepared.close();
+});
+
+test("codex-live-controls re-sends a leftover Steer's text when Codex refuses empty input", async () => {
+  const { installed, prepared, turn, events } = await steerLeftover({
+    steerTerminal: "leftover",
+    redelivery: "refuse-empty",
+  });
+
+  assert.equal((await turn.result()).kind, "completed");
+  assert.deepEqual(steerSettlements(events), [
+    { kind: "delivered", delivery: "re-delivered" },
+  ]);
+  assert.deepEqual(turnStarts(installed).slice(1), [
+    { threadId: "thread-1", input: [] },
+    {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "answer me too" }],
+    },
+  ]);
+  await prepared.close();
+});
+
+test("codex-live-controls keeps the leftover's native terminal when Codex refuses every re-delivery", async () => {
+  const { installed, prepared, turn, events } = await steerLeftover({
+    steerTerminal: "leftover",
+    redelivery: "refuse-all",
+  });
+
+  const result = await turn.result();
+  assert.equal(result.kind, "completed");
+  if (result.kind !== "completed") throw new Error("unreachable");
+  assert.equal(result.detail.session.state, "open");
+  assert.deepEqual(steerSettlements(events), [
+    { kind: "delivered", delivery: "within-turn" },
+  ]);
+  assert.deepEqual(
+    events.filter((event) => event.kind === "activity"),
+    [
+      {
+        kind: "activity",
+        description:
+          "Codex refused to re-deliver a Steer. turn/start returned RPC error -32603: failed to submit turn input: EmptyInput",
+      },
+    ],
+  );
+  assert.equal(turnStarts(installed).length, 3);
+  await prepared.close();
+});
+
+test("codex-live-controls loses the Turn when the re-delivery turn/start goes unanswered", async () => {
+  const { prepared, turn, events } = await steerLeftover(
+    { steerTerminal: "leftover", redelivery: "stall" },
+    { controlTimeoutMs: 300 },
+  );
+
+  const result = await turn.result();
+  assert.equal(result.kind, "lost");
+  if (result.kind !== "lost") throw new Error("unreachable");
+  assert.equal(result.detail.unknown, "acceptance");
+  assert.equal(result.detail.failure?.category, "turn-start");
+  assert.equal(result.detail.session.state, "detached");
+  assert.deepEqual(steerSettlements(events), [
+    { kind: "delivered", delivery: "within-turn" },
+  ]);
+  await prepared.close();
+});
+
+test("codex-live-controls interrupts the re-delivery's native Turn", async () => {
+  const redelivery = stdinWatch((message) => message.method === "turn/start");
+  const { installed, prepared, turn, events } = await steerLeftover(
+    {
+      steerTerminal: "leftover",
+      redelivery: "withhold",
+      interruptTerminal: "interrupted",
+    },
+    { recordingObserver: redelivery.observer },
+  );
+  await redelivery.seen(2);
+
+  assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
+  assert.equal((await turn.result()).kind, "interrupted");
+  assert.deepEqual(steerSettlements(events), [
+    { kind: "delivered", delivery: "re-delivered" },
+  ]);
+  const interrupt = appServerMessages(installed).find(
+    (message) => message.method === "turn/interrupt",
+  );
+  assert.deepEqual(interrupt?.params, {
+    threadId: "thread-1",
+    turnId: "turn-2",
+  });
+  await prepared.close();
+});
+
+for (const terminal of ["interrupted", "completed"] as const) {
+  test(`codex-live-controls settles a Steer in history delivered without re-delivery on an Interrupt's ${terminal} terminal`, async () => {
+    const { installed, prepared, turn, events } = await steerLeftover({
+      steerTerminal: "history-only",
+      ...(terminal === "interrupted"
+        ? { interruptTerminal: "interrupted" }
+        : { interruptTerminalBeforeResponse: "completed" }),
+    });
+
+    assert.deepEqual(
+      await turn.interrupt(),
+      terminal === "interrupted"
+        ? { outcome: "accepted" }
+        : { outcome: "rejected", reason: "expired" },
+    );
+    assert.equal((await turn.result()).kind, terminal);
+    assert.deepEqual(steerSettlements(events), [
+      { kind: "delivered", delivery: "within-turn" },
+    ]);
+    assert.equal(turnStarts(installed).length, 1);
+    await prepared.close();
+  });
+}
+
+/** A live synthetic Turn whose accepted Steer the scenario leaves in history. */
+async function steerLeftover(
+  options: Parameters<InstalledCodexReplayer["configureTurn"]>[0],
+  adapter: {
+    readonly controlTimeoutMs?: number;
+    readonly recordingObserver?: CodexRecordingObserver;
+  } = {},
+) {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({ withholdTerminal: true, ...options });
+  const preparedResult = await createCodexAdapter({
+    path: installed.path,
+    env: {},
+    ...adapter,
+  }).prepare({ workspace: process.cwd() });
+  assert.equal(preparedResult.ok, true);
+  if (!preparedResult.ok) throw new Error("unreachable");
+  const prepared = preparedResult.harness;
+  const turn = prepared.startTurn(turnRequest());
+  const events = observeEvents(turn);
+  await waitForSession(turn);
+  assert.deepEqual(
+    await turn.steer({ steerId: "leftover", text: "answer me too" }),
+    { outcome: "accepted" },
+  );
+  return { installed, prepared, turn, events };
+}
+
+function steerSettlements(events: readonly TurnEvent[]): unknown[] {
+  return events.flatMap((event) =>
+    event.kind === "steer" ? [event.settlement] : [],
+  );
+}
+
+function appServerMessages(
+  installed: InstalledCodexReplayer,
+): { readonly method?: string; readonly params?: unknown }[] {
+  const appServer = installed
+    .invocations()
+    .find((invocation) => invocation.args.join(" ") === "app-server");
+  assert.ok(appServer !== undefined);
+  return appServer.stdinLines.map((line) => JSON.parse(line));
+}
+
+function turnStarts(installed: InstalledCodexReplayer): unknown[] {
+  return appServerMessages(installed)
+    .filter((message) => message.method === "turn/start")
+    .map((message) => message.params);
+}
+
+function steerSentAt(events: readonly TurnEvent[]): string {
+  const steer = events.find((event) => event.kind === "steer");
+  assert.equal(steer?.kind, "steer");
+  if (steer?.kind !== "steer") throw new Error("unreachable");
+  return steer.sentAt;
+}
+
+/** Observe the Adapter's stdin frames, resolving once `count` match. */
+function stdinWatch(
+  matches: (message: { readonly method?: string }) => boolean,
+): {
+  readonly observer: CodexRecordingObserver;
+  seen(count: number): Promise<void>;
+} {
+  const decoder = new TextDecoder();
+  let matched = 0;
+  const waiters: { readonly count: number; readonly resolve: () => void }[] =
+    [];
+  const ignore = () => undefined;
+  return {
+    observer: {
+      version: ignore,
+      schema: ignore,
+      stdout: ignore,
+      stderr: ignore,
+      closed: ignore,
+      stdin(bytes) {
+        for (const line of decoder.decode(bytes).split("\n")) {
+          if (line.trim().length === 0 || !matches(JSON.parse(line))) continue;
+          matched += 1;
+        }
+        for (const waiter of waiters.filter(
+          (entry) => entry.count <= matched,
+        )) {
+          waiters.splice(waiters.indexOf(waiter), 1);
+          waiter.resolve();
+        }
+      },
+    },
+    seen(count) {
+      if (matched >= count) return Promise.resolve();
+      return new Promise((resolve) => waiters.push({ count, resolve }));
+    },
+  };
 }

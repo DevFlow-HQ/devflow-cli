@@ -405,6 +405,8 @@ export type CodexRuntimeNotification =
       readonly turnId: string;
       readonly itemId: string;
       readonly userMessageClientId?: string;
+      /** The model produced this item, so it saw every input taken before it. */
+      readonly modelOutput: boolean;
       readonly event?: TurnEvent;
       readonly approvalInput?: string;
     }
@@ -536,12 +538,29 @@ export function parseRuntimeNotification(
   }
 }
 
+/** Item types a model request produces. A hook prompt, compaction, review marker,
+ *  or tool output is not evidence that the model saw the input before it. */
+const MODEL_OUTPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
+  "agentMessage",
+  "reasoning",
+  "plan",
+  "commandExecution",
+  "fileChange",
+  "mcpToolCall",
+  "dynamicToolCall",
+  "collabAgentToolCall",
+  "webSearch",
+  "imageView",
+  "imageGeneration",
+]);
+
 function normalizeItem(
   value: unknown,
   started: boolean,
 ): {
   readonly itemId: string;
   readonly userMessageClientId?: string;
+  readonly modelOutput: boolean;
   readonly event?: TurnEvent;
   readonly approvalInput?: string;
 } {
@@ -550,6 +569,21 @@ function normalizeItem(
     z.looseObject({ id: z.string().min(1), type: z.string().min(1) }),
     "item lifecycle",
   );
+  return {
+    ...normalizeItemContent(item, started),
+    modelOutput: MODEL_OUTPUT_ITEM_TYPES.has(item.type),
+  };
+}
+
+function normalizeItemContent(
+  item: { readonly id: string; readonly type: string },
+  started: boolean,
+): {
+  readonly itemId: string;
+  readonly userMessageClientId?: string;
+  readonly event?: TurnEvent;
+  readonly approvalInput?: string;
+} {
   const type = item.type;
   if (type === "reasoning") return { itemId: item.id };
   if (type === "userMessage") {

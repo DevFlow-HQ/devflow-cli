@@ -130,7 +130,16 @@ interface CodexTurnReplayOptions {
   readonly duplicateFirstApproval?: boolean;
   readonly withholdTerminal?: boolean;
   readonly interruptTerminal?: "interrupted" | "exit";
-  readonly steerTerminal?: "completed";
+  /** `leftover`: the Steer's `userMessage`, then a native terminal with no model
+   *  output; the next `turn/start` re-delivers it and completes. `history-only`:
+   *  the `userMessage` alone, the Turn left running. */
+  readonly steerTerminal?:
+    "completed" | "leftover" | "leftover-failed" | "history-only";
+  /** Follow the Steer's `userMessage` with a compaction item. */
+  readonly leftoverCompaction?: boolean;
+  /** Refuse the empty-input re-delivery (as Codex does while a turn is active)
+   *  or every one, never answer it, or accept it and withhold its output. */
+  readonly redelivery?: "refuse-empty" | "refuse-all" | "stall" | "withhold";
   readonly deliverSteer?: "before-response" | "after-response";
   readonly interruptRpcError?: "stale" | "mismatch" | "near-miss" | "internal";
   readonly interruptTerminalBeforeResponse?:
