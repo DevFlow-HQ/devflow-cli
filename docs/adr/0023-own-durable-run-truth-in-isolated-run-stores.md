@@ -84,7 +84,9 @@ value means the Harness default, never a substitute. The requested model is free
 at launch-preparation and at prepare ([ADR 0022](./0022-own-a-truthful-deep-harness-seam.md)); a Command-only Run carries none. It is not evidence:
 the effective model each Attempt observes stays a per-Attempt fact and never overwrites the request. (Edited 2026-09-29: [ADR 0034](./0034-choose-and-change-model-and-effort-as-one-run-wide-model-choice.md)
 replaces this never-changed request with a Run-wide **Model choice** of model and effort that the store holds, updates on each change, and copies into
-each Turn's requested model and effort beside the observed effective values; no value means "Harness default" any more.)
+each Turn's requested model and effort beside the observed effective values; no value means "Harness default" any more.) (Edited 2026-10-03,
+[#340](https://github.com/secantdev/secant/issues/340): the stored request is no longer handed to prepare. Run execution sends it on every Turn request
+and records it on each Turn at admission; the Run-wide Model choice replaces the stored value in a later slice.)
 
 ## Amendment — a Run owns one editable working area (2026-09-23, [#214](https://github.com/secantdev/secant/issues/214))
 

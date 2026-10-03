@@ -80,7 +80,8 @@ measures elapsed time on the monotonic clock. A handshake made of several exchan
   The `--version` probe reports no phase.
 - **Codex.** `launch` is the app-server spawn and `handshake` the `initialize`/`account/read`/`model/list` exchange, both at `prepare` with no
   Session key. Those three are the handshake's steps `protocol-initialize`, `account-check`, and `model-list`; the step open when the handshake
-  ends settles with its outcome, so a login refusal fails `account-check` and a missing requested model fails `model-list`. Per Session,
+  ends settles with its outcome, so a login refusal fails `account-check`. `model-list` only reads the list; each Turn's model is checked against it
+  at Turn start, never at prepare. Per Session,
   `thread/start` is a `handshake` and `thread/resume` is `recovery`. `control` spans the `turn/interrupt` or `turn/steer`
   RPC: ok on a parsed acknowledgement, abandoned on an expected race, otherwise failed (`control-refused` with the RPC code, `control-timeout`,
   `control-transport`, or `protocol-corruption`). `cleanup` spans `close`, including its bounded interrupt.

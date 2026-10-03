@@ -20,6 +20,7 @@ import {
   REPLAY_BARRIER,
   type FakeRequestSpec,
   type FakeScript,
+  type FakeTurnRequestRecord,
   type FakeTurnScript,
 } from "./fake-adapter.js";
 
@@ -141,15 +142,23 @@ const scenarios: ConformanceScenarios = {
   // and the requested-model cases exercise both admission and typed rejection.
   expectedDeclaration: { kind: "list", includes: ["fake-model-a"] },
   requestedModel: "fake-model-a",
+  // The fake records each request's effort, so the opaque effort path is proven
+  // here before any Run carries one (#342).
+  requestedEffort: "high",
   unknownModel: "fake-model-z",
-  requestedTurn: () =>
-    createFake(
-      fake({
-        events: [{ kind: "assistant-content", content: "hello" }],
-        result: COMPLETED_OPEN,
+  requesting: () => {
+    const turnRequests: FakeTurnRequestRecord[] = [];
+    return {
+      factory: createFake({
+        ...fake({
+          events: [{ kind: "assistant-content", content: "hello" }],
+          result: COMPLETED_OPEN,
+        }),
+        turnRequests,
       }),
-    ),
-  rejectsUnknownModel: () => createFake(fake({ result: COMPLETED_OPEN })),
+      requests: () => turnRequests.map((request) => request.modelChoice),
+    };
+  },
   baseline: () =>
     createFake(
       fake({

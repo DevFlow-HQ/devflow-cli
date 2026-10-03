@@ -1252,6 +1252,19 @@ function toTurnKind(kind: string | undefined): RunTurnKind | undefined {
   return kind === "agent" || kind === "interactive-agent" ? kind : undefined;
 }
 
+/** A `turn-started` entry's requested model and effort (ADR 0034): free text, so
+ *  copied as stored, and omitted when the Turn recorded no request. */
+function requestFields(
+  turn: TurnRecord,
+): Pick<RunTimelineEvent, "requestedModel" | "requestedEffort"> {
+  const choice = turn.modelChoice;
+  if (choice === undefined) return {};
+  return {
+    requestedModel: choice.model,
+    ...(choice.effort !== undefined ? { requestedEffort: choice.effort } : {}),
+  };
+}
+
 /** Each Turn's Step, decoded from its stored Attempt id (#289), keyed by Turn id. */
 export function turnSteps(
   turns: readonly TurnRecord[],
@@ -1477,9 +1490,9 @@ function buildTimeline(
       order: afterSettled(conflict.at),
     });
   }
-  // Each Harness Turn (#116): admitted (naming its Session), then — once settled —
-  // its result kind. Each carries its Crucible Turn kind (#126), narrowed at this
-  // read ingress (D7) so a client labels reopened Agent and Interactive Turns
+  // Each Harness Turn (#116): admitted (naming its Session and the Model choice it
+  // requested, ADR 0034), then — once settled — its result kind. Each carries its
+  // Crucible Turn kind (#126), narrowed at this read ingress (D7) so a client labels reopened Agent and Interactive Turns
   // without inferring from `progress[position]`; a legacy row with no kind omits it.
   // The authoritative assistant content and tool activity in between come from the
   // normalized durable events. Every Turn-scoped event names its Step and its
@@ -1503,6 +1516,7 @@ function buildTimeline(
         event: "turn-started",
         detail: turn.session,
         ...kindField,
+        ...requestFields(turn),
         ...scope(turn),
       },
       order,

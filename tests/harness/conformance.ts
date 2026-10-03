@@ -16,6 +16,7 @@ import {
   type HarnessRequest,
   type HarnessTurn,
   type LostUnknown,
+  type ModelChoice,
   type PreparedHarness,
   type RecoveryCoordinate,
   type TurnAdmission,
@@ -824,44 +825,57 @@ export function runModelDeclarationCases(
 }
 
 /**
- * The requested-model behaviours every Adapter and the fake must exhibit: a
- * requested model is threaded through prepare to the Adapter's native mechanism
- * while the effective model stays a separate observed fact, and a requested model
- * a declared list does not admit fails prepare with a typed unavailable result
- * rather than a substitution (ADR 0022).
+ * The per-Turn Model choice every Adapter and the fake must honour (ADR 0034): each
+ * Turn request carries its model, and its effort when it has one, to the Harness
+ * while the effective model stays a separate observed fact, and a model a declared
+ * list does not admit settles that Turn `not-started` before admission rather than
+ * a substitution. Nothing about the model is a prepare option.
  */
 export interface RequestedModelScenarios {
   readonly label: string;
   readonly inputText?: string;
-  /** A model the baseline declaration admits, threaded through prepare. */
+  /** A model the baseline declaration admits, sent on the Turn request. */
   readonly requestedModel: string;
-  /** An Adapter that completes a Turn, prepared with `requestedModel`. */
-  requestedTurn(): TestHarnessAdapterFactory;
+  /** An effort sent beside it, for a provider that applies effort; one that does
+   *  not apply it yet omits this. */
+  readonly requestedEffort?: string;
+  /** An Adapter that completes one Turn, and the Model choice each Turn reached
+   *  the Harness with, in order (absent where a Turn carried none). */
+  requesting(): ModelRequestProbe;
   /** For a list-declaring Adapter, a model the list rejects. A free-text Adapter
-   *  admits any value and omits both this and `rejectsUnknownModel`. */
+   *  admits any value and omits it. */
   readonly unknownModel?: string;
-  rejectsUnknownModel?: () => TestHarnessAdapterFactory;
 }
 
-/** Run the requested-model cases against one provider. */
+interface ModelRequestProbe {
+  readonly factory: TestHarnessAdapterFactory;
+  readonly requests: () => readonly (ModelChoice | undefined)[];
+}
+
+/** Run the per-Turn requested-model cases against one provider. */
 export function runRequestedModelCases(
   scenarios: RequestedModelScenarios,
   register: RegisterConformanceCase,
 ): void {
   const name = (behaviour: string) => `[${scenarios.label}] ${behaviour}`;
+  const text = scenarios.inputText;
 
   register(
     name(
-      "a requested model reaches the Adapter and the effective model stays separate",
+      "a Turn request's model reaches the Harness and the effective model stays separate",
     ),
     async () => {
-      const prepared = await prepareWith(scenarios.requestedTurn(), {
-        requestedModel: scenarios.requestedModel,
-      });
-      const turn = prepared.startTurn(
-        request(recorder().recorder, { text: scenarios.inputText }),
-      );
-      const result = await turn.result();
+      const probe = scenarios.requesting();
+      const prepared = await prepare(probe.factory);
+      const modelChoice: ModelChoice = {
+        model: scenarios.requestedModel,
+        ...(scenarios.requestedEffort !== undefined
+          ? { effort: scenarios.requestedEffort }
+          : {}),
+      };
+      const result = await prepared
+        .startTurn(request(recorder().recorder, { text, modelChoice }))
+        .result();
       assert.equal(result.kind, "completed");
       if (result.kind !== "completed") throw new Error("unreachable");
       // Requested and effective stay distinct facts: an observed effective model
@@ -874,42 +888,47 @@ export function runRequestedModelCases(
         );
       }
       await prepared.close();
+      assert.deepEqual(probe.requests(), [modelChoice]);
     },
   );
 
-  register(
-    name("an empty requested model is treated as no model requested"),
-    async () => {
-      // Every Adapter reads `requestedModel` the same way: an empty string is no
-      // request, so even a list-declaring Adapter admits it without a list check.
-      const prepared = await prepareWith(scenarios.requestedTurn(), {
-        requestedModel: "",
-      });
-      const result = await prepared
-        .startTurn(request(recorder().recorder, { text: scenarios.inputText }))
-        .result();
-      assert.equal(result.kind, "completed");
-      await prepared.close();
-    },
-  );
+  register(name("a Turn request with no model carries none"), async () => {
+    const probe = scenarios.requesting();
+    const prepared = await prepare(probe.factory);
+    const result = await prepared
+      .startTurn(request(recorder().recorder, { text }))
+      .result();
+    assert.equal(result.kind, "completed");
+    await prepared.close();
+    assert.deepEqual(probe.requests(), [undefined]);
+  });
 
-  const rejectsUnknownModel = scenarios.rejectsUnknownModel;
   const unknownModel = scenarios.unknownModel;
-  if (rejectsUnknownModel !== undefined && unknownModel !== undefined) {
+  if (unknownModel !== undefined) {
     register(
       name(
-        "a requested model the declared list rejects fails prepare with a typed unavailable result",
+        "a Turn requesting a model the declared list rejects settles not-started before admission",
       ),
       async () => {
-        const adapter = rejectsUnknownModel()();
-        const result = await adapter.prepare({
-          workspace: process.cwd(),
-          requestedModel: unknownModel,
-        });
-        assert.equal(result.ok, false);
-        if (result.ok) throw new Error("unreachable");
-        assert.equal(result.failure.phase, "prepare");
-        assert.equal(result.failure.category, "model-unavailable");
+        const prepared = await prepare(scenarios.requesting().factory);
+        const probe = recorder();
+        const result = await prepared
+          .startTurn(
+            request(probe.recorder, {
+              text,
+              modelChoice: { model: unknownModel },
+            }),
+          )
+          .result();
+        assert.equal(result.kind, "not-started");
+        if (result.kind !== "not-started") throw new Error("unreachable");
+        assert.equal(result.detail.failure.phase, "turn");
+        assert.equal(result.detail.failure.category, "model-unavailable");
+        assert.equal(result.detail.failure.possibleEffects, "none");
+        assert.match(result.detail.failure.diagnostics ?? "", /model/);
+        // Refused before admission, so nothing was recorded or sent.
+        assert.deepEqual(probe.admissions, []);
+        await prepared.close();
       },
     );
   }
@@ -1179,19 +1198,6 @@ async function prepare(factory: TestHarnessAdapterFactory) {
   return result.harness;
 }
 
-async function prepareWith(
-  factory: TestHarnessAdapterFactory,
-  options: { readonly requestedModel: string },
-) {
-  const result = await factory().prepare({
-    workspace: process.cwd(),
-    requestedModel: options.requestedModel,
-  });
-  assert.equal(result.ok, true);
-  if (!result.ok) throw new Error("unreachable");
-  return result.harness;
-}
-
 interface RecorderProbe {
   readonly recorder: DurableTurnRecorder;
   readonly admissions: TurnAdmission[];
@@ -1233,6 +1239,7 @@ function request(
   overrides?: {
     readonly resume?: RecoveryCoordinate;
     readonly text?: string;
+    readonly modelChoice?: ModelChoice;
   },
 ): TurnRequest {
   return {
@@ -1242,6 +1249,9 @@ function request(
     recorder: durableRecorder,
     input: { text: overrides?.text ?? "conformance turn" },
     resume: overrides?.resume,
+    ...(overrides?.modelChoice !== undefined
+      ? { modelChoice: overrides.modelChoice }
+      : {}),
   };
 }
 

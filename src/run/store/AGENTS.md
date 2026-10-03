@@ -11,8 +11,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `RunOwner.selectHarness` is the sole legacy upgrade write: fenced, null-only, and idempotent when the same immutable id is already present (#139).
 - `run_record.requested_model` is the immutable model requested at launch (#187), written with `selected_harness` in the staged store before create publishes and never
   changed after. It is free text (no closed-set validation at the read ingress, unlike `selected_harness`), null when the launch requested no model — the Harness default
-  applies, never a substituted value — and for a Command-only Run. Composition threads it into `prepare` identically on launch and resume; it stays distinct from the
-  per-Attempt observed `effective_model`.
+  applies, never a substituted value — and for a Command-only Run. Run execution sends it on every Turn request and copies it onto each `turn` row; it stays
+  distinct from the per-Attempt observed `effective_model`.
 - Ownership is per Run, not per Workspace (ADR 0031): each Run Store carries one owner record; an absent record reads unowned at epoch zero. There is no
   Workspace-wide claim column and no one-live-Run index, so any number of Runs may be live in one Workspace at once, each owned separately.
   `createRun` never refuses for the Workspace and two concurrent creates both succeed; ownership is set on the create/resume claim and released only on
@@ -87,6 +87,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Turn `kind` (#126): `admitTurn` records the Secant Step kind that produced the Turn — `agent` or `interactive-agent` — in the nullable `turn.kind` column, Secant-owned
   durable truth independent of `origin` (`managed`/`human`). The column is nullable so a row admitted before it existed reads its kind back **null** (undefined in
   `TurnRecord`) — a legacy row whose kind is genuinely unknown, never fabricated to a guess.
+- Turn request (ADR 0034): `admitTurn` writes the requested Model choice into the nullable, free-text `turn.requested_model`/`requested_effort`, null for
+  no request and on older rows; `TurnRecord.modelChoice` is present only when a model is stored, and settlement never touches them.
 - The `attempt` row also carries the normalized Harness identity and steer evidence of an Agent-step Attempt (#125, #134):
   `harness`/`executable`/`executable_version` plus `steer_available`/`steer_evidence`, written together by `publishAttempt` from the prepared profile (all null for a
   Command/Gate Attempt). `PublishAttemptRequest` carries an optional `agentEvidence` (identity required, model optional), so a write can never create a model-only

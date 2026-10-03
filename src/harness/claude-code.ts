@@ -57,6 +57,7 @@ import type {
 } from "./harness.js";
 import { JsonlLineReader } from "./jsonl.js";
 import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
+import { modelChoiceRefusal } from "./model-request.js";
 import { writableDirectoryFailure } from "./writable-directory.js";
 import {
   EXPIRED_MESSAGE,
@@ -148,9 +149,6 @@ class ClaudeCodeAdapter implements HarnessAdapter {
         `Claude Code is not supported on platform '${process.platform}'.`,
       );
     }
-    // An empty requested model means no model was requested, matching Codex; both
-    // Adapters read `PrepareOptions.requestedModel` identically.
-    const requestedModel = normalizeRequestedModel(options.requestedModel);
     const writableFailure = writableDirectoryFailure(options.writableDirectory);
     if (writableFailure !== undefined) {
       return { ok: false, failure: writableFailure };
@@ -178,7 +176,6 @@ class ClaudeCodeAdapter implements HarnessAdapter {
           options.workspace,
           this.overrides.sessionId ?? randomUUID,
           spawn,
-          requestedModel,
           options.writableDirectory,
           options.phases,
         ),
@@ -198,7 +195,6 @@ class ClaudeCodeAdapter implements HarnessAdapter {
         options.workspace,
         this.overrides.sessionId ?? randomUUID,
         spawn,
-        requestedModel,
         options.writableDirectory,
         options.phases,
       ),
@@ -331,9 +327,6 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
     private readonly workspace: string,
     private readonly createSessionId: () => string,
     private readonly spawn: ProcessAdapter["spawnOwnedProcess"],
-    /** The caller's requested model, forwarded to every launch as --model and
-     *  kept private; the free-text profile admits any value. */
-    private readonly requestedModel: string | undefined,
     /** The one additional writable directory, forwarded as --add-dir (#214). */
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
@@ -387,7 +380,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
         coordinate,
         () => this.ensureBridge(),
         this.spawn,
-        this.requestedModel,
+        this.profile,
         this.writableDirectory,
         this.phases,
       );
@@ -503,8 +496,9 @@ class ClaudeCodeSession {
     sessionId: string,
     private readonly ensureBridge: () => Promise<PermissionBridge>,
     private readonly spawn: ProcessAdapter["spawnOwnedProcess"],
-    /** The caller's requested model, forwarded as --model on every launch. */
-    private readonly requestedModel: string | undefined,
+    /** The qualified profile, whose model declaration each Turn's request is
+     *  checked against before admission. */
+    private readonly profile: HarnessProfile,
     /** The additional writable directory, forwarded as --add-dir on every
      *  launch, fresh or resumed (#214). */
     private readonly writableDirectory: string | undefined,
@@ -640,6 +634,14 @@ class ClaudeCodeSession {
   private async submit(turn: ClaudeCodeTurn): Promise<void> {
     if (turn.settled) return;
 
+    // The shared per-Turn model rule (ADR 0034). Claude Code declares free text, so
+    // it admits any model; the check keeps the profile the one statement of it.
+    const refusal = modelChoiceRefusal(this.profile, turn.request.modelChoice);
+    if (refusal !== undefined) {
+      turn.settleNotStartedWith(refusal);
+      return;
+    }
+
     if (this.unusableReason !== undefined) {
       turn.settleRecoveryFailure(this.unusableReason, this.model());
       return;
@@ -767,11 +769,13 @@ class ClaudeCodeSession {
     const sessionArgs = resuming
       ? ["--resume", this.coordinate.opaque]
       : ["--session-id", this.coordinate.opaque];
-    // A caller-requested model is forwarded natively as --model; Claude Code's
-    // free-text profile admits any value, so no value is validated at the Seam.
-    // `requestedModel` is already normalized (empty means none).
-    const modelArgs =
-      this.requestedModel !== undefined ? ["--model", this.requestedModel] : [];
+    // The model this launch's Turn requests is forwarded natively as --model, and
+    // on a relaunch `--resume --model` overrides the transcript's model. A live
+    // child reused for a later Turn keeps the model it was launched with; no Run
+    // changes its request between Turns until #344, and #348 owns that change.
+    // The request's effort is not sent yet (#348).
+    const model = turn.request.modelChoice?.model;
+    const modelArgs = model !== undefined ? ["--model", model] : [];
     // `--add-dir` extends Claude Code's file-tool access to one more directory and
     // leaves the user's permission mode and settings untouched (#214).
     const writableArgs =
@@ -1162,10 +1166,11 @@ class ClaudeCodeTurn implements HarnessTurn {
     cause: unknown,
     diagnostics?: string,
   ): void {
-    this.settle({
-      kind: "not-started",
-      detail: { failure: notStartedFailure(category, cause, diagnostics) },
-    });
+    this.settleNotStartedWith(notStartedFailure(category, cause, diagnostics));
+  }
+
+  settleNotStartedWith(failure: HarnessFailure): void {
+    this.settle({ kind: "not-started", detail: { failure } });
   }
 
   settleInterrupted(): void {
@@ -1675,14 +1680,6 @@ function fileIdentity(path: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** Treat an absent or empty requested model as no request, so every Adapter reads
- *  `PrepareOptions.requestedModel` the same way. */
-function normalizeRequestedModel(
-  value: string | undefined,
-): string | undefined {
-  return value === undefined || value.length === 0 ? undefined : value;
 }
 
 function harnessPlatform(

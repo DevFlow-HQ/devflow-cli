@@ -489,6 +489,31 @@ test("[requested-model-durability] run launch --model is accepted for an Agent B
   assert.match(shown, /Requested model: requested-opus/);
   // The observed effective model stays a separate line: requested vs effective.
   assert.match(shown, /Observed effective model: claude-/);
+
+  // `--json` adds the model each Turn requested on its `turn-started` entry and
+  // keeps the run-level requested and effective models as they were (ADR 0034).
+  const json: string[] = [];
+  const jsonCode = await runHeadless(wired, ["run", "show", runId, "--json"], {
+    out: (text) => json.push(text),
+    err: () => {},
+    cwd: () => process.cwd(),
+  });
+  assert.equal(jsonCode, 0);
+  const run = (JSON.parse(json.join("")) as { result: { run: RunView } }).result
+    .run;
+  assert.equal(run.requestedModel, "requested-opus");
+  assert.match(run.effectiveModel ?? "", /^claude-/);
+  const started = run.timeline.find((event) => event.event === "turn-started");
+  assert.deepEqual(started, {
+    at: started?.at,
+    event: "turn-started",
+    detail: "s",
+    turnKind: "agent",
+    requestedModel: "requested-opus",
+    step: "fix",
+    session: "s",
+    sessionName: "s",
+  });
 });
 
 test("a command -> agent -> command Bundle runs the plain Turn to succeeded (#116)", async (t) => {

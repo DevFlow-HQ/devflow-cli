@@ -34,6 +34,8 @@ const turnRow = z.object({
   session_key: z.string(),
   origin: z.string(),
   kind: z.string().nullable(),
+  requested_model: z.string().nullable(),
+  requested_effort: z.string().nullable(),
   sequence: z.number(),
   input: z.string(),
   admitted_at: z.string(),
@@ -101,6 +103,8 @@ export function admitTurn(
       session_key: request.session,
       origin: request.origin,
       kind: request.kind,
+      requested_model: request.modelChoice?.model ?? null,
+      requested_effort: request.modelChoice?.effort ?? null,
       sequence,
       input: request.input,
       admitted_at: at,
@@ -234,6 +238,8 @@ export function readTurns(db: SQLiteBunDatabase): readonly TurnRecord[] {
       session_key: turns.session_key,
       origin: turns.origin,
       kind: turns.kind,
+      requested_model: turns.requested_model,
+      requested_effort: turns.requested_effort,
       sequence: turns.sequence,
       input: turns.input,
       admitted_at: turns.admitted_at,
@@ -254,6 +260,17 @@ export function readTurns(db: SQLiteBunDatabase): readonly TurnRecord[] {
         // A legacy row admitted before the kind column reads it back null: the
         // kind is genuinely unknown, so omit it rather than fabricate a guess.
         ...(parsed.kind !== null ? { kind: parsed.kind } : {}),
+        // Effort is read only beside a model: a request never names effort alone.
+        ...(parsed.requested_model !== null
+          ? {
+              modelChoice: {
+                model: parsed.requested_model,
+                ...(parsed.requested_effort !== null
+                  ? { effort: parsed.requested_effort }
+                  : {}),
+              },
+            }
+          : {}),
         sequence: parsed.sequence,
         input: parsed.input,
         admittedAt: parsed.admitted_at,

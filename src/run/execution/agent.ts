@@ -25,6 +25,7 @@ import type {
   DurableTurnRecorder,
   HarnessFailure,
   HarnessProfile,
+  ModelChoice,
   PreparedHarness,
   RecoveryCoordinate,
   RequestAnswer,
@@ -402,6 +403,16 @@ function sessionRecovery(
   return { unusable: false, ...(resume !== undefined ? { resume } : {}) };
 }
 
+/** The Run's requested model as a Turn's Model choice, or undefined when the Run
+ *  requested none and the Harness default applies. An empty stored model is no
+ *  request, as it was at prepare. The Run carries no effort until #342, and the
+ *  owner's record is the one read at acquire, which holds while no Run can change
+ *  its request (#344). */
+function currentModelChoice(owner: RunOwner): ModelChoice | undefined {
+  const model = owner.record.requestedModel;
+  return model === undefined || model.length === 0 ? undefined : { model };
+}
+
 /** The mechanical driving of one Harness Turn shared by the autonomous Agent Step
  *  and the interactive human Turn (#116, #122): admit the input as the Turn's
  *  transcript before the stdin frame (the durable admission the Adapter awaits),
@@ -438,6 +449,11 @@ async function driveHarnessTurn(
   const { session, attemptId, turnId, observe } = params;
   const ids = { runId: owner.runId, attemptId, turnId, session };
   const harnessName = prepared.profile.harness;
+  // The one read of the Model choice current at Turn start (ADR 0034): the same
+  // value is sent on the Turn request and recorded on the admitted Turn, so the
+  // Turn's record is what it asked for. Every Agent, Entry, and human Turn passes
+  // here.
+  const modelChoice = currentModelChoice(owner);
   // The recovery coordinate the Adapter reveals at admission (Claude Code reveals it
   // before submission), captured so an interactive Turn can settle `detached` by it.
   let recoveryCoordinate: string | undefined;
@@ -455,6 +471,7 @@ async function driveHarnessTurn(
             origin: admission.origin,
             kind: params.kind,
             input: admission.input.text,
+            ...(modelChoice !== undefined ? { modelChoice } : {}),
             recoveryCoordinate: admission.recoveryCoordinate.opaque,
             harness: harnessName,
             at: new Date(),
@@ -486,6 +503,7 @@ async function driveHarnessTurn(
     recorder,
     input: { text: params.input },
     ...(params.resume !== undefined ? { resume: params.resume } : {}),
+    ...(modelChoice !== undefined ? { modelChoice } : {}),
   });
   // The live request-answer channel (#117): each approval request reaches an
   // observing client through the channel, which the client answers by policy

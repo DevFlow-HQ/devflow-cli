@@ -71,8 +71,9 @@ export function registerClaudeCodeReplayerConformance(
   };
   runPrepareProfileCases(scenarios, register);
 
-  // Claude Code declares free-text model entry and forwards a caller-requested
-  // model as --model; the effective model stays the init/result observation.
+  // Claude Code declares free-text model entry and forwards each Turn's requested
+  // model as --model on the launch serving it; the effective model stays the
+  // init/result observation.
   runModelDeclarationCases(
     {
       label: "claude-code",
@@ -85,14 +86,26 @@ export function registerClaudeCodeReplayerConformance(
     {
       label: "claude-code",
       requestedModel: "requested-conformance-model",
-      requestedTurn: () => {
+      requesting: () => {
         const replayer = installReplayer(VERSION, COMPLETED_CASE);
-        return () =>
-          createClaudeCodeAdapter({
-            path: replayer.path,
-            env: {},
-            sessionId: () => "77777777-7777-4777-8777-777777777777",
-          });
+        return {
+          factory: () =>
+            createClaudeCodeAdapter({
+              path: replayer.path,
+              env: {},
+              sessionId: () => "77777777-7777-4777-8777-777777777777",
+            }),
+          // Each Turn's launch: the model is the value after its --model.
+          requests: () =>
+            replayer
+              .invocations()
+              .filter((invocation) => invocation.args.includes("-p"))
+              .map((invocation) => {
+                const at = invocation.args.indexOf("--model");
+                const model = invocation.args[at + 1];
+                return at === -1 || model === undefined ? undefined : { model };
+              }),
+        };
       },
     },
     register,
@@ -230,9 +243,9 @@ export function registerCodexReplayerConformance(
     register,
   );
 
-  // Codex declares the supported-model list its qualification observed; a
-  // requested model is applied natively per Turn and one the list rejects fails
-  // prepare. `gpt-6-astra` is the default recorded model; `gpt-5.6-sol` a
+  // Codex declares the supported-model list its qualification observed; each
+  // Turn's requested model is applied natively on its turn/start, and one the list
+  // rejects settles that Turn not-started. `gpt-6-astra` is the default recorded model; `gpt-5.6-sol` a
   // non-default one, distinct from the thread's observed effective model.
   runModelDeclarationCases(
     {
@@ -248,17 +261,25 @@ export function registerCodexReplayerConformance(
       label: "codex",
       inputText: CODEX_RECORDING_INPUT.completion,
       requestedModel: "gpt-5.6-sol",
-      requestedTurn: () => () =>
-        createCodexAdapter({
-          path: installSyntheticCodexReplayer().path,
-          env: {},
-        }),
+      requesting: () => {
+        const installed = installSyntheticCodexReplayer();
+        return {
+          factory: () => createCodexAdapter({ path: installed.path, env: {} }),
+          // Each turn/start the app-server received: its model is the request.
+          requests: () =>
+            installed
+              .invocations()
+              .flatMap((invocation) => invocation.stdinLines)
+              .map((line) => JSON.parse(line))
+              .filter((frame) => frame.method === "turn/start")
+              .map((frame) =>
+                frame.params?.model === undefined
+                  ? undefined
+                  : { model: frame.params.model },
+              ),
+        };
+      },
       unknownModel: "no-such-secant-model",
-      rejectsUnknownModel: () => () =>
-        createCodexAdapter({
-          path: installSyntheticCodexReplayer().path,
-          env: {},
-        }),
     },
     register,
   );

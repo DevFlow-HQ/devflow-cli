@@ -2488,16 +2488,18 @@ test("Codex profile is truthful and user-compatible", async () => {
   await result.harness.close();
 });
 
-test("a requested model reaches turn/start natively and the effective model stays separate", async () => {
+test("each Turn's requested model reaches its turn/start natively and the effective model stays separate", async () => {
   const installed = installSyntheticCodexReplayer();
   const prepared = await createCodexAdapter({
     path: installed.path,
     env: {},
-  }).prepare({ workspace: process.cwd(), requestedModel: "gpt-5.6-sol" });
+  }).prepare({ workspace: process.cwd() });
   assert.equal(prepared.ok, true);
   if (!prepared.ok) throw new Error("unreachable");
 
-  const result = await prepared.harness.startTurn(turnRequest()).result();
+  const result = await prepared.harness
+    .startTurn({ ...turnRequest(), modelChoice: { model: "gpt-5.6-sol" } })
+    .result();
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
   // The effective model is what thread/start observed, never the request.
@@ -2518,20 +2520,43 @@ test("a requested model reaches turn/start natively and the effective model stay
   assert.equal(turnStart.params.model, "gpt-5.6-sol");
 });
 
-test("a requested model the observed list rejects fails prepare with a typed unavailable result", async () => {
+test("a Turn requesting a model the observed list rejects settles not-started before any thread exchange", async () => {
   const installed = installSyntheticCodexReplayer();
-  const result = await createCodexAdapter({
+  const prepared = await createCodexAdapter({
     path: installed.path,
     env: {},
-  }).prepare({
-    workspace: process.cwd(),
-    requestedModel: "no-such-secant-model",
-  });
-  assert.equal(result.ok, false);
-  if (result.ok) throw new Error("unreachable");
-  assert.equal(result.failure.phase, "prepare");
-  assert.equal(result.failure.category, "model-unavailable");
-  assert.match(result.failure.diagnostics ?? "", /no-such-secant-model/);
+  }).prepare({ workspace: process.cwd() });
+  // The model is no longer a prepare option, so qualification succeeds.
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) throw new Error("unreachable");
+
+  let admitted = false;
+  const result = await prepared.harness
+    .startTurn({
+      ...turnRequest({
+        admit: () => {
+          admitted = true;
+          return Promise.resolve({ recorded: true });
+        },
+        checkpoint: () => Promise.resolve({ recorded: true }),
+      }),
+      modelChoice: { model: "no-such-secant-model" },
+    })
+    .result();
+  assert.equal(result.kind, "not-started");
+  if (result.kind !== "not-started") throw new Error("unreachable");
+  assert.equal(result.detail.failure.phase, "turn");
+  assert.equal(result.detail.failure.category, "model-unavailable");
+  assert.match(result.detail.failure.diagnostics ?? "", /no-such-secant-model/);
+  assert.equal(admitted, false, "a refused Turn is never admitted");
+  await prepared.harness.close();
+
+  const methods = installed
+    .invocations()
+    .flatMap((invocation) => invocation.stdinLines)
+    .map((line) => JSON.parse(line).method);
+  assert.ok(!methods.includes("thread/start"), methods.join(", "));
+  assert.ok(!methods.includes("turn/start"), methods.join(", "));
 });
 
 test("required schema drift fails closed before app-server launch", async () => {

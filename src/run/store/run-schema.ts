@@ -154,12 +154,21 @@ export const harnessSessions = sqliteTable("harness_session", {
 // truth, independent of `origin` (`managed`/`human`) and of any Harness-native type.
 // Nullable: a Turn admitted before this column existed reads it back null — a legacy
 // row whose kind is genuinely unknown, never fabricated to a guess.
+//
+// `requested_model` and `requested_effort` are the Model choice the Turn requested,
+// copied at admission by Run execution's Turn driver from the choice current at
+// Turn start (ADR 0034), so one row answers which choice this Turn asked for. Free
+// text, never the observed effective model. Both null when the Turn requested no
+// model and on a row admitted before the columns existed; effort is null alone when
+// the request had none.
 export const turns = sqliteTable("turn", {
   turn_id: text("turn_id").primaryKey(),
   attempt_id: text("attempt_id").notNull(),
   session_key: text("session_key").notNull(),
   origin: text("origin").notNull(),
   kind: text("kind"),
+  requested_model: text("requested_model"),
+  requested_effort: text("requested_effort"),
   sequence: integer("sequence").notNull(),
   input: text("input").notNull(),
   admitted_at: text("admitted_at").notNull(),

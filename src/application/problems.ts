@@ -96,8 +96,8 @@ export function trustDigestMismatch(
 
 /** The requested model is not one the selected Harness declares (#189): a launch
  *  assessment qualifies the Harness and, when its model declaration is an exact
- *  list, checks the requested model against it. Distinct from a prepare-time
- *  substitution — the assessment surfaces it before a Run is created. */
+ *  list, checks the requested model against it. Distinct from the per-Turn
+ *  `model-unavailable` refusal — the assessment surfaces it before a Run is created. */
 export function requestedModelUnavailable(
   harness: HarnessChoice,
   model: string,

@@ -1203,17 +1203,17 @@ test("one stream-json Turn yields normalized events and an authoritative complet
   });
 });
 
-test("a requested model is forwarded to the launch as --model, distinct from the effective model", async () => {
+test("a Turn's requested model is forwarded to its launch as --model, distinct from the effective model", async () => {
   const replayer = installReplayer(VERSION, COMPLETED_CASE);
   const workspace = makeTempDir("secant-claude-workspace-");
   const prepared = await createClaudeCodeAdapter({
     path: replayer.path,
     env: {},
     sessionId: () => "11111111-1111-4111-8111-111111111111",
-  }).prepare({ workspace, requestedModel: "claude-opus-4-1" });
+  }).prepare({ workspace });
   assert.equal(prepared.ok, true);
   if (!prepared.ok) throw new Error("unreachable");
-  // Free-text profile: the caller's model is admitted with no list check.
+  // Free-text profile: the Turn's model is admitted with no list check.
   assert.equal(prepared.harness.profile.modelSelection.at, "launch");
   if (prepared.harness.profile.modelSelection.at !== "launch") {
     throw new Error("unreachable");
@@ -1227,6 +1227,7 @@ test("a requested model is forwarded to the launch as --model, distinct from the
     origin: "managed",
     correlationKey: { opaque: "turn-1" },
     input: { text: "Repair the failing test." },
+    modelChoice: { model: "claude-opus-4-1" },
     recorder: {
       admit() {
         return Promise.resolve({ recorded: true });

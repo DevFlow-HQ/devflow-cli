@@ -9,6 +9,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   ([run-control](../../../docs/agents/run-control.md#turn-interrupt-and-steer)), never on the Run's controller or routing promise.
 - The Harness-facing half publishes nothing durable except through the three admitted Turn writes (`admitTurn`, `appendTurnEvent`, `settleTurn`); every
   other durable Run fact surfaces on the Attempt's later `publishAttempt`, never from executing a Turn.
+- `driveHarnessTurn` reads the Run's Model choice once per Turn (`currentModelChoice`, ADR 0034). It sends that value on the Turn request and writes
+  it on the `turn` row in the same `admitTurn`, for Agent, Entry, and human Turns alike, so a Turn's record is what it asked for. It reads the
+  acquire-time `owner.record`, which holds only while no Run can change its request (#344).
 - Every autonomous Agent Attempt publishes one co-sourced evidence value: qualified Harness identity plus its optional observed model. `attemptEvidence`
   fails fast if an Agent result lacks identity; Command/Gate and synthetic interactive Attempts publish neither (#147).
 - An Agent Step's declared `text` outputs come only from Output receipts (#215): after a `completed` Turn each receipt must be a regular UTF-8 file of at most

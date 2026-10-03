@@ -31,6 +31,7 @@ import type {
   HarnessProfile,
   HarnessRequest,
   HarnessFailure,
+  ModelChoice,
   PrepareResult,
   PreparedHarness,
   RecordingReceipt,
@@ -100,6 +101,15 @@ export interface FakeScript {
   /** Handshake sub-steps each `prepare` reports inside its handshake, in order;
    *  the last fails with a scripted `prepareFailure` (#325). */
   readonly handshakeSteps?: readonly HarnessPhaseStep[];
+  /** When given, each `startTurn` appends what its request carried, in order:
+   *  the fake's record of the Model choice every Turn asked for. */
+  readonly turnRequests?: FakeTurnRequestRecord[];
+}
+
+/** One Turn request as the fake received it. */
+export interface FakeTurnRequestRecord {
+  readonly session: string;
+  readonly modelChoice?: ModelChoice;
 }
 
 const DEFAULT_CLEANUP: CleanupReport = {
@@ -155,27 +165,6 @@ class FakeAdapter implements TestHarnessAdapter {
           category: "writable-directory-unavailable",
           possibleEffects: "none",
           diagnostics: `The fake Harness cannot grant '${directory}'.`,
-        },
-      });
-    }
-    // A requested model the profile's declared list does not admit is a typed
-    // unavailable prepare failure, never a substitution (ADR 0022). A free-text
-    // declaration admits any value; selection-unavailable profiles ignore it.
-    const selection = this.script.profile.modelSelection;
-    if (
-      options.requestedModel !== undefined &&
-      options.requestedModel.length > 0 &&
-      selection.at !== "unavailable" &&
-      selection.declaration.kind === "list" &&
-      !selection.declaration.models.includes(options.requestedModel)
-    ) {
-      return Promise.resolve({
-        ok: false,
-        failure: {
-          phase: "prepare",
-          category: "model-unavailable",
-          possibleEffects: "none",
-          diagnostics: `The fake Harness does not offer the requested model '${options.requestedModel}'.`,
         },
       });
     }
@@ -278,6 +267,12 @@ class FakePreparedHarness implements PreparedHarness {
     if (!scripted) {
       throw new Error("startTurn beyond the scripted Turns");
     }
+    this.script.turnRequests?.push({
+      session: request.session,
+      ...(request.modelChoice !== undefined
+        ? { modelChoice: request.modelChoice }
+        : {}),
+    });
     const history = this.history.get(request.session) ?? [];
     this.history.set(request.session, history);
     const turn = new FakeTurn(scripted, this.profile, request, history);
@@ -410,6 +405,30 @@ class FakeTurn {
   }
 
   private async drive(): Promise<void> {
+    // A model the profile's declared list does not admit refuses the Turn before
+    // admission, never a substitution (ADR 0034). A free-text declaration admits
+    // any value; a selection-unavailable profile ignores the request.
+    const selection = this.profile.modelSelection;
+    const model = this.request.modelChoice?.model;
+    if (
+      model !== undefined &&
+      selection.at !== "unavailable" &&
+      selection.declaration.kind === "list" &&
+      !selection.declaration.models.includes(model)
+    ) {
+      this.settle({
+        kind: "not-started",
+        detail: {
+          failure: {
+            phase: "turn",
+            category: "model-unavailable",
+            possibleEffects: "none",
+            diagnostics: `The fake Harness does not offer the requested model '${model}'.`,
+          },
+        },
+      });
+      return;
+    }
     const admission = await this.admit();
     if (!admission.recorded) {
       this.settle(

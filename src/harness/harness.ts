@@ -111,8 +111,8 @@ type ModelDeclaration =
   | { readonly kind: "free-text" };
 
 /** Where model selection can occur and what the Harness admits, or that Crucible
- *  cannot select a model. Every selectable variant carries the declaration a
- *  caller's requested model is checked against. */
+ *  cannot select a model. Every selectable variant carries the declaration each
+ *  Turn's requested model is checked against. */
 type ModelSelectionCapability =
   | {
       readonly at: "launch";
@@ -237,6 +237,15 @@ export interface DurableTurnRecorder {
   checkpoint(coordinate: RecoveryCoordinate): Promise<RecordingReceipt>;
 }
 
+/** The model and effort one Turn requests (ADR 0034), as opaque strings the
+ *  Adapter applies however its Harness does before sending content. No Run, Step,
+ *  or Bundle word crosses with it. The model is non-empty: a caller with no model
+ *  sends no choice. Effort is absent when the request has none. */
+export interface ModelChoice {
+  readonly model: string;
+  readonly effort?: string;
+}
+
 /** Everything `startTurn` needs. The handle returns before native acceptance. */
 export interface TurnRequest {
   readonly session: string;
@@ -246,6 +255,12 @@ export interface TurnRequest {
   readonly input: TurnInput;
   /** When set, resume the named Session from this coordinate. */
   readonly resume?: RecoveryCoordinate;
+  /** The Model choice this Turn requests, applied at the Adapter's native point for
+   *  this Turn. A model outside a declared `list` settles the Turn `not-started`
+   *  (`model-unavailable`) before admission, never a substitution; a free-text
+   *  declaration forwards any value. Absent, the Harness's own default applies. The
+   *  effective model a Turn reports is observed and never copies this request. */
+  readonly modelChoice?: ModelChoice;
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +485,9 @@ export interface HarnessFailure {
 // event follows it.
 // ---------------------------------------------------------------------------
 
-/** The Turn never started: durable admission failed before any content. */
+/** The Turn never started: no content was sent. The request was refused before
+ *  admission (an unlisted model), durable admission failed, or the Session could
+ *  not be opened before submission. */
 interface NotStartedDetail {
   readonly failure: HarnessFailure;
 }
@@ -670,12 +687,6 @@ export interface PrepareOptions {
   /** An explicit configured executable path or command, tried before the
    *  canonical name. */
   readonly configuredExecutable?: string;
-  /** An optional caller-supplied model applied at each Adapter's native point and
-   *  kept private below the Seam. Validated against a declared list at prepare — an
-   *  unknown model is a typed unavailable failure, never a substitution — while a
-   *  free-text profile admits any value. The effective model reported on a Turn
-   *  stays a separate observed fact and never copies this request. */
-  readonly requestedModel?: string;
   /** One additional absolute directory every Session may write (#214), granted
    *  natively only where the Harness's sandbox rules would otherwise refuse it and
    *  without changing the user's broader permission posture. A path that is not an

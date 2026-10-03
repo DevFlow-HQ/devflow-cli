@@ -54,9 +54,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   native runs (not an existing absolute directory ⇒ typed `writable-directory-unavailable`). Claude Code forwards it as `--add-dir` on every launch; Codex
   sends a per-thread `sandbox_workspace_write.writable_roots` config override and refuses the Turn `writable-directory-refused` only when an acknowledged
   `workspaceWrite` sandbox omits it (read-only defers to approvals).
-- `PrepareOptions.requestedModel` is the caller's durable request, normalized identically by both Adapters (empty means none). A request outside a declared
-  list, including an empty one, is a typed `model-unavailable` prepare failure, never a substitution; free text forwards any value. The effective model a
-  Turn reports is observed and never copies the request.
+- Each `TurnRequest` carries its `modelChoice` (ADR 0034); `modelChoiceRefusal` refuses one outside a declared list, even an empty one, as a `not-started`
+  `model-unavailable` Turn before admission, never a substitution. Codex sends it on `turn/start`, Claude Code as `--model` on the launch serving the Turn
+  (a reused live child keeps its model, #348); neither sends effort yet (#345, #348). The observed effective model never copies the request.
 
 ### Interrupt, recovery, and cleanup
 

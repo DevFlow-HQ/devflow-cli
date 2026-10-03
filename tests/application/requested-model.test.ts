@@ -7,23 +7,27 @@ import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   type HarnessAdapter,
   type HarnessProfile,
-  type PrepareOptions,
 } from "../../src/harness/harness.js";
 import type { RunView } from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  createFake,
+  type FakeScript,
+  type FakeTurnRequestRecord,
+} from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // The requested model carried from launch through the Run Store, resume, and the Run
 // view (#187): a model requested at launch is pinned immutably beside the selected
-// Harness, threaded into prepare identically on launch and resume with no fallback,
-// participates in idempotent replay identity, is refused as irrelevant for a
-// Command-only Bundle, and stays a separate fact from the observed effective model.
+// Harness, sent on every Turn request and recorded on each admitted Turn (ADR 0034)
+// identically on launch and resume with no fallback, participates in idempotent
+// replay identity, is refused as irrelevant for a Command-only Bundle, and stays a
+// separate fact from the observed effective model.
 // Driven end to end through the composition wiring against the deterministic fake
 // Adapter, so the durable behaviour — not just the pure codecs — is proven.
 
@@ -54,7 +58,12 @@ function fakeProcess(): ProcessAdapter {
   };
 }
 
-function profile(): HarnessProfile {
+function profile(
+  modelSelection: HarnessProfile["modelSelection"] = {
+    at: "unavailable",
+    evidence: "scripted fake",
+  },
+): HarnessProfile {
   return {
     harness: "Claude Code",
     executable: "/usr/bin/claude",
@@ -67,9 +76,9 @@ function profile(): HarnessProfile {
     approvals: { available: true, evidence: "scripted fake" },
     clarifications: { available: false, evidence: "scripted fake" },
     steer: { available: false, evidence: "scripted fake" },
-    // Selection unavailable ⇒ the fake admits any requested model without validating
-    // it, so this suite exercises the carry, not #186's admission list.
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
+    // Selection unavailable by default ⇒ the fake admits any requested model
+    // without validating it, so most cases exercise the carry, not the list.
+    modelSelection,
     modelObservation: { available: true, evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
@@ -124,22 +133,27 @@ function failedScript(): FakeScript {
   };
 }
 
-/** An Adapter that records the requested model of every `prepare` call. */
-function capturing(script: FakeScript): {
+/** `script` recording each Turn request it receives into `requests`. */
+function recording(script: FakeScript): {
   adapter: HarnessAdapter;
-  models: (string | undefined)[];
+  requests: FakeTurnRequestRecord[];
 } {
-  const inner = createFake(script)();
-  const models: (string | undefined)[] = [];
+  const requests: FakeTurnRequestRecord[] = [];
   return {
-    models,
-    adapter: {
-      prepare(options: PrepareOptions) {
-        models.push(options.requestedModel);
-        return inner.prepare(options);
-      },
-    },
+    requests,
+    adapter: createFake({ ...script, turnRequests: requests })(),
   };
+}
+
+/** Each `turn-started` timeline entry's Turn kind and requested Model choice. */
+function startedTurns(run: RunView) {
+  return run.timeline
+    .filter((event) => event.event === "turn-started")
+    .map(({ turnKind, requestedModel, requestedEffort }) => ({
+      turnKind,
+      requestedModel,
+      requestedEffort,
+    }));
 }
 
 function writeAgentBundle(): { folder: string; id: string } {
@@ -164,6 +178,50 @@ function writeAgentBundle(): { folder: string; id: string } {
         retry: 0,
         session: "s",
         prompt: { asset: "prompts/go.md" },
+      },
+    ],
+  };
+  writeFileSync(
+    join(folder, "manifest.json"),
+    JSON.stringify(manifest, null, 2),
+  );
+  return { folder, id: manifest.bundle.id };
+}
+
+function writeAgentThenInteractiveBundle(): { folder: string; id: string } {
+  const folder = makeTempDir("secant-requested-model-interactive-");
+  mkdirSync(join(folder, "prompts"), { recursive: true });
+  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
+  writeFileSync(join(folder, "prompts", "chat.md"), "Discuss the work.\n");
+  const manifest = {
+    formatVersion: 1,
+    bundle: {
+      id: "dev.secant.requested-model-interactive",
+      version: "1.0.0",
+      name: "Requested Model Turns",
+      description:
+        "An Agent Step, then an interactive Step with an Entry Turn.",
+    },
+    platforms: ["windows", "macos", "linux"],
+    inputs: {},
+    assets: [
+      { path: "prompts/go.md", kind: "prompt" },
+      { path: "prompts/chat.md", kind: "prompt" },
+    ],
+    routing: [
+      {
+        id: "work",
+        kind: "agent",
+        retry: 0,
+        session: "s",
+        prompt: { asset: "prompts/go.md" },
+      },
+      {
+        id: "chat",
+        kind: "interactive-agent",
+        session: "s",
+        entryTurn: true,
+        prompt: { asset: "prompts/chat.md" },
       },
     ],
   };
@@ -218,6 +276,8 @@ function wire(
   const wired = wireApplication({
     secantHome: home,
     launchCwd: workspace,
+    // The TUI's capability, so a Bundle with an interactive Step launches.
+    supportsInteractiveTurns: true,
     process: fakeProcess(),
     harnessAdapter: adapter,
   });
@@ -251,10 +311,10 @@ function readRun(wired: Wiring, runId: string): RunView {
   }
 }
 
-test("[requested-model-durability] a requested model is pinned, threaded to prepare, projected beside the effective model, and survives reopen", async (t) => {
+test("[requested-model-durability] a requested model is pinned, sent on the Turn request, recorded on the Turn, projected beside the effective model, and survives reopen", async (t) => {
   const home = makeTempDir("secant-requested-model-home-");
   const workspace = makeTempDir("secant-requested-model-ws-");
-  const captured = capturing(completedScript("observed-sonnet"));
+  const captured = recording(completedScript("observed-sonnet"));
   const { wired, digest } = wire(
     t,
     captured.adapter,
@@ -285,15 +345,25 @@ test("[requested-model-durability] a requested model is pinned, threaded to prep
 
   await awaitSettled(wired.projectionPort, "op-launch");
 
-  // Threaded into prepare on launch.
-  assert.deepEqual(captured.models, ["requested-opus"]);
+  // Sent on the Turn request, with no effort: the Run carries none yet.
+  assert.deepEqual(captured.requests, [
+    { session: "s", modelChoice: { model: "requested-opus" } },
+  ]);
 
-  // Requested and effective stay distinct facts on the view.
+  // Requested and effective stay distinct facts on the view, and the Turn records
+  // the model it requested.
   const run = readRun(wired, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.requestedModel, "requested-opus");
   assert.equal(run.effectiveModel, "observed-sonnet");
   assert.notEqual(run.requestedModel, run.effectiveModel);
+  assert.deepEqual(startedTurns(run), [
+    {
+      turnKind: "agent",
+      requestedModel: "requested-opus",
+      requestedEffort: undefined,
+    },
+  ]);
 
   // Reopened in a fresh process, the requested model reads back unchanged.
   const reopened = wireApplication({
@@ -309,7 +379,9 @@ test("[requested-model-durability] a requested model is pinned, threaded to prep
   const reopenedRecord = reopened.runGroup.readRun(runId);
   assert.ok(reopenedRecord.ok);
   assert.equal(reopenedRecord.run.requestedModel, "requested-opus");
-  assert.equal(readRun(reopened, runId).requestedModel, "requested-opus");
+  const reopenedRun = readRun(reopened, runId);
+  assert.equal(reopenedRun.requestedModel, "requested-opus");
+  assert.deepEqual(startedTurns(reopenedRun), startedTurns(run));
 });
 
 test("[requested-model-durability] resume reuses the stored model with no fallback", async (t) => {
@@ -340,8 +412,8 @@ test("[requested-model-durability] resume reuses the stored model with no fallba
   await awaitSettled(wired.projectionPort, "op-launch");
   assert.equal(readRun(wired, runId).state, "failed");
 
-  // Reopen in a fresh process with a capturing Adapter and resume (no model flag).
-  const captured = capturing(completedScript("observed-later"));
+  // Reopen in a fresh process with a recording Adapter and resume (no model flag).
+  const captured = recording(completedScript("observed-later"));
   const reopened = wireApplication({
     secantHome: home,
     launchCwd: workspace,
@@ -360,11 +432,205 @@ test("[requested-model-durability] resume reuses the stored model with no fallba
   assert.ok(resume.admitted, JSON.stringify(resume));
   await awaitSettled(reopened.projectionPort, resume.operationId);
 
-  // Resume reused the durable model, not a default, when it prepared.
-  assert.deepEqual(captured.models, ["requested-opus"]);
+  // The resumed Turn requested the durable model, not a default, and both Turns
+  // record it.
+  assert.deepEqual(captured.requests, [
+    { session: "s", modelChoice: { model: "requested-opus" } },
+  ]);
   const run = readRun(reopened, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.requestedModel, "requested-opus");
+  assert.deepEqual(
+    startedTurns(run).map((turn) => turn.requestedModel),
+    ["requested-opus", "requested-opus"],
+  );
+});
+
+test("an Agent Turn, an Interactive Entry Turn, and a human Turn each record the model current at admission", async (t) => {
+  const home = makeTempDir("secant-requested-model-home-");
+  const workspace = makeTempDir("secant-requested-model-ws-");
+  const completed = completedScript("observed-sonnet").turns[0]!;
+  // Every prepare replays this script from its first Turn, so each Turn is the
+  // same completion whichever prepared Harness serves it.
+  const captured = recording({
+    profile: profile(),
+    turns: [completed, completed, completed],
+  });
+  const { wired, digest } = wire(
+    t,
+    captured.adapter,
+    writeAgentThenInteractiveBundle(),
+    home,
+    workspace,
+  );
+
+  const admission = wired.projectionPort.submit({
+    operationId: "op-launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: "dev.secant.requested-model-interactive" },
+      launchInputs: {},
+      trustDigest: digest,
+      harness: "claude-code",
+      requestedModel: "requested-opus",
+    },
+  });
+  assert.ok(admission.admitted, JSON.stringify(admission));
+  const runId = admission.runId;
+  assert.ok(runId);
+  await awaitSettled(wired.projectionPort, "op-launch");
+  // The Agent Step ran, then the interactive Step's Entry Turn; the Run waits for
+  // the human.
+  assert.equal(readRun(wired, runId).state, "blocked");
+
+  const sent = wired.projectionPort.submit({
+    operationId: "op-turn",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "chat", text: "Carry on." },
+  });
+  assert.ok(sent.admitted, JSON.stringify(sent));
+  const outcome = await awaitSettled(wired.projectionPort, "op-turn");
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+
+  const requested = { model: "requested-opus" };
+  assert.deepEqual(
+    captured.requests.map((request) => request.modelChoice),
+    [requested, requested, requested],
+  );
+  const run = await awaitRunRest(wired.projectionPort, runId);
+  assert.deepEqual(startedTurns(run), [
+    {
+      turnKind: "agent",
+      requestedModel: "requested-opus",
+      requestedEffort: undefined,
+    },
+    {
+      turnKind: "interactive-agent",
+      requestedModel: "requested-opus",
+      requestedEffort: undefined,
+    },
+    {
+      turnKind: "interactive-agent",
+      requestedModel: "requested-opus",
+      requestedEffort: undefined,
+    },
+  ]);
+});
+
+for (const [label, requestedModel] of [
+  ["requested no model", undefined],
+  ["stored an empty model", ""],
+] as const) {
+  test(`a Run that ${label} sends and records none on its Turn`, async (t) => {
+    const home = makeTempDir("secant-requested-model-home-");
+    const workspace = makeTempDir("secant-requested-model-ws-");
+    const captured = recording(completedScript("observed-sonnet"));
+    const { wired, digest } = wire(
+      t,
+      captured.adapter,
+      writeAgentBundle(),
+      home,
+      workspace,
+    );
+    const admission = wired.projectionPort.submit({
+      operationId: "op-launch",
+      operation: "launch-run",
+      input: {
+        bundle: { id: "dev.secant.requested-model" },
+        launchInputs: {},
+        trustDigest: digest,
+        harness: "claude-code",
+        ...(requestedModel !== undefined ? { requestedModel } : {}),
+      },
+    });
+    assert.ok(admission.admitted, JSON.stringify(admission));
+    assert.ok(admission.runId);
+    await awaitSettled(wired.projectionPort, "op-launch");
+
+    // An empty stored model is no request, so the Seam never sees an empty model.
+    assert.deepEqual(captured.requests, [{ session: "s" }]);
+    const run = readRun(wired, admission.runId);
+    assert.equal(run.requestedModel, requestedModel);
+    const started = run.timeline.find(
+      (event) => event.event === "turn-started",
+    );
+    assert.ok(started);
+    assert.equal("requestedModel" in started, false);
+    assert.equal("requestedEffort" in started, false);
+  });
+}
+
+test("a model the Harness no longer lists fails the resumed Turn not-started, admitting no Turn", async (t) => {
+  const home = makeTempDir("secant-requested-model-home-");
+  const workspace = makeTempDir("secant-requested-model-ws-");
+  const listing = (models: string[]): HarnessProfile["modelSelection"] => ({
+    at: "launch",
+    declaration: { kind: "list", models },
+    evidence: "scripted fake",
+  });
+  const { wired, digest } = wire(
+    t,
+    createFake({
+      ...failedScript(),
+      profile: profile(listing(["listed-a", "listed-b"])),
+    })(),
+    writeAgentBundle(),
+    home,
+    workspace,
+  );
+  const admission = wired.projectionPort.submit({
+    operationId: "op-launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: "dev.secant.requested-model" },
+      launchInputs: {},
+      trustDigest: digest,
+      harness: "claude-code",
+      requestedModel: "listed-b",
+    },
+  });
+  assert.ok(admission.admitted, JSON.stringify(admission));
+  const runId = admission.runId;
+  assert.ok(runId);
+  await awaitSettled(wired.projectionPort, "op-launch");
+  assert.equal(readRun(wired, runId).state, "failed");
+
+  // The Harness has since dropped `listed-b`. The model is not a prepare option,
+  // so the resume prepares; the Turn is refused before admission.
+  const captured = recording({
+    ...completedScript("observed-later"),
+    profile: profile(listing(["listed-a"])),
+  });
+  const reopened = wireApplication({
+    secantHome: home,
+    launchCwd: workspace,
+    process: fakeProcess(),
+    harnessAdapter: captured.adapter,
+  });
+  t.after(() => {
+    reopened.runGroup.close();
+    reopened.catalog.close();
+  });
+  const resume = reopened.projectionPort.submit({
+    operationId: "op-resume",
+    operation: "resume-run",
+    input: { runId },
+  });
+  assert.ok(resume.admitted, JSON.stringify(resume));
+  await awaitSettled(reopened.projectionPort, resume.operationId);
+
+  assert.deepEqual(captured.requests, [
+    { session: "s", modelChoice: { model: "listed-b" } },
+  ]);
+  const run = readRun(reopened, runId);
+  // A not-started Turn fails the Agent Attempt like any other, here with no retry
+  // budget left.
+  assert.equal(run.state, "failed");
+  assert.deepEqual(
+    startedTurns(run).map((turn) => turn.requestedModel),
+    ["listed-b"],
+    "the refused Turn was never admitted",
+  );
 });
 
 test("a Command-only launch refuses a requested model as irrelevant, leaving no Run", async (t) => {

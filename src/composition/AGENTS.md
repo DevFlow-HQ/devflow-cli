@@ -19,8 +19,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   module (`import.meta.dirname`, `/$bunfs/root` in the binary); no directory means zero built-ins. Its notices reach headless stderr through
   `HeadlessClients.startupNotices` and Home through the `workspace` Projection (#227).
 - `prepareRunHarness` (`wiring.ts`) is the one prepare site for launch, resume, and the interactive reopen: it threads `writableDirectory: owner.workingArea().path`
-  and the stored `requestedModel` identically, and an unusable area is a typed `working-area-unavailable` prepare failure, so the Run halts before any Turn rather
-  than writing planning files anywhere else (#214). Execution never passes the area itself.
+  identically, and an unusable area is a typed `working-area-unavailable` prepare failure, so the Run halts before any Turn rather than writing planning
+  files anywhere else (#214). Execution never passes the area itself.
 - Composition owns the operational log (`operational-log.ts`, #318, #328): builtin JSONL serialization and synchronous `node:fs` writes
   on an owner-only file. Both client entries (and the runner entry below) run as one Secant invocation under
   `runSecantInvocation`, which starts the sink before `wireApplication` (for the TUI, before the no-TTY rejection) and synchronously writes the

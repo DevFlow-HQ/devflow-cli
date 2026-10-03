@@ -474,10 +474,11 @@ function makePrepareRunInteractiveStep(
 }
 
 // Prepare a Run's Harness identically on launch, resume, and interactive reopen:
-// the immutable requested model with no fallback (#187, ADR 0022), the Run's
-// working area as the one additional writable directory (#214), and the Run's own
-// scope (#333). An unusable area is a typed prepare failure, so the Run halts
-// before any Turn rather than writing planning files anywhere else.
+// the Run's working area as the one additional writable directory (#214) and the
+// Run's own scope (#333). The model is not a prepare option: Run execution's Turn
+// driver sends it on each Turn request (ADR 0034). An unusable area is a typed
+// prepare failure, so the Run halts before any Turn rather than writing planning
+// files anywhere else.
 async function prepareRunHarness(
   harnessRegistry: HarnessRegistry,
   selectedHarness: SelectedHarnessId,
@@ -502,9 +503,6 @@ async function prepareRunHarness(
     {
       workspace: owner.record.workspacePath,
       writableDirectory: area.path,
-      ...(owner.record.requestedModel !== undefined
-        ? { requestedModel: owner.record.requestedModel }
-        : {}),
     },
     scope,
   );

@@ -25,7 +25,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - New Agent/Interactive-agent Runs require one known, available registry id and pin it in `createRun`; Command-only Runs reject a selection as irrelevant.
   The launch replay key includes the choice, and resume automatically reuses the immutable stored id without deriving it from Attempt evidence (#138, #146).
 - A launch's requested model is written into the Run record by `createRun` beside the Harness selection, before the first Attempt, and never changes
-  (ADR 0023). Launch and resume hand that stored value to `prepare`; the observed `effectiveModel` never overwrites it (#187).
+  (ADR 0023). Run execution sends that stored value on every Turn request and records it on each Turn, which the `run` Projection shows on
+  `turn-started` (ADR 0034); the observed `effectiveModel` never overwrites it (#187).
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
   strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
@@ -69,7 +70,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `launch-preparation` and `submitLaunch` share one create-time evaluator (`LaunchPreparation.evaluate`, `launch-preparation.ts`) so both admit under identical rules (#189):
   `submitLaunch` takes its first finding; the Projection collects all in launch order, each with a `correction` target. Composition-corruption is a single hard-stop `bundle`
   finding like missing/invalid bytes. The model check is assessment-only — the Projection qualifies the selected Harness (`harnessCatalog.qualify`, which spawns) only when the
-  draft is otherwise ready and a model is requested; a direct `submitLaunch` skips it, so a bad model surfaces at `prepare`, not as a pre-create refusal.
+  draft is otherwise ready and a model is requested; a direct `submitLaunch` skips it, so a model outside the Harness's list surfaces at the first Turn as
+  a `not-started` `model-unavailable` Turn, not as a pre-create refusal.
 - The observer (`observer.ts`, #319) has a no-op default and never sees the logger. Application guards it once at resolution (#330): an observer
   never throws into its caller or changes a Projection, qualification, or Operation outcome. Every new Operation is admitted through `admit`, which reports the
   admission before scheduling settlement, so the record precedes an inline outcome; `submit` reports only replays and refusals. An Operation stored any

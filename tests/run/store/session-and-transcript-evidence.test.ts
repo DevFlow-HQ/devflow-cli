@@ -3,7 +3,10 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { Database } from "bun:sqlite";
-import type { RunGroup } from "../../../src/run/store/store.js";
+import type {
+  AdmitTurnRequest,
+  RunGroup,
+} from "../../../src/run/store/store.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
 import { openFakeRunGroup as openRunGroup } from "./fake-git-process.js";
 
@@ -434,6 +437,80 @@ test("an Agent Attempt's pre-change `#turn` row and later Turns read back unchan
       ["0.0:build#turn-3", "0.0:build", 2],
     ],
   );
+});
+
+test("each Turn records the Model choice it requested at admission, and none reads absent (ADR 0034)", async (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-1");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner !== undefined);
+  t.after(() => owner.close());
+
+  const admit = (
+    turnId: string,
+    modelChoice?: AdmitTurnRequest["modelChoice"],
+  ) =>
+    owner.admitTurn({
+      turnId,
+      attemptId: "0.0:build",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      input: "build it",
+      recoveryCoordinate: "native-1",
+      harness: "codex",
+      at: AT,
+      ...(modelChoice !== undefined ? { modelChoice } : {}),
+    });
+  assert.ok(admit("turn-1", { model: "gpt-5.6-sol", effort: "high" }).ok);
+  assert.ok(admit("turn-2", { model: "gpt-6-astra" }).ok);
+  assert.ok(admit("turn-3").ok);
+  // The settled result never rewrites the request recorded at admission.
+  owner.settleTurn({
+    turnId: "turn-1",
+    session: "s",
+    resultKind: "completed",
+    resultDetail: JSON.stringify({ kind: "completed" }),
+    availability: "open",
+    at: AT,
+  });
+  assert.deepEqual(
+    owner.turns().map((turn) => [turn.turnId, turn.modelChoice]),
+    [
+      ["turn-1", { model: "gpt-5.6-sol", effort: "high" }],
+      ["turn-2", { model: "gpt-6-astra" }],
+      ["turn-3", undefined],
+    ],
+  );
+
+  // A row admitted before the request columns existed (a raw INSERT that omits
+  // them) reads back with no request, never a guessed one.
+  const runDb = new Database(join(groupDirOf(home), created.runId, "run.db"));
+  try {
+    runDb
+      .query(
+        `INSERT INTO turn
+           (turn_id, attempt_id, session_key, origin, kind, sequence, input, admitted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "turn-legacy",
+        "legacy",
+        "s",
+        "managed",
+        "agent",
+        3,
+        "old turn",
+        AT.toISOString(),
+      );
+  } finally {
+    runDb.close();
+  }
+  const legacy = owner.turns().find((turn) => turn.turnId === "turn-legacy");
+  assert.ok(legacy !== undefined);
+  assert.equal("modelChoice" in legacy, false);
 });
 
 test("transcriptPage reads bounded, ordered pages and flags older history (#124)", async (t) => {

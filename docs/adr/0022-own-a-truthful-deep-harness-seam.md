@@ -91,7 +91,9 @@ profile supplies the model list when the Harness exposes one and declares free-t
 the Bundle is deferred to a later version. (Edited 2026-09-23: M5 shipped this as two profile fields. `modelSelection` declares where a model can be
 selected and carries a `list` or `free-text` model declaration, or declares selection `unavailable`; `modelObservation` declares whether the Adapter
 reads the effective model from native evidence, independent of selection. A caller's requested model outside a declared list is a typed
-`model-unavailable` prepare failure, never a substitution.) (Edited 2026-09-29: [ADR 0034](./0034-choose-and-change-model-and-effort-as-one-run-wide-model-choice.md)
+`model-unavailable` prepare failure, never a substitution. Edited 2026-10-03, [#340](https://github.com/secantdev/secant/issues/340): the request
+moved to each Turn request, so such a model now settles that Turn `not-started` with `model-unavailable` before admission, and nothing about the model
+is a prepare option.) (Edited 2026-09-29: [ADR 0034](./0034-choose-and-change-model-and-effort-as-one-run-wide-model-choice.md)
 replaces the Run-level requested model with a Run-wide **Model choice** of model and effort requested per Turn, adds a `suggested` model declaration
 kind, and qualifies Claude Code's typed model and effort control requests with a relaunch fallback.)
 

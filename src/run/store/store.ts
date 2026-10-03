@@ -14,7 +14,7 @@ import { drizzle, type SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import type { MigrationsJournal } from "drizzle-orm/migrator";
 import { z } from "zod";
-import type { SteerCapability } from "../../harness/harness.js";
+import type { ModelChoice, SteerCapability } from "../../harness/harness.js";
 import { type ProcessAdapter } from "../../process/process.js";
 import type {
   ArtifactType,
@@ -380,6 +380,9 @@ export interface AdmitTurnRequest {
   readonly kind: TurnKind;
   /** The exact rendered transcript input admitted before native submission. */
   readonly input: string;
+  /** The Model choice this Turn requested, as sent on its Harness request (ADR
+   *  0034). Absent when the Turn requested no model. */
+  readonly modelChoice?: ModelChoice;
   /** The opaque native recovery coordinate (native session id) observed. */
   readonly recoveryCoordinate: string;
   readonly harness: string;
@@ -418,6 +421,9 @@ export interface TurnRecord {
    *  row admitted before the kind column existed — genuinely unknown, so the
    *  Projection narrows a known value and omits an unknown one rather than guess. */
   readonly kind?: string;
+  /** The Model choice this Turn requested at admission (ADR 0034). Absent when it
+   *  requested no model and for a row admitted before the request was recorded. */
+  readonly modelChoice?: ModelChoice;
   readonly sequence: number;
   readonly input: string;
   readonly admittedAt: string; // ISO 8601

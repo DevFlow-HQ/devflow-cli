@@ -765,6 +765,14 @@ export interface RunTimelineEvent {
    *  `repeat-continued` a human-controlled Repeat's Continue (#217), and
    *  `stage-ended` its confirmed End Stage (#218). */
   readonly turnKind?: RunTurnKind;
+  /** The model a `turn-started` Turn requested at its admission (ADR 0034),
+   *  additive to the frozen `--json`. Absent on every other event, when the Turn
+   *  requested no model, and on a Turn admitted before requests were recorded. The
+   *  Run-level `requestedModel` and `effectiveModel` keep their meaning. */
+  readonly requestedModel?: string;
+  /** The effort that `turn-started` Turn requested beside `requestedModel`;
+   *  absent when the request had none. */
+  readonly requestedEffort?: string;
   /** The Step this event belongs to (#289), additive to the frozen `--json`: set on
    *  every Attempt settle and Turn-scoped event, decoded from its stored Attempt id.
    *  Absent on Run-scoped events (`run-created`, `trust-granted`), Repeat-group

@@ -58,6 +58,7 @@ import {
   parseTurnSteerResult,
   parseTurnStartResult,
 } from "./codex/runtime-protocol.js";
+import { modelChoiceRefusal } from "./model-request.js";
 import { writableDirectoryFailure } from "./writable-directory.js";
 import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
 
@@ -178,15 +179,11 @@ class CodexAdapter implements HarnessAdapter {
       if (cacheKey !== undefined) this.cache.add(cacheKey);
     }
 
-    // An empty requested model means no model was requested, matching Claude Code;
-    // both Adapters treat `PrepareOptions.requestedModel` identically.
-    const requestedModel = normalizeRequestedModel(options.requestedModel);
     const live = await this.qualifyLive(
       processAdapter,
       options.phases,
       discovery.target,
       options.workspace,
-      requestedModel,
     );
     if (!live.ok) return live;
     const profile = buildProfile({
@@ -209,7 +206,6 @@ class CodexAdapter implements HarnessAdapter {
           DEFAULT_HANDSHAKE_TIMEOUT_MS,
         this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
         this.overrides.recordingObserver,
-        requestedModel,
         options.writableDirectory,
         options.phases,
       ),
@@ -344,7 +340,6 @@ class CodexAdapter implements HarnessAdapter {
     phases: HarnessPhaseObserver | undefined,
     target: TDiscoveredTarget,
     workspace: string,
-    requestedModel: string | undefined,
   ): Promise<TLiveQualification> {
     const launch = startPhase(phases, "launch");
     const spawned = await processAdapter.spawnOwnedProcess({
@@ -376,14 +371,10 @@ class CodexAdapter implements HarnessAdapter {
       undefined,
       "protocol-initialize",
     );
-    const live = await this.handshake(
-      spawned.process,
-      requestedModel,
-      (next) => {
-        step.ok();
-        step = startPhase(phases, "handshake", undefined, next);
-      },
-    );
+    const live = await this.handshake(spawned.process, (next) => {
+      step.ok();
+      step = startPhase(phases, "handshake", undefined, next);
+    });
     if (live.ok) {
       step.ok();
       handshake.ok();
@@ -396,7 +387,6 @@ class CodexAdapter implements HarnessAdapter {
 
   private async handshake(
     child: OwnedProcess,
-    requestedModel: string | undefined,
     nextStep: (step: HarnessPhaseStep) => void,
   ): Promise<TLiveQualification> {
     const connection = new CodexQualificationConnection(
@@ -432,27 +422,6 @@ class CodexAdapter implements HarnessAdapter {
       }
       nextStep("model-list");
       const models = await connection.listModels();
-      // A requested model the observed list does not admit is a typed unavailable
-      // prepare failure, never a silent substitution (ADR 0022) — including when the
-      // list is empty, so an unconfirmable model is rejected rather than forwarded.
-      // The child spawned for qualification is torn down through the same failure path.
-      if (requestedModel !== undefined && !models.includes(requestedModel)) {
-        return {
-          ok: false,
-          failure: await failedQualification({
-            process: child,
-            diagnostics: diagnosticCapture,
-            failure: failure(
-              "model-unavailable",
-              `Codex does not offer the requested model '${requestedModel}'. Available models: ${models.join(", ")}.`,
-            ),
-            cleanupTimeoutMs:
-              this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
-            includeStderr: false,
-            observer: this.overrides.recordingObserver,
-          }),
-        };
-      }
       return {
         ok: true,
         process: child,
@@ -498,9 +467,6 @@ class CodexPreparedHarness implements PreparedHarness {
     private readonly controlTimeoutMs: number,
     private readonly cleanupTimeoutMs: number,
     private readonly observer: CodexRecordingObserver | undefined,
-    /** The caller's requested model, applied natively per Turn and kept private;
-     *  validated against the observed list at prepare. */
-    private readonly requestedModel: string | undefined,
     /** The one additional writable directory each thread is started or resumed
      *  with (#214). */
     private readonly writableDirectory: string | undefined,
@@ -533,8 +499,8 @@ class CodexPreparedHarness implements PreparedHarness {
         request.session,
         this.connection,
         this.workspace,
+        this.profile,
         this.controlTimeoutMs,
-        this.requestedModel,
         this.writableDirectory,
         this.phases,
       );
@@ -656,9 +622,10 @@ class CodexSession {
     readonly name: string,
     private readonly connection: CodexJsonlConnection,
     private readonly workspace: string,
+    /** The qualified profile, whose declared model list each Turn's request is
+     *  checked against before anything native is sent. */
+    private readonly profile: HarnessProfile,
     private readonly controlTimeoutMs: number,
-    /** The caller's requested model, applied on turn/start and kept private. */
-    private readonly requestedModel: string | undefined,
     /** The additional writable directory (#214), sent as a per-thread config
      *  override and checked against the acknowledged sandbox. */
     private readonly writableDirectory: string | undefined,
@@ -728,6 +695,14 @@ class CodexSession {
   }
 
   private async submit(turn: CodexTurn): Promise<void> {
+    // A model the observed list does not admit refuses the Turn before any thread
+    // exchange or admission, never a silent substitution (ADR 0034) — including
+    // when the list is empty, so an unconfirmable model is never forwarded.
+    const refusal = modelChoiceRefusal(this.profile, turn.request.modelChoice);
+    if (refusal !== undefined) {
+      turn.settleNotStartedWith(refusal);
+      return;
+    }
     if (this.unusableFailure !== undefined) {
       turn.settleRecoveryFailure(this.unusableFailure, this.model);
       return;
@@ -829,10 +804,11 @@ class CodexSession {
           this.connection.request("turn/start", {
             threadId: coordinate.opaque,
             input: [{ type: "text", text: turn.request.input.text }],
-            // A caller-requested model is applied at the native per-Turn point; the
-            // effective model stays what thread/start observed, never the request.
-            ...(this.requestedModel !== undefined
-              ? { model: this.requestedModel }
+            // This Turn's requested model is applied at the native per-Turn point;
+            // the effective model stays what thread/start observed, never the
+            // request. Its effort is not sent yet (#345).
+            ...(turn.request.modelChoice !== undefined
+              ? { model: turn.request.modelChoice.model }
               : {}),
           }),
         timeoutMs: this.controlTimeoutMs,
@@ -2007,14 +1983,6 @@ function harnessPlatform(
     default:
       return undefined;
   }
-}
-
-/** Treat an absent or empty requested model as no request, so every Adapter reads
- *  `PrepareOptions.requestedModel` the same way. */
-function normalizeRequestedModel(
-  value: string | undefined,
-): string | undefined {
-  return value === undefined || value.length === 0 ? undefined : value;
 }
 
 function failure(category: string, diagnostics: string): HarnessFailure {
