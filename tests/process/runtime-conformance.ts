@@ -55,6 +55,8 @@ import { runSupervised } from "../helpers/supervisor.js";
 import type { RunnerCase } from "../helpers/scenario-runner.js";
 import { registerSupervisorConformance } from "./supervisor-conformance.js";
 
+import { registerWindowsContainmentCases } from "./windows-contained-conformance.js";
+
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 const executable = process.execPath;
@@ -250,6 +252,7 @@ function registeredCases(): RunnerCase[] {
   registerProcessConformanceCases(scenarios, (name, body) => {
     cases.push({ name, body });
   });
+  registerWindowsContainmentCases((test) => cases.push(test));
   cases.push(
     { name: "execution-real-command", body: executionRealCommand },
     { name: "process-sync-command", body: processSyncCommand },

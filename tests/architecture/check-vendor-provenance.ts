@@ -43,7 +43,9 @@ const SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 // to detect the compiled-binary entry (`import.meta.main` is false in a Bun binary
 // on Windows). The Catalog and Run Store adapters import `bun:sqlite` behind their
 // Interfaces. The Windows console guard imports `bun:ffi` for its `GetConsoleWindow`
-// + `IsWindowVisible` conhost probe. A site reaching for a *different* Bun API —
+// + `IsWindowVisible` conhost probe. The private Windows Process containment
+// file imports `bun:ffi` for at-creation Job Objects and handle-based exit.
+// A site reaching for a *different* Bun API —
 // `Bun.spawn` in the Run Store, say — is rejected until ADR 0030 names it, so the
 // grant is per API, not a blanket pass for the file; and an entry whose file no
 // longer touches any Bun API is rejected as a dead grant.
@@ -57,6 +59,7 @@ const BUN_API_ALLOWLIST = new Map<string, ReadonlySet<string>>([
   ["src/catalog/catalog.ts", new Set(["bun:sqlite"])],
   ["src/run/store/store.ts", new Set(["bun:sqlite"])],
   ["src/tui/renderer/conhost-notice.ts", new Set(["bun:ffi"])],
+  ["src/process/windows-containment.ts", new Set(["bun:ffi"])],
 ]);
 
 /** The Bun API a node touching the `Bun` global reaches for, normalised to a

@@ -284,6 +284,7 @@ const FACT_FIELDS = new Set([
   "status",
   "signal",
   "elapsedMs",
+  "containment",
 ]);
 
 /** The settlement fields a case checks on the last fact it asserts. */

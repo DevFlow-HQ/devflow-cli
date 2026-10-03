@@ -73,6 +73,7 @@ type FakeOwnedProcessScript =
     }
   | {
       readonly kind: "launched";
+      readonly containment?: ProcessInterruption["containment"];
       readonly emissions: readonly FakeOwnedProcessEmission[];
     };
 
@@ -371,7 +372,16 @@ class FakeProcessAdapter implements ProcessAdapter {
             ],
       ),
     );
-    this.report([{ kind: "spawn", role, pid }]);
+    this.report([
+      {
+        kind: "spawn",
+        role,
+        pid,
+        ...(entry.containment === undefined
+          ? {}
+          : { containment: entry.containment }),
+      },
+    ]);
     owned.start();
     return Promise.resolve({ ok: true, process: owned });
   }

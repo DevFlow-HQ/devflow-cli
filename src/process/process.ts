@@ -6,7 +6,12 @@ import {
   type StdioOptions,
 } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import {
+  launchContained,
+  type ContainedChild,
+  type ContainmentFailureStage,
+} from "./windows-containment.js";
 import which from "which";
 
 // The process Module owns the "owned child process" mechanics that a Command step
@@ -17,7 +22,8 @@ import which from "which";
 //
 // It imports nothing from other Modules and reaches the OS only through
 // `node:child_process`, the primary `which` PATH walk, and the Windows-only
-// `where.exe` fallback (no new Bun API, ADR 0030). Run execution, Application
+// `where.exe` fallback. Windows owned launches use the private `bun:ffi`
+// containment file named in ADR 0030. Run execution, Application
 // (Preflight), and the Harness Module are its callers, so their precondition
 // checks and their spawns agree by construction (A40, D1).
 
@@ -264,9 +270,12 @@ type ChildRole = SpawnRole | "executable-lookup" | "tree-kill";
  *  - `exit` and `reap` carry the exit status, or the signal that ended it.
  *
  *  `elapsedMs` is monotonic time since the spawn call. */
+type WindowsContainment = "contained" | "fallback";
+
 export type ChildFact =
   | {
       readonly kind: "spawn";
+      readonly containment?: WindowsContainment;
       readonly role: ChildRole;
       readonly pid?: number;
     }
@@ -295,6 +304,8 @@ export type ChildFact =
  *  ignored, so a fact can never change a Process outcome. */
 export interface ProcessAdapterOptions {
   readonly observeChild?: (fact: ChildFact) => void;
+  /** Test-only acquisition failure; never wired by production composition. */
+  readonly testWindowsContainmentFailure?: ContainmentFailureStage;
 }
 
 /** The guarded observer every spawn path reports through. */
@@ -326,6 +337,7 @@ class ChildWatch {
   constructor(
     private readonly notify: Notify,
     private readonly role: ChildRole,
+    private readonly containment?: WindowsContainment,
   ) {}
 
   /** A synchronous spawn is about to block; its PID is not known yet. */
@@ -336,7 +348,14 @@ class ChildWatch {
   /** An asynchronous spawn returned a running child. */
   spawned(pid: number): void {
     this.pid = pid;
-    this.notify({ kind: "spawn", role: this.role, pid });
+    this.notify({
+      kind: "spawn",
+      role: this.role,
+      pid,
+      ...(this.containment === undefined
+        ? {}
+        : { containment: this.containment }),
+    });
   }
 
   /** A synchronous spawn returned: it failed to start, or its child ended. A
@@ -422,8 +441,9 @@ function watchChild(
   child: ChildProcess,
   notify: Notify,
   role: ChildRole,
+  containment?: WindowsContainment,
 ): ChildWatch {
-  const watch = new ChildWatch(notify, role);
+  const watch = new ChildWatch(notify, role, containment);
   if (child.pid !== undefined) watch.spawned(child.pid);
   child.once("error", (error) => {
     if (child.pid === undefined) watch.failed(error);
@@ -494,8 +514,9 @@ const KILL_ESCALATION_MS = 3000;
 
 // --- Long-lived owned process ----------------------------------------------
 
-/** The `close` observation for a long-lived child. `close`, rather than
- * `exit`, proves that stdout and stderr have both been drained. */
+/** One owned lifetime observation. Successful exit/signal observations follow
+ * output draining. Windows detects root exit on its handle and releases the job
+ * before draining; cleanup errors and timeouts do not prove a complete drain. */
 export type OwnedProcessClose =
   | { readonly kind: "exited"; readonly status: number }
   | { readonly kind: "signal"; readonly signal: NodeJS.Signals | null }
@@ -523,6 +544,7 @@ export interface OwnedProcessOptions {
 export type ProcessInterruption = {
   readonly close: OwnedProcessClose;
   readonly escalated: boolean;
+  readonly containment?: WindowsContainment;
 };
 
 /** A directly spawned child whose pipe and process-tree lifecycle remains owned
@@ -571,11 +593,17 @@ export interface ProcessAdapter {
 export function createProcessAdapter(
   options: ProcessAdapterOptions = {},
 ): ProcessAdapter {
-  return new NodeProcessAdapter(guardedObserver(options));
+  return new NodeProcessAdapter(
+    guardedObserver(options),
+    options.testWindowsContainmentFailure,
+  );
 }
 
 class NodeProcessAdapter implements ProcessAdapter {
-  constructor(private readonly notify: Notify) {}
+  constructor(
+    private readonly notify: Notify,
+    private readonly containmentFailure?: ContainmentFailureStage,
+  ) {}
 
   resolveExecutable(
     name: string,
@@ -595,7 +623,7 @@ class NodeProcessAdapter implements ProcessAdapter {
   spawnOwnedProcess(
     options: OwnedProcessOptions,
   ): Promise<SpawnOwnedProcessResult> {
-    return spawnOwnedProcessWithNode(options, this.notify);
+    return spawnOwnedProcess(options, this.notify, this.containmentFailure);
   }
 }
 
@@ -626,12 +654,83 @@ function spawnCommandSyncWithNode(
   };
 }
 
+/** Select contained Windows launch behind the unchanged owned Interface. */
+async function spawnOwnedProcess(
+  options: OwnedProcessOptions,
+  notify: Notify,
+  failAt: ContainmentFailureStage | undefined,
+): Promise<SpawnOwnedProcessResult> {
+  if (process.platform !== "win32")
+    return spawnOwnedProcessWithNode(options, notify);
+  // Match Node's case-insensitive environment selection before both resolution
+  // and CreateProcessW. Undefined keys are omitted, rather than shadowing a value.
+  const env: NodeJS.ProcessEnv = {};
+  const seen = new Set<string>();
+  for (const key of Object.keys(withoutBunTestWorker(options.env)).sort()) {
+    const value = options.env[key];
+    if (value === undefined || seen.has(key.toUpperCase())) continue;
+    seen.add(key.toUpperCase());
+    env[key] = value;
+  }
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH");
+  const target =
+    isAbsolute(options.executable) || /[\\/]/.test(options.executable)
+      ? {
+          kind: "found" as const,
+          executable: resolve(options.cwd, options.executable),
+          prefixArgs: [],
+        }
+      : resolveExecutableWithNode(
+          options.executable,
+          {
+            path:
+              pathKey === undefined
+                ? ""
+                : (env[pathKey] ?? "")
+                    .split(";")
+                    .map((entry) => resolve(options.cwd, entry))
+                    .join(";"),
+          },
+          notify,
+        );
+  if (target.kind !== "found")
+    return spawnOwnedProcessWithNode(options, notify, "fallback");
+  const resolved = {
+    ...options,
+    executable: resolve(options.cwd, target.executable),
+    args: [...target.prefixArgs, ...options.args],
+    env,
+  };
+  const result = await launchContained(resolved, failAt);
+  if (result.kind === "fallback")
+    return spawnOwnedProcessWithNode(resolved, notify, "fallback");
+  const watch = new ChildWatch(notify, options.role, "contained");
+  if (result.kind === "failed") {
+    watch.failed(result.cause);
+    return { ok: false, failure: { kind: "spawn-error", cause: result.cause } };
+  }
+  watch.spawned(result.child.pid);
+  void result.child.close.then((close) => {
+    if (close.kind === "exited") watch.closed(close.status, null);
+    else watch.closed(null, null);
+  });
+  return {
+    ok: true,
+    process: new ManagedOwnedProcess(
+      { kind: "contained", child: result.child },
+      watch,
+      "contained",
+    ),
+  };
+}
+
 /** Spawn a long-lived child with pipe backpressure and tree-owned cleanup. On
  * Windows, `overlapped` pipes avoid synchronous handle semantics; elsewhere
  * ordinary pipes are used. */
 function spawnOwnedProcessWithNode(
   options: OwnedProcessOptions,
   notify: Notify,
+  containment?: WindowsContainment,
 ): Promise<SpawnOwnedProcessResult> {
   const pipe: "pipe" | "overlapped" =
     process.platform === "win32" ? "overlapped" : "pipe";
@@ -655,7 +754,7 @@ function spawnOwnedProcessWithNode(
       },
     });
   }
-  const watch = watchChild(child, notify, options.role);
+  const watch = watchChild(child, notify, options.role, containment);
 
   return new Promise((resolve) => {
     let decided = false;
@@ -676,9 +775,10 @@ function spawnOwnedProcessWithNode(
     const onSpawn = (): void => {
       finish({
         ok: true,
-        process: new NodeOwnedProcess(
-          child as ChildProcessWithoutNullStreams,
+        process: new ManagedOwnedProcess(
+          { kind: "node", child: child as ChildProcessWithoutNullStreams },
           watch,
+          containment,
         ),
       });
     };
@@ -727,7 +827,13 @@ async function reapTimedOutLaunch(
   }
 }
 
-class NodeOwnedProcess implements OwnedProcess {
+type OwnedChild =
+  | { readonly kind: "node"; readonly child: ChildProcessWithoutNullStreams }
+  | { readonly kind: "contained"; readonly child: ContainedChild };
+
+/** Own the shared write, interruption, and cleanup-bound policy once. The
+ * private child variants supply Node events or Windows handle observations. */
+class ManagedOwnedProcess implements OwnedProcess {
   readonly stdout: AsyncIterable<Uint8Array>;
   readonly stderr: AsyncIterable<Uint8Array>;
   private readonly closePromise: Promise<OwnedProcessClose>;
@@ -735,20 +841,26 @@ class NodeOwnedProcess implements OwnedProcess {
   private interruptPromise: Promise<ProcessInterruption> | undefined;
 
   constructor(
-    private readonly child: ChildProcessWithoutNullStreams,
+    private readonly child: OwnedChild,
     private readonly watch: ChildWatch,
+    private readonly containment?: WindowsContainment,
   ) {
-    this.stdout = child.stdout;
-    this.stderr = child.stderr;
+    this.stdout = child.child.stdout;
+    this.stderr = child.child.stderr;
+    if (child.kind === "contained") {
+      this.closePromise = child.child.close;
+      return;
+    }
+    const nodeChild = child.child;
     this.closePromise = new Promise((resolve) => {
       // Once `spawn` succeeded, only `close` proves the process ended and both
       // output pipes drained. Retain a later error until that close observation,
       // but never mistake the error event itself for lifecycle completion.
       let processError: Error | undefined;
-      child.on("error", (error) => {
+      nodeChild.on("error", (error) => {
         processError = error;
       });
-      child.once("close", (code, signal) => {
+      nodeChild.once("close", (code, signal) => {
         if (processError !== undefined) {
           resolve({ kind: "cleanup-error", cause: processError });
           return;
@@ -766,7 +878,7 @@ class NodeOwnedProcess implements OwnedProcess {
       const finish = (): void => {
         if (callbackComplete && drained) resolve();
       };
-      const accepted = this.child.stdin.write(bytes, (error) => {
+      const accepted = this.child.child.stdin.write(bytes, (error) => {
         if (error) {
           reject(error);
           return;
@@ -776,7 +888,7 @@ class NodeOwnedProcess implements OwnedProcess {
       });
       if (!accepted) {
         drained = false;
-        this.child.stdin.once("drain", () => {
+        this.child.child.stdin.once("drain", () => {
           drained = true;
           finish();
         });
@@ -800,6 +912,19 @@ class NodeOwnedProcess implements OwnedProcess {
     return this.closePromise;
   }
 
+  private alive(): boolean {
+    return this.child.kind === "contained"
+      ? this.child.child.alive()
+      : alive(this.child.child);
+  }
+
+  private kill(signal: "SIGTERM" | "SIGKILL"): void {
+    if (this.child.kind === "contained") {
+      if (this.child.child.alive())
+        killWindowsTree(this.child.child.pid, signal, this.watch);
+    } else killGroup(this.child.child, signal, this.watch);
+  }
+
   /** Graceful signal, bounded wait, then a forced escalation if it did not stop.
    * The two stages share `gracefulMs`: the process gets the whole bound to exit on
    * the graceful signal, and the same bound again to die once force-killed. */
@@ -815,26 +940,30 @@ class NodeOwnedProcess implements OwnedProcess {
         // live child is force-killed at once and reported escalated — the Adapter
         // then reports the Turn `lost`, never a confirmed `interrupted` it cannot
         // vouch for. A child already gone was not killed by us: not escalated.
-        const live = alive(this.child);
+        const live = this.alive();
         if (live) this.watch.stopping("cancellation");
-        killGroup(this.child, "SIGKILL", this.watch);
+        this.kill("SIGKILL");
         const forced = await settleWithin(this.closePromise, gracefulMs);
         return {
           close: forced ?? { kind: "cleanup-timeout" },
           escalated: live,
+          containment: this.containment,
         };
       }
-      if (alive(this.child)) this.watch.stopping("cancellation");
-      killGroup(this.child, "SIGTERM", this.watch);
+      if (this.alive()) this.watch.stopping("cancellation");
+      this.kill("SIGTERM");
       const graceful = await settleWithin(this.closePromise, gracefulMs);
       if (graceful !== undefined) return { close: graceful, escalated: false };
-      killGroup(this.child, "SIGKILL", this.watch);
+      this.kill("SIGKILL");
       const forced = await settleWithin(this.closePromise, gracefulMs);
       return { close: forced ?? { kind: "cleanup-timeout" }, escalated: true };
     } catch (error) {
       return {
         close: { kind: "cleanup-error", cause: error },
         escalated: true,
+        ...(this.containment === undefined
+          ? {}
+          : { containment: this.containment }),
       };
     }
   }
@@ -843,18 +972,18 @@ class NodeOwnedProcess implements OwnedProcess {
     const deadline = Date.now() + timeoutMs;
     const stageTimeout = (stagesRemaining: number): number =>
       Math.max(0, Math.floor((deadline - Date.now()) / stagesRemaining));
-    this.child.stdin.end();
+    this.child.child.stdin.end();
 
     const firstWait = await settleWithin(this.closePromise, stageTimeout(3));
     if (firstWait !== undefined) return firstWait;
     // The process did not close within its share of the cleanup bound. One that
     // exited but whose pipes are still held open is not killed, so no timeout.
-    if (alive(this.child)) this.watch.stopping("timeout");
-    killGroup(this.child, "SIGTERM", this.watch);
+    if (this.alive()) this.watch.stopping("timeout");
+    this.kill("SIGTERM");
 
     const secondWait = await settleWithin(this.closePromise, stageTimeout(2));
     if (secondWait !== undefined) return secondWait;
-    killGroup(this.child, "SIGKILL", this.watch);
+    this.kill("SIGKILL");
 
     const finalWait = await settleWithin(this.closePromise, stageTimeout(1));
     return finalWait ?? { kind: "cleanup-timeout" };
@@ -1018,16 +1147,7 @@ function killGroup(
   if (pid === undefined) return;
   if (!alive(child)) return;
   if (process.platform === "win32") {
-    watch.killing(signal);
-    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    watch.treeKill(killer);
-    // taskkill.exe may be unspawnable (stripped image, restrictive sandbox); an
-    // unhandled 'error' event would crash the whole process, so swallow it — a
-    // failed kill leaves the child to its own timeout, never a fault here.
-    killer.on("error", () => {});
+    killWindowsTree(pid, signal, watch);
     return;
   }
   try {
@@ -1037,4 +1157,19 @@ function killGroup(
     return;
   }
   watch.killing(signal);
+}
+
+/** The same Windows cleanup for Node fallback and contained roots until #362. */
+function killWindowsTree(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+  watch: ChildWatch,
+): void {
+  watch.killing(signal);
+  const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  watch.treeKill(killer);
+  killer.on("error", () => {});
 }

@@ -56,7 +56,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   declines only while still unapproved — a programmatic clear once approved is not a decline.
 - The legacy-conhost notice (`renderer/conhost-notice.ts`, #70) gates the TUI at the `runTuiApp` seam before any renderer exists; `WT_SESSION` short-circuits the
   probe. `createStdinKeypress` reads one raw key and must hand stdin back paused, cooked, and listener-free **without destroying it** — the teardown's
-  `createProcessStdinRelease` does destroy it, and OpenTUI takes stdin next. Ctrl+C at the wait exits 130. It is the only `bun:ffi` importer in target source,
+  `createProcessStdinRelease` does destroy it, and OpenTUI takes stdin next. Ctrl+C at the wait exits 130. Its `bun:ffi` import is allowlisted per file,
   allowlisted in `tests/architecture/check-vendor-provenance.ts`.
 
 ## Tests

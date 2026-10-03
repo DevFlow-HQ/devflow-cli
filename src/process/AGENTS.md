@@ -11,6 +11,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Module spawns is `windowsHide: true` and so has none — verified on a desktop, where the same executable closed politely only when launched visible. So
   `killGroup` runs `taskkill /T /F` for both signals there, `interrupt` force-kills a live child at once and reports `escalated: true` (a child already
   gone reports `false`), and the graceful-stop proof in the spawn suite is POSIX-only by design. Off Windows: SIGTERM to the group, then SIGKILL.
+- Windows owned launches attach a separate kill-on-close, no-breakaway job at creation. Only `windows-containment.ts` imports `bun:ffi`.
+  The root starts suspended until its exit wait is registered. Any pre-execution failure releases the attempt before the Node fallback runs.
+  Root-handle exit releases the job, ending background descendants, then drains output before publishing `closed()`; a stalled drain is a cleanup error.
+  The `spawn` fact and interruption carry `contained` or `fallback`; Command spawns carry neither. Taskkill stopping stays until #362.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound
   again to die once force-killed. The bound is not split between the stages.
 - The primary single-PATH-walk comment (D1, `walkPath`) covers only this Module's executable resolution; it must not be read as excluding the three git

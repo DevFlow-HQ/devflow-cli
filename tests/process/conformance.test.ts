@@ -371,3 +371,36 @@ test("every spawn declares a caller role from the closed set", () => {
     [undefined, "executable-lookup", "node"],
   );
 });
+
+for (const containment of ["contained", "fallback"] as const) {
+  test(`owned Process exposes ${containment} evidence without changing interruption`, async () => {
+    const facts: ChildFact[] = [];
+    const interruption = {
+      close: { kind: "exited", status: 1 },
+      escalated: true,
+      containment,
+    } satisfies ProcessInterruption;
+    const adapter = createFakeProcess(
+      {
+        ownedProcesses: [
+          {
+            kind: "launched",
+            containment,
+            emissions: [interruptTerminal(interruption, 100)],
+          },
+        ],
+      },
+      { observeChild: (fact) => facts.push(fact) },
+    );
+    const launched = await adapter.spawnOwnedProcess(basicOwnedOptions);
+    assert.ok(launched.ok);
+    assert.equal(await launched.process.interrupt(100), interruption);
+    assert.equal(await launched.process.closed(), interruption.close);
+    assert.deepEqual(facts[0], {
+      kind: "spawn",
+      role: "harness-runtime",
+      pid: 40_000,
+      containment,
+    });
+  });
+}

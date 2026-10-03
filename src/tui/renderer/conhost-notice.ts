@@ -11,7 +11,7 @@ import { dlopen } from "bun:ffi";
 //
 // Detection and the keypress are behind injectable seams so every branch
 // unit-tests on every OS without touching Windows APIs or real stdin. The
-// production probe is the only `bun:ffi` importer in target source, allowlisted
+// production probe imports `bun:ffi` under its per-file allowance,
 // in tests/architecture/check-vendor-provenance.ts.
 //
 // ponytail: whole guard goes once Bun merges the stdin-release fix
