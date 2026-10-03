@@ -75,7 +75,10 @@ installed `claude`, reproducing the Adapter's exact launch argv and an equivalen
 loopback MCP approve-bridge, then writes the case directory. It records with
 `--restricted` (the real login and model apply, but this host's hooks, plugins,
 `CLAUDE.md`, and settings-file MCP do not) so fixtures are clean and reproducible;
-scoping `CLAUDE_CONFIG_DIR` instead would drop the login. It never runs in CI.
+scoping `CLAUDE_CONFIG_DIR` instead would drop the login. The account's
+claude.ai connectors still load under `--restricted` (a held-open process lists
+them in a later Turn's init), so the recorder also sets
+`ENABLE_CLAUDEAI_MCP_SERVERS=false`. It never runs in CI.
 
 The recorder refuses to write a recording whose bytes still match a credential
 pattern after redaction, naming the pattern — a recording must not carry a live
