@@ -87,8 +87,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   there (see [the Run Store's notes](../run/store/AGENTS.md)). The marker is harmless only because its outcome is not `succeeded`, not because the walk
   excludes it — keep that true if you add marker rows.
 - One settle path (`submitEndInteractiveStep` → `startEndInteractiveStep`) backs `end-interactive-step`, `continue-repeat` (#217), and `end-stage` (#218), so no
-  iteration settles twice; which control is legal on which Step (`interactiveControlMismatch`) and the mid-Turn refusal are
-  [run-control's](../../docs/agents/run-control.md).
+  iteration settles twice. Run execution's `interactiveEndLegality` owns the position and mid-Turn rules; Application only translates its refusals
+  through `interactiveControlMismatch` and `interactiveStepMidTurn`. Claim and promise ordering remain [run-control's](../../docs/agents/run-control.md).
 - App-release trust is a recorded Trust grant (operation id `app-release`) that the startup ensure (`shipped-bundles.ts`) writes only on an Entry whose
   origin is `built-in`, re-checked every startup, so launch, resume, and the timeline read it like any grant; `trustState` shows a grant on a built-in as
   `app-release`. Equal bytes a user imported first keep their own origin and trust (#227).

@@ -58,9 +58,10 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   re-walks from the top, replays settled iterations, and skips the settled Step (#216).
 - Both set `tracking.promise` (via a `start*` helper) so cancel-run and shutdown find and abort live work; interrupt reaches only the Turn's bound function.
   The abort reason decides the rest as the answer path does, and reaches clients through the Run Projection. `send` is refused blank at admission (before any stdin);
-  `end` mid-Turn (a live Turn) is refused as a value.
-- `continue-repeat` (#217) is `end` for a Step inside a human-controlled Repeat, which the scheduler re-walks into the next iteration; the Projection offers it
-  in End Step's place. Each control is refused as a value on the other's Step (`inHumanRepeat`), so one iteration is never settled by both.
+  the three ending controls use Run execution's `interactiveEndLegality` after `beginInteractive` confirms the Step and acquires or reuses its owner.
+  The Application passes `interactiveTurnLive`, preserving its in-flight promise check, and translates refusals into the existing Problems.
+- `continue-repeat` (#217) is `end` for a Step inside a human-controlled Repeat, which the scheduler re-walks into the next iteration.
+  The Projection asks the same predicate which ending controls to offer, passing its durable Turn-live fact; its send, interrupt, and steer gates stay local.
 - `end-stage` (#218) is `continue-repeat` whose published Attempt carries `endsStage`, one durable `attempt_log` mark: the re-walk finishes that iteration and exits
   the group, the Projection walks past it and reports `completion: "human-declared"` once the Run succeeds. Offered beside Continue; no tracker is read.
 

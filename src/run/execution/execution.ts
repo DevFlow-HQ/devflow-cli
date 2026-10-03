@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import {
   flattenSteps,
+  inHumanRepeat,
   FRESH_SESSION,
   MAX_REVIEW_CHECKPOINT_INTERVAL,
   type AgentStep,
@@ -995,6 +996,56 @@ function renderGateMessage(step: HumanGateStep, context: StepContext): string {
     );
   }
   return new TextDecoder().decode(bytes);
+}
+
+type InteractiveEndControl =
+  "end-interactive-step" | "continue-repeat" | "end-stage";
+
+export type InteractiveEndLegality =
+  | { readonly kind: "legal" }
+  | {
+      readonly kind: "refused";
+      readonly reason:
+        | "mid-turn"
+        | "end-step-in-human-repeat"
+        | "continue-outside-human-repeat"
+        | "end-stage-outside-human-repeat";
+    };
+
+/** Legality of the controls that settle an interactive Step. Callers first confirm
+ *  the Run is at that Step; Turn liveness includes their own in-flight work. */
+export function interactiveEndLegality({
+  routing,
+  step,
+  control,
+  turnLive,
+}: {
+  readonly routing: readonly RoutingNode[];
+  readonly step: Pick<Step, "id">;
+  readonly control: InteractiveEndControl;
+  readonly turnLive: boolean;
+}): InteractiveEndLegality {
+  // A raced control reports the live Turn even when its position also mismatches.
+  if (turnLive) return { kind: "refused", reason: "mid-turn" };
+  const humanRepeat = inHumanRepeat(routing, step.id);
+  switch (control) {
+    case "end-interactive-step":
+      return humanRepeat
+        ? { kind: "refused", reason: "end-step-in-human-repeat" }
+        : { kind: "legal" };
+    case "continue-repeat":
+      return humanRepeat
+        ? { kind: "legal" }
+        : { kind: "refused", reason: "continue-outside-human-repeat" };
+    case "end-stage":
+      return humanRepeat
+        ? { kind: "legal" }
+        : { kind: "refused", reason: "end-stage-outside-human-repeat" };
+    default: {
+      const exhaustive: never = control;
+      return exhaustive;
+    }
+  }
 }
 
 /** Where an interactive-agent Step's human Turns go (#122, #216): the pending

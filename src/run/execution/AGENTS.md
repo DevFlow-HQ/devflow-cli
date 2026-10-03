@@ -30,8 +30,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   lost Entry Turn rests the Run `halted` without publishing an Attempt, and only `end-interactive-step` publishes one (#212).
 - `runRepeatGroup` has two branches (#217): the Verdict-driven one re-reads `until` after each iteration and blocks at the Review cadence; the human-controlled
   one (`control: "human"`) reads no Verdict and raises no checkpoint, resting `blocked` at each iteration's interactive Step. Neither reads agent text to choose the exit.
-- Continue and End Stage settle an iteration only at a Turn boundary. Confirmed End Stage publishes that iteration's Attempt
-  marked `endsStage`, so the walk exits the group once and a trailing group rests the Run `succeeded` as human-declared completion, never a second settle (#218).
+- `interactiveEndLegality` owns the ending controls' rules, shared by Application settlement and Offers: End Step outside a human-controlled Repeat,
+  Continue or End Stage inside one, all only at a Turn boundary. A live Turn takes precedence over a position mismatch. Callers confirm the active Step
+  and supply Turn liveness; Application includes its in-flight promise, while the Projection uses durable Turn records.
+  Confirmed End Stage publishes the iteration's Attempt marked `endsStage`, so the walk exits the group once (#218).
 - Each Repeat iteration of an Interactive Step is its own Attempt (`encodeAttemptId` carries the iteration) with its own Session (`interactiveSession` scopes the
   name to that Attempt id), so Continue always opens a fresh conversation; `interactiveStepTarget` finds the resting iteration from the log (#216).
 - `observe` is guarded once at each entry (`executeRouting` and `driveInteractiveTurn`) by the shared `observer.ts` rule (#330): an observer never

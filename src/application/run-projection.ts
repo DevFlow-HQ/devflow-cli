@@ -27,6 +27,7 @@ import type {
 import {
   attemptIteration,
   attemptStepId,
+  interactiveEndLegality,
   interactiveStepTarget,
 } from "../run/execution/execution.js";
 import type {
@@ -322,12 +323,22 @@ function runResult(
           ...(interactiveStep !== undefined
             ? [
                 sendInteractiveTurnOffer(runId, interactiveStep.id),
-                ...(inHumanRepeat(facts.routing, interactiveStep.id)
-                  ? [
-                      continueRepeatOffer(runId, interactiveStep.id),
-                      endStageOffer(runId, interactiveStep.id),
-                    ]
-                  : [endInteractiveStepOffer(runId, interactiveStep.id)]),
+                ...(
+                  [
+                    ["end-interactive-step", endInteractiveStepOffer],
+                    ["continue-repeat", continueRepeatOffer],
+                    ["end-stage", endStageOffer],
+                  ] as const
+                ).flatMap(([control, offer]) =>
+                  interactiveEndLegality({
+                    routing: facts.routing,
+                    step: interactiveStep,
+                    control,
+                    turnLive: liveTurn !== undefined,
+                  }).kind === "legal"
+                    ? [offer(runId, interactiveStep.id)]
+                    : [],
+                ),
               ]
             : []),
           isLive || derivedRun.state === "blocked"

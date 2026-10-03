@@ -8,7 +8,6 @@ import type { Catalog } from "../catalog/catalog.js";
 import {
   flattenSteps,
   matchHarnessInputRule,
-  inHumanRepeat,
   routingNeedsHarness,
   type AgentStep,
   type AuthoredManifest,
@@ -16,6 +15,7 @@ import {
   type RoutingNode,
 } from "../workflow/workflow.js";
 import {
+  interactiveEndLegality,
   interactiveStepTarget,
   type RequestChannel,
   type RunReport,
@@ -2612,24 +2612,19 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if ("problem" in begun) {
       return Promise.resolve({ status: "not-applied", problem: begun.problem });
     }
-    // End Step is admitted only at a Turn boundary: a live Turn refuses it precisely,
-    // changing nothing (AC1). Checked here, so the refusal leaves the live Turn's
-    // `tracking.promise` intact.
-    if (interactiveTurnLive(begun.tracking, begun.owner)) {
+    const legality = interactiveEndLegality({
+      routing: begun.facts.routing,
+      step: begun.step,
+      control,
+      turnLive: interactiveTurnLive(begun.tracking, begun.owner),
+    });
+    if (legality.kind !== "legal") {
       return Promise.resolve({
         status: "not-applied",
-        problem: interactiveStepMidTurn(input.runId, begun.step.id),
-      });
-    }
-    const humanRepeat = inHumanRepeat(begun.facts.routing, begun.step.id);
-    if (humanRepeat !== (control !== "end-interactive-step")) {
-      return Promise.resolve({
-        status: "not-applied",
-        problem: interactiveControlMismatch(
-          input.runId,
-          begun.step.id,
-          control,
-        ),
+        problem:
+          legality.reason === "mid-turn"
+            ? interactiveStepMidTurn(input.runId, begun.step.id)
+            : interactiveControlMismatch(input.runId, begun.step.id, control),
       });
     }
     const promise = runInteractiveEnd(input, begun, control === "end-stage");
