@@ -25,14 +25,12 @@ import type {
   CleanupReport,
   ControlReceipt,
   ControlRejection,
-  HarnessAdapter,
   HarnessPhaseFact,
   HarnessPhaseObserver,
   HarnessPhaseStep,
   HarnessProfile,
   HarnessRequest,
   HarnessFailure,
-  PrepareOptions,
   PrepareResult,
   PreparedHarness,
   RecordingReceipt,
@@ -45,6 +43,11 @@ import type {
   TurnResult,
   TurnSubscription,
 } from "../../src/harness/harness.js";
+import type {
+  TestHarnessAdapter,
+  TestHarnessAdapterFactory,
+  TestPrepareOptions,
+} from "./test-adapters.js";
 
 /** One request the scripted Turn raises. `awaited` Turns settle only once it is
  *  answered; a non-awaited request is expired at terminal. */
@@ -119,26 +122,23 @@ const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
   "tool-activity",
 ]);
 
-/** Build a factory for the fake Adapter from a script. Given a phase observer,
- *  the fake reports what a native Adapter would around its scripted outcomes: a
- *  launch and handshake on each `prepare` that passes validation (the handshake
- *  failing with a scripted `prepareFailure`), and a cleanup on the first `close`
- *  (failing with the report's failure). Elapsed time is always zero. */
-export function createFake(
-  script: FakeScript,
-): (phases?: HarnessPhaseObserver) => HarnessAdapter {
-  return (phases) => new FakeAdapter(script, phases);
+/** Build a factory for the fake Adapter from a script. It spawns nothing, so a
+ *  prepare's Process is optional. Given a prepare's phase observer, the fake
+ *  reports what a native Adapter would around its scripted outcomes: a launch and
+ *  handshake on each `prepare` that passes validation (the handshake failing with
+ *  a scripted `prepareFailure`), and a cleanup on that Prepared Harness's first
+ *  `close` (failing with the report's failure). Elapsed time is always zero. */
+export function createFake(script: FakeScript): TestHarnessAdapterFactory {
+  return () => new FakeAdapter(script);
 }
 
-class FakeAdapter implements HarnessAdapter {
-  constructor(
-    private readonly script: FakeScript,
-    private readonly phases: HarnessPhaseObserver | undefined,
-  ) {}
+class FakeAdapter implements TestHarnessAdapter {
+  constructor(private readonly script: FakeScript) {}
 
-  prepare(options: PrepareOptions): Promise<PrepareResult> {
+  prepare(options: TestPrepareOptions): Promise<PrepareResult> {
+    const phases = ignoringThrows(options.phases);
     if (this.script.prepareFailure) {
-      this.reportOpen(this.script.prepareFailure);
+      this.reportOpen(phases, this.script.prepareFailure);
       return Promise.resolve({
         ok: false,
         failure: this.script.prepareFailure,
@@ -179,34 +179,50 @@ class FakeAdapter implements HarnessAdapter {
         },
       });
     }
-    this.reportOpen();
+    this.reportOpen(phases);
     return Promise.resolve({
       ok: true,
-      harness: new FakePreparedHarness(this.script, this.phases),
+      harness: new FakePreparedHarness(this.script, phases),
     });
   }
 
   /** The launch and handshake a native prepare reports, with any scripted
    *  handshake steps nested inside; the handshake and its last step fail with
    *  `failure` when one is given. */
-  private reportOpen(failure?: HarnessFailure): void {
-    this.phases?.({ kind: "phase-start", phase: "launch" });
-    this.phases?.({
+  private reportOpen(
+    phases: HarnessPhaseObserver | undefined,
+    failure?: HarnessFailure,
+  ): void {
+    phases?.({ kind: "phase-start", phase: "launch" });
+    phases?.({
       kind: "phase-end",
       phase: "launch",
       elapsedMs: 0,
       outcome: "ok",
     });
-    this.phases?.({ kind: "phase-start", phase: "handshake" });
+    phases?.({ kind: "phase-start", phase: "handshake" });
     const steps = this.script.handshakeSteps ?? [];
     steps.forEach((step, index) => {
-      this.phases?.({ kind: "phase-start", phase: "handshake", step });
-      this.phases?.(
-        endFact(index === steps.length - 1 ? failure : undefined, step),
-      );
+      phases?.({ kind: "phase-start", phase: "handshake", step });
+      phases?.(endFact(index === steps.length - 1 ? failure : undefined, step));
     });
-    this.phases?.(endFact(failure));
+    phases?.(endFact(failure));
   }
+}
+
+/** `observer`, ignoring a throw as every Adapter must, so observation never
+ *  changes a Harness outcome. */
+function ignoringThrows(
+  observer: HarnessPhaseObserver | undefined,
+): HarnessPhaseObserver | undefined {
+  if (observer === undefined) return undefined;
+  return (fact) => {
+    try {
+      observer(fact);
+    } catch {
+      // Observation never changes a Harness outcome.
+    }
+  };
 }
 
 /** A handshake (or handshake step) end: failed with `failure` when given. */

@@ -35,16 +35,15 @@ import {
   type PreparedHarness,
   type PrepareResult,
 } from "../harness/harness.js";
+import type { SelectedHarnessId } from "../run/store/store.js";
 import {
   type ArtifactType,
   type AssetKind,
   type Platform,
   routingNeedsHarness,
 } from "../workflow/workflow.js";
-import {
-  HarnessRegistry,
-  type HarnessAdapterOverride,
-} from "./harness-registry.js";
+import { HarnessRegistry } from "./harness-registry.js";
+import type { HarnessScope } from "./harness-log.js";
 import type { OperationalLog } from "./operational-log.js";
 import { applicationObserver } from "./application-log.js";
 import { runLifecycleObserver } from "./run-lifecycle-log.js";
@@ -116,19 +115,20 @@ export interface WiringOverrides {
   readonly launchCwd?: string;
   readonly engineVersion?: string;
   readonly hostPlatform?: Platform;
-  /** Process test Seam. Production constructs the real Adapter once here. */
+  /** Process test Seam: one instance shared by the invocation and every Run
+   *  scope, so its children carry no `runId`. Production constructs here. */
   readonly process?: ProcessAdapter;
   /** Constructor test Seam: proves the default construction branch runs once
-   * while keeping child creation out of the semantic test runner. It receives
-   * the options the real Adapter would, so a double can report child facts to
-   * the operational log. */
+   * for the invocation, and once per Run-scoped call when logging, while keeping child
+   * creation out of the semantic test runner. It receives the options the real
+   * Adapter would, so a double can report child facts to the operational log. */
   readonly processFactory?: (options: ProcessAdapterOptions) => ProcessAdapter;
   /** The Claude Code Adapter registry entry (#116). Production constructs the
-   * native Adapter; tests inject one over the replayer, or a factory taking the
-   * phase observer composition built for it. */
-  readonly harnessAdapter?: HarnessAdapterOverride;
+   * native Adapter; tests inject one, which reads its Process and phase observer
+   * from each prepare's options. */
+  readonly harnessAdapter?: HarnessAdapter;
   /** A Codex Adapter test seam. Production constructs the native Adapter. */
-  readonly codexHarnessAdapter?: HarnessAdapterOverride;
+  readonly codexHarnessAdapter?: HarnessAdapter;
   /** Whether the launching client can relay human turn-taking (#116, #122). The TUI
    *  root sets this true; the headless root leaves it false so an interactive-agent
    *  Bundle is refused at Preflight. Defaults to false. */
@@ -239,11 +239,31 @@ export function wireApplication(
   const launchWorkspacePath = overrides.launchCwd ?? process.cwd();
   const canonicalLaunchWorkspacePath =
     canonicalizeWorkspacePath(launchWorkspacePath);
-  const processOptions = log === undefined ? {} : processObserver(log);
+  const constructProcess = (options: ProcessAdapterOptions): ProcessAdapter =>
+    overrides.processFactory?.(options) ?? createProcessAdapter(options);
   const processAdapter =
     overrides.process ??
-    overrides.processFactory?.(processOptions) ??
-    createProcessAdapter(processOptions);
+    constructProcess(log === undefined ? {} : processObserver(log));
+  // The invocation's scope serves Preflight, discovery, and qualification, whose
+  // records belong to no Run.
+  const invocation: HarnessScope = {
+    process: processAdapter,
+    ...(log === undefined ? {} : { log }),
+  };
+  // One Run scope per Run (#333, ADR 0031): composition binds every lower-Module
+  // observer a Run's work reports through to that Run's id, so overlapping Runs'
+  // records stay apart while Harness, Process, and Run Store learn no Run. The
+  // Process Adapter holds no state but its observer, so each call builds an
+  // equivalent scope with its own Process rather than caching one per Run; an
+  // injected Process instance cannot be rebound and is shared.
+  const runScope = (runId: string): HarnessScope => {
+    if (log === undefined) return invocation;
+    const runLog = runRecorder(log, runId);
+    return {
+      process: overrides.process ?? constructProcess(processObserver(runLog)),
+      log: runLog,
+    };
+  };
 
   // The Catalog derives each installed digest's read-only asset tree through the
   // Bundle Module's reader, injected here so Catalog keeps depending only on the
@@ -260,20 +280,21 @@ export function wireApplication(
     // the one exported canonicaliser rather than a second `realpathSync.native`
     // site, so a fresh `run show` process reaches the same group directory as the
     // launch.
+    // The Run owner's Artifact Git spawns through the Run's own scope.
     const runGroup = openRunGroup(secantHome, canonicalLaunchWorkspacePath, {
       process: processAdapter,
+      processForRun: (runId) => runScope(runId).process,
     });
     try {
       const harnessRegistry = new HarnessRegistry(
         canonicalLaunchWorkspacePath,
-        processAdapter,
+        invocation,
         {
           claudeCodeAdapter: overrides.harnessAdapter,
           codexAdapter: overrides.codexHarnessAdapter,
           discoverClaudeCode: overrides.discoverClaudeCode,
           discoverCodex: overrides.discoverCodex,
         },
-        log,
       );
       const application = createApplication({
         catalog,
@@ -290,11 +311,12 @@ export function wireApplication(
           catalog,
           platform: host ?? "linux",
           harnessRegistry,
-          process: processAdapter,
+          runScope,
           ...(observe !== undefined ? { observe } : {}),
         }),
         prepareRunInteractiveStep: makePrepareRunInteractiveStep(
           harnessRegistry,
+          runScope,
           observe,
         ),
         // Pre-Run Application facts (#319) beside the Attempt outcomes it settles.
@@ -332,12 +354,12 @@ interface TMakeRunExecutionParams {
   readonly catalog: Catalog;
   readonly platform: Platform;
   readonly harnessRegistry: HarnessRegistry;
-  readonly process: ProcessAdapter;
+  readonly runScope: (runId: string) => HarnessScope;
   readonly observe?: ExecutionObserver;
 }
 
 function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
-  const { catalog, platform, harnessRegistry, process, observe } = params;
+  const { catalog, platform, harnessRegistry, runScope, observe } = params;
   return async ({
     routing,
     digest,
@@ -346,11 +368,13 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
     requestChannel,
     observeSteer,
   }) => {
+    // Command Steps and the Run's Harness share the Run's scope.
+    const scope = runScope(owner.record.runId);
     const deps = {
       owner,
       platform,
       resolveAsset: treeResolver(catalog, digest),
-      process,
+      process: scope.process,
       ...(observe !== undefined ? { observe } : {}),
       // The Application's per-Run cancel Seam (#98): an abort kills the child's
       // process group and unwinds execution, and the Application decides the rest.
@@ -371,9 +395,13 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
         "composition: an Agent-bearing Run has no selected Harness.",
       );
     }
-    const adapter = harnessRegistry.adapter(selectedHarness);
     const facts = harnessFacts(catalog, digest);
-    const prepared = await prepareRunHarness(adapter, owner);
+    const prepared = await prepareRunHarness(
+      harnessRegistry,
+      selectedHarness,
+      owner,
+      scope,
+    );
     if (!prepared.ok) {
       const harnessFailure = harnessRegistry.preparationFailure(
         selectedHarness,
@@ -410,6 +438,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
 // learning a Harness type, and the driver closes the prepared Harness exactly once.
 function makePrepareRunInteractiveStep(
   harnessRegistry: HarnessRegistry,
+  runScope: (runId: string) => HarnessScope,
   observe: ExecutionObserver | undefined,
 ): PrepareRunInteractiveStep {
   return async ({ owner }) => {
@@ -419,8 +448,12 @@ function makePrepareRunInteractiveStep(
         "composition: an Interactive-agent Run has no selected Harness.",
       );
     }
-    const adapter = harnessRegistry.adapter(selectedHarness);
-    const prepared = await prepareRunHarness(adapter, owner);
+    const prepared = await prepareRunHarness(
+      harnessRegistry,
+      selectedHarness,
+      owner,
+      runScope(owner.record.runId),
+    );
     if (!prepared.ok) {
       return {
         ok: false,
@@ -438,13 +471,15 @@ function makePrepareRunInteractiveStep(
 }
 
 // Prepare a Run's Harness identically on launch, resume, and interactive reopen:
-// the immutable requested model with no fallback (#187, ADR 0022), and the Run's
-// working area as the one additional writable directory (#214). An unusable area is
-// a typed prepare failure, so the Run halts before any Turn rather than writing
-// planning files anywhere else.
+// the immutable requested model with no fallback (#187, ADR 0022), the Run's
+// working area as the one additional writable directory (#214), and the Run's own
+// scope (#333). An unusable area is a typed prepare failure, so the Run halts
+// before any Turn rather than writing planning files anywhere else.
 async function prepareRunHarness(
-  adapter: HarnessAdapter,
+  harnessRegistry: HarnessRegistry,
+  selectedHarness: SelectedHarnessId,
   owner: RunOwner,
+  scope: HarnessScope,
 ): Promise<PrepareResult> {
   const area = owner.workingArea();
   if (!area.ok) {
@@ -459,13 +494,28 @@ async function prepareRunHarness(
       },
     };
   }
-  return adapter.prepare({
-    workspace: owner.record.workspacePath,
-    writableDirectory: area.path,
-    ...(owner.record.requestedModel !== undefined
-      ? { requestedModel: owner.record.requestedModel }
-      : {}),
-  });
+  return harnessRegistry.prepare(
+    selectedHarness,
+    {
+      workspace: owner.record.workspacePath,
+      writableDirectory: area.path,
+      ...(owner.record.requestedModel !== undefined
+        ? { requestedModel: owner.record.requestedModel }
+        : {}),
+    },
+    scope,
+  );
+}
+
+/** `log` with every record attributed to `runId`, placed after the event as the
+ *  Run lifecycle records place it. */
+function runRecorder(
+  log: Pick<OperationalLog, "record">,
+  runId: string,
+): Pick<OperationalLog, "record"> {
+  return {
+    record: ({ event, ...fields }) => log.record({ event, runId, ...fields }),
+  };
 }
 
 // Human Turns reach execution through this driver, not the execution

@@ -121,24 +121,19 @@ type TLiveQualification =
     }
   | { readonly ok: false; readonly failure: HarnessFailure };
 
-/** The factory a composition root calls, with the one Process instance it
- *  constructs. `phases`, when given, receives each native phase fact (#322). */
+/** The factory a composition root calls. Each `prepare` supplies the Process
+ *  Interface and phase observer its Prepared Harness uses; the Adapter keeps
+ *  only its schema-qualification cache. */
 export function createCodexAdapter(
   overrides: CodexAdapterOverrides,
-  processAdapter: ProcessAdapter,
-  phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
-  return new CodexAdapter(overrides, processAdapter, phases);
+  return new CodexAdapter(overrides);
 }
 
 class CodexAdapter implements HarnessAdapter {
   private readonly cache = new Set<string>();
 
-  constructor(
-    private readonly overrides: CodexAdapterOverrides,
-    private readonly processAdapter: ProcessAdapter,
-    private readonly phases: HarnessPhaseObserver | undefined,
-  ) {}
+  constructor(private readonly overrides: CodexAdapterOverrides) {}
 
   async prepare(options: PrepareOptions): Promise<PrepareResult> {
     const nativePlatform = this.overrides.platform ?? process.platform;
@@ -155,9 +150,10 @@ class CodexAdapter implements HarnessAdapter {
       return { ok: false, failure: writableFailure };
     }
 
+    const processAdapter = options.process;
     const discovery = this.discover(options);
     if (!discovery.ok) return discovery;
-    const version = await this.probeVersion(discovery.target);
+    const version = await this.probeVersion(processAdapter, discovery.target);
     if (!version.ok) return version;
     this.overrides.recordingObserver?.version(version.value);
 
@@ -173,7 +169,11 @@ class CodexAdapter implements HarnessAdapter {
       probeRevision,
     });
     if (cacheKey === undefined || !this.cache.has(cacheKey)) {
-      const schema = await this.qualifySchema(discovery.target, probeRevision);
+      const schema = await this.qualifySchema(
+        processAdapter,
+        discovery.target,
+        probeRevision,
+      );
       if (!schema.ok) return schema;
       if (cacheKey !== undefined) this.cache.add(cacheKey);
     }
@@ -182,6 +182,8 @@ class CodexAdapter implements HarnessAdapter {
     // both Adapters treat `PrepareOptions.requestedModel` identically.
     const requestedModel = normalizeRequestedModel(options.requestedModel);
     const live = await this.qualifyLive(
+      processAdapter,
+      options.phases,
       discovery.target,
       options.workspace,
       requestedModel,
@@ -209,7 +211,7 @@ class CodexAdapter implements HarnessAdapter {
         this.overrides.recordingObserver,
         requestedModel,
         options.writableDirectory,
-        this.phases,
+        options.phases,
       ),
     };
   }
@@ -238,7 +240,7 @@ class CodexAdapter implements HarnessAdapter {
     if (this.overrides.resolve !== undefined) {
       discoveryOptions.resolve = this.overrides.resolve;
     }
-    const discovery = discoverCodex(this.processAdapter, discoveryOptions);
+    const discovery = discoverCodex(options.process, discoveryOptions);
     if (discovery.kind === "found") {
       const target = discoveredHarnessTarget(discovery);
       return {
@@ -274,10 +276,11 @@ class CodexAdapter implements HarnessAdapter {
   }
 
   private probeVersion(
+    processAdapter: ProcessAdapter,
     target: TDiscoveredTarget,
   ): Promise<TProbeResult<string>> {
     return runTextProbe({
-      processAdapter: this.processAdapter,
+      processAdapter,
       target,
       args: ["--version"],
       category: "version-probe",
@@ -287,13 +290,14 @@ class CodexAdapter implements HarnessAdapter {
   }
 
   private async qualifySchema(
+    processAdapter: ProcessAdapter,
     target: TDiscoveredTarget,
     probeRevision: string,
   ): Promise<TProbeResult<true>> {
     const directory = mkdtempSync(join(tmpdir(), "secant-codex-schema-"));
     try {
       const generated = await runTextProbe({
-        processAdapter: this.processAdapter,
+        processAdapter,
         target,
         args: ["app-server", "generate-json-schema", "--out", directory],
         category: "schema-probe",
@@ -336,12 +340,14 @@ class CodexAdapter implements HarnessAdapter {
   }
 
   private async qualifyLive(
+    processAdapter: ProcessAdapter,
+    phases: HarnessPhaseObserver | undefined,
     target: TDiscoveredTarget,
     workspace: string,
     requestedModel: string | undefined,
   ): Promise<TLiveQualification> {
-    const launch = startPhase(this.phases, "launch");
-    const spawned = await this.processAdapter.spawnOwnedProcess({
+    const launch = startPhase(phases, "launch");
+    const spawned = await processAdapter.spawnOwnedProcess({
       role: "harness-runtime",
       executable: target.executable,
       args: target.prefixArgs.concat("app-server"),
@@ -363,9 +369,9 @@ class CodexAdapter implements HarnessAdapter {
     // Protocol initialization through the account and model reads is the open
     // handshake. Each exchange is a semantic step nested inside it (#325); the
     // step still open when the handshake ends settles with its outcome.
-    const handshake = startPhase(this.phases, "handshake");
+    const handshake = startPhase(phases, "handshake");
     let step = startPhase(
-      this.phases,
+      phases,
       "handshake",
       undefined,
       "protocol-initialize",
@@ -375,7 +381,7 @@ class CodexAdapter implements HarnessAdapter {
       requestedModel,
       (next) => {
         step.ok();
-        step = startPhase(this.phases, "handshake", undefined, next);
+        step = startPhase(phases, "handshake", undefined, next);
       },
     );
     if (live.ok) {

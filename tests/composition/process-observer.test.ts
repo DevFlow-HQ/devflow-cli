@@ -23,6 +23,7 @@ test("a Command Run's children reach the log with their role and PID, and no arg
   const git = createFakeGitProcess();
   const cmd = writeCommandBundle({ script: `console.log('${argument}')` });
   const workspace = overrides.launchCwd!;
+  let runId = "";
 
   const status = await withClients(
     async ({ projectionPort, bundleManagement }) => {
@@ -52,6 +53,7 @@ test("a Command Run's children reach the log with their role and PID, and no arg
         },
       });
       assert.ok(launch.admitted, JSON.stringify(launch));
+      runId = launch.runId!;
       await awaitSettled(projectionPort, "op-launch");
       return 0;
     },
@@ -95,6 +97,7 @@ test("a Command Run's children reach the log with their role and PID, and no arg
       time: WALL.toISOString(),
       invocationId: log.records[0]!.invocationId,
       event: "child-spawn",
+      runId,
       childRole: "command",
       childPid: pid,
     },
@@ -103,6 +106,7 @@ test("a Command Run's children reach the log with their role and PID, and no arg
       time: WALL.toISOString(),
       invocationId: log.records[0]!.invocationId,
       event: "child-exit",
+      runId,
       childRole: "command",
       childPid: pid,
       exitStatus: 0,
@@ -110,11 +114,13 @@ test("a Command Run's children reach the log with their role and PID, and no arg
       elapsedMs: 13,
     },
   ]);
-  // The Artifact repository's git: each synchronous spawn starts before it
-  // blocks, and its PID arrives with the exit.
+  // The Artifact repository's git, in the Run's own scope: each synchronous
+  // spawn starts before it blocks, and its PID arrives with the exit.
   const gitRecords = children.filter((record) => record.childRole === "git");
   assert.ok(gitRecords.length >= 2, JSON.stringify(children));
   for (let i = 0; i < gitRecords.length; i += 2) {
+    assert.equal(gitRecords[i]!.runId, runId);
+    assert.equal(gitRecords[i + 1]!.runId, runId);
     assert.deepEqual(
       [gitRecords[i]!.event, "childPid" in gitRecords[i]!],
       ["child-spawn", false],
@@ -135,6 +141,7 @@ test("a refused spawn and a timed-out child warn, with the native code and no PI
   });
   const slow = writeCommandBundle({ id: "dev.secant.slow", retry: 0 });
   const workspace = overrides.launchCwd!;
+  const runIds: string[] = [];
 
   await withClients(
     async ({ projectionPort, bundleManagement }) => {
@@ -157,7 +164,7 @@ test("a refused spawn and a timed-out child warn, with the native code and no PI
         catalog.close();
         if (!result.found) throw new Error("unreachable");
         const operationId = `op-launch-${index}`;
-        projectionPort.submit({
+        const launch = projectionPort.submit({
           operationId,
           operation: "launch-run",
           input: {
@@ -166,6 +173,9 @@ test("a refused spawn and a timed-out child warn, with the native code and no PI
             trustDigest: result.bundle.digest,
           },
         });
+        if (launch.admitted && launch.runId !== undefined) {
+          runIds.push(launch.runId);
+        }
         await awaitSettled(projectionPort, operationId);
       }
       return 0;
@@ -204,6 +214,10 @@ test("a refused spawn and a timed-out child warn, with the native code and no PI
     (record) => record.childRole === "command",
   )?.childPid;
   assert.equal(typeof pid, "number");
+  // Preflight refuses the probed Bundle before any Run exists, so only the slow
+  // Bundle's Run is created, and only its Command is attributed to it.
+  assert.equal(runIds.length, 1);
+  const runId = runIds[0];
   assert.deepEqual(children, [
     { level: "info", event: "child-spawn", childRole: "git" },
     {
@@ -216,18 +230,21 @@ test("a refused spawn and a timed-out child warn, with the native code and no PI
     {
       level: "info",
       event: "child-spawn",
+      runId,
       childRole: "command",
       childPid: pid,
     },
     {
       level: "warn",
       event: "child-timeout",
+      runId,
       childRole: "command",
       childPid: pid,
     },
     {
       level: "info",
       event: "child-reap",
+      runId,
       childRole: "command",
       childPid: pid,
       signal: "SIGTERM",

@@ -920,6 +920,9 @@ export function openRunGroup(
   workspacePath: string,
   options: {
     readonly process: ProcessAdapter;
+    /** The Process a Run's owner spawns through (its Artifact Git), given the
+     *  Run's id. Defaults to `process`. */
+    readonly processForRun?: (runId: string) => ProcessAdapter;
     readonly now?: () => Date;
     /** Whether the process owning a live Run is still alive (#98 S2). Defaults
      *  to a real probe (`process.kill(pid, 0)`); a test injects a fixed answer to
@@ -933,7 +936,8 @@ export function openRunGroup(
 ): RunGroup {
   const selfPid = options.selfPid ?? process.pid;
   const isOwnerAlive = options.isOwnerAlive ?? processIsAlive;
-  const processAdapter = options.process;
+  const processForRun =
+    options.processForRun ?? ((): ProcessAdapter => options.process);
   const groupDir = join(secantHome, "runs", groupDirName(workspacePath));
   mkdirSync(groupDir, { recursive: true });
   const { db, sqlite, rebuilt } = openCoordination(
@@ -1205,7 +1209,7 @@ export function openRunGroup(
         isOwnerAlive,
         openDatabase: openRunDatabase,
         trackHandle: (database) => trackRunHandle(runId, database),
-        process: processAdapter,
+        process: processForRun(runId),
       });
     },
     listRuns() {

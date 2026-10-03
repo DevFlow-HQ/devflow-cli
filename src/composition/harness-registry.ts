@@ -17,22 +17,17 @@ import {
   type HarnessDiscovery,
   type HarnessAdapter,
   type HarnessFailure,
-  type HarnessPhaseObserver,
+  type PrepareOptions,
+  type PrepareResult,
 } from "../harness/harness.js";
-import type { ProcessAdapter } from "../process/process.js";
 import type { SelectedHarnessId } from "../run/store/store.js";
-import { harnessPhaseRecorder, recordingHarness } from "./harness-log.js";
-import type { OperationalLog } from "./operational-log.js";
+import { prepareRecorded, type HarnessScope } from "./harness-log.js";
 
-/** A test Adapter in place of a native one: an instance, or a factory that takes
- *  the phase observer composition built for that Harness, so a double can report
- *  phase facts as the native factory would. */
-export type HarnessAdapterOverride =
-  HarnessAdapter | ((phases: HarnessPhaseObserver) => HarnessAdapter);
-
+/** Test Adapters in place of the native ones. A double reads the Process and
+ *  phase observer from each prepare's options, as the native Adapters do. */
 export interface HarnessRegistryOverrides {
-  readonly claudeCodeAdapter?: HarnessAdapterOverride;
-  readonly codexAdapter?: HarnessAdapterOverride;
+  readonly claudeCodeAdapter?: HarnessAdapter;
+  readonly codexAdapter?: HarnessAdapter;
   readonly discoverClaudeCode?: () => HarnessDiscovery;
   readonly discoverCodex?: () => HarnessDiscovery;
 }
@@ -43,8 +38,9 @@ interface THarnessRegistryEntry {
 }
 
 /** One closed registry table owns both production Harnesses. Application receives
- * only each entry's normalized half; execution resolves the private Adapter by
- * the durable semantic id. */
+ * only each entry's normalized half; a Run prepares the private Adapter by the
+ * durable semantic id, through its own scope. Discovery and qualification use the
+ * invocation's scope, so qualification records belong to no Run. */
 export class HarnessRegistry {
   private readonly entries: ReadonlyMap<
     SelectedHarnessId,
@@ -53,16 +49,12 @@ export class HarnessRegistry {
 
   constructor(
     qualificationWorkspace: string,
-    process: ProcessAdapter,
+    invocation: HarnessScope,
     overrides: HarnessRegistryOverrides,
-    log: Pick<OperationalLog, "record"> | undefined,
   ) {
-    const claudeCodeAdapter = observedAdapter(
-      "claude-code",
-      overrides.claudeCodeAdapter,
-      (phases) => createClaudeCodeAdapter({}, process, phases),
-      log,
-    );
+    const { process } = invocation;
+    const claudeCodeAdapter =
+      overrides.claudeCodeAdapter ?? createClaudeCodeAdapter({});
     const claudeCode: THarnessRegistryEntry = {
       application: {
         choice: {
@@ -79,16 +71,16 @@ export class HarnessRegistry {
           return normalizeDiscovery(discovery, CLAUDE_CODE_EXECUTABLE_ENV);
         },
         qualify: () =>
-          qualifyAdapter(claudeCodeAdapter, qualificationWorkspace),
+          qualifyAdapter(
+            claudeCodeAdapter,
+            "claude-code",
+            qualificationWorkspace,
+            invocation,
+          ),
       },
       adapter: claudeCodeAdapter,
     };
-    const codexAdapter = observedAdapter(
-      "codex",
-      overrides.codexAdapter,
-      (phases) => createCodexAdapter({}, process, phases),
-      log,
-    );
+    const codexAdapter = overrides.codexAdapter ?? createCodexAdapter({});
     const codex: THarnessRegistryEntry = {
       application: {
         choice: { id: "codex", name: "Codex", availability: "available" },
@@ -100,7 +92,13 @@ export class HarnessRegistry {
               : overrides.discoverCodex();
           return normalizeDiscovery(discovery, CODEX_EXECUTABLE_ENV);
         },
-        qualify: () => qualifyAdapter(codexAdapter, qualificationWorkspace),
+        qualify: () =>
+          qualifyAdapter(
+            codexAdapter,
+            "codex",
+            qualificationWorkspace,
+            invocation,
+          ),
       },
       adapter: codexAdapter,
     };
@@ -118,8 +116,19 @@ export class HarnessRegistry {
     return this.entry(selectedHarness).application.choice;
   }
 
-  adapter(selectedHarness: SelectedHarnessId): HarnessAdapter {
-    return this.entry(selectedHarness).adapter;
+  /** Prepares the selected Harness through `scope`, recording its phases,
+   *  usage, and cleanup there. */
+  prepare(
+    selectedHarness: SelectedHarnessId,
+    options: Omit<PrepareOptions, "process" | "phases">,
+    scope: HarnessScope,
+  ): Promise<PrepareResult> {
+    return prepareRecorded(
+      this.entry(selectedHarness).adapter,
+      selectedHarness,
+      options,
+      scope,
+    );
   }
 
   preparationFailure(
@@ -151,34 +160,20 @@ export class HarnessRegistry {
   }
 }
 
-/** Builds one Harness's Adapter, native or overridden. With a log, it gets its
- *  phase observer and is wrapped so every Harness it prepares records its
- *  cleanup and usage; with none (a direct `wireApplication` caller), it reports
- *  nowhere. */
-function observedAdapter(
-  harness: SelectedHarnessId,
-  override: HarnessAdapterOverride | undefined,
-  create: (phases: HarnessPhaseObserver | undefined) => HarnessAdapter,
-  log: Pick<OperationalLog, "record"> | undefined,
-): HarnessAdapter {
-  const phases =
-    log === undefined ? undefined : harnessPhaseRecorder(harness, log);
-  const adapter =
-    override === undefined
-      ? create(phases)
-      : typeof override === "function"
-        ? override(phases ?? (() => undefined))
-        : override;
-  return log === undefined ? adapter : recordingHarness(adapter, harness, log);
-}
-
 async function qualifyAdapter(
   adapter: HarnessAdapter,
+  harness: SelectedHarnessId,
   workspace: string,
+  invocation: HarnessScope,
 ): Promise<ApplicationHarnessQualification> {
-  let prepared: Awaited<ReturnType<HarnessAdapter["prepare"]>>;
+  let prepared: PrepareResult;
   try {
-    prepared = await adapter.prepare({ workspace });
+    prepared = await prepareRecorded(
+      adapter,
+      harness,
+      { workspace },
+      invocation,
+    );
   } catch (error) {
     return qualificationException("prepare", error);
   }

@@ -13,7 +13,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   with the Adapter (the resolved spawn target stays private), and the permission-bridge factory (`startPermissionBridge`), exported so the fixture
   recorder composes the production bridge instead of a copy (#127 D3); its surface is launch flags, the bearer, and a teardown, never an MCP type;
   and the safe cause translator (`translateCause`, #316), the one bounded, redacting record of a failure cause that M8's operational log and
-  M11's Detailed diagnostics write; and the optional phase observer each factory takes (`HarnessPhaseObserver`, #322), which carries only the
+  M11's Detailed diagnostics write; and the optional phase observer each prepare takes (`HarnessPhaseObserver`, #322), which carries only the
   semantic phase, an optional closed semantic `step` (#325), the Session key, elapsed time, and a typed `HarnessFailure`; no typed field carries a
   frame, argv, RPC name, or coordinate (mapping in harness-adapters), though a translated Codex cause may name its RPC method in bounded message or stack text.
   Recovery coordinates cross the Seam only as opaque `RecoveryCoordinate` values, never Run truth; callers never decide from their contents. Native
@@ -46,6 +46,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `ModelDeclaration`: a `list` of admitted models or `free-text`. `modelObservation` separately declares whether the effective model is read from native
   evidence. Codex declares `launch-and-per-turn` with the `model/list` result observed at qualification; Claude Code declares `launch` with free text
   (`--model`). Both observe the effective model.
+- `PrepareOptions.process` and `phases` (#333) serve that prepare and its Prepared Harness alone; an Adapter keeps only its qualification cache across
+  prepares, so a cache hit never reuses an earlier caller's Process or observer.
 - `PrepareOptions.writableDirectory` (#214) is validated by the one shared `writableDirectoryFailure` (`writable-directory.ts`) before anything
   native runs (not an existing absolute directory ⇒ typed `writable-directory-unavailable`). Claude Code forwards it as `--add-dir` on every launch; Codex
   sends a per-thread `sandbox_workspace_write.writable_roots` config override and refuses the Turn `writable-directory-refused` only when an acknowledged

@@ -39,8 +39,9 @@ async function launchFailure(cause: unknown): Promise<unknown> {
       },
     ],
   });
-  const prepared = await createClaudeCodeAdapter({ env: {} }, process).prepare({
+  const prepared = await createClaudeCodeAdapter({ env: {} }).prepare({
     workspace: makeTempDir("secant-secret-ws-"),
+    process,
   });
   assert.ok(prepared.ok);
   try {

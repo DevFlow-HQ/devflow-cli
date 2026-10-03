@@ -13,7 +13,6 @@ import { isDeepStrictEqual } from "node:util";
 import {
   LOST_UNKNOWNS,
   type DurableTurnRecorder,
-  type HarnessAdapterFactory,
   type HarnessRequest,
   type HarnessTurn,
   type LostUnknown,
@@ -24,6 +23,7 @@ import {
   type TurnRequest,
   type TurnResult,
 } from "../../src/harness/harness.js";
+import type { TestHarnessAdapterFactory } from "./test-adapters.js";
 
 /**
  * How a conformance behaviour is registered. Under the test runner the caller
@@ -83,9 +83,9 @@ export function collectAdapterConformanceCases(): {
 export interface PrepareProfileScenarios {
   readonly label: string;
   /** An Adapter that qualifies and returns an evidence-bearing profile. */
-  baseline(): HarnessAdapterFactory;
+  baseline(): TestHarnessAdapterFactory;
   /** An Adapter whose `prepare` returns a typed failure. */
-  prepareFailure(): HarnessAdapterFactory;
+  prepareFailure(): TestHarnessAdapterFactory;
 }
 
 /** The common Turn, terminal-ordering, and cleanup behaviours every native
@@ -93,7 +93,7 @@ export interface PrepareProfileScenarios {
 export interface TurnLifecycleScenarios extends PrepareProfileScenarios {
   readonly inputText?: string;
   /** A Turn the Harness ends with a terminal error subtype. */
-  failedTurn(): HarnessAdapterFactory;
+  failedTurn(): TestHarnessAdapterFactory;
 }
 
 /** Exact native reattachment behaviours for an Adapter whose deterministic
@@ -102,9 +102,9 @@ export interface ExactThreadRecoveryScenarios {
   readonly label: string;
   readonly resumeInputText?: string;
   /** The recovered native conversation acknowledges the requested coordinate. */
-  resumeAcknowledged(): HarnessAdapterFactory;
+  resumeAcknowledged(): TestHarnessAdapterFactory;
   /** Recovery returns missing or different native conversation evidence. */
-  resumeUnacknowledged(): HarnessAdapterFactory;
+  resumeUnacknowledged(): TestHarnessAdapterFactory;
 }
 
 /** Capability-specific native same-Turn guidance. Providers without native
@@ -113,7 +113,7 @@ export interface NativeSteerScenarios {
   readonly label: string;
   readonly inputText?: string;
   readonly guidanceText?: string;
-  steerableTurn(): HarnessAdapterFactory;
+  steerableTurn(): TestHarnessAdapterFactory;
 }
 
 /**
@@ -130,12 +130,12 @@ export interface ApprovalRequestScenarios {
   readonly awaitedInputText?: string;
   /** A Turn that raises `concurrentCount` requests at once, settling once all
    *  are answered. */
-  concurrentRequests(): HarnessAdapterFactory;
+  concurrentRequests(): TestHarnessAdapterFactory;
   /** A Turn that raises one approval request and awaits its answer. */
-  awaitedApproval(): HarnessAdapterFactory;
+  awaitedApproval(): TestHarnessAdapterFactory;
   /** A Turn that raises one awaited request and can be interrupted. Adapters
    *  whose native interrupt slice has not landed omit this scenario. */
-  interruptible?: () => HarnessAdapterFactory;
+  interruptible?: () => TestHarnessAdapterFactory;
 }
 
 /**
@@ -152,19 +152,19 @@ export interface InterruptRecoveryScenarios extends TurnLifecycleScenarios {
   /** A Turn that emits a `session` event then blocks until interrupted; the
    *  graceful interrupt stops it and it settles `interrupted` with a detached
    *  Session. */
-  blockingTurn(): HarnessAdapterFactory;
+  blockingTurn(): TestHarnessAdapterFactory;
   /** A blocking Turn whose process does not stop on the graceful signal and must
    *  be force-killed → `lost` with unknown "interruption". */
-  unresponsiveInterrupt(): HarnessAdapterFactory;
+  unresponsiveInterrupt(): TestHarnessAdapterFactory;
   /** A Turn whose producer closes with no authoritative result → `lost` with
    *  unknown "completion". */
-  lostCompletion(): HarnessAdapterFactory;
+  lostCompletion(): TestHarnessAdapterFactory;
   /** Two Turns on one Session: the first blocks and is interrupted (detaches),
    *  the second resumes from the coordinate and completes. */
-  resumeAcknowledged(): HarnessAdapterFactory;
+  resumeAcknowledged(): TestHarnessAdapterFactory;
   /** Like `resumeAcknowledged`, but the resumed Session is not acknowledged: it
    *  becomes `unusable` and the second Turn fails in the `recovery` phase. */
-  resumeUnacknowledged(): HarnessAdapterFactory;
+  resumeUnacknowledged(): TestHarnessAdapterFactory;
 }
 
 /**
@@ -180,11 +180,11 @@ export interface ConformanceScenarios
     ModelDeclarationScenarios,
     RequestedModelScenarios {
   /** A Turn that raises one request it does not await, expiring it at terminal. */
-  expiringRequest(): HarnessAdapterFactory;
+  expiringRequest(): TestHarnessAdapterFactory;
   /** A Turn that ends `lost` with the given unknown. */
-  lost(unknown: LostUnknown): HarnessAdapterFactory;
+  lost(unknown: LostUnknown): TestHarnessAdapterFactory;
   /** Two Turns: the first detaches, the second resumes and completes. */
-  resumable(): HarnessAdapterFactory;
+  resumable(): TestHarnessAdapterFactory;
   /** Load-with-replay recovery (ADR 0022): the first Turn emits transcript
    *  content then blocks and is interrupted; the second resumes and must replay
    *  that history before a barrier, reconcile one repeated entry, then progress. */
@@ -193,7 +193,7 @@ export interface ConformanceScenarios
 
 /** What a load-with-replay provider promises the suite can observe on resume. */
 interface ReplayScenario {
-  readonly factory: HarnessAdapterFactory;
+  readonly factory: TestHarnessAdapterFactory;
   /** The transcript events the first Turn emits, in order — the history. */
   readonly history: readonly TurnEvent[];
   /** One history entry the resumed Turn also carries live; it must appear once. */
@@ -657,7 +657,7 @@ export function runPrepareProfileCases(
 /** A granting Adapter and the directories its native side was handed: one list
  *  per native launch (Claude Code) or thread start/resume (Codex). */
 interface WritableDirectoryGrant {
-  readonly factory: HarnessAdapterFactory;
+  readonly factory: TestHarnessAdapterFactory;
   readonly grants: () => readonly (readonly string[])[];
 }
 
@@ -668,7 +668,7 @@ export interface WritableDirectoryGrantScenarios {
   readonly directory: () => string;
   readonly granting: () => WritableDirectoryGrant;
   /** An Adapter whose acknowledged native policy cannot admit the directory. */
-  readonly refusing?: () => HarnessAdapterFactory;
+  readonly refusing?: () => TestHarnessAdapterFactory;
   /** The coordinate a fresh prepared Harness resumes, proving recovery re-grants. */
   readonly resumeCoordinate?: RecoveryCoordinate;
 }
@@ -749,7 +749,7 @@ export function runWritableDirectoryGrantCases(
 }
 
 async function prepareGranting(
-  factory: HarnessAdapterFactory,
+  factory: TestHarnessAdapterFactory,
   writableDirectory: string,
 ) {
   const result = await factory().prepare({
@@ -769,7 +769,7 @@ async function prepareGranting(
  */
 export interface ModelDeclarationScenarios {
   readonly label: string;
-  baseline(): HarnessAdapterFactory;
+  baseline(): TestHarnessAdapterFactory;
   /** What the baseline profile's model-selection capability must declare. A list
    *  Adapter names models the list must include; a free-text Adapter names none. */
   readonly expectedDeclaration:
@@ -836,11 +836,11 @@ export interface RequestedModelScenarios {
   /** A model the baseline declaration admits, threaded through prepare. */
   readonly requestedModel: string;
   /** An Adapter that completes a Turn, prepared with `requestedModel`. */
-  requestedTurn(): HarnessAdapterFactory;
+  requestedTurn(): TestHarnessAdapterFactory;
   /** For a list-declaring Adapter, a model the list rejects. A free-text Adapter
    *  admits any value and omits both this and `rejectsUnknownModel`. */
   readonly unknownModel?: string;
-  rejectsUnknownModel?: () => HarnessAdapterFactory;
+  rejectsUnknownModel?: () => TestHarnessAdapterFactory;
 }
 
 /** Run the requested-model cases against one provider. */
@@ -1172,7 +1172,7 @@ export function runConformanceSuite(
 
 // --- Driving helpers ---------------------------------------------------------
 
-async function prepare(factory: HarnessAdapterFactory) {
+async function prepare(factory: TestHarnessAdapterFactory) {
   const result = await factory().prepare({ workspace: process.cwd() });
   assert.equal(result.ok, true);
   if (!result.ok) throw new Error("unreachable");
@@ -1180,7 +1180,7 @@ async function prepare(factory: HarnessAdapterFactory) {
 }
 
 async function prepareWith(
-  factory: HarnessAdapterFactory,
+  factory: TestHarnessAdapterFactory,
   options: { readonly requestedModel: string },
 ) {
   const result = await factory().prepare({

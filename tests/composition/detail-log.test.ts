@@ -140,8 +140,8 @@ async function launchOnce(t: TestContext, options: LaunchOptions) {
       engineVersion: "9.8.7",
       hostPlatform: "linux",
       process: createFakeBundleProcess({ executables: [process.execPath] }),
-      // The factory form: composition hands the fake its phase observer.
-      harnessAdapter: createFake(options.script),
+      // Each prepare hands the fake its phase observer.
+      harnessAdapter: createFake(options.script)(),
       logSink: {
         folder,
         clock: steppingClock(),
@@ -244,6 +244,7 @@ test("detail checkpoints are written with detail on and dropped with it off, for
     {
       level: "debug",
       event: "harness-phase-start",
+      runId: "<run>",
       harness: "claude-code",
       phase: "handshake",
       step: name,
@@ -251,6 +252,7 @@ test("detail checkpoints are written with detail on and dropped with it off, for
     {
       level: "debug",
       event: "harness-phase-end",
+      runId: "<run>",
       harness: "claude-code",
       phase: "handshake",
       step: name,
@@ -356,7 +358,7 @@ test("an assessment's refused check settles refused with its codes while later c
       engineVersion: "9.8.7",
       hostPlatform: "linux",
       process: createFakeBundleProcess(),
-      harnessAdapter: createFake({ profile: profile(), turns: [] }),
+      harnessAdapter: createFake({ profile: profile(), turns: [] })(),
       logSink: {
         folder,
         clock: steppingClock(),
@@ -506,7 +508,7 @@ test("a Human Gate's pending-gate write, a Materialization conflict's write, and
       engineVersion: "9.8.7",
       hostPlatform: "linux",
       process: createFakeBundleProcess(),
-      harnessAdapter: createFake({ profile: profile(), turns: [] }),
+      harnessAdapter: createFake({ profile: profile(), turns: [] })(),
       logSink: {
         folder,
         clock: steppingClock(),

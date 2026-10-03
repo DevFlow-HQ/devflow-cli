@@ -8,10 +8,10 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { HarnessAdapterFactory } from "../../src/harness/harness.js";
 import {
   createClaudeCodeAdapter,
   createCodexAdapter,
+  type TestHarnessAdapterFactory,
 } from "./test-adapters.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import {
@@ -172,7 +172,7 @@ export function registerClaudeCodeReplayerConformance(
   });
 
   const caseScenario =
-    (name: string, id: string) => (): HarnessAdapterFactory => {
+    (name: string, id: string) => (): TestHarnessAdapterFactory => {
       const replayer = installReplayer(VERSION, protocolCase(name));
       return () =>
         createClaudeCodeAdapter({
@@ -268,7 +268,7 @@ export function registerCodexReplayerConformance(
   const codexGrant = (
     installed = installSyntheticCodexReplayer(),
   ): {
-    factory: HarnessAdapterFactory;
+    factory: TestHarnessAdapterFactory;
     grants: () => string[][];
   } => {
     return {

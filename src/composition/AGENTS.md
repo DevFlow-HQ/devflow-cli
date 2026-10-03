@@ -6,8 +6,12 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 
 - Application receives only normalized Harness registrations and never an Adapter object. `HarnessRegistry` is imported only inside composition, where it
   resolves the selected Harness id to the private Adapter before Run execution.
-- Composition constructs the one real Process implementation (`createProcessAdapter`) and injects that instance into Run execution, the Run Store,
-  Application's Preflight, and the Harness registry; tests replace it through the wiring overrides, never by a second construction site.
+- Composition alone constructs the real Process (`createProcessAdapter`): the invocation's instance serves Preflight, the Run group's default,
+  discovery, and qualification; tests replace it through the wiring overrides, never by a second construction site.
+- One Run scope per Run (#333, ADR 0031): `runScope` in `wiring.ts` binds a Process observer and the Harness phase, usage, and cleanup records to
+  the Run's `runId`. Its Process goes to Command Steps, the Run's Harness prepare, and (via `processForRun`) the owner's Artifact Git; qualification
+  stays unscoped. The Adapter is stateless but for its observer, so each `runScope` call builds an equivalent scope with its own Process rather than
+  caching one per Run; an injected `process` instance is shared, so its children carry no `runId`.
 - Composition owns the qualify prepare-then-close pairing: a registration's catalog qualification prepares its private Adapter against the canonical
   launch Workspace and immediately closes it. Only a clean close publishes the captured profile; prepare or cleanup failure crosses as normalized
   unavailability, never an Adapter or prepared Harness (#188).
@@ -33,9 +37,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   `applicationObserver` (`application-log.ts`, #319) maps the Application's pre-Run events the same way and hands its `attempt-end` to that
   lifecycle observer, which holds the Attempt's start.
 - `OperationalLog.record` maps each event to its level (`recordLevel`): a failed Harness phase, unclean cleanup, or not-ready qualification warns.
-  `harness-log.ts` builds each Harness's phase observer and wraps its Adapter so every prepared Harness records its `CleanupReport` on first close and each completed
-  Turn's usage: one seam for the qualify, Run, and interactive close sites, a double included. A test Adapter override may be a factory taking
-  that observer (#322). The Process observer (`process-observer.ts`, #321) is built where the one Process is constructed, and
+  `harness-log.ts` (`prepareRecorded`) hands each prepare its scope's Process and phase observer and wraps the Prepared Harness so it records its
+  `CleanupReport` on first close and each completed Turn's usage: one seam for the qualify, Run, and interactive close sites, a double included. A
+  test Adapter reads both from the prepare options (#322, #333). The Process observer (`process-observer.ts`, #321) is built per scope, and
   `processFactory` receives the same options, so a double reports child facts too; a child that never ran, timed out, or was force-killed warns.
 - Detail checkpoints (#325) map to `debug`: a Preflight check, a Run execution store write, and a phase record carrying a `step`. No observer
   learns whether detail is on; the sink drops detail-off records before serialization or reading the clock. They read no clock, so

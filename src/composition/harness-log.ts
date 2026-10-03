@@ -5,8 +5,11 @@ import {
   type HarnessFailure,
   type HarnessPhaseObserver,
   type PreparedHarness,
+  type PrepareOptions,
+  type PrepareResult,
   type SafeCause,
 } from "../harness/harness.js";
+import type { ProcessAdapter } from "../process/process.js";
 import type { SelectedHarnessId } from "../run/store/store.js";
 import type { OperationalLog, OperationalRecord } from "./operational-log.js";
 
@@ -38,8 +41,51 @@ function sessionField(
   return session === undefined ? {} : { session };
 }
 
-/** The phase observer composition passes into `harness`'s Adapter. */
-export function harnessPhaseRecorder(
+/** What one prepare reports through (#333): the Process its Harness spawns
+ *  through, and the log its phase, usage, and cleanup records reach (none when
+ *  the invocation logs nothing). A Run's scope binds both to the Run's id;
+ *  qualification's binds neither. */
+export interface HarnessScope {
+  readonly process: ProcessAdapter;
+  readonly log?: Recorder;
+}
+
+/** Prepares `adapter` through `scope`: its Process and phase observer go to this
+ *  prepare alone, and the Prepared Harness records its `CleanupReport` on its
+ *  first close and each completed Turn's usage. Every close site, qualify, Run,
+ *  and interactive driver alike, closes through this one wrapper. */
+export async function prepareRecorded(
+  adapter: HarnessAdapter,
+  harness: SelectedHarnessId,
+  options: Omit<PrepareOptions, "process" | "phases">,
+  scope: HarnessScope,
+): Promise<PrepareResult> {
+  const { log } = scope;
+  const prepared = await adapter.prepare({
+    ...options,
+    process: scope.process,
+    ...(log === undefined
+      ? {}
+      : { phases: harnessPhaseRecorder(harness, log) }),
+  });
+  if (!prepared.ok || log === undefined) return prepared;
+  const recorder: Recorder = {
+    record(record) {
+      try {
+        log.record(record);
+      } catch {
+        // Recording evidence never changes a Harness result or close report.
+      }
+    },
+  };
+  return {
+    ok: true,
+    harness: recordingPrepared(prepared.harness, harness, recorder),
+  };
+}
+
+/** The phase observer one prepare of `harness` reports through. */
+function harnessPhaseRecorder(
   harness: SelectedHarnessId,
   log: Recorder,
 ): HarnessPhaseObserver {
@@ -67,35 +113,6 @@ export function harnessPhaseRecorder(
       elapsedMs: fact.elapsedMs,
       ...(fact.outcome === "failed" ? failureFields(fact.failure) : {}),
     });
-  };
-}
-
-/** `adapter` with every Harness it prepares recording its `CleanupReport` on
- *  its first close and each completed Turn's usage. Every close site, qualify,
- *  Run, and interactive driver alike, closes through this one wrapper. */
-export function recordingHarness(
-  adapter: HarnessAdapter,
-  harness: SelectedHarnessId,
-  log: Recorder,
-): HarnessAdapter {
-  const recorder: Recorder = {
-    record(record) {
-      try {
-        log.record(record);
-      } catch {
-        // Recording evidence never changes a Harness result or close report.
-      }
-    },
-  };
-  return {
-    async prepare(options) {
-      const prepared = await adapter.prepare(options);
-      if (!prepared.ok) return prepared;
-      return {
-        ok: true,
-        harness: recordingPrepared(prepared.harness, harness, recorder),
-      };
-    },
   };
 }
 

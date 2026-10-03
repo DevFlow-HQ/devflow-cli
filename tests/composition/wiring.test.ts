@@ -15,12 +15,21 @@ import {
   type Wiring,
 } from "../../src/composition/main.js";
 import { buildBundle } from "../../src/bundle/bundle.js";
-import type { HarnessAdapter } from "../../src/harness/harness.js";
+import {
+  createClaudeCodeAdapter,
+  type HarnessAdapter,
+} from "../../src/harness/harness.js";
+import type {
+  ProcessAdapter,
+  ProcessAdapterOptions,
+} from "../../src/process/process.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
 import {
   ensureRuntimeOnPath,
+  RUNTIME_NAME,
   writeCommandBundle,
 } from "../helpers/commandBundle.js";
+import { createFakeProcess } from "../process/fake-adapter.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 import { createFake } from "../harness/fake-adapter.js";
@@ -996,4 +1005,320 @@ test("a preparation failure on a fenced owner records the refusal without claimi
   );
   assert.equal(refusal?.runId, runId);
   assert.equal(refusal?.code, "selected-harness-unavailable");
+});
+
+// --- Run-scoped attribution (#333, audit A7) ------------------------------------
+
+const OVERLAP_SESSION_ID = "33333333-3333-4333-8333-333333333333";
+
+/** A Command Step then an Agent Step, both Runs of it sharing Session `s`. */
+function writeOverlapBundle(): { folder: string; id: string } {
+  const folder = makeTempDir("secant-overlap-bundle-");
+  writeFileSync(join(folder, "work.md"), "Do the work.");
+  const id = "dev.secant.overlap";
+  writeFileSync(
+    join(folder, "manifest.json"),
+    JSON.stringify({
+      formatVersion: 1,
+      bundle: {
+        id,
+        version: "1.0.0",
+        name: "Overlap",
+        description: "Two overlapping Runs share one Session name.",
+      },
+      platforms: ["windows", "macos", "linux"],
+      inputs: {},
+      assets: [{ path: "work.md", kind: "prompt" }],
+      routing: [
+        {
+          id: "check",
+          kind: "command",
+          produces: [{ name: "output", type: "text" }],
+          command: {
+            executable: RUNTIME_NAME,
+            arguments: ["-e", "console.log('checked')"],
+          },
+        },
+        {
+          id: "draft",
+          kind: "agent",
+          retry: 0,
+          session: "s",
+          prompt: { asset: "work.md" },
+        },
+      ],
+    }),
+  );
+  return { folder, id };
+}
+
+/** The Claude Code stream one scripted Session child emits: init, then a
+ *  completed result carrying usage. */
+function claudeTurnFrames(): Uint8Array {
+  const frames = [
+    {
+      type: "system",
+      subtype: "init",
+      session_id: OVERLAP_SESSION_ID,
+      model: "scripted-model",
+      tools: [],
+      mcp_servers: [],
+      claude_code_version: "2.1.234",
+    },
+    {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "done",
+      session_id: OVERLAP_SESSION_ID,
+      total_cost_usd: 0.001,
+      usage: { input_tokens: 1, output_tokens: 2 },
+    },
+  ];
+  return new TextEncoder().encode(
+    frames.map((frame) => `${JSON.stringify(frame)}\n`).join(""),
+  );
+}
+
+/** A Process factory every construction of which shares one fake Git and the
+ *  Bundle's Command handlers, so only the observer it is given differs. Each
+ *  Claude Code Session child is held at spawn until a second one is requested,
+ *  so two Runs' Turns are live at once. */
+function overlappingProcess() {
+  const bundle = createFakeBundleProcess({ executables: ["claude"] });
+  let arrivals = 0;
+  let firstArrived!: () => void;
+  const first = new Promise<void>((resolve) => {
+    firstArrived = resolve;
+  });
+  let secondArrived!: () => void;
+  const second = new Promise<void>((resolve) => {
+    secondArrived = resolve;
+  });
+  const factory = (options: ProcessAdapterOptions): ProcessAdapter => {
+    const scripted = createFakeProcess(
+      {
+        resolutionHandler: (name) => bundle.resolveExecutable(name),
+        commandHandler: (spawn) =>
+          spawn.role === "harness-probe"
+            ? {
+                kind: "exited",
+                status: 0,
+                text: new TextEncoder().encode("2.1.234 (Claude Code)"),
+              }
+            : bundle.spawnCommand(spawn),
+        syncCommandHandler: (spawn) => bundle.spawnCommandSync(spawn),
+      },
+      options,
+    );
+    return {
+      resolveExecutable: (name, resolve) =>
+        scripted.resolveExecutable(name, resolve),
+      spawnCommand: (spawn) => scripted.spawnCommand(spawn),
+      spawnCommandSync: (spawn) => scripted.spawnCommandSync(spawn),
+      async spawnOwnedProcess(spawn) {
+        arrivals += 1;
+        if (arrivals === 1) {
+          firstArrived();
+          await second;
+        } else if (arrivals === 2) {
+          secondArrived();
+        }
+        return createFakeProcess(
+          {
+            ownedProcesses: [
+              {
+                kind: "launched",
+                emissions: [
+                  { kind: "stdout", bytes: claudeTurnFrames() },
+                  {
+                    kind: "terminal",
+                    trigger: "close-stdin",
+                    close: { kind: "exited", status: 0 },
+                  },
+                ],
+              },
+            ],
+          },
+          options,
+        ).spawnOwnedProcess(spawn);
+      },
+    };
+  };
+  return { factory, firstSessionRequested: first };
+}
+
+/** The usage summary a Run's records carry, so the attribution assertion does
+ *  not restate the Adapter's own formatting. */
+function usageSummary(records: readonly Record<string, unknown>[]): string {
+  const usage = records.find((record) => record.event === "harness-usage");
+  assert.equal(typeof usage?.summary, "string");
+  return usage!.summary as string;
+}
+
+test("two overlapping Runs sharing one Session attribute every Harness and child record to their own Run", async () => {
+  const { folder, overrides } = home();
+  const workspace = overrides.launchCwd!;
+  const scoped = overlappingProcess();
+  const runIds: string[] = [];
+  const status = await withClients(
+    async (clients) => {
+      const port = clients.projectionPort;
+      const bundle = writeOverlapBundle();
+      const built = clients.bundleManagement.build(bundle.folder, {
+        noInstall: false,
+      });
+      assert.ok(built.ok, JSON.stringify(built));
+      await applied(port, {
+        operationId: "op-approve",
+        operation: "approve-workspace",
+        input: { path: workspace },
+      });
+      const launch = (operationId: string) => {
+        const admission = port.submit({
+          operationId,
+          operation: "launch-run",
+          input: {
+            bundle: { id: bundle.id },
+            launchInputs: {},
+            trustDigest: built.report.digest,
+            harness: "claude-code",
+          },
+        });
+        assert.ok(admission.admitted, JSON.stringify(admission));
+        runIds.push(admission.runId!);
+      };
+      launch("op-launch-a");
+      // The first Run's Turn is live (its Session child requested) before the
+      // second Run launches, so the second prepares from the cached profile.
+      await scoped.firstSessionRequested;
+      launch("op-launch-b");
+      await awaitSettled(port, "op-launch-a");
+      await awaitSettled(port, "op-launch-b");
+      for (const runId of runIds) {
+        assert.equal((await awaitRunRest(port, runId)).state, "succeeded");
+      }
+      // Qualification after both Runs: its records belong to no Run.
+      const opened = port.openProjection({
+        family: "harness-catalog",
+        focus: { id: "claude-code" },
+      });
+      await opened.updates[Symbol.asyncIterator]().next();
+      opened.close();
+      return 0;
+    },
+    {
+      ...overrides,
+      process: undefined,
+      processFactory: scoped.factory,
+      discoverClaudeCode: () => ({
+        kind: "found",
+        attempt: { source: "path", name: "claude", description: "fake" },
+      }),
+      harnessAdapter: createClaudeCodeAdapter({
+        env: {},
+        sessionId: () => OVERLAP_SESSION_ID,
+      }),
+    },
+  );
+  assert.equal(status, 0);
+
+  const [runA, runB] = runIds as [string, string];
+  const records = readLog(folder).records.map(semantic);
+  const ofRun = (runId: string | undefined) =>
+    records.filter((record) => record.runId === runId);
+  const harness = (subset: readonly Record<string, unknown>[]) =>
+    subset.filter((record) => String(record.event).startsWith("harness-"));
+  const children = (subset: readonly Record<string, unknown>[], role: string) =>
+    subset
+      .filter((record) => record.childRole === role)
+      .map((record) => record.event);
+
+  // Both Runs launched their Session before either Session child spawned.
+  const at = (predicate: (record: Record<string, unknown>) => boolean) =>
+    records.findIndex(predicate);
+  const launched = (runId: string) =>
+    at(
+      (r) =>
+        r.event === "harness-phase-start" &&
+        r.phase === "launch" &&
+        r.runId === runId,
+    );
+  const firstSessionChild = at(
+    (r) => r.event === "child-spawn" && r.childRole === "harness-runtime",
+  );
+  assert.ok(launched(runA) >= 0 && launched(runA) < firstSessionChild);
+  assert.ok(launched(runB) >= 0 && launched(runB) < firstSessionChild);
+
+  for (const runId of [runA, runB]) {
+    const run = ofRun(runId);
+    // The scripted child emits its whole stream at spawn, so its init is read
+    // within the launch and no separate handshake opens.
+    assert.deepEqual(
+      harness(run).map(({ elapsedMs: _elapsed, ...rest }) => rest),
+      [
+        { event: "harness-phase-start", phase: "launch", session: "s" },
+        {
+          event: "harness-phase-end",
+          phase: "launch",
+          session: "s",
+          status: "ok",
+        },
+        {
+          event: "harness-usage",
+          session: "s",
+          estimate: true,
+          summary: usageSummary(run),
+        },
+        { event: "harness-phase-start", phase: "cleanup" },
+        { event: "harness-phase-end", phase: "cleanup", status: "ok" },
+        {
+          event: "harness-cleanup",
+          status: "clean",
+          sessions: [{ session: "s", availability: "detached" }],
+        },
+      ].map(({ event, ...fields }) => ({
+        event,
+        runId,
+        harness: "claude-code",
+        ...fields,
+      })),
+    );
+    assert.deepEqual(children(run, "command"), ["child-spawn", "child-exit"]);
+    assert.deepEqual(children(run, "harness-runtime"), [
+      "child-spawn",
+      "child-exit",
+    ]);
+    assert.ok(children(run, "git").length >= 2);
+  }
+  // Only the first Run probed the version; the second reused its cached profile.
+  assert.deepEqual(children(ofRun(runA), "harness-probe"), [
+    "child-spawn",
+    "child-exit",
+  ]);
+  assert.deepEqual(
+    records
+      .filter((record) => record.childRole === "harness-probe")
+      .map((record) => record.runId),
+    [runA, runA],
+  );
+  // Every child record belongs to one of the Runs.
+  assert.deepEqual(
+    records.filter(
+      (record) =>
+        String(record.event).startsWith("child-") &&
+        record.runId !== runA &&
+        record.runId !== runB,
+    ),
+    [],
+  );
+  // Qualification prepared the cached Harness and closed it, under no Run.
+  assert.deepEqual(
+    harness(ofRun(undefined)).map((record) => [record.event, record.phase]),
+    [
+      ["harness-phase-start", "cleanup"],
+      ["harness-phase-end", "cleanup"],
+      ["harness-cleanup", undefined],
+    ],
+  );
 });

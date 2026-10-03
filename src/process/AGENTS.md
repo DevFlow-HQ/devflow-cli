@@ -5,8 +5,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Invariants
 
 - The `ProcessAdapter` Interface and `createProcessAdapter` are the Module's only runtime exports (#202). The Interface is opaque: callers get normalized
-  resolution, command, and owned-process outcomes and never a platform child. Composition builds the one real instance and injects it into execution,
-  storage, Preflight, and the Harness registry, which passes it to both Adapters and discovery; no other Module constructs or imports an implementation.
+  resolution, command, and owned-process outcomes and never a platform child. Composition builds the invocation's instance and one per Run-scoped call (#333),
+  each differing only in its observer, and injects them into execution, storage, Preflight, discovery, and each Harness prepare; no other Module
+  constructs or imports an implementation.
 - Windows has no graceful stage (#127 A6, amended 2026-09-18): Windows' polite close (`taskkill` without `/F`) reaches only a window, and every child this
   Module spawns is `windowsHide: true` and so has none — verified on a desktop, where the same executable closed politely only when launched visible. So
   `killGroup` runs `taskkill /T /F` for both signals there, `interrupt` force-kills a live child at once and reports `escalated: true` (a child already

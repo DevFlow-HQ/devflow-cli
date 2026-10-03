@@ -115,16 +115,13 @@ export interface ClaudeCodeAdapterOverrides {
   readonly sessionId?: () => string;
 }
 
-/** The factory a composition root calls. The caller supplies the Process
- *  Interface: composition injects the one real instance it constructs; tests
- *  inject a real or scripted Process implementation. The overrides exist only
- *  for tests. `phases`, when given, receives each native phase fact (#322). */
+/** The factory a composition root calls. Each `prepare` supplies the Process
+ *  Interface and phase observer its Prepared Harness uses; the Adapter keeps
+ *  only its qualification cache. The overrides exist only for tests. */
 export function createClaudeCodeAdapter(
   overrides: ClaudeCodeAdapterOverrides,
-  processAdapter: ProcessAdapter,
-  phases?: HarnessPhaseObserver,
 ): HarnessAdapter {
-  return new ClaudeCodeAdapter(overrides, processAdapter, phases);
+  return new ClaudeCodeAdapter(overrides);
 }
 
 /** A resolved, spawnable Claude Code target. */
@@ -139,11 +136,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
    *  re-running `--version`; any drift in either requalifies. */
   private readonly cache = new Map<string, HarnessProfile>();
 
-  constructor(
-    private readonly overrides: ClaudeCodeAdapterOverrides,
-    private readonly processAdapter: ProcessAdapter,
-    private readonly phases: HarnessPhaseObserver | undefined,
-  ) {}
+  constructor(private readonly overrides: ClaudeCodeAdapterOverrides) {}
 
   async prepare(options: PrepareOptions): Promise<PrepareResult> {
     const platform = harnessPlatform(
@@ -166,8 +159,9 @@ class ClaudeCodeAdapter implements HarnessAdapter {
     const discovery = this.discover(options);
     if (!discovery.ok) return { ok: false, failure: discovery.failure };
     const target = discovery.target;
+    const processAdapter = options.process;
     const spawn: ProcessAdapter["spawnOwnedProcess"] = (spawnOptions) =>
-      this.processAdapter.spawnOwnedProcess(spawnOptions);
+      processAdapter.spawnOwnedProcess(spawnOptions);
 
     const identity = fileIdentity(target.identityPath);
     // Keyed by the target's path and file identity (the spec's cache key); the
@@ -186,12 +180,12 @@ class ClaudeCodeAdapter implements HarnessAdapter {
           spawn,
           requestedModel,
           options.writableDirectory,
-          this.phases,
+          options.phases,
         ),
       };
     }
 
-    const probe = await this.probeVersion(target);
+    const probe = await this.probeVersion(processAdapter, target);
     if (!probe.ok) return { ok: false, failure: probe.failure };
 
     const profile = buildProfile(target, probe.version, platform);
@@ -206,7 +200,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
         spawn,
         requestedModel,
         options.writableDirectory,
-        this.phases,
+        options.phases,
       ),
     };
   }
@@ -220,7 +214,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
   ):
     | { ok: true; target: DiscoveredTarget }
     | { ok: false; failure: HarnessFailure } {
-    const discovery = discoverClaudeCode(this.processAdapter, {
+    const discovery = discoverClaudeCode(options.process, {
       ...(options.configuredExecutable !== undefined
         ? { configuredExecutable: options.configuredExecutable }
         : {}),
@@ -267,11 +261,12 @@ class ClaudeCodeAdapter implements HarnessAdapter {
   /** Probe `<executable> --version` and nothing else — the only argv this slice
    *  builds. stdin is closed by `spawnCommand`, so no content is ever sent. */
   private async probeVersion(
+    processAdapter: ProcessAdapter,
     target: DiscoveredTarget,
   ): Promise<
     { ok: true; version: string } | { ok: false; failure: HarnessFailure }
   > {
-    const result = await this.processAdapter.spawnCommand({
+    const result = await processAdapter.spawnCommand({
       role: "harness-probe",
       executable: target.executable,
       args: [...target.prefixArgs, "--version"],

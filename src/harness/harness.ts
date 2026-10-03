@@ -10,6 +10,8 @@
 // private. It knows nothing of Routing, Step kind, retry budget, or Run policy,
 // all of which live above the Seam.
 
+import type { ProcessAdapter } from "../process/process.js";
+
 // ---------------------------------------------------------------------------
 // Opaque coordinates
 //
@@ -652,10 +654,19 @@ export interface PreparedHarness {
   close(): Promise<CleanupReport>;
 }
 
-/** Options for non-conversational Preflight qualification. */
+/** Options for one `prepare`: a qualification, or a Run's Harness. The
+ *  Process and phase observer belong to this prepare alone, so each Prepared
+ *  Harness spawns and reports through its caller's own scope while the Adapter
+ *  keeps its qualification cache across prepares. */
 export interface PrepareOptions {
   /** The resolved absolute Workspace directory every Session runs against. */
   readonly workspace: string;
+  /** The Process Interface this prepare and its Prepared Harness spawn through:
+   *  discovery, probes, and every Session child. */
+  readonly process: ProcessAdapter;
+  /** Receives each native phase fact of this prepare and its Prepared Harness
+   *  (#322). An observer that throws is ignored. */
+  readonly phases?: HarnessPhaseObserver;
   /** An explicit configured executable path or command, tried before the
    *  canonical name. */
   readonly configuredExecutable?: string;
@@ -686,12 +697,6 @@ export type PrepareResult =
 export interface HarnessAdapter {
   prepare(options: PrepareOptions): Promise<PrepareResult>;
 }
-
-/**
- * The factory a composition root calls to obtain an Adapter, and the parameter
- * the shared conformance suite is run against.
- */
-export type HarnessAdapterFactory = () => HarnessAdapter;
 
 // ---------------------------------------------------------------------------
 // Native Adapters
