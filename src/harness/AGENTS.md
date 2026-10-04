@@ -52,11 +52,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Model selection is a profile fact. `modelSelection` declares where a model can be chosen (`launch`, `per-turn`, both, or `unavailable`) and carries a
   `ModelDeclaration` (ADR 0034): an exhaustive `list`, `suggested` picks that are neither exhaustive nor validated, or `free-text`. `list` and
   `suggested` entries share `{model, label, efforts, defaultEffort?}`; empty `efforts` is a model without an effort setting, and `suggested` and
-  `free-text` carry a declaration-level `efforts` for any other name. Codex declares `launch-and-per-turn` with the `model/list` entries observed at
-  qualification; Claude Code declares `launch` with its documented aliases as `suggested`, each offering the five `--help` efforts and no default
-  effort, since which levels a Claude model honours is observed, never catalogued. `modelObservation` separately declares whether the effective
-  model is read from native evidence; both observe it. A `model` event's `ModelObservation` carries the effort beside a known model (absent: unknown);
-  each event replaces the last, and the result's `effectiveModel` is the last observed (#345).
+  `free-text` carry a declaration-level `efforts` for any other name. Both declare `launch-and-per-turn`: Codex its `model/list` entries, Claude Code
+  its aliases as `suggested` with the five `--help` efforts and no default (which levels a model honours is observed, never catalogued). Both observe
+  the effective model: a `model` event carries effort beside a known model (absent: unknown), each replaces the last, the result's is the last (#345).
+  `modelChange.reach` (#348) is `live-turn` (Claude Code, fixture-qualified) or `next-turn` (Codex: `changeModel` is `unsupported`); a change's
+  `applied`, `refused` (with `kept`), or `next-turn` answer rides on its `model` event.
 - `PreparedHarness.readDefaults()` (#341) is the Harness's own default Model choice, read lazily and once per Prepared Harness so a Run's prepare never
   pays for it: `reported`, or the Adapter's declared `fallback` with its reason (Codex: the `model/list` default at its own default effort; Claude
   Code: Opus (latest) at medium). Claude probes settings outside the profile cache (#347); a failed read falls back, never throws. An
@@ -69,8 +69,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `workspaceWrite` sandbox omits it (read-only defers to approvals).
 - Each `TurnRequest` carries its `modelChoice` (ADR 0034); `modelChoiceRefusal` refuses one outside a declared `list`, even an empty one
   (`suggested` and `free-text` admit any), as a `not-started` `model-unavailable` Turn before admission, never a substitution. Codex sends model
-  and effort on `turn/start` (#345), Claude Code the model as `--model` on the launch serving the Turn (a reused live child keeps its model, #348)
-  and no effort yet (#348). The observed effective model never copies the request.
+  and effort on `turn/start` (#345), Claude Code `--model --effort` at launch and typed controls to a reused child (#348). The observed effective
+  model never copies the request.
 
 ### Interrupt, recovery, and cleanup
 

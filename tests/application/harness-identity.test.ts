@@ -81,6 +81,7 @@ function profile(harness = "Claude Code"): HarnessProfile {
     steer: { available: false, evidence: "scripted fake" },
     modelSelection: { at: "unavailable", evidence: "scripted fake" },
     modelObservation: { available: true, evidence: "scripted fake" },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
       evidence: "scripted fake",

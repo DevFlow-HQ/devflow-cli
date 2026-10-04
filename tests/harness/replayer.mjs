@@ -306,6 +306,12 @@ const elicitationReplies = [];
 let frameWaiter;
 let stdinEnded = false;
 let awaitingTurn = false;
+// How many `get_settings` control steps the open window (a Turn's steps, or the
+// next Turn's `before`) has yet to take (#348): such a read is a recorded
+// read-back, while every other `get_settings` takes the sticky settings reply.
+let settingsSteps = 0;
+const countSettings = (specs) =>
+  specs.filter((spec) => spec?.subtype === "get_settings").length;
 const wake = () => {
   const waiter = frameWaiter;
   frameWaiter = undefined;
@@ -344,6 +350,12 @@ lines.on("line", (line) => {
         recording.log,
         JSON.stringify({ type: "control", id: invocationId, line }) + "\n",
       );
+    }
+    if (frame.request?.subtype === "get_settings" && settingsSteps > 0) {
+      settingsSteps -= 1;
+      controlFrames.push(frame);
+      wake();
+      return;
     }
     if (frame.request?.subtype === "get_settings") {
       const settingsCase = protocolCase.settings;
@@ -448,6 +460,14 @@ async function controlStep(spec) {
 
 let turnIndex = 0;
 for (;;) {
+  // A Turn's `before` steps (#348) take the control requests the Adapter sends
+  // between Turns, such as a Model choice change to a reused child, ahead of
+  // that Turn's prompt.
+  const upcoming = playback.turns[resumeOffset + turnIndex];
+  const before = Array.isArray(upcoming?.before) ? upcoming.before : [];
+  settingsSteps = countSettings(before);
+  for (const spec of before) await controlStep(spec);
+  settingsSteps = 0;
   awaitingTurn = true;
   if (controlFrames.length > 0) unexpectedControl();
   const line = await nextFrame(userFrames);
@@ -507,6 +527,9 @@ for (;;) {
     }
   };
   if (Array.isArray(turn.steps)) {
+    settingsSteps = countSettings(
+      turn.steps.flatMap((step) => (step.control ? [step.control] : [])),
+    );
     // Ordered mix of stdout emissions and permission-bridge calls. A bridge step
     // blocks until Secant answers it, so the recorded stdout after it emits only
     // once the permission verdict is in — the "recorded point in the Turn".

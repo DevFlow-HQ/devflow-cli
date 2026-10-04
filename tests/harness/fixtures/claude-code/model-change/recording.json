@@ -1,0 +1,29 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.289 (Claude Code)",
+  "protocolVersion": "2.1.289",
+  "recordedAt": "2026-10-04T14:27:13.509Z",
+  "redactions": [
+    {
+      "placeholder": "«PERSONAL-SETTINGS»",
+      "reason": "get_settings replies keep only their applied model and effort; effective, sources, policy and unrelated applied settings are removed"
+    },
+    {
+      "placeholder": "«CONTROL-REPLIES»",
+      "reason": "control replies are cut out of the Turn bytes into their own files, emitted when the Adapter's request arrives"
+    },
+    {
+      "placeholder": "«TOOL-INPUT-DELTAS»",
+      "reason": "streamed tool-input JSON deltas removed (not consumed by the Adapter; they fragment host paths past substring redaction)"
+    },
+    {
+      "placeholder": "«WORKSPACE»",
+      "reason": "recording workspace path"
+    },
+    {
+      "placeholder": "«RUNTIME_DIR»",
+      "reason": "user runtime directory"
+    }
+  ],
+  "refreshCommand": "bun tests/harness/record.ts model-change"
+}

@@ -61,6 +61,11 @@ Six keys, all required (the structural step enforces their presence):
     expired" skips to the Turn's next control step, or exits 0 without one.
   - `uuid` — the uuid the recorder stamped on this Turn's prompt (#359); the
     replayer swaps in the Adapter's from the Turn frame, as for a Steer.
+  - `before` — `control` specs (as above) taken between the previous Turn and
+    this Turn's prompt (#348), such as a Model choice change to a reused child.
+    A `get_settings` control step, in `steps` or `before`, takes the next
+    `get_settings` while that window is open and emits its recorded read-back;
+    every other `get_settings` still takes the sticky `settings` reply.
   - `workspacePatch` — a git diff file the replayer `git apply`s in the launch
     cwd as the Turn concludes (the "applied at the Turn's result" step).
   - `workingAreaPatch` — the same, applied in the launch's `--add-dir` directory
@@ -225,6 +230,7 @@ synthetic note. The synthetic inventory below is the pick-up list.
 | `completed`               | success Turn: tool activity, thinking/telemetry exclusion, preview coalescing, unknown-frame tolerance | a real plain Turn does not emit every frame variety on demand |
 | `completed-quotes-login`  | success result whose text quotes "run /login"                                                          | guards that a real answer is not misread as auth              |
 | `incompatibility`         | initialize omits one required response field                                                           | a compatible real Codex cannot emit this fault on demand      |
+| `model-change-unanswered` | `model-change` bytes with every change control swallowed, so the next Turn relaunches with `--resume`  | a real Claude Code answers every typed control                |
 
 The synthetic `interrupt-recovery` and `compaction-recovery` cases reuse the
 original recorded bytes and add a replacement-process `resume` section for
@@ -234,6 +240,12 @@ follow-up to complete, and `completedTurnsBeforeBlock` establishes multiple
 Sessions before the interrupted Turn. Its `backgroundTree` option reports
 escaped Git Bash descendants before native acceptance for handle-based cleanup
 checks. Strict recorded Codex `resume` remains a POSIX same-server scenario.
+
+`model-change` (#348) is a Claude Code 2.1.289 recording on one held process launched with `--model haiku --effort low`. While Turn 1 waits on its
+Write approval, the recorder sends `set_model`, `apply_flag_settings`, and a `get_settings` read-back, each after the last answered; the Turn's next reply
+runs on Sonnet. Before Turn 2 an unknown `set_model` is refused with `catalog_unknown`, and Turn 2 still runs. A separate `--resume --model --effort`
+launch supplies the `resume` section. Control replies are cut from the Turn bytes into their own files, and `get_settings` replies keep only `applied`.
+The recorder also writes the synthetic `model-change-unanswered` from the same bytes. Refresh both with `bun tests/harness/record.ts model-change`.
 
 The #371 channel cases are native Claude Code 2.1.289 recordings. Refresh each with `bun tests/harness/record.ts` followed by `agent-call`,
 `elicitation-declined`, or `elicitation-withdrawn`. The recorder uses an empty temporary Workspace, the production channel attachment, and a loopback

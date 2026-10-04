@@ -109,10 +109,13 @@ import {
 } from "./problems.js";
 import type { UpdateStream } from "./update-stream.js";
 import {
+  modelChoiceRefusalExplanation,
   preselectModelChoice,
   resolveChangedModelChoice,
   saveLastModelChoice,
+  sameModelChoice,
 } from "./model-choice.js";
+import type { ModelChange, ModelChoice } from "../harness/harness.js";
 import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import { listRunsSnapshot } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
@@ -486,6 +489,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const runs = new Map<string, TrackedRun>();
   const windowsCleanupFallbacks = new Set<string>();
   const preferenceNotices = new Map<string, string>();
+  // A refused Model choice the Run reverted from, per Run (#348): live evidence
+  // like the preference notice, never Run truth.
+  const modelChoiceNotices = new Map<string, string>();
+  // Live changes awaiting their Harness's answer, per Run (#348). Each settles
+  // once, synchronously, so its Run write lands before the next Turn starts.
+  const pendingModelChanges = new Map<
+    string,
+    Set<{
+      readonly choice: ModelChoice;
+      settle(answer: ModelChange | undefined): void;
+    }>
+  >();
   const modelChoiceQualifications = new Map<
     string,
     ApplicationHarnessQualification
@@ -525,7 +540,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // while the Run rests joins here before a later Operation creates or replaces
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
   const runObservers = new Map<string, Set<UpdateStream>>();
-  const liveOverlay = createLiveOverlay((runId) => runs.get(runId));
+  const liveOverlay = createLiveOverlay((runId) => runs.get(runId), {
+    reported: reportedModelChange,
+    ended: (runId) => {
+      for (const pending of [...(pendingModelChanges.get(runId) ?? [])])
+        pending.settle(undefined);
+    },
+  });
   const workspaceObservers = new Set<UpdateStream>();
   const bundleCatalogObservers = new Set<UpdateStream>();
   const runListObservers = new Set<{
@@ -711,6 +732,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
               modelChoicePreparation: modelChoicePreparations.has(runId),
               modelChoiceQualification: runModelQualification(runId),
               preferenceNotice: preferenceNotices.get(runId),
+              modelChoiceNotice: modelChoiceNotices.get(runId),
               windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
             }
           : {
@@ -718,6 +740,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
               modelChoicePreparation: modelChoicePreparations.has(runId),
               modelChoiceQualification: runModelQualification(runId),
               preferenceNotice: preferenceNotices.get(runId),
+              modelChoiceNotice: modelChoiceNotices.get(runId),
               windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
               facts: {
                 routing: tracking.routing,
@@ -1636,12 +1659,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
             modelChoicePreparation: modelChoicePreparations.has(runId),
             modelChoiceQualification: runModelQualification(runId),
             preferenceNotice: preferenceNotices.get(runId),
+            modelChoiceNotice: modelChoiceNotices.get(runId),
             windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
           }
         : {
             modelChoicePreparation: modelChoicePreparations.has(runId),
             modelChoiceQualification: runModelQualification(runId),
             preferenceNotice: preferenceNotices.get(runId),
+            modelChoiceNotice: modelChoiceNotices.get(runId),
             windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
             facts: {
               routing: tracking.routing,
@@ -3473,6 +3498,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
       registration === undefined
     )
       return { status: "not-applied", problem: runSupportUnavailable() };
+    // A change still waiting for its Harness would land after this one; its
+    // halves resolve against the Run's choice, which that answer may replace.
+    if ((pendingModelChanges.get(runId)?.size ?? 0) > 0)
+      return {
+        status: "not-applied",
+        problem: {
+          code: "model-choice-change-pending",
+          explanation: `A Model choice change is still waiting for ${registration.choice.name} to answer.`,
+          remediation: "Wait for it to apply or be refused, then change again.",
+          possibleEffects: "none",
+        },
+      };
     const resolved = resolveChangedModelChoice({
       harness: registration.choice,
       profile: qualification.profile,
@@ -3492,32 +3529,134 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const tracking = runs.get(runId);
     const held =
       tracking !== undefined && !tracking.done ? tracking.owner : undefined;
+    const change = resolved.result;
+    // A change reaching the running Turn waits for its Harness to answer; the
+    // Run and preference are written only once it applies (#348).
+    const live = tracking?.live.changeModel;
+    if (offer.reach === "live-turn" && held !== undefined && live !== undefined)
+      return new Promise<OperationOutcome>((resolve) => {
+        const pendings = pendingModelChanges.get(runId) ?? new Set();
+        pendingModelChanges.set(runId, pendings);
+        const pending = {
+          choice: change.choice,
+          // Synchronous, so the write precedes the next Turn's start.
+          settle(answer: ModelChange | undefined): void {
+            if (!pendings.delete(pending)) return;
+            if (pendings.size === 0) pendingModelChanges.delete(runId);
+            resolve(
+              answer?.outcome === "refused"
+                ? {
+                    status: "not-applied",
+                    problem: {
+                      code: "model-choice-refused",
+                      explanation: modelChoiceRefusalExplanation(
+                        registration.choice.name,
+                        change.choice,
+                        answer.reason,
+                        latest.run.modelChoice,
+                      ),
+                      remediation: `Choose another Model choice, or run secant run model ${runId} with an available --model.`,
+                      possibleEffects: "none",
+                      correction: "model",
+                    },
+                  }
+                : commitModelChoiceChange(runId, held, selected, operationId, {
+                    ...change,
+                    // Unanswered by the Turn's end, it applies from the next.
+                    reach:
+                      answer?.outcome === "applied" ? "live-turn" : "next-turn",
+                  }),
+            );
+          },
+        };
+        pendings.add(pending);
+        void live(change.choice).then((receipt) => {
+          if (receipt.outcome === "rejected") pending.settle(undefined);
+        });
+      });
     const owner = held ?? runGroup.acquireRun(runId);
     if (owner === undefined)
       return { status: "not-applied", problem: runLiveElsewhere(runId) };
     // A pushed read uses this writer's owner, so observation never fences it.
     const transient = held === undefined;
     try {
-      const written = observedOwner(owner, runId).changeModelChoice(
-        resolved.result.choice,
-      );
-      if (!written.ok)
-        return { status: "not-applied", problem: runLiveElsewhere(runId) };
-      const notice = saveLastModelChoice(
-        catalog,
-        selected,
-        resolved.result.choice,
-      );
-      if (notice === undefined) preferenceNotices.delete(runId);
-      else preferenceNotices.set(runId, notice);
-      const operation = operations.get(operationId);
-      if (operation !== undefined)
-        operation.modelChoiceChange = resolved.result;
-      pushRunUpdate(runId, owner);
-      return { status: "applied" };
+      return commitModelChoiceChange(runId, owner, selected, operationId, {
+        ...change,
+        reach: "next-turn",
+      });
     } finally {
       if (transient) owner.close();
     }
+  }
+
+  /** Save a Run's committed choice as the last choice, keeping a failure's notice. */
+  function saveRunModelChoice(
+    runId: string,
+    harness: string,
+    choice: ModelChoice,
+  ): void {
+    const notice = saveLastModelChoice(catalog, harness, choice);
+    if (notice === undefined) preferenceNotices.delete(runId);
+    else preferenceNotices.set(runId, notice);
+  }
+
+  /** Write a resolved change to the Run, then the last-choice preference, and
+   *  record it on its Operation. */
+  function commitModelChoiceChange(
+    runId: string,
+    owner: RunOwner,
+    harness: string,
+    operationId: string,
+    result: NonNullable<OperationSnapshot["modelChoiceChange"]>,
+  ): OperationOutcome {
+    const written = observedOwner(owner, runId).changeModelChoice(
+      result.choice,
+    );
+    if (!written.ok)
+      return { status: "not-applied", problem: runLiveElsewhere(runId) };
+    saveRunModelChoice(runId, harness, result.choice);
+    modelChoiceNotices.delete(runId);
+    const operation = operations.get(operationId);
+    if (operation !== undefined) operation.modelChoiceChange = result;
+    pushRunUpdate(runId, owner);
+    return { status: "applied" };
+  }
+
+  /** A Harness answered a change on a live Turn (#348). A pending live change
+   *  for the same choice settles on it. Otherwise it answered a later Turn's own
+   *  request: a refusal of the Run's current choice restores the choice its
+   *  Session kept, saved as the last choice, and says why. */
+  function reportedModelChange(runId: string, change: ModelChange): void {
+    const pending = [...(pendingModelChanges.get(runId) ?? [])].filter(
+      (candidate) => sameModelChoice(candidate.choice, change.requested),
+    );
+    if (pending.length > 0) {
+      for (const candidate of pending) candidate.settle(change);
+      return;
+    }
+    if (change.outcome !== "refused" || change.kept === undefined) return;
+    const owner = runs.get(runId)?.owner;
+    const current = owner?.record.modelChoice;
+    const harness = owner?.record.selectedHarness;
+    if (
+      owner === undefined ||
+      harness === undefined ||
+      current === undefined ||
+      !sameModelChoice(current, change.requested)
+    )
+      return;
+    if (!observedOwner(owner, runId).changeModelChoice(change.kept).ok) return;
+    saveRunModelChoice(runId, harness, change.kept);
+    modelChoiceNotices.set(
+      runId,
+      modelChoiceRefusalExplanation(
+        harnessInputRegistrations.get(harness)?.choice.name ?? harness,
+        change.requested,
+        change.reason,
+        change.kept,
+      ),
+    );
+    pushRunUpdate(runId, owner);
   }
 
   // Cancel a live Run (#87), idempotently per Operation id.
@@ -3739,6 +3878,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     runs.delete(runId);
     windowsCleanupFallbacks.delete(runId);
     preferenceNotices.delete(runId);
+    modelChoiceNotices.delete(runId);
     modelChoicePreparations.delete(runId);
     return { status: "applied" };
   }

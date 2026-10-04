@@ -1,0 +1,42 @@
+{
+  "exitCode": 0,
+  "settings": {
+    "stdout": "settings.stdout"
+  },
+  "turns": [
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000001",
+      "steps": [
+        {
+          "emit": "turn-1a.stdout"
+        },
+        {
+          "control": {
+            "subtype": "set_model"
+          }
+        },
+        {
+          "emit": "turn-1b.stdout"
+        }
+      ]
+    },
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000002",
+      "before": [
+        {
+          "subtype": "set_model"
+        }
+      ],
+      "stdout": "turn-2.stdout"
+    }
+  ],
+  "resume": {
+    "exitCode": 0,
+    "turns": [
+      {
+        "uuid": "9a0e0000-0000-4000-8000-000000000003",
+        "stdout": "resume.stdout"
+      }
+    ]
+  }
+}

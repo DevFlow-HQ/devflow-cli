@@ -87,6 +87,7 @@ function listProfile(models: readonly string[]): HarnessProfile {
       evidence: "Observed from model/list.",
     },
     modelObservation: { available: true, evidence: "scripted" },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: { timing: "before-submission", evidence: "scripted" },
     skillDelivery: { mode: "plain-path", evidence: "scripted" },
     fileDelivery: { mode: "plain-path", evidence: "scripted" },

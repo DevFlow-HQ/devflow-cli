@@ -59,6 +59,7 @@ function profile(overrides: Partial<HarnessProfile> = {}): HarnessProfile {
       available: true,
       evidence: "fake observes its own model",
     },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
       evidence: "fake records before submission",

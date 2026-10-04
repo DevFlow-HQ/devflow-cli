@@ -1,0 +1,56 @@
+{
+  "exitCode": 0,
+  "settings": {
+    "stdout": "settings.stdout"
+  },
+  "turns": [
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000001",
+      "steps": [
+        {
+          "emit": "turn-1a.stdout"
+        },
+        {
+          "control": {
+            "subtype": "set_model",
+            "emit": "set-model.stdout"
+          }
+        },
+        {
+          "control": {
+            "subtype": "apply_flag_settings",
+            "emit": "apply-flag.stdout"
+          }
+        },
+        {
+          "control": {
+            "subtype": "get_settings",
+            "emit": "readback.stdout"
+          }
+        },
+        {
+          "emit": "turn-1b.stdout"
+        }
+      ]
+    },
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000002",
+      "before": [
+        {
+          "subtype": "set_model",
+          "emit": "refused.stdout"
+        }
+      ],
+      "stdout": "turn-2.stdout"
+    }
+  ],
+  "resume": {
+    "exitCode": 0,
+    "turns": [
+      {
+        "uuid": "9a0e0000-0000-4000-8000-000000000003",
+        "stdout": "resume.stdout"
+      }
+    ]
+  }
+}

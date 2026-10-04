@@ -68,6 +68,7 @@ export type {
   AgentFollowUp,
   HarnessExecutionDeps,
   LiveInterruptFn,
+  LiveModelChangeFn,
   LiveObservation,
   LiveRequestView,
   LiveSteerFn,

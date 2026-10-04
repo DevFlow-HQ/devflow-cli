@@ -29,6 +29,7 @@ import type {
   DurableTurnRecorder,
   HarnessFailure,
   HarnessProfile,
+  ModelChange,
   ModelChoice,
   PreparedHarness,
   RecoveryCoordinate,
@@ -84,9 +85,10 @@ export type RequestAnswerFn = (
   by: RequestAnswerBy,
 ) => Promise<LiveAnswerOutcome>;
 
-/** The outcome of steering the live Turn (#148): accepted, or a rejected native
- *  control race carrying its reason. Mirrors {@link LiveAnswerOutcome}. */
-type LiveSteerOutcome =
+/** The receipt of a live Turn control, such as a Steer (#148) or a Model choice
+ *  change (#348): accepted, or a rejected native control race carrying its
+ *  reason. Mirrors {@link LiveAnswerOutcome}. */
+type LiveControlOutcome =
   | { readonly outcome: "accepted" }
   | { readonly outcome: "rejected"; readonly reason: string };
 
@@ -96,7 +98,7 @@ type LiveSteerOutcome =
 export type LiveSteerFn = (input: {
   readonly steerId: string;
   readonly text: string;
-}) => Promise<LiveSteerOutcome>;
+}) => Promise<LiveControlOutcome>;
 
 /** Interrupt one live Turn and report whether it ended interrupted or lost.
  *  Receipt rejection returns immediately; acceptance waits for this Turn's end. */
@@ -104,6 +106,13 @@ export type LiveInterruptFn = () => Promise<
   | { readonly outcome: "applied" }
   | { readonly outcome: "rejected"; readonly reason: string }
 >;
+
+/** Send a Model choice change into the live Turn (#348). A rejected receipt
+ *  returns at once; acceptance proves no effect, whose outcome arrives through
+ *  `RequestChannel.modelChanged`. */
+export type LiveModelChangeFn = (
+  choice: ModelChoice,
+) => Promise<LiveControlOutcome>;
 
 /** Coalesced live observations for the overlay (never durable). */
 export interface LiveObservation {
@@ -130,6 +139,13 @@ export interface RequestChannel {
   bindSteer(steer: LiveSteerFn | undefined): void;
   /** Bind (or unbind) interrupt for this Turn only, alongside answer and steer. */
   bindInterrupt(interrupt: LiveInterruptFn | undefined): void;
+  /** Bind (or unbind) the live Model choice change for this Turn only (#348),
+   *  unbound last when the Turn ends, after its settlement is written. */
+  bindModelChange(change: LiveModelChangeFn | undefined): void;
+  /** The Harness answered a Model choice change on the live Turn: one sent
+   *  through the binding, or the Turn's own request differing from what its
+   *  Session ran. */
+  modelChanged(change: ModelChange): void;
   /** The live Turn's Session commands (ADR 0040): the typed leading words the
    *  Harness runs as its own commands, replaced at each Session fact and cleared
    *  (`undefined`) when the Turn ends. Steer admission refuses them mid-Turn. */
@@ -614,6 +630,8 @@ async function driveHarnessTurn(
       }
       recordTurnEvent(owner, turnId, event, answerSources);
       if (channel !== undefined) notifyChannel(channel, event);
+      if (event.kind === "model" && event.change !== undefined)
+        channel?.modelChanged(event.change);
     });
     if (channel !== undefined) {
       channel.bindInterrupt(async () => {
@@ -644,6 +662,12 @@ async function driveHarnessTurn(
       // Harness without it is never asked here.
       channel.bindSteer(async (input) => {
         const receipt = await turn.steer(input);
+        return receipt.outcome === "accepted"
+          ? { outcome: "accepted" }
+          : { outcome: "rejected", reason: receipt.reason };
+      });
+      channel.bindModelChange(async (choice) => {
+        const receipt = await turn.changeModel(choice);
         return receipt.outcome === "accepted"
           ? { outcome: "accepted" }
           : { outcome: "rejected", reason: receipt.reason };
@@ -694,6 +718,7 @@ async function driveHarnessTurn(
     channel?.bindSteer(undefined);
     channel?.bindInterrupt(undefined);
     channel?.sessionCommands(undefined);
+    channel?.bindModelChange(undefined);
   }
 }
 
@@ -1149,8 +1174,11 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "model") {
-    // An unknown observation says nothing durable.
+    // An unknown observation says nothing durable, and a change the Harness did
+    // not apply left the observation it repeats unchanged (#348).
     if (!event.observation.known) return;
+    if (event.change !== undefined && event.change.outcome !== "applied")
+      return;
     owner.appendTurnEvent({
       turnId,
       kind: "model",

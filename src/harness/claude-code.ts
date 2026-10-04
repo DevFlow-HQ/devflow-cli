@@ -53,6 +53,8 @@ import type {
   HarnessProfile,
   HarnessRequest,
   HarnessTurn,
+  ModelChange,
+  ModelChoice,
   ModelEntry,
   ModelObservation,
   PrepareOptions,
@@ -490,6 +492,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
       { ...request, agentCalls: declarations },
       session,
       this.profile.steer,
+      this.profile.modelChange,
       () => {
         if (this.active === turn) this.active = undefined;
       },
@@ -589,6 +592,31 @@ type SessionCloseOutcome = {
   | { readonly clean: false; readonly failure: HarnessFailure }
 );
 
+/** How Claude Code answered one Model choice change (#348). */
+type ChoiceAnswer =
+  | { readonly kind: "applied"; readonly observation: ModelObservation }
+  | { readonly kind: "refused"; readonly reason: string }
+  | { readonly kind: "unanswered" }
+  | { readonly kind: "closed" };
+
+function choiceFailure(
+  outcome: Exclude<ControlOutcome, { kind: "success" }>,
+): ChoiceAnswer {
+  switch (outcome.kind) {
+    case "refused":
+      return { kind: "refused", reason: outcome.detail };
+    case "closed":
+      return { kind: "closed" };
+    case "timeout":
+    case "write-failed":
+      return { kind: "unanswered" };
+  }
+}
+
+function sameChoice(a: ModelChoice, b: ModelChoice | undefined): boolean {
+  return b !== undefined && a.model === b.model && a.effort === b.effort;
+}
+
 /** Whether a launch spawned the Session's child, or why it did not. */
 type LaunchOutcome =
   | { readonly ok: true }
@@ -620,6 +648,15 @@ class ClaudeCodeSession {
   private unusableReason: string | undefined;
   private effectiveModel: ModelObservation = { known: false };
   private effectiveEffort: string | undefined;
+  /** The Model choice the current process runs, in the request's own words: its
+   *  launch flags, then each change Claude Code confirmed (#348). Absent when the
+   *  launch named no model. */
+  private applied: ModelChoice | undefined;
+  /** A change control went unanswered, so the next Turn relaunches the Session
+   *  with `--resume --model --effort` rather than trusting this process. */
+  private relaunchForChoice = false;
+  /** Changes run one at a time, each control waiting for the one before it. */
+  private changing: Promise<unknown> = Promise.resolve();
   private stderr = "";
   /** A claimed interrupt still settling its Turn. `close` awaits it, so the
    *  bridge — and the bearer it keeps registered for Seam redaction — outlives
@@ -810,23 +847,7 @@ class ClaudeCodeSession {
   async reapConfirmed(): Promise<void> {
     this.nativeControl?.ok();
     const owned = this.process;
-    if (owned === undefined) return;
-    this.releaseProcess();
-    this.unreaped = owned;
-    const cleanup = startPhase(this.phases, "cleanup", this.name);
-    const result = scrubClose(
-      await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
-    );
-    if (result.kind === "cleanup-error" || result.kind === "cleanup-timeout") {
-      this.reapFailure = cleanupFailure(
-        result,
-        describeClose(this.name, result),
-      );
-      cleanup.failed(this.reapFailure);
-    } else {
-      this.unreaped = undefined;
-      cleanup.ok();
-    }
+    if (owned !== undefined) await this.retire(owned);
   }
 
   /** Write one input frame to the process serving this Turn. */
@@ -1036,6 +1057,37 @@ class ClaudeCodeSession {
       if (closed && this.process === prior) this.releaseProcess();
     }
 
+    // A reused child runs the choice it was launched or last changed with. A
+    // differing request reaches it as typed controls before the prompt; a child
+    // that left a control unanswered is no longer trusted, so the Session
+    // relaunches with the request's flags.
+    const choice = turn.request.modelChoice;
+    const reused = this.process;
+    const channel =
+      reused === undefined ? undefined : this.controls.get(reused);
+    if (
+      reused !== undefined &&
+      channel !== undefined &&
+      (this.relaunchForChoice ||
+        (choice !== undefined && !sameChoice(choice, this.applied)))
+    ) {
+      const answer =
+        choice === undefined
+          ? ({ kind: "unanswered" } as const)
+          : await this.changeChoice(reused, channel, choice);
+      if (turn.settled) return;
+      if (answer.kind === "unanswered") {
+        turn.noteActivity(
+          "Claude Code did not answer the Model choice change; relaunching the Session with it.",
+        );
+        if (!(await this.retire(reused))) {
+          turn.settleCleanupRecoveryFailure();
+          return;
+        }
+      } else if (choice !== undefined) this.report(turn, choice, answer);
+      if (turn.settled) return;
+    }
+
     if (this.process === undefined) {
       const launch = this.launch(turn);
       this.launchPromise = launch;
@@ -1110,6 +1162,146 @@ class ClaudeCodeSession {
     }
   }
 
+  /** Send a live Turn's Model choice change to the process running it (#348).
+   *  False when no process runs this Turn, so the receipt is `expired`; the
+   *  outcome reaches the Turn's stream once Claude Code answers. */
+  changeLive(turn: ClaudeCodeTurn, choice: ModelChoice): boolean {
+    const owned = this.process;
+    const control =
+      owned !== undefined && this.processTurn === turn
+        ? this.controls.get(owned)
+        : undefined;
+    if (owned === undefined || control === undefined) return false;
+    void this.changeChoice(owned, control, choice).then((answer) => {
+      if (answer.kind !== "unanswered") {
+        this.report(turn, choice, answer);
+        return;
+      }
+      this.relaunchForChoice = true;
+      turn.observeModel(this.model(), {
+        requested: choice,
+        outcome: "next-turn",
+        reason:
+          "Claude Code did not answer the Model choice change; the Session relaunches with it at the next Turn.",
+      });
+    });
+    return true;
+  }
+
+  /** Report a change Claude Code answered on the Turn's stream: an applied one
+   *  with the value read back, a refused one with the unchanged observation. */
+  private report(
+    turn: ClaudeCodeTurn,
+    requested: ModelChoice,
+    answer: Exclude<ChoiceAnswer, { kind: "unanswered" }>,
+  ): void {
+    if (answer.kind === "closed") return;
+    if (answer.kind === "applied") {
+      turn.observeModel(answer.observation, { requested, outcome: "applied" });
+      return;
+    }
+    turn.observeModel(this.model(), {
+      requested,
+      outcome: "refused",
+      reason: answer.reason,
+      ...(this.applied === undefined ? {} : { kept: this.applied }),
+    });
+  }
+
+  private changeChoice(
+    owned: OwnedProcess,
+    control: ControlChannel,
+    choice: ModelChoice,
+  ): Promise<ChoiceAnswer> {
+    const change = this.changing.then(() =>
+      this.applyChoice(owned, control, choice),
+    );
+    this.changing = change;
+    return change;
+  }
+
+  /** `set_model`, then `apply_flag_settings` when the choice has an effort, each
+   *  sent only once the one before it succeeded, then a `get_settings` read-back.
+   *  A refused effort restores the model it replaced, so a refusal keeps the
+   *  whole previous choice. */
+  private async applyChoice(
+    owned: OwnedProcess,
+    control: ControlChannel,
+    choice: ModelChoice,
+  ): Promise<ChoiceAnswer> {
+    if (this.relaunchForChoice) return { kind: "unanswered" };
+    const current = (): boolean => this.process === owned;
+    const previous = this.applied;
+    const model = await control.request({
+      subtype: "set_model",
+      model: choice.model,
+    });
+    if (model.kind !== "success") return choiceFailure(model);
+    if (choice.effort !== undefined) {
+      const effort = await control.request({
+        subtype: "apply_flag_settings",
+        settings: { effortLevel: choice.effort },
+      });
+      if (effort.kind !== "success") {
+        if (effort.kind !== "refused") return choiceFailure(effort);
+        // A model this process cannot be told to return to leaves it running
+        // neither choice, so the next Turn relaunches it with its own flags.
+        const restored =
+          previous === undefined
+            ? undefined
+            : await control.request({
+                subtype: "set_model",
+                model: previous.model,
+              });
+        if (current() && restored?.kind !== "success")
+          this.relaunchForChoice = true;
+        return choiceFailure(effort);
+      }
+    }
+    if (!current()) return { kind: "closed" };
+    this.applied = choice;
+    // Applied only once Claude Code reports what it now runs; a change it took
+    // but cannot read back is trusted to no one, so the Session relaunches.
+    const read = await control.request({ subtype: "get_settings" });
+    if (read.kind === "closed") return { kind: "closed" };
+    const settings = read.kind === "success" ? read.settings : undefined;
+    if (settings === undefined) {
+      if (current()) this.relaunchForChoice = true;
+      return { kind: "unanswered" };
+    }
+    const observation: ModelObservation = {
+      known: true,
+      model: settings.model,
+      ...(settings.effort === null ? {} : { effort: settings.effort }),
+    };
+    if (current()) {
+      this.effectiveModel = observation;
+      this.effectiveEffort = observation.effort;
+    }
+    return { kind: "applied", observation };
+  }
+
+  /** Close a process between Turns so the next launch resumes the Session: a
+   *  confirmed Windows interrupt's reap, or a reused child a changed choice
+   *  relaunches. It is retained as unreaped while closing, and stays so when its
+   *  cleanup is not confirmed (false), so no duplicate process starts. */
+  private async retire(owned: OwnedProcess): Promise<boolean> {
+    if (this.process === owned) this.releaseProcess();
+    this.unreaped = owned;
+    const cleanup = startPhase(this.phases, "cleanup", this.name);
+    const close = scrubClose(
+      await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
+    );
+    if (close.kind === "cleanup-error" || close.kind === "cleanup-timeout") {
+      this.reapFailure = cleanupFailure(close, describeClose(this.name, close));
+      cleanup.failed(this.reapFailure);
+      return false;
+    }
+    this.unreaped = undefined;
+    cleanup.ok();
+    return true;
+  }
+
   private async launch(turn: ClaudeCodeTurn): Promise<LaunchOutcome> {
     const span = startPhase(this.phases, "launch", this.name);
     const launched = await this.spawnChild(turn);
@@ -1140,13 +1332,19 @@ class ClaudeCodeSession {
     const sessionArgs = resuming
       ? ["--resume", this.coordinate.opaque]
       : ["--session-id", this.coordinate.opaque];
-    // The model this launch's Turn requests is forwarded natively as --model, and
-    // on a relaunch `--resume --model` overrides the transcript's model. A live
-    // child reused for a later Turn keeps the model it was launched with; no Run
-    // changes its request between Turns until #344, and #348 owns that change.
-    // The request's effort is not sent yet (#348).
-    const model = turn.request.modelChoice?.model;
-    const modelArgs = model !== undefined ? ["--model", model] : [];
+    // The Model choice this launch's Turn requests is forwarded natively as
+    // --model and --effort; on a relaunch the flags override the transcript's
+    // model. A child reused for a later Turn takes a changed choice through
+    // typed controls instead (#348).
+    const choice = turn.request.modelChoice;
+    const modelArgs =
+      choice === undefined
+        ? []
+        : [
+            "--model",
+            choice.model,
+            ...(choice.effort === undefined ? [] : ["--effort", choice.effort]),
+          ];
     // `--add-dir` extends Claude Code's file-tool access to one more directory and
     // leaves the user's permission mode and settings untouched (#214).
     const writableArgs =
@@ -1197,6 +1395,8 @@ class ClaudeCodeSession {
     this.controls.set(owned, control);
     this.process = owned;
     this.processTurn = turn;
+    this.applied = choice;
+    this.relaunchForChoice = false;
     void this.consumeStdout(owned, control).catch((error) => {
       const redacted = redactSecrets(error);
       this.active?.protocolCorruption(
@@ -1404,6 +1604,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     request: TurnRequest,
     private readonly session: ClaudeCodeSession,
     private readonly steerCapability: SteerCapability,
+    private readonly modelChange: HarnessProfile["modelChange"],
     private readonly onSettled: () => void,
   ) {
     this.request = request;
@@ -1461,6 +1662,24 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.steers.delete(uuid);
     this.endHeldBoundary();
     return { outcome: "rejected", reason: "expired" };
+  }
+
+  /** A live Model choice change (#348): typed controls to the process running
+   *  this Turn, accepted once sent after the prompt. Its outcome is a `model`
+   *  event carrying the change. */
+  async changeModel(choice: ModelChoice): Promise<ControlReceipt> {
+    if (this.settled || this.interrupting) {
+      return { outcome: "rejected", reason: "expired" };
+    }
+    if (this.modelChange.reach !== "live-turn") {
+      return { outcome: "rejected", reason: "unsupported" };
+    }
+    if (!(await this.sent) || this.settled || this.interrupting) {
+      return { outcome: "rejected", reason: "expired" };
+    }
+    return this.session.changeLive(this, choice)
+      ? { outcome: "accepted" }
+      : { outcome: "rejected", reason: "expired" };
   }
 
   /** The prompt reached stdin, so Steers may follow it. */
@@ -1890,8 +2109,13 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.emit({ kind: "activity", description: describeSessionFacts(facts) });
   }
 
-  observeModel(observation: ModelObservation): void {
-    if (!this.settled) this.emit({ kind: "model", observation });
+  observeModel(observation: ModelObservation, change?: ModelChange): void {
+    if (this.settled) return;
+    this.emit({
+      kind: "model",
+      observation,
+      ...(change === undefined ? {} : { change }),
+    });
   }
 
   private acceptAssistant(frame: MessageFrame): void {
@@ -2499,19 +2723,24 @@ function buildProfile(
         "A Steer is a stdin user frame stamped with a Secant-minted uuid: written during a tool round it reaches the model with the round's tool result, and written while text streams it runs as the next native exchange inside the same Turn. Delivery is read from command_lifecycle frames and the result's user_message_uuids; an Interrupt sends cancel_queued, so an undelivered Steer is dropped, never run.",
     },
     modelSelection: {
-      at: "launch",
+      at: "launch-and-per-turn",
       declaration: {
         kind: "suggested",
         models: CLAUDE_CODE_SUGGESTIONS,
         efforts: CLAUDE_CODE_EFFORTS,
       },
       evidence:
-        "Claude Code accepts any model string at launch via --model, an alias for the latest model or a full name, and lists no models; Secant suggests its documented aliases, validates nothing, and forwards a caller-requested model.",
+        "Claude Code accepts any model string via --model, an alias for the latest model or a full name, and lists no models; Secant suggests its documented aliases, validates nothing, and forwards a caller-requested model and effort as --model and --effort at launch, or as typed set_model and apply_flag_settings to a Session already running.",
     },
     modelObservation: {
       available: true,
       evidence:
-        "The effective model is read from the init message and result usage, distinct from any requested model.",
+        "The effective model is read from the init message and the effort from get_settings, distinct from any requested model.",
+    },
+    modelChange: {
+      reach: "live-turn",
+      evidence:
+        "Recorded on Claude Code 2.1.289 (the model-change fixture): a typed set_model and apply_flag_settings sent while a Turn waited on a tool answered success, get_settings then read back the new model and effort, and the Turn's next reply ran on the new model; an unknown model answers a typed error and keeps the Session's model. A Claude Code that does not answer is relaunched with --resume --model --effort at the next Turn.",
     },
     recoveryCoordinate: {
       timing: "before-submission",

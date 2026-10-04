@@ -1410,6 +1410,15 @@ class CodexTurn implements HarnessTurn {
     return this.resultPromise;
   }
 
+  /** Codex declares `next-turn` reach (ADR 0034): every `turn/start` carries the
+   *  Model choice, so no change is sent into a running Turn. */
+  changeModel(): Promise<ControlReceipt> {
+    return Promise.resolve({
+      outcome: "rejected",
+      reason: this.settled ? "expired" : "unsupported",
+    });
+  }
+
   async steer(input: SteerInput): Promise<ControlReceipt> {
     if (this.settled || this.interruptState.kind !== "idle" || this.closing) {
       return { outcome: "rejected", reason: "expired" };
@@ -2902,6 +2911,11 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
       available: true,
       evidence:
         "thread/read after each Turn starts reports the effective model and reasoning effort, and model/rerouted for that Turn replaces the model; both are distinct from any requested Model choice.",
+    },
+    modelChange: {
+      reach: "next-turn",
+      evidence:
+        "Codex takes model and effort on every turn/start, so a change applies from the next Turn; the experimental thread and turn settings-update methods change nothing a user can see and are not used (ADR 0034).",
     },
     recoveryCoordinate: {
       timing: "before-submission",

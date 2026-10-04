@@ -149,6 +149,13 @@ type ModelSelectionCapability =
     }
   | { readonly at: "unavailable"; readonly evidence: string };
 
+/** Where a Model choice change reaches (ADR 0034): the running Turn through the
+ *  handle's `changeModel`, or only the next Turn's request. Where it is
+ *  `next-turn`, `changeModel` is rejected `unsupported`. */
+type ModelChangeCapability =
+  | { readonly reach: "live-turn"; readonly evidence: string }
+  | { readonly reach: "next-turn"; readonly evidence: string };
+
 /** Whether the Adapter observes the effective model from native evidence, giving
  *  the `model` event and a result's effective-model observation a declared source.
  *  Independent of selection: a Harness may report its model without accepting one. */
@@ -201,6 +208,7 @@ export interface HarnessProfile {
   readonly steer: SteerCapability;
   readonly modelSelection: ModelSelectionCapability;
   readonly modelObservation: ModelObservationCapability;
+  readonly modelChange: ModelChangeCapability;
   readonly recoveryCoordinate: RecoveryCoordinateTiming;
   readonly skillDelivery: SkillDelivery;
   readonly fileDelivery: FileDelivery;
@@ -416,6 +424,23 @@ export type ModelObservation =
   | { readonly known: true; readonly model: string; readonly effort?: string }
   | { readonly known: false };
 
+/** How the Harness answered one Model choice change (ADR 0034), from the live
+ *  `changeModel` control or a later Turn's request that differs from what its
+ *  Session runs. `applied` is reported only once the Harness confirms it, and its
+ *  `model` event carries what the Harness then reports. `refused` keeps what the
+ *  Session ran, named in `kept` when the Adapter knows it, and says why.
+ *  `next-turn` means the Harness took no answer now and the choice applies when
+ *  the next Turn starts. */
+export type ModelChange = { readonly requested: ModelChoice } & (
+  | { readonly outcome: "applied" }
+  | {
+      readonly outcome: "refused";
+      readonly reason: string;
+      readonly kept?: ModelChoice;
+    }
+  | { readonly outcome: "next-turn"; readonly reason: string }
+);
+
 /** Whether a Session can take a next Turn now, holds a recovery coordinate, or
  *  cannot continue. */
 export type SessionAvailability =
@@ -474,8 +499,14 @@ export type TurnEvent =
   | { readonly kind: "usage"; readonly observation: UsageObservation }
   | { readonly kind: "activity"; readonly description: string }
   // Each observation replaces the Turn's last one (a reroute is a second); the
-  // result's `effectiveModel` is the last observed.
-  | { readonly kind: "model"; readonly observation: ModelObservation }
+  // result's `effectiveModel` is the last observed. A change's outcome rides on
+  // the observation it leaves (#348): the reported value when applied, the
+  // unchanged one otherwise.
+  | {
+      readonly kind: "model";
+      readonly observation: ModelObservation;
+      readonly change?: ModelChange;
+    }
   | {
       readonly kind: "steer";
       readonly steerId: string;
@@ -750,6 +781,11 @@ export interface HarnessTurn {
   answerRequest(answer: RequestAnswer): Promise<ControlReceipt>;
   /** Answer a call separately from human Harness Requests. Expected races are receipts. */
   answerAgentCall(answer: AgentCallAnswer): Promise<ControlReceipt>;
+  /** Send a Model choice change into this live Turn (ADR 0034). Rejected
+   *  `unsupported` where the profile's `modelChange` reach is `next-turn`, and
+   *  `expired` once the Turn ends. Acceptance proves no effect: the outcome arrives
+   *  as a `model` event carrying `change`, or never when the Turn ends first. */
+  changeModel(choice: ModelChoice): Promise<ControlReceipt>;
 }
 
 /** An effort the user's own environment fixes, which Secant shows and never

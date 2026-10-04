@@ -3884,6 +3884,8 @@ test("Codex profile is truthful and user-compatible", async () => {
   assert.equal(profile.approvals.available, true);
   assert.equal(profile.clarifications.available, false);
   assert.equal(profile.steer.available, true);
+  // Every turn/start carries the Model choice, so a change waits for it (#348).
+  assert.equal(profile.modelChange.reach, "next-turn");
   assert.equal(profile.modelSelection.at, "launch-and-per-turn");
   if (profile.modelSelection.at !== "launch-and-per-turn") {
     throw new Error("unreachable");

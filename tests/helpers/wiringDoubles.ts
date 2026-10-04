@@ -35,6 +35,7 @@ export const QUALIFICATION_PROFILE: HarnessProfile = {
     evidence: "Launch model flag.",
   },
   modelObservation: { available: true, evidence: "Model events." },
+  modelChange: { reach: "next-turn", evidence: "scripted fake" },
   recoveryCoordinate: {
     timing: "before-submission",
     evidence: "Known before content.",

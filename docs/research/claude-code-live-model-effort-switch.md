@@ -331,7 +331,12 @@ g3  applied={"model":"claude-haiku-4-5-20251001","effort":null,…}
 
 - Whether a typed `set_model` sent during a Turn changes the next model call of
   that Turn, as the SDK docs say it does from 2.1.212. Only `set_model` between
-  Turns was tested.
+  Turns was tested. **Settled on 2.1.289 by #348**: a `set_model` and
+  `apply_flag_settings` sent while a Turn waited on a tool approval answered
+  success, `get_settings` read the new model and effort back, and the Turn's
+  next reply ran on the new model (the `model-change` fixture). A `get_settings`
+  pipelined right behind `set_model` still read the old model, so each request
+  waits for the reply before it.
 - What happens to a queued `/model` or `/effort` when the Turn is interrupted or
   the process ends before the Turn's `result`.
 - Whether `-p` mode's queueing of slash commands during a Turn is fixed behavior or

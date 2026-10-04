@@ -1,7 +1,7 @@
 # Live Run Control
 
-Read this before changing live Run control in the Application: deferred settlement, cancel and shutdown, Turn interrupt and steer, takeover, the
-interactive-Step drive, or the live overlay. It was carved out of [the Application Module's notes](../../src/application/AGENTS.md), which keep the
+Read this before changing live Run control in the Application: deferred settlement, cancel and shutdown, Turn interrupt, steer, and live Model choice
+change, takeover, the interactive-Step drive, or the live overlay. It was carved out of [the Application Module's notes](../../src/application/AGENTS.md), which keep the
 write, launch, and read invariants; the abort-reason vocabulary and the resting state each reason maps to are owned by
 [the Run execution Module's notes](../../src/run/execution/AGENTS.md).
 
@@ -42,6 +42,10 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   `RequestChannel.bindSteer` hook, unbound at Turn end alongside `bindAnswer`); a native control race settles `steer-rejected`, a stale/settled turnId `turn-control-rejected`,
   an accepted steer `applied`, Run still running. Its Operation id is the opaque Steer id through execution to the Harness; replay never sends it twice (#356). Settlement
   carries full text and send time through `appendTurnEvent`, independently of when the acceptance receipt resolves.
+- A `change-model-choice` whose Offer reach is `live-turn` (#348) sends `RequestChannel.bindModelChange`'s control and stays `pending`; the Run and preference
+  are written only when the Harness reports it applied (`live-turn`), or when the receipt is rejected or the Turn ends unanswered (`next-turn`). A refusal writes
+  nothing and settles `model-choice-refused`; another change meanwhile is `model-choice-change-pending`. Every write happens in the synchronous settle, before
+  the next Turn reads the choice. A later Turn's own refused request restores the Run to the Harness's `kept` choice, saves it, and sets `modelChoiceNotice`.
 - `resume-run` continues a `detached` Session in the same native Session because the executor reads the stored Session availability and passes its coordinate as
   `resume`; a Session recorded `unusable` fails the Attempt without ever opening a fresh Session (ADR 0022).
 

@@ -78,6 +78,7 @@ function claudeProfile(): HarnessProfile {
       available: true,
       evidence: "fake claude observes its own model",
     },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
       evidence: "fake claude mints a session id",

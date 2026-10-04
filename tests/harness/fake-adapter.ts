@@ -35,7 +35,9 @@ import type {
   HarnessRequest,
   HarnessDefaults,
   HarnessFailure,
+  ModelChange,
   ModelChoice,
+  ModelObservation,
   PrepareResult,
   PreparedHarness,
   RecordingReceipt,
@@ -91,7 +93,28 @@ export interface FakeTurnScript {
   /** A recovery coordinate revealed only after acceptance; recorded through the
    *  recorder's checkpoint and echoed on a `completed` result. */
   readonly revealCoordinateAfterAcceptance?: { readonly opaque: string };
+  /** How the Harness answers a live `changeModel` on a `live-turn` profile (#348),
+   *  with the observation the answer leaves. `report` holds the answer until it
+   *  resolves, so a caller sees the change pending; a Turn that ends first reports
+   *  none. Unscripted, a change is answered `next-turn` with an unknown model. */
+  readonly modelChange?: {
+    readonly report?: Promise<void>;
+    readonly answer: FakeModelChangeAnswer;
+  };
 }
+
+/** The fake's answer to one live Model choice change and what it leaves observed. */
+export type FakeModelChangeAnswer = {
+  readonly observation: ModelObservation;
+} & (
+  | { readonly outcome: "applied" }
+  | {
+      readonly outcome: "refused";
+      readonly reason: string;
+      readonly kept?: ModelChoice;
+    }
+  | { readonly outcome: "next-turn"; readonly reason: string }
+);
 
 /** The whole scripted Adapter. */
 export interface FakeScript {
@@ -110,6 +133,8 @@ export interface FakeScript {
   /** When given, each `startTurn` appends what its request carried, in order:
    *  the fake's record of the Model choice every Turn asked for. */
   readonly turnRequests?: FakeTurnRequestRecord[];
+  /** When given, each accepted live `changeModel` appends its choice, in order. */
+  readonly modelChanges?: ModelChoice[];
 }
 
 /** One Turn request as the fake received it. */
@@ -327,6 +352,7 @@ class FakePreparedHarness implements PreparedHarness {
       this.profile,
       { ...request, agentCalls: declarations },
       history,
+      this.script.modelChanges,
     );
     this.active = turn;
     turn.begin();
@@ -388,6 +414,7 @@ class FakeTurn {
     private readonly profile: HarnessProfile,
     private readonly request: TurnRequest,
     private readonly history: TurnEvent[],
+    private readonly modelChanges: ModelChoice[] | undefined,
   ) {
     this.resultPromise = new Promise<TurnResult>((resolve) => {
       this.resolveResult = resolve;
@@ -434,6 +461,29 @@ class FakeTurn {
         if (!this.terminal) this.deliverSteers("after-boundary");
       });
     }
+    return accept();
+  }
+
+  async changeModel(choice: ModelChoice): Promise<ControlReceipt> {
+    if (this.terminal) return reject("expired");
+    if (this.profile.modelChange.reach !== "live-turn")
+      return reject("unsupported");
+    this.modelChanges?.push(choice);
+    const scripted = this.script.modelChange;
+    void (scripted?.report ?? Promise.resolve()).then(() => {
+      // A Turn that ended first reports no outcome.
+      if (this.terminal) return;
+      const answer: FakeModelChangeAnswer = scripted?.answer ?? {
+        outcome: "next-turn",
+        reason: "The fake Harness scripts no live change.",
+        observation: { known: false },
+      };
+      this.emit({
+        kind: "model",
+        observation: answer.observation,
+        change: modelChange(choice, answer),
+      });
+    });
     return accept();
   }
 
@@ -749,6 +799,25 @@ class FakeTurn {
         },
       },
     };
+  }
+}
+
+function modelChange(
+  requested: ModelChoice,
+  answer: FakeModelChangeAnswer,
+): ModelChange {
+  switch (answer.outcome) {
+    case "applied":
+      return { requested, outcome: "applied" };
+    case "refused":
+      return {
+        requested,
+        outcome: "refused",
+        reason: answer.reason,
+        ...(answer.kept === undefined ? {} : { kept: answer.kept }),
+      };
+    case "next-turn":
+      return { requested, outcome: "next-turn", reason: answer.reason };
   }
 }
 

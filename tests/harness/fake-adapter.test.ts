@@ -50,6 +50,7 @@ function profile(): HarnessProfile {
       available: true,
       evidence: "fake observes the effective model",
     },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "after-acceptance",
       evidence: "fake reveals the id after acceptance",

@@ -1,0 +1,1 @@
+{"type":"control_response","response":{"subtype":"success","request_id":"readback-recording","response":{"applied":{"model":"claude-sonnet-5-5","effort":"high"}}}}

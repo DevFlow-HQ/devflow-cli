@@ -54,6 +54,7 @@ const HEADLESS_HARNESS_PROFILE: HarnessProfile = {
     evidence: "Observed models.",
   },
   modelObservation: { available: true, evidence: "Model events." },
+  modelChange: { reach: "next-turn", evidence: "scripted fake" },
   recoveryCoordinate: {
     timing: "before-submission",
     evidence: "Known before content.",

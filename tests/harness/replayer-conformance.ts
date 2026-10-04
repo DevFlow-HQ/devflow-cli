@@ -22,6 +22,7 @@ import {
   runApprovalRequestCases,
   runExactThreadRecoveryCases,
   runInterruptRecoveryCases,
+  runModelChangeCases,
   runModelDeclarationCases,
   runModelObservationCases,
   runNativeSteerCases,
@@ -83,7 +84,7 @@ export function registerClaudeCodeReplayerConformance(
 
   // Claude Code suggests its documented aliases with the five `--help` efforts,
   // admits any other name, and starts from its declared fallback until its
-  // settings are read (#347); each Turn's requested model is forwarded as --model on
+  // settings are read (#347); each Turn's requested model and effort are forwarded as --model and --effort on
   // the launch serving it.
   const claudeEfforts = ["low", "medium", "high", "xhigh", "max"];
   runModelDeclarationCases(
@@ -115,6 +116,7 @@ export function registerClaudeCodeReplayerConformance(
     {
       label: "claude-code",
       requestedModel: "requested-conformance-model",
+      requestedEffort: "high",
       requesting: () => {
         const replayer = installReplayer(VERSION, COMPLETED_CASE);
         return {
@@ -124,15 +126,21 @@ export function registerClaudeCodeReplayerConformance(
               env: {},
               sessionId: () => "77777777-7777-4777-8777-777777777777",
             }),
-          // Each Turn's launch: the model is the value after its --model.
+          // Each Turn's launch: the model and effort are the values after its
+          // --model and --effort.
           requests: () =>
             replayer
               .invocations()
               .filter((invocation) => invocation.args.includes("-p"))
-              .map((invocation) => {
-                const at = invocation.args.indexOf("--model");
-                const model = invocation.args[at + 1];
-                return at === -1 || model === undefined ? undefined : { model };
+              .map(({ args }) => {
+                const at = args.indexOf("--model");
+                const model = args[at + 1];
+                const effort = args.includes("--effort")
+                  ? args[args.indexOf("--effort") + 1]
+                  : undefined;
+                return at === -1 || model === undefined
+                  ? undefined
+                  : { model, ...(effort === undefined ? {} : { effort }) };
               }),
         };
       },
@@ -429,6 +437,24 @@ export function registerClaudeCodeReplayerConformance(
     },
     register,
   );
+
+  // A live Model choice change (#348): the recorded Turn waits on its tool round
+  // until the Adapter's set_model, apply_flag_settings, and read-back arrive.
+  runModelChangeCases(
+    {
+      label: "claude-code",
+      launchChoice: { model: "haiku", effort: "low" },
+      change: { model: "sonnet", effort: "high" },
+      applied: { known: true, model: "claude-sonnet-5-5", effort: "high" },
+      changing: () => ({
+        factory: caseScenario(
+          "model-change",
+          "30de1111-1111-4111-8111-111111111111",
+        )(),
+      }),
+    },
+    register,
+  );
 }
 
 // --- Codex over the real replayer --------------------------------------------
@@ -644,6 +670,27 @@ export function registerCodexReplayerConformance(
           interruptTerminal: stop === "interrupt" ? "interrupted" : "exit",
         });
         return () => createCodexAdapter({ path: installed.path, env: {} });
+      },
+    },
+    register,
+  );
+
+  // Codex declares next-turn reach: a live change is rejected while the Turn runs.
+  runModelChangeCases(
+    {
+      label: "codex-live-controls",
+      launchChoice: { model: "gpt-5.6-sol", effort: "low" },
+      change: { model: "gpt-5.6-sol", effort: "high" },
+      changing: () => {
+        const installed = installSyntheticCodexReplayer();
+        installed.configureTurn({
+          withholdTerminal: true,
+          interruptTerminal: "interrupted",
+        });
+        return {
+          factory: () => createCodexAdapter({ path: installed.path, env: {} }),
+          finish: (turn) => void turn.interrupt(),
+        };
       },
     },
     register,

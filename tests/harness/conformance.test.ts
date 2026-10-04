@@ -19,6 +19,7 @@ import {
   type ModelDeclarationScenarios,
   runConformanceSuite,
   runAgentCallCases,
+  runModelChangeCases,
   runModelDeclarationCases,
   runPendingSteerCases,
   runStretchingSteerCases,
@@ -26,6 +27,7 @@ import {
 import {
   createFake,
   REPLAY_BARRIER,
+  type FakeModelChangeAnswer,
   type FakeRequestSpec,
   type FakeScript,
   type FakeTurnRequestRecord,
@@ -76,6 +78,10 @@ function profile(overrides?: Partial<HarnessProfile>): HarnessProfile {
     modelObservation: {
       available: true,
       evidence: "fake observes the effective model from its script",
+    },
+    modelChange: {
+      reach: "next-turn",
+      evidence: "fake applies a changed Model choice from the next Turn",
     },
     recoveryCoordinate: {
       timing: "before-submission",
@@ -501,6 +507,86 @@ runStretchingSteerCases(
   },
   test,
 );
+
+// The fake on both reaches (#348): next-turn rejects a live change, and live-turn
+// answers it from the script, applied or refused, while the Turn blocks.
+const LAUNCH_OBSERVED = {
+  known: true,
+  model: "fake-model-a-2026",
+  effort: "low",
+} as const;
+const LIVE_CHANGE_PROFILE = profile({
+  modelChange: {
+    reach: "live-turn",
+    evidence: "fake answers a live change from its script",
+  },
+});
+function blockingChange(
+  reach: "live-turn" | "next-turn",
+  answer?: FakeModelChangeAnswer,
+) {
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const effectiveModel =
+    answer?.outcome === "applied" ? answer.observation : LAUNCH_OBSERVED;
+  return {
+    factory: createFake({
+      profile: reach === "live-turn" ? LIVE_CHANGE_PROFILE : profile(),
+      turns: [
+        {
+          events: [
+            SESSION_OPEN,
+            { kind: "model", observation: LAUNCH_OBSERVED },
+          ],
+          block: true,
+          finish: finished,
+          ...(answer === undefined ? {} : { modelChange: { answer } }),
+          result: {
+            kind: "completed",
+            detail: { effectiveModel, session: { state: "open" } },
+          },
+        },
+      ],
+    }),
+    finish,
+  };
+}
+const APPLIED_OBSERVATION = {
+  known: true,
+  model: "fake-model-b-2026",
+} as const;
+for (const reach of ["next-turn", "live-turn"] as const) {
+  runModelChangeCases(
+    {
+      label: `fake-${reach}`,
+      launchChoice: { model: "fake-model-a", effort: "low" },
+      change: { model: "fake-model-b" },
+      applied: APPLIED_OBSERVATION,
+      changing: () =>
+        blockingChange(reach, {
+          outcome: "applied",
+          observation: APPLIED_OBSERVATION,
+        }),
+      ...(reach === "live-turn"
+        ? {
+            refusing: () => ({
+              ...blockingChange(reach, {
+                outcome: "refused",
+                reason: "fake-model-z is blocked by the organisation",
+                kept: { model: "fake-model-a", effort: "low" },
+                observation: LAUNCH_OBSERVED,
+              }),
+              choice: { model: "fake-model-z" },
+              reason: /blocked by the organisation/,
+            }),
+          }
+        : {}),
+    },
+    test,
+  );
+}
 
 runAgentCallCases(
   {

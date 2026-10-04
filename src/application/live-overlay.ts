@@ -1,5 +1,7 @@
+import type { ModelChange } from "../harness/harness.js";
 import type {
   LiveInterruptFn,
+  LiveModelChangeFn,
   LiveObservation,
   LiveRequestView,
   LiveSteerFn,
@@ -23,6 +25,8 @@ export interface LiveOverlayState {
    *  Application reaches it for an available `steer-turn`. */
   steer?: LiveSteerFn;
   interrupt?: LiveInterruptFn;
+  /** The live Turn's Model choice change (#348), bound while a Turn is live. */
+  changeModel?: LiveModelChangeFn;
   /** The live Turn's Session commands (ADR 0040), which Steer admission refuses
    *  while the Turn works. */
   sessionCommands?: readonly string[];
@@ -44,11 +48,20 @@ export interface LiveOverlayChannel {
   requestChannel(runId: string): RequestChannel;
 }
 
+/** Where the Harness's answers to Model choice changes go (#348): the
+ *  Application owns the Run write they decide. `ended` follows the Turn's
+ *  settlement, so a change still unanswered applies from the next Turn. */
+interface ModelChangeListener {
+  reported(runId: string, change: ModelChange): void;
+  ended(runId: string): void;
+}
+
 /** Own the Application's ephemeral Turn overlay behind one tracking accessor.
  *  Durable Run state stays with the Application; this private submodule owns the
  *  generation, request-answer binding, and coalesced live observations (#134 A31). */
 export function createLiveOverlay(
   trackingFor: (runId: string) => LiveTrackedRun | undefined,
+  modelChanges: ModelChangeListener,
 ): LiveOverlayChannel {
   function fresh(): LiveOverlayState {
     return {
@@ -125,6 +138,14 @@ export function createLiveOverlay(
         const tracking = trackingFor(runId);
         if (tracking === undefined) return;
         tracking.live.steer = steer;
+      },
+      bindModelChange(change: LiveModelChangeFn | undefined): void {
+        const tracking = trackingFor(runId);
+        if (tracking !== undefined) tracking.live.changeModel = change;
+        if (change === undefined) modelChanges.ended(runId);
+      },
+      modelChanged(change: ModelChange): void {
+        modelChanges.reported(runId, change);
       },
       sessionCommands(commands: readonly string[] | undefined): void {
         const tracking = trackingFor(runId);

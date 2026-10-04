@@ -112,6 +112,7 @@ export interface RunSteerCapability {
 export interface RunReadContext {
   readonly windowsCleanupFallback?: boolean;
   readonly preferenceNotice?: string;
+  readonly modelChoiceNotice?: string;
   readonly modelChoicePreparation?: boolean;
   readonly modelChoiceQualification?: ApplicationHarnessQualification;
   readonly facts?: RunFacts; // present for a Run launched in this process
@@ -320,6 +321,9 @@ function runResult(
         ...(context.preferenceNotice === undefined
           ? {}
           : { preferenceNotice: context.preferenceNotice }),
+        ...(context.modelChoiceNotice === undefined
+          ? {}
+          : { modelChoiceNotice: context.modelChoiceNotice }),
         ...(context.windowsCleanupFallback
           ? {
               windowsCleanupNotice:
@@ -367,6 +371,7 @@ function runResult(
                   state: derivedRun.state,
                   foreignOwner: liveElsewhere ? listing : undefined,
                   qualification: context.modelChoiceQualification,
+                  turnLive: isLive && liveTurn !== undefined,
                 }),
               ]
             : []),
@@ -858,11 +863,19 @@ function modelChoiceOffer(params: {
   readonly state: RunStateName;
   readonly foreignOwner: RunListing | undefined;
   readonly qualification: ApplicationHarnessQualification | undefined;
+  /** A Turn runs in this process now. */
+  readonly turnLive: boolean;
 }): ChangeModelChoiceOffer {
+  const qualified = params.qualification;
   const base = {
     action: "change-model-choice",
     runId: params.runId,
-    reach: "next-turn",
+    reach:
+      params.turnLive &&
+      qualified?.ok === true &&
+      qualified.profile.modelChange.reach === "live-turn"
+        ? "live-turn"
+        : "next-turn",
     ...(params.currentChoice === undefined
       ? {}
       : { currentChoice: params.currentChoice }),
@@ -884,7 +897,6 @@ function modelChoiceOffer(params: {
         possibleEffects: "none",
       },
     };
-  const qualified = params.qualification;
   if (qualified === undefined)
     return {
       ...base,

@@ -246,6 +246,37 @@ export function resolveModelChoice(params: {
   };
 }
 
+/** Whether two Model choices name the same model and effort. */
+export function sameModelChoice(a: ModelChoice, b: ModelChoice): boolean {
+  return a.model === b.model && a.effort === b.effort;
+}
+
+/** A Model choice as a person reads it: the model, and its effort when it has one. */
+function describeModelChoice(choice: ModelChoice): string {
+  return choice.effort === undefined
+    ? choice.model
+    : `${choice.model} at ${choice.effort} effort`;
+}
+
+/** Why a Harness refused a change and what the Run keeps (#348). */
+export function modelChoiceRefusalExplanation(
+  harness: string,
+  requested: ModelChoice,
+  reason: string,
+  kept: ModelChoice | undefined,
+): string {
+  const stated = /[.!?]$/.test(reason.trim())
+    ? reason.trim()
+    : `${reason.trim()}.`;
+  return `${harness} refused ${describeModelChoice(requested)}: ${stated}${kept === undefined ? "" : ` The Run keeps ${describeModelChoice(kept)}.`}`;
+}
+
+/** A resolved change before it lands: the Application decides its reach. */
+export type ResolvedModelChoiceChange = Omit<
+  NonNullable<OperationSnapshot["modelChoiceChange"]>,
+  "reach"
+>;
+
 /** Resolve a Run change from its current value, never from saved Preferences. */
 export function resolveChangedModelChoice(params: {
   readonly harness: HarnessChoice;
@@ -257,7 +288,7 @@ export function resolveChangedModelChoice(params: {
 }):
   | {
       readonly ok: true;
-      readonly result: NonNullable<OperationSnapshot["modelChoiceChange"]>;
+      readonly result: ResolvedModelChoiceChange;
     }
   | { readonly ok: false; readonly problem: Problem } {
   const { harness, defaults, current } = params;
@@ -319,7 +350,6 @@ export function resolveChangedModelChoice(params: {
         model,
         ...(effort.effort === undefined ? {} : { effort: effort.effort }),
       },
-      reach: "next-turn",
       ...(reset
         ? {
             effortReset: {

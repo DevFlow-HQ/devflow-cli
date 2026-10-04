@@ -618,10 +618,12 @@ export interface OperationSnapshot {
   readonly family: "operation";
   readonly operationId: string;
   readonly outcome: OperationOutcome;
-  /** Additive result of an applied change; preference notices remain on the Run. */
+  /** Additive result of an applied change; preference notices remain on the Run.
+   *  `reach` says whether the running Turn took it (#348) or it applies from the
+   *  next Turn. */
   readonly modelChoiceChange?: {
     readonly choice: ModelChoiceView;
-    readonly reach: "next-turn";
+    readonly reach: ModelChangeReach;
     readonly effortReset?: {
       readonly previous: string;
       readonly effort?: string;
@@ -1081,6 +1083,9 @@ export interface RunView {
   readonly windowsCleanupNotice?: string;
   /** Live evidence that a last-choice read or save failed; never Run truth. */
   readonly preferenceNotice?: string;
+  /** Live evidence that the Harness refused the Model choice a Turn requested
+   *  and the Run kept the choice its Session runs (#348); never Run truth. */
+  readonly modelChoiceNotice?: string;
   readonly runId: string;
   readonly bundle: {
     readonly id: string;
@@ -1463,12 +1468,18 @@ export interface EndStageOffer {
   readonly consequence: string;
 }
 
-/** Run-wide change legality and qualified choices, owned by Application. */
+/** Where a Model choice change lands (ADR 0034): inside the Turn running now,
+ *  shown applied only once its Harness reports it, or from the next Turn. */
+type ModelChangeReach = "live-turn" | "next-turn";
+
+/** Run-wide change legality and qualified choices, owned by Application. `reach`
+ *  is `live-turn` only while a Turn runs in this process on a Harness whose
+ *  profile takes a change inside it (#348). */
 export type ChangeModelChoiceOffer = {
   readonly action: "change-model-choice";
   readonly runId: string;
   readonly currentChoice?: ModelChoiceView;
-  readonly reach: "next-turn";
+  readonly reach: ModelChangeReach;
 } & (
   | { readonly available: false; readonly problem: Problem }
   | {

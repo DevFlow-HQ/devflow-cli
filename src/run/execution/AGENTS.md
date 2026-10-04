@@ -11,7 +11,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   other durable Run fact surfaces on the Attempt's later `publishAttempt`, never from executing a Turn.
   Steer settlement events carry their own id, full text, and send time, so execution records them before or after the acceptance receipt without a second write (#356).
   Each known `model` observation is a `model` Turn event (#345), so a reroute adds one and settlement stays immutable; this records Claude Code's
-  init observation too. The Attempt's effective model still comes from the settled result.
+  init observation too. The Attempt's effective model still comes from the settled result. A change answered other than `applied` repeats an
+  unchanged observation and records none; every change answer reaches `RequestChannel.modelChanged`, and `bindModelChange` unbinds last (#348).
 - `driveHarnessTurn` reads the Run's Model choice once per Turn (`currentModelChoice`, ADR 0034). It sends that value on the Turn request and writes
   it on the `turn` row in the same `admitTurn`, for Agent, Entry, and human Turns alike, so a Turn's record is what it asked for. It reads
   `owner.record`, which the owner refreshes after its own upgrade writes; #344's change write must refresh it too.

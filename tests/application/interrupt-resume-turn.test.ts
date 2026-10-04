@@ -86,6 +86,7 @@ function claudeProfile(): HarnessProfile {
       available: true,
       evidence: "fake claude observes its own model",
     },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
       evidence: "fake claude mints a session id",
@@ -860,6 +861,7 @@ async function failedInterruptScenario(
               subscribe: (listener) => turn.subscribe(listener),
               answerRequest: (answer) => turn.answerRequest(answer),
               answerAgentCall: (answer) => turn.answerAgentCall(answer),
+              changeModel: (choice) => turn.changeModel(choice),
               steer: (input) => turn.steer(input),
               result: () => turn.result(),
               async interrupt() {

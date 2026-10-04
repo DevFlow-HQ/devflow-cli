@@ -75,6 +75,7 @@ const PROFILE: HarnessProfile = {
     available: true,
     evidence: "Turn events identify the effective model.",
   },
+  modelChange: { reach: "next-turn", evidence: "scripted fake" },
   recoveryCoordinate: {
     timing: "before-submission",
     evidence: "Thread id is recorded before content.",

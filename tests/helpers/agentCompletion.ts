@@ -34,6 +34,7 @@ function profile(): HarnessProfile {
     steer: { available: true, evidence: "scripted fake" },
     modelSelection: { at: "unavailable", evidence: "scripted fake" },
     modelObservation: { available: true, evidence: "scripted fake" },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
       evidence: "scripted fake",
@@ -147,6 +148,7 @@ export async function launchAgentCompletionRun(
               interrupt: () => turn.interrupt(),
               steer: (input) => turn.steer(input),
               answerRequest: (answer) => turn.answerRequest(answer),
+              changeModel: (choice) => turn.changeModel(choice),
 
               answerAgentCall(answer) {
                 answers.push(answer);

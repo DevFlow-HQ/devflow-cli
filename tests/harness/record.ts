@@ -15,7 +15,7 @@
 //   bun tests/harness/record.ts all           # every real case
 //
 // Cases: plain, test-repair, interrupt, resume, authentication, protocol-corruption,
-// matt-front, steer-within, steer-boundary, steer-cancel, compaction.
+// matt-front, steer-within, steer-boundary, steer-cancel, compaction, model-change.
 // It records with `--restricted` (real login and model, but no personal hooks,
 // CLAUDE.md, plugins, or settings) so fixtures are clean and reproducible. The
 // authentication case uses a fresh, not-logged-in `CLAUDE_CONFIG_DIR`, so the real
@@ -67,6 +67,7 @@ const SESSION_IDS = {
   "steer-boundary": "57ee2222-2222-4222-8222-222222222222",
   "steer-cancel": "57ee3333-3333-4333-8333-333333333333",
   compaction: "c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0",
+  "model-change": "30de1111-1111-4111-8111-111111111111",
 } as const;
 /** Ticket planning opens its own Session before implementation Sessions (#295). */
 const MATT_FRONT_TICKETS_SESSION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb0";
@@ -365,6 +366,9 @@ function writeCase(options: {
   configDir?: string;
   /** The scenario's temp Run working area, redacted (the matt-front case). */
   workingArea?: string;
+  /** Why a case derived from recorded bytes is synthetic; it is then stamped
+   *  `synthetic` with that reason instead of a refresh command. */
+  synthetic?: string;
 }): void {
   const dir = join(FIXTURES, options.name);
   rmSync(dir, { recursive: true, force: true });
@@ -425,9 +429,15 @@ function writeCase(options: {
         harness: HARNESS,
         executableVersion: options.executableVersion,
         protocolVersion: options.protocolVersion,
-        recordedAt: new Date().toISOString(),
+        recordedAt:
+          options.synthetic === undefined
+            ? new Date().toISOString()
+            : "synthetic",
         redactions: applied,
-        refreshCommand: `bun tests/harness/record.ts ${options.name}`,
+        refreshCommand:
+          options.synthetic === undefined
+            ? `bun tests/harness/record.ts ${options.name}`
+            : `synthetic -- ${options.synthetic}`,
       },
       null,
       2,
@@ -703,6 +713,8 @@ async function recordHeld(options: {
   readonly sessionId: string;
   readonly workspace: string;
   readonly prompt: string;
+  /** Launch flags the Adapter adds for this Session, such as its Model choice. */
+  readonly launchFlags?: readonly string[];
   readonly onFrame: (frame: Record<string, unknown>, held: HeldProcess) => void;
   readonly approve?: (held: HeldProcess) => Promise<void>;
 }): Promise<HeldRecording> {
@@ -714,12 +726,15 @@ async function recordHeld(options: {
   try {
     const child = spawn(
       "claude",
-      launchArgs(["--session-id", options.sessionId], {
-        launchArgs: bridge.session("recording").launchArgs,
-        token: bridge.session("recording").bearer,
-        calls: [],
-        close: () => bridge.close(),
-      }),
+      launchArgs(
+        [...(options.launchFlags ?? []), "--session-id", options.sessionId],
+        {
+          launchArgs: bridge.session("recording").launchArgs,
+          token: bridge.session("recording").bearer,
+          calls: [],
+          close: () => bridge.close(),
+        },
+      ),
       {
         cwd: options.workspace,
         env: baseEnv(),
@@ -1497,6 +1512,314 @@ async function recordMattFront(): Promise<void> {
   }
 }
 
+// --- Model choice change on one held-open process (#348) -----------------------
+
+/** The Model choice the Session launches with, the one a live change applies,
+ *  and a model Claude Code does not know, in the request's own words. */
+const MODEL_CHANGE = {
+  launch: { model: "haiku", effort: "low" },
+  live: { model: "sonnet", effort: "high" },
+  unknown: "claude-nonexistent-model",
+} as const;
+
+function controlFrame(requestId: string, request: object): string {
+  return `${JSON.stringify({
+    type: "control_request",
+    request_id: requestId,
+    request,
+  })}\n`;
+}
+
+/** A `get_settings` reply keeping only its applied model and effort; the rest
+ *  carries personal settings. */
+function appliedOnly(frame: Record<string, unknown>): Buffer {
+  const response = frame.response as {
+    subtype: string;
+    request_id: string;
+    response?: { applied?: { model?: unknown; effort?: unknown } };
+  };
+  const applied = response.response?.applied;
+  if (response.subtype !== "success" || applied === undefined)
+    throw new Error("get_settings was not answered with applied settings");
+  return Buffer.from(
+    `${JSON.stringify({
+      type: "control_response",
+      response: {
+        subtype: response.subtype,
+        request_id: response.request_id,
+        response: {
+          applied: { model: applied.model, effort: applied.effort },
+        },
+      },
+    })}\n`,
+  );
+}
+
+/** Record a Model choice change the way the Adapter sends it (#348): the Session
+ *  launches on Haiku at low effort; while Turn 1 waits on its Write approval,
+ *  `set_model` then `apply_flag_settings`, each sent once the one before it
+ *  answered, then a `get_settings` read-back; the Turn's next reply runs on the
+ *  new model. Before Turn 2 an unknown `set_model` is refused with a typed error,
+ *  and Turn 2 still runs. A separate `--resume --model --effort` launch records
+ *  the relaunch fallback. Control replies are cut out of the Turn bytes into
+ *  their own files, which the replay emits when the Adapter's request arrives. */
+async function recordModelChange(): Promise<void> {
+  const ws = tempWorkspace("secant-rec-ws-");
+  const sessionId = SESSION_IDS["model-change"];
+  try {
+    const replies = new Map<string, Record<string, unknown>>();
+    const waiting = new Map<string, () => void>();
+    const answered = (requestId: string) =>
+      replies.has(requestId)
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => waiting.set(requestId, resolve));
+    let results = 0;
+    let probed = false;
+    let changed = false;
+    const recorded = await recordHeld({
+      sessionId,
+      workspace: ws,
+      prompt: WRITE_PROMPT,
+      launchFlags: [
+        "--model",
+        MODEL_CHANGE.launch.model,
+        "--effort",
+        MODEL_CHANGE.launch.effort,
+      ],
+      approve: async (held) => {
+        if (changed) return;
+        changed = true;
+        held.write(
+          controlFrame("model-recording", {
+            subtype: "set_model",
+            model: MODEL_CHANGE.live.model,
+          }),
+        );
+        await answered("model-recording");
+        held.write(
+          controlFrame("effort-recording", {
+            subtype: "apply_flag_settings",
+            settings: { effortLevel: MODEL_CHANGE.live.effort },
+          }),
+        );
+        await answered("effort-recording");
+        held.write(
+          controlFrame("readback-recording", { subtype: "get_settings" }),
+        );
+        await answered("readback-recording");
+      },
+      onFrame: (frame, held) => {
+        if (!probed) {
+          probed = true;
+          held.write(
+            controlFrame("settings-recording", { subtype: "get_settings" }),
+          );
+        }
+        if (frame.type === "control_response") {
+          const requestId = (frame.response as { request_id: string })
+            .request_id;
+          replies.set(requestId, frame);
+          waiting.get(requestId)?.();
+          if (requestId === "refused-recording")
+            held.write(
+              userFrame(
+                "Reply with exactly: done. Use no tools.",
+                RECORDED_PROMPT_UUIDS[1],
+              ),
+            );
+          return;
+        }
+        if (frame.type !== "result") return;
+        results += 1;
+        if (results === 1)
+          held.write(
+            controlFrame("refused-recording", {
+              subtype: "set_model",
+              model: MODEL_CHANGE.unknown,
+            }),
+          );
+        else held.end();
+      },
+    });
+    const refused = replies.get("refused-recording")?.response as
+      { subtype?: string } | undefined;
+    if (refused?.subtype !== "error")
+      throw new Error("Claude Code accepted the unknown model");
+
+    // Split stdout into whole lines: control replies by request id, every other
+    // line by the Turn it belongs to.
+    const changeMark = recorded.marks[1];
+    if (changeMark === undefined) throw new Error("no live change was sent");
+    const lines: { readonly offset: number; readonly bytes: Buffer }[] = [];
+    for (let offset = 0; offset < recorded.stdout.length;) {
+      const end = recorded.stdout.indexOf(0x0a, offset);
+      const next = end < 0 ? recorded.stdout.length : end + 1;
+      lines.push({ offset, bytes: recorded.stdout.subarray(offset, next) });
+      offset = next;
+    }
+    const turn1a: Buffer[] = [];
+    const turn1b: Buffer[] = [];
+    const turn2: Buffer[] = [];
+    let ended = false;
+    for (const line of lines) {
+      const text = line.bytes.toString("utf8").trim();
+      if (text.includes('"type":"control_response"')) continue;
+      if (line.offset < changeMark) turn1a.push(line.bytes);
+      else if (!ended) {
+        turn1b.push(line.bytes);
+        ended = text.includes('"type":"result"');
+      } else turn2.push(line.bytes);
+    }
+    const reply = (requestId: string): Buffer => {
+      const frame = replies.get(requestId);
+      if (frame === undefined) throw new Error(`no reply to ${requestId}`);
+      return Buffer.from(`${JSON.stringify(frame)}\n`);
+    };
+
+    const bridge = await startBridge(
+      () => ({ behavior: "allow" }),
+      () => 0,
+    );
+    let resumed: Capture;
+    try {
+      resumed = await runTurn({
+        args: launchArgs(
+          [
+            "--model",
+            MODEL_CHANGE.live.model,
+            "--effort",
+            MODEL_CHANGE.live.effort,
+            "--resume",
+            sessionId,
+          ],
+          bridge,
+        ),
+        cwd: ws,
+        env: baseEnv(),
+        input: userFrame(
+          "Reply with exactly: resumed. Use no tools.",
+          RECORDED_PROMPT_UUIDS[2],
+        ),
+      });
+    } finally {
+      await bridge.close();
+    }
+
+    const files: WriteFile[] = [
+      {
+        name: "settings.stdout",
+        bytes: appliedOnly(replies.get("settings-recording") ?? {}),
+      },
+      { name: "turn-1a.stdout", bytes: Buffer.concat(turn1a) },
+      { name: "set-model.stdout", bytes: reply("model-recording") },
+      { name: "apply-flag.stdout", bytes: reply("effort-recording") },
+      {
+        name: "readback.stdout",
+        bytes: appliedOnly(replies.get("readback-recording") ?? {}),
+      },
+      { name: "turn-1b.stdout", bytes: Buffer.concat(turn1b) },
+      { name: "refused.stdout", bytes: reply("refused-recording") },
+      { name: "turn-2.stdout", bytes: Buffer.concat(turn2) },
+      { name: "resume.stdout", bytes: resumed.stdout },
+    ];
+    const personal: Redaction[] = [
+      {
+        placeholder: "«PERSONAL-SETTINGS»",
+        reason:
+          "get_settings replies keep only their applied model and effort; effective, sources, policy and unrelated applied settings are removed",
+      },
+      {
+        placeholder: "«CONTROL-REPLIES»",
+        reason:
+          "control replies are cut out of the Turn bytes into their own files, emitted when the Adapter's request arrives",
+      },
+    ];
+    const turn1 = {
+      uuid: RECORDED_PROMPT_UUIDS[0],
+      steps: [
+        { emit: "turn-1a.stdout" },
+        { control: { subtype: "set_model", emit: "set-model.stdout" } },
+        {
+          control: {
+            subtype: "apply_flag_settings",
+            emit: "apply-flag.stdout",
+          },
+        },
+        { control: { subtype: "get_settings", emit: "readback.stdout" } },
+        { emit: "turn-1b.stdout" },
+      ],
+    };
+    const resume = {
+      exitCode: resumed.exitCode,
+      turns: [{ uuid: RECORDED_PROMPT_UUIDS[2], stdout: "resume.stdout" }],
+    };
+    const common = {
+      workspace: ws,
+      secrets: hostSecrets(recorded.bridgeToken),
+      executableVersion: claudeVersion(),
+      protocolVersion: protocolVersionOf(recorded.stdout),
+      extraRedactions: personal,
+    };
+    writeCase({
+      ...common,
+      name: "model-change",
+      files,
+      caseJson: {
+        exitCode: recorded.exitCode,
+        settings: { stdout: "settings.stdout" },
+        turns: [
+          turn1,
+          {
+            uuid: RECORDED_PROMPT_UUIDS[1],
+            before: [{ subtype: "set_model", emit: "refused.stdout" }],
+            stdout: "turn-2.stdout",
+          },
+        ],
+        resume,
+      },
+    });
+    // The same bytes with every change control swallowed: a Claude Code that
+    // never answers, whose Session the Adapter relaunches with the new flags.
+    writeCase({
+      ...common,
+      name: "model-change-unanswered",
+      synthetic:
+        "a real Claude Code answers every typed control; derived from the model-change recording with the change controls swallowed",
+      files: files.filter((file) =>
+        [
+          "settings.stdout",
+          "turn-1a.stdout",
+          "turn-1b.stdout",
+          "turn-2.stdout",
+          "resume.stdout",
+        ].includes(file.name),
+      ),
+      caseJson: {
+        exitCode: recorded.exitCode,
+        settings: { stdout: "settings.stdout" },
+        turns: [
+          {
+            uuid: RECORDED_PROMPT_UUIDS[0],
+            steps: [
+              { emit: "turn-1a.stdout" },
+              { control: { subtype: "set_model" } },
+              { emit: "turn-1b.stdout" },
+            ],
+          },
+          {
+            uuid: RECORDED_PROMPT_UUIDS[1],
+            before: [{ subtype: "set_model" }],
+            stdout: "turn-2.stdout",
+          },
+        ],
+        resume,
+      },
+    });
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
 /** Settings-only recording: no user frame and no model call. Retain only the
  * correlated response's applied values; the rest contains personal settings. */
 async function recordSettings(locked = false, noEffort = false): Promise<void> {
@@ -1842,6 +2165,7 @@ const RECORDERS: Record<string, () => Promise<void>> = {
   "steer-boundary": recordSteerBoundary,
   "steer-cancel": recordSteerCancel,
   compaction: recordCompaction,
+  "model-change": recordModelChange,
 };
 
 async function main(): Promise<void> {

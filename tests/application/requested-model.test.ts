@@ -101,6 +101,7 @@ function profile(
     // without validating it, so most cases exercise the carry, not the list.
     modelSelection,
     modelObservation: { available: true, evidence: "scripted fake" },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
       evidence: "scripted fake",
@@ -2274,6 +2275,424 @@ test("[change-model-choice] a change while a Turn works is admitted here, keeps 
   assert.equal(
     startedTurns(readRun(wired, runId)).at(-1)?.requestedModel,
     "beta",
+  );
+  await wired.shutdown();
+});
+
+// --- Live Model choice change (#348) -----------------------------------------
+
+/** A Harness whose changes reach the live Turn, answering from the fake's script. */
+const LIVE_REACH: HarnessProfile["modelChange"] = {
+  reach: "live-turn",
+  evidence: "scripted fake answers a live change",
+};
+const BETA_OBSERVED = {
+  known: true,
+  model: "beta-2026",
+  effort: "medium",
+} as const;
+
+/** Launch the Agent-then-interactive Bundle on alpha at high effort against a
+ *  live-reach fake whose interactive Entry Turn blocks with `entry` and whose
+ *  next human Turn runs `next`, and resolve once the Entry Turn is live. Each
+ *  live change the Harness receives resolves `reached`. */
+async function liveChangeRun(
+  t: TestContext,
+  entry: Partial<FakeScript["turns"][number]>,
+  next: Partial<FakeScript["turns"][number]> = {},
+) {
+  const complete = completedScript("observed").turns[0];
+  assert.ok(complete);
+  const requests: FakeTurnRequestRecord[] = [];
+  const modelChanges: { model: string; effort?: string }[] = [];
+  let markReached!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  const record = modelChanges.push.bind(modelChanges);
+  modelChanges.push = (...items) => {
+    const length = record(...items);
+    markReached();
+    return length;
+  };
+  const adapter = createFake({
+    profile: {
+      ...profile(LISTED),
+      interruption: { mode: "active-turn", evidence: "fake" },
+      modelChange: LIVE_REACH,
+    },
+    defaults: REPORTED,
+    turns: [
+      complete,
+      { ...complete, block: true, ...entry },
+      { ...complete, ...next },
+    ],
+    turnRequests: requests,
+    modelChanges,
+  })();
+  const bundle = writeAgentThenInteractiveBundle();
+  const home = makeTempDir("secant-live-change-home-");
+  const { wired, digest } = wire(
+    t,
+    adapter,
+    bundle,
+    home,
+    makeTempDir("secant-live-change-ws-"),
+  );
+  t.after(() => wired.shutdown());
+  const launched = wired.projectionPort.submit({
+    operationId: "live-launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: bundle.id },
+      launchInputs: {},
+      trustDigest: digest,
+      harness: "claude-code",
+      requestedModel: "alpha",
+      requestedEffort: "high",
+    },
+  });
+  assert.ok(launched.admitted && launched.runId);
+  const runId = launched.runId;
+  const interrupt = await followRun(wired.projectionPort, runId, (run) => {
+    const offer = run.actionOffers.find(
+      (candidate) => candidate.action === "interrupt-turn",
+    );
+    return run.progress.find((step) => step.id === "chat")?.status ===
+      "running" && offer?.action === "interrupt-turn"
+      ? offer
+      : undefined;
+  });
+  return {
+    wired,
+    runId,
+    home,
+    requests,
+    modelChanges,
+    reached,
+    /** Interrupt the live Entry Turn and await the Run's rest. */
+    async interrupt() {
+      assert.ok(
+        wired.projectionPort.submit({
+          operationId: "live-interrupt",
+          operation: "interrupt-turn",
+          input: { runId, turnId: interrupt.turnId },
+        }).admitted,
+      );
+      await awaitSettled(wired.projectionPort, "live-interrupt");
+      await awaitSettled(wired.projectionPort, "live-launch");
+    },
+    /** Send the next human Turn and await its rest. */
+    async nextTurn() {
+      assert.ok(
+        wired.projectionPort.submit({
+          operationId: "live-next",
+          operation: "send-interactive-turn",
+          input: { runId, stepId: "chat", text: "Continue." },
+        }).admitted,
+      );
+      await awaitSettled(wired.projectionPort, "live-next");
+      await awaitRunRest(wired.projectionPort, runId);
+    },
+  };
+}
+
+function operationStatus(wired: Wiring, operationId: string) {
+  const opened = wired.projectionPort.openProjection({
+    family: "operation",
+    operationId,
+  });
+  try {
+    return opened.snapshot.outcome.status;
+  } finally {
+    opened.close();
+  }
+}
+
+/** The `change-model-choice` Offer once explicit preparation has qualified it. */
+async function changeOffer(wired: Wiring, runId: string) {
+  const opened = wired.projectionPort.openProjection({
+    family: "run",
+    runId,
+    prepareModelChoice: true,
+  });
+  const qualified = (snapshot: typeof opened.snapshot) => {
+    if (snapshot.family !== "run" || !snapshot.result.found) return undefined;
+    const offer = snapshot.result.run.actionOffers.find(
+      (candidate) => candidate.action === "change-model-choice",
+    );
+    return offer?.action === "change-model-choice" &&
+      (offer.available || offer.problem.code !== "model-choice-checking")
+      ? offer
+      : undefined;
+  };
+  try {
+    const first = qualified(opened.snapshot);
+    if (first !== undefined) return first;
+    for await (const update of opened.updates) {
+      if (update.kind !== "durable") continue;
+      const offer = qualified(update.snapshot);
+      if (offer !== undefined) return offer;
+    }
+    throw new Error("the Run Projection closed before qualifying");
+  } finally {
+    opened.close();
+  }
+}
+
+test("[live-model-change] a change reaching the live Turn is pending until the Harness reports it, then applied", async (t) => {
+  let report!: () => void;
+  const reported = new Promise<void>((resolve) => {
+    report = resolve;
+  });
+  const live = await liveChangeRun(t, {
+    modelChange: {
+      report: reported,
+      answer: { outcome: "applied", observation: BETA_OBSERVED },
+    },
+  });
+  const { wired, runId } = live;
+  // The Offer's reach names the live Turn while one runs.
+  const offer = await changeOffer(wired, runId);
+  assert.ok(offer.available);
+  assert.equal(offer.reach, "live-turn");
+
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "live-change",
+      operation: "change-model-choice",
+      input: { runId, model: "beta", effort: "medium" },
+    }).admitted,
+  );
+  await live.reached;
+  assert.deepEqual(
+    [...live.modelChanges],
+    [{ model: "beta", effort: "medium" }],
+  );
+  assert.equal(operationStatus(wired, "live-change"), "pending");
+  assert.deepEqual(readRun(wired, runId).modelChoice, {
+    model: "alpha",
+    effort: "high",
+  });
+  assert.equal(
+    wired.catalog.getPreference("last-model-choice:claude-code"),
+    JSON.stringify({ model: "alpha", effort: "high" }),
+  );
+
+  report();
+  const settled = await changeChoice(wired, "live-change", {
+    runId,
+    model: "beta",
+    effort: "medium",
+  });
+  assert.equal(settled.outcome.status, "applied");
+  assert.deepEqual(settled.modelChoiceChange, {
+    choice: { model: "beta", effort: "medium" },
+    reach: "live-turn",
+  });
+  const run = readRun(wired, runId);
+  assert.deepEqual(run.modelChoice, { model: "beta", effort: "medium" });
+  assert.equal(
+    wired.catalog.getPreference("last-model-choice:claude-code"),
+    JSON.stringify({ model: "beta", effort: "medium" }),
+  );
+  // The running Turn's effective model is what the Harness reported.
+  assert.deepEqual(
+    run.timeline
+      .filter((event) => event.event === "effective-model")
+      .map(({ effectiveModel, effectiveEffort }) => [
+        effectiveModel,
+        effectiveEffort,
+      ])
+      .at(-1),
+    ["beta-2026", "medium"],
+  );
+  await live.interrupt();
+  await live.nextTurn();
+  assert.deepEqual(live.requests.at(-1)?.modelChoice, {
+    model: "beta",
+    effort: "medium",
+  });
+  await wired.shutdown();
+});
+
+test("[live-model-change] a second change waits for the pending one to settle", async (t) => {
+  let report!: () => void;
+  const reported = new Promise<void>((resolve) => {
+    report = resolve;
+  });
+  const live = await liveChangeRun(t, {
+    modelChange: {
+      report: reported,
+      answer: { outcome: "applied", observation: BETA_OBSERVED },
+    },
+  });
+  const { wired, runId } = live;
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "first-change",
+      operation: "change-model-choice",
+      input: { runId, model: "beta", effort: "medium" },
+    }).admitted,
+  );
+  await live.reached;
+  const second = await changeChoice(wired, "second-change", {
+    runId,
+    effort: "low",
+  });
+  assert.equal(second.outcome.status, "not-applied");
+  if (second.outcome.status !== "not-applied") throw new Error("unreachable");
+  assert.equal(second.outcome.problem.code, "model-choice-change-pending");
+  assert.equal(live.modelChanges.length, 1);
+  report();
+  const first = await changeChoice(wired, "first-change", {
+    runId,
+    model: "beta",
+    effort: "medium",
+  });
+  assert.equal(first.outcome.status, "applied");
+  // Once it settled, the next change resolves from the applied choice.
+  const third = await changeChoice(wired, "third-change", {
+    runId,
+    effort: "low",
+  });
+  assert.equal(live.modelChanges.at(-1)?.model, "beta");
+  assert.equal(live.modelChanges.at(-1)?.effort, "low");
+  await live.interrupt();
+  assert.equal(third.outcome.status, "applied");
+  await wired.shutdown();
+});
+
+test("[live-model-change] a refused live change keeps the previous choice and says why", async (t) => {
+  const live = await liveChangeRun(t, {
+    modelChange: {
+      answer: {
+        outcome: "refused",
+        reason: "beta is blocked by your organisation.",
+        kept: { model: "alpha", effort: "high" },
+        observation: { known: true, model: "alpha-2026", effort: "high" },
+      },
+    },
+  });
+  const { wired, runId } = live;
+  const settled = await changeChoice(wired, "refused-change", {
+    runId,
+    model: "beta",
+    effort: "medium",
+  });
+  assert.equal(live.modelChanges.length, 1);
+  assert.equal(settled.outcome.status, "not-applied");
+  if (settled.outcome.status !== "not-applied") throw new Error("unreachable");
+  assert.equal(settled.outcome.problem.code, "model-choice-refused");
+  assert.match(
+    settled.outcome.problem.explanation,
+    /beta is blocked by your organisation\./,
+  );
+  assert.match(settled.outcome.problem.explanation, /keeps alpha/);
+  assert.equal(settled.modelChoiceChange, undefined);
+  assert.deepEqual(readRun(wired, runId).modelChoice, {
+    model: "alpha",
+    effort: "high",
+  });
+  assert.equal(
+    wired.catalog.getPreference("last-model-choice:claude-code"),
+    JSON.stringify({ model: "alpha", effort: "high" }),
+  );
+  await live.interrupt();
+  await live.nextTurn();
+  assert.deepEqual(live.requests.at(-1)?.modelChoice, {
+    model: "alpha",
+    effort: "high",
+  });
+  await wired.shutdown();
+});
+
+test("[live-model-change] a live change the Turn ends before answering applies from the next Turn", async (t) => {
+  const live = await liveChangeRun(t, {
+    modelChange: {
+      report: new Promise<void>(() => {}),
+      answer: { outcome: "applied", observation: BETA_OBSERVED },
+    },
+  });
+  const { wired, runId } = live;
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "unanswered-change",
+      operation: "change-model-choice",
+      input: { runId, model: "beta", effort: "medium" },
+    }).admitted,
+  );
+  await live.reached;
+  assert.equal(operationStatus(wired, "unanswered-change"), "pending");
+  await live.interrupt();
+  const settled = await changeChoice(wired, "unanswered-change", {
+    runId,
+    model: "beta",
+    effort: "medium",
+  });
+  assert.equal(settled.outcome.status, "applied");
+  assert.equal(settled.modelChoiceChange?.reach, "next-turn");
+  assert.deepEqual(readRun(wired, runId).modelChoice, {
+    model: "beta",
+    effort: "medium",
+  });
+  await live.nextTurn();
+  assert.deepEqual(live.requests.at(-1)?.modelChoice, {
+    model: "beta",
+    effort: "medium",
+  });
+  await wired.shutdown();
+});
+
+test("[live-model-change] a later Turn's refused request restores the choice its Session kept, with a notice", async (t) => {
+  const live = await liveChangeRun(
+    t,
+    {},
+    {
+      events: [
+        {
+          kind: "model",
+          observation: { known: true, model: "alpha-2026", effort: "high" },
+          change: {
+            requested: { model: "beta", effort: "medium" },
+            outcome: "refused",
+            reason: "Model 'beta' not found",
+            kept: { model: "alpha", effort: "high" },
+          },
+        },
+      ],
+    },
+  );
+  const { wired, runId } = live;
+  await live.interrupt();
+  // Between Turns the change reaches only the next Turn's request.
+  assert.equal((await changeOffer(wired, runId)).reach, "next-turn");
+  const changed = await changeChoice(wired, "idle-change", {
+    runId,
+    model: "beta",
+    effort: "medium",
+  });
+  assert.equal(changed.outcome.status, "applied");
+  assert.equal(changed.modelChoiceChange?.reach, "next-turn");
+  assert.deepEqual(readRun(wired, runId).modelChoice, {
+    model: "beta",
+    effort: "medium",
+  });
+
+  await live.nextTurn();
+  assert.deepEqual(live.requests.at(-1)?.modelChoice, {
+    model: "beta",
+    effort: "medium",
+  });
+  const run = readRun(wired, runId);
+  assert.deepEqual(run.modelChoice, { model: "alpha", effort: "high" });
+  assert.equal(
+    run.modelChoiceNotice,
+    "Claude Code refused beta at medium effort: Model 'beta' not found. The Run keeps alpha at high effort.",
+  );
+  assert.equal(
+    wired.catalog.getPreference("last-model-choice:claude-code"),
+    JSON.stringify({ model: "alpha", effort: "high" }),
   );
   await wired.shutdown();
 });

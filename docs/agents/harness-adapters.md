@@ -8,6 +8,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - Claude's per-Adapter profile cache keys on discovery source, path and file identity. Equal bytes reuse the version; drift requalifies and a source change refreshes evidence.
 - `readDefaults` probes `get_settings` once per Prepared Harness in a bounded, settings-only process outside that cache, retaining only `applied` (#347).
   A valid inherited `CLAUDE_CODE_EFFORT_LEVEL` locks effort; invalid values are ignored. Each Turn reads effort without holding settlement.
+- A Model choice change (#348) sends `set_model`, `apply_flag_settings`, then a `get_settings` read-back, each after the last succeeded; applied needs the read-back.
+  A refused effort restores the model. A reused child gets a differing request the same way. Anything unanswered or unrestorable relaunches with the flags.
 - The shared listener mints a 256-bit bearer per Harness Session, reused on relaunch. Both MCP endpoints bind every transport to its Session
   and server, including short extra connections; idle-Session approvals are denied. Each token stays registered for the invocation, and every cause
   below launch crosses `redactSecrets` (close observations, stdin-write and stdout-read errors, captured stderr), so redaction happens at the Seam.
@@ -49,10 +51,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   `interrupted` `process-only`, a force-kill `lost`, and a live child on Windows is force-killed at once, so its fallback settles `lost`. A process stop
   claims the process before awaiting, and `onClosed` returns early when `this.process !== owned`; during a native stop it yields too, because the
   closed channel sends that stop to its fallback, which settles the one authoritative result.
-- Resume spawns with `--resume` (never a fresh `--session-id`) for a relaunch of a Session that already ran or any Turn carrying `resume`. Init state is
-  per process.
-- Session unusability is stored as a private `unusableReason` on the Session, set by `markUnusable` when a resume is not acknowledged; the Turn-start path
-  (`submit`) reads it first and fails every further Turn with the same recovery failure, never opening a fresh conversation.
+- Resume spawns with `--resume` (never `--session-id`) for a relaunch of a Session that already ran or a Turn carrying `resume`; init state is per process.
+- An unacknowledged resume sets the Session's private `unusableReason` (`markUnusable`); `submit` fails every later Turn with it, never a fresh conversation.
 
 ## Codex qualification and Turns
 

@@ -759,6 +759,7 @@ export function runPrepareProfileCases(
     assert.ok(profile.agentCalls.evidence.length > 0);
     assert.ok(profile.steer.evidence.length > 0);
     assert.ok(profile.modelSelection.evidence.length > 0);
+    assert.ok(profile.modelChange.evidence.length > 0);
     assert.ok(profile.recoveryCoordinate.evidence.length > 0);
     assert.ok(profile.skillDelivery.evidence.length > 0);
     assert.ok(profile.fileDelivery.evidence.length > 0);
@@ -1250,6 +1251,153 @@ export function runModelObservationCases(
   );
 }
 
+/**
+ * A Model choice change sent into a live Turn (ADR 0034, #348). A provider whose
+ * profile declares `next-turn` reach rejects the control `unsupported` while the
+ * Turn runs and reports no change. A `live-turn` provider accepts it, and its
+ * outcome rides on a `model` event before the result: `applied` with what the
+ * Harness then reports, never the request copied back, or `refused` with its
+ * reason and the observation left unchanged. Every control after the result is
+ * `expired`.
+ */
+export interface ModelChangeScenarios {
+  readonly label: string;
+  readonly inputText?: string;
+  /** The Model choice the Turn requests when it starts. */
+  readonly launchChoice: ModelChoice;
+  /** A live Turn that ends once `finish` is called with it (a provider whose
+   *  Turn ends on its own after answering omits it). */
+  changing(): {
+    readonly factory: TestHarnessAdapterFactory;
+    readonly finish?: (turn: HarnessTurn) => void;
+  };
+  /** The change a `live-turn` provider applies, and what its Harness then
+   *  reports; a `next-turn` provider sends this choice and expects a rejection. */
+  readonly change: ModelChoice;
+  readonly applied?: ModelObservation;
+  /** A live Turn whose Harness refuses `refused.choice`, for a provider that
+   *  can refuse a change inside a running Turn. */
+  refusing?(): {
+    readonly factory: TestHarnessAdapterFactory;
+    readonly finish?: (turn: HarnessTurn) => void;
+    readonly choice: ModelChoice;
+    readonly reason: RegExp;
+  };
+}
+
+/** Run the live Model choice change cases against one provider. */
+export function runModelChangeCases(
+  scenarios: ModelChangeScenarios,
+  register: RegisterConformanceCase,
+): void {
+  const name = (behaviour: string) => `[${scenarios.label}] ${behaviour}`;
+  const changeEvents = (events: Observation) =>
+    events.all.filter(
+      (event): event is Extract<TurnEvent, { kind: "model" }> =>
+        event.kind === "model" && event.change !== undefined,
+    );
+  const lastObservation = (events: readonly TurnEvent[]) =>
+    events
+      .flatMap((event) => (event.kind === "model" ? [event.observation] : []))
+      .at(-1) ?? { known: false };
+
+  register(
+    name("a live Model choice change follows the profile's reach"),
+    async () => {
+      const scenario = scenarios.changing();
+      const prepared = await prepare(scenario.factory);
+      const turn = prepared.startTurn(
+        request(recorder().recorder, {
+          text: scenarios.inputText,
+          modelChoice: scenarios.launchChoice,
+        }),
+      );
+      const events = observe(turn);
+      await events.waitForSession();
+      const reach = prepared.profile.modelChange.reach;
+      if (reach === "next-turn") {
+        assert.deepEqual(await turn.changeModel(scenarios.change), {
+          outcome: "rejected",
+          reason: "unsupported",
+        });
+        scenario.finish?.(turn);
+        await turn.result();
+        assert.deepEqual(changeEvents(events), []);
+      } else {
+        const applied = scenarios.applied;
+        assert.ok(applied, "a live-turn provider names what it applies");
+        assert.deepEqual(await turn.changeModel(scenarios.change), {
+          outcome: "accepted",
+        });
+        await events.waitFor(
+          (event) => event.kind === "model" && !!event.change,
+        );
+        scenario.finish?.(turn);
+        const result = await turn.result();
+        assert.deepEqual(changeEvents(events), [
+          {
+            kind: "model",
+            observation: applied,
+            change: { requested: scenarios.change, outcome: "applied" },
+          },
+        ]);
+        // The reported value, never the request copied back.
+        if (applied.known)
+          assert.notEqual(applied.model, scenarios.change.model);
+        assert.equal(result.kind, "completed");
+        if (result.kind !== "completed") throw new Error("unreachable");
+        assert.deepEqual(
+          result.detail.effectiveModel,
+          lastObservation(events.all),
+        );
+      }
+      assert.deepEqual(await turn.changeModel(scenarios.change), {
+        outcome: "rejected",
+        reason: "expired",
+      });
+      await prepared.close();
+    },
+  );
+
+  const refusing = scenarios.refusing;
+  if (refusing !== undefined) {
+    register(
+      name("a refused live change says why and keeps the observed model"),
+      async () => {
+        const scenario = refusing();
+        const prepared = await prepare(scenario.factory);
+        const turn = prepared.startTurn(
+          request(recorder().recorder, {
+            text: scenarios.inputText,
+            modelChoice: scenarios.launchChoice,
+          }),
+        );
+        const events = observe(turn);
+        await events.waitForSession();
+        const before = lastObservation(events.all);
+        assert.deepEqual(await turn.changeModel(scenario.choice), {
+          outcome: "accepted",
+        });
+        await events.waitFor(
+          (event) => event.kind === "model" && !!event.change,
+        );
+        scenario.finish?.(turn);
+        const result = await turn.result();
+        const [change, ...rest] = changeEvents(events);
+        assert.deepEqual(rest, []);
+        assert.ok(change?.change?.outcome === "refused");
+        assert.deepEqual(change.change.requested, scenario.choice);
+        assert.match(change.change.reason, scenario.reason);
+        assert.deepEqual(change.observation, before);
+        assert.equal(result.kind, "completed");
+        if (result.kind !== "completed") throw new Error("unreachable");
+        assert.deepEqual(result.detail.effectiveModel, before);
+        await prepared.close();
+      },
+    );
+  }
+}
+
 /** Run the approval request/answer/expiry cases against one provider. Both the
  *  full suite (for the fake) and the Claude Code Adapter over the bridge call it.
  *  `interruptOutcome` names how the provider's interrupt of a live Turn settles
@@ -1600,12 +1748,18 @@ interface Observation {
   /** Resolve once the Turn is live — its first `session` event has arrived. The
    *  request-free interrupt/recovery cases use this in place of a raised request. */
   waitForSession(): Promise<void>;
+  /** Resolve once an event matching `predicate` has arrived. */
+  waitFor(predicate: (event: TurnEvent) => boolean): Promise<void>;
 }
 
 function observe(turn: HarnessTurn): Observation {
   const all: TurnEvent[] = [];
   const waiters: { count: number; resolve: () => void }[] = [];
   const sessionWaiters: (() => void)[] = [];
+  const eventWaiters: {
+    readonly predicate: (event: TurnEvent) => boolean;
+    readonly resolve: () => void;
+  }[] = [];
   const raisedCount = () =>
     all.filter((event) => event.kind === "request-raised").length;
   const hasSession = () => all.some((event) => event.kind === "session");
@@ -1618,6 +1772,11 @@ function observe(turn: HarnessTurn): Observation {
     }
     if (event.kind === "session") {
       for (const resolve of sessionWaiters.splice(0)) resolve();
+    }
+    for (const waiter of [...eventWaiters]) {
+      if (!waiter.predicate(event)) continue;
+      eventWaiters.splice(eventWaiters.indexOf(waiter), 1);
+      waiter.resolve();
     }
   });
   return {
@@ -1639,6 +1798,12 @@ function observe(turn: HarnessTurn): Observation {
       if (hasSession()) return Promise.resolve();
       return new Promise<void>((resolve) => {
         sessionWaiters.push(resolve);
+      });
+    },
+    waitFor(predicate) {
+      if (all.some(predicate)) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        eventWaiters.push({ predicate, resolve });
       });
     },
   };

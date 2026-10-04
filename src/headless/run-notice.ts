@@ -10,6 +10,7 @@ export function createRunNoticeReporter(
     for (const notice of [
       snapshot.result.run.windowsCleanupNotice,
       snapshot.result.run.preferenceNotice,
+      snapshot.result.run.modelChoiceNotice,
     ]) {
       if (notice === undefined || reported.has(notice)) continue;
       reported.add(notice);
@@ -24,6 +25,7 @@ export function runSnapshotJson(snapshot: RunSnapshot): string {
   const {
     windowsCleanupNotice: _windowsNotice,
     preferenceNotice: _preferenceNotice,
+    modelChoiceNotice: _modelChoiceNotice,
     ...run
   } = snapshot.result.run;
   return JSON.stringify(

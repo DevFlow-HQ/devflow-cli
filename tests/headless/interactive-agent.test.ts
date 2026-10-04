@@ -54,6 +54,7 @@ function profile(): HarnessProfile {
     steer: { available: false, evidence: "scripted fake" },
     modelSelection: { at: "unavailable", evidence: "scripted fake" },
     modelObservation: { available: true, evidence: "scripted fake" },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
     recoveryCoordinate: {
       timing: "before-submission",
       evidence: "scripted fake",
@@ -832,6 +833,7 @@ test("a fault after admission reaches the Run, since the send already settled ap
               interrupt: () => turn.interrupt(),
               answerRequest: (answer) => turn.answerRequest(answer),
               answerAgentCall: (answer) => turn.answerAgentCall(answer),
+              changeModel: (choice) => turn.changeModel(choice),
               async result() {
                 await turn.result();
                 throw new Error("scripted Adapter fault after admission");

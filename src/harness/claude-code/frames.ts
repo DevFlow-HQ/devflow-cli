@@ -319,10 +319,16 @@ export function encodeUserMessage(uuid: string, text: string): Uint8Array {
 
 /** The control requests this Adapter sends. The Interrupt always cancels
  *  queued stdin messages (#359), so an undelivered Steer never runs after it;
- *  settings reads reuse the channel, and #348 adds the live-change subtypes. */
+ *  settings reads reuse the channel, and a Model choice change (#348) is
+ *  `set_model` then `apply_flag_settings`, each answered success or a typed error. */
 export type ControlRequest =
   | { readonly subtype: "interrupt"; readonly cancel_queued: true }
-  | { readonly subtype: "get_settings" };
+  | { readonly subtype: "get_settings" }
+  | { readonly subtype: "set_model"; readonly model: string }
+  | {
+      readonly subtype: "apply_flag_settings";
+      readonly settings: { readonly effortLevel: string };
+    };
 
 export function encodeControlRequest(
   requestId: string,

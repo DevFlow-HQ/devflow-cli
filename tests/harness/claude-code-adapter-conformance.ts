@@ -1487,8 +1487,11 @@ test("a Turn's requested model is forwarded to its launch as --model, distinct f
   if (!prepared.ok) throw new Error("unreachable");
   // Suggested, not validated: a full name outside the suggestions is admitted
   // on the Turn with no list check.
-  assert.equal(prepared.harness.profile.modelSelection.at, "launch");
-  if (prepared.harness.profile.modelSelection.at !== "launch") {
+  assert.equal(
+    prepared.harness.profile.modelSelection.at,
+    "launch-and-per-turn",
+  );
+  if (prepared.harness.profile.modelSelection.at !== "launch-and-per-turn") {
     throw new Error("unreachable");
   }
   const declaration = prepared.harness.profile.modelSelection.declaration;
@@ -1841,11 +1844,16 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
   assert.equal(profile.clarifications.available, false);
   assert.equal(profile.steer.available, true);
   assert.match(profile.steer.evidence, /cancel_queued/);
-  // Claude Code accepts any model string via --model at launch: it suggests
-  // its documented aliases, each with the five `--help` efforts and no declared
-  // default effort, and observes the effective model from init/result.
-  assert.equal(profile.modelSelection.at, "launch");
-  if (profile.modelSelection.at !== "launch") throw new Error("unreachable");
+  // Claude Code accepts any model string via --model at launch and typed
+  // set_model for a running Session (#348): it suggests its documented aliases,
+  // each with the five `--help` efforts and no declared default effort, and
+  // observes the effective model from init/result. A change reaches the live
+  // Turn, qualified by the recorded model-change fixture.
+  assert.equal(profile.modelSelection.at, "launch-and-per-turn");
+  if (profile.modelSelection.at !== "launch-and-per-turn")
+    throw new Error("unreachable");
+  assert.equal(profile.modelChange.reach, "live-turn");
+  assert.match(profile.modelChange.evidence, /model-change fixture/);
   const declaration = profile.modelSelection.declaration;
   assert.equal(declaration.kind, "suggested");
   if (declaration.kind !== "suggested") throw new Error("unreachable");
@@ -2145,3 +2153,157 @@ for (const name of [
     }
   });
 }
+
+// --- Model choice change (#348) ----------------------------------------------
+
+const MODEL_CHANGE_SESSION = "30de1111-1111-4111-8111-111111111111";
+
+/** Start one recorded Turn requesting `modelChoice` and resolve once its
+ *  Session is open, collecting its events. */
+async function openRecordedTurn(
+  harness: Awaited<ReturnType<typeof preparedOver>>["harness"],
+  text: string,
+  modelChoice: { readonly model: string; readonly effort?: string },
+) {
+  const turn = harness.startTurn({ ...recordedTurn(text), modelChoice });
+  const events: TurnEvent[] = [];
+  await new Promise<void>((resolve) => {
+    turn.subscribe((event) => {
+      events.push(event);
+      if (event.kind === "session") resolve();
+    });
+  });
+  return { turn, events };
+}
+
+const modelChanges = (events: readonly TurnEvent[]) =>
+  events.flatMap((event) =>
+    event.kind === "model" && event.change !== undefined ? [event] : [],
+  );
+
+test("a recorded live change applies inside the Turn and a refused next choice keeps it on the same process", async () => {
+  const { replayer, harness } = await preparedOver(
+    "model-change",
+    MODEL_CHANGE_SESSION,
+  );
+  const first = await openRecordedTurn(harness, "write a note", {
+    model: "haiku",
+    effort: "low",
+  });
+  assert.deepEqual(
+    await first.turn.changeModel({ model: "sonnet", effort: "high" }),
+    { outcome: "accepted" },
+  );
+  const settled = await first.turn.result();
+  assert.equal(settled.kind, "completed");
+  if (settled.kind !== "completed") throw new Error("unreachable");
+  assert.equal(settled.detail.finalContent, "PINEAPPLE.");
+  const applied = {
+    known: true,
+    model: "claude-sonnet-5-5",
+    effort: "high",
+  } as const;
+  assert.deepEqual(modelChanges(first.events), [
+    {
+      kind: "model",
+      observation: applied,
+      change: {
+        requested: { model: "sonnet", effort: "high" },
+        outcome: "applied",
+      },
+    },
+  ]);
+  assert.deepEqual(settled.detail.effectiveModel, applied);
+
+  const unknown = { model: "claude-nonexistent-model", effort: "high" };
+  const second = await openRecordedTurn(harness, "reply done", unknown);
+  const next = await second.turn.result();
+  assert.equal(next.kind, "completed");
+  if (next.kind !== "completed") throw new Error("unreachable");
+  assert.equal(next.detail.finalContent, "done.");
+  assert.deepEqual(
+    modelChanges(second.events).map((event) => event.change),
+    [
+      {
+        requested: unknown,
+        outcome: "refused",
+        reason: "Model 'claude-nonexistent-model' not found",
+        kept: { model: "sonnet", effort: "high" },
+      },
+    ],
+  );
+  // Claude Code kept Sonnet: the Turn's own init names it.
+  assert.deepEqual(next.detail.effectiveModel.known, true);
+  assert.equal(
+    next.detail.effectiveModel.known && next.detail.effectiveModel.model,
+    "claude-sonnet-5-5",
+  );
+  await harness.close();
+
+  const launches = replayer
+    .invocations()
+    .filter((launch) => launch.args.includes("-p"));
+  assert.equal(launches.length, 1);
+  const args = launches[0]?.args ?? [];
+  assert.equal(args[args.indexOf("--model") + 1], "haiku");
+  assert.equal(args[args.indexOf("--effort") + 1], "low");
+  const requests = (launches[0]?.controlLines ?? []).map(
+    (line) => JSON.parse(line).request,
+  );
+  assert.deepEqual(
+    requests.filter((request) => request.subtype !== "get_settings"),
+    [
+      { subtype: "set_model", model: "sonnet" },
+      {
+        subtype: "apply_flag_settings",
+        settings: { effortLevel: "high" },
+      },
+      { subtype: "set_model", model: "claude-nonexistent-model" },
+    ],
+  );
+});
+
+test("a change Claude Code never answers relaunches the exact Session with --resume --model --effort", async () => {
+  const replayer = installReplayer(
+    VERSION,
+    protocolCase("model-change-unanswered"),
+  );
+  const prepared = await createClaudeCodeAdapter({
+    path: replayer.path,
+    env: {},
+    sessionId: () => MODEL_CHANGE_SESSION,
+    controlTimeoutMs: 500,
+  }).prepare({ workspace: makeTempDir("secant-claude-workspace-") });
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) throw new Error("unreachable");
+  const harness = prepared.harness;
+  const change = { model: "sonnet", effort: "high" };
+  const first = await openRecordedTurn(harness, "write a note", {
+    model: "haiku",
+    effort: "low",
+  });
+  assert.deepEqual(await first.turn.changeModel(change), {
+    outcome: "accepted",
+  });
+  assert.equal((await first.turn.result()).kind, "completed");
+
+  const second = await openRecordedTurn(harness, "reply resumed", change);
+  const resumed = await second.turn.result();
+  assert.equal(resumed.kind, "completed");
+  if (resumed.kind !== "completed") throw new Error("unreachable");
+  assert.equal(resumed.detail.finalContent, "resumed.");
+  assert.equal((await harness.close()).clean, true);
+
+  const launches = replayer
+    .invocations()
+    .filter((launch) => launch.args.includes("-p"));
+  assert.equal(launches.length, 2);
+  const relaunch = launches[1]?.args ?? [];
+  assert.equal(
+    relaunch[relaunch.indexOf("--resume") + 1],
+    MODEL_CHANGE_SESSION,
+  );
+  assert.equal(relaunch[relaunch.indexOf("--model") + 1], "sonnet");
+  assert.equal(relaunch[relaunch.indexOf("--effort") + 1], "high");
+  assert.equal(relaunch.includes("--session-id"), false);
+});
