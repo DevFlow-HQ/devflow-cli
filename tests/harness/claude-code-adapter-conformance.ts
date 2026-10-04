@@ -1050,11 +1050,17 @@ test("a confirmed native interrupt recovers the exact Session after Windows reap
     invocation.stdinLines.length,
     process.platform === "win32" ? 1 : 2,
   );
-  // The one control frame is the interrupt, cancelling queued messages (#359);
-  // the replayer echoed its Adapter-minted request id into the recorded
-  // confirmation.
-  assert.equal(invocation.controlLines.length, 3);
-  const controls = invocation.controlLines.map((line) => JSON.parse(line));
+  // Each Turn reads settings. Windows puts the second read on the resumed
+  // process; POSIX keeps both reads and the interrupt on the original process.
+  const launches = [invocation, ...relaunches];
+  assert.deepEqual(
+    launches.map((launch) => launch.controlLines.length),
+    process.platform === "win32" ? [2, 1] : [3],
+  );
+  const controls = launches
+    .flatMap((launch) => launch.controlLines)
+    .map((line) => JSON.parse(line));
+  assert.equal(controls.length, 3);
   assert.equal(controls[0].request.subtype, "get_settings");
   assert.equal(controls[2].request.subtype, "get_settings");
   const control = controls[1];
