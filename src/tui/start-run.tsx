@@ -17,6 +17,7 @@ import type {
   LaunchRunInput,
   Problem,
 } from "../application/projection-port.js";
+import type { ModelChoiceDraft } from "./model-choice-picker.js";
 import { BundleCatalog } from "./bundle-catalog.js";
 import { useBundleCatalogView } from "./bundle-view.js";
 import { isCheckingModels } from "./harness-format.js";
@@ -25,38 +26,19 @@ import { useRunLaunchView, type LaunchOutcome } from "./run-launch-view.js";
 import {
   ChooseStep,
   HarnessStep,
+  ModelChoiceStep,
   InputsStep,
   PendingStep,
   ReviewStep,
   routingNeedsHarness,
 } from "./start-run-views.js";
 
-// The Start-a-Run flow (#90, #191, #192): from Home — where it is now the first and
-// default entry — one decision per screen. Choose an Installed Bundle (with a
-// read-only side panel, a `View Bundle Details` jump into the Bundle catalog, and
-// an inline trust acknowledgement that gates Continue), choose a Harness and model
-// for an Agent-bearing Bundle, provide the Bundle-declared Launch inputs (skipped
-// when none), review, then Start. The steps are numbered `N of M` with Harness
-// omitted for a Command-only Bundle and Inputs omitted when the Bundle declares
-// none. Review opens `launch-preparation` for the complete draft, renders every
-// finding while assessment settles, and exposes Start only from the ready Offer.
-// Submission drives the same `launch-run` Operation as headless through the
-// `run-launch-view` seam; refusal routes only by `correction`, clears only that
-// field, and leaves every unrelated draft choice intact.
-//
-// The Harness step reads the spawn-free `harness-catalog` list for its rows and
-// worded qualification/availability; choosing a Harness opens that one's focus,
-// which qualifies only it and carries the model declaration the model field
-// renders (a choice list or free-text entry) and the Application's preselection,
-// the Model choice a launch starts from and its source (ADR 0034).
-//
-// State that survives back-navigation (chosen Bundle index, chosen Harness, the
-// requested model, entered input values, the acknowledged digest) lives in this one
-// component, so stepping back never loses a draft; only leaving the flow entirely
-// (Escape at the chooser) discards it. Exactly one step renders at a time (a Solid
-// <Switch>), so each step's key bindings exist only while it is active.
+// Drafts survive back-navigation; only leaving the flow discards them. Agent
+// Bundles choose a Harness, enter Launch inputs, then choose model and effort.
+// Review assesses the complete draft and submits the ready Offer unchanged.
+// Refusals return to their correction stage without clearing unrelated choices.
 
-type Step = "choose" | "harness" | "inputs" | "review" | "pending";
+type Step = "choose" | "harness" | "inputs" | "model" | "review" | "pending";
 
 export function StartRun(props: {
   onLeave: () => void;
@@ -91,9 +73,33 @@ export function StartRun(props: {
   const [harnessFindingId, setHarnessFindingId] = createSignal<
     string | undefined
   >();
-  const [requestedModel, setRequestedModel] = createSignal<
-    string | undefined
-  >();
+  const [selectedChoice, setSelectedChoice] = createSignal<ModelChoiceDraft>();
+  const [effortReset, setEffortReset] = createSignal<string>();
+  const [modelStage, setModelStage] = createSignal<"model" | "effort">("model");
+  const modelDraft = (): ModelChoiceDraft => {
+    const selected = selectedChoice();
+    if (selected !== undefined) return selected;
+    const choice = chosenHarnessFocus()?.preselection?.choice;
+    return choice === undefined
+      ? { kind: "model-needed" }
+      : { kind: "chosen", choice };
+  };
+  const chooseModelChoice = (
+    choice: NonNullable<HarnessFocus["preselection"]>["choice"],
+    reset?: string,
+  ) => {
+    setSelectedChoice({ kind: "chosen", choice });
+    setEffortReset(reset);
+  };
+  const requestedChoice = () => {
+    const selected = selectedChoice();
+    const choice = selected?.kind === "chosen" ? selected.choice : undefined;
+    const preselection = chosenHarnessFocus()?.preselection?.choice;
+    return choice?.model === preselection?.model &&
+      choice?.effort === preselection?.effort
+      ? undefined
+      : choice;
+  };
   // Every digest the user has acknowledged trust for. A set (not one slot) so an
   // acknowledgement survives moving to another Bundle and back (trust is
   // digest-scoped, ADR 0021).
@@ -193,10 +199,12 @@ export function StartRun(props: {
   // one the new Harness supports; the launch revalidates regardless.
   const chooseHarness = (id: string) => {
     if (chosenHarnessId() !== id && harnessFindingId() !== id) {
-      setRequestedModel(undefined);
+      setSelectedChoice(undefined);
+      setEffortReset(undefined);
     }
     setHarnessFindingId(undefined);
     setChosenHarnessId(id);
+    continueFromHarness();
   };
 
   // Continue past the Harness step only once the chosen Harness's check has
@@ -210,6 +218,7 @@ export function StartRun(props: {
     const bundle = focusBundle();
     if (bundle === undefined || !canContinueHarness()) return;
     setChooserProblem(undefined);
+    setModelStage("model");
     setStep(nextDraftStep(bundle));
   };
 
@@ -239,7 +248,8 @@ export function StartRun(props: {
       // The draft carries the requested model into the launch; a Command-only
       // Bundle asks for neither Harness nor model (#191). An undefined model takes
       // the preselection, which the assessment resolves into the Offer's draft.
-      requestedModel: needsHarness ? requestedModel() : undefined,
+      requestedModel: needsHarness ? requestedChoice()?.model : undefined,
+      requestedEffort: needsHarness ? requestedChoice()?.effort : undefined,
       trustDigest:
         bundle.trust.state === "not-yet-trusted" && acknowledged()
           ? bundle.digest
@@ -301,12 +311,22 @@ export function StartRun(props: {
       setChosenHarnessId(undefined);
       setStep("harness");
     } else if (problem.correction === "model") {
-      setRequestedModel(undefined);
-      setStep("harness");
+      const draft = modelDraft();
+      setSelectedChoice({
+        kind: "model-needed",
+        effort: draft.kind === "chosen" ? draft.choice.effort : draft.effort,
+      });
+      setModelStage("model");
+      setStep("model");
     } else if (problem.correction === "effort") {
-      // Effort is resolved, not chosen, until the guided picker (#349): a model
-      // whose effort cannot be resolved is corrected by choosing another model.
-      setStep("harness");
+      const draft = modelDraft();
+      if (draft.kind === "chosen")
+        setSelectedChoice({
+          kind: "chosen",
+          choice: { model: draft.choice.model },
+        });
+      setModelStage("effort");
+      setStep("model");
     } else if (problem.correction === "trust") {
       const bundle = focusBundle();
       if (bundle !== undefined) {
@@ -324,13 +344,15 @@ export function StartRun(props: {
 
   const backFromReview = () => {
     const bundle = focusBundle();
-    setStep(
-      bundle !== undefined && bundle.launchInputs.length === 0
-        ? routingNeedsHarness(bundle.routing)
-          ? "harness"
-          : "choose"
-        : "inputs",
-    );
+    if (focusNeedsHarness(bundle)) {
+      setModelStage("effort");
+      setStep("model");
+    } else
+      setStep(
+        bundle !== undefined && bundle.launchInputs.length > 0
+          ? "inputs"
+          : "choose",
+      );
   };
 
   // The ordered steps present for a Bundle, so each step can render its `N of M`
@@ -340,6 +362,7 @@ export function StartRun(props: {
     const sequence: Step[] = ["choose"];
     if (routingNeedsHarness(bundle.routing)) sequence.push("harness");
     if (bundle.launchInputs.length > 0) sequence.push("inputs");
+    if (routingNeedsHarness(bundle.routing)) sequence.push("model");
     sequence.push("review");
     return sequence;
   };
@@ -384,8 +407,6 @@ export function StartRun(props: {
               findingHarnessId={harnessFindingId}
               choose={chooseHarness}
               focus={chosenHarnessFocus}
-              model={requestedModel}
-              setModel={setRequestedModel}
               stepLabel={() => stepLabel("harness")}
               problem={chooserProblem}
               notice={notice}
@@ -405,10 +426,36 @@ export function StartRun(props: {
               notice={notice}
               onDismissNotice={() => setNotice(undefined)}
               stepLabel={() => stepLabel("inputs")}
-              onContinue={() => setStep("review")}
+              onContinue={() => {
+                setModelStage("model");
+                setStep(focusNeedsHarness(focusBundle()) ? "model" : "review");
+              }}
               onBack={() =>
                 setStep(focusNeedsHarness(focusBundle()) ? "harness" : "choose")
               }
+            />
+          </Match>
+          <Match when={step() === "model"}>
+            <ModelChoiceStep
+              focus={chosenHarnessFocus}
+              draft={modelDraft}
+              reset={effortReset}
+              enabled={canContinueHarness}
+              initialStage={modelStage()}
+              onChoice={chooseModelChoice}
+              onDone={() => setStep("review")}
+              onBack={() => {
+                setModelStage("model");
+                setStep(
+                  focusBundle()?.launchInputs.length === 0
+                    ? "harness"
+                    : "inputs",
+                );
+              }}
+              stepLabel={() => stepLabel("model")}
+              problem={chooserProblem}
+              notice={notice}
+              onDismissNotice={() => setNotice(undefined)}
             />
           </Match>
           <Match when={step() === "review"}>
@@ -422,6 +469,7 @@ export function StartRun(props: {
               stepLabel={() => stepLabel("review")}
               notice={notice}
               onDismissNotice={() => setNotice(undefined)}
+              reset={effortReset}
               onStart={startLaunch}
               onBack={backFromReview}
             />
@@ -444,7 +492,11 @@ export function StartRun(props: {
 // --- step sequencing -------------------------------------------------------
 
 function nextDraftStep(bundle: InstalledBundleFocus): Step {
-  return bundle.launchInputs.length === 0 ? "review" : "inputs";
+  return bundle.launchInputs.length > 0
+    ? "inputs"
+    : routingNeedsHarness(bundle.routing)
+      ? "model"
+      : "review";
 }
 
 function focusNeedsHarness(bundle: InstalledBundleFocus | undefined): boolean {

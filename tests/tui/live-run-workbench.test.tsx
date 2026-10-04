@@ -255,10 +255,15 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   await rendered.waitForFrame((frame) => frame.includes("Trust acknowledged"));
   rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) => frame.includes("Choose a Harness"));
-  rendered.mockInput.pressEnter(); // choose the highlighted Harness → model field
-  await rendered.waitForFrame((frame) => frame.includes("Model"));
-  await rendered.renderOnce();
-  rendered.mockInput.pressEnter(); // the preselected model → Review
+  rendered.mockInput.pressEnter();
+  await rendered.waitForFrame((frame) =>
+    frame.includes("Model choices loaded"),
+  );
+  rendered.mockInput.pressEnter();
+  await rendered.waitForFrame((frame) => frame.includes("1. Choose a model"));
+  rendered.mockInput.pressEnter();
+  await rendered.waitForFrame((frame) => frame.includes("2. Choose effort"));
+  rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) => frame.includes("Review"));
   rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) =>
@@ -392,14 +397,19 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
   rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) => frame.includes("Choose a Harness"));
   rendered.mockInput.pressEnter();
-  await rendered.waitForFrame((frame) => frame.includes("Model"));
-  await rendered.renderOnce();
+  await rendered.waitForFrame((frame) =>
+    frame.includes("Model choices loaded"),
+  );
   rendered.mockInput.pressEnter();
   // The Bundle's required idea is collected on the inputs screen.
   await rendered.waitForFrame((frame) => frame.includes("Launch inputs"));
   assert.match(rendered.captureCharFrame(), /idea \(text\)/);
   await rendered.mockInput.typeText(idea);
   await rendered.waitForFrame((frame) => frame.includes(idea));
+  rendered.mockInput.pressEnter();
+  await rendered.waitForFrame((frame) => frame.includes("1. Choose a model"));
+  rendered.mockInput.pressEnter();
+  await rendered.waitForFrame((frame) => frame.includes("2. Choose effort"));
   rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) => frame.includes("Review"));
   assert.match(rendered.captureCharFrame(), new RegExp(`idea: ${idea}`));

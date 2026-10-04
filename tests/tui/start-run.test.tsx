@@ -68,13 +68,11 @@ import type {
 // checking words in character frames, the fill and bold in spans), and renderer
 // evidence through `testRender` with the fake Renderer Port.
 //
-// #342 slice coverage (the `[start-run-model-choice]` and `[start-run-preselection]`
-// groups): the interim model field offers no "Harness default" and opens on the
-// Application's preselection with its source. Keymap and focus (←/→ cycles only the
-// declared models; Esc to the list and back keeps the choice), small sizes and
-// resize (60x24 and 140x44, a mid-selection resize keeps the choice and focus),
-// meaning without colour (the value and its source read from character frames), and
-// renderer evidence through `testRender`. The guided picker's effort step is #349's.
+// #349 renderer evidence: the guided model and effort stages, per-model resets,
+// suggested aliases and native Other input, effort locks and absence, held keys,
+// page navigation over long lists, and preserved choice/focus across 60x24 and
+// 140x44 resize. Character frames prove current/source/reason meaning without
+// colour. The canonical test suite runs these same cases on all three CI platforms.
 
 const WORKSPACE = "/tmp/secant-launch-workspace";
 
@@ -181,6 +179,8 @@ interface HarnessSpec {
   readonly name: string;
   /** A declared model list, `"free-text"`, or `undefined` for none. */
   readonly models?: readonly string[] | "free-text";
+  readonly declaration?: HarnessFocus["modelDeclaration"];
+  readonly preferenceNotice?: string;
   /** The Application's preselection the focus carries, when the Harness reports
    *  one (ADR 0034). */
   readonly preselection?: HarnessFocus["preselection"];
@@ -230,18 +230,23 @@ function focusOf(spec: HarnessSpec): HarnessFocus {
         ? ({ kind: "free-text" } as const)
         : ({ kind: "list", models: spec.models } as const);
   const modelDeclaration =
-    spec.models === undefined
+    spec.declaration ??
+    (spec.models === undefined
       ? undefined
       : spec.models === "free-text"
-        ? ({ kind: "free-text", efforts: ["low", "high"] } as const)
+        ? ({
+            kind: "free-text",
+            efforts: ["low", "medium", "high", "xhigh", "max"],
+          } as const)
         : ({
             kind: "list",
             models: spec.models.map((model) => ({
               model,
               label: model,
-              efforts: ["low", "high"],
+              efforts: ["low", "medium", "high", "xhigh", "max"],
+              defaultEffort: "medium",
             })),
-          } as const);
+          } as const));
   return {
     ...summary,
     qualification: { state: "qualified", observation: OBSERVATION },
@@ -250,6 +255,9 @@ function focusOf(spec: HarnessSpec): HarnessFocus {
     ...(spec.preselection === undefined
       ? {}
       : { preselection: spec.preselection }),
+    ...(spec.preferenceNotice === undefined
+      ? {}
+      : { preferenceNotice: spec.preferenceNotice }),
     capabilities: [],
     configurationPosture: "Harness-owned settings stay with the Harness.",
   };
@@ -303,6 +311,7 @@ function harnessCatalog(specs: readonly HarnessSpec[]): {
 function checkingHarnessCatalog(specs: readonly HarnessSpec[]): {
   view: HarnessCatalogView;
   settle: (id: HarnessSpec["id"]) => void;
+  hold: (id: HarnessSpec["id"]) => void;
 } {
   const [list] = createSignal<HarnessCatalogSnapshot>({
     family: "harness-catalog",
@@ -310,6 +319,7 @@ function checkingHarnessCatalog(specs: readonly HarnessSpec[]): {
     harnesses: specs.map(summaryOf),
   });
   const settlers = new Map<string, () => void>();
+  const holders = new Map<string, () => void>();
   const view: HarnessCatalogView = {
     openList: () => list,
     openFocus: (selector: HarnessFocusSelector) => {
@@ -324,6 +334,17 @@ function checkingHarnessCatalog(specs: readonly HarnessSpec[]): {
           harness: { ...summaryOf(spec), capabilities: [] },
         },
       });
+      holders.set(selector.id, () =>
+        setSnapshot({
+          family: "harness-catalog",
+          view: "focus",
+          selection: selector,
+          result: {
+            found: true,
+            harness: { ...summaryOf(spec), capabilities: [] },
+          },
+        }),
+      );
       settlers.set(selector.id, () =>
         setSnapshot({
           family: "harness-catalog",
@@ -340,12 +361,33 @@ function checkingHarnessCatalog(specs: readonly HarnessSpec[]): {
     if (settler === undefined) throw new Error(`${id} focus was never opened`);
     settler();
   };
-  return { view, settle };
+  const hold = (id: HarnessSpec["id"]) => {
+    const holder = holders.get(id);
+    if (holder === undefined) throw new Error(`${id} focus was never opened`);
+    holder();
+  };
+  return { view, settle, hold };
 }
 
 const AVAILABLE_HARNESSES: readonly HarnessSpec[] = [
-  { id: "claude-code", name: "Claude Code", models: ["claude-sonnet"] },
-  { id: "codex", name: "Codex", models: ["gpt-5-codex", "gpt-5"] },
+  {
+    id: "claude-code",
+    name: "Claude Code",
+    models: ["claude-sonnet"],
+    preselection: {
+      choice: { model: "claude-sonnet", effort: "medium" },
+      source: { kind: "reported" },
+    },
+  },
+  {
+    id: "codex",
+    name: "Codex",
+    models: ["gpt-5-codex", "gpt-5"],
+    preselection: {
+      choice: { model: "gpt-5", effort: "high" },
+      source: { kind: "reported" },
+    },
+  },
 ];
 
 function defaultHarnessCatalog(): HarnessCatalogView {
@@ -379,7 +421,11 @@ function resolvedChoice(
 ): LaunchPreparationSnapshot["draft"]["modelChoice"] {
   if (draft.harness === undefined) return undefined;
   return draft.requestedModel !== undefined
-    ? { model: draft.requestedModel, source: { kind: "requested" } }
+    ? {
+        model: draft.requestedModel,
+        effort: draft.requestedEffort,
+        source: { kind: "requested" },
+      }
     : {
         model: PRESELECTED_MODEL,
         effort: "medium",
@@ -473,6 +519,7 @@ function controlledPreparation() {
     status: "ready" | "not-ready",
     findings: readonly Problem[],
     modelChoice?: LaunchPreparationSnapshot["draft"]["modelChoice"],
+    preferenceNotice?: string,
   ) => {
     if (openedDraft === undefined || updateSnapshot === undefined) {
       throw new Error("Review must open preparation before it can settle");
@@ -502,6 +549,7 @@ function controlledPreparation() {
         requestedModel: openedDraft.requestedModel,
         ...readyChoice(status, openedDraft),
         ...(modelChoice === undefined ? {} : { modelChoice }),
+        ...(preferenceNotice === undefined ? {} : { preferenceNotice }),
         launchInputs: openedDraft.launchInputs,
         trustDigest: openedDraft.trustDigest,
       },
@@ -761,6 +809,12 @@ async function mountFlow(
   return { t, exits };
 }
 
+async function chooseGuided(t: Awaited<ReturnType<typeof testRender>>) {
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  t.mockInput.pressEnter();
+}
+
 const ALPHA = focus({
   id: "dev.alpha",
   name: "Alpha",
@@ -952,20 +1006,16 @@ test("[start-run-review-assessment] Review renders the complete assessed draft a
     readyPreparationFor(UNTRUSTED_AGENT_BETA),
   );
   t.mockInput.pressKey("a");
-  await t.waitForFrame((frame) => frame.includes("Trust acknowledged"));
+  await t.waitForFrame((f) => f.includes("Trust acknowledged"));
   t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
   t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Model"));
-  t.mockInput.pressArrow("right");
-  await t.waitForFrame((frame) => frame.includes("claude-sonnet"));
+  await t.waitForFrame((f) => f.includes("Launch inputs"));
+  t.mockInput.typeText("hi");
   t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Launch inputs"));
-  t.mockInput.pressKey("h");
-  t.mockInput.pressKey("i");
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Review"));
-
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  await chooseGuided(t);
+  await t.waitForFrame((f) => f.includes("Review"));
   const frame = t.captureCharFrame();
   assert.match(frame, /Workflow.*work \(agent\)/s);
   assert.match(frame, /Bundle.*Untrusted Agent Beta/s);
@@ -973,17 +1023,16 @@ test("[start-run-review-assessment] Review renders the complete assessed draft a
   assert.match(frame, /Workspace.*secant-launch-workspace/s);
   assert.match(frame, new RegExp(WORKSPACE.replaceAll("/", "\\/")));
   assert.match(frame, /Harness: Claude Code \(claude-code\)/);
-  // The review repeats the Model choice the Offer launches and its source.
-  assert.match(frame, /Model choice: claude-sonnet/);
-  assert.match(frame, /Your choice for this launch/);
+  assert.match(frame, /Model choice: preselected-model at medium effort/);
+  assert.match(frame, /From your Claude Code settings/);
   assert.match(frame, /target: hi/);
   assert.match(frame, /Trust: Exact digest acknowledged for this launch/);
   assert.equal(frame.split("untrustedagentbeta111").length - 1, 1);
 });
 
-test("[both-client-harness-selection] the Harness step shows worded rows, spawns nothing until a Harness is chosen, then qualifies only that one", async () => {
-  const launch = fakeLaunch();
+test("[both-client-harness-selection] Harness selection is spawn-free until chosen, then qualifies only that Harness", async () => {
   const harnesses = harnessCatalog(AVAILABLE_HARNESSES);
+  const launch = fakeLaunch();
   const { t } = await mountFlow(
     catalog([AGENT_ALPHA]),
     launch.view,
@@ -993,156 +1042,79 @@ test("[both-client-harness-selection] the Harness step shows worded rows, spawns
     harnesses.view,
   );
   t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
   const frame = t.captureCharFrame();
   assert.match(frame, /Claude Code/);
   assert.match(frame, /Codex/);
-  // Worded qualification, never a raw enum, and colour-independent.
   assert.match(frame, /Not checked/);
-  assert.doesNotMatch(frame, /availability/i);
-  // The step names no discovery evidence; that lives in the Harness catalog.
-  assert.doesNotMatch(frame, /found via/i);
-  assert.doesNotMatch(frame, /\/usr\/bin\/harness/);
-  // Opening the step spawns nothing: no focus opened until a Harness is chosen.
+  assert.doesNotMatch(frame, /availability|found via|\/usr\/bin\/harness/i);
   assert.deepEqual(harnesses.focusCalls, []);
-  for (const line of frame.split("\n")) {
-    assert.ok(line.length <= 40, `overflow at 40: ${JSON.stringify(line)}`);
-  }
-
-  t.mockInput.pressArrow("down"); // highlight Codex (still spawn-free)
+  for (const line of frame.split("\n")) assert.ok(line.length <= 40);
+  t.mockInput.pressArrow("down");
   assert.deepEqual(harnesses.focusCalls, []);
-  t.mockInput.pressEnter(); // choose Codex → qualifies only Codex
-  await t.waitForFrame((candidate) => candidate.includes("Model"));
-  assert.deepEqual(harnesses.focusCalls, ["codex"]);
-
-  t.mockInput.pressEnter(); // the preselection → review
-  await t.waitForFrame((candidate) => candidate.includes("Review"));
-  assert.match(t.captureCharFrame(), /Harness: Codex \(codex\)/);
-
   t.mockInput.pressEnter();
-  await t.waitForFrame((candidate) => candidate.includes("Checking launch"));
-  // A draft naming no model launches the Offer's resolved preselection.
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  assert.deepEqual(harnesses.focusCalls, ["codex"]);
+  await chooseGuided(t);
+  await t.waitForFrame((f) => f.includes("Review"));
+  assert.match(t.captureCharFrame(), /Harness: Codex \(codex\)/);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Checking launch"));
   assert.equal(launch.calls[0]?.harness, "codex");
   assert.equal(launch.calls[0]?.requestedModel, PRESELECTED_MODEL);
   assert.equal(launch.calls[0]?.requestedEffort, "medium");
 });
 
-test("changing a Harness after a selected-Harness refusal preserves unrelated input drafts", async () => {
-  const launch = fakeLaunch();
-  const { t } = await mountFlow(catalog([AGENT_BETA]), launch.view);
-  t.mockInput.pressEnter(); // Bundle → Harness
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
-  t.mockInput.pressArrow("down"); // highlight Codex
-  t.mockInput.pressEnter(); // choose Codex → model phase
-  await t.waitForFrame((frame) => frame.includes("Model"));
-  await t.renderOnce();
-  t.mockInput.pressEnter(); // model default → inputs
-  await t.waitForFrame((frame) => frame.includes("Launch inputs"));
-  t.mockInput.pressKey("h");
-  t.mockInput.pressKey("i");
-  await t.waitForFrame((frame) => frame.includes("hi"));
-  t.mockInput.pressEnter(); // inputs → review
-  await t.waitForFrame((frame) => frame.includes("Harness: Codex"));
-  t.mockInput.pressEnter(); // Start
-  await t.waitForFrame((frame) => frame.includes("Checking launch"));
-  launch.resolve({
-    kind: "refused",
-    problem: {
-      code: "harness-not-found",
-      explanation: "Codex could not be found.",
-      remediation: "Install Codex.",
-      possibleEffects: "none",
-      correction: "harness",
-      details: { harness: "codex" },
-    },
+for (const correction of ["harness", "model", "effort"] as const) {
+  test(`a ${correction} refusal preserves unrelated Launch inputs and routes to the correction`, async () => {
+    const launch = fakeLaunch();
+    const { t } = await mountFlow(catalog([AGENT_BETA]), launch.view);
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Launch inputs"));
+    t.mockInput.typeText("hi");
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    await chooseGuided(t);
+    await t.waitForFrame((f) => f.includes("Review"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Checking launch"));
+    launch.resolve({
+      kind: "refused",
+      problem: {
+        code: "choice-unavailable",
+        explanation: "The selected choice is no longer available.",
+        remediation: "Choose again.",
+        possibleEffects: "none",
+        correction,
+      },
+    });
+    await t.waitForFrame((f) => f.includes("Run not started"));
+    const frame = t.captureCharFrame();
+    assert.match(frame, /selected choice/);
+    if (correction === "harness") {
+      assert.match(frame, /Choose a Harness/);
+      assert.match(frame, /› Claude Code/);
+      t.mockInput.pressArrow("down");
+      t.mockInput.pressEnter();
+      await t.waitForFrame((f) => f.includes("Launch inputs"));
+      assert.match(t.captureCharFrame(), /hi/);
+      t.mockInput.pressEnter();
+      await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    } else {
+      assert.match(frame, /Harness: Claude Code/);
+      assert.match(
+        frame,
+        correction === "model" ? /1. Choose a model/ : /2. Choose effort/,
+      );
+    }
+    if (correction !== "effort") await chooseGuided(t);
+    else t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.match(t.captureCharFrame(), /target: hi/);
   });
-  await t.waitForFrame((frame) => frame.includes("Codex could not be found"));
-  const refused = t.captureCharFrame();
-  assert.match(refused, /Run not started/);
-  assert.match(refused, /enter choose/);
-  assert.match(refused, /› Codex/, "the invalidated Harness receives focus");
-  assert.doesNotMatch(refused, /harness-not-found/);
-  t.mockInput.pressArrow("up"); // highlight Claude Code
-  t.mockInput.pressEnter(); // choose Claude Code → model phase
-  await t.waitForFrame((frame) => frame.includes("Model"));
-  await t.renderOnce();
-  t.mockInput.pressEnter(); // model default → inputs
-  await t.waitForFrame((frame) => frame.includes("Launch inputs"));
-  assert.match(t.captureCharFrame(), /hi/);
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Harness: Claude Code"));
-  assert.match(t.captureCharFrame(), /target: hi/);
-});
-
-test("a Harness refusal preserves its model choice when the same Harness is selected again", async () => {
-  const launch = fakeLaunch();
-  const { t } = await mountFlow(catalog([AGENT_ALPHA]), launch.view);
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Model"));
-  t.mockInput.pressArrow("right");
-  await t.waitForFrame((frame) => frame.includes("‹ claude-sonnet ›"));
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Review"));
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Checking launch"));
-  launch.resolve({
-    kind: "refused",
-    problem: {
-      code: "harness-not-ready",
-      explanation: "Claude Code is no longer ready.",
-      remediation: "Authenticate Claude Code or choose another Harness.",
-      possibleEffects: "none",
-      correction: "harness",
-    },
-  });
-
-  await t.waitForFrame((frame) => frame.includes("no longer ready"));
-  assert.match(t.captureCharFrame(), /› Claude Code/);
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Model"));
-  assert.match(t.captureCharFrame(), /‹ claude-sonnet ›/);
-});
-
-test("a model refusal keeps the Harness and inputs but clears only the requested model", async () => {
-  const launch = fakeLaunch();
-  const { t } = await mountFlow(catalog([AGENT_BETA]), launch.view);
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Model"));
-  t.mockInput.pressArrow("right");
-  await t.waitForFrame((frame) => frame.includes("‹ claude-sonnet ›"));
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Launch inputs"));
-  t.mockInput.pressKey("h");
-  t.mockInput.pressKey("i");
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Review"));
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Checking launch"));
-  launch.resolve({
-    kind: "refused",
-    problem: {
-      code: "requested-model-unavailable",
-      explanation: "The selected model is no longer available.",
-      remediation: "Choose a currently supported model.",
-      possibleEffects: "none",
-      correction: "model",
-    },
-  });
-
-  await t.waitForFrame((frame) => frame.includes("selected model"));
-  const model = t.captureCharFrame();
-  assert.match(model, /Harness: Claude Code/);
-  // Only the model is cleared: no Harness default stands in, the field asks again.
-  assert.match(model, /‹ \(choose a model\) ›/);
-  assert.match(model, /Run not started/);
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Launch inputs"));
-  assert.match(t.captureCharFrame(), /hi/);
-});
+}
 
 test("an unavailable Harness names its reason and remediation, cannot continue, and relayouts after resize", async () => {
   const harnesses = harnessCatalog([
@@ -1254,17 +1226,19 @@ test("[start-run-checking] while models are checked the step says so and holds C
   assert.doesNotMatch(held, /Review/);
 
   harnesses.settle("codex");
-  await t.waitForFrame((frame) => frame.includes("‹ gpt-5 ›"));
+  await t.waitForFrame((frame) => frame.includes("Model choices loaded"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("› gpt-5 [current]"));
   const settled = t.captureCharFrame();
   assert.match(settled, /Qualified/);
   // The field opens on the preselection and names where it came from.
   assert.match(settled, /Starts from gpt-5 at high effort/);
   assert.match(settled, /From your Codex settings/);
   assert.doesNotMatch(settled, /Checking models/);
-  assert.match(settled, /gpt-5-codex, gpt-5/);
-  assert.match(settled, /←\/→ model · enter continue · esc choose another/);
+  assert.match(settled, /gpt-5-codex/);
+  assert.match(settled, /↑\/↓ move · enter choose/);
 
-  t.mockInput.pressEnter(); // Continue is offered now → Review
+  await chooseGuided(t); // Model then effort → Review
   await t.waitForFrame((frame) => frame.includes("Review"));
   assert.match(t.captureCharFrame(), /Harness: Codex \(codex\)/);
 });
@@ -1288,12 +1262,16 @@ test("[start-run-checking] a free-text Harness mounts no model field until its c
   await t.renderOnce();
 
   harnesses.settle("claude-code");
-  await t.waitForFrame((frame) => frame.includes("Type an exact model name"));
+  await t.waitForFrame((frame) => frame.includes("Model choices loaded"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("Other… exact model name"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("enter accept"));
   t.mockInput.pressKey("o");
   t.mockInput.pressKey("4");
   await t.waitForFrame((frame) => frame.includes("o4"));
   assert.doesNotMatch(t.captureCharFrame(), /oo4/);
-  assert.match(t.captureCharFrame(), /enter continue/);
+  assert.match(t.captureCharFrame(), /enter accept/);
 });
 
 test("[start-run-checking] an unavailable Harness says so only once its check finishes, and still cannot continue", async () => {
@@ -1484,102 +1462,6 @@ test("[start-run-highlight] a click moves the highlight on both lists without ch
   assert.deepEqual(harnesses.focusCalls, ["codex"]);
 });
 
-test("[start-run-model-choice] a list Harness opens on the preselected model, names its source, offers only its models, and the draft carries a changed model", async () => {
-  const launch = fakeLaunch();
-  const harnesses = harnessCatalog([
-    {
-      id: "claude-code",
-      name: "Claude Code",
-      models: ["claude-sonnet", "claude-opus"],
-      preselection: {
-        choice: { model: "claude-opus", effort: "high" },
-        source: { kind: "reported" },
-      },
-    },
-    { id: "codex", name: "Codex", models: "free-text" },
-  ]);
-  const { t } = await mountFlow(
-    catalog([AGENT_ALPHA]),
-    launch.view,
-    100,
-    40,
-    noRunView(),
-    harnesses.view,
-  );
-  t.mockInput.pressEnter(); // Bundle → Harness
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
-  assert.deepEqual(harnesses.focusCalls, []); // spawn-free until chosen
-  t.mockInput.pressEnter(); // choose Claude Code (highlighted first)
-  await t.waitForFrame((frame) => frame.includes("Model"));
-  assert.deepEqual(harnesses.focusCalls, ["claude-code"]);
-  const model = t.captureCharFrame();
-  assert.match(model, /‹ claude-opus ›/);
-  assert.match(model, /claude-sonnet, claude-opus/);
-  assert.match(model, /Starts from claude-opus at high effort/);
-  assert.match(model, /From your Claude Code settings/);
-  assert.doesNotMatch(model, /Harness default/);
-
-  t.mockInput.pressArrow("right"); // claude-opus → claude-sonnet (wraps)
-  await t.waitForFrame((frame) => /‹ claude-sonnet ›/.test(frame));
-  t.mockInput.pressEnter(); // → review
-  await t.waitForFrame((frame) => frame.includes("Review"));
-  const review = t.captureCharFrame();
-  assert.match(review, /Model choice: claude-sonnet/);
-  assert.match(review, /Your choice for this launch/);
-  t.mockInput.pressEnter(); // Start
-  await t.waitForFrame((frame) => frame.includes("Checking launch"));
-  assert.equal(launch.calls[0]?.requestedModel, "claude-sonnet");
-});
-
-test("[start-run-model-choice] a free-text Harness accepts a typed model, and blank starts from the preselection", async () => {
-  const launch = fakeLaunch();
-  const harnesses = harnessCatalog([
-    {
-      id: "claude-code",
-      name: "Claude Code",
-      models: "free-text",
-      preselection: {
-        choice: { model: "opus", effort: "medium" },
-        source: {
-          kind: "fallback",
-          reason: "Claude Code's own settings were not read before launch.",
-        },
-      },
-    },
-  ]);
-  const { t } = await mountFlow(
-    catalog([AGENT_ALPHA]),
-    launch.view,
-    100,
-    40,
-    noRunView(),
-    harnesses.view,
-  );
-  t.mockInput.pressEnter(); // Bundle → Harness
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
-  t.mockInput.pressEnter(); // choose the only Harness → model phase
-  await t.waitForFrame((frame) =>
-    frame.includes("leave blank to start from opus"),
-  );
-  // The fallback names its reason and what it starts with.
-  assert.match(
-    t.captureCharFrame(),
-    /Claude Code's own settings were not read before launch\. Starting with opus and medium effort\./,
-  );
-  // Type a free-text model, then a trailing space: the stored model is trimmed so
-  // the launch (which matches the model verbatim) never sees stray whitespace.
-  t.mockInput.pressKey("o");
-  t.mockInput.pressKey("4");
-  t.mockInput.pressKey(" ");
-  await t.waitForFrame((frame) => frame.includes("o4"));
-  t.mockInput.pressEnter(); // → review
-  await t.waitForFrame((frame) => frame.includes("Review"));
-  assert.match(t.captureCharFrame(), /Model choice: o4/);
-  t.mockInput.pressEnter(); // Start
-  await t.waitForFrame((frame) => frame.includes("Checking launch"));
-  assert.equal(launch.calls[0]?.requestedModel, "o4");
-});
-
 const FALLBACK_CLAUDE: HarnessSpec = {
   id: "claude-code",
   name: "Claude Code",
@@ -1607,7 +1489,7 @@ for (const [width, height] of [
   [60, 24],
   [140, 44],
 ] as const) {
-  test(`[start-run-preselection] at ${width}x${height} the model field shows the preselected choice and its fallback reason in words, wrapped without clipping`, async () => {
+  test(`[start-run-preselection] at ${width}x${height} the guided model list shows the preselected choice and its fallback reason in words, wrapped without clipping`, async () => {
     const { t } = await mountFlow(
       catalog([AGENT_ALPHA]),
       fakeLaunch().view,
@@ -1619,7 +1501,7 @@ for (const [width, height] of [
     t.mockInput.pressEnter(); // Bundle → Harness
     await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
     t.mockInput.pressEnter(); // choose Claude Code
-    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+    await t.waitForFrame((frame) => frame.includes("› opus [current]"));
     // A character frame carries no colour: the current value and the source are
     // read from the words alone.
     const frame = t.captureCharFrame();
@@ -1630,7 +1512,7 @@ for (const [width, height] of [
       );
     }
     const text = words(frame);
-    assert.match(text, /‹ opus ›/);
+    assert.match(text, /› opus \[current\]/);
     assert.match(text, /Starts from opus at medium effort/);
     assert.match(
       text,
@@ -1639,50 +1521,6 @@ for (const [width, height] of [
     assert.doesNotMatch(text, /Harness default/);
   });
 }
-
-test("[start-run-preselection] a changed model and the model focus survive a resize and a trip back to the Harness list", async () => {
-  const launch = fakeLaunch();
-  const { t } = await mountFlow(
-    catalog([AGENT_ALPHA]),
-    launch.view,
-    140,
-    44,
-    noRunView(),
-    harnessCatalog([FALLBACK_CLAUDE]).view,
-  );
-  t.mockInput.pressEnter(); // Bundle → Harness
-  await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
-  t.mockInput.pressEnter(); // choose Claude Code
-  await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
-  t.mockInput.pressArrow("right"); // opus → sonnet
-  await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
-
-  t.resize(60, 24);
-  await t.waitForFrame((frame) => frame.includes("Starts from"));
-  const narrow = t.captureCharFrame();
-  for (const line of narrow.split("\n")) {
-    assert.ok(line.length <= 60, `overflow at 60: ${JSON.stringify(line)}`);
-  }
-  assert.match(narrow, /‹ sonnet ›/, "the choice survives the resize");
-  // The preselection stays named: the launch would start from it unchanged.
-  assert.match(words(narrow), /Starts from opus at medium effort/);
-  // Focus stayed on the model field: ←/→ still cycles it.
-  t.mockInput.pressArrow("left");
-  await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
-  t.mockInput.pressArrow("left");
-  await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
-
-  // Esc returns to the list; choosing the same Harness keeps the choice.
-  t.mockInput.pressEscape();
-  await until(() => t.captureCharFrame().includes("enter choose"));
-  t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
-  t.mockInput.pressEnter(); // → review
-  await t.waitForFrame((frame) => frame.includes("Review"));
-  t.mockInput.pressEnter(); // Start
-  await t.waitForFrame((frame) => frame.includes("Checking launch"));
-  assert.equal(launch.calls[0]?.requestedModel, "sonnet");
-});
 
 test("[start-run-preselection] the review names the resolved preselection and its source once the assessment settles", async () => {
   const prep = controlledPreparation();
@@ -1698,8 +1536,8 @@ test("[start-run-preselection] the review names the resolved preselection and it
   t.mockInput.pressEnter(); // Bundle → Harness
   await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
   t.mockInput.pressEnter(); // choose Claude Code
-  await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
-  t.mockInput.pressEnter(); // keep the preselection → review
+  await t.waitForFrame((frame) => frame.includes("› opus [current]"));
+  await chooseGuided(t); // keep the preselection → review
   await t.waitForFrame((frame) => frame.includes("Review"));
   // While assessing, the review says so rather than guessing a choice.
   assert.match(t.captureCharFrame(), /Model choice: checking…/);
@@ -1726,20 +1564,21 @@ test("a Command-only Bundle asks for neither Harness nor model and numbers its s
   assert.equal(launch.calls[0]?.requestedModel, undefined);
 });
 
-test("an Agent Bundle with inputs numbers Bundle, Harness, Inputs, Review as N of 4", async () => {
+test("an Agent Bundle with inputs numbers Bundle, Harness, Inputs, Model choice, Review as N of 5", async () => {
   const { t } = await mountFlow(catalog([AGENT_BETA]), fakeLaunch().view);
-  assert.match(t.captureCharFrame(), /Step 1 of 4/); // Bundle
+  assert.match(t.captureCharFrame(), /Step 1 of 5/);
   t.mockInput.pressEnter();
   await t.waitForFrame((f) => f.includes("Choose a Harness"));
-  assert.match(t.captureCharFrame(), /Step 2 of 4/); // Harness
-  t.mockInput.pressEnter(); // choose Claude Code → model
-  await t.waitForFrame((f) => f.includes("esc choose another"));
-  t.mockInput.pressEnter(); // → inputs
+  assert.match(t.captureCharFrame(), /Step 2 of 5/);
+  t.mockInput.pressEnter();
   await t.waitForFrame((f) => f.includes("Launch inputs"));
-  assert.match(t.captureCharFrame(), /Step 3 of 4/); // Inputs
-  t.mockInput.pressEnter(); // → review
+  assert.match(t.captureCharFrame(), /Step 3 of 5/);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  assert.match(t.captureCharFrame(), /Step 4 of 5/);
+  await chooseGuided(t);
   await t.waitForFrame((f) => f.includes("Review"));
-  assert.match(t.captureCharFrame(), /Step 4 of 4/); // Review
+  assert.match(t.captureCharFrame(), /Step 5 of 5/);
 });
 
 test("pending feedback then a transition into the Workbench for the Run id; a trusted launch carries no trustDigest", async () => {
@@ -2552,7 +2391,7 @@ for (const [width, height] of [
     t.mockInput.pressEnter();
     await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
     t.mockInput.pressEnter();
-    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+    await t.waitForFrame((frame) => frame.includes("› opus [current]"));
     const frame = t.captureCharFrame();
     assert.match(words(frame), /Your last choice for Claude Code/);
     for (const line of frame.split("\n")) assert.ok(line.length <= width);
@@ -2584,8 +2423,8 @@ for (const [width, height] of [
     t.mockInput.pressEnter();
     await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
     t.mockInput.pressEnter();
-    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
-    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("› opus [current]"));
+    await chooseGuided(t);
     await t.waitForFrame((frame) => frame.includes("Review"));
     prep.settle("ready", [], {
       model: "opus",
@@ -2665,7 +2504,7 @@ for (const [width, height] of [
     t.mockInput.pressEnter();
     await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
     t.mockInput.pressEnter();
-    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+    await t.waitForFrame((frame) => frame.includes("› opus [current]"));
     const sentence =
       "Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh. Change that setting outside Secant.";
     assert.ok(words(t.captureCharFrame()).includes(sentence));
@@ -2673,18 +2512,735 @@ for (const [width, height] of [
       words(t.captureCharFrame()),
       /Starts from opus at xhigh effort/,
     );
-    t.mockInput.pressArrow("right");
-    await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
+    t.mockInput.pressArrow("down");
+    await t.waitForFrame((frame) => frame.includes("› sonnet"));
     t.resize(width === 60 ? 140 : 60, width === 60 ? 44 : 24);
     await t.renderOnce();
     assert.ok(words(t.captureCharFrame()).includes(sentence));
-    assert.match(words(t.captureCharFrame()), /‹ sonnet ›/);
-    t.mockInput.pressEnter();
+    assert.match(words(t.captureCharFrame()), /› sonnet/);
+    await chooseGuided(t);
     await t.waitForFrame((frame) => frame.includes("Review"));
     const review = words(t.captureCharFrame());
     assert.match(review, /Model choice: sonnet at xhigh effort/);
     assert.ok(review.includes(sentence));
     for (const line of t.captureCharFrame().split("\n"))
       assert.ok(line.length <= (width === 60 ? 140 : 60));
+  });
+}
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`[start-run-guided] Codex opens on its preselection and resets to the chosen model's reported default through review at ${width}x${height}`, async () => {
+    const harnesses = harnessCatalog([
+      {
+        id: "codex",
+        name: "Codex",
+        declaration: {
+          kind: "list",
+          models: [
+            {
+              model: "fast",
+              label: "Fast",
+              efforts: ["low", "medium"],
+              defaultEffort: "medium",
+            },
+            {
+              model: "deep",
+              label: "Deep",
+              efforts: ["high", "xhigh"],
+              defaultEffort: "high",
+            },
+          ],
+        },
+        preselection: {
+          choice: { model: "deep", effort: "xhigh" },
+          source: { kind: "reported" },
+        },
+      },
+    ]);
+    const launch = fakeLaunch();
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      launch.view,
+      width,
+      height,
+      noRunView(),
+      harnesses.view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    assert.match(words(t.captureCharFrame()), /› Deep · deep \[current\]/);
+    assert.match(words(t.captureCharFrame()), /From your Codex settings/);
+    assert.doesNotMatch(t.captureCharFrame(), /Other/);
+    t.mockInput.pressArrow("up");
+    await t.waitForFrame((f) => f.includes("› Fast"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("2. Choose effort"));
+    const reset =
+      "fast does not offer xhigh effort. Effort changed to medium, its default.";
+    assert.ok(words(t.captureCharFrame()).includes(reset));
+    assert.match(
+      words(t.captureCharFrame()),
+      /› medium \[current\] \(default\)/,
+    );
+    assert.doesNotMatch(t.captureCharFrame(), /xhigh \[current\]/);
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.ok(words(t.captureCharFrame()).includes(reset));
+    assert.match(
+      words(t.captureCharFrame()),
+      /Model choice: Fast · fast at medium effort/,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Checking launch"));
+    assert.equal(launch.calls[0]?.requestedModel, "fast");
+    assert.equal(launch.calls[0]?.requestedEffort, "medium");
+  });
+}
+
+const GUIDED_CLAUDE: HarnessSpec = {
+  id: "claude-code",
+  name: "Claude Code",
+  declaration: {
+    kind: "suggested",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    models: [
+      ["fable", "Fable (latest)"],
+      ["opus", "Opus (latest)"],
+      ["sonnet", "Sonnet (latest)"],
+      ["haiku", "Haiku (latest)"],
+      ["default", "Default"],
+      ["opusplan", "Opus Plan"],
+      ["opus[1m]", "Opus (latest) with 1M context"],
+      ["sonnet[1m]", "Sonnet (latest) with 1M context"],
+    ].map(([model = "", label = ""]) => ({
+      model,
+      label,
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    })),
+  },
+  preselection: {
+    choice: { model: "opus", effort: "medium" },
+    source: { kind: "reported" },
+  },
+};
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`[start-run-guided] Claude suggestions and native Other input accept a non-empty exact name and cancel at ${width}x${height}`, async () => {
+    const launch = fakeLaunch();
+    const { t, exits } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      launch.view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([GUIDED_CLAUDE]).view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    const list = words(t.captureCharFrame());
+    for (const label of [
+      "Fable (latest)",
+      "Opus (latest)",
+      "Sonnet (latest)",
+      "Haiku (latest)",
+      "Default",
+      "Opus Plan",
+      "Opus (latest) with 1M context",
+      "Sonnet (latest) with 1M context",
+    ])
+      assert.ok(list.includes(label), label);
+    assert.match(list, /› Opus \(latest\) · opus \[current\]/);
+    t.mockInput.pressKey("\u001b[6~");
+    await t.waitForFrame((f) => f.includes("› Other…"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("enter accept"));
+    t.mockInput.pressEnter(); // Empty is held.
+    await t.renderOnce();
+    assert.match(t.captureCharFrame(), /enter accept/);
+    await t.mockInput.typeText("cancelled-name");
+    t.mockInput.pressEscape();
+    await until(() => t.captureCharFrame().includes("› Opus (latest)"));
+    assert.doesNotMatch(t.captureCharFrame(), /cancelled-name/);
+    t.mockInput.pressKey("\u001b[6~");
+    await t.waitForFrame((f) => f.includes("› Other…"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("enter accept"));
+    await t.mockInput.typeText("qa "); // q is text here, and whitespace trims at acceptance.
+    t.mockInput.pressArrow("left"); // Native cursor edits, not model cycling.
+    t.mockInput.pressKey("2");
+    await t.waitForFrame((f) => f.includes("qa2"));
+    t.resize(width === 60 ? 140 : 60, width === 60 ? 44 : 24);
+    await t.renderOnce();
+    assert.match(t.captureCharFrame(), /qa2/);
+    assert.deepEqual(exits, []);
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("2. Choose effort"));
+    assert.match(t.captureCharFrame(), /› medium \[current\]/);
+    for (const effort of ["low", "medium", "high", "xhigh", "max"])
+      assert.ok(t.captureCharFrame().includes(effort));
+    t.mockInput.pressArrow("down");
+    await t.waitForFrame((f) => f.includes("› high"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.match(
+      words(t.captureCharFrame()),
+      /Model choice: qa2 at high effort/,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Checking launch"));
+    assert.equal(launch.calls[0]?.requestedModel, "qa2");
+    assert.equal(launch.calls[0]?.requestedEffort, "high");
+  });
+
+  test(`[start-run-guided] no-effort acknowledgment and switching back re-enable effort at ${width}x${height}`, async () => {
+    const harness: HarnessSpec = {
+      id: "codex",
+      name: "Codex",
+      declaration: {
+        kind: "list",
+        models: [
+          {
+            model: "thinking",
+            label: "Thinking",
+            efforts: ["low", "high"],
+            defaultEffort: "high",
+          },
+          { model: "plain", label: "Plain", efforts: [] },
+        ],
+      },
+      preselection: {
+        choice: { model: "thinking", effort: "high" },
+        source: { kind: "reported" },
+      },
+    };
+    const launch = fakeLaunch();
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      launch.view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([harness]).view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    t.mockInput.pressArrow("down");
+    await t.waitForFrame((f) => f.includes("› Plain"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("2. Choose effort"));
+    assert.match(
+      words(t.captureCharFrame()),
+      /This model has no effort setting. Not available./,
+    );
+    assert.match(t.captureCharFrame(), /enter acknowledge/);
+    t.mockInput.pressArrow("down");
+    await t.renderOnce();
+    assert.doesNotMatch(t.captureCharFrame(), /Review/);
+    t.mockInput.pressEscape();
+    await until(() => t.captureCharFrame().includes("1. Choose a model"));
+    t.mockInput.pressArrow("up");
+    await t.waitForFrame((f) => f.includes("› Thinking"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("2. Choose effort"));
+    assert.doesNotMatch(t.captureCharFrame(), /Not available/);
+    assert.match(t.captureCharFrame(), /› high \[current\] \(default\)/);
+    t.mockInput.pressArrow("up");
+    await t.waitForFrame((f) => f.includes("› low"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.match(
+      words(t.captureCharFrame()),
+      /Thinking · thinking at low effort/,
+    );
+    // Back returns to effort, Esc then returns to model with the choice intact.
+    t.mockInput.pressEscape();
+    await until(() => t.captureCharFrame().includes("2. Choose effort"));
+    assert.match(t.captureCharFrame(), /› low \[current\]/);
+    t.mockInput.pressEscape();
+    await until(() => t.captureCharFrame().includes("1. Choose a model"));
+    t.mockInput.pressArrow("down");
+    await t.waitForFrame((f) => f.includes("› Plain"));
+    await chooseGuided(t);
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.match(words(t.captureCharFrame()), /Model choice: Plain · plain/);
+    assert.match(
+      words(t.captureCharFrame()),
+      /This model has no effort setting. Not available./,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Checking launch"));
+    assert.equal(launch.calls[0]?.requestedModel, "plain");
+    assert.equal(launch.calls[0]?.requestedEffort, undefined);
+  });
+
+  test(`[start-run-guided] lock disables effort, requires acknowledgment and stays fixed across model changes at ${width}x${height}`, async () => {
+    const lock = { effort: "xhigh", source: "CLAUDE_CODE_EFFORT_LEVEL=xhigh" };
+    const harness: HarnessSpec = {
+      ...GUIDED_CLAUDE,
+      preselection: {
+        choice: { model: "opus", effort: "xhigh" },
+        source: { kind: "reported" },
+        effortLock: lock,
+      },
+    };
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([harness]).view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    t.mockInput.pressArrow("down");
+    await t.waitForFrame((f) => f.includes("› Sonnet"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("2. Choose effort"));
+    const sentence =
+      "Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh. Change that setting outside Secant.";
+    assert.ok(words(t.captureCharFrame()).includes(sentence));
+    assert.match(words(t.captureCharFrame()), /xhigh \[current\] \(locked\)/);
+    t.mockInput.pressArrow("up");
+    t.mockInput.pressKey("\u001b[6~");
+    await t.renderOnce();
+    assert.match(words(t.captureCharFrame()), /xhigh \[current\] \(locked\)/);
+    assert.doesNotMatch(t.captureCharFrame(), /Review/);
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.match(
+      words(t.captureCharFrame()),
+      /Sonnet \(latest\) · sonnet at xhigh effort/,
+    );
+  });
+
+  test(`[start-run-guided] long model lists page, wrap and preserve focus through resize and back navigation at ${width}x${height}`, async () => {
+    const harness: HarnessSpec = {
+      id: "codex",
+      name: "Codex",
+      declaration: {
+        kind: "list",
+        models: Array.from({ length: 70 }, (_, index) => ({
+          model: `model-${index}`,
+          label: `Choice ${index} with a long friendly label that wraps across the small terminal`,
+          efforts: ["low", "high"],
+          defaultEffort: "high",
+        })),
+      },
+      preselection: {
+        choice: { model: "model-35", effort: "high" },
+        source: { kind: "last-choice" },
+      },
+    };
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([harness]).view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    assert.match(words(t.captureCharFrame()), /› Choice 35/);
+    assert.match(words(t.captureCharFrame()), /model-35 \[current\]/);
+    t.mockInput.pressKey("\u001b[6~");
+    await t.waitForFrame((f) => !f.includes("› Choice 35"));
+    assert.doesNotMatch(t.captureCharFrame(), /› Choice 35/);
+    t.mockInput.pressKey("\u001b[5~");
+    await t.waitForFrame((f) => f.includes("› Choice 35"));
+    t.mockInput.pressArrow("down");
+    await t.waitForFrame((f) => f.includes("› Choice 36"));
+    t.resize(width === 60 ? 140 : 60, width === 60 ? 44 : 24);
+    await t.renderOnce();
+    assert.match(words(t.captureCharFrame()), /› Choice 36/);
+    assert.match(
+      words(t.captureCharFrame()),
+      /friendly label that wraps across the small terminal/,
+    );
+    for (const line of t.captureCharFrame().split("\n"))
+      assert.ok(line.length <= (width === 60 ? 140 : 60));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("2. Choose effort"));
+    t.mockInput.pressEscape();
+    await until(() => t.captureCharFrame().includes("1. Choose a model"));
+    assert.match(words(t.captureCharFrame()), /› Choice 36/);
+    assert.match(words(t.captureCharFrame()), /model-36 \[current\]/);
+    t.mockInput.pressEscape();
+    await until(() => t.captureCharFrame().includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    assert.match(words(t.captureCharFrame()), /model-36 \[current\]/);
+  });
+}
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`[start-run-guided] qualification holds the guided effort stage and fresh checks hold Start at ${width}x${height}`, async () => {
+    const harnesses = checkingHarnessCatalog([GUIDED_CLAUDE]);
+    const prep = controlledPreparation();
+    const launch = fakeLaunch();
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      launch.view,
+      width,
+      height,
+      noRunView(),
+      harnesses.view,
+      prep.view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) =>
+      words(f).includes(
+        "Checking the Harness and loading model choices… Please wait.",
+      ),
+    );
+    for (const key of [
+      "RETURN",
+      "ARROW_UP",
+      "ARROW_DOWN",
+      "\u001b[5~",
+      "\u001b[6~",
+    ])
+      t.mockInput.pressKey(key);
+    await t.renderOnce();
+    assert.match(t.captureCharFrame(), /Choose a Harness/);
+    assert.doesNotMatch(t.captureCharFrame(), /Other|2. Choose effort|Review/);
+    harnesses.settle("claude-code");
+    await t.waitForFrame((f) => f.includes("Model choices loaded"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("2. Choose effort"));
+    harnesses.hold("claude-code");
+    await t.waitForFrame((f) =>
+      words(f).includes(
+        "Checking the Harness and loading model choices… Please wait.",
+      ),
+    );
+    for (const key of [
+      "RETURN",
+      "ARROW_UP",
+      "ARROW_DOWN",
+      "\u001b[5~",
+      "\u001b[6~",
+    ])
+      t.mockInput.pressKey(key);
+    await t.renderOnce();
+    assert.match(t.captureCharFrame(), /2. Choose effort/);
+    assert.doesNotMatch(t.captureCharFrame(), /Review/);
+    assert.equal(launch.calls.length, 0);
+    harnesses.settle("claude-code");
+    await t.waitForFrame((f) => f.includes("› medium [current]"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.ok(
+      words(t.captureCharFrame()).includes(
+        "Checking the Harness and loading model choices… Please wait.",
+      ),
+    );
+    for (const key of [
+      "RETURN",
+      "ARROW_UP",
+      "ARROW_DOWN",
+      "\u001b[5~",
+      "\u001b[6~",
+    ])
+      t.mockInput.pressKey(key);
+    await t.renderOnce();
+    assert.equal(launch.calls.length, 0);
+    prep.settle("ready", [], {
+      model: "opus",
+      effort: "medium",
+      source: { kind: "reported" },
+    });
+    await t.waitForFrame((f) => f.includes("Ready to start"));
+    assert.match(words(t.captureCharFrame()), /From your Claude Code settings/);
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Checking launch"));
+    assert.equal(launch.calls.length, 1);
+  });
+
+  test(`[start-run-guided] unchanged preselection and preference notice survive review without requested flags at ${width}x${height}`, async () => {
+    const notice =
+      "Secant could not read your last choice. The Harness settings are shown.";
+    const harness: HarnessSpec = {
+      ...GUIDED_CLAUDE,
+      preferenceNotice: notice,
+      preselection: {
+        choice: { model: "opus", effort: "medium" },
+        source: { kind: "last-choice" },
+      },
+    };
+    const drafts: LaunchRunInput[] = [];
+    const prep = controlledPreparation();
+    const preparationView: LaunchPreparationView = {
+      open(draft) {
+        drafts.push(draft);
+        return prep.view.open(draft);
+      },
+    };
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([harness]).view,
+      preparationView,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    assert.ok(words(t.captureCharFrame()).includes(notice));
+    await chooseGuided(t);
+    await t.waitForFrame((f) => f.includes("Review"));
+    assert.equal(drafts[0]?.requestedModel, undefined);
+    assert.equal(drafts[0]?.requestedEffort, undefined);
+    prep.settle(
+      "ready",
+      [],
+      {
+        model: "opus",
+        effort: "medium",
+        source: { kind: "last-choice" },
+      },
+      notice,
+    );
+    await t.waitForFrame((f) =>
+      words(f).includes("Your last choice for Claude Code"),
+    );
+    assert.ok(words(t.captureCharFrame()).includes(notice));
+    assert.match(
+      words(t.captureCharFrame()),
+      /Opus \(latest\) · opus at medium effort/,
+    );
+  });
+}
+
+test("[start-run-guided] a supported effort survives a model change and the same Harness's refusal round-trip", async () => {
+  const harness: HarnessSpec = {
+    id: "codex",
+    name: "Codex",
+    declaration: {
+      kind: "list",
+      models: [
+        {
+          model: "first",
+          label: "First",
+          efforts: ["low", "high"],
+          defaultEffort: "low",
+        },
+        {
+          model: "second",
+          label: "Second",
+          efforts: ["low", "high"],
+          defaultEffort: "low",
+        },
+      ],
+    },
+    preselection: {
+      choice: { model: "first", effort: "high" },
+      source: { kind: "reported" },
+    },
+  };
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    launch.view,
+    60,
+    24,
+    noRunView(),
+    harnessCatalog([harness]).view,
+  );
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› Second"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  assert.match(t.captureCharFrame(), /› high \[current\]/);
+  assert.doesNotMatch(t.captureCharFrame(), /Effort changed/);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Review"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Checking launch"));
+  launch.resolve({
+    kind: "refused",
+    problem: {
+      code: "harness-not-ready",
+      explanation: "Harness temporarily unavailable.",
+      remediation: "Choose again.",
+      possibleEffects: "none",
+      correction: "harness",
+    },
+  });
+  await t.waitForFrame((f) => f.includes("Run not started"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  assert.match(t.captureCharFrame(), /› Second · second \[current\]/);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  assert.match(t.captureCharFrame(), /› high \[current\]/);
+});
+
+test("[start-run-guided] correcting a refused model preserves a non-default supported effort", async () => {
+  const harness: HarnessSpec = {
+    id: "codex",
+    name: "Codex",
+    declaration: {
+      kind: "list",
+      models: [
+        {
+          model: "first",
+          label: "First",
+          efforts: ["medium", "high"],
+          defaultEffort: "medium",
+        },
+        {
+          model: "second",
+          label: "Second",
+          efforts: ["medium", "high"],
+          defaultEffort: "medium",
+        },
+      ],
+    },
+    preselection: {
+      choice: { model: "first", effort: "medium" },
+      source: { kind: "reported" },
+    },
+  };
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    launch.view,
+    60,
+    24,
+    noRunView(),
+    harnessCatalog([harness]).view,
+  );
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› high"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Review"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Checking launch"));
+  launch.resolve({
+    kind: "refused",
+    problem: {
+      code: "model-unavailable",
+      explanation: "Choose another model.",
+      remediation: "Try again.",
+      possibleEffects: "none",
+      correction: "model",
+    },
+  });
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› Second"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  assert.match(t.captureCharFrame(), /› high \[current\]/);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Review"));
+  launch.resolve({ kind: "pending" });
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Checking launch"));
+  assert.equal(launch.calls[1]?.requestedModel, "second");
+  assert.equal(launch.calls[1]?.requestedEffort, "high");
+});
+
+for (const content of ["label", "reason"] as const) {
+  test(`[start-run-guided] paging makes every line of an overflowing ${content} reachable at 60x24`, async () => {
+    const long = Array.from({ length: 200 }, (_, i) => `word${i}`).join(" ");
+    const harness: HarnessSpec = {
+      id: "codex",
+      name: "Codex",
+      preferenceNotice:
+        content === "reason" ? `${long} END_OF_REASON` : undefined,
+      declaration: {
+        kind: "list",
+        models: [
+          {
+            model: "first",
+            label: "First",
+            efforts: ["high"],
+            defaultEffort: "high",
+          },
+          {
+            model: "second",
+            label:
+              content === "label" ? `${long} END_OF_MODEL_LABEL` : "Second",
+            efforts: ["high"],
+            defaultEffort: "high",
+          },
+        ],
+      },
+      preselection: {
+        choice: { model: "first", effort: "high" },
+        source: { kind: "reported" },
+      },
+    };
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      60,
+      24,
+      noRunView(),
+      harnessCatalog([harness]).view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((f) => f.includes("1. Choose a model"));
+    if (content === "label") {
+      t.mockInput.pressArrow("down");
+      await t.waitForFrame((f) => f.includes("› word0"));
+    }
+    let seen = false;
+    for (let page = 0; page < 12; page++) {
+      t.mockInput.pressKey("\u001b[6~");
+      await t.renderOnce();
+      if (
+        t
+          .captureCharFrame()
+          .includes(
+            content === "label" ? "END_OF_MODEL_LABEL" : "END_OF_REASON",
+          )
+      ) {
+        seen = true;
+        break;
+      }
+    }
+    assert.ok(seen, `the ${content}'s last line is reachable`);
   });
 }
