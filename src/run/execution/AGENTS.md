@@ -42,11 +42,13 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Interrupt waits `blocked`, a `lost` Turn halts. A signal also settles a live Turn `interrupted` without throwing, so the aborted signal, not the result
   kind, keeps it halting (ADR 0019).
 - `runRepeatGroup` has two branches (#217): the Verdict-driven one re-reads `until` after each iteration and blocks at the Review cadence; the human-controlled
-  one (`control: "human"`) reads no Verdict and raises no checkpoint, resting `blocked` at each iteration's interactive Step. Neither reads agent text to choose the exit.
+  one (`control: "human"`) reads no Verdict and raises no Gate, resting `blocked` at each iteration's interactive Step. Neither reads agent text to choose the exit.
 - `interactiveEndLegality` owns the ending controls' rules, shared by Application settlement and Offers: End Step outside a human-controlled Repeat,
   Continue or End Stage inside one, all only at a Turn boundary. A live Turn takes precedence over a position mismatch. Callers confirm the active Step
   and supply Turn liveness; Application includes its in-flight promise, while the Projection uses durable Turn records.
-  Calls require a live Turn and the current Step's opt-in; Agent Continue and stage done remain refused until #373.
+  Calls require a live Turn and the current Step's opt-in. In a human-controlled group the predicate derives the consecutive agent Continues from the
+  Step's settled Attempt log (a person's Continue resets it; failed Attempts and other Steps neither count nor reset) and answers the step done past
+  the group's Review checkpoint `held-for-review`, writing nothing: the held call simply never applies. Stage done is never held (#373).
   Confirmed End Stage publishes the iteration's Attempt marked `endsStage`, so the walk exits the group once (#218).
 - Session tool unions follow actual sharing: `fresh` and Interactive Repeat Sessions get only their own Step's calls (#372).
 - Each Repeat iteration of an Interactive Step is its own Attempt (`encodeAttemptId` carries the iteration) with its own Session (`attemptSession` scopes the

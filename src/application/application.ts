@@ -1239,8 +1239,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
         const legality = interactiveEndLegality({
           routing: params.routing,
           step,
-          control: "step_done",
+          control: pending.call.id,
           turnLive: true,
+          attemptLog: params.owner.attemptLog(),
         });
         if (legality.kind !== "legal") break;
         await publishInteractiveEnd({
@@ -1248,7 +1249,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           owner: params.executionOwner,
           tracking: params.tracking,
           attemptId: target.attemptId,
-          endsStage: false,
+          endsStage: pending.call.id === "stage_done",
           endedBy: "agent",
         });
         // The first walk consumed the follow-up and transferred its Harness.
@@ -3274,12 +3275,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
       step: begun.step,
       control,
       turnLive: interactiveTurnLive(begun.tracking, begun.owner),
+      attemptLog: begun.owner.attemptLog(),
     });
     if (legality.kind !== "legal") {
       return Promise.resolve({
         status: "not-applied",
         problem:
-          legality.reason === "mid-turn"
+          legality.kind === "refused" && legality.reason === "mid-turn"
             ? interactiveStepMidTurn(input.runId, begun.step.id)
             : interactiveControlMismatch(input.runId, begun.step.id, control),
       });

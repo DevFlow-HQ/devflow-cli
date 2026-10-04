@@ -350,12 +350,21 @@ export function inHumanRepeat(
   routing: readonly RoutingNode[],
   stepId: string,
 ): boolean {
-  return routing.some(
-    (node) =>
+  return humanRepeatOf(routing, stepId) !== undefined;
+}
+
+function humanRepeatOf(
+  routing: readonly RoutingNode[],
+  stepId: string,
+): HumanRepeat | undefined {
+  for (const node of routing)
+    if (
       "repeat" in node &&
       "control" in node.repeat &&
-      node.repeat.steps.some((step) => step.id === stepId),
-  );
+      node.repeat.steps.some((step) => step.id === stepId)
+    )
+      return node.repeat;
+  return undefined;
 }
 
 /** Resolve authored opt-in at the Step's position. Composition rejects explicit
@@ -371,6 +380,28 @@ export function agentCompletionCalls(
     ? []
     : step.agentCompletion;
 }
+
+/** The human-controlled group's resolved Review checkpoint (ADR 0032): the
+ *  authored cadence of consecutive agent Continues, or 100 with no ceiling, and the
+ *  authored message or Secant's. Undefined outside a human-controlled group. */
+export function humanReviewCheckpoint(
+  routing: readonly RoutingNode[],
+  stepId: string,
+): { readonly interval: number; readonly message: string } | undefined {
+  const repeat = humanRepeatOf(routing, stepId);
+  if (repeat === undefined) return undefined;
+  const interval =
+    repeat.reviewCheckpoint?.interval ?? DEFAULT_HUMAN_REVIEW_INTERVAL;
+  return {
+    interval,
+    message:
+      repeat.reviewCheckpoint?.message ??
+      `The agent has continued ${interval} Iterations in a row on its own. Review the work, then Continue or End Stage.`,
+  };
+}
+
+/** Unlike the Verdict form's ceiling, an author may set any larger interval. */
+const DEFAULT_HUMAN_REVIEW_INTERVAL = 100;
 
 export interface AuthoredManifest {
   readonly formatVersion: 1;

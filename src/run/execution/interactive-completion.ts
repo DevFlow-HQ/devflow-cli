@@ -2,11 +2,17 @@ import { z } from "zod";
 import {
   agentCompletionCalls,
   flattenSteps,
+  humanReviewCheckpoint,
   inHumanRepeat,
   type RoutingNode,
   type Step,
 } from "../../workflow/workflow.js";
-import type { RunOwner, TurnEventRecord } from "../store/store.js";
+import type {
+  AttemptLogEntry,
+  RunOwner,
+  TurnEventRecord,
+} from "../store/store.js";
+import { decodeAttemptId } from "./attempt-id.js";
 
 type InteractiveEndControl =
   | "end-interactive-step"
@@ -17,12 +23,12 @@ type InteractiveEndControl =
 
 export type InteractiveEndLegality =
   | { readonly kind: "legal" }
+  | { readonly kind: "held-for-review" }
   | {
       readonly kind: "refused";
       readonly reason:
         | "no-live-turn"
         | "call-not-enabled"
-        | "call-not-supported"
         | "mid-turn"
         | "end-step-in-human-repeat"
         | "continue-outside-human-repeat"
@@ -30,17 +36,20 @@ export type InteractiveEndLegality =
     };
 
 /** Legality of the controls that settle an interactive Step. Callers first confirm
- *  the Run is at that Step; Turn liveness includes their own in-flight work. */
+ *  the Run is at that Step; Turn liveness includes their own in-flight work. The
+ *  Attempt log decides whether an agent Continue reaches the Review checkpoint. */
 export function interactiveEndLegality({
   routing,
   step,
   control,
   turnLive,
+  attemptLog,
 }: {
   readonly routing: readonly RoutingNode[];
   readonly step: Pick<Step, "id">;
   readonly control: InteractiveEndControl;
   readonly turnLive: boolean;
+  readonly attemptLog: readonly AttemptLogEntry[];
 }): InteractiveEndLegality {
   if (control === "step_done" || control === "stage_done") {
     if (!turnLive) return { kind: "refused", reason: "no-live-turn" };
@@ -51,14 +60,25 @@ export function interactiveEndLegality({
       !agentCompletionCalls(routing, authored).includes(call)
     )
       return { kind: "refused", reason: "call-not-enabled" };
-    // Agent Continue, End Stage, and checkpoint policy land together in #373.
-    if (control === "stage_done" || inHumanRepeat(routing, step.id))
-      return { kind: "refused", reason: "call-not-supported" };
+    // Stopping is never the runaway case, so stage done is never held (ADR 0032).
+    const checkpoint = humanReviewCheckpoint(routing, step.id);
+    if (
+      control === "step_done" &&
+      checkpoint !== undefined &&
+      consecutiveAgentContinues(attemptLog, step.id) >= checkpoint.interval
+    )
+      return { kind: "held-for-review" };
     return interactiveEndLegality({
       routing,
       step,
-      control: "end-interactive-step",
+      control:
+        control === "stage_done"
+          ? "end-stage"
+          : checkpoint !== undefined
+            ? "continue-repeat"
+            : "end-interactive-step",
       turnLive: false,
+      attemptLog,
     });
   }
   // A raced control reports the live Turn even when its position also mismatches.
@@ -84,6 +104,26 @@ export function interactiveEndLegality({
   }
 }
 
+/** The run of agent Continues since the person's last Continue, read from the
+ *  Step's settled Iterations. Failed Attempts and other Steps neither count nor
+ *  reset it; a human-controlled group holds exactly one interactive Step. */
+function consecutiveAgentContinues(
+  log: readonly AttemptLogEntry[],
+  stepId: string,
+): number {
+  let count = 0;
+  for (const entry of log) {
+    if (
+      decodeAttemptId(entry.attemptId)?.stepId !== stepId ||
+      entry.outcome !== "succeeded" ||
+      entry.endsStage === true
+    )
+      continue;
+    count = entry.endedBy === "agent" ? count + 1 : 0;
+  }
+  return count;
+}
+
 const agentCallSchema = z.object({
   callId: z.string(),
   id: z.string(),
@@ -93,6 +133,7 @@ const agentCallSchema = z.object({
     .refine((reason) => reason.trim().length > 0),
   answer: z.discriminatedUnion("outcome", [
     z.object({ outcome: z.literal("accepted") }),
+    z.object({ outcome: z.literal("held-for-review") }),
     z.object({ outcome: z.literal("refused"), reason: z.string() }),
   ]),
 });
@@ -108,8 +149,32 @@ export function readAgentCallEvent(event: TurnEventRecord) {
   }
 }
 
-/** Only the latest call of the latest Turn can settle an open Attempt. */
+/** Only the latest call of the latest Turn can settle an open Attempt, so an
+ *  earlier accepted call never outlives a later held or refused one. */
 export function latestAgentCall(
+  owner: Pick<RunOwner, "turns" | "turnEvents">,
+  attemptId: string,
+) {
+  const latest = lastTurnCall(owner, attemptId);
+  return latest?.call.answer.outcome === "accepted" ? latest : undefined;
+}
+
+/** The latest Turn's step done the Review checkpoint held for the person. */
+export function heldAgentCall(
+  owner: Pick<RunOwner, "turns" | "turnEvents">,
+  attemptId: string,
+) {
+  const latest = lastTurnCall(owner, attemptId);
+  return latest?.call.answer.outcome === "held-for-review" ? latest : undefined;
+}
+
+function isCompletionCall(
+  id: string | undefined,
+): id is "step_done" | "stage_done" {
+  return id === "step_done" || id === "stage_done";
+}
+
+function lastTurnCall(
   owner: Pick<RunOwner, "turns" | "turnEvents">,
   attemptId: string,
 ) {
@@ -123,12 +188,8 @@ export function latestAgentCall(
     .map(readAgentCallEvent)
     .filter((c) => c !== undefined)
     .at(-1);
-  if (
-    call === undefined ||
-    call.answer.outcome !== "accepted" ||
-    call.id !== "step_done"
-  )
-    return undefined;
+  const id: string | undefined = call?.id;
+  if (call === undefined || !isCompletionCall(id)) return undefined;
   if (
     events.some(
       (e) =>
@@ -137,5 +198,5 @@ export function latestAgentCall(
     )
   )
     return undefined;
-  return { turn, call };
+  return { turn, call: { ...call, id } };
 }

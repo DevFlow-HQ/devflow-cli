@@ -46,10 +46,12 @@ import {
 } from "./materialization.js";
 import { observedWrite } from "./store-write.js";
 import { attemptSession } from "./sessions.js";
+import { decodeAttemptId, encodeAttemptId, instanceKey } from "./attempt-id.js";
 import { guardedExecutionObserver } from "./observer.js";
 
 export type { InteractiveEndLegality } from "./interactive-completion.js";
 export {
+  heldAgentCall,
   interactiveEndLegality,
   latestAgentCall,
   readAgentCallEvent,
@@ -555,9 +557,10 @@ async function runRepeatGroup(
   context: WalkContext,
   isLastNode: boolean,
 ): Promise<NodeOutcome> {
-  // A human-controlled Repeat (#217) reads no Verdict and raises no Review
-  // checkpoint: each iteration pauses at its interactive Step (`blocked`), and only
-  // the human's Continue settles that Step, so the walk replays settled iterations
+  // A human-controlled Repeat (#217) reads no Verdict and raises no Gate: each
+  // iteration pauses at its interactive Step (`blocked`), and only a Continue (the
+  // human's, or an applied agent call the Review checkpoint did not hold, #373)
+  // settles that Step, so the walk replays settled iterations
   // and rests at the first unsettled one. An iteration a confirmed End Stage settled
   // (#218) finishes its span and exits the group; a trailing group then leaves the
   // final `succeeded` rest to executeRouting.
@@ -916,37 +919,6 @@ interface ResumeState {
   readonly attempts: ReadonlyMap<string, number>;
   /** Instance keys whose Attempt a confirmed End Stage settled (#218). */
   readonly stageEnded: ReadonlySet<string>;
-}
-
-/** The instance key for a (Step, Iteration): the Iteration is a number, so its
- *  digits before the separator make the key unambiguous whatever the Step id is. */
-function instanceKey(stepId: string, iteration: number): string {
-  return `${iteration}:${stepId}`;
-}
-
-/** Encode an Attempt id from its Step, Iteration, and Attempt number. The numeric
- *  fields lead so the id parses back unambiguously for any Step id, and it stays
- *  human-readable where it surfaces (e.g. a Review checkpoint's Gate Attempt). */
-function encodeAttemptId(
-  stepId: string,
-  iteration: number,
-  attempt: number,
-): string {
-  return `${iteration}.${attempt}:${stepId}`;
-}
-
-/** Parse an Attempt id back to its parts, or undefined for an id this Module did
- *  not mint (the Run Store's reconciliation marker is a random UUID). */
-function decodeAttemptId(
-  id: string,
-): { stepId: string; iteration: number; attempt: number } | undefined {
-  const match = /^(\d+)\.(\d+):([\s\S]*)$/.exec(id);
-  if (match === null) return undefined;
-  return {
-    iteration: Number(match[1]),
-    attempt: Number(match[2]),
-    stepId: match[3]!,
-  };
 }
 
 /** Reconstruct the resume state from the attempt log: which Step instances

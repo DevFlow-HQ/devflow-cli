@@ -7,6 +7,7 @@ import { selectInstalledEntry } from "./entry-selection.js";
 import {
   routingNeedsHarness,
   flattenSteps,
+  humanReviewCheckpoint,
   inHumanRepeat,
   MAX_REVIEW_CHECKPOINT_INTERVAL,
   type AgentStep,
@@ -31,6 +32,7 @@ import type {
 import {
   attemptIteration,
   attemptStepId,
+  heldAgentCall,
   interactiveEndLegality,
   latestAgentCall,
   readAgentCallEvent,
@@ -219,7 +221,7 @@ function runResult(
       pendingCall !== undefined &&
       pendingCall.turn.resultKind === undefined &&
       !log.some((e) => e.attemptId === pendingCall.turn.attemptId)
-        ? { reason: pendingCall.call.reason }
+        ? { call: pendingCall.call.id, reason: pendingCall.call.reason }
         : undefined;
     const deferredAgentCompletion =
       listing?.live !== true &&
@@ -230,9 +232,35 @@ function runResult(
       interactiveEndLegality({
         routing: facts.routing,
         step: current,
-        control: "step_done",
+        control: pendingCall.call.id,
         turnLive: true,
+        attemptLog: log,
       }).kind === "legal";
+    // The Review checkpoint held the agent's Continue (ADR 0032): the Iteration
+    // waits at its Turn boundary for the person, whose controls stay offered.
+    const heldForReview = ((): RunView["heldForReview"] => {
+      if (
+        owner === undefined ||
+        interactiveStep === undefined ||
+        lastTurn?.resultKind !== "completed" ||
+        log.some((e) => e.attemptId === lastTurn.attemptId)
+      )
+        return undefined;
+      const held = heldAgentCall(owner, lastTurn.attemptId);
+      const checkpoint = humanReviewCheckpoint(
+        facts.routing,
+        interactiveStep.id,
+      );
+      return held !== undefined && checkpoint !== undefined
+        ? { ...checkpoint, reason: held.call.reason }
+        : undefined;
+    })();
+    const declarations = log.filter(
+      (entry) =>
+        entry.endsStage === true ||
+        (entry.endedBy === "agent" &&
+          !inHumanRepeat(facts.routing, attemptStepId(entry.attemptId) ?? "")),
+    );
     const sessions = owner?.harnessSessions() ?? [];
     const names = sessionNames(facts.routing, turns);
     const harnessEvidence = owner?.harnessEvidence();
@@ -406,6 +434,7 @@ function runResult(
                     step: interactiveStep,
                     control,
                     turnLive: liveTurn !== undefined,
+                    attemptLog: log,
                   }).kind === "legal"
                     ? [offer(runId, interactiveStep.id)]
                     : [],
@@ -463,14 +492,15 @@ function runResult(
         ...(pendingAgentCompletion !== undefined
           ? { pendingAgentCompletion }
           : {}),
+        ...(heldForReview !== undefined ? { heldForReview } : {}),
         // A confirmed End Stage (#218) completed this Run by human declaration, not
         // automatic verification; the summary says so rather than imply a check.
-        ...(derivedRun.state === "succeeded" &&
-        log.some(
-          (entry) => entry.endedBy === "agent" || entry.endsStage === true,
-        )
+        // An agent's Continue only opens the next Iteration, so it declares nothing.
+        ...(derivedRun.state === "succeeded" && declarations.length > 0
           ? {
-              completion: log.some((entry) => entry.endedBy === "agent")
+              completion: declarations.some(
+                (entry) => entry.endedBy === "agent",
+              )
                 ? ("agent-declared" as const)
                 : ("human-declared" as const),
             }
@@ -1297,8 +1327,9 @@ function finishTerminalGroup(
 ): DerivedRun {
   const current = span[span.length - 1]!;
   const position = flatIndex.get(current)!;
-  // A human-controlled Repeat (#217) never raises a Review checkpoint: Continue is
-  // each iteration's review, so only the interactive pause below can rest it.
+  // A human-controlled Repeat (#217) never raises the Verdict-driven Gate: Continue
+  // is each iteration's review, so only the interactive pause below can rest it. Its
+  // agent-Continue checkpoint surfaces as `heldForReview`, read from the held call.
   if ("until" in repeat) {
     const interval = Math.min(
       repeat.reviewCheckpoint.interval,

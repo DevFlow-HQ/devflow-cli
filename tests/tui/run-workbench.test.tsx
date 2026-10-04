@@ -4,6 +4,8 @@ import {
   readCompletionRun,
   completed,
   call,
+  reviewedLoop,
+  across,
 } from "../helpers/agentCompletion.js";
 import { followRun } from "../helpers/settleOperation.js";
 import { test } from "node:test";
@@ -345,6 +347,9 @@ function runOf(over: Partial<RunView> = {}): RunView {
       : {}),
     ...(over.conflict !== undefined ? { conflict: over.conflict } : {}),
     ...(over.completion !== undefined ? { completion: over.completion } : {}),
+    ...(over.pendingAgentCompletion !== undefined
+      ? { pendingAgentCompletion: over.pendingAgentCompletion }
+      : {}),
     problem: over.problem,
     windowsCleanupNotice: over.windowsCleanupNotice,
     ...(over.sessions !== undefined ? { sessions: over.sessions } : {}),
@@ -5673,3 +5678,97 @@ for (const [width, height] of [
     noOverflow(wb.t.captureCharFrame(), newWidth);
   });
 }
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+]) {
+  test(`a held agent Continue shows the checkpoint message and keeps the person's controls at ${width}x${height}`, async (context) => {
+    const message = "Look over\nthe \x1b[31mtracker\x1b[0m, then Continue.";
+    const { wired, runId } = await launchAgentCompletionRun(
+      context,
+      across(
+        ["1", "2"].map((key) => ({
+          agentCalls: [call(`ticket ${key} done`, key)],
+          result: completed,
+        })),
+      ),
+      reviewedLoop({ interval: 1, message }),
+    );
+    const held = await followRun(wired.projectionPort, runId, (run) =>
+      run.heldForReview !== undefined ? run : undefined,
+    );
+    assert.equal(held.heldForReview?.message, message);
+    const wb = await mountWorkbench(held, width, height);
+    const readable = (frame: string) => frame.replace(/\s+/g, " ");
+    const heldRow =
+      /◆ Held for review · the agent's Continue waits for you · Look over the tracker, then Continue\./g;
+    const newWidth = width === 60 ? 140 : 60;
+    const newHeight = height === 24 ? 44 : 24;
+    for (const [w, h] of [
+      [width, height],
+      [newWidth, newHeight],
+      [width, height],
+    ] as const) {
+      wb.t.resize(w, h);
+      wb.renderer.resize(w, h);
+      // A re-pushed snapshot replaces the stable-key tail row, never repeats it.
+      wb.control.setRun({ ...held });
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      // Meaning without colour: a glyph and words say the Continue is held, and the
+      // authored message wraps at the live edge with its control bytes removed.
+      assert.equal(readable(frame).match(heldRow)?.length, 1);
+      // The timestamped call row clips on a narrow screen; the held row still reads.
+      if (w >= 140) {
+        assert.match(readable(frame), /held for review · ticket 2 done/);
+        assert.match(
+          readable(frame),
+          /↻ Continued by the agent · ticket 1 done/,
+        );
+      }
+      assert.equal(frame.includes("\x1b"), false);
+      noOverflow(frame, w);
+    }
+    // The person's controls stay: Continue arms its confirmation.
+    await press(wb.t, wb.renderer, "n", { ctrl: true });
+    assert.match(wb.t.captureCharFrame(), /y continue/);
+  });
+}
+
+test("agent stage done reads as a Stage request while pending and a Stage end once applied", async () => {
+  const { t, control } = await mountWorkbench(
+    runOf({
+      state: "running",
+      timeline: [{ at: "T000", event: "turn-started", step: "implement" }],
+      pendingAgentCompletion: { call: "stage_done", reason: "no ticket left" },
+    }),
+    60,
+    24,
+  );
+  assert.match(
+    t.captureCharFrame(),
+    /The agent has asked to end this Stage · no ticket left/,
+  );
+  control.setRun(
+    runOf({
+      state: "succeeded",
+      completion: "agent-declared",
+      timeline: [
+        { at: "T000", event: "turn-started", step: "implement" },
+        {
+          at: "T001",
+          event: "stage-ended",
+          detail: "succeeded",
+          endedBy: "agent",
+          reason: "no ticket left",
+          step: "implement",
+        },
+      ],
+    }),
+  );
+  await t.renderOnce();
+  const frame = t.captureCharFrame();
+  assert.match(frame, /▸ Stage ended by the agent · no ticket left/);
+  noOverflow(frame, 60);
+});

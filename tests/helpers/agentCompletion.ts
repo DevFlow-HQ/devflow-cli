@@ -47,15 +47,43 @@ export const completed: FakeScript["turns"][number]["result"] = {
   kind: "completed",
   detail: { effectiveModel: { known: false }, session: { state: "open" } },
 };
-export const call = (reason: string, key = reason) => ({
+export const call = (
+  reason: string,
+  key = reason,
+  id: "step_done" | "stage_done" = "step_done",
+) => ({
   callId: { opaque: key },
-  id: "step_done",
+  id,
   reason,
 });
 
+export const reviewedLoop = (reviewCheckpoint?: object) => [
+  {
+    repeat: {
+      control: "human",
+      ...(reviewCheckpoint !== undefined ? { reviewCheckpoint } : {}),
+      steps: [
+        {
+          id: "implement",
+          kind: "interactive-agent",
+          session: "s",
+          entryTurn: true,
+          agentCompletion: true,
+          prompt: { asset: "prompt.md" },
+        },
+      ],
+    },
+  },
+];
+// One script across re-prepares: each continuation resumes where the last stopped.
+export const across =
+  (script: FakeScript["turns"]) => (_prepare: number, started: number) =>
+    script.slice(started);
 export async function launchAgentCompletionRun(
   t: TestContext,
-  turns: FakeScript["turns"] | ((prepare: number) => FakeScript["turns"]),
+  turns:
+    | FakeScript["turns"]
+    | ((prepare: number, started: number) => FakeScript["turns"]),
   steps: readonly unknown[] = [
     {
       id: "discuss",
@@ -96,7 +124,10 @@ export async function launchAgentCompletionRun(
     async prepare(options) {
       const prepared = await createFake({
         profile: profile(),
-        turns: typeof turns === "function" ? turns(prepares++) : turns,
+        turns:
+          typeof turns === "function"
+            ? turns(prepares++, requests.length)
+            : turns,
       })().prepare(options);
       if (!prepared.ok) return prepared;
       return {

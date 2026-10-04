@@ -7,6 +7,8 @@ import {
   readCompletionRun as readRun,
   completed,
   call,
+  reviewedLoop,
+  across,
 } from "../helpers/agentCompletion.js";
 
 test("a clean Entry Turn applies the latest step done through the Projection Port", async (t) => {
@@ -527,3 +529,198 @@ for (const scope of ["fresh", "repeat"] as const) {
     );
   });
 }
+
+const continueOnce = (key: string) => ({
+  agentCalls: [call(`ticket ${key} done`, key)],
+  result: completed,
+});
+
+test("agent Continues apply up to the Review checkpoint and the next is held", async (t) => {
+  const { wired, runId, answers, requests } = await setup(
+    t,
+    across([continueOnce("1"), continueOnce("2"), continueOnce("3")]),
+    reviewedLoop({ interval: 2, message: "Look over the tracker." }),
+  );
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "launch")).status,
+    "applied",
+  );
+  assert.deepEqual(
+    answers.map((a) => a.outcome),
+    ["accepted", "accepted", "held-for-review"],
+  );
+  assert.equal(new Set(requests.map((r) => r.session)).size, 3);
+  assert.deepEqual(requests[0]?.agentCalls?.map((c) => c.id).sort(), [
+    "stage_done",
+    "step_done",
+  ]);
+  const run = readRun(wired, runId);
+  assert.equal(run.state, "blocked");
+  assert.deepEqual(run.heldForReview, {
+    interval: 2,
+    message: "Look over the tracker.",
+    reason: "ticket 3 done",
+  });
+  const continued = run.timeline.filter((e) => e.event === "repeat-continued");
+  assert.deepEqual(
+    continued.map((e) => [e.endedBy, e.reason]),
+    [
+      ["agent", "ticket 1 done"],
+      ["agent", "ticket 2 done"],
+    ],
+  );
+  assert.deepEqual(
+    run.timeline.filter((e) => e.agentCall !== undefined).at(-1)?.agentCall
+      ?.answer,
+    { outcome: "held-for-review" },
+  );
+  for (const action of [
+    "send-interactive-turn",
+    "continue-repeat",
+    "end-stage",
+  ])
+    assert.ok(run.actionOffers.some((o) => o.action === action));
+});
+
+test("the person's Continue resets the count and stage done is never held", async (t) => {
+  const { wired, runId, answers } = await setup(
+    t,
+    across([
+      continueOnce("1"),
+      continueOnce("2"),
+      continueOnce("3"),
+      continueOnce("4"),
+      continueOnce("5"),
+      continueOnce("6"),
+      {
+        agentCalls: [call("tracker empty", "7", "stage_done")],
+        result: completed,
+      },
+    ]),
+    reviewedLoop({ interval: 2 }),
+  );
+  await awaitSettled(wired.projectionPort, "launch");
+  assert.equal(readRun(wired, runId).heldForReview?.reason, "ticket 3 done");
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "continue",
+      operation: "continue-repeat",
+      input: { runId, stepId: "implement" },
+    }).admitted,
+  );
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "continue")).status,
+    "applied",
+  );
+  const held = await followRun(wired.projectionPort, runId, (r) =>
+    r.heldForReview?.reason === "ticket 6 done" ? r : undefined,
+  );
+  assert.equal(held.state, "blocked");
+  assert.match(held.heldForReview?.message ?? "", /2 Iterations in a row/);
+  assert.equal(held.completion, undefined);
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "send",
+      operation: "send-interactive-turn",
+      input: { runId, stepId: "implement", text: "Anything left?" },
+    }).admitted,
+  );
+  await awaitSettled(wired.projectionPort, "send");
+  const run = await followRun(wired.projectionPort, runId, (r) =>
+    r.state === "succeeded" ? r : undefined,
+  );
+  assert.deepEqual(
+    answers.map((a) => a.outcome),
+    [
+      "accepted",
+      "accepted",
+      "held-for-review",
+      "accepted",
+      "accepted",
+      "held-for-review",
+      "accepted",
+    ],
+  );
+  assert.equal(run.completion, "agent-declared");
+  assert.equal(run.heldForReview, undefined);
+  const ended = run.timeline.find((e) => e.event === "stage-ended");
+  assert.equal(ended?.endedBy, "agent");
+  assert.equal(ended?.reason, "tracker empty");
+  assert.deepEqual(
+    run.timeline
+      .filter((e) => e.event === "repeat-continued")
+      .map((e) => e.endedBy ?? "person"),
+    ["agent", "agent", "person", "agent", "agent"],
+  );
+});
+
+test("a person's End Stage after agent Continues is a human-declared completion", async (t) => {
+  const { wired, runId } = await setup(
+    t,
+    across([continueOnce("1"), { result: completed }]),
+    reviewedLoop(),
+  );
+  await awaitSettled(wired.projectionPort, "launch");
+  assert.equal(readRun(wired, runId).heldForReview, undefined);
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "end",
+      operation: "end-stage",
+      input: { runId, stepId: "implement" },
+    }).admitted,
+  );
+  await awaitSettled(wired.projectionPort, "end");
+  const run = readRun(wired, runId);
+  assert.equal(run.state, "succeeded");
+  assert.equal(run.completion, "human-declared");
+});
+
+test("resume applies a clean stage done recorded before a crash", async (t) => {
+  const { wired, runId, reopen } = await setup(
+    t,
+    [{ result: completed }],
+    reviewedLoop({ interval: 1 }),
+  );
+  await awaitSettled(wired.projectionPort, "launch");
+  await wired.shutdown();
+  const owner = wired.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  const last = owner.turns().at(-1);
+  assert.ok(last);
+  assert.ok(
+    owner.appendTurnEvent({
+      turnId: last.turnId,
+      kind: "agent-call",
+      payload: JSON.stringify({
+        callId: "crash-call",
+        id: "stage_done",
+        reason: "no ticket left",
+        answer: { outcome: "accepted" },
+      }),
+      at: new Date(),
+    }).ok,
+  );
+  owner.close();
+  const recovered = reopen();
+  const before = readRun(recovered, runId);
+  assert.equal(before.state, "blocked");
+  assert.ok(before.actionOffers.some((o) => o.action === "resume-run"));
+  assert.ok(
+    recovered.projectionPort.submit({
+      operationId: "resume",
+      operation: "resume-run",
+      input: { runId },
+    }).admitted,
+  );
+  assert.equal(
+    (await awaitSettled(recovered.projectionPort, "resume")).status,
+    "applied",
+  );
+  const run = readRun(recovered, runId);
+  assert.equal(run.state, "succeeded");
+  assert.equal(run.completion, "agent-declared");
+  assert.equal(
+    run.timeline.find((e) => e.event === "stage-ended")?.reason,
+    "no ticket left",
+  );
+});

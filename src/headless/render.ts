@@ -360,6 +360,19 @@ export function renderRun(run: RunView): string {
     );
   }
 
+  // A human-controlled Repeat's Review checkpoint held the agent's Continue: the
+  // person's Continue, End Stage, and next Turn stay offered below.
+  const held = run.heldForReview;
+  if (held !== undefined) {
+    lines.push(
+      "",
+      "Held for review:",
+      `  message: ${screenReason(held.message)}`,
+      `  held after: ${held.interval} agent Continue(s) in a row`,
+      `  agent reason: ${screenReason(held.reason)}`,
+    );
+  }
+
   // A blocked Run resting at an authored Human Gate (#108): read the basis from
   // its Offer, then print the shape, exact rendered message, declared
   // free-text output, and the Gate's durable reference.

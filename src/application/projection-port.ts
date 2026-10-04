@@ -747,7 +747,8 @@ export type RoutingNodeView =
       };
       readonly steps: readonly RoutingStepView[];
     }
-  /** A human-controlled Repeat group (#217): no Verdict and no checkpoint. */
+  /** A human-controlled Repeat group (#217): no Verdict and no Gate. Its agent-
+   *  Continue Review checkpoint surfaces only as a held Run's `heldForReview`. */
   | {
       readonly node: "repeat";
       readonly control: "human";
@@ -916,6 +917,7 @@ export interface RunTimelineEvent {
     readonly reason: string;
     readonly answer:
       | { readonly outcome: "accepted" }
+      | { readonly outcome: "held-for-review" }
       | { readonly outcome: "refused"; readonly reason: string };
     readonly disposition: "pending" | "completed" | "dropped";
   };
@@ -1143,7 +1145,19 @@ export interface RunView {
    *  the whole Run: Steps after a non-trailing group may still have verified their
    *  own work. Additive to the frozen `--json`. */
   readonly completion?: "human-declared" | "agent-declared";
-  readonly pendingAgentCompletion?: { readonly reason: string };
+  readonly pendingAgentCompletion?: {
+    readonly call: "step_done" | "stage_done";
+    readonly reason: string;
+  };
+  /** A human-controlled Repeat's Review checkpoint held the agent's Continue
+   *  (ADR 0032): the Iteration waits for the person at its Turn boundary. The
+   *  message is the authored one or Secant's; the reason is the agent's, as sent.
+   *  Distinct from the Verdict-driven `checkpoint`, and additive to `--json`. */
+  readonly heldForReview?: {
+    readonly interval: number;
+    readonly message: string;
+    readonly reason: string;
+  };
 }
 
 export interface RunSnapshot {

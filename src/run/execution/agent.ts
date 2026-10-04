@@ -573,12 +573,15 @@ async function driveHarnessTurn(
                     .some(
                       (t) => t.turnId === turnId && t.resultKind === undefined,
                     ) && signal?.aborted !== true,
+                attemptLog: owner.attemptLog(),
               })
             : { kind: "refused" as const, reason: "unknown-call" };
         const answer: AgentCallReply =
           legality.kind === "legal"
             ? { outcome: "accepted" }
-            : { outcome: "refused", reason: legality.reason };
+            : legality.kind === "held-for-review"
+              ? { outcome: "held-for-review" }
+              : { outcome: "refused", reason: legality.reason };
         const recorded = owner.appendTurnEvent({
           turnId,
           kind: "agent-call",

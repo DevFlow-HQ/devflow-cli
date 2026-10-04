@@ -42,8 +42,17 @@ export function buildTimelineRows(
       ? [
           {
             key: "agent-completion:pending",
-            text: `The agent has asked to end this Step · ${screenReason(run.pendingAgentCompletion.reason)}`,
+            text: `The agent has asked to end this ${run.pendingAgentCompletion.call === "stage_done" ? "Stage" : "Step"} · ${screenReason(run.pendingAgentCompletion.reason)}`,
             oneLine: true,
+          },
+        ]
+      : []),
+    // The checkpoint message is authored and may run long, so it wraps.
+    ...(run.heldForReview !== undefined
+      ? [
+          {
+            key: "agent-completion:held",
+            text: `◆ Held for review · the agent's Continue waits for you · ${screenReason(run.heldForReview.message)}`,
           },
         ]
       : []),
@@ -120,12 +129,18 @@ function durableLabel(event: RunTimelineEvent): string {
       ? ` · ${event.detail}`
       : "";
   if (event.endedBy === "agent")
-    return `▸ Step ended by the agent · ${screenReason(event.reason ?? "")}`;
+    return `${
+      event.event === "repeat-continued"
+        ? "↻ Continued by the agent"
+        : event.event === "stage-ended"
+          ? "▸ Stage ended by the agent"
+          : "▸ Step ended by the agent"
+    } · ${screenReason(event.reason ?? "")}`;
   switch (event.event) {
     case "agent-call": {
       const call = event.agentCall;
       if (call === undefined) return "Agent call";
-      return `Agent call ${call.id} · ${call.answer.outcome === "refused" ? `refused · ${call.answer.reason}` : call.disposition === "dropped" ? "dropped" : "accepted, takes effect when this Turn finishes"} · ${screenReason(call.reason)}`;
+      return `Agent call ${call.id} · ${call.answer.outcome === "refused" ? `refused · ${call.answer.reason}` : call.disposition === "dropped" ? "dropped" : call.answer.outcome === "held-for-review" ? "held for review" : "accepted, takes effect when this Turn finishes"} · ${screenReason(call.reason)}`;
     }
     case "run-created":
       return "○ Run created";
