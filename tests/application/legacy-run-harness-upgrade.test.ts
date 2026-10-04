@@ -376,7 +376,7 @@ test("[legacy-run-harness-upgrade] a Run that selected its Harness before Model 
   assert.deepEqual(run.run.modelChoice, { model: "opus", effort: "medium" });
 });
 
-test("[legacy-run-harness-upgrade] a legacy Run whose Harness reports nothing to preselect resumes holding no choice", async (t) => {
+test("[legacy-run-harness-upgrade] a legacy Run whose Harness reports nothing to preselect halts with a run model correction", async (t) => {
   const fixture = createLegacyFixture("agent", true, "claude-code");
   const requests: FakeTurnRequestRecord[] = [];
   const wiring = openFixture(
@@ -397,12 +397,39 @@ test("[legacy-run-harness-upgrade] a legacy Run whose Harness reports nothing to
   });
   assert.ok(resume.admitted, JSON.stringify(resume));
   const outcome = await awaitSettled(wiring.projectionPort, resume.operationId);
-  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
-  assert.deepEqual(requests, [{ session: "s" }]);
+  assert.equal(outcome.status, "not-applied", JSON.stringify(outcome));
+  if (outcome.status === "not-applied") {
+    assert.equal(outcome.problem.correction, "model");
+    assert.match(outcome.problem.remediation, /secant run model/);
+  }
+  assert.deepEqual(requests, []);
   const run = wiring.runGroup.readRun(fixture.runId);
   assert.ok(run.ok);
-  assert.equal(run.run.state, "succeeded");
+  assert.equal(run.run.state, "halted");
   assert.equal(run.run.modelChoice, undefined);
+  const changed = wiring.projectionPort.submit({
+    operationId: "correct-model",
+    operation: "change-model-choice",
+    input: { runId: fixture.runId, model: "chosen-model" },
+  });
+  assert.ok(changed.admitted);
+  assert.equal(
+    (await awaitSettled(wiring.projectionPort, changed.operationId)).status,
+    "applied",
+  );
+  const retry = wiring.projectionPort.submit({
+    operationId: "resume-corrected",
+    operation: "resume-run",
+    input: { runId: fixture.runId },
+  });
+  assert.ok(retry.admitted);
+  assert.equal(
+    (await awaitSettled(wiring.projectionPort, retry.operationId)).status,
+    "applied",
+  );
+  assert.deepEqual(requests, [
+    { session: "s", modelChoice: { model: "chosen-model" } },
+  ]);
 });
 
 test("[legacy-run-harness-upgrade] a Command-only Run remains unselected and prepares no Harness", async (t) => {
@@ -502,4 +529,32 @@ test("a legacy resume uses the last choice once without rewriting that Preferenc
     wiring.catalog.getPreference("last-model-choice:claude-code"),
     encoded,
   );
+});
+
+test("[legacy-run-harness-upgrade] run model upgrades a pre-M4 Harness and chooses a model on its first submission", async (t) => {
+  const fixture = createLegacyFixture("agent", false);
+  const wiring = openFixture(
+    fixture,
+    completedScript({ kind: "unavailable", reason: "No default." }),
+  );
+  t.after(() => {
+    wiring.runGroup.close();
+    wiring.catalog.close();
+  });
+  const submitted = wiring.projectionPort.submit({
+    operationId: "pre-m4-choice",
+    operation: "change-model-choice",
+    input: { runId: fixture.runId, model: "chosen-model" },
+  });
+  assert.ok(submitted.admitted);
+  const outcome = await awaitSettled(
+    wiring.projectionPort,
+    submitted.operationId,
+  );
+  assert.equal(outcome.status, "applied", JSON.stringify(outcome));
+  const run = wiring.runGroup.readRun(fixture.runId);
+  assert.ok(run.ok);
+  assert.equal(run.run.selectedHarness, "claude-code");
+  assert.deepEqual(run.run.modelChoice, { model: "chosen-model" });
+  assert.equal(run.run.state, "halted");
 });

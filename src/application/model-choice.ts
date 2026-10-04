@@ -13,7 +13,11 @@ import {
   requestedEffortUnavailable,
   requestedModelUnavailable,
 } from "./problems.js";
-import type { HarnessChoice, Problem } from "./projection-port.js";
+import type {
+  HarnessChoice,
+  Problem,
+  OperationSnapshot,
+} from "./projection-port.js";
 
 // The Run's Model choice above the Harness Seam (ADR 0034): the one preselection
 // order both clients launch from, and the resolution of a launch draft's
@@ -239,6 +243,96 @@ export function resolveModelChoice(params: {
     source,
     ...(effortLock === undefined ? {} : { effortLock }),
     ...(preferenceNotice === undefined ? {} : { preferenceNotice }),
+  };
+}
+
+/** Resolve a Run change from its current value, never from saved Preferences. */
+export function resolveChangedModelChoice(params: {
+  readonly harness: HarnessChoice;
+  readonly profile: HarnessProfile;
+  readonly defaults: HarnessDefaults;
+  readonly current?: ModelChoice;
+  readonly model?: string;
+  readonly effort?: string;
+}):
+  | {
+      readonly ok: true;
+      readonly result: NonNullable<OperationSnapshot["modelChoiceChange"]>;
+    }
+  | { readonly ok: false; readonly problem: Problem } {
+  const { harness, defaults, current } = params;
+  const lock =
+    defaults.kind === "unavailable" ? undefined : defaults.effortLock;
+  if (
+    lock !== undefined &&
+    params.effort !== undefined &&
+    params.effort !== lock.effort
+  )
+    return { ok: false, problem: effortLocked(lock.source) };
+  // A legacy Run with no choice may complete missing halves from declared
+  // Harness defaults. Existing Runs never use Preferences as their baseline.
+  const baseline =
+    current ?? (defaults.kind === "unavailable" ? undefined : defaults.choice);
+  const model = params.model ?? baseline?.model;
+  if (model === undefined)
+    return { ok: false, problem: modelChoiceRequired(harness) };
+  const declaration =
+    params.profile.modelSelection.at === "unavailable"
+      ? undefined
+      : params.profile.modelSelection.declaration;
+  if (
+    declaration?.kind === "list" &&
+    !declaration.models.some((entry) => entry.model === model)
+  )
+    return {
+      ok: false,
+      problem: requestedModelUnavailable(
+        harness,
+        model,
+        declaration.models.map((entry) => entry.model),
+      ),
+    };
+  // Changing only effort retains the model. Changing model retains effort when
+  // offered, otherwise uses that model's declared default or no effort setting.
+  const effort = resolveEffort({
+    harness,
+    model,
+    declaration,
+    requestedEffort:
+      lock?.effort ??
+      params.effort ??
+      (model === baseline?.model ? baseline?.effort : undefined),
+    preselected: baseline,
+  });
+  if (!effort.ok) return effort;
+  const previous = current?.effort;
+  const reset =
+    params.effort === undefined &&
+    lock === undefined &&
+    previous !== undefined &&
+    model !== current?.model &&
+    effort.effort !== previous;
+  return {
+    ok: true,
+    result: {
+      choice: {
+        model,
+        ...(effort.effort === undefined ? {} : { effort: effort.effort }),
+      },
+      reach: "next-turn",
+      ...(reset
+        ? {
+            effortReset: {
+              previous,
+              ...(effort.effort === undefined ? {} : { effort: effort.effort }),
+              explanation:
+                effort.effort === undefined
+                  ? `${model} does not offer an effort setting. Effort cleared.`
+                  : `${model} does not offer ${previous} effort. Effort changed to ${effort.effort}, its default.`,
+            },
+          }
+        : {}),
+    },
   };
 }
 

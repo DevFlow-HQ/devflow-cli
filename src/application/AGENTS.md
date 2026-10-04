@@ -6,12 +6,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - Windows fallback notices are live launch evidence retained per Run for this Application lifetime (#363), across tracking replacement and Projection reopen.
   A fresh Application learns a notice only from a new fallback launch; the notice is not persisted Run truth.
-- Every canonical write to a Run must go through `observedOwner`, not the raw `RunOwner`, or an open client's live `run` Projection never updates. `observedOwner` spreads
-  `...owner`, reads `record` through a getter (a spread copy goes stale after an upgrade write), and intercepts nine methods — `selectHarness`, `selectModelChoice` (#342),
-  `writeState`, `publishAttempt`, `recordMaterializationConflict`, `recordGateAnswer`, `recordPendingGate` (the authored gate, #108, which rests the Run `blocked` in its own
-  transaction), `admitTurn` (#290), and `appendTurnEvent` for Steer settlements (#356), pushing a fresh snapshot after each commits. A `run` Projection registers in the
-  Run-scoped observer set even while rested; every later tracking entry reuses that set, so resume, gate-answer, and interactive drivers cannot orphan the stream. A new
-  `RunOwner` write method compiles and silently pushes nothing (A3).
+- Every canonical Run write goes through `observedOwner`, whose getter reads the refreshed `record`. It intercepts `selectHarness`, `selectModelChoice`,
+  `changeModelChoice`, `writeState`, `publishAttempt`, `recordMaterializationConflict`, `recordGateAnswer`, `recordPendingGate`, `admitTurn`, and Steer
+  `appendTurnEvent` writes, pushing after commit. A new owner method compiles without pushing unless intercepted (A3).
+  A `run` Projection joins the Run-scoped observer Set even while rested; later tracking entries reuse it so resume and human drivers cannot orphan the stream.
 - `answer-human-gate` serves two gate mechanisms off one Port operation (#108). The Projection derivation decides which: `derived.pendingGate` present is an
   **authored** gate, answered by settling its producing Attempt through `observedOwner.publishAttempt` (into `attempt_log`, so the resumed walk skips the gate) —
   `free-text` publishes the `text` answer as the gate's declared output and re-drives execution in this process, approve advances `running` and re-drives, reject
@@ -30,13 +28,15 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Agent-bearing Runs hold a Model choice. `launch-preparation` resolves draft, valid last choice, reported default, then Adapter fallback.
   It applies the effort lock to any preselection and refuses contradicting effort with correction `effort`; `submit` requires a model and trusts the Offer's effort.
 - Each focus open and assessment reads Preferences outside the qualification cache; stale model/effort skips the whole choice with a notice.
-  `saveLastModelChoice` runs after Run creation; its failure notice survives Projection reopen for this Application lifetime.
+  `saveLastModelChoice` runs after Run creation or a fenced choice change; failure keeps the Run choice and its notice across Projection reopen.
+- `run` reads offer a Model choice after explicit `prepareModelChoice` or qualification. Ordinary reads never prepare a Harness. Changes recheck the Offer; halves use
+  the Run, never Preferences. Pushed reads use the writer's owner.
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
   strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
 - A pre-M4 Run with no selection upgrades only once its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume write `claude-code` once
   through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems stay unselected (#139). A Run with no Model choice takes the preselection once
-  at the resume drive or a reopened human Turn (`upgradeLegacyModelChoice`), never at reopen; other drives skip it without an await.
+  at the resume drive or a reopened human Turn (`upgradeLegacyModelChoice`), never at reopen; no preselection halts with a model correction naming `secant run model`.
 - Human Turn admission reads the Run's selected Harness and its registration's static input rules before `admit` (#358). The read acquires no owner;
   a pre-M4 unselected Run uses Claude Code's rules, matching its reopen/resume upgrade. A refusal consumes no Operation id and records no Turn.
 - Never `acquireRun` a Run merely to read it when it is live in another process: acquiring bumps the owner-fencing epoch and would abort the process

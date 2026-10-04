@@ -1,9 +1,11 @@
+import type { ApplicationHarnessQualification } from "./harness-registry.js";
 import { waitingAgentTurn } from "../run/store/store.js";
 import { z } from "zod";
 import type { Catalog, CatalogEntry } from "../catalog/catalog.js";
 import { inspectBundle, type Budgets } from "../bundle/bundle.js";
 import { selectInstalledEntry } from "./entry-selection.js";
 import {
+  routingNeedsHarness,
   flattenSteps,
   inHumanRepeat,
   MAX_REVIEW_CHECKPOINT_INTERVAL,
@@ -33,6 +35,7 @@ import {
   interactiveStepTarget,
 } from "../run/execution/execution.js";
 import type {
+  ChangeModelChoiceOffer,
   ActionOffer,
   Problem,
   RunCheckpointView,
@@ -56,6 +59,7 @@ import { RUN_TIMELINE_TRUNCATION_MARKER } from "./projection-port.js";
 import {
   bundleBytesCorrupt,
   bundleBytesMissing,
+  runLiveElsewhere,
   runNotFound,
   runStoreDamaged,
 } from "./problems.js";
@@ -104,6 +108,8 @@ export interface RunSteerCapability {
 export interface RunReadContext {
   readonly windowsCleanupFallback?: boolean;
   readonly preferenceNotice?: string;
+  readonly modelChoicePreparation?: boolean;
+  readonly modelChoiceQualification?: ApplicationHarnessQualification;
   readonly facts?: RunFacts; // present for a Run launched in this process
   readonly liveOwner?: RunOwner; // present while live in this process
   readonly state?: string; // the in-memory latest state while tracked
@@ -298,6 +304,19 @@ function runResult(
         // `blocked` (a blocked Run has resumable work, so it is cancelled rather than
         // deleted — A6), delete only otherwise (mutually exclusive).
         actionOffers: [
+          ...(routingNeedsHarness(facts.routing) &&
+          (context.modelChoicePreparation === true ||
+            context.modelChoiceQualification !== undefined)
+            ? [
+                modelChoiceOffer({
+                  runId,
+                  currentChoice: modelChoice,
+                  state: derivedRun.state,
+                  foreignOwner: liveElsewhere ? listing : undefined,
+                  qualification: context.modelChoiceQualification,
+                }),
+              ]
+            : []),
           ...(!liveElsewhere && derivedRun.checkpoint !== undefined
             ? [answerHumanGateOffer(derivedRun.checkpoint.gate, false)]
             : !liveElsewhere && derivedRun.pendingGate !== undefined
@@ -756,6 +775,77 @@ function endStageOffer(runId: string, stepId: string): ActionOffer {
     stepId,
     consequence:
       "Secant has not checked the tracker. This ends the stage as complete; use it only after you and the agent verified the tickets are done.",
+  };
+}
+
+function modelChoiceOffer(params: {
+  readonly runId: string;
+  readonly currentChoice: ChangeModelChoiceOffer["currentChoice"];
+  readonly state: RunStateName;
+  readonly foreignOwner: RunListing | undefined;
+  readonly qualification: ApplicationHarnessQualification | undefined;
+}): ChangeModelChoiceOffer {
+  const base = {
+    action: "change-model-choice",
+    runId: params.runId,
+    reach: "next-turn",
+    ...(params.currentChoice === undefined
+      ? {}
+      : { currentChoice: params.currentChoice }),
+  } as const;
+  if (params.foreignOwner !== undefined)
+    return {
+      ...base,
+      available: false,
+      problem: runLiveElsewhere(params.runId, params.foreignOwner.ownerPid),
+    };
+  if (params.state === "succeeded" || params.state === "cancelled")
+    return {
+      ...base,
+      available: false,
+      problem: {
+        code: "run-terminal",
+        explanation: "A terminal Run's Model choice cannot be changed.",
+        remediation: "Launch a new Run to choose another model.",
+        possibleEffects: "none",
+      },
+    };
+  const qualified = params.qualification;
+  if (qualified === undefined)
+    return {
+      ...base,
+      available: false,
+      problem: {
+        code: "model-choice-checking",
+        explanation: "The selected Harness's Model choices need qualification.",
+        remediation: "Request Model choice preparation, then retry.",
+        possibleEffects: "none",
+      },
+    };
+  if (!qualified.ok)
+    return {
+      ...base,
+      available: false,
+      problem: {
+        code: "selected-harness-unavailable",
+        explanation:
+          "The selected Harness could not qualify for a Model choice change.",
+        remediation:
+          "Check its installation and authentication, then try again.",
+        possibleEffects: "none",
+        correction: "harness",
+      },
+    };
+  const { profile, defaults } = qualified;
+  return {
+    ...base,
+    available: true,
+    ...(profile.modelSelection.at === "unavailable"
+      ? {}
+      : { modelDeclaration: profile.modelSelection.declaration }),
+    ...(defaults.kind === "unavailable" || defaults.effortLock === undefined
+      ? {}
+      : { effortLock: defaults.effortLock }),
   };
 }
 

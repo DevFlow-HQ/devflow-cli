@@ -107,7 +107,11 @@ import {
   type InteractiveControl,
 } from "./problems.js";
 import type { UpdateStream } from "./update-stream.js";
-import { preselectModelChoice, saveLastModelChoice } from "./model-choice.js";
+import {
+  preselectModelChoice,
+  resolveChangedModelChoice,
+  saveLastModelChoice,
+} from "./model-choice.js";
 import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import { listRunsSnapshot } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
@@ -139,6 +143,7 @@ import type {
   BundleCatalogSnapshot,
   BundleFocusSelector,
   BundleFocusSnapshot,
+  ChangeModelChoiceInput,
   ContinueRepeatInput,
   EndInteractiveStepInput,
   EndStageInput,
@@ -173,6 +178,7 @@ import type {
   WorkspaceSnapshot,
 } from "./projection-port.js";
 import type {
+  ApplicationHarnessQualification,
   ApplicationHarnessRegistration,
   RunHarnessPreparationFailure,
 } from "./harness-registry.js";
@@ -415,6 +421,7 @@ interface TrackedOperation {
   readonly operation: Submission["operation"];
   readonly replayKey: string;
   outcome: OperationOutcome;
+  modelChoiceChange?: OperationSnapshot["modelChoiceChange"];
   readonly observers: Set<UpdateStream>;
   readonly runId?: string;
   readonly settle: () => OperationOutcome | Promise<OperationOutcome>;
@@ -476,6 +483,41 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const runs = new Map<string, TrackedRun>();
   const windowsCleanupFallbacks = new Set<string>();
   const preferenceNotices = new Map<string, string>();
+  const modelChoiceQualifications = new Map<
+    string,
+    ApplicationHarnessQualification
+  >();
+  const modelChoicePreparations = new Set<string>();
+  const pendingModelQualifications = new Map<string, Promise<void>>();
+  function qualifyRunModelChoice(harness: string): Promise<void> {
+    const existing = pendingModelQualifications.get(harness);
+    if (existing !== undefined) return existing;
+    const pending = harnessCatalog.qualify(harness).then((qualification) => {
+      modelChoiceQualifications.set(
+        harness,
+        qualification ?? {
+          ok: false,
+          failure: {
+            phase: "prepare",
+            category: "harness-not-registered",
+            possibleEffects: "none",
+          },
+        },
+      );
+      // Several Runs can use the same cached qualification. Refresh each open view.
+      for (const id of runObservers.keys()) pushRunUpdate(id);
+    });
+    pendingModelQualifications.set(harness, pending);
+    return pending;
+  }
+  function runModelQualification(
+    runId: string,
+  ): ApplicationHarnessQualification | undefined {
+    const read = runGroup?.readRun(runId);
+    return read?.ok && read.run.selectedHarness !== undefined
+      ? modelChoiceQualifications.get(read.run.selectedHarness)
+      : undefined;
+  }
   // A Run's observer set outlives any one live tracking entry. A Projection opened
   // while the Run rests joins here before a later Operation creates or replaces
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
@@ -613,6 +655,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
         family: "operation",
         operationId,
         outcome,
+        ...(entry.modelChoiceChange === undefined
+          ? {}
+          : { modelChoiceChange: entry.modelChoiceChange }),
       };
       for (const observer of entry.observers) {
         observer.push({ kind: "durable", snapshot });
@@ -649,7 +694,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     pushRunUpdate(runId);
   }
 
-  function pushRunUpdate(runId: string): void {
+  function pushRunUpdate(runId: string, readOwner?: RunOwner): void {
     if (runProjection === undefined) return;
     const tracking = runs.get(runId);
     const observers = runObservers.get(runId);
@@ -659,10 +704,16 @@ export function createApplication(deps: ApplicationDependencies): Application {
         runId,
         tracking === undefined
           ? {
+              liveOwner: readOwner,
+              modelChoicePreparation: modelChoicePreparations.has(runId),
+              modelChoiceQualification: runModelQualification(runId),
               preferenceNotice: preferenceNotices.get(runId),
               windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
             }
           : {
+              liveOwner: readOwner,
+              modelChoicePreparation: modelChoicePreparations.has(runId),
+              modelChoiceQualification: runModelQualification(runId),
               preferenceNotice: preferenceNotices.get(runId),
               windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
               facts: {
@@ -794,6 +845,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (result.outcome === "selected") pushRunUpdate(runId);
         return result;
       },
+      changeModelChoice(choice) {
+        const result = owner.changeModelChoice(choice);
+        if (result.ok) pushRunUpdate(runId, owner);
+        return result;
+      },
       writeState(state) {
         const result = owner.writeState(state);
         if (result.ok && tracking !== undefined) {
@@ -873,15 +929,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // A Run created before every launch resolved a Model choice holds none (ADR
   // 0034). Resuming it resolves the preselection once, through the same qualify
   // path launch preparation reads, and writes it with the fenced null-only upgrade.
-  // A Harness that fails to qualify, or reports nothing to preselect, leaves the
-  // Run without a choice: the drive's own prepare reports a failure, and its Turns
-  // request none, as they did before. Every other drive returns undefined at once,
+  // A Harness that reports nothing to preselect halts with a model correction.
+  // A qualification failure is reported by the drive's own prepare. Other drives return undefined at once,
   // so it gains no await before execution starts. A fenced write throws.
   function upgradeLegacyModelChoice(
     owner: RunOwner,
     routing: readonly RoutingNode[],
     runId: string,
-  ): Promise<void> | undefined {
+  ): Promise<Problem | undefined> | undefined {
     const harness = owner.record.selectedHarness;
     if (
       owner.record.modelChoice !== undefined ||
@@ -902,7 +957,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
       });
       if (preferenceNotice !== undefined)
         preferenceNotices.set(runId, preferenceNotice);
-      if (preselection === undefined) return;
+      if (preselection === undefined)
+        return {
+          ...modelChoiceRequired(
+            registration.choice,
+            qualification.defaults.kind === "unavailable"
+              ? qualification.defaults.reason
+              : undefined,
+          ),
+          explanation:
+            "This Run has no Model choice. Choose a model before resuming it.",
+          remediation: `Run secant run model ${runId} --model <id>, then resume the Run.`,
+        };
       const written = observedOwner(owner, runId).selectModelChoice(
         preselection.choice,
       );
@@ -1059,7 +1125,17 @@ export function createApplication(deps: ApplicationDependencies): Application {
       params.routing,
       params.runId,
     );
-    if (choiceUpgrade !== undefined) await choiceUpgrade;
+    if (choiceUpgrade !== undefined) {
+      const problem = await choiceUpgrade;
+      if (problem !== undefined) {
+        params.tracking.problem = problem;
+        restRun(params.executionOwner, params.runId, "halted");
+        return {
+          outcome: { status: "not-applied", problem },
+          retainOwner: false,
+        };
+      }
+    }
     const report = await runExecution!({
       routing: params.routing,
       digest: params.digest,
@@ -1218,6 +1294,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function openProjection(selector: {
     readonly family: "run";
     readonly runId: string;
+    readonly prepareModelChoice?: true;
   }): OpenedProjection<RunSnapshot>;
   function openProjection(selector: {
     readonly family: "run-list";
@@ -1227,7 +1304,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function openProjection(selector: ProjectionSelector): OpenedProjection;
   function openProjection(selector: ProjectionSelector): OpenedProjection {
     if (selector.family === "run") {
-      return openRunProjection(selector.runId);
+      return openRunProjection(selector.runId, selector.prepareModelChoice);
     }
     if (selector.family === "run-list") {
       const snapshot: RunListSnapshot =
@@ -1350,6 +1427,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
       family: "operation",
       operationId,
       outcome: operation.outcome,
+      ...(operation.modelChoiceChange === undefined
+        ? {}
+        : { modelChoiceChange: operation.modelChoiceChange }),
     };
     // Pending Operations deliver settlement; settled receipts remain idle.
     // Both subscriptions stay open until their caller or Application ends them.
@@ -1363,7 +1443,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
     };
   }
 
-  function openRunProjection(runId: string): OpenedProjection {
+  function openRunProjection(
+    runId: string,
+    prepareModelChoice = false,
+  ): OpenedProjection {
     if (runProjection === undefined) {
       const updates = subscriptions.open();
       // No Run support wired: a Problem snapshot, not a throw, like an unknown id.
@@ -1404,16 +1487,21 @@ export function createApplication(deps: ApplicationDependencies): Application {
         }
       }
     }
+    if (prepareModelChoice && read?.ok) modelChoicePreparations.add(runId);
     const tracking = runs.get(runId);
     const snapshot = runSnapshot(
       runProjection,
       runId,
       tracking === undefined
         ? {
+            modelChoicePreparation: modelChoicePreparations.has(runId),
+            modelChoiceQualification: runModelQualification(runId),
             preferenceNotice: preferenceNotices.get(runId),
             windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
           }
         : {
+            modelChoicePreparation: modelChoicePreparations.has(runId),
+            modelChoiceQualification: runModelQualification(runId),
             preferenceNotice: preferenceNotices.get(runId),
             windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
             facts: {
@@ -1443,6 +1531,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
       };
     });
     if (snapshot.result.found) {
+      if (
+        prepareModelChoice &&
+        snapshot.result.run.selectedHarness !== undefined &&
+        liveElsewhere(runId) === undefined &&
+        snapshot.result.run.state !== "succeeded" &&
+        snapshot.result.run.state !== "cancelled"
+      )
+        void qualifyRunModelChoice(snapshot.result.run.selectedHarness);
       // A late-joining observer catches up on the current live overlay at once, so
       // a headless follower that opens after a request was raised still sees it
       // (#117). No-op when the Run has no live Turn to describe.
@@ -2755,7 +2851,15 @@ export function createApplication(deps: ApplicationDependencies): Application {
             begun.facts.routing,
             input.runId,
           );
-          if (choiceUpgrade !== undefined) await choiceUpgrade;
+          if (choiceUpgrade !== undefined) {
+            const problem = await choiceUpgrade;
+            if (problem !== undefined) {
+              leaveClaimLive = false;
+              tracking.problem = problem;
+              restRun(observed, input.runId, "halted");
+              return { status: "not-applied", problem };
+            }
+          }
           const prepared = await prepareRunInteractiveStep!({
             observeWindowsCleanupFallback: () =>
               observeWindowsCleanupFallback(input.runId),
@@ -3073,9 +3177,193 @@ export function createApplication(deps: ApplicationDependencies): Application {
     });
   }
 
-  // Cancel a live Run (#87). Admitted at once; the cancel is decided and applied
-  // at settle time (inline by default). Idempotent per operation id via the
-  // operations map.
+  // Admit a partial Run-wide choice change; qualification and writes settle later.
+  function submitChangeModelChoice(
+    operationId: string,
+    input: ChangeModelChoiceInput,
+  ): SubmissionAdmission {
+    const replayKey = JSON.stringify([
+      "change-model-choice",
+      input.runId,
+      input.model ?? null,
+      input.effort ?? null,
+    ]);
+    const existing = operations.get(operationId);
+    if (existing !== undefined)
+      return existing.replayKey === replayKey
+        ? { admitted: true, operationId, runId: input.runId }
+        : { admitted: false, problem: operationIdReused(operationId) };
+    if (input.model === undefined && input.effort === undefined)
+      return {
+        admitted: false,
+        problem: {
+          code: "model-choice-change-required",
+          explanation: "A Model choice change needs a model or an effort.",
+          remediation:
+            "Supply --model <id> or --effort <level> to secant run model.",
+          possibleEffects: "none",
+        },
+      };
+    for (const value of [input.model, input.effort]) {
+      if (value !== undefined && value.trim().length === 0)
+        return {
+          admitted: false,
+          problem: {
+            code: "model-choice-blank",
+            explanation: "Model and effort values must not be blank.",
+            remediation: "Supply a model or effort name.",
+            possibleEffects: "none",
+          },
+        };
+    }
+    admit(operationId, {
+      operation: "change-model-choice",
+      replayKey,
+      runId: input.runId,
+      settle: () => changeModelChoiceAndSettle(operationId, input),
+    });
+    return { admitted: true, operationId, runId: input.runId };
+  }
+
+  async function changeModelChoiceAndSettle(
+    operationId: string,
+    input: ChangeModelChoiceInput,
+  ): Promise<OperationOutcome> {
+    const { runId } = input;
+    if (runGroup === undefined)
+      return { status: "not-applied", problem: runSupportUnavailable() };
+    const foreign = liveElsewhere(runId);
+    if (foreign !== undefined)
+      return {
+        status: "not-applied",
+        problem: runLiveElsewhere(runId, foreign.ownerPid),
+      };
+    const initial = openRunProjection(runId, true);
+    try {
+      if (initial.snapshot.family === "run" && initial.snapshot.result.found) {
+        const offer = initial.snapshot.result.run.actionOffers.find(
+          (candidate) => candidate.action === "change-model-choice",
+        );
+        if (
+          offer?.action === "change-model-choice" &&
+          !offer.available &&
+          offer.problem.code !== "model-choice-checking"
+        )
+          return { status: "not-applied", problem: offer.problem };
+      }
+    } finally {
+      initial.close();
+    }
+    const read = runGroup.readRun(runId);
+    if (!read.ok)
+      return {
+        status: "not-applied",
+        problem:
+          read.problem.kind === "unknown-run"
+            ? runNotFound(runId)
+            : runStoreDamaged(runId),
+      };
+    const harness = read.run.selectedHarness;
+    if (harness !== undefined) await qualifyRunModelChoice(harness);
+    // Re-read the Offer after qualification: ownership, rest, and choice may
+    // change during the await. Offer preparation never acquires a foreign owner.
+    const projection = openRunProjection(runId);
+    let offer;
+    try {
+      const snapshot = projection.snapshot;
+      if (snapshot.family !== "run" || !snapshot.result.found)
+        return {
+          status: "not-applied",
+          problem:
+            snapshot.family === "run" && !snapshot.result.found
+              ? snapshot.result.problem
+              : runNotFound(runId),
+        };
+      offer = snapshot.result.run.actionOffers.find(
+        (candidate) => candidate.action === "change-model-choice",
+      );
+    } finally {
+      projection.close();
+    }
+    if (offer?.action !== "change-model-choice")
+      return {
+        status: "not-applied",
+        problem: {
+          code: "model-choice-irrelevant",
+          explanation: "This Run has no Agent Steps and needs no Model choice.",
+          remediation: "Choose an Agent-bearing Run.",
+          possibleEffects: "none",
+        },
+      };
+    if (!offer.available)
+      return { status: "not-applied", problem: offer.problem };
+    const latest = runGroup.readRun(runId);
+    if (!latest.ok)
+      return { status: "not-applied", problem: runNotFound(runId) };
+    const selected = latest.run.selectedHarness;
+    const qualification =
+      selected === undefined
+        ? undefined
+        : modelChoiceQualifications.get(selected);
+    const registration =
+      selected === undefined
+        ? undefined
+        : harnessInputRegistrations.get(selected);
+    if (
+      selected === undefined ||
+      qualification === undefined ||
+      !qualification.ok ||
+      registration === undefined
+    )
+      return { status: "not-applied", problem: runSupportUnavailable() };
+    const resolved = resolveChangedModelChoice({
+      harness: registration.choice,
+      profile: qualification.profile,
+      defaults: qualification.defaults,
+      current: latest.run.modelChoice,
+      model: input.model,
+      effort: input.effort,
+    });
+    if (!resolved.ok)
+      return {
+        status: "not-applied",
+        problem: {
+          ...resolved.problem,
+          remediation: `Run secant run model ${runId} with an available --model or --effort.`,
+        },
+      };
+    const tracking = runs.get(runId);
+    const held =
+      tracking !== undefined && !tracking.done ? tracking.owner : undefined;
+    const owner = held ?? runGroup.acquireRun(runId);
+    if (owner === undefined)
+      return { status: "not-applied", problem: runLiveElsewhere(runId) };
+    // A pushed read uses this writer's owner, so observation never fences it.
+    const transient = held === undefined;
+    try {
+      const written = observedOwner(owner, runId).changeModelChoice(
+        resolved.result.choice,
+      );
+      if (!written.ok)
+        return { status: "not-applied", problem: runLiveElsewhere(runId) };
+      const notice = saveLastModelChoice(
+        catalog,
+        selected,
+        resolved.result.choice,
+      );
+      if (notice === undefined) preferenceNotices.delete(runId);
+      else preferenceNotices.set(runId, notice);
+      const operation = operations.get(operationId);
+      if (operation !== undefined)
+        operation.modelChoiceChange = resolved.result;
+      pushRunUpdate(runId, owner);
+      return { status: "applied" };
+    } finally {
+      if (transient) owner.close();
+    }
+  }
+
+  // Cancel a live Run (#87), idempotently per Operation id.
   function submitCancel(
     operationId: string,
     runId: string,
@@ -3294,6 +3582,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     runs.delete(runId);
     windowsCleanupFallbacks.delete(runId);
     preferenceNotices.delete(runId);
+    modelChoicePreparations.delete(runId);
     return { status: "applied" };
   }
 
@@ -3332,6 +3621,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
         return submitApprove(submission.operationId, submission.input);
       case "launch-run":
         return submitLaunch(submission.operationId, submission.input);
+      case "change-model-choice":
+        return submitChangeModelChoice(
+          submission.operationId,
+          submission.input,
+        );
       case "resume-run":
         return submitResume(submission.operationId, submission.input);
       case "answer-human-gate":

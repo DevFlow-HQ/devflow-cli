@@ -1070,6 +1070,77 @@ await withCleanup(
             `run show --json did not report the launched Model choice through ${choice.harness}: ${shownJson}`,
           );
         }
+        // Change the idle gate's Run without driving any further Turn. A separate
+        // invocation qualifies anew; requested history must keep its old choice.
+        const nextChoice =
+          choice.harness === "claude-code"
+            ? { model: "opus", effort: "xhigh" }
+            : { model: "gpt-6.1-sol", effort: "high" };
+        let changeEnv = env;
+        if (choice.harness === "codex") {
+          // A separate CLI invocation reads config/read while qualifying. The
+          // Turn recording expects thread/start there, so use the recorded
+          // qualification exchange, with no Turn, for this invocation.
+          const qualificationDirectory = join(
+            smokeRoot,
+            "model-change-codex-qualification",
+          );
+          installCodexReplayerAt(
+            qualificationDirectory,
+            "codex-qualification-unconfigured",
+          );
+          changeEnv = {
+            ...env,
+            PATH: `${qualificationDirectory}${delimiter}${workspaceEnv.PATH}`,
+          };
+        }
+        const changed = JSON.parse(
+          run(
+            binary,
+            [
+              "run",
+              "model",
+              launched.runId,
+              "--model",
+              nextChoice.model,
+              "--json",
+            ],
+            { cwd: workspace, env: changeEnv },
+          ),
+        );
+        if (
+          changed.family !== "operation" ||
+          changed.outcome?.status !== "applied" ||
+          changed.modelChoiceChange?.choice?.model !== nextChoice.model ||
+          changed.modelChoiceChange?.choice?.effort !== nextChoice.effort ||
+          changed.modelChoiceChange?.reach !== "next-turn"
+        )
+          throw new Error(
+            `run model did not apply through ${choice.harness}: ${JSON.stringify(changed)}`,
+          );
+        const after = JSON.parse(
+          run(binary, ["run", "show", launched.runId, "--json"], {
+            cwd: workspace,
+            env,
+          }),
+        ).result?.run;
+        if (
+          after?.state !== "blocked" ||
+          after.modelChoice?.model !== nextChoice.model ||
+          after.modelChoice?.effort !== nextChoice.effort ||
+          !after.timeline
+            .filter(
+              (event: { event: string }) => event.event === "turn-started",
+            )
+            .every(
+              (event: { requestedModel?: string; requestedEffort?: string }) =>
+                event.requestedModel === choice.model &&
+                event.requestedEffort === choice.effort,
+            )
+        )
+          throw new Error(
+            `run show lost the changed Model choice or rewrote history through ${choice.harness}: ${JSON.stringify(after)}`,
+          );
       }
     }
 

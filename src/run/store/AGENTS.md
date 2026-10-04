@@ -9,10 +9,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `run_record.selected_harness` is the immutable semantic Run selection, written in the staged store before create publishes. It is nullable only for
   Command-only and pre-M4 Runs, validates as closed `claude-code | codex` at read ingress, and stays distinct from per-Attempt Harness/model evidence (#138, #146).
   `RunOwner.selectHarness` is the sole legacy upgrade write: fenced, null-only, and idempotent when the same immutable id is already present (#139).
-- `run_record.requested_model`/`requested_effort` hold the Run's current Model choice (ADR 0034), written with `selected_harness` in the staged store before create
-  publishes. Free text, never closed-set validated. Null for a Command-only Run and a Run created before #342, whose one write is `selectModelChoice`: fenced, null-only,
-  idempotent for the same choice. Run execution copies it onto each `turn` row; it stays distinct from the per-Attempt observed `effective_model`.
-- `RunOwner.record` is the acquire-time read, refreshed by that owner's own `selectHarness`/`selectModelChoice`, so a drive after a resume-time upgrade reads it.
+- `run_record.requested_model`/`requested_effort` hold the Run-wide choice (ADR 0034), staged at create with the selected Harness and null for Command-only or
+  pre-#342 Runs. `selectModelChoice` upgrades only null, idempotently for the same choice; `changeModelChoice` replaces it through a fenced transaction.
+  Execution copies the choice onto each Turn; observed `effective_model` stays separate. Both choice writes refresh `RunOwner.record`, as `selectHarness` does.
 - Ownership is per Run, not per Workspace (ADR 0031): each Run Store carries one owner record; an absent record reads unowned at epoch zero. There is no
   Workspace-wide claim column and no one-live-Run index, so any number of Runs may be live in one Workspace at once, each owned separately.
   `createRun` never refuses for the Workspace and two concurrent creates both succeed; ownership is set on the create/resume claim and released only on

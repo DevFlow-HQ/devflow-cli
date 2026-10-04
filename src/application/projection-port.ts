@@ -26,7 +26,11 @@ export type ProjectionSelector =
   | { readonly family: "launch-preparation"; readonly draft: LaunchRunInput }
   // One launched Run by its id. Read-only: launching is an Operation, not a Run
   // Action; durable updates land as each publication commits.
-  | { readonly family: "run"; readonly runId: string }
+  | {
+      readonly family: "run";
+      readonly runId: string;
+      readonly prepareModelChoice?: true;
+    }
   // The Workspace's Previous Runs (#87): a bounded, newest-first page whose rows
   // carry only the Bundle name, Run id, and latest durable-activity time, each
   // grouped Today / Yesterday / Older. `resumable` narrows to halted+failed;
@@ -56,6 +60,7 @@ export interface HarnessFocusSelector {
 export type Submission =
   | ApproveWorkspaceSubmission
   | LaunchRunSubmission
+  | ChangeModelChoiceSubmission
   | ResumeRunSubmission
   | AnswerHumanGateSubmission
   | AnswerHarnessRequestSubmission
@@ -131,6 +136,18 @@ interface ResumeRunSubmission {
   readonly operation: "resume-run";
   readonly input: ResumeRunInput;
 }
+interface ChangeModelChoiceSubmission {
+  readonly operationId: string;
+  readonly operation: "change-model-choice";
+  readonly input: ChangeModelChoiceInput;
+}
+/** Omitted halves retain the Run's choice; at least one half must be supplied. */
+export interface ChangeModelChoiceInput {
+  readonly runId: string;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
 export interface ResumeRunInput {
   readonly runId: string;
   /** The live foreign owner the user explicitly confirmed taking over. */
@@ -600,6 +617,16 @@ export interface OperationSnapshot {
   readonly family: "operation";
   readonly operationId: string;
   readonly outcome: OperationOutcome;
+  /** Additive result of an applied change; preference notices remain on the Run. */
+  readonly modelChoiceChange?: {
+    readonly choice: ModelChoiceView;
+    readonly reach: "next-turn";
+    readonly effortReset?: {
+      readonly previous: string;
+      readonly effort?: string;
+      readonly explanation: string;
+    };
+  };
 }
 export type OperationOutcome =
   | { readonly status: "pending" }
@@ -1207,6 +1234,7 @@ export type ActionOffer =
   | LaunchRunOffer
   | AnswerHumanGateOffer
   | AnswerHarnessRequestOffer
+  | ChangeModelChoiceOffer
   | ResumeRunOffer
   | InterruptTurnOffer
   | SteerTurnOffer
@@ -1398,6 +1426,21 @@ export interface EndStageOffer {
   readonly stepId: string;
   readonly consequence: string;
 }
+
+/** Run-wide change legality and qualified choices, owned by Application. */
+export type ChangeModelChoiceOffer = {
+  readonly action: "change-model-choice";
+  readonly runId: string;
+  readonly currentChoice?: ModelChoiceView;
+  readonly reach: "next-turn";
+} & (
+  | { readonly available: false; readonly problem: Problem }
+  | {
+      readonly available: true;
+      readonly modelDeclaration?: ModelDeclarationView;
+      readonly effortLock?: EffortLockView;
+    }
+);
 
 /** Cancel a live Run (#87). Offered on the `run` Projection only while the Run is
  *  live; it names the consequence so a client presents it without re-deriving. */
@@ -1619,6 +1662,9 @@ export interface ProjectionPort {
   openProjection(selector: {
     readonly family: "run";
     readonly runId: string;
+    /** Explicitly request Model choice Offers through bounded qualification.
+     * Ordinary Run reads never prepare or close a Harness. */
+    readonly prepareModelChoice?: true;
   }): OpenedProjection<RunSnapshot>;
   openProjection(selector: {
     readonly family: "run-list";

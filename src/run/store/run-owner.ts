@@ -839,6 +839,20 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       record = { ...record, modelChoice: choice };
       return { outcome: result.value };
     },
+    changeModelChoice(choice) {
+      const result = guardedWrite((tx) => {
+        tx.update(runRecord)
+          .set({
+            requested_model: choice.model,
+            requested_effort: choice.effort ?? null,
+          })
+          .where(eq(runRecord.run_id, params.runId))
+          .run();
+      });
+      const receipt = toWriteResult(result);
+      if (receipt.ok) record = { ...record, modelChoice: { ...choice } };
+      return receipt;
+    },
     writeState(state) {
       const result = guardedWrite((tx) => {
         updateRunState({ db: tx, runId: params.runId, state });

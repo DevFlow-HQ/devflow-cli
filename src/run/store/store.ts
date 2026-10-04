@@ -500,7 +500,7 @@ export interface TranscriptPage {
 export interface RunOwner {
   readonly runId: string;
   /** The canonical record read at acquire, refreshed by this owner's own
-   *  `selectHarness` and `selectModelChoice` writes, so a reader after an upgrade
+   *  `selectHarness`, `selectModelChoice`, and `changeModelChoice` writes, so a reader after an upgrade
    *  sees the upgraded value. */
   readonly record: RunRecord;
   /** Durably select the Harness for a pre-M4 Run if it is still absent. The
@@ -510,6 +510,8 @@ export interface RunOwner {
    *  (ADR 0034). Fenced and null-only: repeating the same choice performs no
    *  write, and a different stored choice is a caller error. */
   selectModelChoice(choice: ModelChoice): SelectModelChoiceResult;
+  /** Replace the current Run-wide choice in one fenced write and refresh record. */
+  changeModelChoice(choice: ModelChoice): WriteResult;
   /** Record the Run's canonical state, unless this owner has been fenced. */
   writeState(state: string): WriteResult;
   /**

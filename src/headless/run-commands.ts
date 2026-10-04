@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import stripAnsi from "strip-ansi";
 import type { Command } from "commander";
 import type {
+  ChangeModelChoiceInput,
   AnswerHumanGateOffer,
   LaunchPreparationSnapshot,
   LaunchRunOffer,
@@ -56,7 +57,7 @@ export function registerRunCommands(
   const run = program
     .command("run")
     .description(
-      "launch, list, show, read, answer, resume, cancel, and delete Runs",
+      "launch, list, show, read, answer, resume, model, cancel, and delete Runs",
     );
   const launch = run
     .command("launch")
@@ -158,6 +159,49 @@ export function registerRunCommands(
         ),
       );
     });
+  run
+    .command("model")
+    .description("change an open Run's Model choice from its next Turn")
+    .argument("[run-id]", "the Run id printed at launch")
+    .option("--model <id>", "choose a model, keeping effort when offered")
+    .option("--effort <level>", "choose effort, keeping the current model")
+    .option("--json", "print the Operation snapshot as JSON")
+    .action(
+      (
+        runId: string | undefined,
+        options: { model?: string; effort?: string; json?: boolean },
+      ) => {
+        const json = options.json ?? false;
+        if (
+          runId === undefined ||
+          (options.model === undefined && options.effort === undefined)
+        )
+          return settle(
+            fail(io, json, {
+              code:
+                runId === undefined
+                  ? "missing-run-id"
+                  : "model-choice-change-required",
+              explanation:
+                "run model needs a Run id and at least one of --model or --effort.",
+              remediation:
+                "Run secant run model <run-id> [--model <id>] [--effort <level>].",
+              possibleEffects: "none",
+            }),
+          );
+        return settle(
+          execute((clients) =>
+            changeRunModelChoice(clients.projectionPort, io, fail, json, {
+              runId,
+              ...(options.model === undefined ? {} : { model: options.model }),
+              ...(options.effort === undefined
+                ? {}
+                : { effort: options.effort }),
+            }),
+          ),
+        );
+      },
+    );
   const resume = run
     .command("resume")
     .description(
@@ -1083,6 +1127,114 @@ function listRuns(
     return 0;
   } finally {
     opened.close();
+  }
+}
+
+/** Wait for Application's qualified Offer, then submit partial input unchanged. */
+async function changeRunModelChoice(
+  port: ProjectionPort,
+  io: HeadlessIO,
+  fail: RunCommandDeps["fail"],
+  json: boolean,
+  input: ChangeModelChoiceInput,
+): Promise<number> {
+  for (;;) {
+    const view = port.openProjection({
+      family: "run",
+      runId: input.runId,
+      prepareModelChoice: true,
+    });
+    let snapshot = view.snapshot;
+    let end: ObserverEnd | undefined;
+    try {
+      const inspect = (
+        snapshot: RunSnapshot,
+      ): Problem | "checking" | undefined => {
+        if (!snapshot.result.found) return snapshot.result.problem;
+        const offer = snapshot.result.run.actionOffers.find(
+          (offer) => offer.action === "change-model-choice",
+        );
+        if (offer?.action !== "change-model-choice")
+          return {
+            code: "model-choice-irrelevant",
+            explanation: "This Run offers no Model choice change.",
+            remediation: "Choose an open Agent-bearing Run.",
+            possibleEffects: "none",
+          };
+        return offer.available
+          ? undefined
+          : offer.problem.code === "model-choice-checking"
+            ? "checking"
+            : offer.problem;
+      };
+      let readiness = inspect(snapshot);
+      if (readiness === "checking") {
+        for await (const update of view.updates) {
+          if (update.kind === "closed") {
+            end = update.reason;
+            break;
+          }
+          if (update.kind !== "durable") continue;
+          snapshot = update.snapshot;
+          readiness = inspect(snapshot);
+          if (readiness !== "checking") break;
+        }
+      }
+      if (readiness === "checking") {
+        if (end === "observer-lagged") continue;
+        return fail(io, json, {
+          code: "model-choice-observation-ended",
+          explanation:
+            "Model choice observation ended before qualification finished.",
+          remediation: "Try the change again.",
+          possibleEffects: "none",
+        });
+      }
+      // A valid intent still gets its Operation receipt when the Offer refuses
+      // it. Application gates the write; every refusal has the same JSON shape.
+    } finally {
+      view.close();
+    }
+    break;
+  }
+  const admission = port.submit({
+    operationId: randomUUID(),
+    operation: "change-model-choice",
+    input,
+  });
+  if (!admission.admitted) return fail(io, json, admission.problem);
+  const outcome = await settledOutcome(port, admission.operationId);
+  const operation = port.openProjection({
+    family: "operation",
+    operationId: admission.operationId,
+  });
+  try {
+    const noticeView = port.openProjection({
+      family: "run",
+      runId: input.runId,
+    });
+    try {
+      createRunNoticeReporter((text) => io.err(text))(noticeView.snapshot);
+    } finally {
+      noticeView.close();
+    }
+    if (json) {
+      io.out(`${JSON.stringify(operation.snapshot, null, 2)}\n`);
+      return outcome.status === "applied" ? 0 : 1;
+    }
+    if (outcome.status === "not-applied")
+      return fail(io, false, outcome.problem);
+    const result = operation.snapshot.modelChoiceChange;
+    if (result !== undefined) {
+      io.out(
+        `Model choice for Run ${input.runId}: ${result.choice.model}${result.choice.effort === undefined ? "" : `, ${result.choice.effort} effort`}. Applies from the next Turn.\n`,
+      );
+      if (result.effortReset !== undefined)
+        io.out(`${result.effortReset.explanation}\n`);
+    }
+    return 0;
+  } finally {
+    operation.close();
   }
 }
 

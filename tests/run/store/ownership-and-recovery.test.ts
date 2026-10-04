@@ -835,3 +835,30 @@ function exampleGroupName(): string {
     .slice(0, 16);
   return `example-project--${digest}`;
 }
+
+test("changing a Model choice refreshes and persists it, clears absent effort, and refuses a fenced owner", (t) => {
+  const group = openRunGroup(makeTempDir("secant-store-choice-"), WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "mutable-choice", {
+    selectedHarness: "codex",
+    modelChoice: { model: "alpha", effort: "high" },
+  });
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.deepEqual(owner.changeModelChoice({ model: "beta", effort: "low" }), {
+    ok: true,
+  });
+  assert.deepEqual(owner.record.modelChoice, { model: "beta", effort: "low" });
+  assert.deepEqual(owner.changeModelChoice({ model: "gamma" }), { ok: true });
+  assert.deepEqual(owner.record.modelChoice, { model: "gamma" });
+  const replacement = group.acquireRun(created.runId);
+  assert.ok(replacement);
+  t.after(() => replacement.close());
+  assert.deepEqual(replacement.record.modelChoice, { model: "gamma" });
+  assert.equal(owner.changeModelChoice({ model: "alpha" }).ok, false);
+  assert.deepEqual(owner.record.modelChoice, { model: "gamma" });
+  const read = group.readRun(created.runId);
+  assert.ok(read.ok);
+  assert.deepEqual(read.run.modelChoice, { model: "gamma" });
+});

@@ -10,6 +10,8 @@ import {
   type HarnessAdapter,
   type HarnessProfile,
 } from "../../src/harness/harness.js";
+import { createApplication } from "../../src/application/application.js";
+import { openFakeRunGroup } from "../run/store/fake-git-process.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
 import type {
   RunTranscriptEntryView,
@@ -1337,4 +1339,262 @@ test("headless shows the lock at launch and records requested and effective effo
   );
   assert.equal(effective.at(-1)?.effectiveModel, "observed-model");
   assert.equal(effective.at(-1)?.effectiveEffort, "xhigh");
+});
+
+function seedHeadlessModelRun(
+  wired: Wiring,
+  digest: string,
+  docPath: string,
+  state = "halted",
+) {
+  const created = wired.runGroup.createRun({
+    operationId: "seed-headless-model",
+    bundleSnapshotDigest: digest,
+    launch: { doc: docPath },
+    selectedHarness: "claude-code",
+    modelChoice: { model: "opus", effort: "high" },
+    at: new Date(),
+  });
+  const owner = wired.runGroup.acquireRun(created.runId);
+  assert.ok(owner);
+  assert.ok(owner.writeState(state).ok);
+  assert.ok(owner.release().ok);
+  owner.close();
+  return created.runId;
+}
+
+test("[change-model-choice] run model requires a Run id and at least one flag, and resume accepts no model flag", async (t) => {
+  const { wired, digest, docPath } = wireAgent(t);
+  const runId = seedHeadlessModelRun(wired, digest, docPath);
+  const out: string[] = [],
+    err: string[] = [];
+  const io: HeadlessIO = {
+    out: (text) => out.push(text),
+    err: (text) => err.push(text),
+    cwd: () => process.cwd(),
+  };
+  assert.equal(
+    await runHeadless(wired, ["run", "model", "--model", "sonnet"], io),
+    1,
+  );
+  assert.match(err.join(""), /missing-run-id/);
+  err.length = 0;
+  assert.equal(await runHeadless(wired, ["run", "model", runId], io), 1);
+  assert.match(err.join(""), /model-choice-change-required/);
+  err.length = 0;
+  assert.equal(
+    await runHeadless(wired, ["run", "resume", runId, "--model", "sonnet"], io),
+    1,
+  );
+  assert.match(err.join(""), /unknown option/);
+  assert.deepEqual((await runShowJson(wired, runId)).modelChoice, {
+    model: "opus",
+    effort: "high",
+  });
+});
+
+test("[change-model-choice] run model retains omitted halves, prints additive Operation JSON, and reports preference failure only on stderr", async (t) => {
+  const { wired, digest, docPath, home } = wireAgent(t, {
+    adapter: createFake(lockedScript())(),
+  });
+  const runId = seedHeadlessModelRun(wired, digest, docPath);
+  const out: string[] = [],
+    err: string[] = [];
+  const io: HeadlessIO = {
+    out: (text) => out.push(text),
+    err: (text) => err.push(text),
+    cwd: () => process.cwd(),
+  };
+  // The lock overlays the old Run's effort when its model is changed.
+  assert.equal(
+    await runHeadless(
+      wired,
+      ["run", "model", runId, "--model", "sonnet", "--json"],
+      io,
+    ),
+    0,
+  );
+  const result = JSON.parse(out.join(""));
+  assert.equal(result.family, "operation");
+  assert.equal(typeof result.operationId, "string");
+  assert.deepEqual(result.outcome, { status: "applied" });
+  assert.deepEqual(result.modelChoiceChange, {
+    choice: { model: "sonnet", effort: "xhigh" },
+    reach: "next-turn",
+  });
+  assert.deepEqual((await runShowJson(wired, runId)).modelChoice, {
+    model: "sonnet",
+    effort: "xhigh",
+  });
+  out.length = 0;
+  err.length = 0;
+  const database = new Database(join(home, "catalog.db"));
+  t.after(() => database.close());
+  database.exec(
+    "CREATE TRIGGER fail_model_save BEFORE UPDATE ON preferences BEGIN SELECT RAISE(ABORT, 'injected'); END",
+  );
+  assert.equal(
+    await runHeadless(
+      wired,
+      ["run", "model", runId, "--effort", "xhigh", "--json"],
+      io,
+    ),
+    0,
+  );
+  assert.deepEqual(JSON.parse(out.join("")).modelChoiceChange.choice, {
+    model: "sonnet",
+    effort: "xhigh",
+  });
+  assert.match(err.join(""), /could not save/);
+  assert.equal(out.join("").includes("preferenceNotice"), false);
+  assert.equal("preferenceNotice" in (await runShowJson(wired, runId)), false);
+  out.length = 0;
+  err.length = 0;
+  assert.equal(
+    await runHeadless(
+      wired,
+      ["run", "model", runId, "--effort", "low", "--json"],
+      io,
+    ),
+    1,
+  );
+  assert.equal(JSON.parse(out.join("")).outcome.problem.code, "effort-locked");
+  assert.deepEqual((await runShowJson(wired, runId)).modelChoice, {
+    model: "sonnet",
+    effort: "xhigh",
+  });
+});
+
+test("[change-model-choice] plain run model reports a default effort reset, and unknown models and terminal Runs exit 1", async (t) => {
+  const script = plainScript();
+  const declaration: HarnessProfile["modelSelection"] = {
+    at: "per-turn",
+    evidence: "fake",
+    declaration: {
+      kind: "list",
+      models: [
+        {
+          model: "opus",
+          label: "Opus",
+          efforts: ["high"],
+          defaultEffort: "high",
+        },
+        {
+          model: "sonnet",
+          label: "Sonnet",
+          efforts: ["low"],
+          defaultEffort: "low",
+        },
+      ],
+    },
+  };
+  const { wired, digest, docPath } = wireAgent(t, {
+    adapter: createFake({
+      ...script,
+      profile: { ...script.profile, modelSelection: declaration },
+    })(),
+  });
+  const runId = seedHeadlessModelRun(wired, digest, docPath);
+  const out: string[] = [],
+    err: string[] = [];
+  const io: HeadlessIO = {
+    out: (text) => out.push(text),
+    err: (text) => err.push(text),
+    cwd: () => process.cwd(),
+  };
+  assert.equal(
+    await runHeadless(wired, ["run", "model", runId, "--model", "sonnet"], io),
+    0,
+  );
+  assert.match(out.join(""), /Applies from the next Turn/);
+  assert.match(
+    out.join(""),
+    /sonnet does not offer high effort. Effort changed to low, its default./,
+  );
+  out.length = 0;
+  out.length = 0;
+  err.length = 0;
+  assert.equal(
+    await runHeadless(wired, ["run", "model", runId, "--model", "unknown"], io),
+    1,
+  );
+  assert.match(err.join(""), /requested-model-unavailable/);
+  const owner = wired.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  assert.ok(owner.writeState("succeeded").ok);
+  owner.close();
+  out.length = 0;
+  err.length = 0;
+  assert.equal(
+    await runHeadless(
+      wired,
+      ["run", "model", runId, "--model", "opus", "--json"],
+      io,
+    ),
+    1,
+  );
+  const terminal = JSON.parse(out.join(""));
+  assert.equal(terminal.family, "operation");
+  assert.equal(typeof terminal.operationId, "string");
+  assert.equal(terminal.outcome.problem.code, "run-terminal");
+});
+
+test("[change-model-choice] a foreign live Run returns an Operation JSON refusal without fencing its owner", async (t) => {
+  const { wired, digest, docPath } = wireAgent(t);
+  const workspaceView = wired.projectionPort.openProjection({
+    family: "workspace",
+  });
+  const workspace = workspaceView.snapshot.path;
+  workspaceView.close();
+  const store = makeTempDir("secant-headless-model-foreign-");
+  const owning = openFakeRunGroup(store, workspace, {
+    selfPid: 1000,
+    isOwnerAlive: () => true,
+  });
+  t.after(() => owning.close());
+  const created = owning.createRun({
+    operationId: "foreign-live",
+    bundleSnapshotDigest: digest,
+    launch: { doc: docPath },
+    selectedHarness: "claude-code",
+    modelChoice: { model: "opus", effort: "high" },
+    at: new Date(),
+  });
+  const owner = owning.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.ok(owner.writeState("running").ok);
+  const observing = openFakeRunGroup(store, workspace, {
+    selfPid: 2000,
+    isOwnerAlive: (pid) => pid === 1000,
+  });
+  t.after(() => observing.close());
+  const app = createApplication({
+    catalog: wired.catalog,
+    runGroup: observing,
+    launchWorkspacePath: workspace,
+    process: createFakeBundleProcess(),
+  });
+  const out: string[] = [],
+    err: string[] = [];
+  assert.equal(
+    await runHeadless(
+      app,
+      ["run", "model", created.runId, "--model", "sonnet", "--json"],
+      {
+        out: (text) => out.push(text),
+        err: (text) => err.push(text),
+        cwd: () => workspace,
+      },
+    ),
+    1,
+  );
+  const receipt = JSON.parse(out.join(""));
+  assert.equal(receipt.family, "operation");
+  assert.equal(typeof receipt.operationId, "string");
+  assert.equal(receipt.outcome.status, "not-applied");
+  assert.equal(receipt.outcome.problem.code, "run-live-elsewhere");
+  assert.ok(owner.writeState("running").ok);
+  assert.deepEqual(owner.record.modelChoice, { model: "opus", effort: "high" });
+  assert.equal(err.join(""), "");
 });

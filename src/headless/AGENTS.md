@@ -5,7 +5,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Invariants
 
 - The Run notice follower starts before launch/resume/answer settlement (#363), reopens on observer lag, and writes fallback information once to stderr.
-  Run snapshot JSON serialization explicitly omits the transient notice; `show` also writes it to stderr.
+  Run snapshot JSON serialization explicitly omits the transient notice; `show` and `model` also write it to stderr.
+- `run model` waits for the qualified `change-model-choice` Offer, forwards partial values unchanged, and adds its result to Operation JSON.
 
 - Exit-code contract: the headless Run commands exit 0 only when the Run rests exactly `succeeded`, **2** when it rests `blocked` at its Human Gate
   checkpoint (the M2 gate's expected outcome — distinguished from a failure so CI can assert it), and 1 for every other rest (A36, `exitForState` in
@@ -13,7 +14,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   than a raw `spawnSync`; but raw `spawnSync` sites deliberately remain for the spawns that expect a non-zero/failure exit and for the long-lived child processes
   (SIGINT, takeover), which `run()`'s default exit-0 contract does not fit (A35). This rest-state exit is only `launch`, `resume` and `answer` — the three
   commands that drive to settlement through `settleAndReportRun`;
-  `show`, `list`, `read`, `cancel` and `delete` exit 0 on success (or 1 on a refusal), never by rest state. On Ctrl+C the signal handler (`withClients`,
+  `show`, `list`, `read`, `model`, `cancel` and `delete` exit 0 on success (or 1 on a refusal), never by rest state. On Ctrl+C the signal handler (`withClients`,
   `composition/main.ts`, #98) aborts the live Runs, restores the default disposition, and re-raises the signal, so the process exits **128 plus the signal
   number** rather than 1 — the Unix "killed" contract a CI script reads, which a fabricated 1 destroys. The `halted` rest lands lazily: the claim is left
   live and the next open reconciles it `halted` (ADR 0019), not the signalled process.

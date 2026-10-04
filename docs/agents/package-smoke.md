@@ -29,6 +29,7 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
   the Run's `modelChoice` and every `turn-started` entry's requested model and effort. Each launch names a value its preselection would not choose
   (Codex qualifies against `codex-qualification-unconfigured`), and the strict Codex replay proves both on `turn/start`. Claude refuses a contradicting
   effort under `CLAUDE_CODE_EFFORT_LEVEL=xhigh`, launches explicitly and flaglessly at that lock, and records observed effort in JSON (#347).
+  `run model` changes each idle gate's Run; a later `run show --json` reports the new choice while earlier Turns retain their requested values (#344).
 - **install-collision**: a byte-different same-identity archive is rejected as `bundle-identity-collision` (first-install-wins).
 - **run-refusals** (#82): `run show` on an unknown id and `run launch` on an uninstalled Bundle exit non-zero with `run-not-found` and
   `bundle-not-installed` before any Run directory exists.
