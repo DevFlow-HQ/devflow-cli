@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const CODEX_RECORDING_INPUT = {
+  agentCalls:
+    "Call secant.step_done with reason 'recorded completion', then recording_external.needs_approval, then recording_external.ask_form, then recording_external.ask_url, in that exact order. If a request is declined, continue with the next tool. Do not call other tools. Finally reply: recorded channel.",
+  agentCallsLegacy:
+    "Call recording_external.needs_approval once. If declined, reply: recorded legacy decline. Do not call other tools.",
   completion: "Reply with exactly: recorded completion.",
   secondCompletion: "Reply with exactly: recorded second completion.",
   approval:

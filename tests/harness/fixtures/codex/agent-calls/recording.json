@@ -1,0 +1,41 @@
+{
+  "harness": "codex",
+  "executableVersion": "codex-cli 0.160.0",
+  "protocolVersion": "codex-probe-4",
+  "recordedAt": "2026-10-04T11:20:45.589Z",
+  "redactions": [
+    {
+      "placeholder": "«SESSION_BEARER»",
+      "reason": "Session MCP bearer"
+    },
+    {
+      "placeholder": "/recorded/codex-home",
+      "reason": "Codex home path"
+    },
+    {
+      "placeholder": "«WORKSPACE»",
+      "reason": "recording Workspace path"
+    },
+    {
+      "placeholder": "recorded-installation-id",
+      "reason": "Codex installation id"
+    },
+    {
+      "placeholder": "recorded-chatgpt-account-id",
+      "reason": "Codex ChatGPT account id"
+    },
+    {
+      "placeholder": "http://127.0.0.1:1/mcp",
+      "reason": "ephemeral Session MCP URL"
+    },
+    {
+      "placeholder": "recorded@example.invalid",
+      "reason": "Codex account email"
+    },
+    {
+      "placeholder": "«HOSTNAME»",
+      "reason": "recording host name"
+    }
+  ],
+  "refreshCommand": "bun tests/harness/record-codex.ts agent-calls"
+}

@@ -132,6 +132,8 @@ function durableLabel(event: RunTimelineEvent): string {
       return `● ${turnLabel} settled${detail}`;
     case "effective-model":
       return `◇ Effective model${detail}`;
+    case "elicitation-declined":
+      return `↳ ${event.detail ?? "Elicitation declined"}`;
     case "request-raised":
       return `? Harness Request raised${detail}`;
     case "request-answered":

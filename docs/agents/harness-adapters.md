@@ -92,6 +92,9 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - Timeout split: `handshakeTimeoutMs` bounds prepare and replacement qualification (spawn → `initialize`/`account`/`model`); `controlTimeoutMs`
   (defaults to it) bounds post-qualification live exchanges (session start/resume, Turn start/interrupt/steer acks). A stall-then-timeout test squeezes
   `controlTimeoutMs`, never `handshakeTimeoutMs` — throttling the spawn+handshake there flakes `prepare` on a loaded Windows runner (the #148 CI flake).
+- Opted-in Codex Sessions attach `secant` through start and every exact resume, reusing their token and fixed tools across replacement (#370).
+  `approvalsReviewer: "user"` keeps requests human-routed; MCP tool elicitations expose Allow/Deny. Other elicitations and user input are declined.
+  Declined elicitation evidence crosses the Harness Interface as data; Application owns its words. Native MCP metadata only cross-checks attribution.
 - Codex inherits user environment/home; unauthenticated becomes the fixed separate-login remediation, and no account or credential crosses the Seam.
 - The per-thread `sandbox_workspace_write.writable_roots` override (#214) **replaces** any user-configured extra `writable_roots` for that thread rather than
   merging them (a `ponytail:` in `codex.ts`; merge via `config/read` if a user relies on both). `sandboxAdmitsDirectory` compares roots through

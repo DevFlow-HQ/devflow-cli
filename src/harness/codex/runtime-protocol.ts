@@ -396,6 +396,26 @@ const commandApprovalSchema = correlatedParamsSchema.extend({
 const fileApprovalSchema = correlatedParamsSchema.extend({
   itemId: z.string().min(1),
 });
+const elicitationSchema = z.looseObject({
+  threadId: z.string().min(1),
+  turnId: z.string().min(1).nullish(),
+  serverName: z.string().min(1),
+  message: z.string(),
+  mode: z.string(),
+  url: z.string().optional(),
+  _meta: z.unknown().optional(),
+});
+const toolApprovalMetadata = z.looseObject({
+  codex_approval_kind: z.literal("mcp_tool_call"),
+});
+const toolApprovalInput = toolApprovalMetadata.extend({
+  tool_params: z.record(z.string(), z.unknown()),
+});
+const userInputSchema = correlatedParamsSchema.extend({
+  itemId: z.string().min(1),
+  questions: z.array(z.unknown()),
+});
+
 const modelReroutedSchema = correlatedParamsSchema.extend({
   toModel: z.string().min(1),
 });
@@ -443,11 +463,28 @@ export type CodexRuntimeNotification =
     }
   | { readonly kind: "activity"; readonly description: string }
   | {
+      readonly kind: "elicitation";
+      readonly nativeRequestId: string | number;
+      readonly threadId: string;
+      readonly turnId?: string;
+      readonly server: string;
+      readonly message: string;
+      readonly url?: string;
+      readonly approvalInput?: string;
+    }
+  | {
+      readonly kind: "user-input";
+      readonly nativeRequestId: string | number;
+      readonly threadId: string;
+      readonly turnId: string;
+    }
+  | {
       readonly kind: "approval-request";
       readonly nativeRequestId: string | number;
       readonly threadId: string;
       readonly turnId: string;
-      readonly tool: "command" | "file-change";
+      readonly tool: string;
+      readonly responseKind?: "elicitation";
       readonly itemId: string;
       readonly input?: string;
     }
@@ -473,6 +510,35 @@ export function parseRuntimeNotification(
   const method = message.method;
   if (method === undefined) return undefined;
   if (message.id !== undefined) {
+    if (method === "mcpServer/elicitation/request") {
+      const params = parseResult(message.params, elicitationSchema, method);
+      const approval = toolApprovalMetadata.safeParse(params._meta).success
+        ? parseResult(params._meta, toolApprovalInput, method)
+        : undefined;
+      return {
+        kind: "elicitation",
+        nativeRequestId: message.id,
+        threadId: params.threadId,
+        ...(params.turnId == null ? {} : { turnId: params.turnId }),
+        server: params.serverName,
+        message: params.message,
+        ...(params.url === undefined ? {} : { url: params.url }),
+        ...(approval === undefined
+          ? {}
+          : {
+              approvalInput: `${params.message}\n${JSON.stringify(approval.tool_params)}`,
+            }),
+      };
+    }
+    if (method === "item/tool/requestUserInput") {
+      const params = parseResult(message.params, userInputSchema, method);
+      return {
+        kind: "user-input",
+        nativeRequestId: message.id,
+        threadId: params.threadId,
+        turnId: params.turnId,
+      };
+    }
     if (method === "item/commandExecution/requestApproval") {
       const params = parseResult(message.params, commandApprovalSchema, method);
       return {
@@ -816,4 +882,38 @@ export async function boundedCodexExchange<T>(options: {
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+// Codex 0.160.0 turn_metadata.rs retains immediate parent identity but strips
+// parent/root Turn ids from external MCP metadata. Helpers keep their own ids.
+const nativeTurnMetadataSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  },
+  z.object({
+    thread_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    parent_thread_id: z.string().min(1).optional(),
+  }),
+);
+const agentCallMetadataSchema = z
+  .object({
+    threadId: z.string().min(1).optional(),
+    turnId: z.string().min(1).optional(),
+    "x-codex-turn-metadata": nativeTurnMetadataSchema.optional(),
+  })
+  .transform((value) => ({
+    threadId: value.threadId ?? value["x-codex-turn-metadata"]?.thread_id,
+    turnId: value.turnId ?? value["x-codex-turn-metadata"]?.turn_id,
+    parentThreadId: value["x-codex-turn-metadata"]?.parent_thread_id,
+  }));
+
+/** Opaque MCP metadata is only a cross-check, never Session attribution. */
+export function parseAgentCallMetadata(value: unknown) {
+  return agentCallMetadataSchema.safeParse(value ?? {});
 }

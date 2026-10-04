@@ -46,7 +46,8 @@ export type ApprovalRouter = (
 /** Resolves the Session's live Turn at call time. An idle Session has no sink. */
 type AgentCallRouter = (
   session: string,
-) => ((call: AgentCall) => Promise<AgentCallReply>) | undefined;
+) =>
+  ((call: AgentCall, metadata: unknown) => Promise<AgentCallReply>) | undefined;
 
 interface SessionAttachment {
   readonly launchArgs: readonly string[];
@@ -317,16 +318,19 @@ function agentCallServer(
             ),
         },
       },
-      async (args) => {
+      async (args, extra) => {
         const sink = router(owner.name);
         const reply: AgentCallReply =
           sink === undefined
             ? { outcome: "refused", reason: "no Turn in progress" }
-            : await sink({
-                callId: { opaque: randomBytes(16).toString("hex") },
-                id: declaration.id,
-                reason: args.reason,
-              });
+            : await sink(
+                {
+                  callId: { opaque: randomBytes(16).toString("hex") },
+                  id: declaration.id,
+                  reason: args.reason,
+                },
+                extra._meta,
+              );
         const message =
           reply.outcome === "accepted"
             ? "accepted: takes effect when this Turn finishes"

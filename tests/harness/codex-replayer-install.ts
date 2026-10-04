@@ -192,9 +192,20 @@ interface CodexTurnReplayOptions {
 }
 
 interface CodexApprovalReplay {
+  readonly server?: string;
+  readonly message?: string;
+  readonly url?: string;
+  readonly toolApproval?: boolean;
+  readonly toolParams?: Readonly<Record<string, unknown>>;
+  readonly uncorrelated?: boolean;
   readonly id: string | number;
   readonly kind:
-    "command" | "file" | "unsupported-command" | "request-user-input";
+    | "command"
+    | "file"
+    | "unsupported-command"
+    | "request-user-input"
+    | "elicitation"
+    | "unknown-request";
   readonly itemId: string;
   readonly command?: string;
   readonly changes?: readonly {

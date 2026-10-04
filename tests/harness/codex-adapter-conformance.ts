@@ -75,6 +75,453 @@ export function registerCodexAdapterConformance(
 // runtime-conformance runner (#184): see tests/harness/replayer-conformance.ts
 // (`codex-replayer-conformance`). The Codex-specific cases below stay here.
 
+test("Codex Agent calls use an authenticated Session channel and settle before producer close", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({
+    withholdTerminal: true,
+    interruptTerminal: "interrupted",
+  });
+  const prepared = await prepareCodex(installed.path);
+  try {
+    assert.equal(prepared.profile.agentCalls.available, true);
+    const turn = prepared.startTurn({
+      ...turnRequest(),
+      agentCalls: [
+        { id: "step_done", description: "End the step", maxReasonLength: 400 },
+      ],
+    });
+    const events = observeEvents(turn);
+    await waitForEventCount(turn, events, "model", 1);
+    const native = installed
+      .invocations()
+      .flatMap((i) => i.stdinLines)
+      .map((line) => JSON.parse(line));
+    const start = native.find((frame) => frame.method === "thread/start");
+    assert.equal(start.params.approvalsReviewer, "user");
+    assert.equal(
+      start.params.config["mcp_servers.secant.default_tools_approval_mode"],
+      "approve",
+    );
+    const url = start.params.config["mcp_servers.secant.url"];
+    const headers = {
+      ...start.params.config["mcp_servers.secant.http_headers"],
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    const rpc = async (method: string, params: object) =>
+      fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+    const init = await rpc("initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "codex-test", version: "1" },
+    });
+    assert.equal(init.status, 200);
+    await init.json();
+    const sessionId = init.headers.get("mcp-session-id");
+    assert.ok(sessionId);
+    Object.assign(headers, { "mcp-session-id": sessionId });
+    const wrong = await rpc("tools/call", {
+      name: "step_done",
+      arguments: { reason: "done" },
+      _meta: { threadId: "wrong" },
+    });
+    assert.equal((await wrong.json()).result.isError, true);
+    const stale = await rpc("tools/call", {
+      name: "step_done",
+      arguments: { reason: "done" },
+      _meta: {
+        "x-codex-turn-metadata": {
+          thread_id: "thread-1",
+          turn_id: "stale-turn",
+        },
+      },
+    });
+    assert.equal((await stale.json()).result.isError, true);
+    assert.equal(events.filter((e) => e.kind === "agent-call").length, 0);
+    const call = rpc("tools/call", {
+      name: "step_done",
+      arguments: { reason: "  done\nnow  " },
+      _meta: {
+        "x-codex-turn-metadata": { thread_id: "thread-1", turn_id: "turn-1" },
+      },
+    });
+    await waitForEventCount(turn, events, "agent-call", 1);
+    const raised = events.find(
+      (e) => e.kind === "agent-call" && e.phase === "raised",
+    );
+    assert.ok(raised?.kind === "agent-call" && raised.phase === "raised");
+    assert.equal(raised.call.reason, "  done\nnow  ");
+    const answer = {
+      callId: raised.call.callId,
+      outcome: "held-for-review",
+    } as const;
+    assert.deepEqual(await turn.answerAgentCall(answer), {
+      outcome: "accepted",
+    });
+    assert.deepEqual(await turn.answerAgentCall(answer), {
+      outcome: "rejected",
+      reason: "already-settled",
+    });
+    assert.equal(
+      (await (await call).json()).result.content[0].text,
+      "held for review: the human decides the next Iteration",
+    );
+    // A direct helper and a deeper descendant inherit the Session bearer;
+    // their own Turn ids cannot be compared with the parent's live Turn.
+    let callCount = 1;
+    for (const parent of ["thread-1", "helper-thread"]) {
+      const helper = rpc("tools/call", {
+        name: "step_done",
+        arguments: { reason: "helper done" },
+        _meta: {
+          "x-codex-turn-metadata": JSON.stringify({
+            thread_id: "helper-descendant",
+            turn_id: "helper-turn",
+            parent_thread_id: parent,
+          }),
+        },
+      });
+      await waitForEventCount(turn, events, "agent-call", ++callCount);
+      const latest = events.at(-1);
+      assert.ok(latest?.kind === "agent-call" && latest.phase === "raised");
+      assert.deepEqual(
+        await turn.answerAgentCall({
+          callId: latest.call.callId,
+          outcome: "accepted",
+        }),
+        { outcome: "accepted" },
+      );
+      assert.equal((await (await helper).json()).result.isError, false);
+    }
+    const unanswered = rpc("tools/call", {
+      name: "step_done",
+      arguments: { reason: "later" },
+    });
+    await waitForEventCount(turn, events, "agent-call", ++callCount);
+    await turn.interrupt();
+    assert.equal((await turn.result()).kind, "interrupted");
+    assert.equal((await (await unanswered).json()).result.isError, true);
+    assert.equal(events.at(-1)?.kind, "agent-call");
+    assert.deepEqual(await turn.answerAgentCall(answer), {
+      outcome: "rejected",
+      reason: "expired",
+    });
+    const idle = await rpc("tools/call", {
+      name: "step_done",
+      arguments: { reason: "idle" },
+    });
+    assert.equal(
+      (await idle.json()).result.content[0].text,
+      "no Turn in progress",
+    );
+  } finally {
+    await prepared.close();
+  }
+});
+
+for (const legacy of [false, true]) {
+  test(`Codex recorded channel ${legacy ? "legacy input decline" : "Agent call, approvals and elicitation declines"}`, async () => {
+    const installed = installCodexReplayer(
+      legacy ? "agent-calls-legacy" : "agent-calls",
+    );
+    const prepared = await prepareCodex(installed.path);
+    try {
+      const turn = prepared.startTurn({
+        ...turnRequest(undefined, {
+          text: legacy
+            ? CODEX_RECORDING_INPUT.agentCallsLegacy
+            : CODEX_RECORDING_INPUT.agentCalls,
+        }),
+        agentCalls: [
+          {
+            id: "step_done",
+            description: "End the Step",
+            maxReasonLength: 400,
+          },
+        ],
+      });
+      const events = observeEvents(turn);
+      turn.subscribe((event) => {
+        if (event.kind === "agent-call" && event.phase === "raised")
+          void turn.answerAgentCall({
+            callId: event.call.callId,
+            outcome: "accepted",
+          });
+        if (event.kind === "request-raised")
+          void turn.answerRequest({
+            requestId: event.request.requestId,
+            kind: "approval",
+            decision: "allow",
+          });
+      });
+      const result = await turn.result();
+      assert.equal(result.kind, "completed", JSON.stringify(result));
+      assert.equal(
+        events.filter((event) => event.kind === "request-raised").length,
+        legacy ? 0 : 3,
+      );
+      assert.equal(
+        events.filter(
+          (event) => event.kind === "agent-call" && event.phase === "raised",
+        ).length,
+        legacy ? 0 : 1,
+      );
+      assert.deepEqual(
+        events.filter((event) => event.kind === "elicitation-declined"),
+        legacy
+          ? []
+          : [
+              {
+                kind: "elicitation-declined",
+                harness: "codex",
+                server: "recording_external",
+                message: "Enter a recording code",
+              },
+              {
+                kind: "elicitation-declined",
+                harness: "codex",
+                server: "recording_external",
+                message: "Open the recording verification link",
+                url: "https://example.com/verify",
+              },
+            ],
+      );
+    } finally {
+      await prepared.close();
+    }
+  });
+}
+
+test("Codex tool elicitations offer Allow/Deny and decline other elicitations", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({
+    approvals: [
+      {
+        id: "allow",
+        kind: "elicitation",
+        toolApproval: true,
+        message: "Call external.write with value 1",
+        toolParams: { path: "safe" },
+        itemId: "1",
+      },
+      {
+        id: "deny",
+        kind: "elicitation",
+        toolApproval: true,
+        message: "Call external.write with value 2",
+        toolParams: { path: "sensitive" },
+        itemId: "2",
+        uncorrelated: true,
+      },
+      {
+        id: "form",
+        kind: "elicitation",
+        message: "Enter a code",
+        itemId: "3",
+        uncorrelated: true,
+      },
+      {
+        id: "link",
+        kind: "elicitation",
+        message: "Open this link",
+        url: "https://example.com/verify",
+        itemId: "4",
+      },
+    ],
+  });
+  const prepared = await prepareCodex(installed.path);
+  try {
+    const turn = prepared.startTurn(turnRequest());
+    const events = observeEvents(turn);
+    await waitForRequestCount(turn, events, 2);
+    const requests = events.flatMap((e) =>
+      e.kind === "request-raised" ? [e.request] : [],
+    );
+    assert.deepEqual(
+      requests.map((r) => r.shape),
+      [
+        {
+          kind: "approval",
+          tool: "external",
+          input: 'Call external.write with value 1\n{"path":"safe"}',
+          decisions: ["allow", "deny"],
+        },
+        {
+          kind: "approval",
+          tool: "external",
+          input: 'Call external.write with value 2\n{"path":"sensitive"}',
+          decisions: ["allow", "deny"],
+        },
+      ],
+    );
+    for (const [index, request] of requests.entries())
+      assert.deepEqual(
+        await turn.answerRequest({
+          requestId: request.requestId,
+          kind: "approval",
+          decision: index === 0 ? "allow" : "deny",
+        }),
+        { outcome: "accepted" },
+      );
+    assert.equal((await turn.result()).kind, "completed");
+    assert.deepEqual(
+      events.filter((e) => e.kind === "elicitation-declined"),
+      [
+        {
+          kind: "elicitation-declined",
+          harness: "codex",
+          server: "external",
+          message: "Enter a code",
+        },
+        {
+          kind: "elicitation-declined",
+          harness: "codex",
+          server: "external",
+          message: "Open this link",
+          url: "https://example.com/verify",
+        },
+      ],
+    );
+    const replies = installed
+      .invocations()
+      .flatMap((i) => i.stdinLines)
+      .map((line) => JSON.parse(line))
+      .filter((frame) => ["allow", "deny", "form", "link"].includes(frame.id));
+    assert.deepEqual(
+      replies.map((r) => r.result),
+      [
+        { action: "decline", content: null, _meta: null },
+        { action: "decline", content: null, _meta: null },
+        { action: "accept", content: { decision: "approve" }, _meta: null },
+        { action: "decline", content: null, _meta: null },
+      ],
+    );
+  } finally {
+    await prepared.close();
+  }
+});
+
+test("Codex unknown reverse requests still fail the Turn", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({
+    approvals: [{ id: "unknown", kind: "unknown-request", itemId: "1" }],
+  });
+  const prepared = await prepareCodex(installed.path);
+  try {
+    assert.equal(
+      (await prepared.startTurn(turnRequest()).result()).kind,
+      "lost",
+    );
+  } finally {
+    await prepared.close();
+  }
+});
+
+for (const fault of [
+  "thread/start",
+  "turn/start",
+  "thread/read",
+  "native-error",
+] as const) {
+  test(`Codex Session bearer is redacted from ${fault}`, async () => {
+    const installed = installSyntheticCodexReplayer();
+    if (fault === "thread/read") installed.configureThreadRead("rpc-error");
+    if (fault === "native-error")
+      installed.configureTurn({ retryingError: "NATIVE_BEARER" });
+    const native = createProcessAdapter(withRunnerObserver());
+    let bearer: string | undefined;
+    const processAdapter = processWithSpawn(async (options) => {
+      const spawned = await native.spawnOwnedProcess(options);
+      if (!spawned.ok) return spawned;
+      const owned = spawned.process;
+      return {
+        ...spawned,
+        process: {
+          stdout: {
+            async *[Symbol.asyncIterator]() {
+              for await (const bytes of owned.stdout) {
+                const text = new TextDecoder()
+                  .decode(bytes)
+                  .replaceAll("NATIVE_BEARER", bearer ?? "NATIVE_BEARER")
+                  .replaceAll(
+                    "failed to read thread: rollout is empty",
+                    `echoed ${bearer ?? "unavailable"}`,
+                  );
+                yield new TextEncoder().encode(text);
+              }
+            },
+          },
+          stderr: owned.stderr,
+          closed: () => owned.closed(),
+          closeStdin: (ms) => owned.closeStdin(ms),
+          interrupt: (ms) => owned.interrupt(ms),
+          writeStdin(bytes) {
+            const text = new TextDecoder().decode(bytes);
+            const frame = JSON.parse(text);
+            if (frame.method === "thread/start") {
+              bearer =
+                frame.params.config[
+                  "mcp_servers.secant.http_headers"
+                ].Authorization.slice(7);
+            }
+            if (
+              (fault === "thread/start" || fault === "turn/start") &&
+              frame.method === fault
+            )
+              return Promise.reject(new Error(`write failed ${bearer}`));
+            return owned.writeStdin(bytes);
+          },
+        },
+      };
+    });
+    const result = await createCodexAdapter({
+      path: installed.path,
+      env: {},
+    }).prepare({ workspace: process.cwd(), process: processAdapter });
+    assert.ok(result.ok);
+    try {
+      const turn = result.harness.startTurn({
+        ...turnRequest(),
+        agentCalls: [
+          { id: "step_done", description: "Done", maxReasonLength: 400 },
+        ],
+      });
+      const events = observeEvents(turn);
+      const terminal = await turn.result();
+      assert.ok(bearer);
+      const secret = bearer;
+      if (fault === "thread/start" || fault === "turn/start") {
+        assert.equal(
+          terminal.kind,
+          fault === "thread/start" ? "not-started" : "lost",
+        );
+        assert.ok(terminal.kind === "not-started" || terminal.kind === "lost");
+        const cause = terminal.detail.failure?.cause;
+        assert.ok(cause instanceof Error);
+        assert.equal(cause.message.includes(bearer), false);
+        assert.equal(cause.stack?.includes(bearer), false);
+        assert.match(cause.message, /redacted/);
+      } else {
+        assert.equal(terminal.kind, "completed");
+        const descriptions = events.flatMap((event) =>
+          event.kind === "activity" ? [event.description] : [],
+        );
+        assert.ok(descriptions.some((text) => text.includes("redacted")));
+        assert.equal(
+          descriptions.some((text) => text.includes(secret)),
+          false,
+        );
+      }
+    } finally {
+      await result.harness.close();
+    }
+  });
+}
+
 // --- Approval requests -------------------------------------------------------
 
 test("Codex approval allow and deny map only to native accept and decline", async () => {
@@ -597,7 +1044,7 @@ test("a file approval without exact file-change context fails closed", async () 
   await prepared.close();
 });
 
-test("experimental request-user-input remains disabled and fails closed", async () => {
+test("request-user-input is declined without ending the Turn", async () => {
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     approvals: [
@@ -606,9 +1053,13 @@ test("experimental request-user-input remains disabled and fails closed", async 
   });
   const prepared = await prepareCodex(installed.path);
   const result = await prepared.startTurn(turnRequest()).result();
-  assert.equal(result.kind, "lost");
-  if (result.kind !== "lost") throw new Error("unreachable");
-  assert.equal(result.detail.failure?.category, "protocol-corruption");
+  assert.equal(result.kind, "completed");
+  const replies = installed
+    .invocations()
+    .flatMap((i) => i.stdinLines)
+    .map((line) => JSON.parse(line))
+    .filter((frame) => frame.id === "request-input");
+  assert.deepEqual(replies, [{ id: "request-input", result: { answers: {} } }]);
   assert.equal(prepared.profile.clarifications.available, false);
   await prepared.close();
 });
@@ -1814,6 +2265,9 @@ test("cleanup failure cannot rewrite an already-settled Codex Turn", async () =>
 test("codex replacement resumes two Sessions on one new app-server before admission", async () => {
   const installed = installSyntheticCodexReplayer();
   const writableDirectory = makeTempDir("secant-replacement-writable-");
+  const agentCalls = [
+    { id: "step_done", description: "End the Step", maxReasonLength: 400 },
+  ];
   let end: (() => Promise<CleanupReport>) | undefined;
   const result = await createCodexAdapter({
     path: installed.path,
@@ -1827,7 +2281,11 @@ test("codex replacement resumes two Sessions on one new app-server before admiss
   try {
     for (const session of ["one", "two"]) {
       assert.equal(
-        (await prepared.startTurn({ ...turnRequest(), session }).result()).kind,
+        (
+          await prepared
+            .startTurn({ ...turnRequest(), agentCalls, session })
+            .result()
+        ).kind,
         "completed",
       );
     }
@@ -1844,6 +2302,7 @@ test("codex replacement resumes two Sessions on one new app-server before admiss
     const unsupported = await prepared
       .startTurn({
         ...turnRequest(),
+        agentCalls,
         session: "one",
         modelChoice: { model: "unlisted-model" },
       })
@@ -1873,6 +2332,7 @@ test("codex replacement resumes two Sessions on one new app-server before admiss
           },
           checkpoint: () => Promise.resolve({ recorded: true }),
         }),
+        agentCalls,
         session,
         modelChoice: {
           model: session === "two" ? "gpt-5.6-sol" : "gpt-6-astra",
@@ -1884,6 +2344,20 @@ test("codex replacement resumes two Sessions on one new app-server before admiss
       .invocations()
       .filter((entry) => entry.args.join(" ") === "app-server");
     assert.equal(servers.length, 2);
+    const starts = servers[0]!.stdinLines
+      .map((line) => JSON.parse(line))
+      .filter((frame) => frame.method === "thread/start");
+    assert.notDeepEqual(
+      starts[0].params.config["mcp_servers.secant.http_headers"],
+      starts[1].params.config["mcp_servers.secant.http_headers"],
+    );
+    for (const start of starts) {
+      assert.equal(start.params.approvalsReviewer, "user");
+      assert.equal(
+        start.params.config["mcp_servers.secant.default_tools_approval_mode"],
+        "approve",
+      );
+    }
     const frames = servers[1]!.stdinLines.map((line) => JSON.parse(line));
     assert.deepEqual(
       frames.map((frame) => frame.method),
@@ -1907,13 +2381,25 @@ test("codex replacement resumes two Sessions on one new app-server before admiss
       [
         {
           threadId: "thread-2",
+          approvalsReviewer: "user",
           config: {
+            "mcp_servers.secant.url":
+              starts[1].params.config["mcp_servers.secant.url"],
+            "mcp_servers.secant.http_headers":
+              starts[1].params.config["mcp_servers.secant.http_headers"],
+            "mcp_servers.secant.default_tools_approval_mode": "approve",
             "sandbox_workspace_write.writable_roots": [writableDirectory],
           },
         },
         {
           threadId: "thread-1",
+          approvalsReviewer: "user",
           config: {
+            "mcp_servers.secant.url":
+              starts[0].params.config["mcp_servers.secant.url"],
+            "mcp_servers.secant.http_headers":
+              starts[0].params.config["mcp_servers.secant.http_headers"],
+            "mcp_servers.secant.default_tools_approval_mode": "approve",
             "sandbox_workspace_write.writable_roots": [writableDirectory],
           },
         },

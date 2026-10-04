@@ -46,6 +46,13 @@ taken after the last pending-input check is re-delivered by an empty-input `turn
 injects the empty-input refusal, which an idle 0.160.0 thread never sends. These recordings qualify those protocol fields, not a full
 installed-Harness Proof Bundle pass.
 
+The Agent-call recordings (`agent-calls`, `agent-calls-legacy`, #370) were recorded on codex-cli 0.160.0 on Linux x64 on 2026-10-04 against
+`codex-probe-4`. They cover the pre-approved Secant call, tool-approval elicitations, declined form/link elicitations, and the legacy
+`requestUserInput` decline. The recorder attaches a local fixture MCP server through a pass-through config shim; every reverse-request byte comes
+from Codex. Replay checks the Session config and calls the real loopback listener. Synthetic cases cover token reuse across replacement,
+Allow/Deny-only replies, metadata mismatch, call expiry, unknown requests, and token redaction. This adds replay provenance without changing
+installed-Harness claims.
+
 The `v0.1.0` release recorded both Harness passes on Windows x64 against candidate
 binary SHA-256 `c1fab9956073b39ab689793f0a4232260986c521b98106fb28a9bd296ffa9577`.
 These rows make no macOS, Linux, or cross-operating-system real-Harness claim.

@@ -1,4 +1,9 @@
-import { bindAgentCallDeclarations } from "./permission-bridge.js";
+import {
+  bindAgentCallDeclarations,
+  startPermissionBridge,
+  type PermissionBridge,
+} from "./permission-bridge.js";
+import { redactSecrets, redactText } from "./secrets.js";
 import { reportContainment } from "./containment.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -7,6 +12,8 @@ import { join } from "node:path";
 import type { OwnedProcess, ProcessAdapter } from "../process/process.js";
 import {
   APPROVAL_DECISIONS,
+  type AgentCall,
+  type AgentCallReply,
   type AgentCallAnswer,
   type AgentCallDeclaration,
   type CleanupReport,
@@ -61,6 +68,7 @@ import {
   CodexRpcResponseError,
   type CodexRpcEnvelope,
   parseRuntimeNotification,
+  parseAgentCallMetadata,
   parseThreadReadResult,
   parseThreadResumeResult,
   parseThreadStartResult,
@@ -640,6 +648,32 @@ class CodexPreparedHarness implements PreparedHarness {
     return this.defaults;
   }
 
+  private bridgePromise: Promise<PermissionBridge> | undefined;
+
+  private ensureBridge(): Promise<PermissionBridge> {
+    if (this.bridgePromise === undefined) {
+      const started = startPermissionBridge(
+        async () => ({
+          decision: "deny",
+          message: "unsupported permission endpoint",
+        }),
+        (session) => {
+          const active = this.active;
+          return active !== undefined &&
+            active.request.session === session &&
+            active.acceptsAgentCalls()
+            ? (call, metadata) => active.raiseAgentCall(call, metadata)
+            : undefined;
+        },
+      ).catch((cause: unknown) => {
+        if (this.bridgePromise === started) this.bridgePromise = undefined;
+        throw cause;
+      });
+      this.bridgePromise = started;
+    }
+    return this.bridgePromise;
+  }
+
   private readonly callDeclarations = new Map<
     string,
     readonly AgentCallDeclaration[]
@@ -667,6 +701,8 @@ class CodexPreparedHarness implements PreparedHarness {
         this.controlTimeoutMs,
         this.writableDirectory,
         this.phases,
+        () => this.ensureBridge(),
+        declarations,
       );
       this.sessions.set(request.session, session);
     }
@@ -858,6 +894,26 @@ class CodexPreparedHarness implements PreparedHarness {
     }
     if (this.replacement !== undefined) await this.replacement;
     const report = await this.endGeneration();
+    if (this.bridgePromise !== undefined) {
+      const bridge = await this.bridgePromise.catch(() => undefined);
+      try {
+        await bridge?.close();
+      } catch (cause) {
+        return {
+          clean: false,
+          detail: "Codex Session listener did not close cleanly.",
+          failure: {
+            ...failureWithCause(
+              "cleanup",
+              "Codex Session listener did not close cleanly.",
+              cause,
+            ),
+            phase: "cleanup",
+          },
+          sessions: this.sessionReports(),
+        };
+      }
+    }
     return this.endedReport?.clean === false
       ? { ...this.endedReport, sessions: this.sessionReports() }
       : report;
@@ -977,21 +1033,37 @@ class CodexSession {
      *  override and checked against the acknowledged sandbox. */
     private readonly writableDirectory: string | undefined,
     private readonly phases: HarnessPhaseObserver | undefined,
+    private readonly ensureBridge: () => Promise<PermissionBridge>,
+    private readonly declarations: readonly AgentCallDeclaration[],
   ) {}
 
-  /** The per-thread config override adding the writable directory (#214). It
-   *  extends `workspace-write` roots only, so the user's sandbox mode and approval
-   *  policy stay theirs; under read-only the user's approvals govern its writes. */
-  private threadConfig(): { config?: Record<string, unknown> } {
-    return this.writableDirectory === undefined
-      ? {}
-      : {
-          // ponytail: replaces any user-configured extra writable_roots for this
-          // thread; merge them via config/read if a user relies on both.
-          config: {
-            "sandbox_workspace_write.writable_roots": [this.writableDirectory],
-          },
-        };
+  /** Reused on every start and exact resume, including generation replacement. */
+  private async threadConfig(): Promise<{
+    approvalsReviewer: "user";
+    config?: Record<string, unknown>;
+  }> {
+    const config: Record<string, unknown> = {};
+    if (this.writableDirectory !== undefined) {
+      // ponytail: replaces the user's extra writable roots for this thread (#214).
+      config["sandbox_workspace_write.writable_roots"] = [
+        this.writableDirectory,
+      ];
+    }
+    if (this.declarations.length > 0) {
+      const attachment = (await this.ensureBridge()).session(
+        this.name,
+        this.declarations,
+      );
+      config["mcp_servers.secant.url"] = attachment.url;
+      config["mcp_servers.secant.http_headers"] = {
+        Authorization: `Bearer ${attachment.bearer}`,
+      };
+      config["mcp_servers.secant.default_tools_approval_mode"] = "approve";
+    }
+    return {
+      approvalsReviewer: "user",
+      ...(Object.keys(config).length === 0 ? {} : { config }),
+    };
   }
 
   /** Refuse the Turn, failing the thread exchange's phase, when the
@@ -1061,10 +1133,10 @@ class CodexSession {
       const recovery = startPhase(this.phases, "recovery", this.name);
       try {
         const result = await boundedCodexExchange({
-          operation: () =>
+          operation: async () =>
             connection.request("thread/resume", {
               threadId: recoveryCoordinate.opaque,
-              ...this.threadConfig(),
+              ...(await this.threadConfig()),
             }),
           timeoutMs: this.controlTimeoutMs,
           label: "thread/resume runtime exchange",
@@ -1091,10 +1163,10 @@ class CodexSession {
       const handshake = startPhase(this.phases, "handshake", this.name);
       try {
         const result = await boundedCodexExchange({
-          operation: () =>
+          operation: async () =>
             connection.request("thread/start", {
               cwd: this.workspace,
-              ...this.threadConfig(),
+              ...(await this.threadConfig()),
             }),
           timeoutMs: this.controlTimeoutMs,
           label: "thread/start runtime exchange",
@@ -1151,7 +1223,7 @@ class CodexSession {
       category: "recovery-unacknowledged",
       possibleEffects: "none",
       diagnostics,
-      ...(cause !== undefined ? { cause } : {}),
+      ...(cause !== undefined ? { cause: redactSecrets(cause) } : {}),
     };
     this.unusableFailure = failure;
     turn.settleRecoveryFailure(failure, UNKNOWN_MODEL);
@@ -1166,6 +1238,7 @@ type RuntimeNotification = NonNullable<
 interface PendingCodexApproval {
   readonly request: HarnessRequest;
   readonly nativeRequestId: string | number;
+  readonly responseKind: "decision" | "elicitation";
   state:
     | { readonly kind: "outstanding" }
     | { readonly kind: "answering"; readonly answer: RequestAnswer }
@@ -1271,6 +1344,12 @@ class CodexTurn implements HarnessTurn {
   private recoveryPending = false;
   private readonly steers = new Map<string, PendingCodexSteer>();
   private readonly steerIds = new Set<string>();
+  private readonly calls = new Map<
+    string,
+    | { kind: "outstanding"; resolve: (reply: AgentCallReply) => void }
+    | { kind: "answered" }
+    | { kind: "expired" }
+  >();
   private readonly approvals = new Map<string, PendingCodexApproval>();
   private readonly approvalsByNativeId = new Map<
     string,
@@ -1649,8 +1728,8 @@ class CodexTurn implements HarnessTurn {
       phase: "control",
       category: params.category,
       possibleEffects: this.submitted ? "possible" : "none",
-      diagnostics: params.diagnostics,
-      cause: params.cause,
+      diagnostics: redactText(params.diagnostics),
+      cause: redactSecrets(params.cause),
     };
   }
 
@@ -1679,8 +1758,66 @@ class CodexTurn implements HarnessTurn {
     });
   }
 
-  answerAgentCall(_answer: AgentCallAnswer): Promise<ControlReceipt> {
-    return Promise.resolve({ outcome: "rejected", reason: "unsupported" });
+  acceptsAgentCalls(): boolean {
+    return (
+      this.admittedToRuntime &&
+      this.turnId !== undefined &&
+      !this.settled &&
+      !this.producerClosed &&
+      !this.closing
+    );
+  }
+
+  raiseAgentCall(
+    call: AgentCall,
+    rawMetadata: unknown,
+  ): Promise<AgentCallReply> {
+    if (!this.acceptsAgentCalls())
+      return Promise.resolve({
+        outcome: "refused",
+        reason: "no Turn in progress",
+      });
+    const parsed = parseAgentCallMetadata(rawMetadata);
+    if (!parsed.success)
+      return Promise.resolve({
+        outcome: "refused",
+        reason: "invalid caller metadata",
+      });
+    const metadata = parsed.data;
+    // A cloned helper has its own native ids and only its immediate parent in
+    // external metadata. The inherited bearer remains authoritative, including
+    // descendants whose ancestry this app-server does not observe.
+    if (
+      metadata.parentThreadId === undefined &&
+      ((metadata.threadId !== undefined &&
+        metadata.threadId !== this.threadId) ||
+        (metadata.turnId !== undefined && metadata.turnId !== this.turnId))
+    ) {
+      return Promise.resolve({
+        outcome: "refused",
+        reason: "caller metadata does not match the live Turn",
+      });
+    }
+    return new Promise((resolve) => {
+      this.calls.set(call.callId.opaque, { kind: "outstanding", resolve });
+      this.emit({ kind: "agent-call", phase: "raised", call });
+    });
+  }
+
+  answerAgentCall(answer: AgentCallAnswer): Promise<ControlReceipt> {
+    if (this.settled || this.producerClosed)
+      return Promise.resolve({ outcome: "rejected", reason: "expired" });
+    const pending = this.calls.get(answer.callId.opaque);
+    if (pending === undefined || pending.kind === "expired")
+      return Promise.resolve({ outcome: "rejected", reason: "expired" });
+    if (pending.kind === "answered")
+      return Promise.resolve({
+        outcome: "rejected",
+        reason: "already-settled",
+      });
+    this.calls.set(answer.callId.opaque, { kind: "answered" });
+    pending.resolve(answer);
+    return Promise.resolve({ outcome: "accepted" });
   }
 
   async answerRequest(answer: RequestAnswer): Promise<ControlReceipt> {
@@ -1698,7 +1835,14 @@ class CodexTurn implements HarnessTurn {
     pending.state = { kind: "answering", answer };
     try {
       await this.connection.respondToServerRequest(pending.nativeRequestId, {
-        decision: answer.decision === "allow" ? "accept" : "decline",
+        ...(pending.responseKind === "elicitation"
+          ? {
+              action: answer.decision === "allow" ? "accept" : "decline",
+              content:
+                answer.decision === "allow" ? { decision: "approve" } : null,
+              _meta: null,
+            }
+          : { decision: answer.decision === "allow" ? "accept" : "decline" }),
       });
     } catch (cause) {
       if (pending.state.kind === "answering") {
@@ -1830,6 +1974,60 @@ class CodexTurn implements HarnessTurn {
       return;
     }
     if (notification.threadId !== this.threadId) return;
+    if (
+      notification.kind === "elicitation" ||
+      notification.kind === "user-input"
+    ) {
+      if (this.turnId === undefined) {
+        this.pendingNotifications.push(notification);
+        return;
+      }
+      if (
+        notification.turnId !== undefined &&
+        !this.matchesTurn(notification.turnId)
+      )
+        return;
+      if (
+        notification.kind === "elicitation" &&
+        notification.approvalInput !== undefined
+      ) {
+        this.raiseApproval({
+          kind: "approval-request",
+          nativeRequestId: notification.nativeRequestId,
+          threadId: notification.threadId,
+          turnId: this.turnId,
+          tool: notification.server,
+          itemId: "",
+          input: notification.approvalInput,
+          responseKind: "elicitation",
+        });
+      } else {
+        if (notification.kind === "elicitation")
+          this.emit({
+            kind: "elicitation-declined",
+            harness: "codex",
+            server: redactText(notification.server),
+            message: redactText(notification.message),
+            ...(notification.url === undefined
+              ? {}
+              : { url: redactText(notification.url) }),
+          });
+        void this.connection
+          .respondToServerRequest(
+            notification.nativeRequestId,
+            notification.kind === "elicitation"
+              ? { action: "decline", content: null, _meta: null }
+              : { answers: {} },
+          )
+          .catch((cause: unknown) =>
+            this.protocolFailure(
+              "Codex declined-input response could not be written.",
+              cause,
+            ),
+          );
+      }
+      return;
+    }
     if (notification.kind === "server-request-resolved") {
       if (this.turnId === undefined) {
         this.pendingNotifications.push(notification);
@@ -1945,7 +2143,7 @@ class CodexTurn implements HarnessTurn {
           diagnostics: interruptionUnknown
             ? "Codex app-server closed before confirming native interruption."
             : "Codex app-server closed without a matching terminal Turn event.",
-          ...(cause !== undefined ? { cause } : {}),
+          ...(cause !== undefined ? { cause: redactSecrets(cause) } : {}),
         },
       },
     });
@@ -1964,7 +2162,7 @@ class CodexTurn implements HarnessTurn {
           category: "turn-start",
           possibleEffects: "possible",
           diagnostics: "Codex did not acknowledge turn/start.",
-          cause,
+          cause: redactSecrets(cause),
         },
       },
     });
@@ -2023,8 +2221,8 @@ class CodexTurn implements HarnessTurn {
           phase: "turn",
           category: "protocol-corruption",
           possibleEffects: "possible",
-          diagnostics,
-          ...(cause !== undefined ? { cause } : {}),
+          diagnostics: redactText(diagnostics),
+          ...(cause !== undefined ? { cause: redactSecrets(cause) } : {}),
         },
       },
     });
@@ -2129,13 +2327,14 @@ class CodexTurn implements HarnessTurn {
       shape: {
         kind: "approval",
         tool: notification.tool,
-        input,
+        input: redactText(input),
         decisions: [...APPROVAL_DECISIONS],
       },
     };
     const pending: PendingCodexApproval = {
       request,
       nativeRequestId: notification.nativeRequestId,
+      responseKind: notification.responseKind ?? "decision",
       state: { kind: "outstanding" },
     };
     this.approvals.set(requestId.opaque, pending);
@@ -2329,7 +2528,7 @@ class CodexTurn implements HarnessTurn {
             phase: "turn",
             category: "execution",
             possibleEffects: "possible",
-            diagnostics,
+            diagnostics: redactText(diagnostics),
           },
           effectiveModel: this.model,
           session: { state: "open" },
@@ -2341,6 +2540,8 @@ class CodexTurn implements HarnessTurn {
 
   private emit(event: TurnEvent): void {
     if (this.settled || this.producerClosed) return;
+    if (event.kind === "activity")
+      event = { ...event, description: redactText(event.description) };
     this.events.push(event);
     for (const listener of this.listeners) listener(event);
   }
@@ -2438,6 +2639,12 @@ class CodexTurn implements HarnessTurn {
     }
     this.steers.clear();
     this.settleApprovals(confirmAnswers);
+    for (const [opaque, pending] of this.calls) {
+      if (pending.kind !== "outstanding") continue;
+      this.calls.set(opaque, { kind: "expired" });
+      this.emit({ kind: "agent-call", phase: "expired", callId: { opaque } });
+      pending.resolve({ outcome: "refused", reason: "request expired" });
+    }
     this.producerClosed = true;
     this.listeners.clear();
     if (
@@ -2501,8 +2708,8 @@ function notStartedFailure(
     phase: "turn",
     category,
     possibleEffects: "none",
-    diagnostics,
-    ...(cause !== undefined ? { cause } : {}),
+    diagnostics: redactText(diagnostics),
+    ...(cause !== undefined ? { cause: redactSecrets(cause) } : {}),
   };
 }
 
@@ -2627,6 +2834,7 @@ function qualificationCacheKey(options: TCacheKey): string | undefined {
 }
 
 function recoveryFailureReason(cause: unknown): string {
+  cause = redactSecrets(cause);
   const detail = cause instanceof Error ? cause.message : String(cause);
   return `Codex could not acknowledge the requested thread during recovery: ${detail}`;
 }
@@ -2653,7 +2861,7 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
     platform: options.platform,
     adapterRevision: options.probeRevision,
     configurationPosture:
-      "user-compatible: inherits the user's Codex home and environment; experimental API is disabled, a caller-requested model and reasoning effort are applied natively per Turn and none is set otherwise, while personality, approval policy, and sandbox policy remain unset by Secant.",
+      "user-compatible: inherits the user's Codex home and environment; experimental API is disabled, a caller-requested model and reasoning effort are applied natively per Turn and none is set otherwise, personality, approval policy, and sandbox mode remain inherited; the reviewer is user, and opted-in Sessions attach the Secant MCP server with pre-approved tools.",
     recovery: {
       mode: "native-reattach",
       evidence:
@@ -2670,8 +2878,9 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
         "Qualified command and file approvals expose exact actions; allow accepts once and deny declines once.",
     },
     agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
+      available: true,
+      evidence:
+        "Qualified per-Session MCP attachment on thread start and every resume; authenticated calls are answered or expired before producer close.",
     },
     clarifications: {
       available: false,
@@ -2738,7 +2947,7 @@ function failure(category: string, diagnostics: string): HarnessFailure {
     phase: "prepare",
     category,
     possibleEffects: "none",
-    diagnostics,
+    diagnostics: redactText(diagnostics),
   };
 }
 
@@ -2751,8 +2960,8 @@ function failureWithCause(
     phase: "prepare",
     category,
     possibleEffects: "none",
-    diagnostics,
-    cause,
+    diagnostics: redactText(diagnostics),
+    cause: redactSecrets(cause),
   };
 }
 
@@ -2765,7 +2974,7 @@ function failureWithNativeCode(
     phase: "prepare",
     category,
     possibleEffects: "none",
-    diagnostics,
+    diagnostics: redactText(diagnostics),
     nativeCode,
   };
 }
@@ -2847,6 +3056,8 @@ function combinedCause(causes: readonly unknown[], message: string): unknown {
 }
 
 function appendStderr(diagnostics: string, stderr: string): string {
+  diagnostics = redactText(diagnostics);
+  stderr = redactText(stderr);
   if (stderr.length === 0) return diagnostics;
   return `${diagnostics} Codex stderr: ${stderr}`;
 }

@@ -79,6 +79,7 @@ let resumed = false;
 let threadNumber = 0;
 let activeThreadId = "thread-1";
 let activeTurnId;
+let channelAttachment;
 const outstandingApprovals = new Map();
 let steerNumber = 0;
 const stalledControls = [];
@@ -126,24 +127,56 @@ function expectedStdinLine(recordedLine, actualLine) {
  *  frame — stays strictly matched. */
 function stdinFrameMatches(recordedLine, actualLine) {
   const expected = expectedStdinLine(recordedLine, actualLine);
-  if (expected === `${actualLine}\n`) return true;
   try {
     const recorded = JSON.parse(expected);
     const actual = JSON.parse(actualLine);
     if (recorded.method !== actual.method) return false;
     if (actual.method === "initialize") {
-      if (recorded.params?.clientInfo) {
+      if (recorded.params?.clientInfo)
         delete recorded.params.clientInfo.version;
-      }
       if (actual.params?.clientInfo) delete actual.params.clientInfo.version;
-    } else if (
-      (actual.method === "thread/start" || actual.method === "thread/resume") &&
-      recorded.params?.config === undefined &&
-      isWorkingAreaOverride(actual.params?.config)
-    ) {
-      delete actual.params.config;
-    } else {
-      return false;
+    }
+    if (actual.method === "thread/start" || actual.method === "thread/resume") {
+      if (actual.params?.approvalsReviewer !== "user") return false;
+      if (recorded.params?.approvalsReviewer === undefined)
+        delete actual.params.approvalsReviewer;
+      const config = actual.params?.config;
+      if (recorded.params?.config?.["mcp_servers.secant.url"] !== undefined) {
+        const url = config?.["mcp_servers.secant.url"];
+        const authorization =
+          config?.["mcp_servers.secant.http_headers"]?.Authorization;
+        if (
+          typeof url !== "string" ||
+          !/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/mcp$/.test(url) ||
+          typeof authorization !== "string" ||
+          !/^Bearer [a-f0-9]{64}$/.test(authorization)
+        )
+          return false;
+        channelAttachment = { url, authorization };
+        config["mcp_servers.secant.url"] =
+          recorded.params.config["mcp_servers.secant.url"];
+        config["mcp_servers.secant.http_headers"] = {
+          ...config["mcp_servers.secant.http_headers"],
+          Authorization:
+            recorded.params.config["mcp_servers.secant.http_headers"]
+              .Authorization,
+        };
+      }
+      if (
+        config?.["sandbox_workspace_write.writable_roots"] !== undefined &&
+        recorded.params?.config?.["sandbox_workspace_write.writable_roots"] ===
+          undefined
+      ) {
+        if (
+          !isWorkingAreaOverride({
+            "sandbox_workspace_write.writable_roots":
+              config["sandbox_workspace_write.writable_roots"],
+          })
+        )
+          return false;
+        delete config["sandbox_workspace_write.writable_roots"];
+        if (Object.keys(config).length === 0) delete actual.params.config;
+      }
     }
     return JSON.stringify(recorded) === JSON.stringify(actual);
   } catch {
@@ -176,13 +209,72 @@ function applyWorkspacePatch(path) {
   }
 }
 
-function drainRecordedOutput() {
+async function replayAgentCall(params) {
+  if (channelAttachment === undefined)
+    throw new Error("Secant tool started without its Session attachment");
+  const headers = {
+    Authorization: channelAttachment.authorization,
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  const rpc = (method, arguments_) =>
+    fetch(channelAttachment.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params: arguments_,
+      }),
+    });
+  const initialized = await rpc("initialize", {
+    protocolVersion: "2025-03-26",
+    capabilities: {},
+    clientInfo: { name: "codex-replayer", version: "1" },
+  });
+  if (initialized.status !== 200)
+    throw new Error("Agent-call MCP initialization failed");
+  await initialized.json();
+  headers["mcp-session-id"] = initialized.headers.get("mcp-session-id");
+  const response = await rpc("tools/call", {
+    name: params.item.tool,
+    arguments: params.item.arguments,
+    _meta: {
+      "x-codex-turn-metadata": {
+        thread_id: params.threadId,
+        turn_id: params.turnId,
+      },
+    },
+  });
+  const reply = await response.json();
+  if (
+    reply.result?.isError === true ||
+    reply.result?.content?.[0]?.text !==
+      "accepted: takes effect when this Turn finishes"
+  )
+    throw new Error("Recorded Agent call was not accepted");
+}
+
+async function drainRecordedOutput() {
   while (trafficAt < (scenario.traffic?.length ?? 0)) {
     const entry = scenario.traffic[trafficAt];
     if (entry.direction === "stdin") return;
     trafficAt += 1;
     if (entry.direction === "stdout") {
-      process.stdout.write(replayLine(entry.line));
+      for (const line of replayLine(entry.line)
+        .split(/(?<=\n)/)
+        .filter(Boolean)) {
+        process.stdout.write(line);
+        const message = JSON.parse(line);
+        if (
+          message.method === "item/started" &&
+          message.params?.item?.type === "mcpToolCall" &&
+          message.params.item.server === "secant"
+        ) {
+          await replayAgentCall(message.params);
+        }
+      }
     } else if (entry.direction === "stderr") {
       process.stderr.write(replayLine(entry.line));
     } else if (entry.direction === "workspace-patch") {
@@ -194,7 +286,7 @@ function drainRecordedOutput() {
   }
 }
 
-if (scenario.replay === "strict") drainRecordedOutput();
+if (scenario.replay === "strict") await drainRecordedOutput();
 for await (const line of lines) {
   log({ type: "stdin", line });
   if (scenario.replay === "strict") {
@@ -208,7 +300,7 @@ for await (const line of lines) {
       process.exit(3);
     }
     trafficAt += 1;
-    drainRecordedOutput();
+    await drainRecordedOutput();
     continue;
   }
   if (
@@ -877,16 +969,40 @@ function emitTurnCompleted(turnId, status) {
 
 function emitApprovalRequest(approval, turnId) {
   const method =
-    approval.kind === "file"
-      ? "item/fileChange/requestApproval"
-      : approval.kind === "request-user-input"
-        ? "item/tool/requestUserInput"
-        : "item/commandExecution/requestApproval";
+    approval.kind === "unknown-request"
+      ? "unknown/request"
+      : approval.kind === "elicitation"
+        ? "mcpServer/elicitation/request"
+        : approval.kind === "file"
+          ? "item/fileChange/requestApproval"
+          : approval.kind === "request-user-input"
+            ? "item/tool/requestUserInput"
+            : "item/commandExecution/requestApproval";
   const params = {
     itemId: approval.itemId,
     startedAtMs: 1,
     threadId: activeThreadId,
     turnId,
+    ...(approval.kind === "elicitation"
+      ? {
+          turnId: approval.uncorrelated ? null : turnId,
+          serverName: approval.server ?? "external",
+          message: approval.message ?? "Enter a code",
+          mode: approval.url === undefined ? "form" : "url",
+          ...(approval.url === undefined
+            ? { requestedSchema: { type: "object", properties: {} } }
+            : { url: approval.url, elicitationId: "recording-link" }),
+          ...(approval.toolApproval
+            ? {
+                _meta: {
+                  codex_approval_kind: "mcp_tool_call",
+                  tool_params: approval.toolParams ?? {},
+                },
+              }
+            : {}),
+        }
+      : {}),
+    ...(approval.kind === "request-user-input" ? { questions: [] } : {}),
     ...(approval.kind === "command"
       ? { command: approval.command, kind: "command" }
       : approval.kind === "unsupported-command"

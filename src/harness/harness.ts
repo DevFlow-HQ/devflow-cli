@@ -434,6 +434,13 @@ export type SteerSettlement =
 /** The closed set of Turn event kinds. */
 export type TurnEvent =
   | {
+      readonly kind: "elicitation-declined";
+      readonly harness: "codex" | "claude-code";
+      readonly server: string;
+      readonly message: string;
+      readonly url?: string;
+    }
+  | {
       readonly kind: "agent-call";
       readonly phase: "raised";
       readonly call: AgentCall;
@@ -480,6 +487,7 @@ export type TurnEvent =
 export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "session",
   "agent-call",
+  "elicitation-declined",
   "assistant-content",
   "tool-activity",
   "request-raised",

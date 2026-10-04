@@ -1056,7 +1056,19 @@ function recordTurnEvent(
   event: TurnEvent,
   answerSources: ReadonlyMap<string, RequestAnswerBy>,
 ): void {
-  if (event.kind === "steer") {
+  if (event.kind === "elicitation-declined") {
+    owner.appendTurnEvent({
+      turnId,
+      kind: event.kind,
+      payload: JSON.stringify({
+        harness: event.harness,
+        server: event.server,
+        message: event.message,
+        ...(event.url === undefined ? {} : { url: event.url }),
+      }),
+      at: new Date(),
+    });
+  } else if (event.kind === "steer") {
     owner.appendTurnEvent({
       turnId,
       kind: "steer",

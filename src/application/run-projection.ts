@@ -1513,7 +1513,34 @@ const effectiveModelEventSchema = z.object({
 });
 
 /** The turn-event timeline entries for one Turn's normalized durable events. */
+const declinedElicitationSchema = z.object({
+  harness: z.enum(["codex", "claude-code"]),
+  server: z.string(),
+  message: z.string(),
+  url: z.string().optional(),
+});
+
 function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
+  if (event.kind === "elicitation-declined") {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(event.payload);
+    } catch {
+      return undefined;
+    }
+    const parsed = declinedElicitationSchema.safeParse(payload);
+    if (!parsed.success) return undefined;
+    const { harness, server, message, url } = parsed.data;
+    const name = harness === "codex" ? "Codex" : "Claude Code";
+    return {
+      at: event.at,
+      event: "elicitation-declined",
+      detail: timelineDetail(
+        `Secant cannot show this elicitation. Finish setup in ${name} directly before continuing. Declined from ${server}: ${message}${url === undefined ? "" : ` · ${url}`}`,
+      ),
+    };
+  }
+
   // The effective model and effort a Turn's Harness reported (#345), copied as
   // stored; a malformed payload projects nothing rather than a guess.
   if (event.kind === "model") {
@@ -1864,6 +1891,7 @@ const TIMELINE_CATEGORY_RANK: Record<RunTimelineKind, number> = {
   "request-raised": 5,
   "request-answered": 6,
   "request-expired": 7,
+  "elicitation-declined": 7,
   steer: 7,
   "turn-settled": 8,
   "interactive-step-ended": 9,

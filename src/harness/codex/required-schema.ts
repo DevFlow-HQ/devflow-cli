@@ -117,6 +117,8 @@ const SERVER_NOTIFICATIONS: TRequiredVariants = {
 const SERVER_REQUESTS: TRequiredVariants = {
   "item/commandExecution/requestApproval": ["id", "method", "params"],
   "item/fileChange/requestApproval": ["id", "method", "params"],
+  "mcpServer/elicitation/request": ["id", "method", "params"],
+  "item/tool/requestUserInput": ["id", "method", "params"],
 };
 
 const THREAD_ITEMS: TRequiredVariants = {
@@ -178,6 +180,9 @@ const SERVER_REQUEST_PARAM_REFS: Readonly<Record<string, string>> = {
     "#/definitions/CommandExecutionRequestApprovalParams",
   "item/fileChange/requestApproval":
     "#/definitions/FileChangeRequestApprovalParams",
+  "mcpServer/elicitation/request":
+    "#/definitions/McpServerElicitationRequestParams",
+  "item/tool/requestUserInput": "#/definitions/ToolRequestUserInputParams",
 };
 
 const SERVER_REQUEST_ID_REFS: Readonly<Record<string, string>> = {
@@ -224,11 +229,189 @@ const THREAD_ITEM_ARRAY_ITEM_REFS: Readonly<
 
 interface TSchemaFact {
   readonly path: readonly string[];
-  readonly expected: string;
+  readonly expected: string | boolean;
   readonly label: string;
 }
 
 const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
+  fact(
+    "MCP config map",
+    true,
+    "definitions",
+    "v2",
+    "ThreadStartParams",
+    "properties",
+    "config",
+    "additionalProperties",
+  ),
+  fact(
+    "MCP resume config map",
+    true,
+    "definitions",
+    "v2",
+    "ThreadResumeParams",
+    "properties",
+    "config",
+    "additionalProperties",
+  ),
+  fact(
+    "elicitation metadata",
+    true,
+    "definitions",
+    "McpServerElicitationRequestParams",
+    "oneOf",
+    "0",
+    "properties",
+    "_meta",
+  ),
+  fact(
+    "ThreadStartParams config",
+    "object",
+    "definitions",
+    "v2",
+    "ThreadStartParams",
+    "properties",
+    "config",
+    "type",
+    "0",
+  ),
+  fact(
+    "ThreadStartParams approvalsReviewer",
+    "#/definitions/v2/ApprovalsReviewer",
+    "definitions",
+    "v2",
+    "ThreadStartParams",
+    "properties",
+    "approvalsReviewer",
+    "anyOf",
+    "0",
+    "$ref",
+  ),
+  fact(
+    "ThreadResumeParams config",
+    "object",
+    "definitions",
+    "v2",
+    "ThreadResumeParams",
+    "properties",
+    "config",
+    "type",
+    "0",
+  ),
+  fact(
+    "ThreadResumeParams approvalsReviewer",
+    "#/definitions/v2/ApprovalsReviewer",
+    "definitions",
+    "v2",
+    "ThreadResumeParams",
+    "properties",
+    "approvalsReviewer",
+    "anyOf",
+    "0",
+    "$ref",
+  ),
+  fact(
+    "user reviewer",
+    "user",
+    "definitions",
+    "v2",
+    "ApprovalsReviewer",
+    "enum",
+    "0",
+  ),
+  fact(
+    "MCP pre-approval",
+    "approve",
+    "definitions",
+    "v2",
+    "AppToolApproval",
+    "enum",
+    "3",
+  ),
+  fact(
+    "elicitation server",
+    "string",
+    "definitions",
+    "McpServerElicitationRequestParams",
+    "properties",
+    "serverName",
+    "type",
+  ),
+  fact(
+    "elicitation thread",
+    "string",
+    "definitions",
+    "McpServerElicitationRequestParams",
+    "properties",
+    "threadId",
+    "type",
+  ),
+  fact(
+    "elicitation turn",
+    "string",
+    "definitions",
+    "McpServerElicitationRequestParams",
+    "properties",
+    "turnId",
+    "type",
+    "0",
+  ),
+  fact(
+    "elicitation message",
+    "string",
+    "definitions",
+    "McpServerElicitationRequestParams",
+    "oneOf",
+    "0",
+    "properties",
+    "message",
+    "type",
+  ),
+  fact(
+    "elicitation URL",
+    "string",
+    "definitions",
+    "McpServerElicitationRequestParams",
+    "oneOf",
+    "3",
+    "properties",
+    "url",
+    "type",
+  ),
+  fact(
+    "elicitation response",
+    "#/definitions/McpServerElicitationAction",
+    "definitions",
+    "McpServerElicitationRequestResponse",
+    "properties",
+    "action",
+    "$ref",
+  ),
+  fact(
+    "elicitation accept",
+    "accept",
+    "definitions",
+    "McpServerElicitationAction",
+    "enum",
+    "0",
+  ),
+  fact(
+    "elicitation decline",
+    "decline",
+    "definitions",
+    "McpServerElicitationAction",
+    "enum",
+    "1",
+  ),
+  fact(
+    "user input answers",
+    "object",
+    "definitions",
+    "ToolRequestUserInputResponse",
+    "properties",
+    "answers",
+    "type",
+  ),
   fact(
     "initialize client info",
     "#/definitions/ClientInfo",
@@ -1293,7 +1476,7 @@ function validateLiteralUnion(
 
 function fact(
   label: string,
-  expected: string,
+  expected: string | boolean,
   ...path: readonly string[]
 ): TSchemaFact {
   return { path, expected, label };

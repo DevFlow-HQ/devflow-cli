@@ -131,6 +131,13 @@ prepare never reads the defaults; a synthetic replay therefore plays the
 qualification traffic only up to `config/read` and answers it from `responses`
 when a test asks.
 
+`agent-calls` and `agent-calls-legacy` record on codex-cli 0.160.0 with `codex-probe-4`. The opt-in recorder uses the production Secant listener
+and a fixture MCP server for approvals and form/link elicitations. Its pass-through shim adds only the fixture server and, for the legacy case,
+disables `tool_call_mcp_elicitation`; requests and replies are real Codex traffic. Session URL and bearer are redacted. Strict replay substitutes
+only that dynamic attachment and reissues the recorded Secant tool call over authenticated HTTP. Older start/resume recordings omit the reviewer;
+replay requires the new explicit `user` reviewer before comparing their remaining fields. Refresh with `bun tests/harness/record-codex.ts agent-calls`
+or `bun tests/harness/record-codex.ts agent-calls-legacy` on macOS or Linux with an authenticated Codex install.
+
 Every real Turn case carries the Turn's `thread/read` right after the
 `turn/start` response (#345); `two-turns` also requests `gpt-5.5` at `low`, then
 `medium`, so its `turn/start` frames carry effort and each read reports it back.

@@ -45,6 +45,7 @@ test("the closed vocabulary sets are exactly what the Interface fixes", () => {
     [
       "session",
       "agent-call",
+      "elicitation-declined",
       "assistant-content",
       "tool-activity",
       "request-raised",

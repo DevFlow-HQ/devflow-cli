@@ -868,6 +868,7 @@ export type RunTimelineKind =
   | "request-raised"
   | "request-answered"
   | "request-expired"
+  | "elicitation-declined"
   | "steer"
   // The effective model and effort a Turn's Harness reported (#345, ADR 0034),
   // one entry per observation: a reroute adds a second.

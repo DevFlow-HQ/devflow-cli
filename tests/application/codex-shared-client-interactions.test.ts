@@ -93,6 +93,21 @@ function codexScript(fixture: string, finish: Promise<void>): FakeScript {
     { kind: "session", availability: { state: "open" } },
     { kind: "assistant-content", content: `recorded ${fixture}` },
   ];
+  if (fixture === "elicitation") {
+    events.push({
+      kind: "elicitation-declined",
+      harness: "codex",
+      server: "external",
+      message: "Enter a code",
+      url: "https://example.com/verify",
+    });
+    events.push({
+      kind: "elicitation-declined",
+      harness: "codex",
+      server: "external",
+      message: "Enter a name",
+    });
+  }
   if (fixture === "steer") {
     return {
       profile: codexProfile(),
@@ -423,5 +438,23 @@ test("[codex-shared-client-interactions] Interrupt records every pending Steer v
     runView(port, runId).timeline.filter((event) => event.event === "steer")
       .length,
     2,
+  );
+});
+
+test("declined elicitations remain in Run history after the Turn completes", async (t) => {
+  const { wired, bundleId, digest } = wire(t, "elicitation", "Reply now.");
+  const port = wired.projectionPort;
+  const runId = launchCodex(port, bundleId, digest);
+  await awaitSettled(port, "op-launch");
+  const run = runView(port, runId);
+  assert.equal(run.state, "succeeded");
+  assert.deepEqual(
+    run.timeline
+      .filter((entry) => entry.event === "elicitation-declined")
+      .map((entry) => entry.detail),
+    [
+      "Secant cannot show this elicitation. Finish setup in Codex directly before continuing. Declined from external: Enter a code · https://example.com/verify",
+      "Secant cannot show this elicitation. Finish setup in Codex directly before continuing. Declined from external: Enter a name",
+    ],
   );
 });

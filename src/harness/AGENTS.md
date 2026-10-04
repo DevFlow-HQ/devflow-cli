@@ -34,6 +34,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   content; a `recorded: false` receipt (or a thrown recorder) proves the Turn `not-started`. A recovery coordinate revealed only after acceptance is
   recorded through `recorder.checkpoint`; a late checkpoint failure is reported separately and never rewrites a settled result.
 - `close` is idempotent and returns the same report each call; cleanup failure is separate and cannot rewrite a settled Turn.
+- Codex MCP Turn metadata is nested under `x-codex-turn-metadata` (#370), as an object or JSON string. Helpers keep their own ids and only
+  their immediate parent; their inherited token remains authoritative. MCP approval input includes the opaque tool arguments, not only the caption.
 - Secrets Secant itself introduces are redacted from failures and diagnostics. Excluding raw protocol, private reasoning, and duplicate transcript
   content is Interface design, not generic secret redaction — a `HarnessFailure` still preserves all useful Harness-originated diagnostics and its cause.
   One private registry (`secrets.ts`) owns it: a minter registers a secret when it hands it out, and nothing registers through the Interface. A secret

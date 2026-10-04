@@ -3,6 +3,7 @@
 // through the recorder-only native seam. It requires an installed Codex and, for
 // conversational cases, the user's existing Codex authentication.
 
+import { startCodexRecordingMcp } from "./codex-recording-mcp.js";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -62,6 +63,8 @@ const REAL_CASES = new Set([
   "resume",
   "authentication",
   "test-repair",
+  "agent-calls",
+  "agent-calls-legacy",
 ]);
 
 process.on("exit", () => {
@@ -99,6 +102,8 @@ const QUALIFICATION_CONFIG: Readonly<Record<string, string | undefined>> = {
   "codex-qualification": 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n',
   "codex-qualification-unconfigured": undefined,
 };
+const channelCase = caseName.startsWith("agent-calls");
+const recordingMcp = channelCase ? await startCodexRecordingMcp() : undefined;
 const qualificationCase = caseName in QUALIFICATION_CONFIG;
 
 const workspace = recorderTempDir(`secant-codex-${caseName}-`);
@@ -106,8 +111,12 @@ if (caseName === "authentication") {
   process.env.CODEX_HOME = recorderTempDir(
     "secant-codex-unauthenticated-home-",
   );
-} else if (qualificationCase) {
-  process.env.CODEX_HOME = isolatedCodexHome(QUALIFICATION_CONFIG[caseName]);
+} else if (qualificationCase || channelCase) {
+  process.env.CODEX_HOME = isolatedCodexHome(
+    channelCase
+      ? 'model = "gpt-5.5"\nmodel_reasoning_effort = "low"\n'
+      : QUALIFICATION_CONFIG[caseName],
+  );
 }
 // A leftover Steer is a race (Codex takes it after its last pending-input
 // check), so its cases retry whole recordings until one lands in the window.
@@ -119,11 +128,18 @@ for (let attempt = 1; ; attempt += 1) {
     recordingObserver: trigger.observer,
   }).prepare({
     workspace,
-    ...(caseName === "approval"
-      ? { configuredExecutable: approvalExecutable() }
-      : caseName === "steer-leftover-resend"
-        ? { configuredExecutable: emptyInputRefusalExecutable() }
-        : {}),
+    ...(channelCase && recordingMcp !== undefined
+      ? {
+          configuredExecutable: channelExecutable(
+            recordingMcp.url,
+            caseName.endsWith("legacy"),
+          ),
+        }
+      : caseName === "approval"
+        ? { configuredExecutable: approvalExecutable() }
+        : caseName === "steer-leftover-resend"
+          ? { configuredExecutable: emptyInputRefusalExecutable() }
+          : {}),
   });
 
   if (caseName === "authentication") {
@@ -172,6 +188,7 @@ for (let attempt = 1; ; attempt += 1) {
   }
 
   const cleanup = await prepared.harness.close();
+  await recordingMcp?.close();
   if (!cleanup.clean) {
     throw new Error("The production Codex Adapter did not close cleanly.", {
       cause: cleanup.failure?.cause,
@@ -306,6 +323,53 @@ async function driveCase(
         }),
         "completed",
       );
+      return true;
+    }
+    case "agent-calls":
+    case "agent-calls-legacy": {
+      const legacy = name.endsWith("legacy");
+      const turn = startTurn({
+        ...turnRequest(
+          name,
+          legacy
+            ? CODEX_RECORDING_INPUT.agentCallsLegacy
+            : CODEX_RECORDING_INPUT.agentCalls,
+        ),
+        agentCalls: [
+          {
+            id: "step_done",
+            description: "End the Step",
+            maxReasonLength: 400,
+          },
+        ],
+      });
+      const events: TurnEvent[] = [];
+      turn.subscribe((event) => {
+        events.push(event);
+        if (event.kind === "agent-call" && event.phase === "raised")
+          void turn.answerAgentCall({
+            callId: event.call.callId,
+            outcome: "accepted",
+          });
+        if (event.kind === "request-raised")
+          void turn.answerRequest({
+            requestId: event.request.requestId,
+            kind: "approval",
+            decision: "allow",
+          });
+      });
+      await expectTurnResult(turn, "completed");
+      if (
+        !legacy &&
+        (events.filter((event) => event.kind === "elicitation-declined")
+          .length !== 2 ||
+          !events.some((event) => event.kind === "agent-call") ||
+          events.filter((event) => event.kind === "request-raised").length !==
+            3)
+      )
+        throw new Error(
+          "Codex did not exercise every channel recording behavior",
+        );
       return true;
     }
     case "test-repair": {
@@ -648,6 +712,42 @@ function terminalTrafficIndex(
   return -1;
 }
 
+function channelExecutable(url: string, legacy: boolean): string {
+  const executable = execFileSync("which", ["codex"], {
+    encoding: "utf8",
+  }).trim();
+  const folder = recorderTempDir("secant-codex-channel-shim-");
+  const shim = join(folder, "shim.mjs");
+  writeFileSync(
+    shim,
+    `import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+const args = process.argv.slice(2);
+const serving = args[0] === "app-server" && args.length === 1;
+const child = spawn(${JSON.stringify(executable)}, args, { stdio: serving ? ["pipe", "pipe", "inherit"] : "inherit" });
+child.on("exit", (code) => process.exit(code ?? 1));
+if (serving) {
+ child.stdout.pipe(process.stdout);
+ for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  if (message.method === "thread/start" || message.method === "thread/resume") {
+    message.params.config = { ...message.params.config, "mcp_servers.recording_external.url": ${JSON.stringify(url)}, "mcp_servers.recording_external.default_tools_approval_mode": "prompt", ${legacy ? '"features.tool_call_mcp_elicitation": false,' : ""} };
+  }
+  child.stdin.write(JSON.stringify(message) + "\\n");
+ }
+ child.stdin.end();
+}
+`,
+  );
+  const launcher = join(folder, "codex");
+  writeFileSync(
+    launcher,
+    `#!/bin/sh\nexec '${process.execPath}' '${shim}' "$@"\n`,
+  );
+  chmodSync(launcher, 0o755);
+  return launcher;
+}
+
 function recordingSecrets(
   caseText: string,
   workspacePath: string,
@@ -675,6 +775,25 @@ function recordingSecrets(
     if (entry.line === undefined) continue;
     try {
       const message = JSON.parse(entry.line);
+      const authorization =
+        message.params?.config?.["mcp_servers.secant.http_headers"]
+          ?.Authorization;
+      if (
+        typeof authorization === "string" &&
+        authorization.startsWith("Bearer ")
+      )
+        secrets.push({
+          value: authorization.slice(7),
+          placeholder: "«SESSION_BEARER»",
+          reason: "Session MCP bearer",
+        });
+      const channelUrl = message.params?.config?.["mcp_servers.secant.url"];
+      if (typeof channelUrl === "string")
+        secrets.push({
+          value: channelUrl,
+          placeholder: "http://127.0.0.1:1/mcp",
+          reason: "ephemeral Session MCP URL",
+        });
       const codexHome = message.result?.codexHome;
       const email = message.result?.account?.email;
       const installationId = message.params?.installationId;
