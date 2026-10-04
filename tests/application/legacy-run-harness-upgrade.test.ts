@@ -470,3 +470,32 @@ test("[legacy-run-harness-upgrade] an unavailable pinned Snapshot returns the ex
   assert.ok(unchanged.ok);
   assert.equal(unchanged.run.selectedHarness, undefined);
 });
+
+test("a legacy resume uses the last choice once without rewriting that Preference", async (t) => {
+  const fixture = createLegacyFixture("agent", true, "claude-code");
+  const requests: FakeTurnRequestRecord[] = [];
+  const wiring = openFixture(fixture, completedScript(REPORTED, requests));
+  t.after(() => {
+    wiring.runGroup.close();
+    wiring.catalog.close();
+  });
+  const encoded = JSON.stringify({ model: "remembered-opus", effort: "low" });
+  wiring.catalog.setPreference("last-model-choice:claude-code", encoded);
+  const resume = wiring.projectionPort.submit({
+    operationId: "resume-last",
+    operation: "resume-run",
+    input: { runId: fixture.runId },
+  });
+  assert.ok(resume.admitted);
+  assert.equal(
+    (await awaitSettled(wiring.projectionPort, resume.operationId)).status,
+    "applied",
+  );
+  assert.deepEqual(requests, [
+    { session: "s", modelChoice: { model: "remembered-opus", effort: "low" } },
+  ]);
+  assert.equal(
+    wiring.catalog.getPreference("last-model-choice:claude-code"),
+    encoded,
+  );
+});

@@ -14,7 +14,7 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **compiled-binary-interface**: the copied binary answers `--help` and `--version` exactly (on macOS after `codesign --verify --deep --strict`), and an
   unknown command or flag exits non-zero with usage before any composition wiring (#72).
 - **relocated-pre-drizzle-home**: the checked-in pre-Drizzle fixture relocated beneath the isolated install, proving the binary migrates and opens it
-  through its embedded migration registries.
+  through its embedded migration registries, including Catalog's two migrations (#343).
 - **workspace-catalog**: `workspace approve` then `workspace --json` reports the approved, realpath-canonical directory.
 - **harness-catalog-headless**: with both replayers on `PATH`, `harness list --json` and `harness inspect codex --json` render the `harness-catalog`
   family with `not-checked` qualification.

@@ -107,7 +107,7 @@ import {
   type InteractiveControl,
 } from "./problems.js";
 import type { UpdateStream } from "./update-stream.js";
-import { preselectModelChoice } from "./model-choice.js";
+import { preselectModelChoice, saveLastModelChoice } from "./model-choice.js";
 import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import { listRunsSnapshot } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
@@ -437,6 +437,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     now,
     subscriptions,
     observe,
+    catalog,
   );
   const harnessInputRegistrations = new Map(
     (deps.harnessRegistry ?? []).map((entry) => [entry.choice.id, entry]),
@@ -474,6 +475,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // awaits, and the streams watching it (#98).
   const runs = new Map<string, TrackedRun>();
   const windowsCleanupFallbacks = new Set<string>();
+  const preferenceNotices = new Map<string, string>();
   // A Run's observer set outlives any one live tracking entry. A Projection opened
   // while the Run rests joins here before a later Operation creates or replaces
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
@@ -656,8 +658,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
         runProjection,
         runId,
         tracking === undefined
-          ? { windowsCleanupFallback: windowsCleanupFallbacks.has(runId) }
+          ? {
+              preferenceNotice: preferenceNotices.get(runId),
+              windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
+            }
           : {
+              preferenceNotice: preferenceNotices.get(runId),
               windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
               facts: {
                 routing: tracking.routing,
@@ -886,7 +892,16 @@ export function createApplication(deps: ApplicationDependencies): Application {
     }
     return harnessCatalog.qualify(harness).then((qualification) => {
       if (qualification === undefined || !qualification.ok) return;
-      const preselection = preselectModelChoice(qualification.defaults);
+      const registration = harnessInputRegistrations.get(harness);
+      if (registration === undefined) return;
+      const { preselection, preferenceNotice } = preselectModelChoice({
+        catalog,
+        harness: registration.choice,
+        profile: qualification.profile,
+        defaults: qualification.defaults,
+      });
+      if (preferenceNotice !== undefined)
+        preferenceNotices.set(runId, preferenceNotice);
       if (preselection === undefined) return;
       const written = observedOwner(owner, runId).selectModelChoice(
         preselection.choice,
@@ -1394,8 +1409,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
       runProjection,
       runId,
       tracking === undefined
-        ? { windowsCleanupFallback: windowsCleanupFallbacks.has(runId) }
+        ? {
+            preferenceNotice: preferenceNotices.get(runId),
+            windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
+          }
         : {
+            preferenceNotice: preferenceNotices.get(runId),
             windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
             facts: {
               routing: tracking.routing,
@@ -1553,6 +1572,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
       });
     }
     const runId = created.runId;
+    if (
+      created.outcome === "created" &&
+      selectedHarness !== undefined &&
+      created.record.modelChoice !== undefined
+    ) {
+      const notice = saveLastModelChoice(
+        catalog,
+        selectedHarness,
+        created.record.modelChoice,
+      );
+      if (notice !== undefined) preferenceNotices.set(runId, notice);
+    }
     runs.set(runId, {
       digest: entry.digest,
       routing: manifest.routing,
@@ -3262,6 +3293,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     pushRunClosed(runId);
     runs.delete(runId);
     windowsCleanupFallbacks.delete(runId);
+    preferenceNotices.delete(runId);
     return { status: "applied" };
   }
 

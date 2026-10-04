@@ -677,6 +677,9 @@ function ModelField(props: {
     const current = preselection();
     if (current !== undefined) {
       return [
+        ...(focus()?.preferenceNotice === undefined
+          ? []
+          : [focus()?.preferenceNotice ?? ""]),
         `Starts from ${modelChoiceWords(current.choice, declaration())}`,
         modelChoiceSourceLine(
           harnessName(),
@@ -688,7 +691,12 @@ function ModelField(props: {
     }
     const defaults = focus()?.harnessDefaults;
     return defaults?.kind === "unavailable"
-      ? [`Nothing to start from. ${defaults.reason}`]
+      ? [
+          ...(focus()?.preferenceNotice === undefined
+            ? []
+            : [focus()?.preferenceNotice ?? ""]),
+          `Nothing to start from. ${defaults.reason}`,
+        ]
       : [];
   };
 
@@ -1046,6 +1054,9 @@ export function ReviewStep(props: {
     }
     const declaration = props.harnessFocus()?.modelDeclaration;
     return [
+      ...(assessment().draft.preferenceNotice === undefined
+        ? []
+        : [assessment().draft.preferenceNotice ?? ""]),
       `Model choice: ${modelChoiceWords(choice, declaration)}`,
       modelChoiceSourceLine(
         props.harness()?.name ?? "the Harness",

@@ -157,6 +157,8 @@ export function modelChoiceSourceLine(
   choice: ModelChoiceWordsInput,
   declaration: HarnessFocus["modelDeclaration"],
 ): string {
+  if (source.kind === "last-choice")
+    return `Your last choice for ${harnessName}`;
   if (source.kind === "reported") return `From your ${harnessName} settings`;
   if (source.kind === "requested") return "Your choice for this launch";
   const label = modelLabel(declaration, choice.model) ?? choice.model;

@@ -44,6 +44,11 @@ export function buildTimelineRows(
             text: `Info: ${run.windowsCleanupNotice}`,
           },
         ]),
+    ...(run.preferenceNotice === undefined
+      ? []
+      : [
+          { key: "notice:model-choice-preference", text: run.preferenceNotice },
+        ]),
     ...liveTimelineRows(run, overlay, preview),
   ];
 }

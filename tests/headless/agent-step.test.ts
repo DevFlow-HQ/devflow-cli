@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -208,14 +209,16 @@ function wireAgent(
   bundleId: string;
   digest: string;
   docPath: string;
+  home: string;
 } {
   // A configured executable, declared to the Process double, so Agent-bearing
   // Preflight discovery passes without a spawn; the fake Adapter is what runs.
   setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
 
   const workspace = makeTempDir("secant-agent-ws-");
+  const home = makeTempDir("secant-agent-home-");
   const wired = wireApplication({
-    secantHome: makeTempDir("secant-agent-home-"),
+    secantHome: home,
     launchCwd: workspace,
     // A deterministic Process double: the Command bookends and the Run Store's Git
     // go through the fake, so no child spawns.
@@ -248,7 +251,7 @@ function wireAgent(
   const docPath = join(makeTempDir("secant-agent-doc-"), "failing.test.ts");
   writeFileSync(docPath, "test('x', () => { throw new Error('fail'); });\n");
 
-  return { wired, bundleId: bundle.id, digest: entry.digest, docPath };
+  return { wired, bundleId: bundle.id, digest: entry.digest, docPath, home };
 }
 
 async function launchAgentRun(
@@ -1127,3 +1130,66 @@ for (const containment of ["fallback", "contained", undefined] as const) {
     opened.close();
   });
 }
+
+test("headless inspection names the last choice and a flagless second launch uses it", async (t) => {
+  const { wired, bundleId, digest, docPath } = wireAgent(t);
+  await launchWith(wired, { bundleId, digest, docPath }, [
+    "--model",
+    "remembered-model",
+    "--effort",
+    "high",
+  ]);
+  const out: string[] = [];
+  assert.equal(
+    await runHeadless(wired, ["harness", "inspect", "claude-code"], {
+      out: (text) => out.push(text),
+      err: () => {},
+      cwd: () => process.cwd(),
+    }),
+    0,
+  );
+  assert.match(out.join(""), /Your last choice for Claude Code/);
+  const runId = await launchWith(wired, { bundleId, digest, docPath }, []);
+  assert.deepEqual((await runShowJson(wired, runId)).modelChoice, {
+    model: "remembered-model",
+    effort: "high",
+  });
+});
+
+test("headless JSON launch succeeds while reporting preference read and save failures on stderr", async (t) => {
+  const { wired, bundleId, digest, docPath, home } = wireAgent(t);
+  const database = new Database(join(home, "catalog.db"));
+  t.after(() => database.close());
+  database.exec("DROP TABLE preferences");
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await runHeadless(
+    wired,
+    [
+      "run",
+      "launch",
+      bundleId,
+      "--trust",
+      digest,
+      "--input",
+      `doc=${docPath}`,
+      "--harness",
+      "claude-code",
+      "--json",
+    ],
+    {
+      out: (text) => out.push(text),
+      err: (text) => err.push(text),
+      cwd: () => process.cwd(),
+    },
+  );
+  assert.equal(code, 0);
+  const snapshot = JSON.parse(out.join(""));
+  assert.equal(snapshot.result.run.state, "succeeded");
+  assert.deepEqual(snapshot.result.run.modelChoice, {
+    model: PLAIN_REPORTED_MODEL,
+  });
+  assert.equal("preferenceNotice" in snapshot.result.run, false);
+  assert.match(err.join(""), /could not read/);
+  assert.equal(err.filter((text) => text.includes("could not save")).length, 1);
+});

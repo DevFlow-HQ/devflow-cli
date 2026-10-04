@@ -527,3 +527,32 @@ test("a built-in origin keeps its installing Secant version across a reopen", as
   t.after(() => reopened.close());
   assert.deepEqual(reopened.listEntries()[0]?.origin, origin);
 });
+
+test("Preferences preserve unrelated keys and the latest committed write is read across instances and reopen", (t) => {
+  const home = makeTempDir("secant-preferences-");
+  const first = openCatalog(home);
+  const second = openCatalog(home);
+  t.after(() => {
+    first.close();
+    second.close();
+  });
+  assert.equal(first.getPreference("last-model-choice:codex"), undefined);
+  first.setPreference("theme", "everforest");
+  first.setPreference("last-model-choice:codex", "first");
+  second.setPreference("last-model-choice:codex", "second");
+  assert.equal(first.getPreference("last-model-choice:codex"), "second");
+  assert.equal(second.getPreference("theme"), "everforest");
+  const reopened = openCatalog(home);
+  t.after(() => reopened.close());
+  assert.equal(reopened.getPreference("last-model-choice:codex"), "second");
+});
+
+test("a malformed Preference row throws at Catalog read ingress", (t) => {
+  const home = makeTempDir("secant-preferences-");
+  const catalog = openCatalog(home);
+  t.after(() => catalog.close());
+  const database = new Database(join(home, "catalog.db"));
+  t.after(() => database.close());
+  database.exec("INSERT INTO preferences (key, value) VALUES ('bad', x'00')");
+  assert.throws(() => catalog.getPreference("bad"));
+});

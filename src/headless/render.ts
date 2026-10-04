@@ -194,6 +194,20 @@ export function renderHarnessFocus(harness: HarnessFocus): string {
   }
 
   lines.push("", ...renderHarnessModels(harness));
+  const preselection = harness.preselection;
+  if (preselection !== undefined) {
+    const { choice, source } = preselection;
+    lines.push(
+      `Starts from ${choice.model}${choice.effort === undefined ? "" : ` at ${choice.effort} effort`}`,
+      source.kind === "last-choice"
+        ? `Your last choice for ${harness.name}`
+        : source.kind === "reported"
+          ? `From your ${harness.name} settings`
+          : source.reason,
+    );
+  }
+  if (harness.preferenceNotice !== undefined)
+    lines.push(harness.preferenceNotice);
 
   lines.push("", "Capabilities:");
   // The TUI inspector adds a blank line between capabilities on purpose;

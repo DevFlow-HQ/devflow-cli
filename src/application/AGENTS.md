@@ -27,9 +27,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Runs.) Preflight runs before the Trust gate, so a Run whose preconditions fail is refused before trust is ever asked for.
 - New Agent/Interactive-agent Runs require one known, available registry id and pin it in `createRun`; Command-only Runs reject a selection as irrelevant.
   The launch replay key includes the choice, and resume automatically reuses the immutable stored id without deriving it from Attempt evidence (#138, #146).
-- Every Agent-bearing Run holds a Model choice (ADR 0034). `launch-preparation` resolves it (the draft's model and effort, else `preselectModelChoice`: reported default,
-  then the Adapter's fallback; #343 puts the last choice first), checks it against the qualified declaration, and writes it into the `launch-run` Offer's draft. `submit` never
-  qualifies: it refuses an Agent draft without a model (`model-choice-required`) and trusts the Offer's effort.
+- Agent-bearing Runs hold a Model choice. `launch-preparation` checks the qualified declaration and resolves the draft, else `preselectModelChoice`:
+  valid last choice, reported default, then Adapter fallback. `submit` never qualifies: it requires a model and trusts the `launch-run` Offer's effort.
+- Each focus open and assessment reads Preferences outside the qualification cache; stale model/effort skips the whole choice with a notice.
+  `saveLastModelChoice` runs after Run creation; its failure notice survives Projection reopen for this Application lifetime.
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
   strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
@@ -100,9 +101,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - App-release trust is a recorded Trust grant (operation id `app-release`) that the startup ensure (`shipped-bundles.ts`) writes only on an Entry whose
   origin is `built-in`, re-checked every startup, so launch, resume, and the timeline read it like any grant; `trustState` shows a grant on a built-in as
   `app-release`. Equal bytes a user imported first keep their own origin and trust (#227).
-- `createApplication` stays one closure for cohesion, not size: its regions share the mutable `runs` map, operations map, and observer Sets, and keep
-  settlement, owner-release, and shutdown ordering visible in one place (#303 A3). Blocks that earned their own ownership already live privately beside it
-  (`launch-preparation`, `harness-catalog`, `live-overlay`, `subscription-lifecycle`); the extraction rule is [module design's](../../docs/agents/module-design.md).
+- `createApplication` stays one closure: its `runs` and operations maps and observer Sets share settlement, owner-release, and shutdown ordering (#303 A3).
+  Its private children are `launch-preparation`, `harness-catalog`, `live-overlay`, and `subscription-lifecycle`.
 
 ## Tests
 

@@ -15,6 +15,7 @@ change the durable Preferences. A failed save reports that the choice was not sa
 preference values use everforest and dark appearance; a preference read failure reports a notice and uses those defaults, while a failure affecting
 the whole Catalog retains its existing handling. Updates preserve unrelated preferences atomically, with the latest committed change winning for
 the same preference. Other running instances adopt saved changes on their next launch; cross-process live synchronization is outside this decision.
+The save-failure, read-failure, and latest-wins rules also cover the last Model choice per Harness (2026-10-04, #343).
 
 The defaults are everforest, as decided in [ADR 0036](./0036-the-run-workbench-mirrors-the-agent.md), and dark appearance. The picker uses the 25
 existing vendored themes and their existing dark and light palettes. This supersedes ADR 0018's initial fixed-theme, no-picker, no-persistence choice;

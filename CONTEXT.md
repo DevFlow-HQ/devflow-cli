@@ -76,8 +76,9 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   **Operation**; it adds no authority of its own. _Avoid_: Command alone, which is ambiguous with **Command step**.
 - **Slash command** — the typed `/name` form of an **App command** in the Run Workbench compose. A draft whose first word is a Slash command's
   name is always that App command and is never sent to the **Harness**. _Avoid_: Harness command, for the Harness's own slash vocabulary.
-- **Preferences** — saved presentation choices shared across **Workspaces** within one Secant home: the theme and its dark or light appearance.
-  They determine a TUI's initial appearance; its active appearance can differ during a preview or after an unsuccessful save.
+- **Preferences** — saved choices shared across **Workspaces** within one Secant home: the last **Model choice** per **Harness**, the theme, and its
+  dark or light appearance. They preselect the next launch's Model choice and determine a TUI's initial appearance; its active appearance can differ
+  during a preview or after an unsuccessful save.
 - **Secant invocation** — one process run of the `secant` command that reaches composition, through the TUI or a headless command. `--help`,
   `--version`, and a command-line parse error never reach composition, so they are not Secant invocations. A standalone test runner program
   (runtime conformance, terminal lifecycle) also runs as one, of the `runner` client, so its scenario breadcrumbs share the log. _Avoid_:

@@ -4,20 +4,28 @@ import type { RunSnapshot } from "../application/projection-port.js";
 export function createRunNoticeReporter(
   write: (text: string) => void,
 ): (snapshot: RunSnapshot) => void {
-  let reported = false;
+  const reported = new Set<string>();
   return (snapshot) => {
-    if (reported || !snapshot.result.found) return;
-    const notice = snapshot.result.run.windowsCleanupNotice;
-    if (notice === undefined) return;
-    reported = true;
-    write(`${notice}\n`);
+    if (!snapshot.result.found) return;
+    for (const notice of [
+      snapshot.result.run.windowsCleanupNotice,
+      snapshot.result.run.preferenceNotice,
+    ]) {
+      if (notice === undefined || reported.has(notice)) continue;
+      reported.add(notice);
+      write(`${notice}\n`);
+    }
   };
 }
 
 /** Keep transient informational copy out of the existing JSON contract. */
 export function runSnapshotJson(snapshot: RunSnapshot): string {
   if (!snapshot.result.found) return JSON.stringify(snapshot, null, 2);
-  const { windowsCleanupNotice: _notice, ...run } = snapshot.result.run;
+  const {
+    windowsCleanupNotice: _windowsNotice,
+    preferenceNotice: _preferenceNotice,
+    ...run
+  } = snapshot.result.run;
   return JSON.stringify(
     { ...snapshot, result: { ...snapshot.result, run } },
     null,

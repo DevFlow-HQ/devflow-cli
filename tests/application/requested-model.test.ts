@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -416,7 +417,9 @@ function wireDeclaring(
   wired: Wiring;
   digest: string;
   requests: FakeTurnRequestRecord[];
+  home: string;
 } {
+  const home = makeTempDir("secant-model-choice-home-");
   const captured = recording({
     ...completedScript("observed"),
     profile: profile(modelSelection),
@@ -426,10 +429,10 @@ function wireDeclaring(
     t,
     captured.adapter,
     writeAgentBundle(),
-    makeTempDir("secant-model-choice-home-"),
+    home,
     makeTempDir("secant-model-choice-ws-"),
   );
-  return { wired, digest, requests: captured.requests };
+  return { wired, digest, requests: captured.requests, home };
 }
 
 test("[model-choice-durability] a launch's model and effort are held on the Run, sent on the Turn request, recorded on its first Turn, projected beside the effective model, and survive reopen", async (t) => {
@@ -1178,4 +1181,319 @@ test("a typed name outside the suggested picks takes the declaration's efforts",
     effort: "high",
     source: { kind: "requested" },
   });
+});
+
+test("the next launch and a freshly opened Harness focus preselect the last choice", async (t) => {
+  const { wired, digest } = wireDeclaring(t, LISTED, REPORTED);
+  const first = await assess(
+    wired,
+    agentDraft(digest, { model: "beta", effort: "medium" }),
+  );
+  const admission = wired.projectionPort.submit({
+    operationId: "first",
+    operation: "launch-run",
+    input: offeredDraft(first),
+  });
+  assert.ok(admission.admitted);
+  await awaitSettled(wired.projectionPort, "first");
+  const next = await assess(wired, agentDraft(digest));
+  assert.equal(next.status, "ready");
+  assert.deepEqual(next.draft.modelChoice, {
+    model: "beta",
+    effort: "medium",
+    source: { kind: "last-choice" },
+  });
+  const focus = wired.projectionPort.openProjection({
+    family: "harness-catalog",
+    focus: { id: "claude-code" },
+  });
+  t.after(() => focus.close());
+  assert.ok(focus.snapshot.result.found);
+  assert.deepEqual(focus.snapshot.result.harness.preselection, {
+    choice: { model: "beta", effort: "medium" },
+    source: { kind: "last-choice" },
+  });
+});
+
+for (const [encoded, reason] of [
+  [
+    JSON.stringify({ model: "retired", effort: "high" }),
+    /retired is no longer offered/,
+  ],
+  [JSON.stringify({ model: "alpha", effort: "retired" }), /effort/],
+  ["{broken", /could not read/],
+  [JSON.stringify({ model: 42 }), /could not read/],
+  [JSON.stringify({ model: "" }), /could not read/],
+] as const) {
+  test(`an unsupported or unreadable last choice (${encoded}) falls back with a notice and stays ready`, async (t) => {
+    const { wired, digest } = wireDeclaring(t, LISTED, REPORTED);
+    wired.catalog.setPreference("last-model-choice:claude-code", encoded);
+    const assessed = await assess(wired, agentDraft(digest));
+    assert.equal(assessed.status, "ready");
+    assert.deepEqual(assessed.findings, []);
+    assert.deepEqual(assessed.draft.modelChoice, {
+      model: "alpha",
+      effort: "high",
+      source: { kind: "reported" },
+    });
+    assert.match(assessed.draft.preferenceNotice ?? "", reason);
+    const focus = wired.projectionPort.openProjection({
+      family: "harness-catalog",
+      focus: { id: "claude-code" },
+    });
+    t.after(() => focus.close());
+    assert.ok(focus.snapshot.result.found);
+    assert.match(focus.snapshot.result.harness.preferenceNotice ?? "", reason);
+    assert.deepEqual(focus.snapshot.result.harness.preselection?.choice, {
+      model: "alpha",
+      effort: "high",
+    });
+  });
+}
+
+test("a preference-only database read failure uses defaults with a notice", async (t) => {
+  const { wired, digest, home } = wireDeclaring(t, LISTED, REPORTED);
+  const database = new Database(join(home, "catalog.db"));
+  t.after(() => database.close());
+  database.exec("DROP TABLE preferences");
+  const assessed = await assess(wired, agentDraft(digest));
+  assert.equal(assessed.status, "ready");
+  assert.equal(assessed.draft.modelChoice?.model, "alpha");
+  assert.match(assessed.draft.preferenceNotice ?? "", /could not read/);
+});
+
+for (const event of ["INSERT", "UPDATE"] as const) {
+  test(`a failed preference ${event} keeps the created Run and reports the unsaved choice on reopen`, async (t) => {
+    const { wired, digest, home } = wireDeclaring(t, LISTED, REPORTED);
+    if (event === "UPDATE")
+      wired.catalog.setPreference(
+        "last-model-choice:claude-code",
+        JSON.stringify({ model: "alpha", effort: "low" }),
+      );
+    const database = new Database(join(home, "catalog.db"));
+    t.after(() => database.close());
+    database.exec(
+      `CREATE TRIGGER fail_preference BEFORE ${event} ON preferences BEGIN SELECT RAISE(ABORT, 'injected failure'); END`,
+    );
+    const admission = wired.projectionPort.submit({
+      operationId: "failed-save",
+      operation: "launch-run",
+      input: agentDraft(digest, { model: "beta", effort: "medium" }),
+    });
+    assert.ok(admission.admitted);
+    assert.ok(admission.runId);
+    assert.deepEqual(readRun(wired, admission.runId).modelChoice, {
+      model: "beta",
+      effort: "medium",
+    });
+    assert.match(
+      readRun(wired, admission.runId).preferenceNotice ?? "",
+      /active for this Run.*could not save/,
+    );
+    await awaitSettled(wired.projectionPort, "failed-save");
+    assert.equal(readRun(wired, admission.runId).state, "succeeded");
+    assert.match(
+      readRun(wired, admission.runId).preferenceNotice ?? "",
+      /could not save/,
+    );
+    const encoded = wired.catalog.getPreference(
+      "last-model-choice:claude-code",
+    );
+    assert.equal(
+      encoded,
+      event === "INSERT"
+        ? undefined
+        : JSON.stringify({ model: "alpha", effort: "low" }),
+    );
+  });
+}
+
+test("two Applications sharing a home adopt the latest committed choice on their next launch, without live sync", async (t) => {
+  const home = makeTempDir("secant-shared-choice-home-");
+  const bundle = writeAgentBundle();
+  const adapter = () =>
+    createFake({
+      ...completedScript("observed"),
+      profile: profile(LISTED),
+      defaults: REPORTED,
+    })();
+  const first = wire(
+    t,
+    adapter(),
+    bundle,
+    home,
+    makeTempDir("secant-choice-ws-"),
+  );
+  const second = wire(
+    t,
+    adapter(),
+    bundle,
+    home,
+    makeTempDir("secant-choice-ws-"),
+  );
+  const oldFocus = first.wired.projectionPort.openProjection({
+    family: "harness-catalog",
+    focus: { id: "claude-code" },
+  });
+  t.after(() => oldFocus.close());
+  // Assessment settles the qualification held by the focus too.
+  await assess(first.wired, agentDraft(first.digest));
+  async function launch(
+    wired: Wiring,
+    digest: string,
+    operationId: string,
+    model: string,
+    effort: string,
+  ) {
+    const admission = wired.projectionPort.submit({
+      operationId,
+      operation: "launch-run",
+      input: agentDraft(digest, { model, effort }),
+    });
+    assert.ok(admission.admitted);
+    await awaitSettled(wired.projectionPort, operationId);
+  }
+  await launch(first.wired, first.digest, "first-choice", "beta", "medium");
+  assert.deepEqual(
+    (await assess(second.wired, agentDraft(second.digest))).draft.modelChoice,
+    { model: "beta", effort: "medium", source: { kind: "last-choice" } },
+  );
+  await launch(second.wired, second.digest, "second-choice", "alpha", "low");
+  assert.deepEqual(
+    (await assess(first.wired, agentDraft(first.digest))).draft.modelChoice,
+    { model: "alpha", effort: "low", source: { kind: "last-choice" } },
+  );
+  const focus = first.wired.projectionPort.openProjection({
+    family: "harness-catalog",
+    focus: { id: "claude-code" },
+  });
+  t.after(() => focus.close());
+  assert.ok(focus.snapshot.result.found);
+  assert.deepEqual(focus.snapshot.result.harness.preselection?.choice, {
+    model: "alpha",
+    effort: "low",
+  });
+});
+
+test("replaying a launch never overwrites a later saved choice", async (t) => {
+  const { wired, digest } = wireDeclaring(t, LISTED, REPORTED);
+  const input = agentDraft(digest, { model: "beta", effort: "medium" });
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "replayed",
+      operation: "launch-run",
+      input,
+    }).admitted,
+  );
+  await awaitSettled(wired.projectionPort, "replayed");
+  wired.catalog.setPreference(
+    "last-model-choice:claude-code",
+    JSON.stringify({ model: "gamma" }),
+  );
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "replayed",
+      operation: "launch-run",
+      input,
+    }).admitted,
+  );
+  assert.deepEqual(
+    (await assess(wired, agentDraft(digest))).draft.modelChoice,
+    { model: "gamma", source: { kind: "last-choice" } },
+  );
+});
+
+for (const [label, selection, choice] of [
+  ["suggested Other", SUGGESTED, { model: "custom-other", effort: "high" }],
+  [
+    "free text",
+    {
+      at: "launch",
+      declaration: { kind: "free-text", efforts: ["low", "high"] },
+      evidence: "scripted fake",
+    },
+    { model: "custom-free", effort: "low" },
+  ],
+  [
+    "no selection declaration",
+    { at: "unavailable", evidence: "scripted fake" },
+    { model: "unchecked", effort: "custom" },
+  ],
+  ["no effort setting", LISTED, { model: "gamma" }],
+] as const) {
+  test(`the saved ${label} choice can preselect even without reported defaults`, async (t) => {
+    const { wired, digest } = wireDeclaring(t, selection, {
+      kind: "unavailable",
+      reason: "No defaults.",
+    });
+    wired.catalog.setPreference(
+      "last-model-choice:claude-code",
+      JSON.stringify(choice),
+    );
+    const assessed = await assess(wired, agentDraft(digest));
+    assert.equal(assessed.status, "ready");
+    assert.deepEqual(assessed.draft.modelChoice, {
+      ...choice,
+      source: { kind: "last-choice" },
+    });
+  });
+}
+
+test("launching one Harness preserves the other Harness's last choice", async (t) => {
+  const { wired, digest } = wireDeclaring(t, LISTED, REPORTED);
+  const codex = JSON.stringify({ model: "codex-last", effort: "high" });
+  wired.catalog.setPreference("last-model-choice:codex", codex);
+  const before = await assess(wired, agentDraft(digest));
+  assert.equal(before.draft.modelChoice?.source.kind, "reported");
+  const launch = wired.projectionPort.submit({
+    operationId: "claude-choice",
+    operation: "launch-run",
+    input: agentDraft(digest, { model: "beta", effort: "low" }),
+  });
+  assert.ok(launch.admitted);
+  await awaitSettled(wired.projectionPort, launch.operationId);
+  assert.equal(wired.catalog.getPreference("last-model-choice:codex"), codex);
+  assert.deepEqual(
+    (await assess(wired, agentDraft(digest))).draft.modelChoice,
+    { model: "beta", effort: "low", source: { kind: "last-choice" } },
+  );
+});
+
+test("a durable launch replay after reopening the Application preserves a newer last choice", async (t) => {
+  const home = makeTempDir("secant-replay-choice-home-");
+  const workspace = makeTempDir("secant-replay-choice-ws-");
+  const bundle = writeAgentBundle();
+  const adapter = () =>
+    createFake({
+      ...completedScript("observed"),
+      profile: profile(LISTED),
+      defaults: REPORTED,
+    })();
+  const first = wire(t, adapter(), bundle, home, workspace);
+  const input = agentDraft(first.digest, { model: "beta", effort: "medium" });
+  const admission = first.wired.projectionPort.submit({
+    operationId: "durable-replay",
+    operation: "launch-run",
+    input,
+  });
+  assert.ok(admission.admitted);
+  await awaitSettled(first.wired.projectionPort, "durable-replay");
+  first.wired.catalog.setPreference(
+    "last-model-choice:claude-code",
+    JSON.stringify({ model: "gamma" }),
+  );
+  const reopened = wire(t, adapter(), bundle, home, workspace);
+  const replay = reopened.wired.projectionPort.submit({
+    operationId: "durable-replay",
+    operation: "launch-run",
+    input,
+  });
+  assert.ok(replay.admitted);
+  assert.equal(replay.runId, admission.runId);
+  await awaitSettled(reopened.wired.projectionPort, "durable-replay");
+  assert.deepEqual(
+    (await assess(reopened.wired, agentDraft(reopened.digest))).draft
+      .modelChoice,
+    { model: "gamma", source: { kind: "last-choice" } },
+  );
 });

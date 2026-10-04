@@ -314,6 +314,7 @@ export function createLaunchPreparation(
       };
     }
     const resolved = resolveModelChoice({
+      catalog: deps.catalog,
       harness: choice,
       profile: qualification.profile,
       defaults: qualification.defaults,
@@ -325,7 +326,13 @@ export function createLaunchPreparation(
         : {}),
     });
     return resolved.ok
-      ? { choice: resolved.choice, source: resolved.source }
+      ? {
+          choice: resolved.choice,
+          source: resolved.source,
+          ...(resolved.preferenceNotice === undefined
+            ? {}
+            : { preferenceNotice: resolved.preferenceNotice }),
+        }
       : { problem: resolved.problem };
   }
 
@@ -376,6 +383,7 @@ export function createLaunchPreparation(
 }
 
 interface TResolvedModelChoice {
+  readonly preferenceNotice?: string;
   readonly choice: ModelChoice;
   readonly source: ModelChoiceSource;
 }
@@ -436,6 +444,9 @@ function draftView(
           },
         }
       : {}),
+    ...(modelChoice?.preferenceNotice === undefined
+      ? {}
+      : { preferenceNotice: modelChoice.preferenceNotice }),
     launchInputs: draft.launchInputs,
     ...(draft.trustDigest !== undefined
       ? { trustDigest: draft.trustDigest }

@@ -16,7 +16,12 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { z } from "zod";
 import { catalogMigrations } from "../drizzle/migrations.js";
-import { catalogEntries, trustGrants, workspaceApprovals } from "./schema.js";
+import {
+  catalogEntries,
+  preferences,
+  trustGrants,
+  workspaceApprovals,
+} from "./schema.js";
 
 // The Catalog owns the catalog database under the Secant home. Everything about
 // SQLite stays behind this Interface: no SQLite type or row shape crosses it, and
@@ -97,6 +102,11 @@ export type BundleInstallResult =
   | { readonly outcome: "identity-collision"; readonly existing: CatalogEntry };
 
 export interface Catalog {
+  /** A home-wide Preference's encoded value, or undefined when absent.
+   * Malformed rows and storage failures throw; callers can default this read. */
+  getPreference(key: string): string | undefined;
+  /** Atomically replace only this key. The latest committed write wins. */
+  setPreference(key: string, value: string): void;
   /** The approval for an exact canonical path, or undefined when none exists. */
   getWorkspaceApproval(path: string): WorkspaceApproval | undefined;
   /**
@@ -179,6 +189,7 @@ const catalogEntryRow = z.object({
   installed_at: z.string(),
   installation_generation: z.number(),
 });
+const preferenceRow = z.object({ key: z.string(), value: z.string() });
 const approvalRow = z.object({
   path: z.string(),
   approved_at: z.string(),
@@ -506,6 +517,28 @@ export function openCatalog(
   }
 
   return {
+    getPreference(key) {
+      const row = db
+        .select()
+        .from(preferences)
+        .where(eq(preferences.key, key))
+        .get();
+      return row === undefined ? undefined : preferenceRow.parse(row).value;
+    },
+    setPreference(key, value) {
+      db.transaction(
+        (tx) => {
+          tx.insert(preferences)
+            .values({ key, value })
+            .onConflictDoUpdate({
+              target: preferences.key,
+              set: { value },
+            })
+            .run();
+        },
+        { behavior: "immediate" },
+      );
+    },
     getWorkspaceApproval: readApproval,
     approveWorkspace(path, approvedAt) {
       insertApproval(path, approvedAt.toISOString());

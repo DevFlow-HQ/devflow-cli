@@ -17,15 +17,19 @@ generic **Projection**, **Action Offer**, and **Operation** terms live in the [c
   the pinned bytes still valid and composed, **Interactive agent step** refusal for a client without interactive turns, selected-**Harness** discovery
   and served capabilities, **Launch input** presence and type, **Workspace prerequisites**, **Command step** executables, and **Trust grant**. When the
   draft is otherwise ready, it additionally qualifies only the selected Harness through the bounded qualify path to read the Harness's own default
-  model and effort and check the **Model choice** against the declared lists, then releases it immediately. Its status is `assessing`, `ready`, or
+  model and effort and check the **Model choice** against the declared lists, then releases it immediately. Preselection reads the last choice for that
+  Harness first, then the reported default, then the Adapter fallback. A skipped or unreadable last choice carries a notice without blocking launch.
+  Its status is `assessing`, `ready`, or
   `not-ready`; only a `ready` draft carries the `launch-run` **Action Offer**, and no status ever creates a Run, Session, Turn, or Trust grant.
   _Avoid_: Dry-run launch, launch validation.
 - **`harness-catalog`** — the **Projection** family for bounded discovery and qualification of the installed **Harnesses**, with an optional exact
   focus on one semantic Harness id. Its `list` view carries one **Harness summary** per registered Harness and spawns nothing; its `focus` view runs
   bounded qualification for that one Harness (prepare then immediate close in composition), caches the result for this process, and adds the
-  supported-model declaration with each model's efforts, the Harness's own default **Model choice** or its declared fallback, the six
+  supported-model declaration with each model's efforts, the Harness's own default **Model choice** or its declared fallback, the preselection and its
+  source, the six
   **Capability state** rows, the configuration posture, external authentication instructions when the failure is authentication, and a
-  diagnostic reference. It projects no **Action Offers**. _Avoid_: Harness registry, harness list.
+  diagnostic reference. Each focus open reads Preferences anew; the qualification cache never caches the last choice. It projects no **Action Offers**.
+  _Avoid_: Harness registry, harness list.
 - **Harness summary** — one row a **`harness-catalog`** `list` view carries for a registered **Harness**: its id and name, its discovery state — found
   with its source, an unsupported shim, or not found with the locations searched — its last **Qualification state**, and the observed executable,
   version, platform, and checked-at evidence when a qualification result is held in this process. It spawns nothing and asserts no capability the

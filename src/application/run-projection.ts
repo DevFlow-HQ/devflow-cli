@@ -103,6 +103,7 @@ export interface RunSteerCapability {
  *  short-lived owner and closes it. */
 export interface RunReadContext {
   readonly windowsCleanupFallback?: boolean;
+  readonly preferenceNotice?: string;
   readonly facts?: RunFacts; // present for a Run launched in this process
   readonly liveOwner?: RunOwner; // present while live in this process
   readonly state?: string; // the in-memory latest state while tracked
@@ -257,6 +258,9 @@ function runResult(
         launchedAt: record.createdAt,
         state: derivedRun.state,
         problem: context.problem,
+        ...(context.preferenceNotice === undefined
+          ? {}
+          : { preferenceNotice: context.preferenceNotice }),
         ...(context.windowsCleanupFallback
           ? {
               windowsCleanupNotice:

@@ -1,3 +1,5 @@
+import { z } from "zod";
+import type { Catalog } from "../catalog/catalog.js";
 import type {
   HarnessDefaults,
   HarnessProfile,
@@ -17,10 +19,9 @@ import type { HarnessChoice, Problem } from "./projection-port.js";
 // requested model and effort against the qualified Harness. The Adapter declares
 // its fallback; this Module only orders the sources and never invents a value.
 
-/** Where a preselected Model choice came from. The order is the Harness-reported
- *  default, then the Adapter-declared fallback with its reason; the last choice
- *  (#343) joins it in front. */
+/** The last choice, then the Harness-reported default, then its fallback. */
 type PreselectionSource =
+  | { readonly kind: "last-choice" }
   | { readonly kind: "reported" }
   | { readonly kind: "fallback"; readonly reason: string };
 
@@ -34,21 +35,96 @@ export interface Preselection {
 export type ModelChoiceSource =
   PreselectionSource | { readonly kind: "requested" };
 
-/** The Model choice to preselect for a Harness, or undefined when it reports
- *  nothing to start from (the defaults' `reason` says why). */
-export function preselectModelChoice(
-  defaults: HarnessDefaults,
-): Preselection | undefined {
-  if (defaults.kind === "reported") {
-    return { choice: defaults.choice, source: { kind: "reported" } };
+const savedChoice = z.strictObject({
+  model: z.string().min(1),
+  effort: z.string().min(1).optional(),
+});
+
+function preferenceKey(harnessId: string): string {
+  return `last-model-choice:${harnessId}`;
+}
+
+/** Save only after the Run write commits. A storage failure keeps that Run
+ * choice active and returns the notice both launch and mid-Run callers report. */
+export function saveLastModelChoice(
+  catalog: Catalog,
+  harnessId: string,
+  choice: ModelChoice,
+): string | undefined {
+  try {
+    catalog.setPreference(preferenceKey(harnessId), JSON.stringify(choice));
+    return undefined;
+  } catch {
+    return "Your Model choice is active for this Run, but Secant could not save it as your last choice. Try choosing it again on your next launch.";
   }
-  if (defaults.kind === "fallback") {
-    return {
-      choice: defaults.choice,
-      source: { kind: "fallback", reason: defaults.reason },
-    };
+}
+
+/** Read anew for each focus or assessment; qualification alone is cached.
+ * Catalog checks row shape. Application checks the encoded choice and its meaning. */
+export function preselectModelChoice(params: {
+  readonly catalog: Catalog;
+  readonly harness: HarnessChoice;
+  readonly profile: HarnessProfile;
+  readonly defaults: HarnessDefaults;
+}): {
+  readonly preselection?: Preselection;
+  readonly preferenceNotice?: string;
+} {
+  let preferenceNotice: string | undefined;
+  try {
+    const encoded = params.catalog.getPreference(
+      preferenceKey(params.harness.id),
+    );
+    if (encoded !== undefined) {
+      const choice = savedChoice.parse(JSON.parse(encoded));
+      const declaration =
+        params.profile.modelSelection.at === "unavailable"
+          ? undefined
+          : params.profile.modelSelection.declaration;
+      const modelAvailable =
+        declaration?.kind !== "list" ||
+        declaration.models.some((entry) => entry.model === choice.model);
+      const effort = resolveEffort({
+        harness: params.harness,
+        model: choice.model,
+        declaration,
+        requestedEffort: choice.effort,
+        preselected: choice,
+      });
+      if (modelAvailable && effort.ok) {
+        return {
+          preselection: {
+            choice:
+              effort.effort === undefined
+                ? { model: choice.model }
+                : { model: choice.model, effort: effort.effort },
+            source: { kind: "last-choice" },
+          },
+        };
+      }
+      preferenceNotice = modelAvailable
+        ? `Your last choice was skipped. ${!effort.ok ? effort.problem.explanation : "The saved effort is unavailable."}`
+        : `Your last choice was skipped because ${choice.model} is no longer offered by ${params.harness.name}.`;
+    }
+  } catch {
+    preferenceNotice =
+      "Secant could not read your last Model choice. Using the Harness defaults; you can still choose a model.";
   }
-  return undefined;
+  const { defaults } = params;
+  const preselection: Preselection | undefined =
+    defaults.kind === "unavailable"
+      ? undefined
+      : {
+          choice: defaults.choice,
+          source:
+            defaults.kind === "reported"
+              ? { kind: "reported" }
+              : { kind: "fallback", reason: defaults.reason },
+        };
+  return {
+    ...(preselection === undefined ? {} : { preselection }),
+    ...(preferenceNotice === undefined ? {} : { preferenceNotice }),
+  };
 }
 
 type ModelChoiceResolution =
@@ -56,6 +132,7 @@ type ModelChoiceResolution =
       readonly ok: true;
       readonly choice: ModelChoice;
       readonly source: ModelChoiceSource;
+      readonly preferenceNotice?: string;
     }
   | { readonly ok: false; readonly problem: Problem };
 
@@ -65,6 +142,7 @@ type ModelChoiceResolution =
  *  model with no effort setting. The model is checked against a `list`
  *  declaration and the effort against the efforts the model offers. */
 export function resolveModelChoice(params: {
+  readonly catalog: Catalog;
   readonly harness: HarnessChoice;
   readonly profile: HarnessProfile;
   readonly defaults: HarnessDefaults;
@@ -72,7 +150,7 @@ export function resolveModelChoice(params: {
   readonly requestedEffort?: string;
 }): ModelChoiceResolution {
   const { harness, requestedModel, requestedEffort } = params;
-  const preselection = preselectModelChoice(params.defaults);
+  const { preselection, preferenceNotice } = preselectModelChoice(params);
   const model = requestedModel ?? preselection?.choice.model;
   if (model === undefined) {
     return {
@@ -124,6 +202,7 @@ export function resolveModelChoice(params: {
         ? { model }
         : { model, effort: effort.effort },
     source,
+    ...(preferenceNotice === undefined ? {} : { preferenceNotice }),
   };
 }
 

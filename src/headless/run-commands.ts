@@ -644,6 +644,8 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
   // resolved — the same preselection the TUI shows (ADR 0034) — and the launch
   // reruns every authoritative check under identical rules.
   const assessment = await assessDraft(port, draft);
+  if (assessment.draft.preferenceNotice !== undefined)
+    io.err(`${assessment.draft.preferenceNotice}\n`);
   if (assessment.status === "not-ready") {
     return reportNotReady(io, fail, json, assessment.findings);
   }
@@ -677,7 +679,14 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
     json,
     admission.operationId,
     runId,
-    (run) => [`Run ${run.runId}`],
+    (run) => [
+      `Run ${run.runId}`,
+      ...(assessment.draft.modelChoice?.source.kind === "last-choice"
+        ? [
+            `Your last choice for ${draft.harness === "codex" ? "Codex" : "Claude Code"}`,
+          ]
+        : []),
+    ],
     harnessRequests,
   );
 }
@@ -692,11 +701,7 @@ async function showRun(
   const opened = port.openProjection({ family: "run", runId });
   try {
     const snapshot = opened.snapshot;
-    if (
-      snapshot.result.found &&
-      snapshot.result.run.windowsCleanupNotice !== undefined
-    )
-      io.err(`${snapshot.result.run.windowsCleanupNotice}\n`);
+    createRunNoticeReporter(io.err)(snapshot);
     if (json) {
       io.out(`${runSnapshotJson(snapshot)}\n`);
       return snapshot.result.found ? 0 : 1;

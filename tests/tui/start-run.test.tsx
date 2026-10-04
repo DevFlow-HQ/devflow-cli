@@ -472,6 +472,7 @@ function controlledPreparation() {
   const settle = (
     status: "ready" | "not-ready",
     findings: readonly Problem[],
+    modelChoice?: LaunchPreparationSnapshot["draft"]["modelChoice"],
   ) => {
     if (openedDraft === undefined || updateSnapshot === undefined) {
       throw new Error("Review must open preparation before it can settle");
@@ -500,6 +501,7 @@ function controlledPreparation() {
         harness: openedDraft.harness,
         requestedModel: openedDraft.requestedModel,
         ...readyChoice(status, openedDraft),
+        ...(modelChoice === undefined ? {} : { modelChoice }),
         launchInputs: openedDraft.launchInputs,
         trustDigest: openedDraft.trustDigest,
       },
@@ -2526,3 +2528,78 @@ test("end-to-end over the live seam: a launched Run transitions into its Workben
   assert.match(frame, /Run run-9/);
   assert.match(frame, /SUCCEEDED/);
 });
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`[start-run-preselection] at ${width}x${height} the last choice source is readable without colour`, async () => {
+    const last: HarnessSpec = {
+      ...FALLBACK_CLAUDE,
+      preselection: {
+        choice: { model: "opus", effort: "medium" },
+        source: { kind: "last-choice" },
+      },
+    };
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([last]).view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+    const frame = t.captureCharFrame();
+    assert.match(words(frame), /Your last choice for Claude Code/);
+    for (const line of frame.split("\n")) assert.ok(line.length <= width);
+  });
+}
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`[start-run-preselection] at ${width}x${height} Review names the last choice source`, async () => {
+    const prep = controlledPreparation();
+    const last: HarnessSpec = {
+      ...FALLBACK_CLAUDE,
+      preselection: {
+        choice: { model: "opus", effort: "medium" },
+        source: { kind: "last-choice" },
+      },
+    };
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([last]).view,
+      prep.view,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("Review"));
+    prep.settle("ready", [], {
+      model: "opus",
+      effort: "medium",
+      source: { kind: "last-choice" },
+    });
+    await t.waitForFrame((frame) =>
+      words(frame).includes("Your last choice for Claude Code"),
+    );
+    assert.match(
+      words(t.captureCharFrame()),
+      /Model choice: opus at medium effort/,
+    );
+    for (const line of t.captureCharFrame().split("\n"))
+      assert.ok(line.length <= width);
+  });
+}

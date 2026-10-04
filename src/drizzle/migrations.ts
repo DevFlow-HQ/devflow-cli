@@ -1,4 +1,5 @@
 import catalogInitial from "./catalog/20260915095848_chubby_vanisher/migration.sql" with { type: "text" };
+import catalogPreferences from "./catalog/20261004071612_high_norrin_radd/migration.sql" with { type: "text" };
 import coordinationInitial from "./coordination/20260915095850_yellow_forge/migration.sql" with { type: "text" };
 import coordinationRunRegistrationOnly from "./coordination/20260918034609_white_alex_power/migration.sql" with { type: "text" };
 import runInitial from "./run/20260915095853_hesitant_silverclaw/migration.sql" with { type: "text" };
@@ -52,6 +53,7 @@ export function journalEntry(
 // changes remain ordinary generated diffs.
 export const catalogMigrations: MigrationsJournal = [
   journalEntry("20260915095848_chubby_vanisher", catalogInitial),
+  journalEntry("20261004071612_high_norrin_radd", catalogPreferences),
 ];
 
 export const coordinationMigrations: MigrationsJournal = [

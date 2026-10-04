@@ -389,7 +389,7 @@ await withCleanup(
           `Compiled binary did not migrate and open the pre-Drizzle home: ${JSON.stringify(listed)}`,
         );
       }
-      assertMigrated(join(legacyHome, "catalog.db"), "Catalog");
+      assertMigrated(join(legacyHome, "catalog.db"), "Catalog", 2);
       assertMigrated(join(groupDir, "coordination.db"), "coordination", 2);
       // The Run Store carries thirteen migrations: #108 added `pending_gate`, #116 added
       // the Harness Turn records (`harness_session`/`turn`/`turn_event`/

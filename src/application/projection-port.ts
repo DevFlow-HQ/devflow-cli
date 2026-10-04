@@ -512,10 +512,9 @@ interface ModelChoiceView {
   readonly effort?: string;
 }
 
-/** Where a preselected Model choice came from (ADR 0034): the Harness's own
- *  reported settings, or the Adapter's declared fallback with the reason it
- *  stands in. #343 adds the last choice. */
+/** The last choice, the Harness's own settings, or its declared fallback. */
 type PreselectionSourceView =
+  | { readonly kind: "last-choice" }
   | { readonly kind: "reported" }
   | { readonly kind: "fallback"; readonly reason: string };
 
@@ -558,9 +557,10 @@ export interface HarnessFocus extends HarnessSummary {
   readonly modelDeclaration?: ModelDeclarationView;
   readonly harnessDefaults?: HarnessDefaultsView;
   /** The Model choice a launch with this Harness starts from (ADR 0034), ordered
-   *  by the Application from the defaults; absent when the Harness reports
-   *  nothing to start from. Clients show it and never derive it. */
+   *  by the Application from the last choice, reported default, then fallback;
+   *  absent when none can preselect. Clients show it and never derive it. */
   readonly preselection?: PreselectionView;
+  readonly preferenceNotice?: string;
   readonly capabilities: readonly HarnessCapabilityView[];
   readonly configurationPosture?: string;
   readonly authenticationInstructions?: string;
@@ -1027,6 +1027,8 @@ export interface RunView {
   /** Informational limit of an observed Windows fallback launch. Retained once
    * per Run in this Application; excluded from headless JSON. */
   readonly windowsCleanupNotice?: string;
+  /** Live evidence that a last-choice read or save failed; never Run truth. */
+  readonly preferenceNotice?: string;
   readonly runId: string;
   readonly bundle: {
     readonly id: string;
@@ -1178,6 +1180,7 @@ export interface LaunchPreparationDraftView {
   /** The Model choice the `launch-run` Offer launches, present once the
    *  qualified Harness resolved it (ADR 0034). */
   readonly modelChoice?: LaunchModelChoiceView;
+  readonly preferenceNotice?: string;
   readonly launchInputs: Readonly<Record<string, string>>;
   readonly trustDigest?: string;
 }

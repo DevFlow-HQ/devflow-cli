@@ -1,3 +1,4 @@
+import type { Catalog } from "../catalog/catalog.js";
 import type {
   HarnessDefaults,
   HarnessProfile,
@@ -61,6 +62,7 @@ export function createHarnessCatalog(
   now: () => Date,
   subscriptions: Pick<SubscriptionLifecycle, "open">,
   observe: ApplicationObserver,
+  catalog: Catalog,
 ): HarnessCatalog {
   const held = new Map<string, HeldQualification>();
   const qualifications = new Map<string, Promise<HeldQualification>>();
@@ -149,19 +151,24 @@ export function createHarnessCatalog(
       if (cached !== undefined) {
         return openedFocus(
           updates,
-          focusSnapshot(selection, registration, cached),
+          focusSnapshot(selection, registration, cached, catalog),
         );
       }
 
       void qualifyRegistration(registration).then((qualification) => {
         updates.push({
           kind: "durable",
-          snapshot: focusSnapshot(selection, registration, qualification),
+          snapshot: focusSnapshot(
+            selection,
+            registration,
+            qualification,
+            catalog,
+          ),
         });
       });
       return openedFocus(
         updates,
-        focusSnapshot(selection, registration, undefined),
+        focusSnapshot(selection, registration, undefined, catalog),
       );
     },
     async qualify(
@@ -225,12 +232,13 @@ function focusSnapshot(
   selection: HarnessFocusSelector,
   registration: ApplicationHarnessRegistration,
   held: HeldQualification | undefined,
+  catalog: Catalog,
 ): HarnessFocusSnapshot {
   return {
     family: "harness-catalog",
     view: "focus",
     selection,
-    result: { found: true, harness: focusOf(registration, held) },
+    result: { found: true, harness: focusOf(registration, held, catalog) },
   };
 }
 
@@ -249,6 +257,7 @@ function summaryOf(
 function focusOf(
   registration: ApplicationHarnessRegistration,
   held: HeldQualification | undefined,
+  catalog: Catalog,
 ): HarnessFocus {
   const summary = summaryOf(registration, held);
   if (held === undefined) {
@@ -287,7 +296,7 @@ function focusOf(
       ? {}
       : modelViews(profile.modelSelection.declaration)),
     harnessDefaults: defaultsView(defaults),
-    ...preselectionView(defaults),
+    ...preselectionView(catalog, registration.choice, profile, defaults),
     capabilities: capabilitiesOf(profile),
     configurationPosture: profile.configurationPosture,
   };
@@ -329,22 +338,20 @@ function entryView(entry: ModelEntry): ModelEntryView {
 /** The Application's preselection over the qualified defaults (ADR 0034), so a
  *  client choosing a Harness shows what a launch starts from without deriving it. */
 function preselectionView(
+  catalog: Catalog,
+  harness: ApplicationHarnessRegistration["choice"],
+  profile: HarnessProfile,
   defaults: HarnessDefaults,
-): Pick<HarnessFocus, "preselection"> {
-  const preselection = preselectModelChoice(defaults);
-  if (preselection === undefined) return {};
-  const { choice, source } = preselection;
+): Pick<HarnessFocus, "preselection" | "preferenceNotice"> {
+  const { preselection, preferenceNotice } = preselectModelChoice({
+    catalog,
+    harness,
+    profile,
+    defaults,
+  });
   return {
-    preselection: {
-      choice: {
-        model: choice.model,
-        ...(choice.effort === undefined ? {} : { effort: choice.effort }),
-      },
-      source:
-        source.kind === "reported"
-          ? { kind: "reported" }
-          : { kind: "fallback", reason: source.reason },
-    },
+    ...(preselection === undefined ? {} : { preselection }),
+    ...(preferenceNotice === undefined ? {} : { preferenceNotice }),
   };
 }
 

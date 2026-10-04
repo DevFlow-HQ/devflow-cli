@@ -36,3 +36,8 @@ export const trustGrants = sqliteTable(
     primaryKey({ columns: [table.digest, table.installation_generation] }),
   ],
 );
+
+export const preferences = sqliteTable("preferences", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
