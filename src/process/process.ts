@@ -881,6 +881,7 @@ class ManagedOwnedProcess implements OwnedProcess {
   private readonly closePromise: Promise<OwnedProcessClose>;
   private shutdownPromise: Promise<OwnedProcessClose> | undefined;
   private interruptPromise: Promise<ProcessInterruption> | undefined;
+  private stdinError: Error | undefined;
 
   constructor(
     private readonly child: OwnedChild,
@@ -889,6 +890,11 @@ class ManagedOwnedProcess implements OwnedProcess {
   ) {
     this.stdout = child.child.stdout;
     this.stderr = child.child.stderr;
+    // A failed write or end also emits on stdin, independently of ChildProcess
+    // errors. Keep that listener for late teardown errors and retain the cause.
+    child.child.stdin.on("error", (error: Error) => {
+      this.stdinError ??= error;
+    });
     if (child.kind === "contained") {
       this.closePromise = child.child.close;
       return;
@@ -914,6 +920,7 @@ class ManagedOwnedProcess implements OwnedProcess {
   }
 
   writeStdin(bytes: Uint8Array): Promise<void> {
+    if (this.stdinError !== undefined) return Promise.reject(this.stdinError);
     return new Promise((resolve, reject) => {
       let callbackComplete = false;
       let drained = true;
@@ -1033,7 +1040,17 @@ class ManagedOwnedProcess implements OwnedProcess {
 
   private async safeShutdown(timeoutMs: number): Promise<OwnedProcessClose> {
     try {
-      return await this.shutdown(timeoutMs);
+      const close = await this.shutdown(timeoutMs);
+      // Reap within the existing bound before reporting a broken input pipe.
+      // A stdin error is not evidence that the child or its descendants exited.
+      if (
+        this.stdinError !== undefined &&
+        close.kind !== "cleanup-error" &&
+        close.kind !== "cleanup-timeout"
+      ) {
+        return { kind: "cleanup-error", cause: this.stdinError };
+      }
+      return close;
     } catch (error) {
       return {
         kind: "cleanup-error",

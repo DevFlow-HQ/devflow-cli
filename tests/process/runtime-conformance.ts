@@ -70,6 +70,7 @@ import {
   harnessOwnerDeathRecovery,
 } from "./windows-harness-conformance.js";
 import { registerWindowsContainmentCases } from "./windows-contained-conformance.js";
+import { registerStdinErrorCases } from "./stdin-error-conformance.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -268,6 +269,7 @@ function registeredCases(): RunnerCase[] {
   });
   registerWindowsContainmentCases((test) => cases.push(test));
   registerWindowsHarnessCases((test) => cases.push(test));
+  registerStdinErrorCases((test) => cases.push(test));
   cases.push(
     { name: "execution-real-command", body: executionRealCommand },
     { name: "process-sync-command", body: processSyncCommand },

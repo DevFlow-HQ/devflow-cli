@@ -23,6 +23,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   callers use child facts and cleanup outcomes, never exit codes, because kill-on-close can report zero. Failed termination records no kill.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound
   again to die once force-killed. The bound is not split between the stages.
+- Owned stdin keeps its own `error` listener through teardown; child-process errors do not cover pipe errors. `closeStdin` reaps before returning that cause
+  as `cleanup-error`, while `closed()` keeps its independent native exit observation. Later writes reject the retained cause.
 - The primary single-PATH-walk comment (D1, `walkPath`) covers only this Module's executable resolution; it must not be read as excluding the three git
   spawn sites (the Preflight worktree probe and the two Artifact-repo spawns) that pass the bare name `"git"` and let the OS resolve it through PATH.
 - Child facts (#321): every spawn path reports through one `ChildWatch`, so its role, PID, and kill state agree across paths and it settles once.
