@@ -35,7 +35,7 @@ async function withBearer(
 ): Promise<void> {
   const bridge = await startPermissionBridge(denyAll);
   try {
-    await body(bridge.bearer);
+    await body(bridge.session("test").bearer);
   } finally {
     await bridge.close();
   }
@@ -291,23 +291,42 @@ test("a secret split across a truncation boundary leaves no fragment", async () 
 
 test("a bearer stays redacted while its bridge is live and after it closes", async () => {
   const bridge = await startPermissionBridge(denyAll);
+  const token = bridge.session("test").bearer;
   try {
-    assert.equal(translatedMessage(bridge.bearer), `token ${REDACTED}`);
+    assert.equal(translatedMessage(token), `token ${REDACTED}`);
   } finally {
     await bridge.close();
   }
   // Teardown stays idempotent and never evicts the bearer.
   await bridge.close();
-  assert.equal(translatedMessage(bridge.bearer), `token ${REDACTED}`);
+  assert.equal(translatedMessage(token), `token ${REDACTED}`);
 });
 
 test("both bearers stay redacted after two bridges in one invocation close", async () => {
   const first = await startPermissionBridge(denyAll);
   const second = await startPermissionBridge(denyAll);
+  const firstToken = first.session("test").bearer;
+  const secondToken = second.session("test").bearer;
   await first.close();
   await second.close();
 
-  assert.notEqual(first.bearer, second.bearer);
-  assert.equal(translatedMessage(first.bearer), `token ${REDACTED}`);
-  assert.equal(translatedMessage(second.bearer), `token ${REDACTED}`);
+  assert.notEqual(firstToken, secondToken);
+  assert.equal(translatedMessage(firstToken), `token ${REDACTED}`);
+  assert.equal(translatedMessage(secondToken), `token ${REDACTED}`);
+});
+
+test("every Session token on a shared listener stays registered after close", async () => {
+  const bridge = await startPermissionBridge(denyAll);
+  const a = bridge.session("a").bearer;
+  const b = bridge.session("b").bearer;
+  try {
+    assert.notEqual(a, b);
+    assert.equal(bridge.session("a").bearer, a);
+    assert.equal(translatedMessage(a), `token ${REDACTED}`);
+    assert.equal(translatedMessage(b), `token ${REDACTED}`);
+  } finally {
+    await bridge.close();
+  }
+  assert.equal(translatedMessage(a), `token ${REDACTED}`);
+  assert.equal(translatedMessage(b), `token ${REDACTED}`);
 });

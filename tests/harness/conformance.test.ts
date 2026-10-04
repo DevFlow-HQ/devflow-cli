@@ -18,6 +18,7 @@ import {
   type ConformanceScenarios,
   type ModelDeclarationScenarios,
   runConformanceSuite,
+  runAgentCallCases,
   runModelDeclarationCases,
   runPendingSteerCases,
   runStretchingSteerCases,
@@ -58,6 +59,10 @@ function profile(overrides?: Partial<HarnessProfile>): HarnessProfile {
     recovery: { mode: "load-with-replay", evidence: "fake replays history" },
     interruption: { mode: "process-only", evidence: "fake stops the process" },
     approvals: { available: true, evidence: "fake hosts a bridge" },
+    agentCalls: {
+      available: true,
+      evidence: "The fake scripts the Session channel.",
+    },
     clarifications: {
       available: true,
       evidence: "fake offers a question shape",
@@ -493,6 +498,57 @@ runStretchingSteerCases(
         deliver,
       };
     },
+  },
+  test,
+);
+
+runAgentCallCases(
+  {
+    label: "fake",
+    blockingCalls: () =>
+      createFake(
+        fake(
+          ...Array.from({ length: 3 }, () => ({
+            agentCalls: [
+              {
+                callId: { opaque: "call-1" },
+                id: "step_done",
+                reason: "  ready\nnow  ",
+              },
+            ],
+            block: true,
+            result: COMPLETED_OPEN,
+          })),
+        ),
+      ),
+    unsupported: () =>
+      createFake({
+        profile: profile({
+          agentCalls: {
+            available: false,
+            evidence: "scripted unsupported channel",
+          },
+        }),
+        turns: [{ result: COMPLETED_OPEN }],
+      }),
+    expiringCall: (ending) =>
+      createFake(
+        fake({
+          agentCalls: [
+            {
+              callId: { opaque: "call-1" },
+              id: "step_done",
+              reason: "  ready\nnow  ",
+            },
+          ],
+          result:
+            ending === "completed"
+              ? COMPLETED_OPEN
+              : ending === "failed"
+                ? FAILED_RECOVERY
+                : LOST_COMPLETION,
+        }),
+      ),
   },
   test,
 );

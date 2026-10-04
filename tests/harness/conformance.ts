@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   LOST_UNKNOWNS,
+  type AgentCall,
+  type AgentCallReply,
   type DurableTurnRecorder,
   type HarnessDefaults,
   type HarnessRequest,
@@ -754,6 +756,7 @@ export function runPrepareProfileCases(
     assert.ok(profile.interruption.evidence.length > 0);
     assert.ok(profile.approvals.evidence.length > 0);
     assert.ok(profile.clarifications.evidence.length > 0);
+    assert.ok(profile.agentCalls.evidence.length > 0);
     assert.ok(profile.steer.evidence.length > 0);
     assert.ok(profile.modelSelection.evidence.length > 0);
     assert.ok(profile.recoveryCoordinate.evidence.length > 0);
@@ -1639,4 +1642,287 @@ function observe(turn: HarnessTurn): Observation {
       });
     },
   };
+}
+
+/** The agent-call contract, shared by channel-capable Adapters and the fake. */
+export function runAgentCallCases(
+  scenarios: {
+    readonly label: string;
+    expiringCall(
+      ending: "completed" | "failed" | "lost",
+    ): TestHarnessAdapterFactory;
+    blockingCalls(): TestHarnessAdapterFactory;
+    unsupported(): TestHarnessAdapterFactory;
+  },
+  register: RegisterConformanceCase,
+): void {
+  const declarations = [
+    { id: "step_done", description: "End the step", maxReasonLength: 400 },
+  ];
+  for (const reply of [
+    { outcome: "accepted" },
+    { outcome: "held-for-review" },
+    { outcome: "refused", reason: "this control is unavailable" },
+  ] satisfies AgentCallReply[]) {
+    register(
+      `${scenarios.label}: agent-call answer ${reply.outcome} is exact and settles once`,
+      async () => {
+        const prepared = await prepare(scenarios.blockingCalls());
+        try {
+          assert.equal(prepared.profile.agentCalls.available, true);
+          const turn = prepared.startTurn({
+            ...request(recorder().recorder),
+            agentCalls: declarations,
+          });
+          const events: TurnEvent[] = [];
+          const call = await raisedCall(turn, events);
+          assert.equal(call.id, "step_done");
+          assert.equal(call.reason, "  ready\nnow  ");
+          assert.deepEqual(
+            await turn.answerAgentCall({
+              callId: { opaque: "unknown" },
+              ...reply,
+            }),
+            { outcome: "rejected", reason: "expired" },
+          );
+          assert.deepEqual(
+            await turn.answerAgentCall({ callId: call.callId, ...reply }),
+            { outcome: "accepted" },
+          );
+          assert.deepEqual(
+            await turn.answerAgentCall({ callId: call.callId, ...reply }),
+            { outcome: "rejected", reason: "already-settled" },
+          );
+          await turn.interrupt();
+          await turn.result();
+          assert.equal(
+            events.filter(
+              (event) =>
+                event.kind === "agent-call" && event.phase === "expired",
+            ).length,
+            0,
+          );
+          assert.deepEqual(
+            await turn.answerAgentCall({ callId: call.callId, ...reply }),
+            { outcome: "rejected", reason: "expired" },
+          );
+        } finally {
+          await prepared.close();
+        }
+      },
+    );
+  }
+  for (const ending of ["interrupt", "close"] as const) {
+    register(
+      `${scenarios.label}: unanswered agent calls expire on ${ending}`,
+      async () => {
+        const prepared = await prepare(scenarios.blockingCalls());
+        try {
+          const turn = prepared.startTurn({
+            ...request(recorder().recorder),
+            agentCalls: declarations,
+          });
+          const events: TurnEvent[] = [];
+          const call = await raisedCall(turn, events);
+          if (ending === "interrupt") await turn.interrupt();
+          else await prepared.close();
+          const result = await turn.result();
+          assert.equal(
+            result.kind,
+            ending === "interrupt" ? "interrupted" : "lost",
+          );
+          assert.deepEqual(
+            events.filter(
+              (event) =>
+                event.kind === "agent-call" && event.phase === "expired",
+            ),
+            [{ kind: "agent-call", phase: "expired", callId: call.callId }],
+          );
+          assert.deepEqual(
+            await turn.answerAgentCall({
+              callId: call.callId,
+              outcome: "accepted",
+            }),
+            { outcome: "rejected", reason: "expired" },
+          );
+          const count = events.length;
+          await Promise.resolve();
+          assert.equal(events.length, count, "no event after the result");
+        } finally {
+          await prepared.close();
+        }
+      },
+    );
+  }
+  register(
+    `${scenarios.label}: agent-call declarations are a fixed snapshot per Session`,
+    async () => {
+      const prepared = await prepare(scenarios.blockingCalls());
+      try {
+        const original = [
+          {
+            id: "step_done",
+            description: "End the step",
+            maxReasonLength: 400,
+          },
+        ];
+        const turn = prepared.startTurn({
+          ...request(recorder().recorder),
+          agentCalls: original,
+        });
+        await raisedCall(turn, []);
+        for (const declaration of original)
+          declaration.description = "mutated by the caller";
+        await turn.interrupt();
+        await turn.result();
+        assert.throws(
+          () =>
+            prepared.startTurn({
+              ...request(recorder().recorder),
+              agentCalls: original,
+            }),
+          /declarations changed/,
+        );
+        assert.throws(
+          () => prepared.startTurn(request(recorder().recorder)),
+          /declarations changed/,
+        );
+        for (const agentCalls of [
+          [{ id: "other", description: "End the step", maxReasonLength: 400 }],
+          [
+            {
+              id: "step_done",
+              description: "End the step",
+              maxReasonLength: 399,
+            },
+          ],
+          [
+            ...declarations,
+            {
+              id: "stage_done",
+              description: "End stage",
+              maxReasonLength: 400,
+            },
+          ],
+        ])
+          assert.throws(
+            () =>
+              prepared.startTurn({
+                ...request(recorder().recorder),
+                agentCalls,
+              }),
+            /declarations changed/,
+          );
+        const same = prepared.startTurn({
+          ...request(recorder().recorder),
+          agentCalls: declarations,
+        });
+        await raisedCall(same, []);
+        await same.interrupt();
+        await same.result();
+        const other = prepared.startTurn({
+          ...request(recorder().recorder),
+          session: "other",
+          agentCalls: original,
+        });
+        await raisedCall(other, []);
+        await other.interrupt();
+        await other.result();
+      } finally {
+        await prepared.close();
+      }
+    },
+  );
+  register(
+    `${scenarios.label}: unsupported agent calls are explicit`,
+    async () => {
+      const prepared = await prepare(scenarios.unsupported());
+      try {
+        assert.throws(
+          () =>
+            prepared.startTurn({
+              ...request(recorder().recorder),
+              agentCalls: declarations,
+            }),
+          /unsupported/,
+        );
+        const turn = prepared.startTurn(request(recorder().recorder));
+        assert.deepEqual(
+          await turn.answerAgentCall({
+            callId: { opaque: "missing" },
+            outcome: "accepted",
+          }),
+          { outcome: "rejected", reason: "unsupported" },
+        );
+        await turn.result();
+      } finally {
+        await prepared.close();
+      }
+    },
+  );
+  for (const ending of ["completed", "failed", "lost"] as const)
+    register(
+      `${scenarios.label}: unanswered agent calls expire before ${ending} result`,
+      async () => {
+        const prepared = await prepare(scenarios.expiringCall(ending));
+        try {
+          const turn = prepared.startTurn({
+            ...request(recorder().recorder),
+            agentCalls: [
+              {
+                id: "step_done",
+                description: "End the step",
+                maxReasonLength: 400,
+              },
+            ],
+          });
+          const events: TurnEvent[] = [];
+          turn.subscribe((event) => events.push(event));
+          assert.equal((await turn.result()).kind, ending);
+          assert.deepEqual(
+            events.filter((event) => event.kind === "agent-call"),
+            [
+              {
+                kind: "agent-call",
+                phase: "raised",
+                call: {
+                  callId: { opaque: "call-1" },
+                  id: "step_done",
+                  reason: "  ready\nnow  ",
+                },
+              },
+              {
+                kind: "agent-call",
+                phase: "expired",
+                callId: { opaque: "call-1" },
+              },
+            ],
+          );
+          assert.equal(
+            events.some((event) => event.kind === "request-raised"),
+            false,
+          );
+        } finally {
+          await prepared.close();
+        }
+      },
+    );
+}
+
+function raisedCall(
+  turn: HarnessTurn,
+  events: TurnEvent[],
+): Promise<AgentCall> {
+  return new Promise((resolve, reject) => {
+    turn.subscribe((event) => {
+      events.push(event);
+      if (event.kind === "agent-call" && event.phase === "raised")
+        resolve(event.call);
+    });
+    void turn
+      .result()
+      .then(() =>
+        reject(new Error("Turn ended without raising an agent call")),
+      );
+  });
 }

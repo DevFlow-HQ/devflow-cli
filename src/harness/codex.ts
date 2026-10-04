@@ -1,3 +1,4 @@
+import { bindAgentCallDeclarations } from "./permission-bridge.js";
 import { reportContainment } from "./containment.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -6,6 +7,8 @@ import { join } from "node:path";
 import type { OwnedProcess, ProcessAdapter } from "../process/process.js";
 import {
   APPROVAL_DECISIONS,
+  type AgentCallAnswer,
+  type AgentCallDeclaration,
   type CleanupReport,
   type ControlReceipt,
   type HarnessAdapter,
@@ -627,6 +630,11 @@ class CodexPreparedHarness implements PreparedHarness {
     return this.defaults;
   }
 
+  private readonly callDeclarations = new Map<
+    string,
+    readonly AgentCallDeclaration[]
+  >();
+
   startTurn(request: TurnRequest): HarnessTurn {
     if (this.closed) {
       throw new Error("startTurn after close: the prepared Harness is closed");
@@ -634,6 +642,13 @@ class CodexPreparedHarness implements PreparedHarness {
     if (this.active !== undefined && !this.active.settled) {
       throw new Error("startTurn while a Turn is active: one active Turn only");
     }
+    const declarations = bindAgentCallDeclarations(
+      this.callDeclarations.get(request.session),
+      request.agentCalls,
+    );
+    if (declarations.length > 0 && !this.profile.agentCalls.available)
+      throw new Error("agent calls are unsupported by this Harness");
+    this.callDeclarations.set(request.session, declarations);
     let session = this.sessions.get(request.session);
     if (session === undefined) {
       session = new CodexSession(
@@ -646,7 +661,7 @@ class CodexPreparedHarness implements PreparedHarness {
       this.sessions.set(request.session, session);
     }
     const turn = new CodexTurn({
-      request,
+      request: { ...request, agentCalls: declarations },
       session,
       steerCapability: this.profile.steer,
       controlTimeoutMs: this.controlTimeoutMs,
@@ -1589,6 +1604,10 @@ class CodexTurn implements HarnessTurn {
         ? { nativeCode: String(cause.code) }
         : {}),
     });
+  }
+
+  answerAgentCall(_answer: AgentCallAnswer): Promise<ControlReceipt> {
+    return Promise.resolve({ outcome: "rejected", reason: "unsupported" });
   }
 
   async answerRequest(answer: RequestAnswer): Promise<ControlReceipt> {
@@ -2550,6 +2569,10 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
       available: true,
       evidence:
         "Qualified command and file approvals expose exact actions; allow accepts once and deny declines once.",
+    },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
     },
     clarifications: {
       available: false,

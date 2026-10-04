@@ -73,7 +73,7 @@ async function withBearer(
     message: "unused",
   }));
   try {
-    await body(bridge.bearer);
+    await body(bridge.session("test").bearer);
   } finally {
     await bridge.close();
   }

@@ -31,6 +31,10 @@ const HEADLESS_HARNESS_PROFILE: HarnessProfile = {
   recovery: { mode: "native-reattach", evidence: "Native resume." },
   interruption: { mode: "active-turn", evidence: "Native interrupt." },
   approvals: { available: true, evidence: "Native approvals." },
+  agentCalls: {
+    available: false,
+    evidence: "Native agent-call attachment is not qualified yet.",
+  },
   clarifications: { available: true, evidence: "Native questions." },
   steer: { available: true, evidence: "Native steering." },
   modelSelection: {

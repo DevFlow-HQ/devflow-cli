@@ -48,6 +48,10 @@ function profile(overrides: Partial<HarnessProfile> = {}): HarnessProfile {
     recovery: { mode: "native-reattach", evidence: "fake resumes by id" },
     interruption: { mode: "process-only", evidence: "fake stops its process" },
     approvals: { available: true, evidence: "fake approvals" },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: { available: false, evidence: "fake has no questions" },
     steer: { available: false, evidence: "fake has no steer" },
     modelSelection: { at: "unavailable", evidence: "fake selects no model" },

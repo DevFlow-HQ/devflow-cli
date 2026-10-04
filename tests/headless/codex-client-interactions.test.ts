@@ -43,6 +43,10 @@ function codexProfile(): HarnessProfile {
       evidence: "fake codex stops the process",
     },
     approvals: { available: true, evidence: "fake codex hosts approvals" },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: {
       available: false,
       evidence: "fake codex offers no clarifications",

@@ -32,6 +32,10 @@ function profile(): HarnessProfile {
       evidence: "fake confirms interruption",
     },
     approvals: { available: true, evidence: "fake hosts a bridge" },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: {
       available: true,
       evidence: "fake offers a question shape",

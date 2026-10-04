@@ -13,6 +13,7 @@
 // the runner; a `skip` option drops a case on the platform it does not apply to.
 
 import assert from "node:assert/strict";
+import { z } from "zod";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -25,6 +26,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
+  type AgentCallDeclaration,
   type HarnessRequest,
   type HarnessTurn,
   type TurnAdmission,
@@ -38,7 +40,10 @@ import type {
   ProcessAdapter,
   ProcessInterruption,
 } from "../../src/process/process.js";
-import { processWithSpawn } from "../process/fake-adapter.js";
+import {
+  createFakeProcess,
+  processWithSpawn,
+} from "../process/fake-adapter.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import {
   collectAdapterConformanceCases,
@@ -225,6 +230,75 @@ test("a second named Session raises its own approval on the shared bridge", asyn
     const turn = prepared.harness.startTurn(bridgeTurn(name));
     const { raised } = firstRequest(turn);
     const request = await raised;
+    if (name === "session-b") {
+      const first = replayer
+        .invocations()
+        .find((invocation) => invocation.args.includes("-p"));
+      assert.ok(first);
+      const raw = first.args[first.args.indexOf("--mcp-config") + 1];
+      assert.ok(raw);
+      const attachment = z
+        .object({
+          mcpServers: z.object({
+            "secant-permissions": z.object({
+              url: z.string(),
+              headers: z.object({ Authorization: z.string() }),
+            }),
+          }),
+        })
+        .parse(JSON.parse(raw)).mcpServers["secant-permissions"];
+      const headers = {
+        ...attachment.headers,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      };
+      const initialized = await fetch(attachment.url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "idle-helper", version: "1" },
+          },
+        }),
+      });
+      assert.equal(initialized.status, 200);
+      await initialized.json();
+      const sessionId = initialized.headers.get("mcp-session-id");
+      assert.ok(sessionId);
+      const response = await fetch(attachment.url, {
+        method: "POST",
+        headers: { ...headers, "mcp-session-id": sessionId },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "approve",
+            arguments: { tool_name: "Edit", input: { path: "idle-helper" } },
+          },
+        }),
+      });
+      assert.equal(response.status, 200);
+      const result = z
+        .object({
+          result: z.object({
+            content: z.array(
+              z.object({ type: z.literal("text"), text: z.string() }),
+            ),
+          }),
+        })
+        .parse(await response.json());
+      assert.equal(
+        result.result.content[0]?.text,
+        '{"behavior":"deny","message":"request expired"}',
+        "an idle helper cannot borrow another Session's live Turn",
+      );
+    }
     await turn.answerRequest({
       requestId: request.requestId,
       kind: "approval",
@@ -244,6 +318,34 @@ test("a second named Session raises its own approval on the shared bridge", asyn
     "both Sessions completed a bridge round-trip",
   );
   assert.ok(bridges.every((entry) => entry.behavior === "allow"));
+  const attachments = replayer
+    .invocations()
+    .filter((invocation) => invocation.args.includes("-p"))
+    .map((invocation) => {
+      const raw = invocation.args[invocation.args.indexOf("--mcp-config") + 1];
+      assert.ok(raw);
+      return z
+        .object({
+          mcpServers: z.object({
+            "secant-permissions": z.object({
+              url: z.string(),
+              headers: z.object({ Authorization: z.string() }),
+            }),
+          }),
+        })
+        .parse(JSON.parse(raw)).mcpServers["secant-permissions"];
+    });
+  assert.equal(attachments.length, 2);
+  assert.equal(
+    attachments[0]?.url,
+    attachments[1]?.url,
+    "one Prepared Harness listener",
+  );
+  assert.notEqual(
+    attachments[0]?.headers.Authorization,
+    attachments[1]?.headers.Authorization,
+    "each Session has its own bearer",
+  );
 });
 
 test("a denied tool use returns the deny shape with a message", async () => {
@@ -1823,3 +1925,106 @@ test(
     assert.equal(result.failure.nativeCode, "4");
   },
 );
+
+test("native launch uses the Session declaration snapshot when the caller mutates its request", async () => {
+  const scripted = createFakeProcess({
+    resolutionHandler: (name) => ({
+      kind: "found",
+      executable: name,
+      prefixArgs: [],
+    }),
+    commands: [
+      {
+        trigger: "immediate",
+        result: {
+          kind: "exited",
+          status: 0,
+          text: new TextEncoder().encode("2.1.234 (Claude Code)"),
+        },
+      },
+    ],
+  });
+  let agentEndpointStatus: number | undefined;
+  const prepared = await createClaudeCodeAdapter({ env: {} }).prepare({
+    workspace: makeTempDir("secant-declarations-"),
+    process: {
+      resolveExecutable: (name, options) =>
+        scripted.resolveExecutable(name, options),
+      spawnCommand: (options) => scripted.spawnCommand(options),
+      spawnCommandSync: (options) => scripted.spawnCommandSync(options),
+      async spawnOwnedProcess(options) {
+        const raw = options.args[options.args.indexOf("--mcp-config") + 1];
+        assert.ok(raw);
+        const attachment = z
+          .object({
+            mcpServers: z.object({
+              "secant-permissions": z.object({
+                url: z.string(),
+                headers: z.object({ Authorization: z.string() }),
+              }),
+            }),
+          })
+          .parse(JSON.parse(raw)).mcpServers["secant-permissions"];
+        const response = await fetch(
+          attachment.url.replace("/permissions", "/mcp"),
+          {
+            method: "POST",
+            headers: {
+              ...attachment.headers,
+              "Content-Type": "application/json",
+              Accept: "application/json, text/event-stream",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2025-03-26",
+                capabilities: {},
+                clientInfo: { name: "mutation-probe", version: "1" },
+              },
+            }),
+          },
+        );
+        agentEndpointStatus = response.status;
+        await response.text();
+        return {
+          ok: false,
+          failure: {
+            kind: "spawn-error",
+            cause: new Error("scripted launch end"),
+          },
+        };
+      },
+    },
+  });
+  assert.ok(prepared.ok);
+  if (!prepared.ok) throw new Error("unreachable");
+  try {
+    const declarations: AgentCallDeclaration[] = [];
+    const turn = prepared.harness.startTurn({
+      session: "mutable",
+      origin: "managed",
+      correlationKey: { opaque: "mutable" },
+      agentCalls: declarations,
+      input: { text: "unused" },
+      recorder: {
+        admit: () => Promise.resolve({ recorded: true }),
+        checkpoint: () => Promise.resolve({ recorded: true }),
+      },
+    });
+    declarations.push({
+      id: "step_done",
+      description: "End the step",
+      maxReasonLength: 400,
+    });
+    assert.equal((await turn.result()).kind, "not-started");
+    assert.equal(
+      agentEndpointStatus,
+      404,
+      "a call added after Session open is never exposed",
+    );
+  } finally {
+    await prepared.harness.close();
+  }
+});

@@ -69,6 +69,10 @@ function claudeProfile(): HarnessProfile {
       available: true,
       evidence: "fake claude hosts a permission bridge",
     },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: {
       available: false,
       evidence: "fake claude offers no clarifications",
@@ -855,6 +859,7 @@ async function failedInterruptScenario(
             return {
               subscribe: (listener) => turn.subscribe(listener),
               answerRequest: (answer) => turn.answerRequest(answer),
+              answerAgentCall: (answer) => turn.answerAgentCall(answer),
               steer: (input) => turn.steer(input),
               result: () => turn.result(),
               async interrupt() {

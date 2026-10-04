@@ -54,6 +54,10 @@ const PROFILE: HarnessProfile = {
     evidence: "Stops the process and detaches the Session.",
   },
   approvals: { available: true, evidence: "Native approval requests." },
+  agentCalls: {
+    available: false,
+    evidence: "Native agent-call attachment is not qualified yet.",
+  },
   clarifications: {
     available: false,
     evidence: "No structured question request is exposed.",

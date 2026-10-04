@@ -44,6 +44,7 @@ test("the closed vocabulary sets are exactly what the Interface fixes", () => {
     [...TURN_EVENT_KINDS],
     [
       "session",
+      "agent-call",
       "assistant-content",
       "tool-activity",
       "request-raised",

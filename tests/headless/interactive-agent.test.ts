@@ -46,6 +46,10 @@ function profile(): HarnessProfile {
     recovery: { mode: "native-reattach", evidence: "scripted fake" },
     interruption: { mode: "process-only", evidence: "scripted fake" },
     approvals: { available: true, evidence: "scripted fake" },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: { available: false, evidence: "scripted fake" },
     steer: { available: false, evidence: "scripted fake" },
     modelSelection: { at: "unavailable", evidence: "scripted fake" },
@@ -827,6 +831,7 @@ test("a fault after admission reaches the Run, since the send already settled ap
               steer: (input) => turn.steer(input),
               interrupt: () => turn.interrupt(),
               answerRequest: (answer) => turn.answerRequest(answer),
+              answerAgentCall: (answer) => turn.answerAgentCall(answer),
               async result() {
                 await turn.result();
                 throw new Error("scripted Adapter fault after admission");

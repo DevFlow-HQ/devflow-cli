@@ -150,7 +150,7 @@ async function startBridge(
   offset: () => number,
 ): Promise<RecorderBridge> {
   const calls: BridgeCall[] = [];
-  const bridge = await startPermissionBridge((request) => {
+  const bridge = await startPermissionBridge((_session, request) => {
     const input = toolInput(request.input);
     calls.push({ tool_name: request.tool, input, stdoutOffset: offset() });
     const verdict = answer({ tool_name: request.tool, input });
@@ -161,8 +161,8 @@ async function startBridge(
     );
   });
   return {
-    launchArgs: bridge.launchArgs,
-    token: bridge.bearer,
+    launchArgs: bridge.session("recording").launchArgs,
+    token: bridge.session("recording").bearer,
     calls,
     close: () => bridge.close(),
   };
@@ -711,8 +711,8 @@ async function recordHeld(options: {
     const child = spawn(
       "claude",
       launchArgs(["--session-id", options.sessionId], {
-        launchArgs: bridge.launchArgs,
-        token: bridge.bearer,
+        launchArgs: bridge.session("recording").launchArgs,
+        token: bridge.session("recording").bearer,
         calls: [],
         close: () => bridge.close(),
       }),
@@ -756,7 +756,12 @@ async function recordHeld(options: {
     child.stderr.resume();
     child.stdin.write(userFrame(options.prompt, RECORDED_PROMPT_UUIDS[0]));
     const exitCode = await exit;
-    return { stdout, marks, exitCode, bridgeToken: bridge.bearer };
+    return {
+      stdout,
+      marks,
+      exitCode,
+      bridgeToken: bridge.session("recording").bearer,
+    };
   } finally {
     await bridge.close();
   }

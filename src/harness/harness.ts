@@ -1,4 +1,4 @@
-// The Harness Module owns Crucible's one truthful Harness Adapter Interface (ADR
+// The Harness Module owns Secant's one truthful Harness Adapter Interface (ADR
 // 0022): the contract every Harness Adapter — the deterministic fake here, the
 // Claude Code, Codex, and Gemini Adapters later — implements at the Harness
 // Seam. This file is the whole public surface: the Interface, the evidence-
@@ -15,7 +15,7 @@ import type { ProcessAdapter } from "../process/process.js";
 // ---------------------------------------------------------------------------
 // Opaque coordinates
 //
-// Crucible mints and stores these but never interprets them. They are values,
+// Secant mints and stores these but never interprets them. They are values,
 // not native ids: an Adapter maps them to its private native identifiers and
 // nothing above the Seam decides anything from their contents.
 // ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ export const HARNESS_PLATFORMS = exhaustive<HarnessPlatform>()([
   "linux",
 ] as const);
 
-/** Crucible's per-Turn correlation key. Opaque, and not an exactly-once
+/** Secant's per-Turn correlation key. Opaque, and not an exactly-once
  *  promise, so uncertain submission is never automatically retried. */
 interface CorrelationKey {
   readonly opaque: string;
@@ -188,12 +188,16 @@ export interface HarnessProfile {
   /** The Adapter revision the profile was produced by. */
   readonly adapterRevision: string;
   /** How the Harness was configured for the qualification (e.g. the flags
-   *  Crucible added), stated as a posture rather than raw arguments. */
+   *  Secant added), stated as a posture rather than raw arguments. */
   readonly configurationPosture: string;
   readonly recovery: RecoveryCapability;
   readonly interruption: InterruptionCapability;
   readonly approvals: ApprovalsCapability;
   readonly clarifications: ClarificationsCapability;
+  /** Whether Session-attached agent calls have qualified native support. */
+  readonly agentCalls:
+    | { readonly available: true; readonly evidence: string }
+    | { readonly available: false; readonly evidence: string };
   readonly steer: SteerCapability;
   readonly modelSelection: ModelSelectionCapability;
   readonly modelObservation: ModelObservationCapability;
@@ -205,14 +209,14 @@ export interface HarnessProfile {
 // ---------------------------------------------------------------------------
 // Durable Turn recorder and Turn submission
 //
-// Crucible supplies an opaque correlation key and a durable Turn recorder the
+// Secant supplies an opaque correlation key and a durable Turn recorder the
 // Adapter awaits before sending content. Recording failure proves the Turn
 // `not-started`. A recovery coordinate revealed only after acceptance is
 // recorded through the same recorder; a late failure there is reported
 // separately and never falsifies a settled result.
 // ---------------------------------------------------------------------------
 
-/** Whether a Step's input is authored by Crucible or typed by a human. */
+/** Whether a Step's input is authored by Secant or typed by a human. */
 export type TurnOrigin = "managed" | "human";
 export const TURN_ORIGINS = exhaustive<TurnOrigin>()([
   "managed",
@@ -245,7 +249,7 @@ export type RecordingReceipt =
   | { readonly recorded: true }
   | { readonly recorded: false; readonly reason: string };
 
-/** The Crucible-owned durable recorder the Adapter awaits. */
+/** The Secant-owned durable recorder the Adapter awaits. */
 export interface DurableTurnRecorder {
   /** Await durable admission before any content is sent. A `recorded: false`
    *  receipt (or a rejected promise) proves the Turn `not-started`. */
@@ -264,9 +268,35 @@ export interface ModelChoice {
   readonly effort?: string;
 }
 
+/** An opaque tool declaration, fixed as a set at Session open. */
+export interface AgentCallDeclaration {
+  readonly id: string;
+  readonly description: string;
+  readonly maxReasonLength: number;
+}
+
+/** One call on a Session's live Turn. The reason is preserved exactly. */
+export interface AgentCall {
+  readonly callId: { readonly opaque: string };
+  readonly id: string;
+  readonly reason: string;
+}
+
+/** The closed reply to an exact outstanding call. */
+export type AgentCallReply =
+  | { readonly outcome: "accepted" }
+  | { readonly outcome: "held-for-review" }
+  | { readonly outcome: "refused"; readonly reason: string };
+
+export type AgentCallAnswer = AgentCallReply & {
+  readonly callId: AgentCall["callId"];
+};
+
 /** Everything `startTurn` needs. The handle returns before native acceptance. */
 export interface TurnRequest {
   readonly session: string;
+  /** Union of enabled Session tools; absent means the empty set. Later Turns must carry the same set. */
+  readonly agentCalls?: readonly AgentCallDeclaration[];
   readonly origin: TurnOrigin;
   readonly correlationKey: CorrelationKey;
   readonly recorder: DurableTurnRecorder;
@@ -404,6 +434,16 @@ export type SteerSettlement =
 /** The closed set of Turn event kinds. */
 export type TurnEvent =
   | {
+      readonly kind: "agent-call";
+      readonly phase: "raised";
+      readonly call: AgentCall;
+    }
+  | {
+      readonly kind: "agent-call";
+      readonly phase: "expired";
+      readonly callId: AgentCall["callId"];
+    }
+  | {
       readonly kind: "session";
       readonly availability: SessionAvailability;
       readonly facts?: SessionFacts;
@@ -439,6 +479,7 @@ export type TurnEvent =
 
 export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "session",
+  "agent-call",
   "assistant-content",
   "tool-activity",
   "request-raised",
@@ -494,7 +535,7 @@ export type ControlReceipt =
 //
 // Operational failures are values preserving phase, category, possible effects,
 // and the original cause. Only trusted caller-contract violations throw. Secrets
-// Crucible itself introduces are redacted; excluding raw protocol and duplicate
+// Secant itself introduces are redacted; excluding raw protocol and duplicate
 // transcript content is Interface design, not generic redaction.
 // ---------------------------------------------------------------------------
 
@@ -520,7 +561,7 @@ export interface HarnessFailure {
   readonly retryEvidence?: string;
   /** Useful diagnostics for the Harness owner. */
   readonly diagnostics?: string;
-  /** The original cause, preserved, with Crucible-introduced secrets redacted. */
+  /** The original cause, preserved, with Secant-introduced secrets redacted. */
   readonly cause?: unknown;
 }
 
@@ -699,6 +740,8 @@ export interface HarnessTurn {
   /** Answer one exact outstanding request. Races (`expired`, `already-settled`,
    *  `shape-mismatch`) return a rejected receipt, never throw. */
   answerRequest(answer: RequestAnswer): Promise<ControlReceipt>;
+  /** Answer a call separately from human Harness Requests. Expected races are receipts. */
+  answerAgentCall(answer: AgentCallAnswer): Promise<ControlReceipt>;
 }
 
 /** An effort the user's own environment fixes, which Secant shows and never

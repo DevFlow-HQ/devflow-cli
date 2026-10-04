@@ -31,6 +31,10 @@ const FAKE_PROFILE: HarnessProfile = {
   recovery: { mode: "native-reattach", evidence: "scripted fake" },
   interruption: { mode: "process-only", evidence: "scripted fake" },
   approvals: { available: true, evidence: "scripted fake" },
+  agentCalls: {
+    available: false,
+    evidence: "Native agent-call attachment is not qualified yet.",
+  },
   clarifications: { available: false, evidence: "scripted fake" },
   steer: { available: false, evidence: "scripted fake" },
   modelSelection: { at: "unavailable", evidence: "scripted fake" },
@@ -512,7 +516,7 @@ test("a Claude Code failure crosses the Harness Seam into the log with its redac
     decision: "deny",
     message: "unused",
   }));
-  const token = bridge.bearer;
+  const token = bridge.session("test").bearer;
   const inner = new RangeError(`inner ${token}`);
   inner.stack = `RangeError: inner ${token}`;
   const error = new TypeError(`launch ${token}`, { cause: inner });

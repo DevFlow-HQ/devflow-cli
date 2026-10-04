@@ -1,10 +1,9 @@
 // The registry of secrets Secant itself introduces — private to the Harness
 // Module, with no register function on its Interface. Whatever mints a secret
-// (today the permission bridge's bearer; the ADR 0033 agent-call token when it
-// lands) registers it once it is handed out, and the registry keeps it for the
+// (the shared permission/agent-call listener's per-Session bearer) registers it once it is handed out, and the registry keeps it for the
 // rest of the Secant invocation: a cause translated after its minter is torn
 // down (M11's Detailed diagnostics may translate late) still redacts it. The
-// cost is one short token per bridge for the life of the process.
+// cost is one short token per Session for the life of the process.
 //
 // One redaction mechanism serves both outputs: the Seam's shape-preserving
 // `redactSecrets` (a failure cause stays an Error on a `HarnessFailure`) and the

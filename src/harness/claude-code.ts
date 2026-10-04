@@ -34,6 +34,8 @@ import {
 } from "./claude-code/frames.js";
 import { APPROVAL_DECISIONS } from "./harness.js";
 import type {
+  AgentCallAnswer,
+  AgentCallDeclaration,
   CleanupReport,
   ControlReceipt,
   HarnessAdapter,
@@ -72,6 +74,7 @@ import { writableDirectoryFailure } from "./writable-directory.js";
 import {
   EXPIRED_MESSAGE,
   startPermissionBridge,
+  bindAgentCallDeclarations,
   type ApprovalOutcome,
   type ApprovalRequest,
   type PermissionBridge,
@@ -377,8 +380,8 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
    *  transient cause (e.g. a momentary loopback bind clash). */
   private ensureBridge(): Promise<PermissionBridge> {
     if (this.bridgePromise === undefined) {
-      const started = startPermissionBridge((request) =>
-        this.routeApproval(request),
+      const started = startPermissionBridge((session, request) =>
+        this.routeApproval(session, request),
       ).catch((error) => {
         if (this.bridgePromise === started) this.bridgePromise = undefined;
         throw error;
@@ -390,9 +393,16 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
 
   /** Relay one bridge call to the active Turn. With no live Turn to raise it on,
    *  the prompt is denied as expired rather than left hanging. */
-  private routeApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {
+  private routeApproval(
+    session: string,
+    request: ApprovalRequest,
+  ): Promise<ApprovalOutcome> {
     const turn = this.active;
-    if (turn === undefined || turn.settled) {
+    if (
+      turn === undefined ||
+      turn.settled ||
+      turn.request.session !== session
+    ) {
       return Promise.resolve({ decision: "deny", message: EXPIRED_MESSAGE });
     }
     return turn.raiseApproval(request.tool, request.input);
@@ -407,6 +417,11 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
     return Promise.resolve(CLAUDE_CODE_FALLBACK);
   }
 
+  private readonly callDeclarations = new Map<
+    string,
+    readonly AgentCallDeclaration[]
+  >();
+
   startTurn(request: TurnRequest): HarnessTurn {
     if (this.closed) {
       throw new Error("startTurn after close: the prepared Harness is closed");
@@ -415,6 +430,13 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
       throw new Error("startTurn while a Turn is active: one active Turn only");
     }
 
+    const declarations = bindAgentCallDeclarations(
+      this.callDeclarations.get(request.session),
+      request.agentCalls,
+    );
+    if (declarations.length > 0 && !this.profile.agentCalls.available)
+      throw new Error("agent calls are unsupported by this Harness");
+    this.callDeclarations.set(request.session, declarations);
     let session = this.sessions.get(request.session);
     if (session === undefined) {
       // Resuming a Session this Prepared Harness has not tracked (e.g. after a
@@ -437,7 +459,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
       this.sessions.set(request.session, session);
     }
     const turn = new ClaudeCodeTurn(
-      request,
+      { ...request, agentCalls: declarations },
       session,
       this.profile.steer,
       () => {
@@ -467,9 +489,19 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
     const outcomes = await Promise.all(
       [...this.sessions.values()].map((session) => session.close()),
     );
+    let bridgeFailure: HarnessFailure | undefined;
     if (this.bridgePromise !== undefined) {
       const bridge = await this.bridgePromise.catch(() => undefined);
-      await bridge?.close();
+      try {
+        await bridge?.close();
+      } catch (cause) {
+        bridgeFailure = {
+          phase: "cleanup",
+          category: "loopback-close",
+          possibleEffects: "none",
+          cause: redactSecrets(cause),
+        };
+      }
     }
     const failed = outcomes.find(
       (
@@ -489,6 +521,13 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
         sessions,
       };
     }
+    if (bridgeFailure !== undefined)
+      return {
+        clean: false,
+        detail: "Harness loopback listener failed to close.",
+        failure: bridgeFailure,
+        sessions,
+      };
     return {
       clean: true,
       detail: `${outcomes.length} Claude Code Session(s) detached.`,
@@ -968,9 +1007,9 @@ class ClaudeCodeSession {
         ...writableArgs,
         ...sessionArgs,
         // The permission bridge: Claude relays every permission prompt to this
-        // loopback tool and waits on it. The inline config carries the per-Run
+        // loopback tool and waits on it. The inline config carries the per-Session
         // bearer token; it is the only place the token appears.
-        ...bridge.launchArgs,
+        ...bridge.session(this.name, turn.request.agentCalls).launchArgs,
       ],
       cwd: this.workspace,
       env: process.env,
@@ -1297,6 +1336,10 @@ class ClaudeCodeTurn implements HarnessTurn {
       });
       this.emit({ kind: "request-raised", request });
     });
+  }
+
+  answerAgentCall(_answer: AgentCallAnswer): Promise<ControlReceipt> {
+    return Promise.resolve({ outcome: "rejected", reason: "unsupported" });
   }
 
   answerRequest(answer: RequestAnswer): Promise<ControlReceipt> {
@@ -2165,6 +2208,10 @@ function buildProfile(
       available: true,
       evidence:
         "Approvals are raised through the Secant-hosted MCP permission bridge.",
+    },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
     },
     clarifications: {
       available: false,

@@ -58,6 +58,10 @@ function claudeProfile(): HarnessProfile {
       available: true,
       evidence: "fake claude hosts a permission bridge",
     },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: {
       available: false,
       evidence: "fake claude offers no clarifications",

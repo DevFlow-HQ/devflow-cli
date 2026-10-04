@@ -22,6 +22,9 @@ import { statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type {
+  AgentCall,
+  AgentCallAnswer,
+  AgentCallDeclaration,
   CleanupReport,
   ControlReceipt,
   ControlRejection,
@@ -61,6 +64,7 @@ export interface FakeRequestSpec {
 
 /** One scripted Turn. `startTurn` consumes the next entry of `turns`. */
 export interface FakeTurnScript {
+  readonly agentCalls?: readonly AgentCall[];
   /** Events emitted in order before requests are awaited. Request lifecycle
    *  events are managed by the fake and must not appear here. */
   readonly events?: readonly TurnEvent[];
@@ -248,6 +252,10 @@ function isExistingAbsoluteDirectory(path: string): boolean {
 class FakePreparedHarness implements PreparedHarness {
   readonly profile: HarnessProfile;
   private turnIndex = 0;
+  private readonly declarations = new Map<
+    string,
+    readonly AgentCallDeclaration[]
+  >();
   private active: FakeTurn | undefined;
   private closed = false;
   private readonly cleanup: CleanupReport;
@@ -279,6 +287,29 @@ class FakePreparedHarness implements PreparedHarness {
     if (this.active && !this.active.settled) {
       throw new Error("startTurn while a Turn is active: one active Turn only");
     }
+    const declarations = [...(request.agentCalls ?? [])]
+      .map((call) => ({ ...call }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const ids = new Set<string>();
+    for (const call of declarations) {
+      if (
+        !call.id ||
+        ids.has(call.id) ||
+        !Number.isInteger(call.maxReasonLength) ||
+        call.maxReasonLength < 1 ||
+        call.maxReasonLength > 400
+      )
+        throw new Error("invalid agent-call declaration");
+      ids.add(call.id);
+    }
+    const bound = this.declarations.get(request.session);
+    if (bound !== undefined && !isDeepStrictEqual(bound, declarations)) {
+      throw new Error("agent-call declarations changed after Session open");
+    }
+    if (declarations.length > 0 && !this.profile.agentCalls.available) {
+      throw new Error("agent calls are unsupported by this Harness");
+    }
+    this.declarations.set(request.session, declarations);
     const scripted = this.script.turns[this.turnIndex++];
     if (!scripted) {
       throw new Error("startTurn beyond the scripted Turns");
@@ -291,7 +322,12 @@ class FakePreparedHarness implements PreparedHarness {
     });
     const history = this.history.get(request.session) ?? [];
     this.history.set(request.session, history);
-    const turn = new FakeTurn(scripted, this.profile, request, history);
+    const turn = new FakeTurn(
+      scripted,
+      this.profile,
+      { ...request, agentCalls: declarations },
+      history,
+    );
     this.active = turn;
     turn.begin();
     return turn;
@@ -338,6 +374,7 @@ class FakeTurn {
   private readonly listeners = new Set<TurnEventListener>();
   private readonly buffer: TurnEvent[] = [];
   private readonly requests = new Map<string, RequestState>();
+  private readonly calls = new Map<string, "outstanding" | "answered">();
   private interruptSignal?: () => void;
   private readonly steers = new Map<
     string,
@@ -421,6 +458,16 @@ class FakeTurn {
     return accept();
   }
 
+  async answerAgentCall(answer: AgentCallAnswer): Promise<ControlReceipt> {
+    if (!this.profile.agentCalls.available) return reject("unsupported");
+    if (this.terminal) return reject("expired");
+    const status = this.calls.get(answer.callId.opaque);
+    if (status === undefined) return reject("expired");
+    if (status === "answered") return reject("already-settled");
+    this.calls.set(answer.callId.opaque, "answered");
+    return accept();
+  }
+
   async answerRequest(answer: RequestAnswer): Promise<ControlReceipt> {
     if (this.terminal) return reject("expired");
     const state = this.requests.get(answer.requestId.opaque);
@@ -490,6 +537,20 @@ class FakeTurn {
         }
       } else {
         await this.emitPaced(pace);
+      }
+      for (const call of this.script.agentCalls ?? []) {
+        if (this.terminal) break;
+        const declaration = this.request.agentCalls?.find(
+          (item) => item.id === call.id,
+        );
+        if (
+          declaration === undefined ||
+          !call.reason.trim() ||
+          call.reason.length > Math.min(400, declaration.maxReasonLength)
+        )
+          continue;
+        this.calls.set(call.callId.opaque, "outstanding");
+        this.emit({ kind: "agent-call", phase: "raised", call });
       }
       if (this.script.requests?.length) {
         await this.raiseAndAwaitRequests();
@@ -649,6 +710,10 @@ class FakeTurn {
       });
     }
     this.steers.clear();
+    for (const [opaque, status] of this.calls) {
+      if (status === "outstanding")
+        this.emit({ kind: "agent-call", phase: "expired", callId: { opaque } });
+    }
     for (const [, state] of this.requests) {
       if (state.status === "outstanding") {
         this.emit({

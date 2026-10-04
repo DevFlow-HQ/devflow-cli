@@ -72,6 +72,10 @@ function listProfile(models: readonly string[]): HarnessProfile {
     recovery: { mode: "native-reattach", evidence: "scripted" },
     interruption: { mode: "active-turn", evidence: "scripted" },
     approvals: { available: true, evidence: "scripted" },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: { available: true, evidence: "scripted" },
     steer: { available: true, evidence: "scripted" },
     modelSelection: {

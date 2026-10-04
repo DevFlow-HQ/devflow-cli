@@ -43,6 +43,10 @@ function profile(): HarnessProfile {
     recovery: { mode: "native-reattach", evidence: "scripted fake" },
     interruption: { mode: "process-only", evidence: "scripted fake" },
     approvals: { available: true, evidence: "scripted fake" },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
     clarifications: { available: false, evidence: "scripted fake" },
     steer: { available: false, evidence: "scripted fake" },
     modelSelection: { at: "unavailable", evidence: "scripted fake" },
@@ -409,7 +413,7 @@ test("with detail on, seeded prompts, arguments, environment values, and a regis
     message: "unused",
   }));
   try {
-    const bearer = bridge.bearer;
+    const bearer = bridge.session("test").bearer;
     // The bearer rides in the prompt the Turn admission carries, and in the
     // cause of a failed handshake step, a detail record with a cause.
     const bundle = writeBundle(`${prompt} ${bearer}`, argument);

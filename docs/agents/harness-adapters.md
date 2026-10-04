@@ -8,10 +8,9 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - Qualification is cached per Adapter instance in a private `Map`, keyed by the discovered target's discovery source, its path, and its file identity: same
   path with identical bytes ⇒ the probed version cannot have changed, so the cached profile is reused without re-running `--version`; any drift in path or
   identity requalifies, and folding the source into the key stops a reused profile reporting a stale source.
-- The permission bridge mints a 256-bit per-Run bearer token for its loopback MCP server; the token lives only in the `--mcp-config` argv and the server's
-  constant-time auth check. The bridge registers it with the Harness secret registry for the rest of the invocation, and the Session routes every
-  failure cause originating below launch through the registry's `redactSecrets` (`scrub` on each close observation; the stdin-write and stdout-read
-  errors and the captured stderr text too), so the rule is "redact at the Seam", not one spawn-error path (#127 A22).
+- The shared listener mints a 256-bit bearer per Harness Session, reused on relaunch. Both MCP endpoints bind every transport to its Session
+  and server, including short extra connections; idle-Session approvals are denied. Each token stays registered for the invocation, and every cause
+  below launch crosses `redactSecrets` (close observations, stdin-write and stdout-read errors, captured stderr), so redaction happens at the Seam.
 - The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `status`, `assistant`, `user`,
   `stream_event`, `result`, `control_response`, `command_lifecycle`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the only
   raw-field accessors. Inbound `control_request` and `control_cancel_request` stay generic activity until #371. Only the fields dispatch
