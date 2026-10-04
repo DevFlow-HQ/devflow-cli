@@ -1000,6 +1000,20 @@ for (const [label, defaults, expected] of [
     },
   ],
   [
+    "the environment lock over a fallback with its reason",
+    {
+      kind: "fallback",
+      choice: { model: "opus", effort: "medium" },
+      reason: "Settings could not be read.",
+      effortLock: { effort: "high", source: "CLAUDE_CODE_EFFORT_LEVEL=high" },
+    },
+    {
+      choice: { model: "opus", effort: "high" },
+      source: { kind: "fallback", reason: "Settings could not be read." },
+      effortLock: { effort: "high", source: "CLAUDE_CODE_EFFORT_LEVEL=high" },
+    },
+  ],
+  [
     "nothing when the Harness reports nothing",
     { kind: "unavailable", reason: "Nothing is listed." },
     undefined,
@@ -1501,3 +1515,125 @@ test("a durable launch replay after reopening the Application preserves a newer 
     { model: "gamma", source: { kind: "last-choice" } },
   );
 });
+
+const EFFORT_LOCK = { effort: "high", source: "CLAUDE_CODE_EFFORT_LEVEL=high" };
+for (const requested of [
+  undefined,
+  { model: "beta" },
+  { model: "beta", effort: "high" },
+]) {
+  test(`launch preserves the environment effort lock for ${JSON.stringify(requested)}`, async (t) => {
+    const { wired, digest, requests } = wireDeclaring(t, LISTED, {
+      kind: "reported",
+      choice: { model: "alpha", effort: "low" },
+      effortLock: EFFORT_LOCK,
+    });
+    const assessed = await assess(wired, agentDraft(digest, requested));
+    assert.equal(assessed.status, "ready", JSON.stringify(assessed.findings));
+    assert.deepEqual(assessed.draft.modelChoice, {
+      model: requested?.model ?? "alpha",
+      effort: "high",
+      source: { kind: requested === undefined ? "reported" : "requested" },
+      effortLock: EFFORT_LOCK,
+    });
+    const admission = wired.projectionPort.submit({
+      operationId: "locked-launch",
+      operation: "launch-run",
+      input: offeredDraft(assessed),
+    });
+    assert.ok(admission.admitted);
+    assert.ok(admission.runId);
+    await awaitSettled(wired.projectionPort, "locked-launch");
+    assert.deepEqual(readRun(wired, admission.runId).modelChoice, {
+      model: requested?.model ?? "alpha",
+      effort: "high",
+    });
+    assert.equal(requests[0]?.modelChoice?.effort, "high");
+  });
+}
+test("launch refuses an effort contradicting the environment lock before creating a Run", async (t) => {
+  const { wired, digest } = wireDeclaring(t, LISTED, {
+    kind: "fallback",
+    choice: { model: "alpha", effort: "medium" },
+    reason: "Settings could not be read.",
+    effortLock: EFFORT_LOCK,
+  });
+  const assessed = await assess(
+    wired,
+    agentDraft(digest, { model: "beta", effort: "low" }),
+  );
+  assert.equal(assessed.status, "not-ready");
+  assert.deepEqual(assessed.actionOffers, []);
+  assert.equal(assessed.findings[0]?.code, "effort-locked");
+  assert.equal(assessed.findings[0]?.correction, "effort");
+  assert.equal(
+    assessed.findings[0]?.explanation,
+    "Locked by CLAUDE_CODE_EFFORT_LEVEL=high. Change that setting outside Secant.",
+  );
+  assert.deepEqual(wired.runGroup.listRuns(), []);
+});
+
+for (const kind of ["reported", "fallback"] as const) {
+  test(`the environment effort lock overlays the saved Model choice ahead of ${kind} defaults`, async (t) => {
+    const defaults: HarnessDefaults =
+      kind === "reported"
+        ? {
+            kind,
+            choice: { model: "alpha", effort: "low" },
+            effortLock: EFFORT_LOCK,
+          }
+        : {
+            kind,
+            choice: { model: "alpha", effort: "medium" },
+            reason: "Settings could not be read.",
+            effortLock: EFFORT_LOCK,
+          };
+    const { wired, digest, requests } = wireDeclaring(t, LISTED, defaults);
+    wired.catalog.setPreference(
+      "last-model-choice:claude-code",
+      JSON.stringify({ model: "beta", effort: "medium" }),
+    );
+    const assessed = await assess(wired, agentDraft(digest));
+    assert.equal(assessed.status, "ready");
+    assert.deepEqual(assessed.draft.modelChoice, {
+      model: "beta",
+      effort: "high",
+      source: { kind: "last-choice" },
+      effortLock: EFFORT_LOCK,
+    });
+    const focus = wired.projectionPort.openProjection({
+      family: "harness-catalog",
+      focus: { id: "claude-code" },
+    });
+    t.after(() => focus.close());
+    assert.ok(focus.snapshot.result.found);
+    assert.deepEqual(focus.snapshot.result.harness.preselection, {
+      choice: { model: "beta", effort: "high" },
+      source: { kind: "last-choice" },
+      effortLock: EFFORT_LOCK,
+    });
+    const refused = await assess(
+      wired,
+      agentDraft(digest, { effort: "medium" }),
+    );
+    assert.equal(refused.status, "not-ready");
+    assert.equal(refused.findings[0]?.code, "effort-locked");
+    assert.deepEqual(wired.runGroup.listRuns(), []);
+    const admission = wired.projectionPort.submit({
+      operationId: "saved-locked-launch",
+      operation: "launch-run",
+      input: offeredDraft(assessed),
+    });
+    assert.ok(admission.admitted);
+    assert.ok(admission.runId);
+    await awaitSettled(wired.projectionPort, "saved-locked-launch");
+    assert.deepEqual(readRun(wired, admission.runId).modelChoice, {
+      model: "beta",
+      effort: "high",
+    });
+    assert.deepEqual(requests[0]?.modelChoice, {
+      model: "beta",
+      effort: "high",
+    });
+  });
+}

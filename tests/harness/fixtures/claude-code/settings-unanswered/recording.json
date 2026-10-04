@@ -1,0 +1,8 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.289 (Claude Code)",
+  "protocolVersion": "stream-json:get_settings",
+  "recordedAt": "synthetic",
+  "redactions": [],
+  "refreshCommand": "synthetic -- a settings request without a response proves the bounded fallback"
+}

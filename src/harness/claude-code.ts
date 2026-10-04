@@ -14,8 +14,10 @@ import type {
   OwnedProcessClose,
   ProcessAdapter,
 } from "../process/process.js";
+import { readSettings } from "./claude-code/settings.js";
 import { ControlChannel, type ControlOutcome } from "./claude-code/control.js";
 import {
+  ClaudeEffort,
   contentBlocks,
   encodeUserMessage,
   genericActivity,
@@ -360,6 +362,8 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
    *  launch that could prompt for permission, so a Harness that never runs a
    *  Turn pays nothing. #117 decides which Runs launch a Turn at all. */
   private bridgePromise: Promise<PermissionBridge> | undefined;
+  private defaultsPromise: Promise<HarnessDefaults> | undefined;
+  private defaultsCleanup: OwnedProcessClose | undefined;
 
   constructor(
     readonly profile: HarnessProfile,
@@ -414,7 +418,18 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
         new Error("readDefaults after close: the prepared Harness is closed"),
       );
     }
-    return Promise.resolve(CLAUDE_CODE_FALLBACK);
+    this.defaultsPromise ??= readSettings({
+      spawn: this.spawn,
+      executable: this.target.executable,
+      prefixArgs: this.target.prefixArgs,
+      workspace: this.workspace,
+      env: { ...process.env },
+      timeoutMs: this.timeouts.controlMs,
+    }).then(({ defaults, cleanup }) => {
+      this.defaultsCleanup = cleanup;
+      return defaults;
+    });
+    return this.defaultsPromise;
   }
 
   private readonly callDeclarations = new Map<
@@ -486,6 +501,7 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
   }
 
   private async closeSessions(): Promise<CleanupReport> {
+    await this.defaultsPromise;
     const outcomes = await Promise.all(
       [...this.sessions.values()].map((session) => session.close()),
     );
@@ -513,6 +529,20 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
       session: outcome.session,
       availability: outcome.availability,
     }));
+    const probeClose = this.defaultsCleanup;
+    if (
+      probeClose !== undefined &&
+      probeClose.kind !== "exited" &&
+      probeClose.kind !== "signal"
+    ) {
+      const detail = "Claude Code's settings process could not be reaped.";
+      return {
+        clean: false,
+        detail,
+        failure: cleanupFailure(scrubClose(probeClose), detail),
+        sessions,
+      };
+    }
     if (failed !== undefined) {
       return {
         clean: false,
@@ -576,6 +606,7 @@ class ClaudeCodeSession {
    *  further Turn fails with the same recovery failure. */
   private unusableReason: string | undefined;
   private effectiveModel: ModelObservation = { known: false };
+  private effectiveEffort: string | undefined;
   private stderr = "";
   /** A claimed interrupt still settling its Turn. `close` awaits it, so the
    *  bridge — and the bearer it keeps registered for Seam redaction — outlives
@@ -612,6 +643,9 @@ class ClaudeCodeSession {
   }
 
   start(turn: ClaudeCodeTurn): void {
+    this.effectiveEffort = undefined;
+    if (this.effectiveModel.known)
+      this.effectiveModel = { known: true, model: this.effectiveModel.model };
     this.active = turn;
     queueMicrotask(() => {
       void this.submit(turn);
@@ -632,7 +666,10 @@ class ClaudeCodeSession {
 
   observeInit(model: ModelObservation): void {
     this.initialized = true;
-    this.effectiveModel = model;
+    this.effectiveModel =
+      model.known && this.effectiveEffort !== undefined
+        ? { ...model, effort: this.effectiveEffort }
+        : model;
   }
 
   markUnusable(reason: string): void {
@@ -732,7 +769,7 @@ class ClaudeCodeSession {
     if (this.process !== owned) {
       // `onClosed` released a process that exited on its own before
       // confirming: nothing stopped it, so the interruption stays unknown.
-      const close = this.scrub(await owned.closed());
+      const close = scrubClose(await owned.closed());
       const failure: HarnessFailure = {
         phase: "control",
         category: "interruption-unknown",
@@ -764,7 +801,7 @@ class ClaudeCodeSession {
     this.releaseProcess();
     this.unreaped = owned;
     const cleanup = startPhase(this.phases, "cleanup", this.name);
-    const result = this.scrub(
+    const result = scrubClose(
       await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
     );
     if (result.kind === "cleanup-error" || result.kind === "cleanup-timeout") {
@@ -816,7 +853,7 @@ class ClaudeCodeSession {
     control: PhaseSpan,
   ): Promise<void> {
     const outcome = await owned.interrupt(DEFAULT_CLEANUP_TIMEOUT_MS);
-    const close = this.scrub(outcome.close);
+    const close = scrubClose(outcome.close);
     const failure = interruptionFailure(close, outcome.escalated);
     if (failure === undefined) control.ok();
     else control.failed(failure);
@@ -866,7 +903,7 @@ class ClaudeCodeSession {
         availability: this.detached(),
       };
     }
-    const result = this.scrub(
+    const result = scrubClose(
       await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
     );
     const clean = this.reapFailure === undefined && isCleanClose(result);
@@ -1010,6 +1047,30 @@ class ClaudeCodeSession {
       );
     }
     const acceptingProcess = this.process!;
+    const control = this.controls.get(acceptingProcess);
+    if (control !== undefined) {
+      void control.request({ subtype: "get_settings" }).then((outcome) => {
+        if (
+          this.process !== acceptingProcess ||
+          this.active !== turn ||
+          turn.settled
+        )
+          return;
+        if (outcome.kind !== "success" || outcome.settings === undefined)
+          return;
+        this.effectiveEffort = outcome.settings.effort ?? undefined;
+        if (this.initialized && this.effectiveModel.known) {
+          this.effectiveModel = {
+            known: true,
+            model: this.effectiveModel.model,
+            ...(this.effectiveEffort === undefined
+              ? {}
+              : { effort: this.effectiveEffort }),
+          };
+          turn.observeModel(this.effectiveModel);
+        }
+      });
+    }
     try {
       await acceptingProcess.writeStdin(
         encodeUserMessage(turn.promptUuid, turn.request.input.text),
@@ -1189,7 +1250,7 @@ class ClaudeCodeSession {
     // A process stop claims the process before awaiting, so once it is in
     // flight `this.process !== owned` and the stop owns the result here.
     if (this.process !== owned) return;
-    const result = this.scrub(close);
+    const result = scrubClose(close);
     const turn = this.processTurn;
     this.releaseProcess();
     if (this.active === turn) this.active = undefined;
@@ -1214,15 +1275,6 @@ class ClaudeCodeSession {
       ...processCode(result),
       ...(result.kind === "cleanup-error" ? { cause: result.cause } : {}),
     });
-  }
-
-  /** A close observation with its cause passed through the bearer redactor, so
-   *  both the cause and every diagnostic string derived from it are scrubbed. */
-  private scrub(close: OwnedProcessClose): OwnedProcessClose {
-    if (close.kind === "cleanup-error" || close.kind === "spawn-error") {
-      return { kind: close.kind, cause: redactSecrets(close.cause) };
-    }
-    return close;
   }
 
   private detached(): SessionAvailability {
@@ -1735,8 +1787,12 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.lastObservation = "Claude Code acknowledged the Session at init";
     const facts = sessionFacts(frame, this.session.coordinate);
     this.emit({ kind: "session", availability: { state: "open" }, facts });
-    this.emit({ kind: "model", observation: model });
+    this.emit({ kind: "model", observation: this.session.model() });
     this.emit({ kind: "activity", description: describeSessionFacts(facts) });
+  }
+
+  observeModel(observation: ModelObservation): void {
+    if (!this.settled) this.emit({ kind: "model", observation });
   }
 
   private acceptAssistant(frame: MessageFrame): void {
@@ -2134,6 +2190,14 @@ function notStartedFailure(
   };
 }
 
+/** Redact every close cause before failure translation at the Harness Seam. */
+function scrubClose(close: OwnedProcessClose): OwnedProcessClose {
+  if (close.kind === "cleanup-error" || close.kind === "spawn-error") {
+    return { kind: close.kind, cause: redactSecrets(close.cause) };
+  }
+  return close;
+}
+
 /** The failure a Turn result carries, if any. */
 function resultFailure(result: TurnResult): HarnessFailure | undefined {
   switch (result.kind) {
@@ -2267,7 +2331,7 @@ function cleanupFailure(
  *  publishes no per-model query, so every suggestion offers all five and names
  *  no default effort: which levels a model honours, or that it has none, is
  *  observed, never declared (ADR 0034 rejects a Claude model catalogue). */
-const CLAUDE_CODE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const CLAUDE_CODE_EFFORTS = ClaudeEffort.options;
 
 /** Claude Code's documented model aliases (ADR 0034): each family's latest
  *  model, Default, Opus Plan, and the 1M-context variants. Suggestions, never a
@@ -2286,14 +2350,6 @@ const CLAUDE_CODE_SUGGESTIONS: readonly ModelEntry[] = [
 function suggestion(model: string, label: string): ModelEntry {
   return { model, label, efforts: CLAUDE_CODE_EFFORTS };
 }
-
-/** The Model choice Claude Code starts from when its own settings are not read
- *  (ADR 0034): Opus (latest) at medium. */
-const CLAUDE_CODE_FALLBACK: HarnessDefaults = {
-  kind: "fallback",
-  choice: { model: "opus", effort: "medium" },
-  reason: "Claude Code's own settings were not read before launch.",
-};
 
 /** The immutable profile, tied to the observed executable, version, platform,
  *  posture, and Adapter revision. Every capability is an M3 fact (#107) with

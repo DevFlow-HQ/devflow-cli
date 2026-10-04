@@ -34,7 +34,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   bindings fire under the dialog.
 - Start a Run skips Harness/model for Command-only Bundles; Agent-bearing Bundles use the Harness catalog's worded rows, model declaration, and `preselection`. Review opens a
   fresh `launch-preparation` Projection for the complete draft, offers Start only while ready, and submits that Projection's exact `launch-run` draft (#191/#192).
-  The interim model field (#349 replaces it) opens on the preselection with its source; an unset model takes the choice the review resolves, never a Harness default.
+  The interim model field (#349 replaces it) shows preselection, source, and effort lock; Review repeats the lock. An unset model takes the resolved choice.
 - A focus that reads `not-checked` is a check in flight (the Port always settles it), so `StartRun` alone holds Harness Continue while `isCheckingModels`. The chosen
   row reads `harnessFocusStatus` from that focus, because the list snapshot is re-pushed only after the focus settles (#286).
 - A refused launch routes only by `correction`, clears only the invalidated draft field, preserves every other choice, and keeps its inline finding after the dismissible

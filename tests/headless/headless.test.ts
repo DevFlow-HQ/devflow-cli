@@ -401,7 +401,10 @@ test("harness inspect text names suggested models, efforts for any other name, a
     text,
     /^Reported settings: Opus \(latest\) · opus at max, the fallback\. The settings were not read\.$/m,
   );
-  assert.match(text, /^Effort locked by EFFORT_LEVEL=max$/m);
+  assert.match(
+    text,
+    /^Locked by EFFORT_LEVEL=max. Change that setting outside Secant.$/m,
+  );
 });
 
 test("harness inspect text says when the Harness has no default to start from", async (t) => {

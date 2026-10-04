@@ -1,0 +1,13 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.289 (Claude Code)",
+  "protocolVersion": "stream-json:get_settings",
+  "recordedAt": "2026-10-04T07:24:12.199Z",
+  "redactions": [
+    {
+      "placeholder": "«PERSONAL-SETTINGS»",
+      "reason": "removed effective, sources, policy and unrelated applied settings; retained only the get_settings reply"
+    }
+  ],
+  "refreshCommand": "bun tests/harness/record.ts settings-no-effort"
+}

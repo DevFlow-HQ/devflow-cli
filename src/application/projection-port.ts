@@ -520,6 +520,7 @@ type PreselectionSourceView =
 
 /** The Model choice a launch with this Harness starts from, and its source. */
 interface PreselectionView {
+  readonly effortLock?: EffortLockView;
   readonly choice: ModelChoiceView;
   readonly source: PreselectionSourceView;
 }
@@ -527,6 +528,7 @@ interface PreselectionView {
 /** A launch's resolved Model choice and its source: the preselection, or
  *  `requested` when the draft named a model or an effort. */
 interface LaunchModelChoiceView extends ModelChoiceView {
+  readonly effortLock?: EffortLockView;
   readonly source: PreselectionSourceView | { readonly kind: "requested" };
 }
 

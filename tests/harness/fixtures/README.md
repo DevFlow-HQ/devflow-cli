@@ -33,6 +33,9 @@ Six keys, all required (the structural step enforces their presence):
 
 ## `case.json` (replay script)
 
+- `settings` (#347) — a sticky `{ "stdout": "settings.stdout" }` reply to `get_settings`, echoing the request id; `{ "unanswered": true }` models a timeout.
+  Settings-only probes use `--no-session-persistence`, carry no Session id or user frame, and never advance `sessions[]`. Ordinary cases use the
+  separately recorded `settings` or `settings-locked` reply, selected by the inherited `xhigh` lock. Other controls still require explicit steps.
 - `exitCode` — the process exit code the replayer settles with.
 - `turns[]` — one entry per stdin Turn frame the Adapter sends:
   - `stdout` / `stderr` — a byte file emitted for the whole Turn, **or**

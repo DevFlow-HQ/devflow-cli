@@ -332,6 +332,9 @@ export function createLaunchPreparation(
           ...(resolved.preferenceNotice === undefined
             ? {}
             : { preferenceNotice: resolved.preferenceNotice }),
+          ...(resolved.effortLock === undefined
+            ? {}
+            : { effortLock: resolved.effortLock }),
         }
       : { problem: resolved.problem };
   }
@@ -384,6 +387,7 @@ export function createLaunchPreparation(
 
 interface TResolvedModelChoice {
   readonly preferenceNotice?: string;
+  readonly effortLock?: { readonly effort: string; readonly source: string };
   readonly choice: ModelChoice;
   readonly source: ModelChoiceSource;
 }
@@ -441,6 +445,9 @@ function draftView(
               ? { effort: modelChoice.choice.effort }
               : {}),
             source: modelChoice.source,
+            ...(modelChoice.effortLock === undefined
+              ? {}
+              : { effortLock: { ...modelChoice.effortLock } }),
           },
         }
       : {}),

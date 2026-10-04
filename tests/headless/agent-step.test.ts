@@ -22,6 +22,7 @@ import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
+import { scriptedClaude } from "../harness/scripted-claude.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
 // The first Agent Step executed headlessly (#116): a synthesized Bundle
@@ -1056,6 +1057,11 @@ for (const containment of ["fallback", "contained", undefined] as const) {
               })
             : base.spawnCommand(options),
         spawnOwnedProcess: async (options) => {
+          if (options.args.includes("--no-session-persistence")) {
+            return scriptedClaude({
+              answer: "confirm",
+            }).process.spawnOwnedProcess(options);
+          }
           const launched = await owned.spawnOwnedProcess(options);
           if (!launched.ok || containment !== "fallback") return launched;
           const child = launched.process;
@@ -1200,4 +1206,135 @@ test("headless JSON launch succeeds while reporting preference read and save fai
   assert.equal("preferenceNotice" in snapshot.result.run, false);
   assert.match(err.join(""), /could not read/);
   assert.equal(err.filter((text) => text.includes("could not save")).length, 1);
+});
+
+function lockedScript(): FakeScript {
+  return {
+    profile: claudeCodeProfile(),
+    defaults: {
+      kind: "reported",
+      choice: { model: "opus", effort: "high" },
+      effortLock: { effort: "xhigh", source: "CLAUDE_CODE_EFFORT_LEVEL=xhigh" },
+    },
+    turns: [
+      {
+        events: [
+          {
+            kind: "model",
+            observation: {
+              known: true,
+              model: "observed-model",
+              effort: "xhigh",
+            },
+          },
+        ],
+        result: {
+          kind: "completed",
+          detail: {
+            finalContent: "done",
+            effectiveModel: {
+              known: true,
+              model: "observed-model",
+              effort: "xhigh",
+            },
+            session: { state: "open" },
+          },
+        },
+      },
+    ],
+  };
+}
+for (const json of [false, true]) {
+  test(`headless refuses a contradicting effort under the environment lock, json=${json}`, async (t) => {
+    const { wired, bundleId, digest, docPath } = wireAgent(t, {
+      adapter: createFake(lockedScript())(),
+    });
+    const out: string[] = [],
+      err: string[] = [];
+    const code = await runHeadless(
+      wired,
+      [
+        "run",
+        "launch",
+        bundleId,
+        "--trust",
+        digest,
+        "--input",
+        `doc=${docPath}`,
+        "--harness",
+        "claude-code",
+        "--model",
+        "sonnet",
+        "--effort",
+        "low",
+        ...(json ? ["--json"] : []),
+      ],
+      {
+        out: (s) => out.push(s),
+        err: (s) => err.push(s),
+        cwd: () => process.cwd(),
+      },
+    );
+    assert.equal(code, 1);
+    if (json) {
+      const response = JSON.parse(out.join(""));
+      assert.equal(response.status, "not-ready");
+      assert.equal(response.findings[0].code, "effort-locked");
+      assert.equal(response.findings[0].correction, "effort");
+      assert.equal(
+        response.findings[0].explanation,
+        "Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh. Change that setting outside Secant.",
+      );
+    } else {
+      assert.match(
+        err.join(""),
+        /Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh\. Change that setting outside Secant\./,
+      );
+    }
+    assert.deepEqual(wired.runGroup.listRuns(), []);
+  });
+}
+test("headless shows the lock at launch and records requested and effective effort additively", async (t) => {
+  const { wired, bundleId, digest, docPath } = wireAgent(t, {
+    adapter: createFake(lockedScript())(),
+  });
+  const out: string[] = [],
+    err: string[] = [];
+  const code = await runHeadless(
+    wired,
+    [
+      "run",
+      "launch",
+      bundleId,
+      "--trust",
+      digest,
+      "--input",
+      `doc=${docPath}`,
+      "--harness",
+      "claude-code",
+      "--model",
+      "sonnet",
+    ],
+    {
+      out: (s) => out.push(s),
+      err: (s) => err.push(s),
+      cwd: () => process.cwd(),
+    },
+  );
+  assert.equal(code, 0, err.join(""));
+  assert.match(
+    err.join(""),
+    /Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh\. Change that setting outside Secant\./,
+  );
+  const runId = /^Run (\S+)$/m.exec(out.join(""))?.[1];
+  assert.ok(runId);
+  const run = await runShowJson(wired, runId);
+  assert.deepEqual(run.modelChoice, { model: "sonnet", effort: "xhigh" });
+  const started = run.timeline.find((entry) => entry.event === "turn-started");
+  assert.equal(started?.requestedEffort, "xhigh");
+  const effective = run.timeline.filter(
+    (entry) => entry.event === "effective-model",
+  );
+  assert.equal(effective.at(-1)?.effectiveModel, "observed-model");
+  assert.equal(effective.at(-1)?.effectiveEffort, "xhigh");
 });

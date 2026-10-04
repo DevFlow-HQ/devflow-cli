@@ -59,7 +59,7 @@ function steerable(answer: ControlAnswer = "ignore"): ScriptedClaude {
 
 /** The uuid the Adapter stamped on the Turn's prompt, which results list. */
 function promptUuid(scripted: ScriptedClaude): unknown {
-  return scripted.writes[0]?.[0]?.uuid;
+  return scripted.writes[0]?.find((frame) => frame.type === "user")?.uuid;
 }
 
 /** The stdin `user` frames written after the Turn's prompt: the Steers. */
@@ -365,7 +365,7 @@ test("a Steer sent before the prompt is written follows the prompt on stdin", as
     scripted.writes[0]?.map(
       (frame) => (frame.message as { content?: unknown } | undefined)?.content,
     ),
-    ["the prompt", "steer"],
+    [undefined, "the prompt", "steer"],
   );
   await turn.interrupt();
   await turn.result();

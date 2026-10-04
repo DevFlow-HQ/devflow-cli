@@ -55,7 +55,10 @@ if (args.includes("--version")) {
   process.exit(0);
 }
 
-const caseDirectory = recording.protocolCaseDirectory;
+const probing = args.includes("--no-session-persistence");
+const caseDirectory =
+  recording.protocolCaseDirectory ??
+  join(recording.settingsDirectory, "settings");
 if (typeof caseDirectory !== "string") {
   process.stderr.write("secant replayer: no protocol case configured\n");
   process.exit(2);
@@ -197,8 +200,11 @@ const valid =
   args.includes("--verbose") &&
   args.includes("--include-partial-messages") &&
   required.every(([flag, value]) => valueAfter(flag) === value) &&
-  (valueAfter("--session-id") !== undefined) !==
-    (valueAfter("--resume") !== undefined);
+  (probing
+    ? valueAfter("--session-id") === undefined &&
+      valueAfter("--resume") === undefined
+    : (valueAfter("--session-id") !== undefined) !==
+      (valueAfter("--resume") !== undefined));
 if (!valid) {
   process.stderr.write("secant replayer: required stream-json flags missing\n");
   process.exit(2);
@@ -254,11 +260,13 @@ const freshOrdinal =
   !resuming && Array.isArray(protocolCase.sessions)
     ? priorLaunches(logEntries(), "--session-id").size
     : 0;
-const playback = resuming
-  ? protocolCase.resume
-  : freshOrdinal === 0
-    ? protocolCase
-    : protocolCase.sessions[freshOrdinal - 1];
+const playback = probing
+  ? protocolCase
+  : resuming
+    ? protocolCase.resume
+    : freshOrdinal === 0
+      ? protocolCase
+      : protocolCase.sessions[freshOrdinal - 1];
 if (!playback) {
   process.stderr.write(
     "secant replayer: no recorded process for this launch\n",
@@ -334,6 +342,26 @@ lines.on("line", (line) => {
         recording.log,
         JSON.stringify({ type: "control", id: invocationId, line }) + "\n",
       );
+    }
+    if (frame.request?.subtype === "get_settings") {
+      const settingsCase = protocolCase.settings;
+      if (settingsCase?.unanswered) return;
+      const directory =
+        settingsCase === undefined
+          ? join(
+              recording.settingsDirectory,
+              process.env.CLAUDE_CODE_EFFORT_LEVEL === "xhigh"
+                ? "settings-locked"
+                : "settings",
+            )
+          : caseDirectory;
+      const file = settingsCase?.stdout ?? "settings.stdout";
+      const reply = readFileSync(join(directory, file), "utf8").replace(
+        /"request_id":"[^"]+"/g,
+        `"request_id":${JSON.stringify(frame.request_id)}`,
+      );
+      process.stdout.write(reply);
+      return;
     }
     if (awaitingTurn) unexpectedControl();
     controlFrames.push(frame);

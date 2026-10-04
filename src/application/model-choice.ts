@@ -8,6 +8,7 @@ import type {
 } from "../harness/harness.js";
 import {
   effortChoiceRequired,
+  effortLocked,
   modelChoiceRequired,
   requestedEffortUnavailable,
   requestedModelUnavailable,
@@ -19,6 +20,10 @@ import type { HarnessChoice, Problem } from "./projection-port.js";
 // requested model and effort against the qualified Harness. The Adapter declares
 // its fallback; this Module only orders the sources and never invents a value.
 
+type EffortLock = NonNullable<
+  Exclude<HarnessDefaults, { kind: "unavailable" }>["effortLock"]
+>;
+
 /** The last choice, then the Harness-reported default, then its fallback. */
 type PreselectionSource =
   | { readonly kind: "last-choice" }
@@ -28,6 +33,7 @@ type PreselectionSource =
 export interface Preselection {
   readonly choice: ModelChoice;
   readonly source: PreselectionSource;
+  readonly effortLock?: EffortLock;
 }
 
 /** Where a resolved launch Model choice came from: the draft named a model or an
@@ -70,6 +76,9 @@ export function preselectModelChoice(params: {
   readonly preselection?: Preselection;
   readonly preferenceNotice?: string;
 } {
+  const { defaults } = params;
+  const effortLock =
+    defaults.kind === "unavailable" ? undefined : defaults.effortLock;
   let preferenceNotice: string | undefined;
   try {
     const encoded = params.catalog.getPreference(
@@ -93,13 +102,16 @@ export function preselectModelChoice(params: {
       });
       if (modelAvailable && effort.ok) {
         return {
-          preselection: {
-            choice:
-              effort.effort === undefined
-                ? { model: choice.model }
-                : { model: choice.model, effort: effort.effort },
-            source: { kind: "last-choice" },
-          },
+          preselection: applyEffortLock(
+            {
+              choice:
+                effort.effort === undefined
+                  ? { model: choice.model }
+                  : { model: choice.model, effort: effort.effort },
+              source: { kind: "last-choice" },
+            },
+            effortLock,
+          ),
         };
       }
       preferenceNotice = modelAvailable
@@ -110,21 +122,36 @@ export function preselectModelChoice(params: {
     preferenceNotice =
       "Secant could not read your last Model choice. Using the Harness defaults; you can still choose a model.";
   }
-  const { defaults } = params;
   const preselection: Preselection | undefined =
     defaults.kind === "unavailable"
       ? undefined
-      : {
-          choice: defaults.choice,
-          source:
-            defaults.kind === "reported"
-              ? { kind: "reported" }
-              : { kind: "fallback", reason: defaults.reason },
-        };
+      : applyEffortLock(
+          {
+            choice: defaults.choice,
+            source:
+              defaults.kind === "reported"
+                ? { kind: "reported" }
+                : { kind: "fallback", reason: defaults.reason },
+          },
+          effortLock,
+        );
   return {
     ...(preselection === undefined ? {} : { preselection }),
     ...(preferenceNotice === undefined ? {} : { preferenceNotice }),
   };
+}
+
+function applyEffortLock(
+  preselection: Preselection,
+  effortLock: EffortLock | undefined,
+): Preselection {
+  return effortLock === undefined
+    ? preselection
+    : {
+        ...preselection,
+        choice: { model: preselection.choice.model, effort: effortLock.effort },
+        effortLock,
+      };
 }
 
 type ModelChoiceResolution =
@@ -133,6 +160,7 @@ type ModelChoiceResolution =
       readonly choice: ModelChoice;
       readonly source: ModelChoiceSource;
       readonly preferenceNotice?: string;
+      readonly effortLock?: EffortLock;
     }
   | { readonly ok: false; readonly problem: Problem };
 
@@ -151,6 +179,13 @@ export function resolveModelChoice(params: {
 }): ModelChoiceResolution {
   const { harness, requestedModel, requestedEffort } = params;
   const { preselection, preferenceNotice } = preselectModelChoice(params);
+  const effortLock = preselection?.effortLock;
+  if (
+    effortLock !== undefined &&
+    requestedEffort !== undefined &&
+    requestedEffort !== effortLock.effort
+  )
+    return { ok: false, problem: effortLocked(effortLock.source) };
   const model = requestedModel ?? preselection?.choice.model;
   if (model === undefined) {
     return {
@@ -191,7 +226,7 @@ export function resolveModelChoice(params: {
     harness,
     model,
     declaration,
-    requestedEffort,
+    requestedEffort: effortLock?.effort ?? requestedEffort,
     preselected: preselection?.choice,
   });
   if (!effort.ok) return effort;
@@ -202,6 +237,7 @@ export function resolveModelChoice(params: {
         ? { model }
         : { model, effort: effort.effort },
     source,
+    ...(effortLock === undefined ? {} : { effortLock }),
     ...(preferenceNotice === undefined ? {} : { preferenceNotice }),
   };
 }

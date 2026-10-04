@@ -649,6 +649,11 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
   if (assessment.status === "not-ready") {
     return reportNotReady(io, fail, json, assessment.findings);
   }
+  const effortLock = assessment.draft.modelChoice?.effortLock;
+  if (effortLock !== undefined)
+    io.err(
+      `Locked by ${effortLock.source}. Change that setting outside Secant.\n`,
+    );
   const offer = assessment.actionOffers.find(
     (candidate): candidate is LaunchRunOffer =>
       candidate.action === "launch-run",

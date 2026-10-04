@@ -2603,3 +2603,88 @@ for (const [width, height] of [
       assert.ok(line.length <= width);
   });
 }
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  test(`[claude-effort-lock] words survive a model choice and resize at ${width}x${height}`, async () => {
+    const lock = { effort: "xhigh", source: "CLAUDE_CODE_EFFORT_LEVEL=xhigh" };
+    const locked: HarnessSpec = {
+      id: "claude-code",
+      name: "Claude Code",
+      models: ["opus", "sonnet"],
+      preselection: {
+        choice: { model: "opus", effort: "xhigh" },
+        source: { kind: "reported" },
+        effortLock: lock,
+      },
+    };
+    const prep: LaunchPreparationView = {
+      open(draft) {
+        const [snapshot] = createSignal<LaunchPreparationSnapshot>({
+          family: "launch-preparation",
+          status: "ready",
+          draft: {
+            bundle: { id: draft.bundle.id },
+            harness: draft.harness,
+            launchInputs: draft.launchInputs,
+            modelChoice: {
+              model: draft.requestedModel ?? "opus",
+              effort: "xhigh",
+              source: { kind: "requested" },
+              effortLock: lock,
+            },
+          },
+          findings: [],
+          actionOffers: [
+            {
+              action: "launch-run",
+              draft: {
+                ...draft,
+                requestedModel: draft.requestedModel ?? "opus",
+                requestedEffort: "xhigh",
+              },
+              trustRequired: false,
+              consequence: "Start",
+            },
+          ],
+        });
+        return snapshot;
+      },
+    };
+    const { t } = await mountFlow(
+      catalog([AGENT_ALPHA]),
+      fakeLaunch().view,
+      width,
+      height,
+      noRunView(),
+      harnessCatalog([locked]).view,
+      prep,
+    );
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("Choose a Harness"));
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("‹ opus ›"));
+    const sentence =
+      "Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh. Change that setting outside Secant.";
+    assert.ok(words(t.captureCharFrame()).includes(sentence));
+    assert.match(
+      words(t.captureCharFrame()),
+      /Starts from opus at xhigh effort/,
+    );
+    t.mockInput.pressArrow("right");
+    await t.waitForFrame((frame) => frame.includes("‹ sonnet ›"));
+    t.resize(width === 60 ? 140 : 60, width === 60 ? 44 : 24);
+    await t.renderOnce();
+    assert.ok(words(t.captureCharFrame()).includes(sentence));
+    assert.match(words(t.captureCharFrame()), /‹ sonnet ›/);
+    t.mockInput.pressEnter();
+    await t.waitForFrame((frame) => frame.includes("Review"));
+    const review = words(t.captureCharFrame());
+    assert.match(review, /Model choice: sonnet at xhigh effort/);
+    assert.ok(review.includes(sentence));
+    for (const line of t.captureCharFrame().split("\n"))
+      assert.ok(line.length <= (width === 60 ? 140 : 60));
+  });
+}

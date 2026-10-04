@@ -1053,8 +1053,11 @@ test("a confirmed native interrupt recovers the exact Session after Windows reap
   // The one control frame is the interrupt, cancelling queued messages (#359);
   // the replayer echoed its Adapter-minted request id into the recorded
   // confirmation.
-  assert.equal(invocation.controlLines.length, 1);
-  const control = JSON.parse(invocation.controlLines[0]!);
+  assert.equal(invocation.controlLines.length, 3);
+  const controls = invocation.controlLines.map((line) => JSON.parse(line));
+  assert.equal(controls[0].request.subtype, "get_settings");
+  assert.equal(controls[2].request.subtype, "get_settings");
+  const control = controls[1];
   assert.deepEqual(control.request, {
     subtype: "interrupt",
     cancel_queued: true,
@@ -1349,6 +1352,7 @@ test("one stream-json Turn yields normalized events and an authoritative complet
   assert.deepEqual(result.detail.effectiveModel, {
     known: true,
     model: "claude-sonnet-4-5",
+    effort: "high",
   });
   assert.deepEqual(result.detail.usage, {
     estimate: true,
@@ -1511,6 +1515,7 @@ test("a Turn's requested model is forwarded to its launch as --model, distinct f
   assert.deepEqual(result.detail.effectiveModel, {
     known: true,
     model: "claude-sonnet-4-5",
+    effort: "high",
   });
   await prepared.harness.close();
 

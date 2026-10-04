@@ -123,6 +123,11 @@ export function installReplayerAt(
           version: current,
           log: logPath,
           protocolCaseDirectory,
+          settingsDirectory: join(
+            dirname(replayerSource),
+            "fixtures",
+            "claude-code",
+          ),
           mcpClientModule: MCP_CLIENT_MODULE,
           mcpTransportModule: MCP_TRANSPORT_MODULE,
           recordedAt: "1970-01-01T00:00:00Z",

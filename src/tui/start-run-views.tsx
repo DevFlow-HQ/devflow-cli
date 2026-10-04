@@ -687,6 +687,11 @@ function ModelField(props: {
           current.choice,
           declaration(),
         ),
+        ...(current.effortLock === undefined
+          ? []
+          : [
+              `Locked by ${current.effortLock.source}. Change that setting outside Secant.`,
+            ]),
       ];
     }
     const defaults = focus()?.harnessDefaults;
@@ -1064,6 +1069,11 @@ export function ReviewStep(props: {
         choice,
         declaration,
       ),
+      ...(choice.effortLock === undefined
+        ? []
+        : [
+            `Locked by ${choice.effortLock.source}. Change that setting outside Secant.`,
+          ]),
     ];
   };
   const trustPosture = () => {

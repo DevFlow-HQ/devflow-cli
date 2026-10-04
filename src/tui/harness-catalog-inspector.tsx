@@ -226,7 +226,7 @@ function ReportedSettings(props: { harness: Accessor<HarnessFocus> }) {
         {(locked) => (
           <text
             fg={theme.textMuted}
-          >{`Effort locked by ${locked().source}`}</text>
+          >{`Locked by ${locked().source}. Change that setting outside Secant.`}</text>
         )}
       </Show>
     </box>

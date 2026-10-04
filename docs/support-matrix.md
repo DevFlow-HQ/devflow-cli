@@ -64,6 +64,10 @@ as were the native Steer and compaction cases (`steer-within`, `steer-boundary`,
 qualify the Steer `uuid`, `command_lifecycle`, `user_message_uuids`, `cancel_queued`, and `compact_result` fields, not an installed-Harness Proof Bundle
 pass, while the installed-Harness row below stays at the 2.1.283 that `v0.1.0` checked. Each case's version is in its `recording.json`.
 
+Claude Code's settings-only replies (`settings`, `settings-locked`, `settings-no-effort`, #347) were recorded on 2.1.289 on Linux x64 on 2026-10-04.
+Only `applied.model` and `applied.effort` remain; personal settings were removed. They qualify reported defaults, the environment effort lock, and
+per-Turn effective effort. `settings-unanswered` is a synthetic fault proving the bounded fallback, not a claim about that installed version.
+
 | Harness     | OS/architecture | Installed version | Evidence                                                                                                                                    |
 | ----------- | --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claude Code | Windows x64     | 2.1.283           | `v0.1.0` installed-Harness Proof Bundle check, pass ([#234 report](https://github.com/secantdev/secant/issues/234#issuecomment-5845987175)) |

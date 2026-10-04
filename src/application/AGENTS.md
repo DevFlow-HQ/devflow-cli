@@ -27,8 +27,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Runs.) Preflight runs before the Trust gate, so a Run whose preconditions fail is refused before trust is ever asked for.
 - New Agent/Interactive-agent Runs require one known, available registry id and pin it in `createRun`; Command-only Runs reject a selection as irrelevant.
   The launch replay key includes the choice, and resume automatically reuses the immutable stored id without deriving it from Attempt evidence (#138, #146).
-- Agent-bearing Runs hold a Model choice. `launch-preparation` checks the qualified declaration and resolves the draft, else `preselectModelChoice`:
-  valid last choice, reported default, then Adapter fallback. `submit` never qualifies: it requires a model and trusts the `launch-run` Offer's effort.
+- Agent-bearing Runs hold a Model choice. `launch-preparation` resolves draft, valid last choice, reported default, then Adapter fallback.
+  It applies the effort lock to any preselection and refuses contradicting effort with correction `effort`; `submit` requires a model and trusts the Offer's effort.
 - Each focus open and assessment reads Preferences outside the qualification cache; stale model/effort skips the whole choice with a notice.
   `saveLastModelChoice` runs after Run creation; its failure notice survives Projection reopen for this Application lifetime.
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and

@@ -105,7 +105,11 @@ function run(
  *  runner's stray SECANT_LOG_DETAIL never reaches a scenario; only the
  *  operational-log scenario sets it (#325). */
 function homeEnv(secantHome: string): NodeJS.ProcessEnv {
-  const { SECANT_LOG_DETAIL: _detail, ...inherited } = process.env;
+  const {
+    SECANT_LOG_DETAIL: _detail,
+    CLAUDE_CODE_EFFORT_LEVEL: _effort,
+    ...inherited
+  } = process.env;
   return {
     ...inherited,
     SECANT_HOME: secantHome,
@@ -857,7 +861,7 @@ await withCleanup(
         {
           harness: "claude-code",
           model: "sonnet",
-          effort: "high",
+          effort: "xhigh",
           install(directory: string) {
             installReplayerAt(
               directory,
@@ -903,10 +907,44 @@ await withCleanup(
           ...workspaceEnv,
           PATH: `${replayerDirectory}${delimiter}${workspaceEnv.PATH}`,
         };
+        delete env.CLAUDE_CODE_EFFORT_LEVEL;
+        if (choice.harness === "claude-code")
+          env.CLAUDE_CODE_EFFORT_LEVEL = "xhigh";
         delete env.SECANT_CLAUDE_CODE;
         delete env.SECANT_CODEX;
         run(binary, ["workspace", "approve"], { cwd: workspace, env });
 
+        if (choice.harness === "claude-code") {
+          const refused = JSON.parse(
+            run(
+              binary,
+              [
+                "run",
+                "launch",
+                "dev.secant.test-repair",
+                "--input",
+                `failing-test=${failingTest}`,
+                "--trust",
+                listed.digest,
+                "--harness",
+                "claude-code",
+                "--effort",
+                "low",
+                "--json",
+              ],
+              { cwd: workspace, env, expect: 1 },
+            ),
+          );
+          if (
+            refused.status !== "not-ready" ||
+            refused.findings?.[0]?.code !== "effort-locked" ||
+            refused.findings[0].explanation !==
+              "Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh. Change that setting outside Secant."
+          )
+            throw new Error(
+              `Contradicting effort was not refused: ${JSON.stringify(refused)}`,
+            );
+        }
         const launched = JSON.parse(
           run(
             binary,
@@ -947,6 +985,74 @@ await withCleanup(
               (event: { event: string }) => event.event === "turn-started",
             )
           : [];
+        if (choice.harness === "claude-code") {
+          const observations = shown?.timeline?.filter(
+            (entry: { event: string }) => entry.event === "effective-model",
+          );
+          if (
+            !observations?.some(
+              (entry: { effectiveEffort?: string }) =>
+                entry.effectiveEffort === "xhigh",
+            )
+          )
+            throw new Error(`Claude effort was not observed: ${shownJson}`);
+          const lockedRaw = join(smokeRoot, "flagless-locked-workspace");
+          await mkdir(lockedRaw, { recursive: true });
+          const lockedWorkspace = realpathSync.native(lockedRaw);
+          // Preferences span Workspaces, so this default-selection case needs
+          // its own Secant home with no saved Model choice (#343).
+          const lockedEnv = {
+            ...env,
+            SECANT_HOME: join(smokeRoot, "flagless-locked-home"),
+          };
+          run(binary, ["bundle", "install", join(smokeRoot, "proof.wfb")], {
+            cwd: lockedWorkspace,
+            env: lockedEnv,
+          });
+          const seeded = seedTestRepairWorkspace(lockedWorkspace);
+          run(binary, ["workspace", "approve"], {
+            cwd: lockedWorkspace,
+            env: lockedEnv,
+          });
+          const flagless = JSON.parse(
+            run(
+              binary,
+              [
+                "run",
+                "launch",
+                "dev.secant.test-repair",
+                "--input",
+                `failing-test=${seeded.failingTest}`,
+                "--trust",
+                listed.digest,
+                "--harness",
+                "claude-code",
+                "--harness-requests",
+                "allow",
+                "--json",
+              ],
+              { cwd: lockedWorkspace, env: lockedEnv, expect: 2 },
+            ),
+          );
+          const locked = JSON.parse(
+            run(binary, ["run", "show", flagless.runId, "--json"], {
+              cwd: lockedWorkspace,
+              env: lockedEnv,
+            }),
+          ).result?.run;
+          if (
+            locked?.modelChoice?.model !== "claude-opus-5-5" ||
+            locked.modelChoice.effort !== "xhigh" ||
+            !locked.timeline.some(
+              (entry: { event: string; effectiveEffort?: string }) =>
+                entry.event === "effective-model" &&
+                entry.effectiveEffort === "xhigh",
+            )
+          )
+            throw new Error(
+              `Flagless launch did not preserve the effort lock: ${JSON.stringify(locked)}`,
+            );
+        }
         if (
           shown?.state !== "blocked" ||
           shown.modelChoice?.model !== choice.model ||

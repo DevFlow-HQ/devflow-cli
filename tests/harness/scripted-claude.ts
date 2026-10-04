@@ -59,6 +59,7 @@ export interface ScriptedClaude {
 export function scriptedClaude(options: {
   readonly answer: ControlAnswer;
   readonly closeStdin?: () => Promise<OwnedProcessClose>;
+  readonly settingsAnswer?: ControlAnswer;
   readonly containment?: ProcessLaunchContainment;
   readonly interruption?: ProcessInterruption;
   readonly userFrame?: (index: number, frame: Frame) => readonly Frame[];
@@ -96,6 +97,7 @@ export function scriptedClaude(options: {
     const written: Frame[] = [];
     writes.push(written);
     const lines: string[] = [];
+    const interruptIds = new Set<unknown>();
     let wake: (() => void) | undefined;
     let ended = false;
     let resolveClose!: (close: OwnedProcessClose) => void;
@@ -118,7 +120,11 @@ export function scriptedClaude(options: {
         const line = lines.shift();
         if (line !== undefined) {
           yield new TextEncoder().encode(line);
-          if (line.includes('"control_response"')) markResponseRead();
+          if (
+            line.includes('"control_response"') &&
+            interruptIds.has(JSON.parse(line).response?.request_id)
+          )
+            markResponseRead();
           continue;
         }
         if (ended) return;
@@ -145,9 +151,33 @@ export function scriptedClaude(options: {
             users += 1;
             for (const each of frames) emit(each);
           } else if (frame.type === "control_request") {
-            answerControl(options.answer, frame, emit, () =>
-              settle({ kind: "exited", status: 1 }),
-            );
+            const request = frame.request;
+            if (
+              typeof request === "object" &&
+              request !== null &&
+              "subtype" in request &&
+              request.subtype === "interrupt"
+            )
+              interruptIds.add(frame.request_id);
+            if (
+              typeof request === "object" &&
+              request !== null &&
+              "subtype" in request &&
+              request.subtype === "get_settings" &&
+              options.settingsAnswer !== undefined
+            ) {
+              answerControl(
+                options.settingsAnswer,
+                frame,
+                emit,
+                () => settle({ kind: "exited", status: 1 }),
+                false,
+              );
+            } else {
+              answerControl(options.answer, frame, emit, () =>
+                settle({ kind: "exited", status: 1 }),
+              );
+            }
           }
         });
         return Promise.resolve();
@@ -244,7 +274,25 @@ function answerControl(
   frame: Frame,
   emit: (frame: Frame) => void,
   exit: () => void,
+  defaultSettings = true,
 ): void {
+  if (
+    defaultSettings &&
+    typeof frame.request === "object" &&
+    frame.request !== null &&
+    "subtype" in frame.request &&
+    frame.request.subtype === "get_settings"
+  ) {
+    emit({
+      ...controlResponse(frame, "success"),
+      response: {
+        subtype: "success",
+        request_id: frame.request_id,
+        response: { applied: { model: "scripted-model", effort: "high" } },
+      },
+    });
+    return;
+  }
   if (typeof answer === "function") {
     answer(frame, emit, exit);
     return;
@@ -333,7 +381,16 @@ export async function liveTurnOn(
 }
 
 export function controlRequests(scripted: ScriptedClaude): Frame[] {
-  return scripted.writes.flat().filter((f) => f.type === "control_request");
+  return scripted.writes.flat().filter((f) => {
+    const request = f.request;
+    return (
+      f.type === "control_request" &&
+      typeof request === "object" &&
+      request !== null &&
+      "subtype" in request &&
+      request.subtype === "interrupt"
+    );
+  });
 }
 
 export function controlSettlements(

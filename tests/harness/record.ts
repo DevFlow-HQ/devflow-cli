@@ -1493,7 +1493,125 @@ async function recordMattFront(): Promise<void> {
   }
 }
 
+/** Settings-only recording: no user frame and no model call. Retain only the
+ * correlated response's applied values; the rest contains personal settings. */
+async function recordSettings(locked = false, noEffort = false): Promise<void> {
+  const name = noEffort
+    ? "settings-no-effort"
+    : locked
+      ? "settings-locked"
+      : "settings";
+  const ws = mkdtempSync(join(tmpdir(), "secant-settings-record-"));
+  const env = { ...process.env };
+  delete env.CLAUDE_CODE_EFFORT_LEVEL;
+  if (locked) env.CLAUDE_CODE_EFFORT_LEVEL = "xhigh";
+  try {
+    const bytes = await new Promise<Buffer>((resolve, reject) => {
+      const child = spawn(
+        "claude",
+        [
+          "-p",
+          "--input-format",
+          "stream-json",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--include-partial-messages",
+          "--no-session-persistence",
+          ...(noEffort ? ["--model", "haiku"] : []),
+        ],
+        { cwd: ws, env },
+      );
+      let pending = "";
+      let reply: Buffer | undefined;
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("Settings recording timed out"));
+      }, 15000);
+      child.stderr.resume();
+      child.on("error", reject);
+      child.stdout.on("data", (chunk: Buffer) => {
+        pending += chunk.toString("utf8");
+        let newline: number;
+        while ((newline = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, newline);
+          pending = pending.slice(newline + 1);
+          if (!line.trim().startsWith("{")) continue;
+          const frame = JSON.parse(line);
+          if (
+            frame.type !== "control_response" ||
+            frame.response?.request_id !== "settings-recording"
+          )
+            continue;
+          if (
+            frame.response.subtype !== "success" ||
+            frame.response.response?.applied === undefined
+          ) {
+            child.kill();
+            reject(new Error("Settings recording was refused"));
+            return;
+          }
+          // Redaction drops whole fields, retaining the real serialized values.
+          reply = Buffer.from(
+            JSON.stringify({
+              type: frame.type,
+              response: {
+                subtype: frame.response.subtype,
+                request_id: frame.response.request_id,
+                response: {
+                  applied: {
+                    model: frame.response.response.applied.model,
+                    effort: frame.response.response.applied.effort,
+                  },
+                },
+              },
+            }) + "\n",
+          );
+          child.stdin.end();
+        }
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code === 0 && reply !== undefined) resolve(reply);
+        else reject(new Error("Settings recording did not exit cleanly"));
+      });
+      child.stdin.write(
+        JSON.stringify({
+          type: "control_request",
+          request_id: "settings-recording",
+          request: { subtype: "get_settings" },
+        }) + "\n",
+      );
+    });
+    writeCase({
+      name,
+      files: [{ name: "settings.stdout", bytes }],
+      caseJson: {
+        exitCode: 0,
+        turns: [],
+        settings: { stdout: "settings.stdout" },
+      },
+      secrets: hostSecrets(""),
+      workspace: ws,
+      executableVersion: claudeVersion(),
+      protocolVersion: "stream-json:get_settings",
+      extraRedactions: [
+        {
+          placeholder: "«PERSONAL-SETTINGS»",
+          reason:
+            "removed effective, sources, policy and unrelated applied settings; retained only the get_settings reply",
+        },
+      ],
+    });
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
 const RECORDERS: Record<string, () => Promise<void>> = {
+  settings: () => recordSettings(),
+  "settings-locked": () => recordSettings(true),
+  "settings-no-effort": () => recordSettings(false, true),
   plain: recordPlain,
   "test-repair": recordTestRepair,
   interrupt: recordInterrupt,

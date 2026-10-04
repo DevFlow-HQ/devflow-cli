@@ -67,6 +67,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `not-checked` (#188). Its frozen JSON is the inner focused Harness, where `supportedModels` keeps its names-only shape (a `suggested` declaration
   reads as `free-text`) and #341 adds `modelDeclaration` and `harnessDefaults` (text: `Reported settings:`) beside it, #342 `preselection`;
   `harness list --json` prints the whole list snapshot, and neither command derives or exposes Action Offers.
+- A locked launch prints its lock sentence on stderr, keeping stdout JSON unchanged (#347).
 - Every command prints the startup notices (`clients.startupNotices`, the ADR 0029 Shipped Bundle ensure) to stderr before executing (`buildProgram`'s
   `execute`). A failed ensure never blocks the command, and stdout, the `--json` shapes, and exit codes are untouched by the notices.
 - Commander settings (`exitOverride`, `configureOutput`, `enablePositionalOptions`, `configureHelp`) must be configured on the program before the

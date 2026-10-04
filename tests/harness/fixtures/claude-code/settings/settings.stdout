@@ -1,0 +1,1 @@
+{"type":"control_response","response":{"subtype":"success","request_id":"settings-recording","response":{"applied":{"model":"claude-opus-5-5","effort":"high"}}}}

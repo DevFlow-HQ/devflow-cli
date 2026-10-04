@@ -6,6 +6,10 @@
 // running both keeps the fake honest to the Interface. This module is not a
 // `.test.ts` file: it is imported and driven by tests/process/runtime-conformance.ts.
 
+import assert from "node:assert/strict";
+import { setEnvironmentForTest } from "../helpers/environment.js";
+import { turnRequest } from "./scripted-claude.js";
+import type { TurnEvent } from "../../src/harness/harness.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -101,9 +105,8 @@ export function registerClaudeCodeReplayerConformance(
         efforts: claudeEfforts,
       },
       expectedDefaults: {
-        kind: "fallback",
-        choice: { model: "opus", effort: "medium" },
-        reason: "Claude Code's own settings were not read before launch.",
+        kind: "reported",
+        choice: { model: "claude-opus-5-5", effort: "high" },
       },
     },
     register,
@@ -136,6 +139,158 @@ export function registerClaudeCodeReplayerConformance(
     },
     register,
   );
+
+  for (const [name, level, expected] of [
+    [
+      "settings",
+      undefined,
+      {
+        kind: "reported",
+        choice: { model: "claude-opus-5-5", effort: "high" },
+      },
+    ],
+    [
+      "settings-locked",
+      "xhigh",
+      {
+        kind: "reported",
+        choice: { model: "claude-opus-5-5", effort: "xhigh" },
+        effortLock: {
+          effort: "xhigh",
+          source: "CLAUDE_CODE_EFFORT_LEVEL=xhigh",
+        },
+      },
+    ],
+    [
+      "settings-unanswered",
+      undefined,
+      {
+        kind: "fallback",
+        choice: { model: "opus", effort: "medium" },
+        reason: "Claude Code's settings did not answer before launch.",
+      },
+    ],
+    [
+      "settings-no-effort",
+      undefined,
+      {
+        kind: "fallback",
+        choice: { model: "opus", effort: "medium" },
+        reason: "Claude Code reported no selectable default effort.",
+      },
+    ],
+  ] as const) {
+    register(
+      `claude-code defaults: ${name} reads once per prepare outside the profile cache`,
+      async () => {
+        const restore = setEnvironmentForTest(
+          { after: () => {} },
+          { CLAUDE_CODE_EFFORT_LEVEL: level },
+        );
+        try {
+          const replayer = installReplayer(
+            "2.1.289 (Claude Code)",
+            fixtureCase(name),
+          );
+          const adapter = createClaudeCodeAdapter({
+            path: replayer.path,
+            env: {},
+            controlTimeoutMs: name === "settings-unanswered" ? 500 : undefined,
+          });
+          const workspace = makeTempDir("secant-settings-ws-");
+          for (let i = 0; i < 2; i++) {
+            const prepared = await adapter.prepare({ workspace });
+            assert.ok(prepared.ok);
+            try {
+              assert.equal(
+                replayer
+                  .invocations()
+                  .filter((call) =>
+                    call.args.includes("--no-session-persistence"),
+                  ).length,
+                i,
+              );
+              const first = prepared.harness.readDefaults();
+              assert.equal(prepared.harness.readDefaults(), first);
+              assert.deepEqual(await first, expected);
+            } finally {
+              assert.equal((await prepared.harness.close()).clean, true);
+            }
+          }
+          const calls = replayer.invocations();
+          assert.equal(
+            calls.filter((call) => call.args.includes("--version")).length,
+            1,
+          );
+          const probes = calls.filter((call) =>
+            call.args.includes("--no-session-persistence"),
+          );
+          assert.equal(probes.length, 2);
+          for (const probe of probes) {
+            assert.equal(probe.stdinLines.length, 0);
+            assert.equal(probe.controlLines.length, 1);
+            assert.equal(
+              JSON.parse(probe.controlLines[0]!).request.subtype,
+              "get_settings",
+            );
+            assert.ok(
+              !probe.args.includes("--session-id") &&
+                !probe.args.includes("--resume"),
+            );
+          }
+        } finally {
+          restore();
+        }
+      },
+    );
+  }
+  for (const level of [undefined, "xhigh"] as const) {
+    register(
+      `claude-code Turn observes recorded effective effort ${level ?? "high"}`,
+      async () => {
+        const restore = setEnvironmentForTest(
+          { after: () => {} },
+          { CLAUDE_CODE_EFFORT_LEVEL: level },
+        );
+        const replayer = installReplayer(
+          "2.1.289 (Claude Code)",
+          COMPLETED_CASE,
+        );
+        const prepared = await createClaudeCodeAdapter({
+          path: replayer.path,
+          env: {},
+        }).prepare({ workspace: makeTempDir("secant-settings-turn-") });
+        assert.ok(prepared.ok);
+        try {
+          const turn = prepared.harness.startTurn({
+            ...turnRequest("recorded effort"),
+            modelChoice: { model: "requested-model", effort: "low" },
+          });
+          const events: TurnEvent[] = [];
+          turn.subscribe((event) => events.push(event));
+          const result = await turn.result();
+          assert.ok(result.kind === "completed");
+          assert.ok(result.detail.effectiveModel.known);
+          assert.equal(result.detail.effectiveModel.effort, level ?? "high");
+          assert.notEqual(
+            result.detail.effectiveModel.model,
+            "requested-model",
+          );
+          assert.ok(
+            events.some(
+              (event) =>
+                event.kind === "model" &&
+                event.observation.known &&
+                event.observation.effort === (level ?? "high"),
+            ),
+          );
+        } finally {
+          await prepared.harness.close();
+          restore();
+        }
+      },
+    );
+  }
 
   // #214: the Run working area reaches every launch as one `--add-dir`.
   runWritableDirectoryGrantCases(

@@ -5,9 +5,9 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 
 ## Claude Code Adapter
 
-- Qualification is cached per Adapter instance in a private `Map`, keyed by the discovered target's discovery source, its path, and its file identity: same
-  path with identical bytes ⇒ the probed version cannot have changed, so the cached profile is reused without re-running `--version`; any drift in path or
-  identity requalifies, and folding the source into the key stops a reused profile reporting a stale source.
+- Claude's per-Adapter profile cache keys on discovery source, path and file identity. Equal bytes reuse the version; drift requalifies and a source change refreshes evidence.
+- `readDefaults` probes `get_settings` once per Prepared Harness in a bounded, settings-only process outside that cache, retaining only `applied` (#347).
+  A valid inherited `CLAUDE_CODE_EFFORT_LEVEL` locks effort; invalid values are ignored. Each Turn reads effort without holding settlement.
 - The shared listener mints a 256-bit bearer per Harness Session, reused on relaunch. Both MCP endpoints bind every transport to its Session
   and server, including short extra connections; idle-Session approvals are denied. Each token stays registered for the invocation, and every cause
   below launch crosses `redactSecrets` (close observations, stdin-write and stdout-read errors, captured stderr), so redaction happens at the Seam.

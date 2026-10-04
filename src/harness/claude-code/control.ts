@@ -16,7 +16,12 @@ import {
 /** How one control request ended. Only `success` means Claude Code accepted
  *  it; every other outcome leaves the caller to its fallback. */
 export type ControlOutcome =
-  | { readonly kind: "success" }
+  | {
+      readonly kind: "success";
+      readonly settings?: NonNullable<
+        ControlResponseFrame["response"]["response"]
+      >["applied"];
+    }
   | { readonly kind: "refused"; readonly detail: string }
   | { readonly kind: "timeout" }
   | { readonly kind: "write-failed" }
@@ -59,10 +64,13 @@ export class ControlChannel {
   /** Correlate one response. A response naming no pending request (a late
    *  answer after its timeout, or an id this process never minted) is dropped. */
   accept(frame: ControlResponseFrame): void {
-    const { subtype, request_id: requestId, error } = frame.response;
+    const { subtype, request_id: requestId, error, response } = frame.response;
     this.pending.get(requestId)?.(
       subtype === "success"
-        ? { kind: "success" }
+        ? {
+            kind: "success",
+            ...(response === undefined ? {} : { settings: response.applied }),
+          }
         : {
             kind: "refused",
             detail: error ?? `control response ${subtype ?? "without subtype"}`,

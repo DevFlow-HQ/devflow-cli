@@ -24,6 +24,8 @@ import type {
 
 // --- Schemas -----------------------------------------------------------------
 
+export const ClaudeEffort = z.enum(["low", "medium", "high", "xhigh", "max"]);
+
 /** A string-valued field that is absent when missing or of another type. */
 const lenientString = z.string().optional().catch(undefined);
 
@@ -116,6 +118,17 @@ const ControlResponseFrame = z.looseObject({
     subtype: lenientString,
     request_id: z.string(),
     error: lenientString,
+    // Keep only applied values. Effective settings and sources can carry hooks,
+    // credentials and personal commands, and are never retained by this read.
+    response: z
+      .object({
+        applied: z.object({
+          model: z.string().min(1),
+          effort: ClaudeEffort.nullable(),
+        }),
+      })
+      .optional()
+      .catch(undefined),
   }),
 });
 export type ControlResponseFrame = z.infer<typeof ControlResponseFrame>;
@@ -266,11 +279,10 @@ export function encodeUserMessage(uuid: string, text: string): Uint8Array {
 
 /** The control requests this Adapter sends. The Interrupt always cancels
  *  queued stdin messages (#359), so an undelivered Steer never runs after it;
- *  #347 and #348 add their subtypes here. */
-export type ControlRequest = {
-  readonly subtype: "interrupt";
-  readonly cancel_queued: true;
-};
+ *  settings reads reuse the channel, and #348 adds the live-change subtypes. */
+export type ControlRequest =
+  | { readonly subtype: "interrupt"; readonly cancel_queued: true }
+  | { readonly subtype: "get_settings" };
 
 export function encodeControlRequest(
   requestId: string,

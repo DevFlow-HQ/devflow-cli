@@ -773,7 +773,7 @@ test("the inspector's models, efforts, and reported settings survive small sizes
   }
   assert.match(
     read,
-    /· Any other model Efforts · low, medium, high, xhigh, max Reported settings Family 30 \(latest\) with a long friendly label and 1M context · family-30\[1m\] at xhigh Fallback · Claude Code's own settings were not read before launch\. Effort locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh/,
+    /· Any other model Efforts · low, medium, high, xhigh, max Reported settings Family 30 \(latest\) with a long friendly label and 1M context · family-30\[1m\] at xhigh Fallback · Claude Code's own settings were not read before launch\. Locked by CLAUDE_CODE_EFFORT_LEVEL=xhigh\. Change that setting outside Secant\./,
   );
 
   // A resize keeps the selection and the inspector's focus, rewrapped within

@@ -57,7 +57,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   each event replaces the last, and the result's `effectiveModel` is the last observed (#345).
 - `PreparedHarness.readDefaults()` (#341) is the Harness's own default Model choice, read lazily and once per Prepared Harness so a Run's prepare never
   pays for it: `reported`, or the Adapter's declared `fallback` with its reason (Codex: the `model/list` default at its own default effort; Claude
-  Code: Opus (latest) at medium until #347 reads `get_settings`), or `unavailable`. A read the Harness cannot answer falls back, never throws; an
+  Code: Opus (latest) at medium). Claude probes settings outside the profile cache (#347); a failed read falls back, never throws. An
   `effortLock` carries an opaque `source`. Composition's qualify path is its one caller.
 - `PrepareOptions.process` and `phases` (#333) serve that prepare and its Prepared Harness alone; an Adapter keeps only its qualification cache across
   prepares, so a cache hit never reuses an earlier caller's Process or observer.

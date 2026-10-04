@@ -1184,6 +1184,27 @@ function overlappingProcess() {
             ownedProcesses: [
               {
                 kind: "launched",
+                stdinReplies: (bytes) => {
+                  const frame = JSON.parse(new TextDecoder().decode(bytes));
+                  if (frame.request?.subtype !== "get_settings") return [];
+                  return [
+                    {
+                      kind: "stdout",
+                      bytes: new TextEncoder().encode(
+                        JSON.stringify({
+                          type: "control_response",
+                          response: {
+                            subtype: "success",
+                            request_id: frame.request_id,
+                            response: {
+                              applied: { model: "fake-model", effort: "high" },
+                            },
+                          },
+                        }) + "\n",
+                      ),
+                    },
+                  ];
+                },
                 emissions: [
                   { kind: "stdout", bytes: claudeTurnFrames() },
                   {
@@ -1358,15 +1379,26 @@ test("two overlapping Runs sharing one Session attribute every Harness and child
       .map((record) => record.runId),
     [runA, runA],
   );
-  // Every child record belongs to one of the Runs.
+  // The settings-only qualification child belongs to the invocation, while
+  // every Run child above retains its exact Run scope (#347).
+  const qualificationChildren = records.filter(
+    (record) =>
+      String(record.event).startsWith("child-") &&
+      record.runId !== runA &&
+      record.runId !== runB,
+  );
   assert.deepEqual(
-    records.filter(
-      (record) =>
-        String(record.event).startsWith("child-") &&
-        record.runId !== runA &&
-        record.runId !== runB,
+    qualificationChildren.map(
+      ({ childPid: _pid, elapsedMs: _elapsed, ...record }) => record,
     ),
-    [],
+    [
+      { event: "child-spawn", childRole: "harness-runtime" },
+      { event: "child-exit", childRole: "harness-runtime", exitStatus: 0 },
+    ],
+  );
+  assert.equal(
+    qualificationChildren[0]?.childPid,
+    qualificationChildren[1]?.childPid,
   );
   // Qualification prepared the cached Harness and closed it, under no Run.
   assert.deepEqual(

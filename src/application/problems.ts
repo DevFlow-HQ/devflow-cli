@@ -976,3 +976,14 @@ export function bundleBytesCorrupt(
         : { digest, finding },
   };
 }
+
+export function effortLocked(source: string): Problem {
+  return {
+    code: "effort-locked",
+    explanation: `Locked by ${source}. Change that setting outside Secant.`,
+    remediation:
+      "Launch with the locked effort or change that setting outside Secant.",
+    possibleEffects: "none",
+    correction: "effort",
+  };
+}

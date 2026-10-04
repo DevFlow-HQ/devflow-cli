@@ -156,7 +156,9 @@ function renderHarnessModels(harness: HarnessFocus): string[] {
       : `Reported settings: ${choice}, the fallback. ${defaults.reason}`,
   );
   if (defaults.effortLock !== undefined) {
-    lines.push(`Effort locked by ${defaults.effortLock.source}`);
+    lines.push(
+      `Locked by ${defaults.effortLock.source}. Change that setting outside Secant.`,
+    );
   }
   return lines;
 }
