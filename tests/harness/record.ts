@@ -36,6 +36,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
+import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { join } from "node:path";
 import { startPermissionBridge } from "../../src/harness/harness.js";
 import {
@@ -1608,7 +1612,222 @@ async function recordSettings(locked = false, noEffort = false): Promise<void> {
   }
 }
 
+/** Record a real attached call, or an MCP setup question declined by the host or
+ * withdrawn by a native Interrupt. No cancel frame is manufactured. */
+async function recordChannel(
+  name: "agent-call" | "elicitation-declined" | "elicitation-withdrawn",
+): Promise<void> {
+  const ws = tempWorkspace("secant-channel-record-");
+  let stdout = Buffer.alloc(0);
+  let call: { reason: string; offset: number } | undefined;
+  let question: { id: string; offset: number } | undefined;
+  const declarations = [
+    {
+      id: "step_done",
+      description: "Report that the step is done",
+      maxReasonLength: 400,
+    },
+  ];
+  const bridge = await startPermissionBridge(
+    async () => ({
+      decision: "deny",
+      message: "Only the requested probe tool is allowed.",
+    }),
+    () => async (request) => {
+      call = { reason: request.reason, offset: stdout.length };
+      return { outcome: "accepted" };
+    },
+  );
+  const attachment = bridge.session(
+    "recording",
+    name === "agent-call" ? declarations : [],
+  );
+  const server = new McpServer({ name: "setup", version: "1.0.0" });
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+  server.registerTool(
+    "setup",
+    { description: "Ask for setup confirmation", inputSchema: {} },
+    async (_args, extra) => {
+      const response = await server.server.elicitInput(
+        {
+          mode: "url",
+          message: "Finish setup in your browser",
+          url: "https://example.com/setup",
+          elicitationId: "setup-1",
+        },
+        { signal: extra.signal },
+      );
+      return { content: [{ type: "text", text: response.action }] };
+    },
+  );
+  await server.connect(transport);
+  const http = createServer((req, res) => {
+    void transport.handleRequest(req, res);
+  });
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  const address = http.address();
+  if (address === null || typeof address === "string")
+    throw new Error("Probe did not bind");
+  const args = launchArgs(
+    [
+      "--session-id",
+      "37137137-1371-4371-8371-371371371371",
+      "--no-session-persistence",
+    ],
+    {
+      launchArgs: attachment.launchArgs,
+      token: attachment.bearer,
+      calls: [],
+      close: () => bridge.close(),
+    },
+  );
+  if (name !== "agent-call") {
+    const i = args.indexOf("--mcp-config") + 1;
+    const config = JSON.parse(args[i]!);
+    config.mcpServers.setup = {
+      type: "http",
+      url: `http://127.0.0.1:${address.port}/mcp`,
+    };
+    args[i] = JSON.stringify(config);
+    args.push("--allowedTools", "mcp__setup__setup");
+  }
+  const input = userFrame(
+    name === "agent-call"
+      ? "Call mcp__secant__step_done exactly once with reason ready. Do nothing else. After its reply say done."
+      : "Call mcp__setup__setup exactly once. Do nothing else. After it returns say done.",
+  );
+  const replies: string[] = [];
+  try {
+    const captured = await new Promise<Capture>((resolve, reject) => {
+      const child = spawn("claude", args, { cwd: ws, env: baseEnv() });
+      let stderr = Buffer.alloc(0);
+      let pending = "";
+      let offset = 0;
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("Channel recording timed out"));
+      }, 120000);
+      child.on("error", reject);
+      child.stderr.on("data", (bytes: Buffer) => {
+        stderr = Buffer.concat([stderr, bytes]);
+      });
+      child.stdout.on("data", (bytes: Buffer) => {
+        stdout = Buffer.concat([stdout, bytes]);
+        pending += bytes.toString("utf8");
+        let end: number;
+        while ((end = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, end);
+          pending = pending.slice(end + 1);
+          offset += Buffer.byteLength(line + "\n");
+          if (!line.startsWith("{")) continue;
+          const frame = JSON.parse(line);
+          if (
+            frame.type === "control_request" &&
+            frame.request?.subtype === "elicitation"
+          ) {
+            question = { id: frame.request_id, offset };
+            const reply =
+              name === "elicitation-withdrawn"
+                ? {
+                    type: "control_request",
+                    request_id: "recording-interrupt",
+                    request: { subtype: "interrupt", cancel_queued: true },
+                  }
+                : {
+                    type: "control_response",
+                    response: {
+                      subtype: "success",
+                      request_id: frame.request_id,
+                      response: { action: "decline" },
+                    },
+                  };
+            const encoded = JSON.stringify(reply) + "\n";
+            replies.push(encoded);
+            child.stdin.write(encoded);
+          }
+          if (frame.type === "result") child.stdin.end();
+        }
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve({ stdout, stderr, exitCode: code ?? 1 });
+      });
+      child.stdin.write(input);
+    });
+    if (name === "agent-call" && call === undefined)
+      throw new Error("Claude never called the attached tool");
+    if (name !== "agent-call" && question === undefined)
+      throw new Error("Claude never raised an elicitation");
+    if (
+      name === "elicitation-withdrawn" &&
+      !stdout.includes(Buffer.from('"type":"control_cancel_request"'))
+    )
+      throw new Error("Claude never withdrew its elicitation");
+    const offset = call?.offset ?? question!.offset;
+    const step =
+      name === "agent-call"
+        ? {
+            bridge: {
+              server: "secant",
+              tool: "step_done",
+              arguments: { reason: call!.reason },
+              expect: {
+                isError: false,
+                text: "accepted: takes effect when this Turn finishes",
+              },
+            },
+          }
+        : name === "elicitation-declined"
+          ? { elicitationReply: { requestId: question!.id } }
+          : {
+              control: {
+                subtype: "interrupt",
+                cancelQueued: true,
+                requestId: "recording-interrupt",
+                emit: "after.stdout",
+              },
+            };
+    writeCase({
+      name,
+      workspace: ws,
+      files: [
+        { name: "before.stdout", bytes: captured.stdout.subarray(0, offset) },
+        { name: "after.stdout", bytes: captured.stdout.subarray(offset) },
+        { name: "turn.stdin", bytes: Buffer.from(input + replies.join("")) },
+      ],
+      caseJson: {
+        exitCode: captured.exitCode,
+        turns: [
+          {
+            steps: [
+              { emit: "before.stdout" },
+              step,
+              ...(name === "elicitation-withdrawn"
+                ? []
+                : [{ emit: "after.stdout" }]),
+            ],
+          },
+        ],
+      },
+      secrets: hostSecrets(attachment.bearer),
+      executableVersion: claudeVersion(),
+      protocolVersion: protocolVersionOf(stdout),
+    });
+  } finally {
+    await bridge.close();
+    await server.close();
+    http.closeAllConnections();
+    await new Promise<void>((resolve) => http.close(() => resolve()));
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
 const RECORDERS: Record<string, () => Promise<void>> = {
+  "agent-call": () => recordChannel("agent-call"),
+  "elicitation-declined": () => recordChannel("elicitation-declined"),
+  "elicitation-withdrawn": () => recordChannel("elicitation-withdrawn"),
   settings: () => recordSettings(),
   "settings-locked": () => recordSettings(true),
   "settings-no-effort": () => recordSettings(false, true),

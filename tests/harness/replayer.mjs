@@ -99,90 +99,80 @@ function replayBytes(path) {
   return Buffer.from(text);
 }
 
-// The MCP permission bridge Secant launched us against: its loopback URL and
-// bearer come from the `--mcp-config` argv, the tool name from
-// `--permission-prompt-tool`. Connected lazily; only bridge steps need it.
+// Select each MCP endpoint by its configured server name. Permission steps retain
+// their original shape; Agent-call steps name a server, tool and arguments.
 const permissionTool = valueAfter("--permission-prompt-tool");
-const bridge = parseBridge(valueAfter("--mcp-config"));
-// Claude addresses the tool as `mcp__<server>__<tool>` via --permission-prompt-tool,
-// but over the MCP protocol the server exposes it under its bare registered name.
-// Strip the `mcp__<server>__` prefix (the server name is the mcp-config key).
-const bridgeTool =
-  bridge && permissionTool
-    ? permissionTool.replace(`mcp__${bridge.name}__`, "")
-    : permissionTool;
-
-function parseBridge(raw) {
-  if (typeof raw !== "string") return undefined;
-  try {
-    const config = JSON.parse(raw);
-    const [name, entry] = Object.entries(config.mcpServers ?? {})[0] ?? [];
-    if (!entry || typeof entry.url !== "string") return undefined;
-    return {
+const mcpServers =
+  JSON.parse(valueAfter("--mcp-config") ?? "{}").mcpServers ?? {};
+const clients = new Map();
+function connectServer(name) {
+  if (!clients.has(name))
+    clients.set(
       name,
-      url: entry.url,
-      authorization: entry.headers?.Authorization,
-    };
-  } catch {
-    return undefined;
-  }
+      (async () => {
+        const entry = mcpServers[name];
+        if (!entry) throw new Error(`MCP server ${name} is not attached`);
+        const { Client } = await import(recording.mcpClientModule);
+        const { StreamableHTTPClientTransport } = await import(
+          recording.mcpTransportModule
+        );
+        const client = new Client({
+          name: "secant-replayer",
+          version: "1.0.0",
+        });
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL(entry.url), {
+            requestInit: { headers: entry.headers ?? {} },
+          }),
+        );
+        return client;
+      })(),
+    );
+  return clients.get(name);
 }
-
-let mcpClient;
-let connecting;
-// One shared client/session for the whole invocation. Memoize the connect
-// promise, not the resolved client, so concurrent bridge steps await the same
-// connection instead of racing to open a second session the transport can't hold.
-function connectBridge() {
-  if (!connecting) {
-    connecting = (async () => {
-      const { Client } = await import(recording.mcpClientModule);
-      const { StreamableHTTPClientTransport } = await import(
-        recording.mcpTransportModule
-      );
-      const client = new Client({ name: "secant-replayer", version: "1.0.0" });
-      const transport = new StreamableHTTPClientTransport(new URL(bridge.url), {
-        requestInit: bridge.authorization
-          ? { headers: { Authorization: bridge.authorization } }
-          : undefined,
-      });
-      await client.connect(transport);
-      mcpClient = client;
-      return client;
-    })();
-  }
-  return connecting;
+async function closeClients() {
+  await Promise.allSettled(
+    [...clients.values()].map(async (promise) => (await promise).close()),
+  );
 }
-
-// Perform one recorded permission call: invoke the bridge tool with the recorded
-// tool name and input, block until Secant answers, then record and return the
-// verdict.
 async function bridgeCall(spec) {
+  const server = spec.server ?? "secant-permissions";
+  const tool = spec.tool ?? permissionTool?.replace(`mcp__${server}__`, "");
   let payload;
   try {
-    const client = await connectBridge();
+    const client = await connectServer(server);
     const result = await client.callTool({
-      name: bridgeTool,
-      arguments: { tool_name: spec.tool_name, input: spec.input },
+      name: tool,
+      arguments: spec.arguments ?? {
+        tool_name: spec.tool_name,
+        input: spec.input,
+      },
     });
     const text = result?.content?.[0]?.text;
-    payload = text ? JSON.parse(text) : { behavior: "unknown" };
+    payload = spec.server
+      ? { isError: result.isError ?? false, text }
+      : text
+        ? JSON.parse(text)
+        : { behavior: "unknown" };
   } catch (error) {
     payload = { behavior: "error", message: String(error) };
   }
-  if (recording.log) {
+  if (spec.expect && JSON.stringify(payload) !== JSON.stringify(spec.expect))
+    throw new Error(`MCP reply mismatch: ${JSON.stringify(payload)}`);
+  if (recording.log)
     appendFileSync(
       recording.log,
       JSON.stringify({
         type: "bridge",
         id: invocationId,
+        server,
+        tool,
         tool_name: spec.tool_name,
-        behavior: payload.behavior,
+        ...payload,
         message: payload.message ?? null,
         updatedInput: payload.updatedInput ?? null,
       }) + "\n",
     );
-  }
   return payload;
 }
 
@@ -312,6 +302,7 @@ const write = (stream, bytes) =>
 // the current Turn has no `control` step left to take it is a replay failure.
 const userFrames = [];
 const controlFrames = [];
+const elicitationReplies = [];
 let frameWaiter;
 let stdinEnded = false;
 let awaitingTurn = false;
@@ -335,6 +326,17 @@ lines.on("line", (line) => {
   } catch {
     process.stderr.write("secant replayer: stdin was not JSON\n");
     process.exit(2);
+  }
+  if (frame.type === "control_response") {
+    if (recording.log)
+      appendFileSync(
+        recording.log,
+        JSON.stringify({ type: "elicitation-reply", id: invocationId, line }) +
+          "\n",
+      );
+    elicitationReplies.push(frame);
+    wake();
+    return;
   }
   if (frame.type === "control_request") {
     if (recording.log) {
@@ -435,9 +437,11 @@ async function controlStep(spec) {
   if (typeof spec.emit !== "string") return;
   const bytes = replayBytes(join(caseDirectory, spec.emit))
     .toString("utf8")
-    .replace(
-      /"request_id":"[^"]+"/g,
-      `"request_id":${JSON.stringify(frame.request_id)}`,
+    .replace(/"request_id":"[^"]+"/g, (match) =>
+      spec.requestId === undefined ||
+      match === `"request_id":${JSON.stringify(spec.requestId)}`
+        ? `"request_id":${JSON.stringify(frame.request_id)}`
+        : match,
     );
   await write(process.stdout, Buffer.from(bytes));
 }
@@ -514,7 +518,14 @@ for (;;) {
     let expired = false;
     for (const step of turn.steps) {
       if (expired && !step.control) continue;
-      if (step.control) {
+      if (step.elicitationReply) {
+        const frame = await nextFrame(elicitationReplies);
+        if (
+          frame?.response?.request_id !== step.elicitationReply.requestId ||
+          frame?.response?.response?.action !== "decline"
+        )
+          throw new Error("elicitation decline did not match its request");
+      } else if (step.control) {
         await controlStep(step.control);
       } else if (step.steer) {
         await steerStep(step.steer);
@@ -537,7 +548,7 @@ for (;;) {
       }
     }
     if (expired && !turn.steps.some((step) => step.control)) {
-      await mcpClient?.close().catch(() => {});
+      await closeClients();
       process.exit(0);
     }
   } else {
@@ -557,5 +568,5 @@ for (;;) {
   if (turn.exitAfter) process.exit(playback.exitCode ?? 0);
 }
 
-await mcpClient?.close().catch(() => {});
+await closeClients();
 process.exitCode = playback.exitCode;

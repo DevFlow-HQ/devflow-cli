@@ -75,6 +75,11 @@ Claude Code's settings-only replies (`settings`, `settings-locked`, `settings-no
 Only `applied.model` and `applied.effort` remain; personal settings were removed. They qualify reported defaults, the environment effort lock, and
 per-Turn effective effort. `settings-unanswered` is a synthetic fault proving the bounded fallback, not a claim about that installed version.
 
+The Claude channel fixtures (`agent-call`, `elicitation-declined`, `elicitation-withdrawn`, #371) were recorded on Claude Code 2.1.289 on Linux x64
+on 2026-10-04. They exercise the production Session attachment, narrow tool pre-approval, native elicitation decline, and exact withdrawal following
+an Interrupt. Each case retains native bytes, provenance, redaction, and a refresh command. Replay evidence does not add an installed-Harness Proof
+Bundle or three-OS support claim.
+
 | Harness     | OS/architecture | Installed version | Evidence                                                                                                                                    |
 | ----------- | --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claude Code | Windows x64     | 2.1.283           | `v0.1.0` installed-Harness Proof Bundle check, pass ([#234 report](https://github.com/secantdev/secant/issues/234#issuecomment-5845987175)) |

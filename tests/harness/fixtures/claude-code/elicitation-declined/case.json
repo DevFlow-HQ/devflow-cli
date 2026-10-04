@@ -1,0 +1,20 @@
+{
+  "exitCode": 0,
+  "turns": [
+    {
+      "steps": [
+        {
+          "emit": "before.stdout"
+        },
+        {
+          "elicitationReply": {
+            "requestId": "db3c6867-3917-4c1a-b0bd-e490edc216af"
+          }
+        },
+        {
+          "emit": "after.stdout"
+        }
+      ]
+    }
+  ]
+}

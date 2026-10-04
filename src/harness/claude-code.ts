@@ -20,6 +20,8 @@ import {
   ClaudeEffort,
   contentBlocks,
   encodeUserMessage,
+  encodeElicitationDecline,
+  type ElicitationFrame,
   genericActivity,
   isAbortedResult,
   isAuthenticationResult,
@@ -36,6 +38,8 @@ import {
 } from "./claude-code/frames.js";
 import { APPROVAL_DECISIONS } from "./harness.js";
 import type {
+  AgentCall,
+  AgentCallReply,
   AgentCallAnswer,
   AgentCallDeclaration,
   CleanupReport,
@@ -95,7 +99,7 @@ const DENY_MESSAGE = "The tool use was denied.";
 
 /** This Adapter's revision, stamped onto every profile it produces so a cached
  *  qualification from an older Adapter is never mistaken for a current one. */
-const ADAPTER_REVISION = "claude-code-4";
+const ADAPTER_REVISION = "claude-code-5";
 
 const HARNESS_NAME = "claude-code";
 
@@ -384,8 +388,17 @@ class ClaudeCodePreparedHarness implements PreparedHarness {
    *  transient cause (e.g. a momentary loopback bind clash). */
   private ensureBridge(): Promise<PermissionBridge> {
     if (this.bridgePromise === undefined) {
-      const started = startPermissionBridge((session, request) =>
-        this.routeApproval(session, request),
+      const started = startPermissionBridge(
+        (session, request) => this.routeApproval(session, request),
+        (session) => {
+          const turn = this.active;
+          return this.closed ||
+            turn === undefined ||
+            turn.settled ||
+            turn.request.session !== session
+            ? undefined
+            : (call) => turn.raiseAgentCall(call);
+        },
       ).catch((error) => {
         if (this.bridgePromise === started) this.bridgePromise = undefined;
         throw error;
@@ -816,9 +829,8 @@ class ClaudeCodeSession {
     }
   }
 
-  /** Write one Steer frame to the process serving `turn` (ADR 0035). False when
-   *  that process is gone or the write fails; the caller then refuses the Steer. */
-  async writeSteer(turn: ClaudeCodeTurn, bytes: Uint8Array): Promise<boolean> {
+  /** Write one input frame to the process serving this Turn. */
+  async writeInput(turn: ClaudeCodeTurn, bytes: Uint8Array): Promise<boolean> {
     const owned = this.process;
     if (owned === undefined || this.processTurn !== turn) return false;
     try {
@@ -903,10 +915,19 @@ class ClaudeCodeSession {
         availability: this.detached(),
       };
     }
+    // Print mode exits 1 when stdin closes after a natively aborted last Turn
+    // (#371's withdrawal recording). Keep that confirmation across onClosed,
+    // which can release the process while closeStdin is pending.
+    const nativeInterrupted =
+      this.processTurn?.settledKind === "interrupted" &&
+      this.processTurn.nativeConfirmed;
     const result = scrubClose(
       await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
     );
-    const clean = this.reapFailure === undefined && isCleanClose(result);
+    const clean =
+      this.reapFailure === undefined &&
+      result.kind === "exited" &&
+      (result.status === 0 || (result.status === 1 && nativeInterrupted));
     const detail = describeClose(this.name, result);
     const availability: SessionAvailability =
       result.kind === "cleanup-error" || result.kind === "cleanup-timeout"
@@ -1344,6 +1365,14 @@ class ClaudeCodeTurn implements HarnessTurn {
    *  coexist; each expires when the Turn ends, is interrupted, or is lost. */
   private readonly approvals = new Map<string, PendingApproval>();
   private approvalSeq = 0;
+  private readonly calls = new Map<
+    string,
+    {
+      status: "outstanding" | "settled";
+      readonly resolve: (reply: AgentCallReply) => void;
+    }
+  >();
+  private readonly elicitations = new Set<string>();
   /** Steers awaiting model exposure, keyed by their minted uuid (#359). */
   private readonly steers = new Map<string, PendingSteer>();
   private readonly steerIds = new Set<string>();
@@ -1423,7 +1452,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       sentAt: new Date().toISOString(),
       exchange: this.betweenExchanges ? undefined : this.boundaries,
     });
-    const written = await this.session.writeSteer(
+    const written = await this.session.writeInput(
       this,
       encodeUserMessage(uuid, input.text),
     );
@@ -1478,8 +1507,32 @@ class ClaudeCodeTurn implements HarnessTurn {
     });
   }
 
-  answerAgentCall(_answer: AgentCallAnswer): Promise<ControlReceipt> {
-    return Promise.resolve({ outcome: "rejected", reason: "unsupported" });
+  raiseAgentCall(call: AgentCall): Promise<AgentCallReply> {
+    if (this.settled || this.producerClosed || this.interrupting)
+      return Promise.resolve({
+        outcome: "refused",
+        reason: "no Turn in progress",
+      });
+    return new Promise((resolve) => {
+      this.calls.set(call.callId.opaque, { status: "outstanding", resolve });
+      this.emit({ kind: "agent-call", phase: "raised", call });
+    });
+  }
+
+  answerAgentCall(answer: AgentCallAnswer): Promise<ControlReceipt> {
+    if (this.settled || this.producerClosed || this.interrupting)
+      return Promise.resolve({ outcome: "rejected", reason: "expired" });
+    const pending = this.calls.get(answer.callId.opaque);
+    if (pending === undefined)
+      return Promise.resolve({ outcome: "rejected", reason: "expired" });
+    if (pending.status === "settled")
+      return Promise.resolve({
+        outcome: "rejected",
+        reason: "already-settled",
+      });
+    pending.status = "settled";
+    pending.resolve(answer);
+    return Promise.resolve({ outcome: "accepted" });
   }
 
   answerRequest(answer: RequestAnswer): Promise<ControlReceipt> {
@@ -1519,6 +1572,13 @@ class ClaudeCodeTurn implements HarnessTurn {
    *  resolve its bridge call as a deny. Idempotent per request. Callers ensure
    *  this runs while the Turn is not yet settled so the events are observable. */
   private expireOutstanding(): void {
+    this.elicitations.clear();
+    for (const [opaque, pending] of this.calls) {
+      if (pending.status !== "outstanding") continue;
+      pending.status = "settled";
+      this.emit({ kind: "agent-call", phase: "expired", callId: { opaque } });
+      pending.resolve({ outcome: "refused", reason: "request expired" });
+    }
     for (const pending of this.approvals.values()) {
       if (pending.status !== "outstanding") continue;
       pending.status = "settled";
@@ -1574,6 +1634,14 @@ class ClaudeCodeTurn implements HarnessTurn {
    *  `other` and is generic activity, never corruption (frames.ts). */
   acceptFrame(parsed: ParsedFrame): void {
     if (this.settled || this.producerClosed) return;
+    if (parsed.kind === "elicitation") {
+      this.declineElicitation(parsed.frame);
+      return;
+    }
+    if (parsed.kind === "control-cancel") {
+      this.elicitations.delete(parsed.requestId);
+      return;
+    }
     if (parsed.kind === "init") {
       this.acceptInit(parsed.frame);
       return;
@@ -1615,6 +1683,37 @@ class ClaudeCodeTurn implements HarnessTurn {
       case "other":
         this.emit(genericActivity(parsed.type));
     }
+  }
+
+  private declineElicitation(frame: ElicitationFrame): void {
+    const id = frame.request_id;
+    if (this.elicitations.has(id)) return;
+    this.elicitations.add(id);
+    this.emit({
+      kind: "elicitation-declined",
+      harness: HARNESS_NAME,
+      server: redactText(frame.request.mcp_server_name ?? "unknown"),
+      message: redactText(frame.request.message ?? ""),
+      ...(frame.request.url === undefined
+        ? {}
+        : { url: redactText(frame.request.url) }),
+    });
+    if (!this.elicitations.has(id) || this.producerClosed || this.interrupting)
+      return;
+    void this.session
+      .writeInput(this, encodeElicitationDecline(id))
+      .then((written) => {
+        if (
+          !this.elicitations.delete(id) ||
+          this.settled ||
+          this.producerClosed
+        )
+          return;
+        if (!written)
+          this.protocolCorruption(
+            "Claude Code elicitation reply could not be written",
+          );
+      });
   }
 
   protocolCorruption(detail: string, cause?: unknown): void {
@@ -2283,10 +2382,6 @@ function processCode(result: OwnedProcessClose): { nativeCode?: string } {
   return {};
 }
 
-function isCleanClose(result: OwnedProcessClose): boolean {
-  return result.kind === "exited" && result.status === 0;
-}
-
 function describeClose(session: string, result: OwnedProcessClose): string {
   return `Session '${session}' detached after ${describeProcessResult(result)}.`;
 }
@@ -2369,7 +2464,7 @@ function buildProfile(
     platform,
     adapterRevision: ADAPTER_REVISION,
     configurationPosture:
-      "user-compatible: no --bare, --strict-mcp-config, --allowedTools, --tools, or permission-mode flag; a caller-requested model is forwarded as --model and no model is selected otherwise; the user's settings, hooks, MCP servers, skills, and CLAUDE.md apply.",
+      "user-compatible: no --bare, --strict-mcp-config, --tools, or permission-mode flag; --allowedTools pre-approves only declared Secant calls, and user or managed deny rules still win; a caller-requested model is forwarded as --model and no model is selected otherwise; the user's settings, hooks, MCP servers, skills, and CLAUDE.md apply.",
     recovery: {
       mode: "native-reattach",
       evidence:
@@ -2389,8 +2484,9 @@ function buildProfile(
         "Approvals are raised through the Secant-hosted MCP permission bridge.",
     },
     agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
+      available: true,
+      evidence:
+        "Session-attached loopback MCP calls use --mcp-config and narrowly scoped --allowedTools; user and managed deny rules retain authority.",
     },
     clarifications: {
       available: false,

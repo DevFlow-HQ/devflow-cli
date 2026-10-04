@@ -899,6 +899,13 @@ interface RunSteerEvent {
 }
 
 export interface RunTimelineEvent {
+  /** Full elicitation evidence, separate from the bounded remediation text. */
+  readonly elicitation?: {
+    readonly harness: "codex" | "claude-code";
+    readonly server: string;
+    readonly message: string;
+    readonly url?: string;
+  };
   /** Full text is separate from the bounded, whitespace-collapsed detail. */
   readonly steer?: RunSteerEvent;
   readonly at: string; // ISO 8601

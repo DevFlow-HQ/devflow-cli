@@ -1,0 +1,28 @@
+{
+  "exitCode": 0,
+  "turns": [
+    {
+      "steps": [
+        {
+          "emit": "before.stdout"
+        },
+        {
+          "bridge": {
+            "server": "secant",
+            "tool": "step_done",
+            "arguments": {
+              "reason": "ready"
+            },
+            "expect": {
+              "isError": false,
+              "text": "accepted: takes effect when this Turn finishes"
+            }
+          }
+        },
+        {
+          "emit": "after.stdout"
+        }
+      ]
+    }
+  ]
+}

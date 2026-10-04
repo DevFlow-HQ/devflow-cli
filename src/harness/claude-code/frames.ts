@@ -133,6 +133,24 @@ const ControlResponseFrame = z.looseObject({
 });
 export type ControlResponseFrame = z.infer<typeof ControlResponseFrame>;
 
+/** Native MCP elicitation. Correlation and subtype are required; descriptive
+ * fields degrade to absent like the other native observations. */
+const ElicitationFrame = z.looseObject({
+  type: z.literal("control_request"),
+  request_id: z.string(),
+  request: z.looseObject({
+    subtype: z.literal("elicitation"),
+    mcp_server_name: lenientString,
+    message: lenientString,
+    url: lenientString,
+  }),
+});
+export type ElicitationFrame = z.infer<typeof ElicitationFrame>;
+const ControlCancelFrame = z.looseObject({
+  type: z.literal("control_cancel_request"),
+  request_id: z.string(),
+});
+
 /** `command_lifecycle` (`msg_lifecycle_v1`): one stdin message's progress,
  *  `queued`, `started` (in front of the model), `completed`, or `cancelled`
  *  (#359). The message's own uuid is the one structural field. */
@@ -159,6 +177,16 @@ const TelemetryFrame = z.looseObject({ type: z.literal("telemetry") });
  *  generic-activity description); a known type whose schema failed, and any
  *  unknown type, arrive as `other`. */
 export type ParsedFrame =
+  | {
+      readonly kind: "elicitation";
+      readonly type: string;
+      readonly frame: ElicitationFrame;
+    }
+  | {
+      readonly kind: "control-cancel";
+      readonly type: string;
+      readonly requestId: string;
+    }
   | { readonly kind: "init"; readonly type: string; readonly frame: InitFrame }
   | {
       readonly kind: "assistant";
@@ -216,6 +244,18 @@ export function parseFrame(value: unknown): ParsedFrame | undefined {
       : { kind: "other", type };
   }
   switch (type) {
+    case "control_request": {
+      const parsed = ElicitationFrame.safeParse(value);
+      return parsed.success
+        ? { kind: "elicitation", type, frame: parsed.data }
+        : { kind: "other", type };
+    }
+    case "control_cancel_request": {
+      const parsed = ControlCancelFrame.safeParse(value);
+      return parsed.success
+        ? { kind: "control-cancel", type, requestId: parsed.data.request_id }
+        : { kind: "other", type };
+    }
     case "assistant": {
       const parsed = AssistantFrame.safeParse(value);
       return parsed.success
@@ -293,6 +333,19 @@ export function encodeControlRequest(
       type: "control_request",
       request_id: requestId,
       request,
+    })}\n`,
+  );
+}
+
+export function encodeElicitationDecline(requestId: string): Uint8Array {
+  return new TextEncoder().encode(
+    `${JSON.stringify({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: requestId,
+        response: { action: "decline" },
+      },
     })}\n`,
   );
 }

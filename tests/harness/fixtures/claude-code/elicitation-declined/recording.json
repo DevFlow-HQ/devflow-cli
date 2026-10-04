@@ -1,0 +1,21 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.289 (Claude Code)",
+  "protocolVersion": "2.1.289",
+  "recordedAt": "2026-10-04T11:20:03.995Z",
+  "redactions": [
+    {
+      "placeholder": "«TOOL-INPUT-DELTAS»",
+      "reason": "streamed tool-input JSON deltas removed (not consumed by the Adapter; they fragment host paths past substring redaction)"
+    },
+    {
+      "placeholder": "«WORKSPACE»",
+      "reason": "recording workspace path"
+    },
+    {
+      "placeholder": "«RUNTIME_DIR»",
+      "reason": "user runtime directory"
+    }
+  ],
+  "refreshCommand": "bun tests/harness/record.ts elicitation-declined"
+}

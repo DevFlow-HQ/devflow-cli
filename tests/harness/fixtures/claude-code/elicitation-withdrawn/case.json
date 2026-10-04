@@ -1,0 +1,20 @@
+{
+  "exitCode": 1,
+  "turns": [
+    {
+      "steps": [
+        {
+          "emit": "before.stdout"
+        },
+        {
+          "control": {
+            "subtype": "interrupt",
+            "cancelQueued": true,
+            "requestId": "recording-interrupt",
+            "emit": "after.stdout"
+          }
+        }
+      ]
+    }
+  ]
+}

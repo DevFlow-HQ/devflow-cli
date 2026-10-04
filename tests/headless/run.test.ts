@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import test, { type TestContext } from "node:test";
+import { z } from "zod";
 import {
   TRANSCRIPT_PAGE_SIZE,
   type RunExecution,
@@ -1373,3 +1374,97 @@ test("run answer needs exactly one of --continue, --stop, or --text (#108)", asy
   );
   assert.match(h.stderr(), /invalid-answer/);
 });
+
+for (const url of ["https://example.com/setup", undefined]) {
+  test(`run show renders declined elicitation safely ${url === undefined ? "without" : "with"} a URL and preserves JSON evidence`, async (t) => {
+    const h = await harness(t);
+    const { digest } = await h.install();
+    assert.ok(h.runGroup);
+    const created = h.runGroup.createRun({
+      operationId: "elicitation-display",
+      bundleSnapshotDigest: digest,
+      launch: {},
+      at: new Date(),
+    });
+    assert.equal(created.outcome, "created");
+    if (created.outcome !== "created") throw new Error("unreachable");
+    const owner = h.runGroup.acquireRun(created.runId);
+    assert.ok(owner);
+    const evidence = {
+      harness: "claude-code",
+      server: "setup",
+      message: "Finish\u0000setup\u001b[31m now\u001b[0m",
+      ...(url === undefined ? {} : { url }),
+    };
+    assert.deepEqual(
+      owner.admitTurn({
+        turnId: "turn-1",
+        attemptId: "attempt-1",
+        session: "repair",
+        origin: "managed",
+        kind: "agent",
+        input: "repair",
+        recoveryCoordinate: "native-1",
+        harness: "claude-code",
+        at: new Date(),
+      }),
+      { ok: true },
+    );
+    assert.deepEqual(
+      owner.appendTurnEvent({
+        turnId: "turn-1",
+        kind: "elicitation-declined",
+        payload: JSON.stringify(evidence),
+        at: new Date(),
+      }),
+      { ok: true },
+    );
+    assert.deepEqual(owner.writeState("succeeded"), { ok: true });
+    owner.close();
+    h.reset();
+    assert.equal(await h.run(["run", "show", created.runId]), 0);
+    const text = h.stdout();
+    assert.match(
+      text,
+      /elicitation-declined claude-code\/setup: Finish setup now/,
+    );
+    assert.match(
+      text,
+      /Finish setup in Claude Code directly before continuing/,
+    );
+    assert.equal(text.includes(String.fromCharCode(0)), false);
+    assert.equal(text.includes(String.fromCharCode(27)), false);
+    assert.doesNotMatch(text, /\[31m|\[0m/);
+    if (url !== undefined) assert.ok(text.includes(url));
+    else assert.doesNotMatch(text, /https:\/\/example.com\/setup|undefined/);
+    h.reset();
+    assert.equal(await h.run(["run", "show", created.runId, "--json"]), 0);
+    const snapshot = z
+      .object({
+        result: z.object({
+          run: z.object({
+            timeline: z.array(
+              z.object({
+                event: z.string(),
+                elicitation: z
+                  .object({
+                    harness: z.string(),
+                    server: z.string(),
+                    message: z.string(),
+                    url: z.string().optional(),
+                  })
+                  .optional(),
+              }),
+            ),
+          }),
+        }),
+      })
+      .parse(JSON.parse(h.stdout()));
+    assert.deepEqual(
+      snapshot.result.run.timeline.find(
+        (event) => event.event === "elicitation-declined",
+      )?.elicitation,
+      evidence,
+    );
+  });
+}

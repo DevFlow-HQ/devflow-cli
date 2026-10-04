@@ -1,0 +1,1 @@
+{"type":"user","message":{"role":"user","content":"Call mcp__secant__step_done exactly once with reason ready. Do nothing else. After its reply say done."},"parent_tool_use_id":null}

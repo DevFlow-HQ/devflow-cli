@@ -219,6 +219,15 @@ export function startPermissionBridge(
           registerSecret(token, "bearer-token");
           const config = JSON.stringify({
             mcpServers: {
+              ...(bound.length === 0
+                ? {}
+                : {
+                    secant: {
+                      type: "http",
+                      url: `${baseUrl}/mcp`,
+                      headers: { Authorization: `Bearer ${token}` },
+                    },
+                  }),
               [SERVER_NAME]: {
                 type: "http",
                 url: `${baseUrl}/permissions`,
@@ -232,6 +241,12 @@ export function startPermissionBridge(
               config,
               "--permission-prompt-tool",
               PERMISSION_TOOL,
+              ...(bound.length === 0
+                ? []
+                : [
+                    "--allowedTools",
+                    bound.map((call) => `mcp__secant__${call.id}`).join(","),
+                  ]),
             ],
             bearer: token,
             url: `${baseUrl}/mcp`,

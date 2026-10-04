@@ -7,6 +7,7 @@ import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   type HarnessProfile,
   type TurnResult,
+  type TurnEvent,
 } from "../../src/harness/harness.js";
 import type {
   RunTimelineEvent,
@@ -198,7 +199,10 @@ function writeBundle(): string {
   return folder;
 }
 
-async function launch(t: TestContext): Promise<{
+async function launch(
+  t: TestContext,
+  extra: FakeTurnScript["events"] = [],
+): Promise<{
   wired: Wiring;
   runId: string;
 }> {
@@ -206,7 +210,10 @@ async function launch(t: TestContext): Promise<{
   const adapter = createFake({
     profile: profile(),
     turns: [
-      turn("grilled", COMPLETED),
+      {
+        ...turn("grilled", COMPLETED),
+        events: extra.length ? extra : turn("grilled", COMPLETED).events,
+      },
       turn("spec draft", FAILED),
       turn("spec written", COMPLETED),
       turn("first ticket", COMPLETED),
@@ -408,4 +415,29 @@ test("[step-session-timeline] every Step-scoped event names its Step, each Step'
     secondPage.entries.map((entry) => entry.step),
     ["implement", "implement"],
   );
+});
+
+test("declined elicitation crosses Harness execution into durable Projection Port history", async (t) => {
+  const evidence = {
+    harness: "claude-code",
+    server: "setup",
+    message: "Confirm setup",
+    url: "https://example.com/setup",
+  } satisfies Omit<
+    Extract<TurnEvent, { kind: "elicitation-declined" }>,
+    "kind"
+  >;
+  const { wired, runId } = await launch(t, [
+    { kind: "elicitation-declined", ...evidence },
+  ]);
+  const run = readRun(wired, runId);
+  assert.equal(run.state, "succeeded");
+  const row = run.timeline.find(
+    (event) => event.event === "elicitation-declined",
+  );
+  assert.ok(row);
+  assert.deepEqual(row.elicitation, evidence);
+  assert.equal(row.step, "grill");
+  assert.equal(row.sessionName, "spec");
+  assert.match(row.detail ?? "", /Finish setup in Claude Code directly/);
 });

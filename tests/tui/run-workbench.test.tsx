@@ -5571,3 +5571,34 @@ test("[windows-cleanup-notice] the Workbench shows one informational notice acro
     t.renderer.destroy();
   }
 });
+
+test("declined elicitation history shows the question and setup remediation safely", async () => {
+  const { t } = await mountWorkbench(
+    runOf({
+      state: "succeeded",
+      timeline: [
+        {
+          at: "T000",
+          event: "elicitation-declined",
+          elicitation: {
+            harness: "claude-code",
+            server: "setup",
+            message: "Finish\u0000setup\u001b[31m now\u001b[0m",
+            url: "https://example.com/setup",
+          },
+          detail:
+            "Secant cannot show this elicitation. Finish setup in Claude Code directly before continuing.",
+        },
+      ],
+    }),
+    140,
+    24,
+  );
+  const frame = t.captureCharFrame();
+  assert.match(frame, /Elicitation declined/);
+  assert.match(frame, /claude-code\/setup/);
+  assert.match(frame, /Finish setup now/);
+  assert.doesNotMatch(frame, /\[31m|\[0m/);
+  assert.match(frame, /https:\/\/example.com\/setup/);
+  assert.match(frame, /Finish setup in Claude Code directly/);
+});

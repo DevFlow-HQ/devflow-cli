@@ -1811,8 +1811,8 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
 
   assert.equal(profile.harness, "claude-code");
   assert.equal(profile.executableVersion, VERSION);
-  // Revision 3 declares native Steer (#359).
-  assert.equal(profile.adapterRevision, "claude-code-4");
+  // Revision 5 adds the Session Agent-call channel (#371).
+  assert.equal(profile.adapterRevision, "claude-code-5");
   assert.equal(
     profile.platform,
     process.platform === "win32"
@@ -2053,3 +2053,95 @@ test("native launch uses the Session declaration snapshot when the caller mutate
     await prepared.harness.close();
   }
 });
+
+for (const name of [
+  "agent-call",
+  "elicitation-declined",
+  "elicitation-withdrawn",
+] as const) {
+  test(`Claude channel replay ${name} completes its native exchange`, async () => {
+    const replayer = installReplayer(
+      "2.1.289 (Claude Code)",
+      fixtureCase(name),
+    );
+    const adapter = createClaudeCodeAdapter({ path: replayer.path, env: {} });
+    const prepared = await adapter.prepare({
+      workspace: makeTempDir("secant-channel-replay-"),
+    });
+    assert.ok(prepared.ok);
+    if (!prepared.ok) throw new Error("unreachable");
+    const harness = prepared.harness;
+    try {
+      const turn = harness.startTurn({
+        ...bridgeTurn("channel"),
+        agentCalls:
+          name === "agent-call"
+            ? [
+                {
+                  id: "step_done",
+                  description: "End the step",
+                  maxReasonLength: 400,
+                },
+              ]
+            : [],
+      });
+      const events: TurnEvent[] = [];
+      const controls: Promise<unknown>[] = [];
+      turn.subscribe((event) => {
+        events.push(event);
+        if (event.kind === "agent-call" && event.phase === "raised")
+          controls.push(
+            turn.answerAgentCall({
+              callId: event.call.callId,
+              outcome: "accepted",
+            }),
+          );
+        if (
+          name === "elicitation-withdrawn" &&
+          event.kind === "elicitation-declined"
+        )
+          controls.push(turn.interrupt());
+      });
+      const result = await turn.result();
+      await Promise.all(controls);
+      assert.equal(
+        result.kind,
+        name === "elicitation-withdrawn" ? "interrupted" : "completed",
+      );
+      if (name === "agent-call") {
+        const raised = events.find(
+          (event) => event.kind === "agent-call" && event.phase === "raised",
+        );
+        assert.ok(raised?.kind === "agent-call" && raised.phase === "raised");
+        assert.equal(raised.call.reason, "ready");
+        const args = replayer
+          .invocations()
+          .find((call) => call.args.includes("--session-id"))?.args;
+        assert.ok(args);
+        assert.equal(
+          args[args.indexOf("--allowedTools") + 1],
+          "mcp__secant__step_done",
+        );
+      } else {
+        assert.deepEqual(
+          events.filter((event) => event.kind === "elicitation-declined"),
+          [
+            {
+              kind: "elicitation-declined",
+              harness: "claude-code",
+              server: "setup",
+              message: "Finish setup in your browser",
+              url: "https://example.com/setup",
+            },
+          ],
+        );
+        assert.equal(
+          events.filter((event) => event.kind === "request-raised").length,
+          0,
+        );
+      }
+    } finally {
+      assert.equal((await harness.close()).clean, true);
+    }
+  });
+}

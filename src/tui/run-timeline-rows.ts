@@ -1,3 +1,4 @@
+import stripAnsi from "strip-ansi";
 import type {
   RunLiveOverlay,
   RunTimelineEvent,
@@ -132,12 +133,21 @@ function durableLabel(event: RunTimelineEvent): string {
       return `● ${turnLabel} settled${detail}`;
     case "effective-model":
       return `◇ Effective model${detail}`;
-    case "elicitation-declined":
-      return `↳ ${event.detail ?? "Elicitation declined"}`;
     case "request-raised":
       return `? Harness Request raised${detail}`;
     case "request-answered":
       return `? Harness Request answered${detail}`;
+    case "elicitation-declined": {
+      const asked = event.elicitation;
+      const evidence =
+        asked === undefined
+          ? ""
+          : ` · ${asked.harness}/${asked.server} · ${asked.message}${asked.url === undefined ? "" : ` · ${asked.url}`}`;
+      return stripAnsi(`? Elicitation declined${evidence}${detail}`).replace(
+        /\p{Cc}/gu,
+        " ",
+      );
+    }
     case "request-expired":
       return "? Harness Request expired";
     case "checkpoint-blocked":

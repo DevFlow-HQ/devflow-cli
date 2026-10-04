@@ -1,3 +1,4 @@
+import stripAnsi from "strip-ansi";
 import type {
   BundleOriginView,
   BundleTrustState,
@@ -480,7 +481,17 @@ export function renderRun(run: RunView): string {
     const kind = event.turnKind !== undefined ? ` ${event.turnKind}` : "";
     const detail = event.detail !== undefined ? ` ${event.detail}` : "";
     const step = event.step !== undefined ? ` · step ${event.step}` : "";
-    lines.push(`  ${event.at} ${event.event}${kind}${detail}${step}`);
+    const asked = event.elicitation;
+    const elicitation =
+      asked === undefined
+        ? ""
+        : ` ${asked.harness}/${asked.server}: ${asked.message}${asked.url === undefined ? "" : ` ${asked.url}`}`;
+    const line = `  ${event.at} ${event.event}${kind}${elicitation}${detail}${step}`;
+    lines.push(
+      event.event === "elicitation-declined"
+        ? stripAnsi(line).replace(/\p{Cc}/gu, " ")
+        : line,
+    );
   }
 
   if (run.conflict !== undefined) {

@@ -1488,3 +1488,60 @@ test("Windows cleanup fallback is published once per Run and retained on reopen"
     "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.",
   );
 });
+
+test("declined elicitation history retains the server, message and URL with remediation", (t) => {
+  const f = fixture(t);
+  const { digest } = installCommandBundle(f);
+  const created = f.runGroup.createRun({
+    operationId: "elicitation-history",
+    bundleSnapshotDigest: digest,
+    launch: {},
+    at: new Date(),
+  });
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") throw new Error("unreachable");
+  const owner = f.runGroup.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.deepEqual(
+    owner.admitTurn({
+      turnId: "t",
+      attemptId: "a",
+      session: "repair",
+      origin: "managed",
+      kind: "agent",
+      input: "go",
+      recoveryCoordinate: "native",
+      harness: "claude-code",
+      at: new Date(),
+    }),
+    { ok: true },
+  );
+  const elicitation = {
+    harness: "claude-code",
+    server: "setup",
+    message: "Please finish setup",
+    url: "https://example.com/setup",
+  };
+  assert.deepEqual(
+    owner.appendTurnEvent({
+      turnId: "t",
+      kind: "elicitation-declined",
+      payload: JSON.stringify(elicitation),
+      at: new Date(),
+    }),
+    { ok: true },
+  );
+  const result = runResult(f.app, created.runId);
+  assert.ok(result.found);
+  if (!result.found) throw new Error("unreachable");
+  const event = result.run.timeline.find(
+    (e) => e.event === "elicitation-declined",
+  );
+  assert.ok(event);
+  assert.deepEqual(event.elicitation, elicitation);
+  assert.match(
+    event.detail ?? "",
+    /^Secant cannot show this elicitation\. Finish setup in Claude Code directly before continuing\./,
+  );
+});

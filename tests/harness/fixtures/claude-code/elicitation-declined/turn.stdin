@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"Call mcp__setup__setup exactly once. Do nothing else. After it returns say done."},"parent_tool_use_id":null}
+{"type":"control_response","response":{"subtype":"success","request_id":"db3c6867-3917-4c1a-b0bd-e490edc216af","response":{"action":"decline"}}}

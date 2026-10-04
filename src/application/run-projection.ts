@@ -1512,7 +1512,6 @@ const effectiveModelEventSchema = z.object({
   effort: z.string().min(1).optional(),
 });
 
-/** The turn-event timeline entries for one Turn's normalized durable events. */
 const declinedElicitationSchema = z.object({
   harness: z.enum(["codex", "claude-code"]),
   server: z.string(),
@@ -1520,6 +1519,7 @@ const declinedElicitationSchema = z.object({
   url: z.string().optional(),
 });
 
+/** The turn-event timeline entries for one Turn's normalized durable events. */
 function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
   if (event.kind === "elicitation-declined") {
     let payload: unknown;
@@ -1535,6 +1535,7 @@ function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
     return {
       at: event.at,
       event: "elicitation-declined",
+      elicitation: parsed.data,
       detail: timelineDetail(
         `Secant cannot show this elicitation. Finish setup in ${name} directly before continuing. Declined from ${server}: ${message}${url === undefined ? "" : ` · ${url}`}`,
       ),

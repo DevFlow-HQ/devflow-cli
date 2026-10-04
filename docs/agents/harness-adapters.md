@@ -13,8 +13,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   below launch crosses `redactSecrets` (close observations, stdin-write and stdout-read errors, captured stderr), so redaction happens at the Seam.
 - The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `status`, `assistant`, `user`,
   `stream_event`, `result`, `control_response`, `command_lifecycle`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the only
-  raw-field accessors. Inbound `control_request` and `control_cancel_request` stay generic activity until #371. Only the fields dispatch
-  iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
+  raw-field accessors. Elicitation requests are declined; `control_cancel_request` withdraws only the exact pending elicitation (#371). Other requests remain activity.
+  Only the fields dispatch iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
   `unknown-result`); every other field degrades to absent (`.catch(undefined)`), unknown fields pass through, and a known type whose
   parse fails or an unknown type is generic activity — never protocol corruption. `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
 - `OwnedProcess.writeStdin` resolves only after both the write callback has fired without error and the stream has drained (it waits for the `drain` event
@@ -38,6 +38,7 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   too, so only an aborted `terminal_reason` (`aborted_streaming`, `aborted_tools`) while that Interrupt is in flight settles `interrupted` `active-turn`; a natural result that
   wins the race keeps its own truth. POSIX keeps its process; Windows launch evidence closes the producer and reaps before settlement, using close kind,
   never exit status. Incomplete cleanup retains the child and fails recovery until final exit. Otherwise the next Turn uses `--resume` with the same id.
+- Print mode's exit 1 is a clean close only after the process-owning Turn settled natively interrupted; retain that confirmation before closing (#371).
 - A Steer (#359) is a stdin `user` frame with a minted uuid, written only after the prompt (stamped too) and accepted once written. A result listing only uuids the Turn never
   sent is another exchange's and is ignored. `command_lifecycle` `started` or the result's `user_message_uuids` settle it delivered, `cancelled` dropped. A result with a Steer
   pending is held as a boundary, and the Turn ends at the next exchange's; the delivering exchange decides `within-turn` or `after-boundary`. Each exchange re-sends init, and
