@@ -73,6 +73,21 @@ import type {
 // page navigation over long lists, and preserved choice/focus across 60x24 and
 // 140x44 resize. Character frames prove current/source/reason meaning without
 // colour. The canonical test suite runs these same cases on all three CI platforms.
+//
+// #350 renderer evidence (the `[start-run-review-edit]` group): keymap and focus
+// (Tab and Shift+Tab over Harness, Model, editable Effort, and Start in both
+// directions, a locked or unavailable Effort skipped but explained), small
+// terminals and resize (all seven #311 cases at 60x24 and 140x44, resized while a
+// Review field is focused and again mid-selection inside its edit), large content
+// (PgUp/PgDn reach every line of a long reason, and Tab scrolls the focused field
+// back into view), interaction tuning (editing returns to Review on the edited
+// field without replaying Launch inputs or trust, Esc abandons an edit, Tab moves
+// between the guided model stage and the Harness, a Harness change reloads its
+// preselection and check (asking for a model when it has none), and Start holds
+// through every fresh check and submits only the current ready Offer), and meaning without colour
+// (the `›` glyph in character frames, bold in spans). Renderer and platform
+// evidence: these run through `testRender` with the fake Renderer Port on all
+// three CI platforms; no renderer or pin changed.
 
 const WORKSPACE = "/tmp/secant-launch-workspace";
 
@@ -1023,7 +1038,8 @@ test("[start-run-review-assessment] Review renders the complete assessed draft a
   assert.match(frame, /Workspace.*secant-launch-workspace/s);
   assert.match(frame, new RegExp(WORKSPACE.replaceAll("/", "\\/")));
   assert.match(frame, /Harness: Claude Code \(claude-code\)/);
-  assert.match(frame, /Model choice: preselected-model at medium effort/);
+  assert.match(frame, /Model: preselected-model/);
+  assert.match(frame, /Effort: medium/);
   assert.match(frame, /From your Claude Code settings/);
   assert.match(frame, /target: hi/);
   assert.match(frame, /Trust: Exact digest acknowledged for this launch/);
@@ -1540,11 +1556,15 @@ test("[start-run-preselection] the review names the resolved preselection and it
   await chooseGuided(t); // keep the preselection → review
   await t.waitForFrame((frame) => frame.includes("Review"));
   // While assessing, the review says so rather than guessing a choice.
-  assert.match(t.captureCharFrame(), /Model choice: checking…/);
+  assert.match(t.captureCharFrame(), /Model: checking…/);
+  assert.match(t.captureCharFrame(), /Effort: checking…/);
   prep.settle("ready", []);
   await t.waitForFrame((frame) => frame.includes("Ready to start"));
   const text = words(t.captureCharFrame());
-  assert.match(text, /Model choice: preselected-model at medium effort/);
+  assert.match(
+    text,
+    /Model: preselected-model From your Claude Code settings Effort: medium/,
+  );
   assert.match(text, /From your Claude Code settings/);
 });
 
@@ -2436,7 +2456,7 @@ for (const [width, height] of [
     );
     assert.match(
       words(t.captureCharFrame()),
-      /Model choice: opus at medium effort/,
+      /Model: opus Your last choice for Claude Code Effort: medium/,
     );
     for (const line of t.captureCharFrame().split("\n"))
       assert.ok(line.length <= width);
@@ -2521,7 +2541,7 @@ for (const [width, height] of [
     await chooseGuided(t);
     await t.waitForFrame((frame) => frame.includes("Review"));
     const review = words(t.captureCharFrame());
-    assert.match(review, /Model choice: sonnet at xhigh effort/);
+    assert.match(review, /Model: sonnet .* Effort: xhigh \(locked\)/);
     assert.ok(review.includes(sentence));
     for (const line of t.captureCharFrame().split("\n"))
       assert.ok(line.length <= (width === 60 ? 140 : 60));
@@ -2593,7 +2613,7 @@ for (const [width, height] of [
     assert.ok(words(t.captureCharFrame()).includes(reset));
     assert.match(
       words(t.captureCharFrame()),
-      /Model choice: Fast · fast at medium effort/,
+      /Model: Fast · fast .* Effort: medium/,
     );
     t.mockInput.pressEnter();
     await t.waitForFrame((f) => f.includes("Checking launch"));
@@ -2692,10 +2712,7 @@ for (const [width, height] of [
     await t.waitForFrame((f) => f.includes("› high"));
     t.mockInput.pressEnter();
     await t.waitForFrame((f) => f.includes("Review"));
-    assert.match(
-      words(t.captureCharFrame()),
-      /Model choice: qa2 at high effort/,
-    );
+    assert.match(words(t.captureCharFrame()), /Model: qa2 .* Effort: high/);
     t.mockInput.pressEnter();
     await t.waitForFrame((f) => f.includes("Checking launch"));
     assert.equal(launch.calls[0]?.requestedModel, "qa2");
@@ -2762,7 +2779,7 @@ for (const [width, height] of [
     await t.waitForFrame((f) => f.includes("Review"));
     assert.match(
       words(t.captureCharFrame()),
-      /Thinking · thinking at low effort/,
+      /Model: Thinking · thinking .* Effort: low/,
     );
     // Back returns to effort, Esc then returns to model with the choice intact.
     t.mockInput.pressEscape();
@@ -2774,10 +2791,10 @@ for (const [width, height] of [
     await t.waitForFrame((f) => f.includes("› Plain"));
     await chooseGuided(t);
     await t.waitForFrame((f) => f.includes("Review"));
-    assert.match(words(t.captureCharFrame()), /Model choice: Plain · plain/);
+    assert.match(words(t.captureCharFrame()), /Model: Plain · plain/);
     assert.match(
       words(t.captureCharFrame()),
-      /This model has no effort setting. Not available./,
+      /Effort: Not available\. This model has no effort setting\./,
     );
     t.mockInput.pressEnter();
     await t.waitForFrame((f) => f.includes("Checking launch"));
@@ -2824,7 +2841,7 @@ for (const [width, height] of [
     await t.waitForFrame((f) => f.includes("Review"));
     assert.match(
       words(t.captureCharFrame()),
-      /Sonnet \(latest\) · sonnet at xhigh effort/,
+      /Model: Sonnet \(latest\) · sonnet .* Effort: xhigh/,
     );
   });
 
@@ -3034,7 +3051,7 @@ for (const [width, height] of [
     assert.ok(words(t.captureCharFrame()).includes(notice));
     assert.match(
       words(t.captureCharFrame()),
-      /Opus \(latest\) · opus at medium effort/,
+      /Model: Opus \(latest\) · opus .* Effort: medium/,
     );
   });
 }
@@ -3244,3 +3261,981 @@ for (const content of ["label", "reason"] as const) {
     assert.ok(seen, `the ${content}'s last line is reachable`);
   });
 }
+
+// --- #350: Review edits the Model choice ------------------------------------
+
+type Choice = NonNullable<HarnessFocus["preselection"]>["choice"];
+type Assessment = LaunchPreparationSnapshot;
+
+/** A launch assessment that resolves the Model choice as the Application does
+ *  for these cases: a requested model is the person's choice (an environment
+ *  lock keeps its effort), otherwise the Harness's preselection with its source.
+ *  While held, every assessment opens `assessing` until `release`. */
+function choicePreparation(specs: readonly HarnessSpec[]) {
+  const opened: LaunchRunInput[] = [];
+  const offered: LaunchRunInput[] = [];
+  const pending: (() => void)[] = [];
+  let holding = false;
+  const view: LaunchPreparationView = {
+    open(draft) {
+      opened.push(draft);
+      const preselection = specs.find(
+        (spec) => spec.id === draft.harness,
+      )?.preselection;
+      const lock = preselection?.effortLock;
+      const effort = lock?.effort ?? draft.requestedEffort;
+      const choice: Choice | undefined =
+        draft.requestedModel !== undefined
+          ? {
+              model: draft.requestedModel,
+              ...(effort === undefined ? {} : { effort }),
+            }
+          : preselection?.choice;
+      const offerDraft: LaunchRunInput = {
+        ...draft,
+        requestedModel: choice?.model,
+        requestedEffort: choice?.effort,
+      };
+      const ready: Assessment = {
+        family: "launch-preparation",
+        status: "ready",
+        draft: {
+          bundle: { id: draft.bundle.id, version: draft.bundle.version },
+          harness: draft.harness,
+          requestedModel: draft.requestedModel,
+          ...(choice === undefined
+            ? {}
+            : {
+                modelChoice: {
+                  ...choice,
+                  source:
+                    draft.requestedModel === undefined
+                      ? (preselection?.source ?? { kind: "requested" })
+                      : { kind: "requested" },
+                  ...(lock === undefined ? {} : { effortLock: lock }),
+                },
+              }),
+          launchInputs: draft.launchInputs,
+          trustDigest: draft.trustDigest,
+        },
+        findings: [],
+        actionOffers: [
+          {
+            action: "launch-run",
+            draft: offerDraft,
+            trustRequired: draft.trustDigest !== undefined,
+            consequence: "Create and start a Run.",
+          },
+        ],
+      };
+      const assessing: Assessment = {
+        ...ready,
+        status: "assessing",
+        draft: {
+          bundle: ready.draft.bundle,
+          harness: draft.harness,
+          launchInputs: draft.launchInputs,
+        },
+        actionOffers: [],
+      };
+      const [snapshot, setSnapshot] = createSignal<Assessment>(
+        holding ? assessing : ready,
+      );
+      const settle = () => {
+        offered.push(offerDraft);
+        setSnapshot(ready);
+      };
+      if (holding) pending.push(settle);
+      else offered.push(offerDraft);
+      return snapshot;
+    },
+  };
+  return {
+    view,
+    opened,
+    offered,
+    hold: () => {
+      holding = true;
+    },
+    release: () => {
+      holding = false;
+      for (const settle of pending.splice(0)) settle();
+    },
+  };
+}
+
+const CODEX_MODELS: HarnessFocus["modelDeclaration"] = {
+  kind: "list",
+  models: [
+    {
+      model: "gpt-6-astra",
+      label: "GPT-6 Astra",
+      efforts: ["low", "medium", "high", "xhigh"],
+      defaultEffort: "high",
+    },
+    {
+      model: "gpt-6-sol",
+      label: "GPT-6 Sol",
+      efforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+    },
+  ],
+};
+
+const NO_EFFORT_CLAUDE_MODELS: HarnessFocus["modelDeclaration"] =
+  GUIDED_CLAUDE.declaration?.kind === "suggested"
+    ? {
+        ...GUIDED_CLAUDE.declaration,
+        models: [
+          { model: "secant-mini-7", label: "secant-mini-7", efforts: [] },
+          ...GUIDED_CLAUDE.declaration.models,
+        ],
+      }
+    : undefined;
+
+const LOCK_SENTENCE =
+  "Locked by CLAUDE_CODE_EFFORT_LEVEL=high. Change that setting outside Secant.";
+const FALLBACK_REASON = "Claude Code's own settings could not be read.";
+
+type Mounted = Awaited<ReturnType<typeof mountFlow>>["t"];
+
+interface EditStep {
+  readonly act: (t: Mounted) => void | Promise<void>;
+  /** Text the frame shows once the step lands; checked again after the resize. */
+  readonly see: string;
+}
+
+/** One of the seven #311 cases: the Harness, the Review it reaches by keeping
+ *  the preselection, and one edit made from Review. */
+interface ReviewCase {
+  readonly name: string;
+  readonly harness: HarnessSpec;
+  readonly review: readonly string[];
+  readonly effortEditable: boolean;
+  readonly edit: {
+    readonly field: "model" | "effort";
+    readonly steps: readonly EditStep[];
+    readonly review: readonly string[];
+    readonly effortEditable: boolean;
+    readonly submitted: Choice;
+  };
+}
+
+const down: EditStep["act"] = (t) => t.mockInput.pressArrow("down");
+
+const REVIEW_CASES: readonly ReviewCase[] = [
+  {
+    name: "Codex last choice",
+    harness: {
+      id: "codex",
+      name: "Codex",
+      declaration: CODEX_MODELS,
+      preselection: {
+        choice: { model: "gpt-6-astra", effort: "xhigh" },
+        source: { kind: "last-choice" },
+      },
+    },
+    review: [
+      "Harness: Codex (codex)",
+      "Model: GPT-6 Astra · gpt-6-astra",
+      "Your last choice for Codex",
+      "Effort: xhigh",
+    ],
+    effortEditable: true,
+    edit: {
+      field: "model",
+      steps: [
+        { act: down, see: "› GPT-6 Sol" },
+        {
+          act: (t) => t.mockInput.pressEnter(),
+          see: "› medium [current] (default)",
+        },
+        { act: (t) => t.mockInput.pressEnter(), see: "Ready to start" },
+      ],
+      review: [
+        "Model: GPT-6 Sol · gpt-6-sol",
+        "Your choice for this launch",
+        "Effort: medium",
+        "gpt-6-sol does not offer xhigh effort. Effort changed to medium, its default.",
+      ],
+      effortEditable: true,
+      submitted: { model: "gpt-6-sol", effort: "medium" },
+    },
+  },
+  {
+    name: "Codex default",
+    harness: {
+      id: "codex",
+      name: "Codex",
+      declaration: CODEX_MODELS,
+      preselection: {
+        choice: { model: "gpt-6-sol", effort: "medium" },
+        source: { kind: "reported" },
+      },
+    },
+    review: [
+      "Harness: Codex (codex)",
+      "Model: GPT-6 Sol · gpt-6-sol",
+      "From your Codex settings",
+      "Effort: medium",
+    ],
+    effortEditable: true,
+    edit: {
+      field: "effort",
+      steps: [
+        { act: down, see: "› high" },
+        { act: (t) => t.mockInput.pressEnter(), see: "Ready to start" },
+      ],
+      review: [
+        "Model: GPT-6 Sol · gpt-6-sol",
+        "Your choice for this launch",
+        "Effort: high",
+      ],
+      effortEditable: true,
+      submitted: { model: "gpt-6-sol", effort: "high" },
+    },
+  },
+  {
+    name: "Claude last choice with Other…",
+    harness: {
+      ...GUIDED_CLAUDE,
+      preselection: {
+        choice: { model: "sonnet", effort: "high" },
+        source: { kind: "last-choice" },
+      },
+    },
+    review: [
+      "Harness: Claude Code (claude-code)",
+      "Model: Sonnet (latest) · sonnet",
+      "Your last choice for Claude Code",
+      "Effort: high",
+    ],
+    effortEditable: true,
+    edit: {
+      field: "model",
+      steps: [
+        { act: (t) => t.mockInput.pressKey("\u001b[6~"), see: "› Other…" },
+        { act: (t) => t.mockInput.pressEnter(), see: "enter accept" },
+        {
+          act: (t) => t.mockInput.typeText("claude-exact-7"),
+          see: "claude-exact-7",
+        },
+        {
+          act: (t) => t.mockInput.pressEnter(),
+          see: "› high [current]",
+        },
+        { act: (t) => t.mockInput.pressEnter(), see: "Ready to start" },
+      ],
+      review: [
+        "Model: claude-exact-7",
+        "Your choice for this launch",
+        "Effort: high",
+      ],
+      effortEditable: true,
+      submitted: { model: "claude-exact-7", effort: "high" },
+    },
+  },
+  {
+    name: "Claude default",
+    harness: GUIDED_CLAUDE,
+    review: [
+      "Harness: Claude Code (claude-code)",
+      "Model: Opus (latest) · opus",
+      "From your Claude Code settings",
+      "Effort: medium",
+    ],
+    effortEditable: true,
+    edit: {
+      field: "effort",
+      steps: [
+        { act: down, see: "› high" },
+        { act: (t) => t.mockInput.pressEnter(), see: "Ready to start" },
+      ],
+      review: ["Model: Opus (latest) · opus", "Effort: high"],
+      effortEditable: true,
+      submitted: { model: "opus", effort: "high" },
+    },
+  },
+  {
+    name: "environment lock",
+    harness: {
+      ...GUIDED_CLAUDE,
+      preselection: {
+        choice: { model: "opus", effort: "high" },
+        source: { kind: "reported" },
+        effortLock: {
+          effort: "high",
+          source: "CLAUDE_CODE_EFFORT_LEVEL=high",
+        },
+      },
+    },
+    review: [
+      "Model: Opus (latest) · opus",
+      "From your Claude Code settings",
+      "Effort: high (locked)",
+      LOCK_SENTENCE,
+    ],
+    effortEditable: false,
+    edit: {
+      field: "model",
+      steps: [
+        { act: down, see: "› Sonnet (latest)" },
+        { act: (t) => t.mockInput.pressEnter(), see: "enter acknowledge" },
+        { act: (t) => t.mockInput.pressEnter(), see: "Ready to start" },
+      ],
+      review: [
+        "Model: Sonnet (latest) · sonnet",
+        "Effort: high (locked)",
+        LOCK_SENTENCE,
+      ],
+      effortEditable: false,
+      submitted: { model: "sonnet", effort: "high" },
+    },
+  },
+  {
+    name: "no effort",
+    harness: {
+      ...GUIDED_CLAUDE,
+      declaration: NO_EFFORT_CLAUDE_MODELS,
+      preselection: {
+        choice: { model: "secant-mini-7" },
+        source: { kind: "last-choice" },
+      },
+    },
+    review: [
+      "Model: secant-mini-7",
+      "Your last choice for Claude Code",
+      "Effort: Not available.",
+      "This model has no effort setting.",
+    ],
+    effortEditable: false,
+    edit: {
+      field: "model",
+      steps: [
+        { act: down, see: "› Fable (latest)" },
+        { act: down, see: "› Opus (latest)" },
+        { act: (t) => t.mockInput.pressEnter(), see: "› low" },
+        { act: (t) => t.mockInput.pressEnter(), see: "Ready to start" },
+      ],
+      review: ["Model: Opus (latest) · opus", "Effort: low"],
+      effortEditable: true,
+      submitted: { model: "opus", effort: "low" },
+    },
+  },
+  {
+    name: "fallback",
+    harness: {
+      ...GUIDED_CLAUDE,
+      preselection: {
+        choice: { model: "opus", effort: "medium" },
+        source: { kind: "fallback", reason: FALLBACK_REASON },
+      },
+    },
+    review: [
+      "Model: Opus (latest) · opus",
+      `${FALLBACK_REASON} Starting with Opus (latest) and medium effort.`,
+      "Effort: medium",
+    ],
+    effortEditable: true,
+    edit: {
+      field: "effort",
+      steps: [
+        { act: down, see: "› high" },
+        { act: (t) => t.mockInput.pressEnter(), see: "Ready to start" },
+      ],
+      review: ["Model: Opus (latest) · opus", "Effort: high"],
+      effortEditable: true,
+      submitted: { model: "opus", effort: "high" },
+    },
+  },
+];
+
+/** Every frame line fits the terminal width and each expected phrase reads
+ *  whole in the frame's words, so nothing was clipped. */
+function assertReads(t: Mounted, width: number, phrases: readonly string[]) {
+  const frame = t.captureCharFrame();
+  for (const line of frame.split("\n"))
+    assert.ok(line.length <= width, `overflow: ${JSON.stringify(line)}`);
+  const text = words(frame);
+  for (const phrase of phrases) assert.ok(text.includes(phrase), phrase);
+}
+
+/** The Review row that carries focus, named by its label. */
+function focusedRow(t: Mounted): string {
+  const line = t
+    .captureCharFrame()
+    .split("\n")
+    .find((candidate) => candidate.trimStart().startsWith("› "));
+  return line?.trim().replace(/^› /, "").split(/:| · /)[0] ?? "";
+}
+
+async function pressTab(t: Mounted, shift = false) {
+  t.mockInput.pressTab(shift ? { shift: true } : undefined);
+  await t.renderOnce();
+}
+
+/** Tab (or Shift+Tab) through every focus stop, back to where it started. */
+async function cycleFocus(t: Mounted, shift: boolean): Promise<string[]> {
+  const start = focusedRow(t);
+  const seen: string[] = [];
+  for (let stop = 0; stop < 5; stop++) {
+    await pressTab(t, shift);
+    seen.push(focusedRow(t));
+    if (seen.at(-1) === start) break;
+  }
+  return seen;
+}
+
+function focusOrder(effortEditable: boolean): string[] {
+  return [
+    "Harness",
+    "Model",
+    ...(effortEditable ? ["Effort"] : []),
+    "Start Run",
+  ];
+}
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+] as const) {
+  const [otherWidth, otherHeight] = width === 60 ? [140, 44] : [60, 24];
+  for (const review of REVIEW_CASES) {
+    test(`[start-run-review-edit] ${review.name} at ${width}x${height}: Review repeats the choice, cycles focus, and edits ${review.edit.field} across a resize`, async () => {
+      const prep = choicePreparation([review.harness]);
+      const launch = fakeLaunch();
+      const { t } = await mountFlow(
+        catalog([AGENT_ALPHA]),
+        launch.view,
+        width,
+        height,
+        noRunView(),
+        harnessCatalog([review.harness]).view,
+        prep.view,
+      );
+      t.mockInput.pressEnter();
+      await t.waitForFrame((f) => f.includes("Choose a Harness"));
+      t.mockInput.pressEnter();
+      await t.waitForFrame((f) => f.includes("1. Choose a model"));
+      await chooseGuided(t);
+      await t.waitForFrame((f) => f.includes("Ready to start"));
+      assert.equal(focusedRow(t), "Start Run");
+      assertReads(t, width, review.review);
+
+      // Forward and reverse focus; a locked or unavailable Effort is skipped
+      // but stays explained.
+      const order = focusOrder(review.effortEditable);
+      assert.deepEqual(await cycleFocus(t, false), order);
+      assert.deepEqual(await cycleFocus(t, true), [
+        ...order.slice(0, -1).reverse(),
+        "Start Run",
+      ]);
+      await pressTab(t); // Harness
+      await pressTab(t); // Model
+      if (review.edit.field === "effort") await pressTab(t);
+      const field = review.edit.field === "model" ? "Model" : "Effort";
+      assert.equal(focusedRow(t), field);
+
+      // A resize keeps the focused field and the choice.
+      t.resize(otherWidth, otherHeight);
+      await t.renderOnce();
+      assert.equal(focusedRow(t), field);
+      assertReads(t, otherWidth, review.review);
+
+      // Enter edits the focused field in place; a resize mid-selection keeps
+      // the candidate; finishing returns to Review on the same field.
+      t.mockInput.pressEnter();
+      await t.waitForFrame((f) =>
+        f.includes(
+          review.edit.field === "model"
+            ? "1. Choose a model"
+            : "2. Choose effort",
+        ),
+      );
+      for (const [index, step] of review.edit.steps.entries()) {
+        await step.act(t);
+        await t.waitForFrame((f) => words(f).includes(step.see));
+        if (index === 0) {
+          t.resize(width, height);
+          await t.renderOnce();
+          assert.ok(words(t.captureCharFrame()).includes(step.see));
+        }
+      }
+      assert.equal(focusedRow(t), field);
+      assertReads(t, width, review.edit.review);
+      assert.deepEqual(await cycleFocus(t, false), [
+        ...focusOrder(review.edit.effortEditable).slice(
+          focusOrder(review.edit.effortEditable).indexOf(field) + 1,
+        ),
+        ...focusOrder(review.edit.effortEditable).slice(
+          0,
+          focusOrder(review.edit.effortEditable).indexOf(field) + 1,
+        ),
+      ]);
+
+      // Start submits the current ready Offer's exact draft.
+      for (let stop = 0; stop < 4 && focusedRow(t) !== "Start Run"; stop++)
+        await pressTab(t);
+      assert.equal(focusedRow(t), "Start Run");
+      t.mockInput.pressEnter();
+      await t.waitForFrame((f) => f.includes("Checking launch"));
+      assert.equal(launch.calls.length, 1);
+      assert.deepEqual(launch.calls[0], prep.offered.at(-1));
+      assert.equal(
+        launch.calls[0]?.requestedModel,
+        review.edit.submitted.model,
+      );
+      assert.equal(
+        launch.calls[0]?.requestedEffort,
+        review.edit.submitted.effort,
+      );
+    });
+  }
+}
+
+/** The styled span of the Review line that starts with `prefix`. */
+function lineSpan(t: Mounted, prefix: string) {
+  for (const line of t.captureSpans().lines) {
+    const span = line.spans.find((candidate) =>
+      candidate.text.trimStart().startsWith(prefix),
+    );
+    if (span !== undefined) return span;
+  }
+  throw new Error(`no line starting '${prefix}'`);
+}
+
+async function reachReview(t: Mounted) {
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  await chooseGuided(t);
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+}
+
+test("[start-run-review-edit] editing from Review keeps Launch inputs, trust and the other field, Esc returns unchanged, and only the fresh ready Offer starts", async () => {
+  const prep = choicePreparation([GUIDED_CLAUDE]);
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(
+    catalog([UNTRUSTED_AGENT_BETA]),
+    launch.view,
+    60,
+    24,
+    noRunView(),
+    harnessCatalog([GUIDED_CLAUDE]).view,
+    prep.view,
+  );
+  t.mockInput.pressKey("a");
+  await t.waitForFrame((f) => f.includes("Trust acknowledged"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Launch inputs"));
+  await t.mockInput.typeText("hi");
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  await chooseGuided(t);
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+
+  // Effort edits in place and returns to Review on Effort.
+  for (let stop = 0; stop < 3; stop++) await pressTab(t);
+  assert.equal(focusedRow(t), "Effort");
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› high"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+  assert.equal(focusedRow(t), "Effort");
+  assertReads(t, 60, [
+    "Model: Opus (latest) · opus",
+    "Effort: high",
+    "target: hi",
+    "Trust: Exact digest acknowledged for this launch",
+  ]);
+
+  // Esc abandons a Model edit: Review returns on Model with nothing changed.
+  await pressTab(t, true);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› Sonnet"));
+  t.mockInput.pressEscape();
+  await until(() => t.captureCharFrame().includes("Ready to start"));
+  assert.equal(focusedRow(t), "Model");
+  assertReads(t, 60, ["Model: Opus (latest) · opus", "Effort: high"]);
+
+  // Esc during an Effort edit steps back to the model list, then to Review.
+  await pressTab(t);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  t.mockInput.pressEscape();
+  await until(() => t.captureCharFrame().includes("1. Choose a model"));
+  t.mockInput.pressEscape();
+  await until(() => t.captureCharFrame().includes("Ready to start"));
+  assert.equal(focusedRow(t), "Effort");
+  assertReads(t, 60, ["Model: Opus (latest) · opus", "Effort: high"]);
+  await pressTab(t, true);
+
+  // The edit opens a fresh assessment: Start holds until it is ready, then
+  // submits that Offer, never the one assessed before the edit.
+  prep.hold();
+  await pressTab(t);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› xhigh"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Review") && f.includes("Checking"));
+  assertReads(t, 60, ["Start Run · unavailable while checks run"]);
+  await pressTab(t);
+  assert.equal(focusedRow(t), "Start Run");
+  t.mockInput.pressEnter();
+  await t.renderOnce();
+  assert.equal(launch.calls.length, 0);
+  prep.release();
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => !f.includes("Review"));
+  assert.equal(launch.calls.length, 1);
+  assert.deepEqual(launch.calls[0], prep.offered.at(-1));
+  assert.equal(launch.calls[0]?.requestedModel, "opus");
+  assert.equal(launch.calls[0]?.requestedEffort, "xhigh");
+  assert.equal(launch.calls[0]?.trustDigest, UNTRUSTED_AGENT_BETA.digest);
+  assert.deepEqual(launch.calls[0]?.launchInputs, { target: "hi" });
+});
+
+test("[start-run-review-edit] a Harness change from Review reloads its preselection and checks, keeps Launch inputs, and holds Start until both finish", async () => {
+  const codex: HarnessSpec = {
+    id: "codex",
+    name: "Codex",
+    declaration: CODEX_MODELS,
+    preselection: {
+      choice: { model: "gpt-6-astra", effort: "xhigh" },
+      source: { kind: "last-choice" },
+    },
+  };
+  const harnesses = checkingHarnessCatalog([GUIDED_CLAUDE, codex]);
+  const prep = choicePreparation([GUIDED_CLAUDE, codex]);
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(
+    catalog([AGENT_BETA]),
+    launch.view,
+    60,
+    24,
+    noRunView(),
+    harnesses.view,
+    prep.view,
+  );
+  const checkingWords =
+    "Checking the Harness and loading model choices… Please wait.";
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => words(f).includes(checkingWords));
+  harnesses.settle("claude-code");
+  await t.waitForFrame((f) => f.includes("Model choices loaded"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Launch inputs"));
+  await t.mockInput.typeText("keep me");
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› high"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+  assertReads(t, 60, ["Effort: high", "Your choice for this launch"]);
+
+  // Esc on the Harness list returns to Review with the choice intact.
+  await pressTab(t);
+  assert.equal(focusedRow(t), "Harness");
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  assert.match(t.captureCharFrame(), /› Claude Code/);
+  t.mockInput.pressEscape();
+  await until(() => t.captureCharFrame().includes("Ready to start"));
+  assert.equal(focusedRow(t), "Harness");
+  assertReads(t, 60, ["Harness: Claude Code", "Effort: high"]);
+
+  // Another Harness holds progression while it is checked.
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› Codex"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => words(f).includes(checkingWords));
+  t.mockInput.pressEnter();
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /Harness: Codex/);
+  assert.doesNotMatch(t.captureCharFrame(), /Review/);
+
+  // Once checked, Review returns on Harness without replaying Launch inputs,
+  // and Start holds through the fresh assessment.
+  prep.hold();
+  harnesses.settle("codex");
+  await t.waitForFrame((f) => f.includes("Model choices loaded"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Review"));
+  assert.equal(focusedRow(t), "Harness");
+  assertReads(t, 60, [
+    "Harness: Codex (codex)",
+    checkingWords,
+    "Start Run · unavailable while checks run",
+  ]);
+  await pressTab(t, true);
+  assert.equal(focusedRow(t), "Start Run");
+  t.mockInput.pressEnter();
+  await t.renderOnce();
+  assert.equal(launch.calls.length, 0);
+  prep.release();
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+  assertReads(t, 60, [
+    "Model: GPT-6 Astra · gpt-6-astra",
+    "Your last choice for Codex",
+    "Effort: xhigh",
+    "target: keep me",
+  ]);
+  assert.doesNotMatch(
+    words(t.captureCharFrame()),
+    /Your choice for this launch|Claude Code/,
+  );
+  const draft = prep.opened.at(-1);
+  assert.equal(draft?.harness, "codex");
+  assert.equal(draft?.requestedModel, undefined);
+  assert.equal(draft?.requestedEffort, undefined);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => !f.includes("Review"));
+  assert.deepEqual(launch.calls, [prep.offered.at(-1)]);
+  assert.equal(launch.calls[0]?.requestedModel, "gpt-6-astra");
+  assert.equal(launch.calls[0]?.requestedEffort, "xhigh");
+  assert.deepEqual(launch.calls[0]?.launchInputs, { target: "keep me" });
+});
+
+test("[start-run-review-edit] at 60x24 PgUp/PgDn reach every line of a long Review, Tab brings the focused field back into view, and focus reads without colour", async () => {
+  const long = Array.from({ length: 120 }, (_, index) => `word${index}`).join(
+    " ",
+  );
+  const harness: HarnessSpec = {
+    ...GUIDED_CLAUDE,
+    preselection: {
+      choice: { model: "opus", effort: "medium" },
+      source: { kind: "fallback", reason: `${long} END_OF_REASON` },
+    },
+  };
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    fakeLaunch().view,
+    60,
+    24,
+    noRunView(),
+    harnessCatalog([harness]).view,
+    choicePreparation([harness]).view,
+  );
+  await reachReview(t);
+  assert.match(t.captureCharFrame(), /PgUp\/PgDn scroll/);
+  assert.match(t.captureCharFrame(), /Workflow:/);
+  assert.doesNotMatch(t.captureCharFrame(), /END_OF_REASON/);
+  let seen = words(t.captureCharFrame());
+  for (let page = 0; page < 12 && !seen.includes("Trust:"); page++) {
+    t.mockInput.pressKey("\u001b[6~");
+    await t.renderOnce();
+    seen += ` ${words(t.captureCharFrame())}`;
+  }
+  for (let index = 0; index < 120; index++)
+    assert.ok(seen.includes(`word${index}`), `word${index} is reachable`);
+  for (const phrase of ["END_OF_REASON", "Effort: medium", "Trust:"])
+    assert.ok(seen.includes(phrase), phrase);
+  assert.doesNotMatch(t.captureCharFrame(), /Workflow:/);
+  for (let page = 0; page < 12; page++) {
+    t.mockInput.pressKey("\u001b[5~");
+    await t.renderOnce();
+  }
+  assert.match(t.captureCharFrame(), /Workflow:/);
+
+  // Focus scrolls its row and reasons into view; the glyph and bold mark it.
+  for (let page = 0; page < 12; page++) {
+    t.mockInput.pressKey("\u001b[6~");
+    await t.renderOnce();
+  }
+  assert.doesNotMatch(t.captureCharFrame(), /Harness:/);
+  await pressTab(t);
+  assert.equal(focusedRow(t), "Harness");
+  assert.ok(lineSpan(t, "› Harness:").attributes & TextAttributes.BOLD);
+  assert.equal(lineSpan(t, "Model:").attributes & TextAttributes.BOLD, 0);
+  assert.equal(lineSpan(t, "Start Run").attributes & TextAttributes.BOLD, 0);
+  await pressTab(t);
+  assert.equal(focusedRow(t), "Model");
+  assert.match(t.captureCharFrame(), /› Model: Opus \(latest\) · opus/);
+  assert.ok(lineSpan(t, "› Model:").attributes & TextAttributes.BOLD);
+
+  t.resize(140, 44);
+  await t.renderOnce();
+  assert.equal(focusedRow(t), "Model");
+  assertReads(t, 140, ["END_OF_REASON", "Workflow:", "Trust:"]);
+  assert.doesNotMatch(t.captureCharFrame(), /PgUp\/PgDn/);
+});
+
+test("[start-run-review-edit] a Command-only Review has no Model choice fields: Tab stays on Start and Enter starts", async () => {
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(catalog([ALPHA]), launch.view, 60, 24);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+  await pressTab(t);
+  await pressTab(t, true);
+  const frame = t.captureCharFrame();
+  assert.doesNotMatch(frame, /Harness:|Model:|Effort:|tab\/shift\+tab|›/);
+  assert.match(frame, /enter start/);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Checking launch"));
+  assert.equal(launch.calls.length, 1);
+});
+
+test("[start-run-review-edit] Tab moves from the guided model stage to the Harness and back; another Harness reloads its preselection there without replaying Launch inputs", async () => {
+  const codex: HarnessSpec = {
+    id: "codex",
+    name: "Codex",
+    declaration: CODEX_MODELS,
+    preselection: {
+      choice: { model: "gpt-6-astra", effort: "xhigh" },
+      source: { kind: "last-choice" },
+    },
+  };
+  const harnesses = checkingHarnessCatalog([GUIDED_CLAUDE, codex]);
+  const launch = fakeLaunch();
+  const { t } = await mountFlow(
+    catalog([AGENT_BETA]),
+    launch.view,
+    60,
+    24,
+    noRunView(),
+    harnesses.view,
+    choicePreparation([GUIDED_CLAUDE, codex]).view,
+  );
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressEnter();
+  harnesses.settle("claude-code");
+  await t.waitForFrame((f) => f.includes("Model choices loaded"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Launch inputs"));
+  await t.mockInput.typeText("keep me");
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  assert.match(words(t.captureCharFrame()), /tab Harness/);
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› Sonnet"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("2. Choose effort"));
+
+  // Tab reaches the Harness list and Tab returns, with the choice intact.
+  await pressTab(t);
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  assert.match(t.captureCharFrame(), /› Claude Code/);
+  assert.match(t.captureCharFrame(), /tab\/esc return/);
+  await pressTab(t);
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  assert.match(
+    words(t.captureCharFrame()),
+    /› Sonnet \(latest\) · sonnet \[current\]/,
+  );
+
+  // Another Harness is checked before the guided stage reopens on its
+  // preselection; Launch inputs are not replayed.
+  await pressTab(t);
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› Codex"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) =>
+    words(f).includes(
+      "Checking the Harness and loading model choices… Please wait.",
+    ),
+  );
+  t.mockInput.pressEnter();
+  await t.renderOnce();
+  assert.doesNotMatch(t.captureCharFrame(), /1\. Choose a model/);
+  harnesses.settle("codex");
+  await t.waitForFrame((f) => f.includes("Model choices loaded"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  assert.match(
+    words(t.captureCharFrame()),
+    /› GPT-6 Astra · gpt-6-astra \[current\]/,
+  );
+  assert.match(words(t.captureCharFrame()), /Your last choice for Codex/);
+  await chooseGuided(t);
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+  assertReads(t, 60, [
+    "Harness: Codex (codex)",
+    "Model: GPT-6 Astra · gpt-6-astra",
+    "Effort: xhigh",
+    "target: keep me",
+  ]);
+});
+
+test("[start-run-review-edit] Tab is text inside Other's input, not a move to the Harness", async () => {
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    fakeLaunch().view,
+    60,
+    24,
+    noRunView(),
+    harnessCatalog([GUIDED_CLAUDE]).view,
+  );
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  t.mockInput.pressKey("\u001b[6~");
+  await t.waitForFrame((f) => f.includes("› Other…"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("enter accept"));
+  await pressTab(t);
+  assert.match(t.captureCharFrame(), /enter accept/);
+  assert.doesNotMatch(t.captureCharFrame(), /Choose a Harness/);
+});
+
+test("[start-run-review-edit] a Harness change from Review to one with nothing to start from asks for a model before Review", async () => {
+  const bare: HarnessSpec = {
+    id: "codex",
+    name: "Codex",
+    declaration: CODEX_MODELS,
+  };
+  const launch = fakeLaunch();
+  const prep = choicePreparation([GUIDED_CLAUDE, bare]);
+  const { t } = await mountFlow(
+    catalog([AGENT_ALPHA]),
+    launch.view,
+    60,
+    24,
+    noRunView(),
+    harnessCatalog([GUIDED_CLAUDE, bare]).view,
+    prep.view,
+  );
+  await reachReview(t);
+  await pressTab(t);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("Choose a Harness"));
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› Codex"));
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => f.includes("1. Choose a model"));
+  assert.doesNotMatch(t.captureCharFrame(), /\[current\]/);
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((f) => f.includes("› GPT-6 Sol"));
+  await chooseGuided(t);
+  await t.waitForFrame((f) => f.includes("Ready to start"));
+  assert.equal(focusedRow(t), "Harness");
+  assertReads(t, 60, [
+    "Harness: Codex (codex)",
+    "Model: GPT-6 Sol · gpt-6-sol",
+    "Effort: medium",
+  ]);
+  await pressTab(t, true);
+  t.mockInput.pressEnter();
+  await t.waitForFrame((f) => !f.includes("Review"));
+  assert.deepEqual(launch.calls, [prep.offered.at(-1)]);
+  assert.equal(launch.calls[0]?.requestedModel, "gpt-6-sol");
+});

@@ -31,12 +31,16 @@ import {
   PendingStep,
   ReviewStep,
   routingNeedsHarness,
+  type ReviewField,
 } from "./start-run-views.js";
 
 // Drafts survive back-navigation; only leaving the flow discards them. Agent
 // Bundles choose a Harness, enter Launch inputs, then choose model and effort.
 // Review assesses the complete draft and submits the ready Offer unchanged.
-// Refusals return to their correction stage without clearing unrelated choices.
+// Editing a field from Review visits only that field's step and returns to
+// Review on it; Tab from the guided model stage visits the Harness the same
+// way and returns to that stage. Refusals return to their correction stage without clearing
+// unrelated choices.
 
 type Step = "choose" | "harness" | "inputs" | "model" | "review" | "pending";
 
@@ -76,6 +80,11 @@ export function StartRun(props: {
   const [selectedChoice, setSelectedChoice] = createSignal<ModelChoiceDraft>();
   const [effortReset, setEffortReset] = createSignal<string>();
   const [modelStage, setModelStage] = createSignal<"model" | "effort">("model");
+  // Where a visited step returns: Review, after editing one of its fields, or
+  // the guided model stage, after Tab reached the Harness from it. Review
+  // reopens focused on `reviewFocus`.
+  const [returnTo, setReturnTo] = createSignal<"review" | "model">();
+  const [reviewFocus, setReviewFocus] = createSignal<ReviewField>("start");
   const modelDraft = (): ModelChoiceDraft => {
     const selected = selectedChoice();
     if (selected !== undefined) return selected;
@@ -219,7 +228,34 @@ export function StartRun(props: {
     if (bundle === undefined || !canContinueHarness()) return;
     setChooserProblem(undefined);
     setModelStage("model");
-    setStep(nextDraftStep(bundle));
+    if (returnTo() === undefined) setStep(nextDraftStep(bundle));
+    // A Harness with nothing to start from needs a model before Review.
+    else if (returnTo() === "review" && modelDraft().kind === "model-needed")
+      setStep("model");
+    else finishVisit();
+  };
+
+  const editFromReview = (field: Exclude<ReviewField, "start">) => {
+    setReviewFocus(field);
+    setReturnTo("review");
+    if (field === "harness") {
+      setStep("harness");
+      return;
+    }
+    setModelStage(field);
+    setStep("model");
+  };
+  const visitHarnessFromModel = () => {
+    if (returnTo() === undefined) setReturnTo("model");
+    setStep("harness");
+  };
+  const finishVisit = () => {
+    const origin = returnTo();
+    setReturnTo(undefined);
+    if (origin === "model") {
+      setModelStage("model");
+      setStep("model");
+    } else setStep("review");
   };
 
   const declaredValues = (): Record<string, string> => {
@@ -413,7 +449,10 @@ export function StartRun(props: {
               onDismissNotice={() => setNotice(undefined)}
               canContinue={canContinueHarness}
               onContinue={continueFromHarness}
-              onBack={() => setStep("choose")}
+              canReturn={() => returnTo() !== undefined}
+              onBack={() =>
+                returnTo() === undefined ? setStep("choose") : finishVisit()
+              }
             />
           </Match>
           <Match when={step() === "inputs"}>
@@ -443,14 +482,21 @@ export function StartRun(props: {
               enabled={canContinueHarness}
               initialStage={modelStage()}
               onChoice={chooseModelChoice}
-              onDone={() => setStep("review")}
+              onDone={() => {
+                if (returnTo() === undefined) setReviewFocus("start");
+                setReturnTo(undefined);
+                setStep("review");
+              }}
+              onHarness={visitHarnessFromModel}
               onBack={() => {
                 setModelStage("model");
-                setStep(
-                  focusBundle()?.launchInputs.length === 0
-                    ? "harness"
-                    : "inputs",
-                );
+                if (returnTo() === "review") finishVisit();
+                else
+                  setStep(
+                    focusBundle()?.launchInputs.length === 0
+                      ? "harness"
+                      : "inputs",
+                  );
               }}
               stepLabel={() => stepLabel("model")}
               problem={chooserProblem}
@@ -463,6 +509,7 @@ export function StartRun(props: {
               bundle={focusBundle}
               harness={chosenHarnessSummary}
               harnessFocus={chosenHarnessFocus}
+              modelDraft={modelDraft}
               draft={launchDraft}
               canAcknowledgeTrust={() => untrusted() && !acknowledged()}
               onAcknowledgeTrust={acknowledge}
@@ -470,6 +517,8 @@ export function StartRun(props: {
               notice={notice}
               onDismissNotice={() => setNotice(undefined)}
               reset={effortReset}
+              initialFocus={reviewFocus()}
+              onEdit={editFromReview}
               onStart={startLaunch}
               onBack={backFromReview}
             />

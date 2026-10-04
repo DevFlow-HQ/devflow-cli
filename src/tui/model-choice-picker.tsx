@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { HarnessFocus } from "../application/projection-port.js";
 import {
+  effortLockSentence,
   harnessFocusStatus,
   modelChoiceSourceLine,
   modelChoiceWords,
@@ -16,6 +17,52 @@ export type ModelChoiceDraft =
   | { readonly kind: "model-needed"; readonly effort?: string };
 
 type Stage = "model" | "effort" | "other";
+
+type EffortLock = NonNullable<
+  NonNullable<HarnessFocus["preselection"]>["effortLock"]
+>;
+interface EffortControl {
+  readonly lock: EffortLock | undefined;
+  readonly efforts: readonly string[];
+  readonly defaultEffort: string | undefined;
+  readonly editable: boolean;
+}
+
+/** What a draft's effort control offers (ADR 0034): the environment lock, else
+ *  the efforts the Harness declares for the draft's model. Effort can be edited
+ *  only when it is unlocked and the model offers one. */
+export function effortControl(
+  focus: HarnessFocus | undefined,
+  draft: ModelChoiceDraft,
+): EffortControl {
+  const declaration = focus?.modelDeclaration;
+  const choice = draft.kind === "chosen" ? draft.choice : undefined;
+  const defaults = focus?.harnessDefaults;
+  const lock =
+    focus?.preselection?.effortLock ??
+    (defaults?.kind === "reported" || defaults?.kind === "fallback"
+      ? defaults.effortLock
+      : undefined);
+  const entry =
+    declaration === undefined || declaration.kind === "free-text"
+      ? undefined
+      : declaration.models.find(
+          (candidate) => candidate.model === choice?.model,
+        );
+  const efforts: readonly string[] =
+    declaration === undefined
+      ? choice?.effort === undefined
+        ? []
+        : [choice.effort]
+      : (entry?.efforts ??
+        (declaration.kind === "list" ? [] : declaration.efforts));
+  return {
+    lock,
+    efforts,
+    defaultEffort: entry?.defaultEffort,
+    editable: lock === undefined && efforts.length > 0,
+  };
+}
 
 /** The host routes navigation keys; unbound text editing stays with the native input. */
 export interface ModelChoicePickerHandle {
@@ -31,6 +78,8 @@ export function ModelChoicePicker(props: {
   width: number;
   height: number;
   initialStage: "model" | "effort";
+  /** The host binds Tab to its Harness choice; the hint says so. */
+  harnessKey?: boolean;
   onChoice: (choice: Choice, reset?: string) => void;
   onDone: () => void;
   onBack: () => void;
@@ -50,31 +99,12 @@ export function ModelChoicePicker(props: {
     return draft.kind === "chosen" ? draft.choice.effort : draft.effort;
   };
   const declaration = () => props.focus()?.modelDeclaration;
-  const lock = () => {
-    const focus = props.focus();
-    const defaults = focus?.harnessDefaults;
-    return (
-      focus?.preselection?.effortLock ??
-      (defaults?.kind === "reported" || defaults?.kind === "fallback"
-        ? defaults.effortLock
-        : undefined)
-    );
-  };
+  const control = createMemo(() => effortControl(props.focus(), props.draft()));
+  const lock = () => control().lock;
+  const efforts = () => control().efforts;
   const modelEntries = () => {
     const decl = declaration();
     return decl === undefined || decl.kind === "free-text" ? [] : decl.models;
-  };
-  const selectedEntry = () =>
-    modelEntries().find((entry) => entry.model === currentChoice()?.model);
-  const efforts = () => {
-    const decl = declaration();
-    if (decl === undefined)
-      return currentChoice()?.effort === undefined
-        ? []
-        : [currentChoice()?.effort ?? ""];
-    return (
-      selectedEntry()?.efforts ?? (decl.kind === "list" ? [] : decl.efforts)
-    );
   };
   const modelOptions = createMemo(() => {
     const entries = modelEntries().map((entry) => ({
@@ -98,7 +128,7 @@ export function ModelChoicePicker(props: {
         ]
       : entries;
   });
-  const disabledEffort = () => lock() !== undefined || efforts().length === 0;
+  const disabledEffort = () => !control().editable;
   const count = () =>
     stage() === "model" ? modelOptions().length : efforts().length;
   const resetHighlight = () => {
@@ -210,10 +240,7 @@ export function ModelChoicePicker(props: {
         );
       if (props.reset() !== undefined) lines.push(props.reset() ?? "");
       const locked = lock();
-      if (locked !== undefined)
-        lines.push(
-          `Locked by ${locked.source}. Change that setting outside Secant.`,
-        );
+      if (locked !== undefined) lines.push(effortLockSentence(locked.source));
       else if (stage() === "effort" && efforts().length === 0)
         lines.push("This model has no effort setting.");
     }
@@ -226,7 +253,7 @@ export function ModelChoicePicker(props: {
         ? "enter accept · esc cancel"
         : stage() === "effort" && disabledEffort()
           ? "enter acknowledge · esc back"
-          : "↑/↓ move · enter choose · esc back · PgUp/PgDn scroll";
+          : `↑/↓ move · enter choose · ${props.harnessKey === true ? "tab Harness · " : ""}esc back · PgUp/PgDn scroll`;
   const footerLines = () => wrap(hint(), props.width);
   const floatingHeader = () =>
     headerLines().length + footerLines().length >= props.height - 1;
@@ -255,7 +282,7 @@ export function ModelChoicePicker(props: {
           )
         : efforts().map(
             (effort) =>
-              `${effort}${effort === currentEffort() ? " [current]" : ""}${effort === selectedEntry()?.defaultEffort ? " (default)" : ""}`,
+              `${effort}${effort === currentEffort() ? " [current]" : ""}${effort === control().defaultEffort ? " (default)" : ""}`,
           );
     return labels.map((label, index) => ({
       index,

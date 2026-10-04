@@ -167,6 +167,11 @@ export function modelChoiceSourceLine(
   return `${source.reason} Starting with ${label}${effort}.`;
 }
 
+/** Why effort cannot change: the environment setting that fixes it (#311). */
+export function effortLockSentence(source: string): string {
+  return `Locked by ${source}. Change that setting outside Secant.`;
+}
+
 /** A model's efforts in words, the default marked in text rather than colour. */
 export function effortsLine(
   efforts: readonly string[],

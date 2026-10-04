@@ -12,6 +12,7 @@ import {
   modelName,
   qualificationLabel,
   qualificationObservation,
+  effortLockSentence,
 } from "./harness-format.js";
 import { useTheme } from "./vendor/theme-context.js";
 
@@ -224,9 +225,9 @@ function ReportedSettings(props: { harness: Accessor<HarnessFocus> }) {
       </Show>
       <Show when={lock()}>
         {(locked) => (
-          <text
-            fg={theme.textMuted}
-          >{`Locked by ${locked().source}. Change that setting outside Secant.`}</text>
+          <text fg={theme.textMuted}>
+            {effortLockSentence(locked().source)}
+          </text>
         )}
       </Show>
     </box>
