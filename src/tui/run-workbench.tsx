@@ -1088,7 +1088,13 @@ export function RunWorkbench(props: {
     wrapRows(
       timelineRows().map((row, index) => ({
         rules: row.dividers ?? [],
-        text: `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
+        text:
+          row.oneLine === true
+            ? clip(
+                `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
+                innerW(),
+              )
+            : `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
       })),
       innerW(),
       TIMELINE_HANG,

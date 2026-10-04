@@ -27,6 +27,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Neither invariant exists in the scrollbox.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
   `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.
+- Agent completion reasons (#372) are sanitized and clipped to one display line. The agent-ended row omits the timestamp to leave room on narrow screens.
 - Step and Session dividers (#289) are `wrapRows` rules leading the row that begins the Step or Session, never rows of their own, so the badge counts events
   and the anchor holds. Their words live in `run-timeline-rows.ts` for both views; they compare the Application's `step`/`session` and parse no name.
 - Exactly one screen mounts at a time (`app.tsx`), so a screen's key bindings exist only while it is active and cannot conflict with another's. And

@@ -395,7 +395,7 @@ await withCleanup(
       }
       assertMigrated(join(legacyHome, "catalog.db"), "Catalog", 2);
       assertMigrated(join(groupDir, "coordination.db"), "coordination", 2);
-      // The Run Store carries thirteen migrations: #108 added `pending_gate`, #116 added
+      // The Run Store carries fourteen migrations: #108 added `pending_gate`, #116 added
       // the Harness Turn records (`harness_session`/`turn`/`turn_event`/
       // `transcript_entry`) and Attempt `effective_model`, #126 added the durable Turn
       // `kind` column, and #125 added the Attempt Harness-identity columns
@@ -404,9 +404,9 @@ await withCleanup(
       // the Run's semantic selected-Harness id, #187 added the requested-model column,
       // #213 added gate suggestions, #218 added the attempt-log End Stage mark,
       // #340 added each Turn's requested model and effort, and #342 added the Run's
-      // Model choice effort.
+      // Model choice effort, and #372 added agent-ended Attempt attribution.
       const runDatabasePath = join(groupDir, runId, "run.db");
-      assertMigrated(runDatabasePath, "Run Store", 13);
+      assertMigrated(runDatabasePath, "Run Store", 14);
       assertLegacyRunRemainsUnselected(runDatabasePath);
     }
 

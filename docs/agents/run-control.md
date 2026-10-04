@@ -20,6 +20,10 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 - Cancel and shutdown race on the Run controller: whichever aborts first supplies its reason. Turn interrupt is bound separately; its Operation reports the
   Harness receipt and its own Turn's result, while the Run's eventual rest still reflects cancel or shutdown when either stops the Run.
 
+- Agent calls (#372) settle in Application's `settleAgentCompletion`, after a tracked routing block and after a human Turn, under the existing promise.
+  It reads the latest accepted call of the Attempt's latest clean Turn, publishes through `publishInteractiveEnd`, and loops over subsequent Entry Turns.
+  An unowned blocked Run with such a call offers resume to close the settle-before-apply crash window. No execution callback applies a call.
+
 ## Turn interrupt and steer
 
 - `interrupt-turn` (#298) reaches only its named live Turn through `RequestChannel.bindInterrupt`, bound and unbound alongside answer and steer in execution's

@@ -73,7 +73,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   no version — the approve-reject authored-gate answer (#108), the interactive End Step, and an Agent-step Attempt declaring no output. Every other succeeded Attempt
   produces at least one output and stages a commit as before. Its `endsStage` sets the nullable `attempt_log.stage_ended` in that transaction (#218): the one
   durable End Stage fact, read back as `AttemptLogEntry.endsStage` only when stored `true` — a stored `false` reads absent exactly like
-  `null`.
+  `null`. `endedBy: "agent"` writes nullable `attempt_log.ended_by` in the same publication transaction (#372).
 - `outputReceiptDirectory` (#215) hands execution one emptied `.receipts/<first 32 hex characters of sha256(attemptId)>` directory inside the Run working
   area (#220), so the one Harness grant covers it; hashed because Attempt ids carry `:`. `keep` (#354, a follow-up Turn) skips emptying, so it refuses any
   non-directory there (a planted link too). Candidate storage, never canonical or fenced: only `publishAttempt` binds receipt bytes; Run deletion removes it.

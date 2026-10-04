@@ -226,6 +226,7 @@ export interface PublishAttemptRequest {
    *  the scheduler exits its human-controlled Repeat and the Projection records a
    *  human-declared completion. */
   readonly endsStage?: true;
+  readonly endedBy?: "agent";
 }
 
 export interface AgentAttemptEvidence {
@@ -270,6 +271,7 @@ export interface AttemptLogEntry {
   /** True on the interactive Attempt a confirmed End Stage settled (#218); absent
    *  on every other entry. */
   readonly endsStage?: true;
+  readonly endedBy?: "agent";
 }
 
 /** A recorded Materialization conflict: a `home: workspace` Artifact's Workspace

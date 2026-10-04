@@ -38,7 +38,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `human`-origin `#turn-<n>` only while its `turnId` is still that latest Turn; otherwise it pauses again and never re-sends the prompt. The follow-up
   keeps the Attempt's receipt directory, adds no receipt lines, and its Turn gives the Attempt its outcome. A signal still cancels the Attempt and halts.
 - An interactive-agent Step's Entry Turn (`entryTurn`) is due only while no Turn of its Attempt was admitted, so no later walk re-sends it; none publishes
-  an Attempt, only `end-interactive-step` does (#212). `interactiveTurnRest` decides the rest after every Interactive Turn, Entry or human (#353): an
+  an Attempt; Application settles human controls and clean Agent calls (#212, #372). `interactiveTurnRest` decides the rest of Entry and human Turns (#353): an
   Interrupt waits `blocked`, a `lost` Turn halts. A signal also settles a live Turn `interrupted` without throwing, so the aborted signal, not the result
   kind, keeps it halting (ADR 0019).
 - `runRepeatGroup` has two branches (#217): the Verdict-driven one re-reads `until` after each iteration and blocks at the Review cadence; the human-controlled
@@ -46,8 +46,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `interactiveEndLegality` owns the ending controls' rules, shared by Application settlement and Offers: End Step outside a human-controlled Repeat,
   Continue or End Stage inside one, all only at a Turn boundary. A live Turn takes precedence over a position mismatch. Callers confirm the active Step
   and supply Turn liveness; Application includes its in-flight promise, while the Projection uses durable Turn records.
+  Calls require a live Turn and the current Step's opt-in; Agent Continue and stage done remain refused until #373.
   Confirmed End Stage publishes the iteration's Attempt marked `endsStage`, so the walk exits the group once (#218).
-- Each Repeat iteration of an Interactive Step is its own Attempt (`encodeAttemptId` carries the iteration) with its own Session (`interactiveSession` scopes the
+- Session tool unions follow actual sharing: `fresh` and Interactive Repeat Sessions get only their own Step's calls (#372).
+- Each Repeat iteration of an Interactive Step is its own Attempt (`encodeAttemptId` carries the iteration) with its own Session (`attemptSession` scopes the
   name to that Attempt id), so Continue always opens a fresh conversation; `interactiveStepTarget` finds the resting iteration from the log (#216).
 - `observe` is guarded once at each entry (`executeRouting` and `driveInteractiveTurn`) by the shared `observer.ts` rule (#330): an observer never
   throws into its caller or changes a Run, Attempt, or Turn outcome. It reports the Run, Attempt, and Turn lifecycle by id only (#320):

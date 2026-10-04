@@ -1,4 +1,11 @@
 import assert from "node:assert/strict";
+import {
+  launchAgentCompletionRun,
+  readCompletionRun,
+  completed,
+  call,
+} from "../helpers/agentCompletion.js";
+import { followRun } from "../helpers/settleOperation.js";
 import { test } from "node:test";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
@@ -5602,3 +5609,67 @@ test("declined elicitation history shows the question and setup remediation safe
   assert.match(frame, /https:\/\/example.com\/setup/);
   assert.match(frame, /Finish setup in Claude Code directly/);
 });
+
+for (const [width, height] of [
+  [60, 24],
+  [140, 44],
+]) {
+  test(`agent completion renders pending, settled, and hostile reasons at ${width}x${height}`, async (context) => {
+    let finish!: () => void;
+    const boundary = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const reason = "ready\n\x1b[31mred\x1b[0m\t\x07\u202e" + "終😺 ".repeat(70);
+    const { wired, runId } = await launchAgentCompletionRun(context, [
+      {
+        agentCalls: [call(reason)],
+        block: true,
+        finish: boundary,
+        result: completed,
+      },
+    ]);
+    const pending = await followRun(wired.projectionPort, runId, (run) =>
+      run.pendingAgentCompletion !== undefined ? run : undefined,
+    );
+    const wb = await mountWorkbench(pending, width, height);
+    const frame = wb.t.captureCharFrame();
+    assert.match(frame, /The agent has asked to end this Step/);
+    assert.match(frame, /ready red/);
+    for (const control of ["\x1b", "\x07", "\u202e"])
+      assert.equal(frame.includes(control), false);
+    noOverflow(frame, width);
+    const pendingLine = frame
+      .split("\n")
+      .find((line) => line.includes("The agent has asked"));
+    assert.ok(pendingLine?.includes("…"));
+    await press(wb.t, wb.renderer, "home");
+    finish();
+    const settled = await followRun(wired.projectionPort, runId, (run) =>
+      run.state === "succeeded" ? run : undefined,
+    );
+    wb.control.setRun(settled);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /Beginning of Run history/);
+    await press(wb.t, wb.renderer, "end");
+    const ended = wb.t.captureCharFrame();
+    assert.match(ended, /Step ended by the agent/);
+    assert.match(ended, /ready red/);
+    for (const control of ["\x1b", "\x07", "\u202e"])
+      assert.equal(ended.includes(control), false);
+    noOverflow(ended, width);
+    assert.equal(
+      readCompletionRun(wired, runId).timeline.find(
+        (event) => event.endedBy === "agent",
+      )?.reason,
+      reason,
+    );
+    const newWidth = width === 60 ? 140 : 60;
+    const newHeight = height === 24 ? 44 : 24;
+    wb.t.resize(newWidth, newHeight);
+    wb.renderer.resize(newWidth, newHeight);
+    await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "end");
+    assert.match(wb.t.captureCharFrame(), /Step ended by the agent/);
+    noOverflow(wb.t.captureCharFrame(), newWidth);
+  });
+}

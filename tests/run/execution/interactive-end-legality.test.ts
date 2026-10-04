@@ -117,3 +117,70 @@ for (const position of positions) {
     });
   }
 }
+
+test("agent step done requires a live Turn and the current Step's opt-in", () => {
+  const optedIn: AgentStep = { ...step, agentCompletion: ["step"] };
+  assert.deepEqual(
+    interactiveEndLegality({
+      routing: [optedIn],
+      step: optedIn,
+      control: "step_done",
+      turnLive: true,
+    }),
+    { kind: "legal" },
+  );
+  assert.deepEqual(
+    interactiveEndLegality({
+      routing: [optedIn],
+      step: optedIn,
+      control: "step_done",
+      turnLive: false,
+    }),
+    { kind: "refused", reason: "no-live-turn" },
+  );
+  assert.deepEqual(
+    interactiveEndLegality({
+      routing: [step],
+      step,
+      control: "step_done",
+      turnLive: true,
+    }),
+    { kind: "refused", reason: "call-not-enabled" },
+  );
+  assert.deepEqual(
+    interactiveEndLegality({
+      routing: [optedIn],
+      step: optedIn,
+      control: "stage_done",
+      turnLive: true,
+    }),
+    { kind: "refused", reason: "call-not-enabled" },
+  );
+});
+
+test("agent Continue and stage done wait for the checkpoint slice while human controls stay legal", () => {
+  const optedIn: AgentStep = { ...step, agentCompletion: true };
+  const routing: readonly RoutingNode[] = [
+    { repeat: { control: "human", steps: [optedIn] } },
+  ];
+  for (const control of ["step_done", "stage_done"] as const)
+    assert.deepEqual(
+      interactiveEndLegality({
+        routing,
+        step: optedIn,
+        control,
+        turnLive: true,
+      }),
+      { kind: "refused", reason: "call-not-supported" },
+    );
+  for (const control of ["continue-repeat", "end-stage"] as const)
+    assert.deepEqual(
+      interactiveEndLegality({
+        routing,
+        step: optedIn,
+        control,
+        turnLive: false,
+      }),
+      { kind: "legal" },
+    );
+});

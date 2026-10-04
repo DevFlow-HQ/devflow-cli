@@ -396,9 +396,11 @@ export function restingProse(run: RunView): string | undefined {
       return undefined;
     case "succeeded":
       // A confirmed End Stage (#218) is the human's declaration, never a check.
-      return run.completion === "human-declared"
-        ? "You declared the stage complete; Secant did not check the tracker."
-        : "Workflow completed.";
+      return run.completion === "agent-declared"
+        ? "The agent declared this Run complete."
+        : run.completion === "human-declared"
+          ? "You declared the stage complete; Secant did not check the tracker."
+          : "Workflow completed.";
     case "failed":
       return "This Run has ended.";
     case "cancelled":

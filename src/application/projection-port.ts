@@ -490,7 +490,8 @@ export interface HarnessCapabilityView {
     | "turn-interruption"
     | "tool-approvals"
     | "structured-questions"
-    | "effective-model";
+    | "effective-model"
+    | "agent-call";
   readonly name: string;
   readonly description: string;
   readonly state: HarnessCapabilityState;
@@ -872,7 +873,8 @@ export type RunTimelineKind =
   | "steer"
   // The effective model and effort a Turn's Harness reported (#345, ADR 0034),
   // one entry per observation: a reroute adds a second.
-  | "effective-model";
+  | "effective-model"
+  | "agent-call";
 
 /** The Crucible Step kind a durable Turn was produced by (#126): an autonomous
  *  `agent` Step's Turn or an `interactive-agent` Step's human Turn. Carried on the
@@ -905,6 +907,17 @@ export interface RunTimelineEvent {
     readonly server: string;
     readonly message: string;
     readonly url?: string;
+  };
+  readonly endedBy?: "agent";
+  /** Agent reason exactly as sent; screens sanitize it, JSON retains it. */
+  readonly reason?: string;
+  readonly agentCall?: {
+    readonly id: string;
+    readonly reason: string;
+    readonly answer:
+      | { readonly outcome: "accepted" }
+      | { readonly outcome: "refused"; readonly reason: string };
+    readonly disposition: "pending" | "completed" | "dropped";
   };
   /** Full text is separate from the bounded, whitespace-collapsed detail. */
   readonly steer?: RunSteerEvent;
@@ -1129,7 +1142,8 @@ export interface RunView {
    *  exited a human-controlled Repeat. Secant checked no tracker for it. It covers
    *  the whole Run: Steps after a non-trailing group may still have verified their
    *  own work. Additive to the frozen `--json`. */
-  readonly completion?: "human-declared";
+  readonly completion?: "human-declared" | "agent-declared";
+  readonly pendingAgentCompletion?: { readonly reason: string };
 }
 
 export interface RunSnapshot {

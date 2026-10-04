@@ -12,6 +12,7 @@ import type { Rule } from "./wrap.js";
 export interface TimelineRow {
   readonly key: string;
   readonly text: string;
+  readonly oneLine?: boolean;
   /** Live rows have none: they carry no Step or Session of their own. */
   readonly dividers?: readonly Rule[];
 }
@@ -37,6 +38,15 @@ export function buildTimelineRows(
 ): readonly TimelineRow[] {
   return [
     ...durableTimelineRows(run.timeline),
+    ...(run.pendingAgentCompletion !== undefined
+      ? [
+          {
+            key: "agent-completion:pending",
+            text: `The agent has asked to end this Step · ${screenReason(run.pendingAgentCompletion.reason)}`,
+            oneLine: true,
+          },
+        ]
+      : []),
     ...(run.windowsCleanupNotice === undefined
       ? []
       : [
@@ -77,7 +87,13 @@ function durableTimelineRows(
     step = event.event === "iteration" ? undefined : (event.step ?? step);
     return {
       key: `durable:${event.at}:${event.event}:${index}`,
-      text: `${event.at} ${durableLabel(event)}`,
+      text:
+        event.endedBy === "agent"
+          ? durableLabel(event)
+          : `${event.at} ${durableLabel(event)}`,
+      ...(event.agentCall !== undefined || event.endedBy === "agent"
+        ? { oneLine: true }
+        : {}),
       dividers,
     };
   });
@@ -103,7 +119,14 @@ function durableLabel(event: RunTimelineEvent): string {
     event.detail !== undefined && event.detail !== "succeeded"
       ? ` · ${event.detail}`
       : "";
+  if (event.endedBy === "agent")
+    return `▸ Step ended by the agent · ${screenReason(event.reason ?? "")}`;
   switch (event.event) {
+    case "agent-call": {
+      const call = event.agentCall;
+      if (call === undefined) return "Agent call";
+      return `Agent call ${call.id} · ${call.answer.outcome === "refused" ? `refused · ${call.answer.reason}` : call.disposition === "dropped" ? "dropped" : "accepted, takes effect when this Turn finishes"} · ${screenReason(call.reason)}`;
+    }
     case "run-created":
       return "○ Run created";
     case "trust-granted":
@@ -113,7 +136,7 @@ function durableLabel(event: RunTimelineEvent): string {
     case "iteration":
       return `↻ Iteration ${event.detail ?? ""} complete`;
     case "interactive-step-ended":
-      return `▸ Step ended${unusual}`;
+      return `▸ Step ended by the person${unusual}`;
     case "repeat-continued":
       return `↻ Continued to the next Iteration${unusual}`;
     case "stage-ended":
@@ -205,4 +228,10 @@ function liveTimelineRows(
 /** Collapse whitespace so a serialized tool input or usage string stays one line. */
 export function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function screenReason(reason: string): string {
+  return stripAnsi(reason)
+    .replace(/[\r\n\t]/g, " ")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "");
 }

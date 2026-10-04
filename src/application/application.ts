@@ -16,6 +16,7 @@ import {
 } from "../workflow/workflow.js";
 import {
   interactiveEndLegality,
+  latestAgentCall,
   interactiveStepTarget,
   type AgentFollowUp,
   type RequestChannel,
@@ -255,6 +256,8 @@ export interface RunInteractiveStep {
   turn(context: {
     readonly runId: string;
     readonly owner: RunOwner;
+    readonly routing: readonly RoutingNode[];
+    readonly step: AgentStep;
     /** The Step's named Session, reused across the Step's Turns and later Steps. */
     readonly session: string;
     /** The interactive Step's pending Attempt id, so every human Turn links to it. */
@@ -832,7 +835,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
       },
       appendTurnEvent(event) {
         const receipt = owner.appendTurnEvent(event);
-        if (event.kind === "steer" && receipt.ok) pushRunUpdate(runId);
+        if (
+          (event.kind === "steer" ||
+            event.kind === "agent-call" ||
+            event.kind === "agent-call-expired") &&
+          receipt.ok
+        )
+          pushRunUpdate(runId);
         return receipt;
       },
       selectHarness(selectedHarness) {
@@ -1136,6 +1145,32 @@ export function createApplication(deps: ApplicationDependencies): Application {
         };
       }
     }
+    const report = await driveTrackedRouting(params);
+    if (report.outcome === "harness-unavailable") {
+      return {
+        outcome: haltForHarnessFailure(
+          params.runId,
+          params.tracking,
+          params.executionOwner,
+          report.harnessFailure,
+        ),
+        retainOwner: false,
+      };
+    }
+    await adoptHeldStep(report, params.tracking, params.owner, params.runId);
+    if (report.outcome === "blocked") {
+      const settlement = settleAgentCompletion(params);
+      if (settlement !== undefined) return settlement;
+    }
+    return {
+      outcome: { status: "applied" },
+      retainOwner: report.outcome === "blocked",
+    };
+  }
+
+  async function driveTrackedRouting(
+    params: Parameters<typeof executeTrackedRouting>[0],
+  ) {
     const report = await runExecution!({
       routing: params.routing,
       digest: params.digest,
@@ -1150,22 +1185,125 @@ export function createApplication(deps: ApplicationDependencies): Application {
       ...(params.heldStep !== undefined ? { heldStep: params.heldStep } : {}),
       ...(params.followUp !== undefined ? { followUp: params.followUp } : {}),
     });
-    if (report.outcome === "harness-unavailable") {
-      return {
-        outcome: haltForHarnessFailure(
+    return report;
+  }
+
+  function settleAgentCompletion(
+    params: Parameters<typeof executeTrackedRouting>[0],
+  ): Promise<Awaited<ReturnType<typeof executeTrackedRouting>>> | undefined {
+    const last = params.owner.turns().at(-1);
+    // No call preserves the synchronous boundary path. Awaiting an empty
+    // settlement would leave the human's controls busy after the blocked push.
+    if (
+      params.tracking.state !== "blocked" ||
+      params.tracking.abort.signal.aborted ||
+      last?.resultKind !== "completed" ||
+      params.owner
+        .attemptLog()
+        .some((entry) => entry.attemptId === last.attemptId) ||
+      latestAgentCall(params.owner, last.attemptId) === undefined
+    )
+      return undefined;
+    return settle();
+
+    async function settle(): Promise<
+      Awaited<ReturnType<typeof executeTrackedRouting>>
+    > {
+      while (
+        params.tracking.state === "blocked" &&
+        !params.tracking.abort.signal.aborted
+      ) {
+        const basis = currentHoldBasis(
+          params.routing,
+          "blocked",
+          params.owner,
           params.runId,
+        );
+        if (basis?.kind !== "interactive") break;
+        const step = flattenSteps(params.routing).find(
+          (s): s is AgentStep =>
+            s.id === basis.step.id && s.kind === "interactive-agent",
+        );
+        if (step === undefined) break;
+        const target = interactiveStepTarget(
+          params.routing,
+          step,
+          params.owner.attemptLog(),
+        );
+        const pending = latestAgentCall(params.owner, target.attemptId);
+        if (
+          pending?.turn.resultKind !== "completed" ||
+          pending.turn.settledAt === undefined
+        )
+          break;
+        const legality = interactiveEndLegality({
+          routing: params.routing,
+          step,
+          control: "step_done",
+          turnLive: true,
+        });
+        if (legality.kind !== "legal") break;
+        await publishInteractiveEnd({
+          runId: params.runId,
+          owner: params.executionOwner,
+          tracking: params.tracking,
+          attemptId: target.attemptId,
+          endsStage: false,
+          endedBy: "agent",
+        });
+        // The first walk consumed the follow-up and transferred its Harness.
+        // Publication closed that handle; later walks prepare fresh work.
+        const report = await driveTrackedRouting({
+          ...params,
+          heldStep: undefined,
+          followUp: undefined,
+        });
+        if (report.outcome === "harness-unavailable")
+          return {
+            outcome: haltForHarnessFailure(
+              params.runId,
+              params.tracking,
+              params.executionOwner,
+              report.harnessFailure,
+            ),
+            retainOwner: false,
+          };
+        await adoptHeldStep(
+          report,
           params.tracking,
-          params.executionOwner,
-          report.harnessFailure,
-        ),
-        retainOwner: false,
+          params.owner,
+          params.runId,
+        );
+        if (report.outcome !== "blocked")
+          return { outcome: { status: "applied" }, retainOwner: false };
+      }
+      return {
+        outcome: { status: "applied" },
+        retainOwner: params.tracking.state === "blocked",
       };
     }
-    await adoptHeldStep(report, params.tracking, params.owner, params.runId);
-    return {
-      outcome: { status: "applied" },
-      retainOwner: report.outcome === "blocked",
-    };
+  }
+
+  async function publishInteractiveEnd(params: {
+    readonly runId: string;
+    readonly owner: RunOwner;
+    readonly tracking: TrackedRun;
+    readonly attemptId: string;
+    readonly endsStage: boolean;
+    readonly endedBy?: "agent";
+  }) {
+    await closeHeldStep(params.tracking);
+    if (params.tracking.abort.signal.aborted) return;
+    settleAttemptOrThrow(params.owner, params.runId, {
+      attemptId: params.attemptId,
+      outcome: "succeeded",
+      required: [],
+      outputs: [],
+      at: new Date(),
+      advanceState: "running",
+      ...(params.endsStage ? { endsStage: true as const } : {}),
+      ...(params.endedBy !== undefined ? { endedBy: params.endedBy } : {}),
+    });
   }
 
   // Acquire the Run and drive it through the injected execution. The launch
@@ -1820,7 +1958,16 @@ export function createApplication(deps: ApplicationDependencies): Application {
         problem: runLiveElsewhere(input.runId, foreign.ownerPid),
       };
     }
-    // Resume applies only to a Run resting `halted` or `failed` (ADR 0019). A
+    const recovery =
+      record.state === "blocked" && runs.get(input.runId)?.owner === undefined
+        ? runSnapshot(runProjection!, input.runId, {})
+        : undefined;
+    const deferredCompletion =
+      recovery?.result.found === true &&
+      recovery.result.run.actionOffers.some(
+        (offer) => offer.action === "resume-run" && offer.available,
+      );
+    // Resume applies to a resting Run or an unapplied clean agent call (#372). A
     // `running` record means the Run is live (here or elsewhere); resuming it would
     // fence the process driving it. A `succeeded`/`cancelled` Run is terminal.
     if (
@@ -1828,7 +1975,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
         (record.state === "succeeded" || record.state === "cancelled")) ||
       (!takeoverMatches &&
         record.state !== "halted" &&
-        record.state !== "failed")
+        record.state !== "failed" &&
+        !deferredCompletion)
     ) {
       return {
         admitted: false,
@@ -2886,6 +3034,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
         const report = await tracking.heldStep.turn({
           runId: input.runId,
           owner: turnOwner,
+          routing: begun.facts.routing,
+          step,
           session,
           attemptId,
           turnId,
@@ -2905,6 +3055,19 @@ export function createApplication(deps: ApplicationDependencies): Application {
         // `writeState` pushes the fresh snapshot (with the new transcript entry),
         // which the Turn's event and settle writes bypass observedOwner and would not push.
         restRun(observed, input.runId, "blocked");
+        const settlement = settleAgentCompletion({
+          runId: input.runId,
+          tracking,
+          owner,
+          executionOwner: observed,
+          routing: begun.facts.routing,
+          digest: begun.record.bundleSnapshotDigest,
+        });
+        if (settlement !== undefined) {
+          const settled = await settlement;
+          leaveClaimLive = settled.retainOwner;
+          return settled.outcome;
+        }
         return { status: "applied" };
       },
       retainOwner: () => leaveClaimLive,
@@ -3144,20 +3307,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
       tracking,
       owner,
       drive: async () => {
-        await closeHeldStep(tracking);
-        // Settle the interactive Step's Attempt succeeded (no outputs — an
-        // interactive-agent Step produces no Artifacts, #215), then drive the Run to
-        // its next rest. The empty succeeded Attempt stages no commit (store/AGENTS),
-        // and a resume skips the Step. An End Stage marks the Attempt in the same
-        // transaction, so the re-walk exits the group; no tracker is read or written.
-        settleAttemptOrThrow(observed, input.runId, {
+        await publishInteractiveEnd({
+          runId: input.runId,
+          owner: observed,
+          tracking,
           attemptId,
-          outcome: "succeeded",
-          required: [],
-          outputs: [],
-          at: new Date(),
-          advanceState: "running",
-          ...(endsStage ? { endsStage: true as const } : {}),
+          endsStage,
         });
         const driven = await executeTrackedRouting({
           runId: input.runId,

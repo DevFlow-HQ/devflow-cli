@@ -32,6 +32,8 @@ import {
   attemptIteration,
   attemptStepId,
   interactiveEndLegality,
+  latestAgentCall,
+  readAgentCallEvent,
   interactiveStepTarget,
 } from "../run/execution/execution.js";
 import type {
@@ -208,6 +210,29 @@ function runResult(
       held?.kind === "interactive" ? held.step : undefined;
     const followUp = held?.kind === "follow-up" ? held : undefined;
     const turnEvents = owner?.turnEvents() ?? [];
+    const lastTurn = turns.at(-1);
+    const pendingCall =
+      owner !== undefined && lastTurn !== undefined
+        ? latestAgentCall(owner, lastTurn.attemptId)
+        : undefined;
+    const pendingAgentCompletion =
+      pendingCall !== undefined &&
+      pendingCall.turn.resultKind === undefined &&
+      !log.some((e) => e.attemptId === pendingCall.turn.attemptId)
+        ? { reason: pendingCall.call.reason }
+        : undefined;
+    const deferredAgentCompletion =
+      listing?.live !== true &&
+      derivedRun.state === "blocked" &&
+      current?.kind === "interactive-agent" &&
+      pendingCall?.turn.resultKind === "completed" &&
+      attemptStepId(pendingCall.turn.attemptId) === current.id &&
+      interactiveEndLegality({
+        routing: facts.routing,
+        step: current,
+        control: "step_done",
+        turnLive: true,
+      }).kind === "legal";
     const sessions = owner?.harnessSessions() ?? [];
     const names = sessionNames(facts.routing, turns);
     const harnessEvidence = owner?.harnessEvidence();
@@ -331,9 +356,19 @@ function runResult(
                   takeoverOwnerPid: listing.ownerPid,
                 }),
               ]
-            : derivedRun.state === "halted" || derivedRun.state === "failed"
-              ? [resumeRunOffer(runId, derivedRun.state, resumeEvidence())]
-              : []),
+            : deferredAgentCompletion
+              ? [
+                  {
+                    action: "resume-run" as const,
+                    runId,
+                    available: true as const,
+                    consequence:
+                      "Apply the agent's recorded Step completion and continue Routing.",
+                  },
+                ]
+              : derivedRun.state === "halted" || derivedRun.state === "failed"
+                ? [resumeRunOffer(runId, derivedRun.state, resumeEvidence())]
+                : []),
           // Turn-scoped controls (#118, #148): while a Turn is live in this process, a
           // user can interrupt it without cancelling the Run (the Step returns to
           // `blocked` waiting for the person, #353, #354), and steer it when the
@@ -425,11 +460,20 @@ function runResult(
             }
           : {}),
         ...(turns.length > 0 ? { turnPosition: turns.length } : {}),
+        ...(pendingAgentCompletion !== undefined
+          ? { pendingAgentCompletion }
+          : {}),
         // A confirmed End Stage (#218) completed this Run by human declaration, not
         // automatic verification; the summary says so rather than imply a check.
         ...(derivedRun.state === "succeeded" &&
-        log.some((entry) => entry.endsStage === true)
-          ? { completion: "human-declared" as const }
+        log.some(
+          (entry) => entry.endedBy === "agent" || entry.endsStage === true,
+        )
+          ? {
+              completion: log.some((entry) => entry.endedBy === "agent")
+                ? ("agent-declared" as const)
+                : ("human-declared" as const),
+            }
           : {}),
       },
     };
@@ -1727,6 +1771,15 @@ function buildTimeline(
                 ? "repeat-continued"
                 : "interactive-step-ended",
         detail: attempt.outcome,
+        ...(attempt.endedBy === "agent"
+          ? {
+              endedBy: "agent" as const,
+              reason: latestAgentCall(
+                { turns: () => turns, turnEvents: () => turnEvents },
+                attempt.attemptId,
+              )?.call.reason,
+            }
+          : {}),
         ...(stepId !== undefined ? { step: stepId } : {}),
       },
       order: index,
@@ -1815,7 +1868,26 @@ function buildTimeline(
     }
   }
   for (const turnEvent of turnEvents) {
-    const entry = turnEventEntry(turnEvent);
+    const call = readAgentCallEvent(turnEvent);
+    const callTurn = turnsById.get(turnEvent.turnId);
+    const entry: RunTimelineEvent | undefined =
+      call !== undefined
+        ? {
+            at: turnEvent.at,
+            event: "agent-call",
+            agentCall: {
+              id: call.id,
+              reason: call.reason,
+              answer: call.answer,
+              disposition:
+                callTurn?.resultKind === undefined
+                  ? "pending"
+                  : callTurn.resultKind === "completed"
+                    ? "completed"
+                    : "dropped",
+            },
+          }
+        : turnEventEntry(turnEvent);
     if (entry === undefined) continue;
     const turn = turnsById.get(turnEvent.turnId);
     events.push(
@@ -1898,6 +1970,7 @@ const TIMELINE_CATEGORY_RANK: Record<RunTimelineKind, number> = {
   "interactive-step-ended": 9,
   "repeat-continued": 9,
   "stage-ended": 9,
+  "agent-call": 8,
   "attempt-settled": 10,
   iteration: 11,
   "checkpoint-blocked": 12,

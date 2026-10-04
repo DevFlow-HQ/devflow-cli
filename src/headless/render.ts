@@ -288,9 +288,11 @@ export function renderRun(run: RunView): string {
     `Launched: ${run.launchedAt}`,
     `State: ${run.state}`,
     // A confirmed End Stage (#218) completes by human declaration, never a check.
-    ...(run.completion === "human-declared"
-      ? ["Completion: declared by a human (Secant did not check the tracker)"]
-      : []),
+    ...(run.completion === "agent-declared"
+      ? ["Completion: declared by the agent"]
+      : run.completion === "human-declared"
+        ? ["Completion: declared by a human (Secant did not check the tracker)"]
+        : []),
     // Whether the Run is live in this instance or another, naming the owner
     // process (ADR 0031). Omitted when the Run is not live: its `State` already
     // says so, and a rested Run has no owner to name.
@@ -486,7 +488,15 @@ export function renderRun(run: RunView): string {
       asked === undefined
         ? ""
         : ` ${asked.harness}/${asked.server}: ${asked.message}${asked.url === undefined ? "" : ` ${asked.url}`}`;
-    const line = `  ${event.at} ${event.event}${kind}${elicitation}${detail}${step}`;
+    const completion =
+      event.endedBy === "agent"
+        ? ` · ended by the agent · ${screenReason(event.reason ?? "")}`
+        : "";
+    const call =
+      event.agentCall !== undefined
+        ? ` · ${event.agentCall.answer.outcome} · ${event.agentCall.disposition} · ${screenReason(event.agentCall.reason)}`
+        : "";
+    const line = `  ${event.at} ${event.event}${kind}${elicitation}${detail}${completion}${call}${step}`;
     lines.push(
       event.event === "elicitation-declined"
         ? stripAnsi(line).replace(/\p{Cc}/gu, " ")
@@ -630,4 +640,10 @@ function renderTrust(trust: BundleTrustState): string {
     case "trusted":
       return `trusted (granted ${trust.grantedAt})`;
   }
+}
+
+function screenReason(reason: string): string {
+  return stripAnsi(reason)
+    .replace(/[\r\n\t]/g, " ")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "");
 }

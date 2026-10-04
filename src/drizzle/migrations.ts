@@ -15,6 +15,7 @@ import runGateSuggestions from "./run/20260923143536_gate_suggestions/migration.
 import runStageEnded from "./run/20260924012140_stage_ended/migration.sql" with { type: "text" };
 import runTurnModelChoice from "./run/20261003120620_turn_model_choice/migration.sql" with { type: "text" };
 import runModelChoice from "./run/20261003192230_run_model_choice/migration.sql" with { type: "text" };
+import runAgentEnded from "./run/20261004105000_agent_ended/migration.sql" with { type: "text" };
 import type { MigrationsJournal } from "drizzle-orm/migrator";
 
 // A migration's journal `name` and `timestamp` are the two load-bearing fields
@@ -78,4 +79,5 @@ export const runMigrations: MigrationsJournal = [
   journalEntry("20260924012140_stage_ended", runStageEnded),
   journalEntry("20261003120620_turn_model_choice", runTurnModelChoice),
   journalEntry("20261003192230_run_model_choice", runModelChoice),
+  journalEntry("20261004105000_agent_ended", runAgentEnded),
 ];

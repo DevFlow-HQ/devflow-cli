@@ -142,6 +142,7 @@ const attemptLogRow = z.object({
   outcome: attemptOutcome,
   at: z.string(),
   stage_ended: z.boolean().nullable(),
+  ended_by: z.literal("agent").nullable(),
 });
 const reconcileRow = z.object({ run_id: z.string(), state: z.string() });
 const conflictRow = z.object({
@@ -426,6 +427,7 @@ function readAttemptLog(db: SQLiteBunDatabase) {
       outcome: attemptLog.outcome,
       at: attemptLog.at,
       stage_ended: attemptLog.stage_ended,
+      ended_by: attemptLog.ended_by,
     })
     .from(attemptLog)
     .orderBy(asc(attemptLog.seq))
@@ -437,6 +439,7 @@ function readAttemptLog(db: SQLiteBunDatabase) {
         outcome: parsed.outcome,
         at: parsed.at,
         ...(parsed.stage_ended === true ? { endsStage: true as const } : {}),
+        ...(parsed.ended_by === "agent" ? { endedBy: "agent" as const } : {}),
       };
     });
 }
@@ -582,6 +585,7 @@ function commitAttempt(params: TCommitAttemptParams): void {
       outcome: params.request.outcome,
       at,
       stage_ended: params.request.endsStage ?? null,
+      ended_by: params.request.endedBy ?? null,
     })
     .run();
   if (params.request.advanceState !== undefined) {

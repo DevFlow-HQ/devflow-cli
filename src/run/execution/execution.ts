@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
 import {
   flattenSteps,
-  inHumanRepeat,
-  FRESH_SESSION,
   MAX_REVIEW_CHECKPOINT_INTERVAL,
   type AgentStep,
   type AttemptOutcome,
@@ -47,7 +45,15 @@ import {
   verifyMaterializations,
 } from "./materialization.js";
 import { observedWrite } from "./store-write.js";
+import { attemptSession } from "./sessions.js";
 import { guardedExecutionObserver } from "./observer.js";
+
+export type { InteractiveEndLegality } from "./interactive-completion.js";
+export {
+  interactiveEndLegality,
+  latestAgentCall,
+  readAgentCallEvent,
+} from "./interactive-completion.js";
 
 export {
   driveInteractiveTurn,
@@ -376,7 +382,7 @@ async function runInteractiveAgent(
     step,
     context,
     attemptId,
-    interactiveSession(context.routing, step, attemptId),
+    attemptSession(context.routing, step, attemptId),
   );
   const halted =
     entry !== undefined &&
@@ -1018,56 +1024,6 @@ function renderGateMessage(step: HumanGateStep, context: StepContext): string {
   return new TextDecoder().decode(bytes);
 }
 
-type InteractiveEndControl =
-  "end-interactive-step" | "continue-repeat" | "end-stage";
-
-export type InteractiveEndLegality =
-  | { readonly kind: "legal" }
-  | {
-      readonly kind: "refused";
-      readonly reason:
-        | "mid-turn"
-        | "end-step-in-human-repeat"
-        | "continue-outside-human-repeat"
-        | "end-stage-outside-human-repeat";
-    };
-
-/** Legality of the controls that settle an interactive Step. Callers first confirm
- *  the Run is at that Step; Turn liveness includes their own in-flight work. */
-export function interactiveEndLegality({
-  routing,
-  step,
-  control,
-  turnLive,
-}: {
-  readonly routing: readonly RoutingNode[];
-  readonly step: Pick<Step, "id">;
-  readonly control: InteractiveEndControl;
-  readonly turnLive: boolean;
-}): InteractiveEndLegality {
-  // A raced control reports the live Turn even when its position also mismatches.
-  if (turnLive) return { kind: "refused", reason: "mid-turn" };
-  const humanRepeat = inHumanRepeat(routing, step.id);
-  switch (control) {
-    case "end-interactive-step":
-      return humanRepeat
-        ? { kind: "refused", reason: "end-step-in-human-repeat" }
-        : { kind: "legal" };
-    case "continue-repeat":
-      return humanRepeat
-        ? { kind: "legal" }
-        : { kind: "refused", reason: "continue-outside-human-repeat" };
-    case "end-stage":
-      return humanRepeat
-        ? { kind: "legal" }
-        : { kind: "refused", reason: "end-stage-outside-human-repeat" };
-    default: {
-      const exhaustive: never = control;
-      return exhaustive;
-    }
-  }
-}
-
 /** Where an interactive-agent Step's human Turns go (#122, #216): the pending
  *  Attempt id of the iteration the Run rests at, and that Attempt's Session. The
  *  scheduler runs iterations in order and skips a settled instance, so the resting
@@ -1087,24 +1043,7 @@ export function interactiveStepTarget(
     iteration,
     resume.attempts.get(instanceKey(step.id, iteration)) ?? 0,
   );
-  return { attemptId, session: interactiveSession(routing, step, attemptId) };
-}
-
-/** An interactive Step's Session for one Attempt: a top-level named Session is
- *  shared with later Steps; inside a Repeat group, or when `fresh`, it is scoped to
- *  the Attempt, so each iteration opens its own conversation (#216). */
-function interactiveSession(
-  routing: readonly RoutingNode[],
-  step: AgentStep,
-  attemptId: string,
-): string {
-  const inRepeat = routing.some(
-    (node) =>
-      "repeat" in node && node.repeat.steps.some((s) => s.id === step.id),
-  );
-  return inRepeat || step.session === FRESH_SESSION
-    ? `${step.session}-${attemptId}`
-    : step.session;
+  return { attemptId, session: attemptSession(routing, step, attemptId) };
 }
 
 /** The Step id an Attempt id names, or undefined for an id this Module did not

@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import {
-  FRESH_SESSION,
+  agentCompletionCalls,
   promptSlotPattern,
   WORKING_AREA_SLOT,
   type AgentStep,
@@ -10,6 +10,8 @@ import {
   type AttemptOutcome,
   type Reference,
   type StepKindName,
+  type RoutingNode,
+  type Step,
 } from "../../workflow/workflow.js";
 import { waitingAgentTurn } from "../store/store.js";
 import type {
@@ -23,6 +25,7 @@ import type {
   WriteResult,
 } from "../store/store.js";
 import type {
+  AgentCallReply,
   DurableTurnRecorder,
   HarnessFailure,
   HarnessProfile,
@@ -40,6 +43,8 @@ import type {
   TurnFailureFacts,
 } from "./execution.js";
 import { observedWrite } from "./store-write.js";
+import { attemptSession, sessionAgentCalls } from "./sessions.js";
+import { interactiveEndLegality } from "./interactive-completion.js";
 import { guardedExecutionObserver } from "./observer.js";
 
 // --- Live request-answer channel (#117) ------------------------------------
@@ -188,6 +193,7 @@ export interface AgentFollowUp {
 }
 
 interface StepContext {
+  readonly routing: readonly RoutingNode[];
   readonly owner: RunOwner;
   readonly resolveAsset: (assetPath: string) => string | undefined;
   readonly cancelSignal?: AbortSignal;
@@ -255,10 +261,7 @@ export async function runAgent(
   // `fresh` isolates a new Session per Attempt (per Iteration inside a Repeat
   // group, since the Attempt id encodes both); any other name is reused, so
   // successive Agent Steps naming it share one live process.
-  const session =
-    step.session === FRESH_SESSION
-      ? `${FRESH_SESSION}-${attemptId}`
-      : step.session;
+  const session = attemptSession(context.routing, step, attemptId);
   const turnId = nextAgentTurnId(owner, attemptId);
 
   const recovery = sessionRecovery(owner, session);
@@ -297,6 +300,8 @@ export async function runAgent(
       : `${rendered.prompt}\n\n${receipts.map(receiptInstruction).join("\n")}`;
 
   const result = await driveHarnessTurn(owner, harness.prepared, {
+    routing: context.routing,
+    step,
     session,
     origin: followUp !== undefined ? "human" : "managed",
     kind: "agent",
@@ -455,6 +460,8 @@ async function driveHarnessTurn(
   owner: RunOwner,
   prepared: PreparedHarness,
   params: {
+    readonly routing: readonly RoutingNode[];
+    readonly step: Step;
     readonly session: string;
     readonly origin: TurnOrigin;
     /** The Crucible Step kind that produced this Turn (#126). This is the Step-kind
@@ -533,6 +540,7 @@ async function driveHarnessTurn(
     correlationKey: { opaque: turnId },
     recorder,
     input: { text: params.input },
+    agentCalls: sessionAgentCalls(params.routing, params.step),
     ...(params.resume !== undefined ? { resume: params.resume } : {}),
     ...(modelChoice !== undefined ? { modelChoice } : {}),
   });
@@ -548,9 +556,59 @@ async function driveHarnessTurn(
   const onAbort = (): void => {
     void turn.interrupt();
   };
+  const callAnswers: Promise<void>[] = [];
   try {
     const resultPromise = turn.result();
     turn.subscribe((event) => {
+      if (event.kind === "agent-call" && event.phase === "raised") {
+        const legality =
+          event.call.id === "step_done" || event.call.id === "stage_done"
+            ? interactiveEndLegality({
+                routing: params.routing,
+                step: params.step,
+                control: event.call.id,
+                turnLive:
+                  owner
+                    .turns()
+                    .some(
+                      (t) => t.turnId === turnId && t.resultKind === undefined,
+                    ) && signal?.aborted !== true,
+              })
+            : { kind: "refused" as const, reason: "unknown-call" };
+        const answer: AgentCallReply =
+          legality.kind === "legal"
+            ? { outcome: "accepted" }
+            : { outcome: "refused", reason: legality.reason };
+        const recorded = owner.appendTurnEvent({
+          turnId,
+          kind: "agent-call",
+          payload: JSON.stringify({
+            callId: event.call.callId.opaque,
+            id: event.call.id,
+            reason: event.call.reason,
+            answer,
+          }),
+          at: new Date(),
+        });
+        callAnswers.push(
+          turn
+            .answerAgentCall({
+              callId: event.call.callId,
+              ...(recorded.ok
+                ? answer
+                : ({ outcome: "refused", reason: "fenced" } as const)),
+            })
+            .then((receipt) => {
+              if (receipt.outcome === "rejected")
+                owner.appendTurnEvent({
+                  turnId,
+                  kind: "agent-call-expired",
+                  payload: JSON.stringify({ callId: event.call.callId.opaque }),
+                  at: new Date(),
+                });
+            }),
+        );
+      }
       recordTurnEvent(owner, turnId, event, answerSources);
       if (channel !== undefined) notifyChannel(channel, event);
     });
@@ -594,6 +652,7 @@ async function driveHarnessTurn(
       else signal.addEventListener("abort", onAbort, { once: true });
     }
     const result = await resultPromise;
+    await Promise.all(callAnswers);
     observedWrite(
       observe,
       owner.runId,
@@ -662,6 +721,8 @@ export function interactiveTurnRest(
 /** What driving one human interactive Turn needs (#122). */
 export interface InteractiveTurnRequest {
   readonly owner: RunOwner;
+  readonly routing: readonly RoutingNode[];
+  readonly step: AgentStep;
   readonly prepared: PreparedHarness;
   /** The Step's named Session, reused across the Step's human Turns and the
    *  following Agent Steps that name it. */
@@ -692,6 +753,8 @@ export async function driveInteractiveTurn(
   // surface it as a failed result without opening a fresh conversation.
   if (recovery.unusable) return unusableTurnResult(request.session);
   return driveHarnessTurn(request.owner, request.prepared, {
+    routing: request.routing,
+    step: request.step,
     session: request.session,
     origin: "human",
     kind: "interactive-agent",
@@ -740,12 +803,14 @@ export async function runInteractiveEntryTurn(
   const recovery = sessionRecovery(owner, session);
   if (recovery.unusable) return unusableTurnResult(session);
   return driveHarnessTurn(owner, harness.prepared, {
+    routing: context.routing,
+    step,
     session,
     origin: "managed",
     kind: "interactive-agent",
     attemptId,
     turnId: `${attemptId}#entry`,
-    input: rendered.prompt,
+    input: entryPrompt(step, context.routing, rendered.prompt),
     observe: context.observe,
     // Settle `detached` like a human Turn, so the next Turn resumes this Session.
     detachAfterTurn: true,
@@ -1362,4 +1427,21 @@ function resultEffectiveModel(result: TurnResult): string | undefined {
     return model.known ? model.model : undefined;
   }
   return undefined;
+}
+
+function entryPrompt(
+  step: AgentStep,
+  routing: readonly RoutingNode[],
+  prompt: string,
+): string {
+  const sentences = agentCompletionCalls(routing, step).map((call) =>
+    call === "step"
+      ? (step.stepDoneWhen ??
+        "When this step is done, call step_done with a one-line reason.")
+      : (step.stageDoneWhen ??
+        "When this stage is done, call stage_done with a one-line reason."),
+  );
+  return sentences.length === 0
+    ? prompt
+    : `${prompt}\n\n${sentences.join("\n")}`;
 }
