@@ -79,6 +79,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   process stop `process-only`. A force-kill, lost connection, or unconfirmed termination settles it `lost` with `interruption-unknown`. Windows has no
   graceful stage ([process notes](../process/AGENTS.md)), so a process stop of a live child there truthfully settles `lost`. The profile's interruption
   evidence states each Harness's stop and its per-OS fallback; the conformance `interruptOutcome` and `recoveryInterruptOutcome` options pin them.
+  Windows launch evidence selects confirm-then-reap: close the producer, reap, then settle `interrupted`. EOF cannot erase native truth. Cleanup has its
+  own Session-keyed phase; an incomplete reap retains ownership and prevents a duplicate native process.
 - Recovery is caller- and history-driven: a relaunch of a Session that already ran, or any Turn carrying `resume`, resumes that exact native conversation.
   A resume the native side does not acknowledge is a `recovery`-phase failure that marks the Session `unusable`; recovery never silently starts a fresh
   conversation. Codex app-server replacement failures leave Sessions detached; only an unacknowledged thread resume makes its Session unusable.

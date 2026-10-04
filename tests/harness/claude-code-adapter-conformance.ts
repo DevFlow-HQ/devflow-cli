@@ -982,8 +982,8 @@ test("the recorded Test Repair Turn approves an Edit and its patch makes the fai
 
 // --- Interrupt and Steer (ADR 0035) ------------------------------------------
 
-test("a recorded native interrupt settles interrupted active-turn on every OS and the next Turn runs on the same process", async () => {
-  const replayer = installReplayer(VERSION, protocolCase("interrupt"));
+test("a confirmed native interrupt recovers the exact Session after Windows reaping and reuses the process on POSIX", async () => {
+  const replayer = installReplayer(VERSION, protocolCase("interrupt-recovery"));
   const prepared = await createClaudeCodeAdapter({
     path: replayer.path,
     env: {},
@@ -1038,9 +1038,18 @@ test("a recorded native interrupt settles interrupted active-turn on every OS an
   const [invocation, ...relaunches] = replayer
     .invocations()
     .filter((launch) => launch.args.includes("-p"));
-  assert.deepEqual(relaunches, [], "a native interrupt spawns no relaunch");
+  if (process.platform === "win32") {
+    assert.equal(relaunches.length, 1);
+    assert.ok(relaunches[0]?.args.includes("--resume"));
+    assert.ok(
+      relaunches[0]?.args.includes("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+    );
+  } else assert.deepEqual(relaunches, [], "POSIX keeps the native process");
   assert.ok(invocation?.args.includes("--session-id"));
-  assert.equal(invocation.stdinLines.length, 2);
+  assert.equal(
+    invocation.stdinLines.length,
+    process.platform === "win32" ? 1 : 2,
+  );
   // The one control frame is the interrupt, cancelling queued messages (#359);
   // the replayer echoed its Adapter-minted request id into the recorded
   // confirmation.
@@ -1134,7 +1143,7 @@ test("a recorded Steer written while text streams runs as the next native exchan
 
 test("a recorded compaction the Interrupt cancels settles interrupted active-turn, and the next compaction completes", async () => {
   const { replayer, harness } = await preparedOver(
-    "compaction",
+    process.platform === "win32" ? "compaction-recovery" : "compaction",
     "c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0",
   );
   assert.equal(
@@ -1167,8 +1176,13 @@ test("a recorded compaction the Interrupt cancels settles interrupted active-tur
   const launches = replayer
     .invocations()
     .filter((launch) => launch.args.includes("-p"));
-  assert.equal(launches.length, 1, "every Turn ran on the one live process");
-  assert.equal(launches[0]?.stdinLines.length, 3);
+  assert.equal(launches.length, process.platform === "win32" ? 2 : 1);
+  assert.equal(
+    launches[0]?.stdinLines.length,
+    process.platform === "win32" ? 2 : 3,
+  );
+  if (process.platform === "win32")
+    assert.ok(launches[1]?.args.includes("--resume"));
 });
 
 // --- Recovery ----------------------------------------------------------------
@@ -1787,7 +1801,7 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
   assert.equal(profile.harness, "claude-code");
   assert.equal(profile.executableVersion, VERSION);
   // Revision 3 declares native Steer (#359).
-  assert.equal(profile.adapterRevision, "claude-code-3");
+  assert.equal(profile.adapterRevision, "claude-code-4");
   assert.equal(
     profile.platform,
     process.platform === "win32"

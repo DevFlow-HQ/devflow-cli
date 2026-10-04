@@ -19,6 +19,7 @@
 // exactly as the real recording did. A `workingAreaPatch` is applied the same way
 // in the directory named by `--add-dir` — the Run working area (#222).
 
+import { backgroundTree } from "./background-tree.mjs";
 import { appendFileSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -441,6 +442,7 @@ for (;;) {
     }
     messageUuids.set(turn.uuid, uuid);
   }
+  await backgroundTree(turn.backgroundTree);
   let workspacePatchApplied = false;
   const applyWorkspacePatch = () => {
     if (workspacePatchApplied) return;

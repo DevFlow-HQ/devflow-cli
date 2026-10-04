@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { backgroundTree } from "./background-tree.mjs";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, cpSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -74,6 +75,7 @@ const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let trafficAt = 0;
 let requestedWorkspace;
 let turnNumber = 0;
+let resumed = false;
 let threadNumber = 0;
 let activeThreadId = "thread-1";
 let activeTurnId;
@@ -254,6 +256,7 @@ for await (const line of lines) {
     continue;
   }
   if (request.method === "thread/resume") {
+    resumed = true;
     if (scenario.recovery?.refuseThreadId === request.params.threadId) {
       process.stdout.write(
         `${JSON.stringify({ id: request.id, error: { code: -32600, message: "thread resume refused" } })}\n`,
@@ -321,6 +324,11 @@ for await (const line of lines) {
     continue;
   }
   if (request.method === "turn/start") {
+    if (
+      !resumed &&
+      turnNumber === (scenario.turn?.completedTurnsBeforeBlock ?? 0)
+    )
+      await backgroundTree(scenario.turn?.backgroundTree);
     activeThreadId = request.params.threadId;
     if (request.params.model !== undefined) {
       configuredModel = request.params.model;
@@ -376,7 +384,12 @@ for await (const line of lines) {
     process.stdout.write(
       `${JSON.stringify({ id: request.id, result: { turn } })}\n`,
     );
-    if (scenario.turn?.withholdTerminal === true) continue;
+    if (
+      scenario.turn?.withholdTerminal === true &&
+      turnNumber > (scenario.turn.completedTurnsBeforeBlock ?? 0) &&
+      !(resumed && scenario.turn.completeAfterResume === true)
+    )
+      continue;
     if (scenario.turn?.stopAfter === "accepted") process.exit(0);
     emitReroute("before-read", turnId);
     deferredTurn = () => {

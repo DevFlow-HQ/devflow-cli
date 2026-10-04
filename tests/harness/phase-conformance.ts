@@ -190,7 +190,7 @@ export function registerHarnessPhaseConformance(
   // --- Claude Code ------------------------------------------------------------
 
   register(
-    "[claude-code phases] a fresh Turn launches and handshakes, a native interrupt is one ok control phase on every OS, and close is cleanup",
+    "[claude-code phases] a fresh Turn launches and handshakes, a native interrupt separates Windows cleanup from control, and close is cleanup",
     async () => {
       const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
       const replayer = installReplayer(CLAUDE_VERSION, claudeCase("interrupt"));
@@ -218,6 +218,9 @@ export function registerHarnessPhaseConformance(
         [`handshake@${SESSION}`]: ["ok"],
         [`control@${SESSION}`]: ["ok"],
         "cleanup@-": ["ok"],
+        ...(process.platform === "win32"
+          ? { [`cleanup@${SESSION}`]: ["ok"] }
+          : {}),
       });
       const launch = replayer
         .invocations()

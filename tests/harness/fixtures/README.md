@@ -61,6 +61,7 @@ Six keys, all required (the structural step enforces their presence):
     (the Run working area); the replay fails if the launch carries none.
   - `exitAfter` — exit right after this Turn's bytes (models lost/corruption).
   - `ignoreSigterm` — swallow SIGTERM so only a force-kill stops the process.
+- `backgroundTree` — a synthetic Turn option naming the Windows descendant worker and its PID-report file. Readiness precedes native content.
 - `resume` — a separate `{ exitCode, turns }` played when the launch carries
   `--resume` (a reattached, detached Session).
 - `sessions[]` — optional later fresh Sessions: the Nth `--session-id` launch
@@ -211,3 +212,12 @@ synthetic note. The synthetic inventory below is the pick-up list.
 | `completed`               | success Turn: tool activity, thinking/telemetry exclusion, preview coalescing, unknown-frame tolerance | a real plain Turn does not emit every frame variety on demand |
 | `completed-quotes-login`  | success result whose text quotes "run /login"                                                          | guards that a real answer is not misread as auth              |
 | `incompatibility`         | initialize omits one required response field                                                           | a compatible real Codex cannot emit this fault on demand      |
+
+The synthetic `interrupt-recovery` and `compaction-recovery` cases reuse the
+original recorded bytes and add a replacement-process `resume` section for
+Windows confirm-then-reap recovery. They are not recordings of Windows recovery.
+The synthetic Codex replayer's `completeAfterResume` permits a replacement's
+follow-up to complete, and `completedTurnsBeforeBlock` establishes multiple
+Sessions before the interrupted Turn. Its `backgroundTree` option reports
+escaped Git Bash descendants before native acceptance for handle-based cleanup
+checks. Strict recorded Codex `resume` remains a POSIX same-server scenario.

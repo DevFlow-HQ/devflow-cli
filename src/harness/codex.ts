@@ -76,7 +76,7 @@ import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
 export type { CodexRecordingObserver } from "./codex/qualification.js";
 
 const HARNESS_NAME = "codex";
-const PROBE_REVISION = "codex-probe-3";
+const PROBE_REVISION = "codex-probe-4";
 const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 const DEFAULT_LAUNCH_TIMEOUT_MS = 15_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
@@ -128,6 +128,7 @@ type TProbeResult<T> =
   | { readonly ok: false; readonly failure: HarnessFailure };
 
 type CodexGeneration = {
+  readonly windowsProcess?: boolean;
   readonly process: OwnedProcess;
   readonly connection: CodexJsonlConnection;
   readonly diagnostics: CodexDiagnosticCapture;
@@ -144,6 +145,7 @@ type TGenerationResult =
 type TLiveQualification =
   | {
       readonly ok: true;
+      readonly windowsProcess: boolean;
       readonly process: OwnedProcess;
       readonly diagnostics: CodexDiagnosticCapture;
       readonly connection: CodexJsonlConnection;
@@ -475,10 +477,14 @@ class CodexAdapter implements HarnessAdapter {
       undefined,
       "protocol-initialize",
     );
-    const live = await this.handshake(spawned.process, (next) => {
-      step.ok();
-      step = startPhase(phases, "handshake", undefined, next);
-    });
+    const live = await this.handshake(
+      spawned.process,
+      (next) => {
+        step.ok();
+        step = startPhase(phases, "handshake", undefined, next);
+      },
+      spawned.containment !== undefined,
+    );
     if (live.ok) {
       step.ok();
       handshake.ok();
@@ -492,6 +498,7 @@ class CodexAdapter implements HarnessAdapter {
   private async handshake(
     child: OwnedProcess,
     nextStep: (step: HarnessPhaseStep) => void,
+    windowsProcess: boolean,
   ): Promise<TLiveQualification> {
     const connection = new CodexQualificationConnection(
       child,
@@ -505,6 +512,7 @@ class CodexAdapter implements HarnessAdapter {
     const refuse = (failure: HarnessFailure, includeStderr: boolean) =>
       failedQualification({
         generation: {
+          windowsProcess,
           process: child,
           diagnostics: diagnosticCapture,
           connection: connection.runtimeConnection(),
@@ -530,6 +538,7 @@ class CodexAdapter implements HarnessAdapter {
       const modelList = await connection.listModels();
       return {
         ok: true,
+        windowsProcess,
         process: child,
         diagnostics: diagnosticCapture,
         connection: connection.runtimeConnection(),
@@ -559,6 +568,7 @@ class CodexPreparedHarness implements PreparedHarness {
   private generation: CodexGeneration | undefined;
   private replacement: Promise<TGenerationResult> | undefined;
   private ending: Promise<CleanupReport> | undefined;
+  private readonly interruptReaps = new WeakSet<CodexGeneration>();
   private endedReport: CleanupReport | undefined;
   private unreaped:
     | { readonly generation: CodexGeneration; readonly failure: HarnessFailure }
@@ -765,7 +775,11 @@ class CodexPreparedHarness implements PreparedHarness {
       );
       return;
     }
-    turn.attachConnection(generation.connection);
+    turn.attachConnection(
+      generation.connection,
+      generation.windowsProcess === true,
+      () => this.reapInterrupt(turn),
+    );
     await session.submit(turn, generation.connection);
   }
 
@@ -778,7 +792,15 @@ class CodexPreparedHarness implements PreparedHarness {
     return this.endGeneration();
   }
 
-  private endGeneration(): Promise<CleanupReport> {
+  private async reapInterrupt(turn: CodexTurn): Promise<void> {
+    const cleanup = startPhase(this.phases, "cleanup", turn.request.session);
+    const generation = this.generation ?? this.unreaped?.generation;
+    if (generation !== undefined) this.interruptReaps.add(generation);
+    const report = await this.endGeneration(true);
+    settleCleanup(cleanup, report);
+  }
+
+  private endGeneration(interruptReap = false): Promise<CleanupReport> {
     if (this.ending !== undefined) return this.ending;
     const generation = this.generation ?? this.unreaped?.generation;
     if (generation === undefined)
@@ -796,20 +818,23 @@ class CodexPreparedHarness implements PreparedHarness {
       : undefined;
     // During close, the interrupt acknowledgement may precede its terminal.
     // Keep that live Turn's reader until EOF; close forbids a newer Turn.
-    if (active === undefined || active.settled) this.generation = undefined;
+    if (interruptReap || active === undefined || active.settled)
+      this.generation = undefined;
     for (const session of this.sessions.values()) session.markDetached();
-    this.ending = this.closeGeneration(generation, retryingCleanup).then(
-      (report) => {
-        // Retired callbacks are fenced, so finish any still-live Turn here. Native
-        // terminal truth that already settled it remains authoritative.
-        if (this.generation === generation) this.generation = undefined;
-        active?.connectionEnded(report.failure?.cause);
-        // An incomplete cleanup remains visible after a later generation closes.
-        if (this.endedReport?.clean !== false) this.endedReport = report;
-        this.ending = undefined;
-        return report;
-      },
-    );
+    this.ending = this.closeGeneration(
+      generation,
+      retryingCleanup,
+      interruptReap,
+    ).then((report) => {
+      // Retired callbacks are fenced, so finish any still-live Turn here. Native
+      // terminal truth that already settled it remains authoritative.
+      if (this.generation === generation) this.generation = undefined;
+      active?.connectionEnded(report.failure?.cause, true);
+      // An incomplete cleanup remains visible after a later generation closes.
+      if (this.endedReport?.clean !== false) this.endedReport = report;
+      this.ending = undefined;
+      return report;
+    });
     return this.ending;
   }
 
@@ -841,6 +866,7 @@ class CodexPreparedHarness implements PreparedHarness {
   private async closeGeneration(
     generation: CodexGeneration,
     retryingCleanup: boolean,
+    interruptReap: boolean,
   ): Promise<CleanupReport> {
     let closed = await generation.process.closeStdin(this.cleanupTimeoutMs);
     if (
@@ -864,7 +890,14 @@ class CodexPreparedHarness implements PreparedHarness {
     const diagnosticResult = await generation.diagnostics.settle(
       this.cleanupTimeoutMs,
     );
-    if (closed.kind === "exited" && closed.status === 0) {
+    if (
+      (closed.kind === "exited" &&
+        (closed.status === 0 ||
+          interruptReap ||
+          this.interruptReaps.has(generation))) ||
+      ((interruptReap || this.interruptReaps.has(generation)) &&
+        closed.kind === "signal")
+    ) {
       if (diagnosticResult.cause !== undefined) {
         const detail =
           "Codex app-server closed, but stderr did not drain cleanly.";
@@ -1250,6 +1283,11 @@ class CodexTurn implements HarnessTurn {
   private nativeTarget = nativeTargetSlot();
   private interruptState: TInterruptControlState = { kind: "idle" };
   private closing = false;
+  private producerClosed = false;
+  private reapInterrupt: (() => Promise<void>) | undefined;
+  private interruptTimer: ReturnType<typeof setTimeout> | undefined;
+  private reaping: Promise<void> | undefined;
+  private interruptPhase: PhaseSpan | undefined;
 
   constructor(params: TCodexTurnParams) {
     this.request = params.request;
@@ -1267,8 +1305,13 @@ class CodexTurn implements HarnessTurn {
     return this.boundConnection === connection;
   }
 
-  attachConnection(connection: CodexJsonlConnection): void {
+  attachConnection(
+    connection: CodexJsonlConnection,
+    windowsProcess: boolean,
+    reap: () => Promise<void>,
+  ): void {
     this.boundConnection = connection;
+    if (windowsProcess) this.reapInterrupt = reap;
   }
 
   private get connection(): CodexJsonlConnection {
@@ -1280,7 +1323,7 @@ class CodexTurn implements HarnessTurn {
 
   subscribe(listener: TurnEventListener): TurnSubscription {
     for (const event of this.events) listener(event);
-    if (!this.settled) this.listeners.add(listener);
+    if (!this.settled && !this.producerClosed) this.listeners.add(listener);
     return { unsubscribe: () => this.listeners.delete(listener) };
   }
 
@@ -1442,6 +1485,28 @@ class CodexTurn implements HarnessTurn {
   ): Promise<ControlReceipt> {
     let result: unknown;
     const control = startPhase(this.phases, "control", this.request.session);
+    this.interruptPhase = control;
+    if (this.reapInterrupt !== undefined) {
+      this.interruptTimer = setTimeout(() => {
+        if (
+          this.settled ||
+          this.producerClosed ||
+          this.interruptState.kind === "idle"
+        )
+          return;
+        control.failed(
+          this.controlFailureValue({
+            category: "control-timeout",
+            diagnostics:
+              "Codex did not confirm native interruption within the control bound.",
+            cause: new CodexExchangeTimeoutError(
+              "turn/interrupt terminal exchange timed out",
+            ),
+          }),
+        );
+        void this.reap();
+      }, timeoutMs);
+    }
     try {
       result = await boundedCodexExchange({
         operation: () =>
@@ -1456,6 +1521,12 @@ class CodexTurn implements HarnessTurn {
       this.settleControlPhase(control, cause);
       if (cause instanceof CodexRpcResponseError) {
         this.interruptState = { kind: "idle" };
+        clearTimeout(this.interruptTimer);
+      } else if (
+        this.reapInterrupt !== undefined &&
+        !(cause instanceof CodexExchangeTimeoutError)
+      ) {
+        await this.reap();
       }
       return this.rejectControlFailure(
         "Codex turn/interrupt control failed.",
@@ -1465,16 +1536,20 @@ class CodexTurn implements HarnessTurn {
     try {
       parseTurnInterruptResult(result);
     } catch (cause) {
+      const invalid = {
+        category: "protocol-corruption",
+        diagnostics: "Codex emitted an invalid turn/interrupt response.",
+        cause,
+      };
       control.failed(
-        this.controlFailure({
-          category: "protocol-corruption",
-          diagnostics: "Codex emitted an invalid turn/interrupt response.",
-          cause,
-        }),
+        this.reapInterrupt === undefined
+          ? this.controlFailure(invalid)
+          : this.controlFailureValue(invalid),
       );
+      if (this.reapInterrupt !== undefined) await this.reap();
       return { outcome: "rejected", reason: "expired" };
     }
-    control.ok();
+    if (this.reapInterrupt === undefined) control.ok();
     const state = this.interruptState;
     if (state.kind === "confirmed") return { outcome: "accepted" };
     if (this.settled || state.kind !== "sent") {
@@ -1745,7 +1820,7 @@ class CodexTurn implements HarnessTurn {
   }
 
   accept(notification: RuntimeNotification): void {
-    if (this.settled || !this.admittedToRuntime) return;
+    if (this.settled || this.producerClosed || !this.admittedToRuntime) return;
     if (notification.kind === "activity") {
       this.emit({ kind: "activity", description: notification.description });
       return;
@@ -1836,8 +1911,8 @@ class CodexTurn implements HarnessTurn {
     }
   }
 
-  connectionEnded(cause?: unknown): void {
-    if (this.settled) return;
+  connectionEnded(cause?: unknown, afterReap = false): void {
+    if (this.settled || this.producerClosed) return;
     if (this.recoveryPending) return;
     if (!this.admittedToRuntime) {
       this.settleNotStarted(
@@ -1849,6 +1924,10 @@ class CodexTurn implements HarnessTurn {
     }
     this.session.markDetached();
     const interruptionUnknown = this.interruptionOutcomeUnknown();
+    if (interruptionUnknown && this.reapInterrupt !== undefined && !afterReap) {
+      void this.reap();
+      return;
+    }
     this.settle({
       kind: "lost",
       detail: {
@@ -2223,6 +2302,8 @@ class CodexTurn implements HarnessTurn {
       return;
     }
     if (notification.status === "interrupted") {
+      clearTimeout(this.interruptTimer);
+      this.interruptPhase?.ok();
       this.confirmInterrupt();
       this.session.markDetached();
       this.settle(
@@ -2261,7 +2342,7 @@ class CodexTurn implements HarnessTurn {
   }
 
   private emit(event: TurnEvent): void {
-    if (this.settled) return;
+    if (this.settled || this.producerClosed) return;
     this.events.push(event);
     for (const listener of this.listeners) listener(event);
   }
@@ -2280,6 +2361,7 @@ class CodexTurn implements HarnessTurn {
   }
 
   private emitPreview(delta: string): void {
+    if (this.settled || this.producerClosed) return;
     this.preview += delta;
     const event: TurnEvent = { kind: "preview", text: this.preview };
     if (this.previewIndex === undefined) {
@@ -2332,7 +2414,10 @@ class CodexTurn implements HarnessTurn {
   }
 
   private settle(result: TurnResult, confirmAnswers = false): void {
-    if (this.settled) return;
+    if (this.settled || this.producerClosed) return;
+    clearTimeout(this.interruptTimer);
+    if (result.kind === "completed" || result.kind === "failed")
+      this.interruptPhase?.abandoned();
     this.resolveTarget(undefined);
     this.clearPreview();
     for (const [clientId, pending] of this.steers) {
@@ -2355,8 +2440,20 @@ class CodexTurn implements HarnessTurn {
     }
     this.steers.clear();
     this.settleApprovals(confirmAnswers);
-    this.settled = true;
+    this.producerClosed = true;
     this.listeners.clear();
+    if (result.kind === "interrupted" && this.reapInterrupt !== undefined) {
+      void this.reap().then(() => this.finishSettlement(result));
+    } else this.finishSettlement(result);
+  }
+
+  private reap(): Promise<void> {
+    this.reaping ??= this.reapInterrupt?.() ?? Promise.resolve();
+    return this.reaping;
+  }
+
+  private finishSettlement(result: TurnResult): void {
+    this.settled = true;
     this.onSettled();
     this.resolveResult(result);
   }
@@ -2563,7 +2660,7 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
     interruption: {
       mode: "active-turn",
       evidence:
-        "Codex confirms active-Turn interruption through the matching terminal Turn event.",
+        "Codex confirms active-Turn interruption through the matching terminal Turn event. On Windows, Secant reaps the shared app-server before reporting interruption; every Session resumes its exact thread through thread/resume on a replacement app-server. An unconfirmed Windows stop is lost.",
     },
     approvals: {
       available: true,

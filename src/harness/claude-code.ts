@@ -93,7 +93,7 @@ const DENY_MESSAGE = "The tool use was denied.";
 
 /** This Adapter's revision, stamped onto every profile it produces so a cached
  *  qualification from an older Adapter is never mistaken for a current one. */
-const ADAPTER_REVISION = "claude-code-3";
+const ADAPTER_REVISION = "claude-code-4";
 
 const HARNESS_NAME = "claude-code";
 
@@ -554,6 +554,10 @@ type LaunchOutcome =
 class ClaudeCodeSession {
   readonly coordinate: RecoveryCoordinate;
   private process: OwnedProcess | undefined;
+  private windowsProcess = false;
+  private unreaped: OwnedProcess | undefined;
+  private reapFailure: HarnessFailure | undefined;
+  private nativeControl: PhaseSpan | undefined;
   /** The Turn that owns `process`. A later Turn may be admitted before the prior
    *  child-close callback runs, so process ownership cannot be inferred from the
    *  Session's current `active` Turn (#134 A17). */
@@ -635,12 +639,9 @@ class ClaudeCodeSession {
     this.unusableReason = reason;
   }
 
-  /** A caller's Interrupt (ADR 0035). When this Turn runs on a live,
-   *  initialized process, a stdin `control_request` `interrupt` keeps the
-   *  process, the active Turn, and process ownership: Claude Code confirms with
-   *  an aborted `result`, which settles the Turn `interrupted` (`active-turn`) and
-   *  leaves the process for the next Turn. Any other state takes the process
-   *  stop at once, and so does a native stop Claude Code does not confirm. */
+  /** Request native interruption on an initialized process. An aborted result
+   *  confirms it; Windows then reaps before settlement, while POSIX retains the
+   *  process. Any other state or missing confirmation takes the process stop. */
   async interrupt(turn: ClaudeCodeTurn): Promise<void> {
     if (this.active !== turn) return;
     const owned = this.process;
@@ -652,11 +653,12 @@ class ClaudeCodeSession {
       await this.stop(turn);
       return;
     }
+    this.nativeControl = startPhase(this.phases, "control", this.name);
     this.interrupting = this.interruptNatively(
       turn,
       owned,
       control,
-      startPhase(this.phases, "control", this.name),
+      this.nativeControl,
     );
     await this.interrupting;
   }
@@ -703,14 +705,24 @@ class ClaudeCodeSession {
     // response; the channel still correlates it, or times it out, alone.
     const outcome = await Promise.race([
       control.request({ subtype: "interrupt", cancel_queued: true }),
+      turn.nativeConfirmation,
       turn.result().then(() => undefined),
     ]);
     if (outcome?.kind === "success") {
       await settlesWithin(
         turn,
         this.timeouts.controlMs - (performance.now() - started),
-        Promise.race([this.closing, owned.closed().then(() => undefined)]),
+        Promise.race([
+          this.closing,
+          owned.closed().then(() => undefined),
+          turn.nativeConfirmation,
+        ]),
       );
+    }
+    if (turn.nativeConfirmed) {
+      span.ok();
+      await turn.result();
+      return;
     }
     if (outcome === undefined || turn.settled) {
       if (turn.settledKind === "interrupted") span.ok();
@@ -739,6 +751,32 @@ class ClaudeCodeSession {
     this.releaseProcess();
     if (this.active === turn) this.active = undefined;
     await this.settleInterruption(turn, owned, span);
+  }
+
+  needsNativeReap(): boolean {
+    return this.windowsProcess;
+  }
+
+  async reapConfirmed(): Promise<void> {
+    this.nativeControl?.ok();
+    const owned = this.process;
+    if (owned === undefined) return;
+    this.releaseProcess();
+    this.unreaped = owned;
+    const cleanup = startPhase(this.phases, "cleanup", this.name);
+    const result = this.scrub(
+      await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
+    );
+    if (result.kind === "cleanup-error" || result.kind === "cleanup-timeout") {
+      this.reapFailure = cleanupFailure(
+        result,
+        describeClose(this.name, result),
+      );
+      cleanup.failed(this.reapFailure);
+    } else {
+      this.unreaped = undefined;
+      cleanup.ok();
+    }
   }
 
   /** Write one Steer frame to the process serving `turn` (ADR 0035). False when
@@ -794,7 +832,11 @@ class ClaudeCodeSession {
     this.closed = true;
     this.signalClosing();
     this.closeControl();
-    if (this.process === undefined && this.launchPromise === undefined) {
+    if (
+      this.process === undefined &&
+      this.launchPromise === undefined &&
+      this.interrupting === undefined
+    ) {
       const active = this.active;
       if (active !== undefined && !active.settled) {
         active.settleNotStarted(
@@ -807,8 +849,16 @@ class ClaudeCodeSession {
     const launch = this.launchPromise;
     if (launch !== undefined) await launch;
     await this.interrupting;
-    const owned = this.process;
+    const owned = this.process ?? this.unreaped;
     if (owned === undefined) {
+      if (this.reapFailure !== undefined)
+        return {
+          clean: false,
+          detail: "Claude Code cleanup was incomplete.",
+          failure: this.reapFailure,
+          session: this.name,
+          availability: this.detached(),
+        };
       return {
         clean: true,
         detail: `Session '${this.name}' had no live process.`,
@@ -819,7 +869,7 @@ class ClaudeCodeSession {
     const result = this.scrub(
       await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
     );
-    const clean = isCleanClose(result);
+    const clean = this.reapFailure === undefined && isCleanClose(result);
     const detail = describeClose(this.name, result);
     const availability: SessionAvailability =
       result.kind === "cleanup-error" || result.kind === "cleanup-timeout"
@@ -837,7 +887,7 @@ class ClaudeCodeSession {
     return {
       clean: false,
       ...common,
-      failure: cleanupFailure(result, detail),
+      failure: this.reapFailure ?? cleanupFailure(result, detail),
     };
   }
 
@@ -857,6 +907,36 @@ class ClaudeCodeSession {
       return;
     }
 
+    if (this.unreaped !== undefined) {
+      const owned = this.unreaped;
+      const finalExit = await Promise.race([
+        owned.closed(),
+        new Promise<undefined>((resolve) => {
+          const timer = setTimeout(
+            () => resolve(undefined),
+            DEFAULT_CLEANUP_TIMEOUT_MS,
+          );
+          void owned.closed().then(() => clearTimeout(timer));
+        }),
+      ]);
+      if (
+        finalExit === undefined ||
+        finalExit.kind === "cleanup-error" ||
+        finalExit.kind === "cleanup-timeout"
+      ) {
+        turn.settleCleanupRecoveryFailure();
+        return;
+      }
+      this.unreaped = undefined;
+    }
+    if (turn.settled) return;
+    if (this.closed) {
+      turn.settleNotStarted(
+        "closed-before-launch",
+        "The prepared Harness closed before Claude Code launched.",
+      );
+      return;
+    }
     const admission = await turn.admit(this.coordinate);
     if (!admission.recorded) {
       const owned = this.process;
@@ -1025,6 +1105,7 @@ class ClaudeCodeSession {
       };
     }
 
+    this.windowsProcess = launched.containment !== undefined;
     reportContainment(this.containment, launched.containment, this.name);
     const owned = launched.process;
     const control = new ControlChannel(
@@ -1189,6 +1270,10 @@ class ClaudeCodeTurn implements HarnessTurn {
   /** The kind the Turn settled with, once it has. */
   settledKind: TurnResult["kind"] | undefined;
   interrupting = false;
+  nativeConfirmed = false;
+  private producerClosed = false;
+  readonly nativeConfirmation: Promise<void>;
+  private confirmNative!: () => void;
   /** The last authoritative fact observed before truth could be lost — carried
    *  into a `lost` result so a caller sees how far the Turn got. */
   lastObservation = "no authoritative observation before the Turn ended";
@@ -1241,6 +1326,9 @@ class ClaudeCodeTurn implements HarnessTurn {
     private readonly onSettled: () => void,
   ) {
     this.request = request;
+    this.nativeConfirmation = new Promise((resolve) => {
+      this.confirmNative = resolve;
+    });
     this.resultPromise = new Promise((resolve) => {
       this.resolveResult = resolve;
     });
@@ -1433,7 +1521,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   /** Dispatch one parsed frame. A known type whose schema failed arrives as
    *  `other` and is generic activity, never corruption (frames.ts). */
   acceptFrame(parsed: ParsedFrame): void {
-    if (this.settled) return;
+    if (this.settled || this.producerClosed) return;
     if (parsed.kind === "init") {
       this.acceptInit(parsed.frame);
       return;
@@ -1478,7 +1566,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   protocolCorruption(detail: string, cause?: unknown): void {
-    if (this.settled) return;
+    if (this.settled || this.producerClosed) return;
     this.settleLost("completion", detail, {
       phase: "turn",
       category: "protocol-corruption",
@@ -1501,10 +1589,14 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.settle({ kind: "not-started", detail: { failure } });
   }
 
-  /** A native stop leaves the process live, but the Session reports `detached`
-   *  with its coordinate either way, as Codex does: a resuming Turn reuses the
-   *  live process and sends at once, or relaunches with `--resume`. */
+  /** Native confirmation detaches the exact Session. Windows reaps before the
+   *  result resolves; POSIX reuses its process. A relaunch always uses --resume. */
   settleInterrupted(stop: "native" | "process"): void {
+    if (this.settled || this.producerClosed) return;
+    if (stop === "native") {
+      this.nativeConfirmed = true;
+      this.confirmNative();
+    }
     this.settle({
       kind: "interrupted",
       detail: {
@@ -1513,7 +1605,7 @@ class ClaudeCodeTurn implements HarnessTurn {
             ? {
                 mode: "active-turn",
                 evidence:
-                  "Claude Code confirmed the interrupt control request with an aborted result; its process stays live for the next Turn.",
+                  "Claude Code confirmed the interrupt control request with an aborted result.",
               }
             : {
                 mode: "process-only",
@@ -1524,6 +1616,23 @@ class ClaudeCodeTurn implements HarnessTurn {
           state: "detached",
           coordinate: this.session.coordinate,
         },
+      },
+    });
+  }
+
+  settleCleanupRecoveryFailure(): void {
+    this.settle({
+      kind: "failed",
+      detail: {
+        failure: {
+          phase: "recovery",
+          category: "recovery-process",
+          possibleEffects: "none",
+          diagnostics:
+            "Claude Code cannot resume until its previous process cleanup is confirmed.",
+        },
+        effectiveModel: this.session.model(),
+        session: { state: "detached", coordinate: this.session.coordinate },
       },
     });
   }
@@ -1905,13 +2014,13 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   private emit(event: TurnEvent): void {
-    if (this.settled) return;
+    if (this.settled || this.producerClosed) return;
     this.events.push(event);
     for (const listener of this.listeners) listener(event);
   }
 
   private emitPreview(delta: string): void {
-    if (this.settled) return;
+    if (this.settled || this.producerClosed) return;
     this.preview += delta;
     const event: TurnEvent = { kind: "preview", text: this.preview };
     if (this.previewIndex === undefined) {
@@ -1931,7 +2040,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   private settle(result: TurnResult): void {
-    if (this.settled) return;
+    if (this.settled || this.producerClosed) return;
     this.clearHandshake();
     // A Turn that settles before init ends its init phase with the Turn's
     // failure, or abandoned when it was interrupted.
@@ -1952,6 +2061,20 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.heldResult = undefined;
     this.expireOutstanding();
     this.resolveSent(false);
+    this.producerClosed = true;
+    this.listeners.clear();
+    if (
+      result.kind === "interrupted" &&
+      result.detail.interruption.mode === "active-turn" &&
+      this.session.needsNativeReap()
+    ) {
+      void this.session
+        .reapConfirmed()
+        .then(() => this.finishSettlement(result));
+    } else this.finishSettlement(result);
+  }
+
+  private finishSettlement(result: TurnResult): void {
     this.settledKind = result.kind;
     this.onSettled();
     this.resolveResult(result);
@@ -2198,7 +2321,7 @@ function buildProfile(
     },
     interruption: {
       mode: "active-turn",
-      evidence: `A stdin interrupt control request ends the active Turn, confirmed by an aborted result, and keeps the process for the next Turn. Unconfirmed within the control bound, ${
+      evidence: `A stdin interrupt control request ends the active Turn, confirmed by an aborted result. On Windows, Secant reaps the process tree before reporting interruption and the next Turn resumes the same Session with --resume; on POSIX the process stays live. Unconfirmed within the control bound, ${
         platform === "windows"
           ? "it falls back to a forced process-tree kill, reported lost because Windows offers a hidden console child no graceful signal"
           : "it falls back to SIGTERM of the process, reported interrupted when the process exits on it and lost when it must be force-killed"

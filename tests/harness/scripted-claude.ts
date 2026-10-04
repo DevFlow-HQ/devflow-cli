@@ -58,6 +58,7 @@ export interface ScriptedClaude {
  *  each stdin `user` frame on its process (a Turn or a Steer) by index. */
 export function scriptedClaude(options: {
   readonly answer: ControlAnswer;
+  readonly closeStdin?: () => Promise<OwnedProcessClose>;
   readonly containment?: ProcessLaunchContainment;
   readonly interruption?: ProcessInterruption;
   readonly userFrame?: (index: number, frame: Frame) => readonly Frame[];
@@ -151,7 +152,16 @@ export function scriptedClaude(options: {
         });
         return Promise.resolve();
       },
-      closeStdin: () => Promise.resolve(settle({ kind: "exited", status: 0 })),
+      closeStdin: async () => {
+        const result = await (options.closeStdin?.() ??
+          Promise.resolve({ kind: "exited", status: 0 } as const));
+        if (
+          result.kind !== "cleanup-error" &&
+          result.kind !== "cleanup-timeout"
+        )
+          settle(result);
+        return result;
+      },
       interrupt: () => {
         stopped ??= (async () => {
           stops += 1;

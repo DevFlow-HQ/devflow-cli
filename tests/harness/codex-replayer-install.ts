@@ -154,6 +154,12 @@ interface CodexTurnReplayOptions {
   readonly completeWithOutstandingApproval?: boolean;
   readonly duplicateFirstApproval?: boolean;
   readonly withholdTerminal?: boolean;
+  readonly completeAfterResume?: boolean;
+  readonly completedTurnsBeforeBlock?: number;
+  readonly backgroundTree?: {
+    readonly worker: string;
+    readonly report: string;
+  };
   readonly interruptTerminal?: "interrupted" | "exit";
   /** `leftover`: the Steer's `userMessage`, then a native terminal with no model
    *  output; the next `turn/start` re-delivers it and completes. `history-only`:
@@ -288,6 +294,10 @@ export function installCodexReplayerAt(
     copyFileSync(source, join(directory, "codex.mjs"));
     writeFileSync(windowsShimPath, npmBunShim("codex.mjs"));
   }
+  copyFileSync(
+    join(dirname(source), "background-tree.mjs"),
+    join(directory, "background-tree.mjs"),
+  );
   copyFileSync(replayPathSource, join(directory, "codex-replay-path.ts"));
 
   let executableVersion = fixtureRecording.executableVersion;

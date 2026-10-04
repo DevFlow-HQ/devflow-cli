@@ -34,9 +34,10 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
   win before the next send, and never attributes an old child's close to the next Turn; a still-live child may accept the next Turn in place.
 - A caller's Interrupt on a live, initialized process running its Turn is native (#346): `claude-code/control.ts`, one channel per process, mints the `request_id`, writes the
   stdin `control_request` `interrupt` with `cancel_queued: true`, and correlates the echoed `control_response`. `controlTimeoutMs` (default 5 s, a named test seam) bounds the
-  write through the aborted `result`. The process, active Turn, and process ownership stay put. The confirming result's subtype is `error_during_execution`, a task failure's
+  write through the aborted `result`. The confirming result's subtype is `error_during_execution`, a task failure's
   too, so only an aborted `terminal_reason` (`aborted_streaming`, `aborted_tools`) while that Interrupt is in flight settles `interrupted` `active-turn`; a natural result that
-  wins the race keeps its own truth. The Session then reports `detached` with its coordinate, as Codex does, and a resuming Turn finds the process live and sends at once.
+  wins the race keeps its own truth. POSIX keeps its process; Windows launch evidence closes the producer and reaps before settlement, using close kind,
+  never exit status. Incomplete cleanup retains the child and fails recovery until final exit. Otherwise the next Turn uses `--resume` with the same id.
 - A Steer (#359) is a stdin `user` frame with a minted uuid, written only after the prompt (stamped too) and accepted once written. A result listing only uuids the Turn never
   sent is another exchange's and is ignored. `command_lifecycle` `started` or the result's `user_message_uuids` settle it delivered, `cancelled` dropped. A result with a Steer
   pending is held as a boundary, and the Turn ends at the next exchange's; the delivering exchange decides `within-turn` or `after-boundary`. Each exchange re-sends init, and
@@ -78,7 +79,9 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - Codex client RPC and reverse-request ids have separate private maps. Approvals expose exact actions. A native resolution or terminal confirms an answer
   whose send has started, emitting `request-answered` before settlement; earlier resolution or terminal expires it. Close and local failures expire
   unconfirmed answers, including in-flight writes. A write failure after native confirmation cannot retract the answer.
-- Native Steer and Interrupt await bounded RPC acknowledgement for exact active ids. Only matching interrupted completion proves interruption; connection loss stays `lost`.
+- Native Steer and Interrupt await bounded RPC acknowledgement for exact active ids. Only matching interrupted completion proves interruption. Windows launch
+  evidence bounds terminal confirmation, closes the producer and reaps the generation before settlement. Every Session detaches and recovers on one replacement.
+  EOF cannot erase confirmation. Missing confirmation reaps then settles `lost`; an RPC refusal leaves the Turn live. POSIX keeps its server.
 - A Steer's `userMessage` (`clientId`) puts it in history, which delivers it (ADR 0035) at the next model output (agent, reasoning, plan, or tool
   item, delta, approval; never hook prompt or compaction) or any other end. In history with none by a `completed`/`failed` terminal, it is a
   leftover (#357): absent an Interrupt or close it is re-sent once, empty input then text on RPC refusal, on a new native turn id whose target slot
@@ -96,23 +99,17 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 
 ## Native phases
 
-Each Adapter maps its native steps onto the five semantic phases (#322) through the private `phases.ts` span, which settles each start once and
-measures elapsed time on the monotonic clock. A handshake made of several exchanges reports each as a span carrying a closed semantic `step`
-(`HarnessPhaseStep`, #325), nested inside the handshake's own start and end; composition logs those only in detail mode.
+Each Adapter reports the five phases through `phases.ts`, settling each start once with monotonic elapsed time (#322). Handshake exchanges nest
+`HarnessPhaseStep` spans (#325) inside it; composition logs them only in detail mode.
 
-- **Claude Code.** `launch` (per Session) spans the bridge start and the child spawn; a close that wins first abandons it. The first init of a fresh
-  child is the Session's `handshake`; the init of a `--resume` child is `recovery`, which includes every relaunch of a Session that already ran
-  (print mode exits per Turn, so a later Turn reattaches natively unless the child is still live). A Turn that settles before init ends that phase with its own
-  failure, or abandoned when interrupted. `control` is one span per stop: a native stop's span is ok on confirmation, abandoned when a natural
-  result wins, and otherwise spans the fallback process termination too. A process termination settles the span on its outcome even when the Turn
-  already settled (an internal stop after corruption or a refused resume reports it too). `cleanup` spans the prepared Harness's `close`.
-  The `--version` probe reports no phase.
-- **Codex.** `launch` is the app-server spawn and `handshake` the `initialize`/`account/read`/`model/list` exchange, both at prepare and replacement with no
-  Session key. Replacement also reports the triggering Session's `recovery` around identity checks, launch and handshake.
-  The handshake's steps are `protocol-initialize`, `account-check`, and `model-list`; the step open when the handshake
-  ends settles with its outcome, so a login refusal fails `account-check`. `model-list` only reads the list; each Turn's model is checked against it
-  at Turn start before native recovery, never at prepare. The lazy `config/read` defaults read is outside the handshake and reports no
-  phase. Per Session,
-  `thread/start` is a `handshake` and `thread/resume` is `recovery`; a Turn's `thread/read` reports no phase. `control` spans the `turn/interrupt` or `turn/steer`
-  RPC: ok on a parsed acknowledgement, abandoned on an expected race, otherwise failed (`control-refused` with the RPC code, `control-timeout`,
-  `control-transport`, or `protocol-corruption`). `cleanup` spans `close`, including its bounded interrupt.
+- **Claude Code.** Per-Session `launch` spans bridge start and spawn; close winning abandons it. Fresh init is `handshake`; resumed init is `recovery`,
+  including relaunches of Sessions that ran before. Settlement before init fails that phase with the Turn's failure, or abandons it on interruption.
+  `control` spans each stop: native confirmation is ok, a natural result winning abandons it, and fallback includes process termination. An internal stop
+  after Turn settlement still reports its outcome. Keyless `cleanup` covers close; Session-keyed cleanup covers Windows interrupt reaping. Version has no phase.
+- **Codex.** Keyless `launch` spans app-server spawn and `handshake` spans initialize, account and model reads at prepare and replacement. Replacement also
+  reports the triggering Session's `recovery` around identity checks, launch and handshake. Handshake steps are `protocol-initialize`, `account-check` and
+  `model-list`; the open step shares the handshake outcome, so login refusal fails `account-check`. Turn models are checked before recovery, never at prepare.
+  Defaults `config/read` and runtime `thread/read` have no phase. Per Session, `thread/start` is `handshake` and `thread/resume` is `recovery`.
+  `control` spans Interrupt and Steer: acknowledgement is ok, except Windows Interrupt waits for terminal confirmation. An expected race abandons it;
+  other failures report `control-refused` with the RPC code, `control-timeout`, `control-transport` or `protocol-corruption`. Keyless cleanup covers close,
+  including bounded interruption; Session-keyed cleanup covers Windows interrupt reaping.

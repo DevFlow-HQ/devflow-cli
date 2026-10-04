@@ -223,7 +223,7 @@ export function registerClaudeCodeReplayerConformance(
   const interruptScenarios: InterruptRecoveryScenarios = {
     ...turnScenarios,
     blockingTurn: caseScenario(
-      "interrupt",
+      process.platform === "win32" ? "interrupt-recovery" : "interrupt",
       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     ),
     unresponsiveInterrupt: caseScenario(
@@ -550,11 +550,21 @@ export function registerCodexReplayerConformance(
         installed.configureTurn({ stopAfter: "accepted" });
         return () => createCodexAdapter({ path: installed.path, env: {} });
       },
-      resumeAcknowledged: () => () =>
-        createCodexAdapter({
-          path: installCodexReplayer("resume").path,
-          env: {},
-        }),
+      resumeAcknowledged: () => {
+        if (process.platform !== "win32")
+          return () =>
+            createCodexAdapter({
+              path: installCodexReplayer("resume").path,
+              env: {},
+            });
+        const installed = installSyntheticCodexReplayer();
+        installed.configureTurn({
+          withholdTerminal: true,
+          interruptTerminal: "interrupted",
+          completeAfterResume: true,
+        });
+        return () => createCodexAdapter({ path: installed.path, env: {} });
+      },
       resumeUnacknowledged: () => {
         const installed = installSyntheticCodexReplayer();
         installed.configureTurn({

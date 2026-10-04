@@ -1,0 +1,17 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.288 (Claude Code)",
+  "protocolVersion": "2.1.288",
+  "recordedAt": "synthetic",
+  "redactions": [
+    {
+      "placeholder": "\u00abWORKSPACE\u00bb",
+      "reason": "recording workspace path"
+    },
+    {
+      "placeholder": "\u00abRUNTIME_DIR\u00bb",
+      "reason": "user runtime directory"
+    }
+  ],
+  "refreshCommand": "synthetic -- recorded interrupt bytes followed by same-coordinate replacement resume"
+}

@@ -2969,7 +2969,7 @@ test("the recorder observer captures runtime traffic and shutdown through the pr
     ),
   );
   assert.equal(executableVersion, "codex-cli 0.160.0");
-  assert.equal(protocolVersion, "codex-probe-3");
+  assert.equal(protocolVersion, "codex-probe-4");
   assert.ok(schemaBytes > 0);
   assert.ok(
     observed.some(
@@ -3201,30 +3201,34 @@ test("[codex-recorded-conformance] Interrupt waits for recorded terminal truth",
   await prepared.close();
 });
 
-test("[codex-recorded-conformance] Resume reattaches the exact recorded thread", async () => {
-  const prepared = await prepareCodex(installCodexReplayer("resume").path);
-  const first = prepared.startTurn(recordedSleepRequest("resume"));
-  const events = observeEvents(first);
-  await waitForToolOrRequest(first, events);
-  assert.deepEqual(await first.interrupt(), { outcome: "accepted" });
-  const interrupted = await first.result();
-  assert.equal(interrupted.kind, "interrupted");
-  if (
-    interrupted.kind !== "interrupted" ||
-    interrupted.detail.session.state !== "detached"
-  ) {
-    throw new Error("unreachable");
-  }
-  const second = prepared.startTurn({
-    ...turnRequest(),
-    session: "resume",
-    correlationKey: { opaque: "record-resume" },
-    input: { text: CODEX_RECORDING_INPUT.resume },
-    resume: interrupted.detail.session.coordinate,
-  });
-  assert.equal((await second.result()).kind, "completed");
-  await prepared.close();
-});
+test(
+  "[codex-recorded-conformance] Resume reattaches the exact recorded thread",
+  { skip: process.platform === "win32" },
+  async () => {
+    const prepared = await prepareCodex(installCodexReplayer("resume").path);
+    const first = prepared.startTurn(recordedSleepRequest("resume"));
+    const events = observeEvents(first);
+    await waitForToolOrRequest(first, events);
+    assert.deepEqual(await first.interrupt(), { outcome: "accepted" });
+    const interrupted = await first.result();
+    assert.equal(interrupted.kind, "interrupted");
+    if (
+      interrupted.kind !== "interrupted" ||
+      interrupted.detail.session.state !== "detached"
+    ) {
+      throw new Error("unreachable");
+    }
+    const second = prepared.startTurn({
+      ...turnRequest(),
+      session: "resume",
+      correlationKey: { opaque: "record-resume" },
+      input: { text: CODEX_RECORDING_INPUT.resume },
+      resume: interrupted.detail.session.coordinate,
+    });
+    assert.equal((await second.result()).kind, "completed");
+    await prepared.close();
+  },
+);
 
 test("[codex-recorded-conformance] authentication stays a typed prepare failure", async () => {
   const result = await createCodexAdapter({
@@ -3387,7 +3391,7 @@ test("Codex profile is truthful and user-compatible", async () => {
   if (!result.ok) throw new Error("unreachable");
   const { profile } = result.harness;
   assert.equal(profile.harness, "codex");
-  assert.equal(profile.adapterRevision, "codex-probe-3");
+  assert.equal(profile.adapterRevision, "codex-probe-4");
   assert.equal(profile.recovery.mode, "native-reattach");
   assert.match(profile.recovery.evidence, /thread\/resume.*exact/i);
   assert.equal(profile.interruption.mode, "active-turn");

@@ -93,6 +93,10 @@ export function installReplayerAt(
   const logPath = join(dir, "invocations.log");
   writeFileSync(logPath, "");
 
+  copyFileSync(
+    join(dirname(replayerSource), "background-tree.mjs"),
+    join(dir, "background-tree.mjs"),
+  );
   const windows = process.platform === "win32";
   let executablePath: string;
   let identityPath: string;

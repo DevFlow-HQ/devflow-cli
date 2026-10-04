@@ -1,0 +1,37 @@
+{
+  "exitCode": 0,
+  "turns": [
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000001",
+      "stdout": "turn-1.stdout"
+    },
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000002",
+      "steps": [
+        {
+          "emit": "compacting.stdout"
+        },
+        {
+          "control": {
+            "subtype": "interrupt",
+            "cancelQueued": true,
+            "emit": "compact-cancelled.stdout"
+          }
+        }
+      ]
+    },
+    {
+      "uuid": "9a0e0000-0000-4000-8000-000000000003",
+      "stdout": "compact.stdout"
+    }
+  ],
+  "resume": {
+    "exitCode": 0,
+    "turns": [
+      {
+        "uuid": "9a0e0000-0000-4000-8000-000000000003",
+        "stdout": "compact.stdout"
+      }
+    ]
+  }
+}

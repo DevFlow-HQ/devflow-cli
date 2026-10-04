@@ -305,8 +305,175 @@ for (const kind of ["contained", "fallback"] as const) {
     await first.turn.interrupt();
     await first.turn.result();
     const second = await liveTurnOn(harness, "next");
-    assert.deepEqual(facts, [{ kind, session: "planning" }]);
+    assert.deepEqual(facts, [
+      { kind, session: "planning" },
+      { kind, session: "planning" },
+    ]);
     await second.turn.interrupt();
     await harness.close();
   });
 }
+
+for (const containment of ["contained", "fallback"] as const) {
+  test(`a ${containment} native stop reaps before settlement and resumes the same Session`, async () => {
+    let closes = 0;
+    let release!: () => void;
+    let reaping!: () => void;
+    const started = new Promise<void>((resolve) => {
+      reaping = resolve;
+    });
+    const ended = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scripted = scriptedClaude({
+      answer: "confirm",
+      containment:
+        containment === "contained"
+          ? { kind: "contained" }
+          : { kind: "fallback", cause: new Error("unavailable") },
+      closeStdin: async () => {
+        closes += 1;
+        reaping();
+        await ended;
+        return { kind: "exited", status: closes === 1 ? 1 : 0 };
+      },
+    });
+    const phases: HarnessPhaseFact[] = [];
+    const harness = await prepare(scripted, { phases });
+    const { turn, events } = await liveTurnOn(harness);
+    let settled = false;
+    void turn.result().then(() => {
+      settled = true;
+    });
+    const stopping = turn.interrupt();
+    await started;
+    assert.equal(settled, false);
+    const count = events.length;
+    scripted.emit({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "late" }] },
+    });
+    release();
+    await stopping;
+    const result = await turn.result();
+    assert.equal(result.kind, "interrupted");
+    assert.equal(events.length, count);
+    assert.deepEqual(controlSettlements(phases), ["ok"]);
+    assert.ok(
+      phases.some(
+        (fact) =>
+          fact.kind === "phase-end" &&
+          fact.phase === "cleanup" &&
+          fact.session === "planning" &&
+          fact.outcome === "ok",
+      ),
+    );
+    const next = await liveTurnOn(harness, "again");
+    assert.equal(scripted.writes.length, 2);
+    scripted.emit({ type: "result", subtype: "success", result: "continued" });
+    assert.equal((await next.turn.result()).kind, "completed");
+    assert.equal((await harness.close()).clean, true);
+  });
+}
+
+test("an incomplete confirmed reap preserves native truth, refuses duplicate launch, and reports cleanup separately", async () => {
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    containment: { kind: "contained" },
+    closeStdin: () => Promise.resolve({ kind: "cleanup-timeout" }),
+  });
+  const phases: HarnessPhaseFact[] = [];
+  const harness = await prepare(scripted, { phases });
+  const { turn } = await liveTurnOn(harness);
+  await turn.interrupt();
+  assert.equal((await turn.result()).kind, "interrupted");
+  assert.ok(
+    phases.some(
+      (fact) =>
+        fact.kind === "phase-end" &&
+        fact.phase === "cleanup" &&
+        fact.outcome === "failed",
+    ),
+  );
+  const next = await harness.startTurn(turnRequest("again")).result();
+  assert.equal(next.kind, "failed");
+  if (next.kind !== "failed") throw new Error("unreachable");
+  assert.equal(next.detail.failure.phase, "recovery");
+  assert.equal(next.detail.failure.possibleEffects, "none");
+  assert.equal(next.detail.session.state, "detached");
+  assert.equal(scripted.writes.length, 1);
+  scripted.exit({ kind: "exited", status: 1 });
+  const recovered = await liveTurnOn(harness, "retry");
+  assert.equal(scripted.writes.length, 2);
+  scripted.emit({ type: "result", subtype: "success", result: "continued" });
+  assert.equal((await recovered.turn.result()).kind, "completed");
+  assert.equal((await harness.close()).clean, false);
+});
+
+test("close during a confirmed reap waits for cleanup and preserves the interrupted result", async () => {
+  let begin!: () => void;
+  let finish!: () => void;
+  const started = new Promise<void>((resolve) => {
+    begin = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    containment: { kind: "contained" },
+    closeStdin: async () => {
+      begin();
+      await gate;
+      return { kind: "exited", status: 1 };
+    },
+  });
+  const harness = await prepare(scripted);
+  const { turn } = await liveTurnOn(harness);
+  const interrupt = turn.interrupt();
+  await started;
+  let closed = false;
+  const close = harness.close().then((report) => {
+    closed = true;
+    return report;
+  });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  finish();
+  await interrupt;
+  assert.equal((await turn.result()).kind, "interrupted");
+  assert.equal((await close).clean, true);
+});
+
+test("a contained natural result wins the interrupt race without reaping", async () => {
+  let reaps = 0;
+  const scripted = scriptedClaude({
+    answer: "complete-instead",
+    containment: { kind: "contained" },
+    closeStdin: () => {
+      reaps += 1;
+      return Promise.resolve({ kind: "exited", status: 0 });
+    },
+  });
+  const harness = await prepare(scripted);
+  const { turn } = await liveTurnOn(harness);
+  await turn.interrupt();
+  assert.equal((await turn.result()).kind, "completed");
+  assert.equal(reaps, 0);
+  await harness.close();
+});
+
+test("closing immediately after a confirmed Windows reap settles the next Turn before launch", async () => {
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    containment: { kind: "contained" },
+  });
+  const harness = await prepare(scripted);
+  const { turn } = await liveTurnOn(harness);
+  await turn.interrupt();
+  await turn.result();
+  const next = harness.startTurn(turnRequest("again"));
+  await harness.close();
+  assert.equal((await next.result()).kind, "not-started");
+  assert.equal(scripted.writes.length, 1);
+});

@@ -64,6 +64,11 @@ import { runSupervised } from "../helpers/supervisor.js";
 import type { RunnerCase } from "../helpers/scenario-runner.js";
 import { registerSupervisorConformance } from "./supervisor-conformance.js";
 
+import {
+  registerWindowsHarnessCases,
+  interruptTree,
+  harnessOwnerDeathRecovery,
+} from "./windows-harness-conformance.js";
 import { registerWindowsContainmentCases } from "./windows-contained-conformance.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -262,6 +267,7 @@ function registeredCases(): RunnerCase[] {
     cases.push({ name, body });
   });
   registerWindowsContainmentCases((test) => cases.push(test));
+  registerWindowsHarnessCases((test) => cases.push(test));
   cases.push(
     { name: "execution-real-command", body: executionRealCommand },
     { name: "process-sync-command", body: processSyncCommand },
@@ -1246,6 +1252,7 @@ async function executionRealCancellation(): Promise<void> {
 }
 
 async function executionRealGroupReaping(): Promise<void> {
+  if (process.platform === "win32") await interruptTree("claude-code");
   const fixture = runtimeExecutionFixture("runtime-reaping");
   const source =
     "const{spawn}=require('node:child_process');" +
@@ -1607,6 +1614,7 @@ function executeGit(
 }
 
 async function storeOwnerDeathRecovery(): Promise<void> {
+  if (process.platform === "win32") await harnessOwnerDeathRecovery();
   const processAdapter = createProcessAdapter(withRunnerObserver());
   const home = runtimeTemp("secant-runtime-owner-home-");
   const workspace = runtimeTemp("secant-runtime-owner-ws-");
