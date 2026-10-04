@@ -1486,27 +1486,7 @@ class CodexTurn implements HarnessTurn {
     let result: unknown;
     const control = startPhase(this.phases, "control", this.request.session);
     this.interruptPhase = control;
-    if (this.reapInterrupt !== undefined) {
-      this.interruptTimer = setTimeout(() => {
-        if (
-          this.settled ||
-          this.producerClosed ||
-          this.interruptState.kind === "idle"
-        )
-          return;
-        control.failed(
-          this.controlFailureValue({
-            category: "control-timeout",
-            diagnostics:
-              "Codex did not confirm native interruption within the control bound.",
-            cause: new CodexExchangeTimeoutError(
-              "turn/interrupt terminal exchange timed out",
-            ),
-          }),
-        );
-        void this.reap();
-      }, timeoutMs);
-    }
+    const started = performance.now();
     try {
       result = await boundedCodexExchange({
         operation: () =>
@@ -1522,11 +1502,6 @@ class CodexTurn implements HarnessTurn {
       if (cause instanceof CodexRpcResponseError) {
         this.interruptState = { kind: "idle" };
         clearTimeout(this.interruptTimer);
-      } else if (
-        this.reapInterrupt !== undefined &&
-        !(cause instanceof CodexExchangeTimeoutError)
-      ) {
-        await this.reap();
       }
       return this.rejectControlFailure(
         "Codex turn/interrupt control failed.",
@@ -1541,11 +1516,7 @@ class CodexTurn implements HarnessTurn {
         diagnostics: "Codex emitted an invalid turn/interrupt response.",
         cause,
       };
-      control.failed(
-        this.reapInterrupt === undefined
-          ? this.controlFailure(invalid)
-          : this.controlFailureValue(invalid),
-      );
+      control.failed(this.controlFailure(invalid));
       if (this.reapInterrupt !== undefined) await this.reap();
       return { outcome: "rejected", reason: "expired" };
     }
@@ -1557,6 +1528,33 @@ class CodexTurn implements HarnessTurn {
     }
     this.interruptState = { kind: "acknowledged", receipt: state.receipt };
     this.lastObservation = "Codex acknowledged turn/interrupt";
+    // A timed-out RPC is a refused control, leaving native work and approvals
+    // live. Only an acknowledged stop earns the Windows terminal deadline,
+    // measured from its request rather than granting a second control bound.
+    if (this.reapInterrupt !== undefined) {
+      this.interruptTimer = setTimeout(
+        () => {
+          if (
+            this.settled ||
+            this.producerClosed ||
+            this.interruptState.kind === "idle"
+          )
+            return;
+          control.failed(
+            this.controlFailureValue({
+              category: "control-timeout",
+              diagnostics:
+                "Codex did not confirm native interruption within the control bound.",
+              cause: new CodexExchangeTimeoutError(
+                "turn/interrupt terminal exchange timed out",
+              ),
+            }),
+          );
+          void this.reap();
+        },
+        Math.max(0, timeoutMs - (performance.now() - started)),
+      );
+    }
     return { outcome: "accepted" };
   }
 
@@ -2442,7 +2440,11 @@ class CodexTurn implements HarnessTurn {
     this.settleApprovals(confirmAnswers);
     this.producerClosed = true;
     this.listeners.clear();
-    if (result.kind === "interrupted" && this.reapInterrupt !== undefined) {
+    if (
+      this.reapInterrupt !== undefined &&
+      (result.kind === "interrupted" ||
+        (result.kind === "lost" && result.detail.failure?.phase === "control"))
+    ) {
       void this.reap().then(() => this.finishSettlement(result));
     } else this.finishSettlement(result);
   }
