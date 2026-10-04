@@ -288,6 +288,95 @@ async function stopTree(
   }
 }
 
+async function missingPostTerminationMember(
+  releaseBeforeClose: boolean,
+): Promise<void> {
+  let release!: () => void;
+  let reportWait!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const waiting = new Promise<void>((resolve) => (reportWait = resolve));
+  const { adapter } = observed({
+    testWindowsContainmentFailure: "post-termination-member-missing",
+    testWindowsContainmentMemberGap: { onWait: reportWait, release: gate },
+  });
+  const launched = await adapter.spawnOwnedProcess(options("bash-tree"));
+  assert.ok(launched.ok);
+  const ready = await line(launched.process);
+  const tree = z
+    .object({
+      harnessPid: z.number().int().positive(),
+      pids: z.array(z.number().int().positive()).length(2),
+    })
+    .parse(JSON.parse(ready.text));
+  const holders = [tree.harnessPid, ...tree.pids].map(observeLifetime);
+  const stdoutEnd = ready.iterator.next();
+  const stderr = collect(launched.process.stderr);
+  try {
+    const stopping = launched.process.interrupt(5000);
+    const first = await Promise.race([
+      waiting.then(() => "waiting" as const),
+      stopping.then(() => "closed" as const),
+    ]);
+    assert.equal(
+      first,
+      "waiting",
+      "a member absent from the later job list must be waited on before close",
+    );
+    if (releaseBeforeClose) release();
+    const result = (await stopping).close;
+    if (releaseBeforeClose) assert.equal(result.kind, "exited");
+    else {
+      assert.equal(result.kind, "cleanup-error");
+      assert.ok(result.kind === "cleanup-error");
+      assert.match(String(result.cause), /contained process exit timeout/);
+    }
+    assert.ok(holders.every((holder) => !holder.alive()));
+    assert.equal((await stdoutEnd).done, true);
+    assert.equal(await stderr, "");
+  } finally {
+    release();
+    for (const holder of holders) holder.close();
+    await launched.process.interrupt(5000);
+  }
+}
+
+async function missingMemberOnNaturalExit(): Promise<void> {
+  let release!: () => void;
+  let reportWait!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const waiting = new Promise<void>((resolve) => (reportWait = resolve));
+  const { adapter } = observed({
+    testWindowsContainmentFailure: "post-termination-member-missing",
+    testWindowsContainmentMemberGap: { onWait: reportWait, release: gate },
+  });
+  const launched = await adapter.spawnOwnedProcess(options("bash-tree-exit"));
+  assert.ok(launched.ok);
+  const stdout = collect(launched.process.stdout);
+  const stderr = collect(launched.process.stderr);
+  const closing = launched.process.closed();
+  try {
+    const first = await Promise.race([
+      waiting.then(() => "waiting" as const),
+      closing.then(() => "closed" as const),
+    ]);
+    assert.equal(
+      first,
+      "waiting",
+      "natural root exit must retain member handles",
+    );
+    release();
+    assert.deepEqual(await closing, { kind: "exited", status: 23 });
+    const result = z
+      .object({ pids: z.array(z.number().int().positive()).length(2) })
+      .parse(JSON.parse(await stdout));
+    assert.equal(await stderr, "");
+    assert.ok(result.pids.every((pid) => !isLive(pid)));
+  } finally {
+    release();
+    await launched.process.interrupt(5000);
+  }
+}
+
 async function incompleteCleanup(
   failAt: "job-terminate" | "descendant-confirm",
   stop: "interrupt" | "close-stdin",
@@ -416,6 +505,18 @@ export function registerWindowsContainmentCases(
     ["cancel-escaped-tree", () => stopTree("cancel")],
     ["session-teardown-escaped-tree", () => stopTree("session-teardown")],
     ["shutdown-escaped-tree", () => stopTree("shutdown")],
+    [
+      "post-termination-member-missing",
+      () => missingPostTerminationMember(true),
+    ],
+    [
+      "post-termination-member-timeout",
+      () => missingPostTerminationMember(false),
+    ],
+    [
+      "natural-exit-post-termination-member-missing",
+      missingMemberOnNaturalExit,
+    ],
     [
       "interrupt-termination-error",
       () => incompleteCleanup("job-terminate", "interrupt"),

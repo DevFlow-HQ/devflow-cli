@@ -1,7 +1,11 @@
 import { dlopen, FFIType as T, JSCallback, ptr } from "bun:ffi";
 import { createServer, type Socket } from "node:net";
 import { finished } from "node:stream/promises";
-import type { OwnedProcessClose, OwnedProcessOptions } from "./process.js";
+import type {
+  OwnedProcessClose,
+  OwnedProcessOptions,
+  ProcessAdapterOptions,
+} from "./process.js";
 
 // Win32's fixed x64 ABI, not a growing native binding. #259 and the compiled
 // #338 probe established these layouts. Keep all native access private here.
@@ -77,7 +81,8 @@ export type ContainmentFailureStage =
   | "exit-wait"
   | "exit-callback"
   | "job-terminate"
-  | "descendant-confirm";
+  | "descendant-confirm"
+  | "post-termination-member-missing";
 
 export interface ContainedChild {
   readonly pid: number;
@@ -291,13 +296,20 @@ function terminateJob(k: Kernel, job: bigint): void {
     throw nativeError(k, "TerminateJobObject");
 }
 
-/** Termination requests stop the tree, but pipe EOF can precede its process
- * handles being signaled. Retain the job while confirming those handle exits. */
-async function confirmJobExit(
+interface MemberHandle {
+  readonly pid: number;
+  readonly handle: bigint;
+}
+
+/** A job's active list can lose a process before its handle signals. Acquire
+ * handles while the job is still live, and again after termination for members
+ * that entered between the first snapshot and the kill request. */
+function snapshotJobMembers(
   k: Kernel,
   job: bigint,
   deadline: number,
-): Promise<void> {
+  hiddenPid?: number,
+): MemberHandle[] {
   let capacity = 16;
   let processes: Uint8Array;
   for (;;) {
@@ -319,17 +331,18 @@ async function confirmJobExit(
       throw new Error("contained process exit timeout");
     capacity = Math.max(capacity * 2, assigned);
   }
-  const handles: bigint[] = [];
+  const handles: MemberHandle[] = [];
   try {
     const view = new DataView(processes.buffer);
     for (let i = 0; i < view.getUint32(4, true); i++) {
       const pid = Number(view.getBigUint64(8 + i * 8, true));
+      if (pid === hiddenPid) continue; // Test-only simulated post-kill list gap.
       const handle = k.OpenProcess(0x100000 | 0x1000, 0, pid);
       if (handle === 0n) {
         if (k.GetLastError() === 87) continue; // Already exited.
         throw nativeError(k, "OpenProcess(contained descendant)");
       }
-      handles.push(handle);
+      handles.push({ pid, handle });
       const member = new Int32Array(1);
       if (!k.IsProcessInJob(handle, job, ptr(member)))
         throw nativeError(k, "IsProcessInJob(contained descendant)");
@@ -339,20 +352,57 @@ async function confirmJobExit(
         k.CloseHandle(handle);
       }
     }
+    return handles;
+  } catch (cause) {
+    for (const member of handles) k.CloseHandle(member.handle);
+    throw cause;
+  }
+}
+
+function closeMembers(k: Kernel, members: readonly MemberHandle[]): void {
+  for (const member of members) k.CloseHandle(member.handle);
+}
+
+/** Termination and pipe EOF are not process-handle exit. Confirm every retained
+ * member under the same close deadline, including a second post-kill snapshot. */
+async function confirmJobExit(
+  k: Kernel,
+  job: bigint,
+  retained: readonly MemberHandle[],
+  deadline: number,
+  hiddenPid: number | undefined,
+  memberGap: ProcessAdapterOptions["testWindowsContainmentMemberGap"],
+): Promise<void> {
+  const after = snapshotJobMembers(k, job, deadline, hiddenPid);
+  const members = [...retained, ...after];
+  let released = false;
+  let reported = false;
+  if (hiddenPid !== undefined && memberGap !== undefined)
+    void memberGap.release.then(() => (released = true));
+  try {
     for (;;) {
-      const pending = handles.some((handle) => {
-        const result = k.WaitForSingleObject(handle, 0);
+      let pending = false;
+      for (const member of members) {
+        // The test gate models a member that left the active list while its
+        // process object still had not signaled. It never reaches composition.
+        if (member.pid === hiddenPid && memberGap !== undefined && !released) {
+          if (!reported) memberGap.onWait();
+          reported = true;
+          pending = true;
+          continue;
+        }
+        const result = k.WaitForSingleObject(member.handle, 0);
         if (result === 0xffffffff)
           throw nativeError(k, "WaitForSingleObject(contained descendant)");
-        return result === 258;
-      });
+        if (result === 258) pending = true;
+      }
       if (!pending) return;
       if (Date.now() >= deadline)
         throw new Error("contained process exit timeout");
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
     }
   } finally {
-    for (const handle of handles) k.CloseHandle(handle);
+    closeMembers(k, after);
   }
 }
 
@@ -362,6 +412,7 @@ async function confirmJobExit(
 export async function launchContained(
   options: OwnedProcessOptions,
   failAt: ContainmentFailureStage | undefined,
+  memberGap?: ProcessAdapterOptions["testWindowsContainmentMemberGap"],
 ): Promise<LaunchResult> {
   if (process.platform !== "win32")
     return {
@@ -508,15 +559,45 @@ export async function launchContained(
     const ownedJob = job;
     const ownedProcess = processHandle;
     let closeDeadline = 0;
+    let retained: MemberHandle[] = [];
+    let hiddenPid: number | undefined;
+    const captureAndTerminate = (deadline: number): void => {
+      const before = snapshotJobMembers(k, ownedJob, deadline);
+      try {
+        if (failAt === "post-termination-member-missing") {
+          hiddenPid = before.find((member) => {
+            if (member.pid === pid) return false;
+            const result = k.WaitForSingleObject(member.handle, 0);
+            if (result === 0xffffffff)
+              throw nativeError(k, "WaitForSingleObject(contained descendant)");
+            return result === 258;
+          })?.pid;
+        }
+        terminateJob(k, ownedJob);
+      } catch (cause) {
+        closeMembers(k, before);
+        throw cause;
+      }
+      retained = before;
+      terminated = true;
+    };
     const observation = exit.finally(async () => {
       live = false;
       closeDeadline = Date.now() + 1000;
       let releaseError: Error | undefined;
       try {
-        if (!terminated) terminateJob(k, ownedJob);
+        if (!terminated) captureAndTerminate(closeDeadline);
         check("descendant-confirm");
-        await confirmJobExit(k, ownedJob, closeDeadline);
+        await confirmJobExit(
+          k,
+          ownedJob,
+          retained,
+          closeDeadline,
+          hiddenPid,
+          memberGap,
+        );
       } finally {
+        closeMembers(k, retained);
         if (!k.CloseHandle(ownedJob))
           releaseError = nativeError(k, "CloseHandle(job)");
         k.CloseHandle(ownedProcess);
@@ -567,8 +648,7 @@ export async function launchContained(
         terminate: () => {
           if (!live || terminated) return false;
           check("job-terminate");
-          terminateJob(k, ownedJob);
-          terminated = true;
+          captureAndTerminate(Date.now() + 1000);
           return true;
         },
       },

@@ -56,7 +56,7 @@ if (mode === "arguments") {
     write(process.stderr, "stderr-final:" + "y".repeat(128 * 1024)),
   ]);
   process.exit(23);
-} else if (mode === "bash-tree") {
+} else if (mode === "bash-tree" || mode === "bash-tree-exit") {
   const bash = "C:\\Program Files\\Git\\bin\\bash.exe";
   // Git for Windows exposes the Windows PID in /proc/<MSYS pid>/winpid, also
   // used by Git's t6500-gc.sh. Bash exits, leaving dead Windows parent links.
@@ -93,6 +93,7 @@ if (mode === "arguments") {
     JSON.stringify({ harnessPid: process.pid, bashPid: child.pid, pids }) +
       "\n",
   );
+  if (mode === "bash-tree-exit") process.exit(23);
   setInterval(() => {}, 1000);
 } else if (mode === "crash-owner") {
   const launched = await adapter.spawnOwnedProcess({

@@ -13,7 +13,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   and reports `escalated: true` (a child already gone reports `false`). The graceful-stop proof is POSIX-only. Off Windows: SIGTERM, then SIGKILL.
 - Windows owned launches attach a separate kill-on-close, no-breakaway job at creation. Only `windows-containment.ts` imports `bun:ffi`.
   The root starts suspended until its exit wait is registered. Any pre-execution failure releases the attempt before the Node fallback runs.
-  Root-handle exit terminates the job and confirms descendant handle exits before releasing it and publishing `closed()`; pipe EOF alone does not prove death.
+  Root-handle exit captures member handles, terminates the job, and confirms those plus later-listed handles before releasing the job and publishing
+  `closed()`; controlled stops capture before termination too. The active list can drop a member before its handle signals, so pipe EOF or a later job
+  list alone does not prove death. A child born after the first snapshot and gone from the list before the second remains an unconfirmed gap (#375).
   The existing close bound spans descendant-exit confirmation and output drain; a timeout is a cleanup error.
   The owned launch result, `spawn` fact, and interruption carry `contained` or `fallback`; Command spawns carry neither.
   Fallback launch results and facts retain the acquisition cause for translated operational logging (#363).

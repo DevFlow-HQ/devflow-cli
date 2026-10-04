@@ -309,6 +309,11 @@ export interface ProcessAdapterOptions {
   readonly observeChild?: (fact: ChildFact) => void;
   /** Test-only containment failure; never wired by production composition. */
   readonly testWindowsContainmentFailure?: ContainmentFailureStage;
+  /** Test-only gate simulating a member whose process handle signals late. */
+  readonly testWindowsContainmentMemberGap?: {
+    readonly onWait: () => void;
+    readonly release: Promise<void>;
+  };
 }
 
 /** The guarded observer every spawn path reports through. */
@@ -612,6 +617,7 @@ export function createProcessAdapter(
   return new NodeProcessAdapter(
     guardedObserver(options),
     options.testWindowsContainmentFailure,
+    options.testWindowsContainmentMemberGap,
   );
 }
 
@@ -619,6 +625,7 @@ class NodeProcessAdapter implements ProcessAdapter {
   constructor(
     private readonly notify: Notify,
     private readonly containmentFailure?: ContainmentFailureStage,
+    private readonly containmentMemberGap?: ProcessAdapterOptions["testWindowsContainmentMemberGap"],
   ) {}
 
   resolveExecutable(
@@ -639,7 +646,12 @@ class NodeProcessAdapter implements ProcessAdapter {
   spawnOwnedProcess(
     options: OwnedProcessOptions,
   ): Promise<SpawnOwnedProcessResult> {
-    return spawnOwnedProcess(options, this.notify, this.containmentFailure);
+    return spawnOwnedProcess(
+      options,
+      this.notify,
+      this.containmentFailure,
+      this.containmentMemberGap,
+    );
   }
 }
 
@@ -675,6 +687,7 @@ async function spawnOwnedProcess(
   options: OwnedProcessOptions,
   notify: Notify,
   failAt: ContainmentFailureStage | undefined,
+  memberGap: ProcessAdapterOptions["testWindowsContainmentMemberGap"],
 ): Promise<SpawnOwnedProcessResult> {
   if (process.platform !== "win32")
     return spawnOwnedProcessWithNode(options, notify);
@@ -728,7 +741,7 @@ async function spawnOwnedProcess(
     args: [...target.prefixArgs, ...options.args],
     env,
   };
-  const result = await launchContained(resolved, failAt);
+  const result = await launchContained(resolved, failAt, memberGap);
   if (result.kind === "fallback")
     return spawnOwnedProcessWithNode(resolved, notify, result);
   const watch = new ChildWatch(notify, options.role, { kind: "contained" });
