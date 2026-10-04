@@ -1,3 +1,4 @@
+import { waitingAgentTurn } from "../run/store/store.js";
 import { z } from "zod";
 import type { Catalog, CatalogEntry } from "../catalog/catalog.js";
 import { inspectBundle, type Budgets } from "../bundle/bundle.js";
@@ -30,7 +31,6 @@ import {
   attemptStepId,
   interactiveEndLegality,
   interactiveStepTarget,
-  waitingAgentTurn,
 } from "../run/execution/execution.js";
 import type {
   ActionOffer,
@@ -226,6 +226,11 @@ function runResult(
         currentStepKind: current?.kind,
         lastAttemptOutcome: log[log.length - 1]?.outcome,
         hasConflict: active !== undefined,
+        waitingForFollowUp:
+          owner !== undefined &&
+          current?.kind === "agent" &&
+          attemptStepId(waitingAgentTurn(owner)?.attemptId ?? "") ===
+            current.id,
         sessions,
         ...(currentInteractive !== undefined
           ? {
@@ -529,6 +534,7 @@ interface ResumeEvidence {
   readonly takeoverOwnerPid?: number;
   readonly acknowledgement?: string;
   readonly unavailable?: string;
+  readonly consequence?: string;
 }
 
 /** Derive the resting-resume evidence from the facts the Run view already exposes
@@ -546,13 +552,14 @@ function resumeEvidenceOf(params: {
   readonly currentStepKind: string | undefined;
   readonly lastAttemptOutcome: string | undefined;
   readonly hasConflict: boolean;
+  readonly waitingForFollowUp: boolean;
   readonly sessions: readonly {
     readonly availability: string;
     readonly session: string;
   }[];
   /** The exact Session the current Step resumes into, when known. */
   readonly currentSession?: string;
-}): { readonly acknowledgement?: string; readonly unavailable?: string } {
+}): ResumeEvidence {
   const unusable = params.sessions.find(
     (s) =>
       s.availability === "unusable" &&
@@ -582,6 +589,12 @@ function resumeEvidenceOf(params: {
         "the interrupted command may have already run — resuming re-runs this Step, so its effects may repeat.",
     };
   }
+  if (params.state === "halted" && params.waitingForFollowUp) {
+    return {
+      consequence:
+        "resume: wait again for your next message to the interrupted agent; nothing is re-sent.",
+    };
+  }
   return {};
 }
 
@@ -607,7 +620,8 @@ function resumeRunOffer(
       ? `take over from process ${evidence.takeoverOwnerPid} and continue the Run.`
       : state === "failed"
         ? "resume: reset this Step's attempt and iteration bounds and grant another try."
-        : "resume: continue from the Step the Run stopped at.";
+        : (evidence.consequence ??
+          "resume: continue from the Step the Run stopped at.");
   return {
     action: "resume-run",
     runId,
@@ -1215,7 +1229,7 @@ function finishTerminalGroup(
   if (
     ((state === "blocked" || state === "halted") &&
       span[0]!.kind === "interactive-agent") ||
-    (state === "blocked" &&
+    ((state === "blocked" || state === "halted") &&
       waiting !== undefined &&
       attemptStepId(waiting.attemptId) === span[0]!.id)
   ) {

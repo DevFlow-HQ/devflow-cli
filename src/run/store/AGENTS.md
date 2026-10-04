@@ -45,9 +45,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Startup reconciliation (#86, #98 S2, ADR 0031): at open every registration opens its `run.db`, reads the owner, probes it, and performs any rest plus
   release inside that same immediate transaction (`process.kill(pid, 0)` is injectable as `isOwnerAlive`). An owner still alive in another process is a
   Run genuinely live there — left untouched, listed with its `ownerPid` so the Application can refuse `run-live-elsewhere`. A dead owner is reconciled
-  **by stored state**: a `running`/`created` record is rested `halted` with one appended
-  `indeterminate` attempt-log marker; every other state is already at rest and left as-is, so a `blocked` record stays `blocked` (nothing was cut off, the
-  checkpoint still holds). Either way its ownership is released, running no Step work. The `pid !== selfPid` guard makes an owner equal to our own pid always
+  by stored state: a `running`/`created` record rests `halted` with one `indeterminate` attempt-log marker. A `blocked` Run whose open Agent Attempt's
+  latest Turn is `interrupted` also halts, without a marker (#355, ADR 0035); all other blocked rests stay blocked. Both close and crash use this rule.
+  Ownership is released without Step work. Unowned legacy waits remain untouched. The `pid !== selfPid` guard makes an owner equal to our own pid always
   reconcile — this handles pid reuse and lets a same-process reopen (the reconciliation tests) reconcile; `selfPid` is injectable so two `openRunGroup`s on one
   home stand in for two processes. Previous-release databases migrate through the embedded Drizzle journals at open. The marker lands in `attempt_log`
   (not an `attempt` row); the resume skip cursor reads that log, so it is the marker's
@@ -57,10 +57,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   driven by an injectable clock) — files with an mtime at or before `now - 90 days` are deleted, newer ones kept. It walks Run directories on the filesystem, not
   the registrations, so it runs before any Run is acquired and never fails the open.
 - D7 has two halves. The closed-set columns the Store itself branches on — `attempt_log.outcome`, `gate_answer.answer`, and `pending_gate.shape` — are validated with `z.enum`
-  at their read ingress (not cast), so a drifted value is rejected there rather than trusted by the resume cursor, the grant count, or the pending-gate derivation. The six M3
-  closed-set columns the Store does **not** branch on — turn `origin`, turn `kind`, turn `result_kind`, `turn_event.kind`, `harness_session.availability`, and
-  `transcript_entry.role` — are returned raw and narrowed tolerantly at the Projection's read ingress instead (an unknown value falls to a safe default), so the Store never
-  rejects a Turn row over a value only the client interprets.
+  at their read ingress (not cast), so a drifted value is rejected there rather than trusted by the resume cursor, the grant count, or the pending-gate derivation. The six
+  M3 columns — turn `origin`, `kind`, `result_kind`, `turn_event.kind`, `harness_session.availability`, and `transcript_entry.role` — are returned raw.
+  The shared `openAgentAttemptTurn`/`waitingAgentTurn` derivation (#355) compares `kind` and `result_kind` by equality, so unknown or legacy values
+  never establish an Agent wait. Projection narrows the other values tolerantly; the Store never rejects these rows over an unknown member.
 - A Human Gate answer (#85) is a bound Artifact recorded through `recordGateAnswer` — a publication-shaped write (stage a commit, then one transaction moves the
   binding and appends the `gate_answer` row) that deliberately skips `attempt_log`, so `blocked` stays derived and iterations still count off the log. Idempotent
   per `operation_id` (a UNIQUE column); its `iterations_at_grant` is the offset the derived "iterations since the last grant" count resets from.

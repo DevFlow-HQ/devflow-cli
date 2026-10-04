@@ -397,8 +397,9 @@ export interface Application {
    *  install, which the `workspace` Projection also carries. Composition calls it
    *  once, before either client reads. */
   ensureShippedBundles(files: readonly string[]): readonly Problem[];
-  /** End all opened subscriptions with application-shutdown, release Runs
-   *  already blocked without changing their rest, then abort every
+  /** End subscriptions with application-shutdown, close blocked Runs' Harnesses,
+   *  leave follow-up waits' claims for reconciliation and release other blocked
+   *  claims without changing their rest, then abort every
    *  running Run and await settlement. Composition calls this from its OS-signal
    *  handler before teardown, so no prepared Harness or child is left running. */
   shutdown(): Promise<void>;
@@ -3434,16 +3435,19 @@ export function createApplication(deps: ApplicationDependencies): Application {
     );
     for (const [runId, tracking] of blocked) {
       const owner = tracking.owner!;
-      // A blocked rest is durable pending work, not interrupted execution. Keep
-      // the state and release only ownership so the gate remains answerable after
-      // restart (ADR 0031's shutdown rule, #134 A21).
+      // Leave an interrupted Agent Step's waiting claim for Store reconciliation
+      // to halt on reopen (ADR 0035). Other blocked rests retain their state and
+      // release ownership, keeping gates and interactive waits answerable.
+      const waiting =
+        currentHoldBasis(tracking.routing, tracking.state, owner, runId)
+          ?.kind === "follow-up";
       try {
         await closeHeldStep(tracking);
       } finally {
         tracking.owner = undefined;
         tracking.done = true;
         try {
-          owner.release();
+          if (!waiting) owner.release();
         } finally {
           owner.close();
           pushRunUpdate(runId);

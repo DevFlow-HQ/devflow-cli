@@ -1021,9 +1021,14 @@ test("an interrupted interactive Turn returns to waiting and keeps the Step-scop
   // Headless gains no Interrupt; its Run view reports the waiting Step.
   assert.match(await runShow(wired, runId), /Blocked: interactive Turn/);
 
-  // Shutdown closes the held Harness once.
+  // An interrupted Interactive rest keeps the same shutdown rule (#355).
   await wired.shutdown();
   assert.deepEqual(counts.closes, [1]);
+  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(
+    wired.runGroup.listRuns().find((run) => run.runId === runId)?.live,
+    false,
+  );
 });
 
 test("an interrupted interactive Turn advances nothing and the next Turn continues the same Session (#219, #353)", async (t) => {

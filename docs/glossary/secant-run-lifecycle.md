@@ -163,8 +163,10 @@ and Adapter evidence, and each Turn its requested and effective model and effort
 | `cancelled` | the user explicitly ended the Run                                             | yes      |
 
 `blocked` is durable truth, not computed: since [#108](https://github.com/secantdev/secant/issues/108) the authored **Human Gate**'s `pending_gate`
-row and the `blocked` state are written in one transaction, and execution also stores `blocked` before a checkpoint pause, so a killed Run reconciles
-`blocked`. The interrupted condition of a Run marked live with no process running it is what is computed at open, not the state itself.
+row and the `blocked` state are written in one transaction, and execution also stores `blocked` before a checkpoint pause. These waits reconcile
+`blocked` after owner death. The Agent-step wait after an **Interrupt** instead reconciles `halted` without an indeterminate Attempt; resume returns it
+to waiting without re-sending its prompt ([ADR 0035](../adr/0035-interrupt-ends-only-the-turn-and-a-mid-turn-message-is-a-native-steer.md)).
+The condition of a Run marked live with no process running it is computed at open, not the state itself.
 
 `running` and `blocked` are live states. `halted` and `failed` are resting, resumable states. `succeeded` and `cancelled` are terminal states.
 

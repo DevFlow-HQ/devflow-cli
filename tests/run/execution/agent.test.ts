@@ -1,3 +1,7 @@
+import {
+  openAgentAttemptTurn,
+  waitingAgentTurn,
+} from "../../../src/run/store/store.js";
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
@@ -10,9 +14,7 @@ import type {
 } from "../../../src/harness/harness.js";
 import {
   executeRouting,
-  openAgentAttemptTurn,
   SIGNAL_ABORT,
-  waitingAgentTurn,
   type AssetResolver,
   type ExecutionDeps,
   type ExecutionEvent,
@@ -838,60 +840,6 @@ test("a Turn joining an Attempt that holds a pre-change `#turn` row takes the ne
       ["0.0:agent#turn-2", "completed"],
     ],
   );
-});
-
-test("the open-Attempt read finds only an Agent Attempt with Turns and no published outcome (#352)", () => {
-  const turn = (
-    turnId: string,
-    attemptId: string,
-    sequence: number,
-    kind?: string,
-  ): TurnRecord => ({
-    turnId,
-    attemptId,
-    session: SESSION,
-    origin: "managed",
-    ...(kind !== undefined ? { kind } : {}),
-    sequence,
-    input: "Do the work.",
-    admittedAt: AT.toISOString(),
-  });
-  const read = (
-    turns: readonly TurnRecord[],
-    published: readonly string[] = [],
-  ) =>
-    openAgentAttemptTurn({
-      turns: () => turns,
-      attemptLog: () =>
-        published.map((attemptId) => ({
-          attemptId,
-          outcome: "succeeded" as const,
-          at: AT.toISOString(),
-        })),
-    });
-  const closed = turn("0.0:a#turn-1", "0.0:a", 0, "agent");
-
-  assert.equal(read([]), undefined);
-  assert.equal(read([closed], ["0.0:a"]), undefined);
-  // A resting Interactive Attempt has Turns and no outcome, but is not an Agent one.
-  assert.equal(
-    read([turn("0.0:i#entry", "0.0:i", 0, "interactive-agent")]),
-    undefined,
-  );
-  // A legacy row's kind is unknown, never guessed to be an Agent Turn.
-  assert.equal(read([turn("0.0:l#turn", "0.0:l", 0)]), undefined);
-
-  const open = read(
-    [
-      closed,
-      turn("1.0:b#turn-1", "1.0:b", 1, "agent"),
-      turn("2.0:i#entry", "2.0:i", 2, "interactive-agent"),
-      turn("1.0:b#turn-2", "1.0:b", 3, "agent"),
-    ],
-    ["0.0:a"],
-  );
-  assert.equal(open?.attemptId, "1.0:b");
-  assert.equal(open.turnId, "1.0:b#turn-2");
 });
 
 for (const delivery of ["skill", "file"] as const) {

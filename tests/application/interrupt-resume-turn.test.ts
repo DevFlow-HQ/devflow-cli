@@ -697,7 +697,7 @@ test("a blank or stale follow-up changes nothing (#354)", async (t) => {
   assert.equal(harness.requests.length, 1);
 });
 
-test("after a reopen the follow-up re-prepares the Harness and resumes the detached Session (#354)", async (t) => {
+test("closing while waiting halts; resume waits without retrying, and a follow-up resumes the Session (#355)", async (t) => {
   const { wired, digest, dirs } = wire(t, "interrupt");
   const runId = launchAgent(wired.projectionPort, digest);
   await interrupt(
@@ -706,7 +706,6 @@ test("after a reopen the follow-up re-prepares the Harness and resumes the detac
     await awaitLiveTurn(wired.projectionPort, runId),
   );
   await awaitSettled(wired.projectionPort, "op-launch");
-  // Until #355, closing Secant keeps the waiting Run blocked and releases it.
   await wired.shutdown();
   wired.runGroup.close();
   wired.catalog.close();
@@ -719,8 +718,34 @@ test("after a reopen the follow-up re-prepares the Harness and resumes the detac
     reopened,
   );
   const port = next.projectionPort;
-  const offer = followUpOffer(runView(port, runId));
-  assert.ok(offer, "expected the follow-up offered after a reopen");
+  const halted = runView(port, runId);
+  assert.equal(halted.state, "halted");
+  assert.equal(followUpOffer(halted), undefined);
+  assert.deepEqual(timelineDetails(halted, "attempt-settled"), []);
+  const resume = halted.actionOffers.find(
+    (offer) => offer.action === "resume-run",
+  );
+  assert.ok(resume?.available);
+  assert.equal(
+    resume.consequence,
+    "resume: wait again for your next message to the interrupted agent; nothing is re-sent.",
+  );
+  assert.ok(
+    port.submit({
+      operationId: "op-resume",
+      operation: "resume-run",
+      input: { runId },
+    }).admitted,
+  );
+  assert.equal((await awaitSettled(port, "op-resume")).status, "applied");
+  const waiting = runView(port, runId);
+  assert.equal(waiting.state, "blocked");
+  assert.deepEqual(timelineDetails(waiting, "attempt-settled"), []);
+  assert.deepEqual(reopened.requests, []);
+  assert.equal(reopened.prepares, 1);
+  const offer = followUpOffer(waiting);
+  assert.ok(offer);
+  assert.equal(offer.turnId, "0.0:work#turn-1");
 
   assert.ok(sendFollowUp(port, offer, "Continue where you stopped.").admitted);
   assert.equal((await awaitSettled(port, "op-follow-up")).status, "applied");
@@ -1155,7 +1180,8 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
       text: new Uint8Array(),
     }),
   });
-  const wired = wireApplication({
+  const record = harnessRecord();
+  const overrides = {
     secantHome: makeTempDir("secant-interrupt-home-"),
     launchCwd: workspace,
     process: {
@@ -1165,9 +1191,10 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
       spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
       spawnCommandSync: (options) => git.spawnCommandSync(options),
     },
-    harnessAdapter: sequencedAdapter([
-      { profile: claudeProfile(), turns: [completedTurn(), blockingTurn()] },
-    ]),
+    harnessAdapter: sequencedAdapter(
+      [{ profile: claudeProfile(), turns: [completedTurn(), blockingTurn()] }],
+      record,
+    ),
     discoverClaudeCode: () => ({
       kind: "found",
       attempt: {
@@ -1176,7 +1203,8 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
         description: "PATH name 'claude'",
       },
     }),
-  });
+  } satisfies Parameters<typeof wireApplication>[0];
+  let wired = wireApplication(overrides);
   t.after(async () => {
     await wired.shutdown();
     wired.runGroup.close();
@@ -1276,4 +1304,37 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
   assert.equal(run.progress[run.position]?.id, "fix");
   assert.equal(offer.stepId, "fix");
   assert.equal(offer.attemptId, "1.0:fix");
+  await awaitSettled(port, "op-launch");
+  await wired.shutdown();
+  wired.runGroup.close();
+  wired.catalog.close();
+  wired = wireApplication(overrides);
+  const next = wired.projectionPort;
+  const halted = runView(next, runId);
+  assert.equal(halted.state, "halted");
+  assert.equal(halted.progress[halted.position]?.id, "fix");
+  assert.equal(followUpOffer(halted), undefined);
+  assert.deepEqual(timelineDetails(halted, "attempt-settled"), [
+    "succeeded",
+    "succeeded",
+    "succeeded",
+  ]);
+  const sent = record.requests.length;
+  assert.ok(
+    next.submit({
+      operationId: "op-resume",
+      operation: "resume-run",
+      input: { runId },
+    }).admitted,
+  );
+  assert.equal((await awaitSettled(next, "op-resume")).status, "applied");
+  const resumed = runView(next, runId);
+  assert.equal(resumed.state, "blocked");
+  assert.equal(resumed.progress[resumed.position]?.id, "fix");
+  assert.equal(followUpOffer(resumed)?.turnId, offer.turnId);
+  assert.deepEqual(
+    timelineDetails(resumed, "attempt-settled"),
+    timelineDetails(halted, "attempt-settled"),
+  );
+  assert.equal(record.requests.length, sent);
 });

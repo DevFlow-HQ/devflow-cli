@@ -38,7 +38,9 @@ owner fencing, startup recovery that starts no Step work, and coordinator rebuil
 - **Quitting a blocked Run (A21).** The body originally had quitting halt every live Run without exception. Corrected: quitting halts every **running** Run; a
   **blocked** Run keeps its rest and releases ownership. The old wording contradicted this ADR's own reconciliation rule — where a dead owner leaves a
   blocked Run blocked, never halted — and [ADR 0023](./0023-own-durable-run-truth-in-isolated-run-stores.md)'s durable gates, which a shutdown must not
-  discard. Halting a blocked Run would throw away a pause the human still has to answer.
+  discard. **2026-10-04, [ADR 0035](./0035-interrupt-ends-only-the-turn-and-a-mid-turn-message-is-a-native-steer.md), #355:** the Agent-step wait after an
+  Interrupt is the exception. Close leaves its claim for reconciliation to halt without an indeterminate marker; resume returns to the same wait.
+  Gates, checkpoints, and Interactive waits keep the blocked rule above.
 - **`blocked` is durable, not computed (A63).** The body originally described `blocked` as computed from the current Step Attempt rather than stored.
   Since [#108](https://github.com/secantdev/secant/issues/108) the authored Human Gate's `pending_gate` row and the `blocked` state are written in one
   transaction, so `blocked` is durable truth a crash cannot lose; the checkpoint facts a Review checkpoint shows are still projected from the attempt log,

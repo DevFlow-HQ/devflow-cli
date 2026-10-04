@@ -24,6 +24,15 @@ import {
 } from "../../src/process/process.js";
 import type { RunView } from "../../src/application/projection-port.js";
 import { createClaudeCodeAdapter } from "../harness/test-adapters.js";
+import {
+  createFake,
+  type FakeTurnRequestRecord,
+} from "../harness/fake-adapter.js";
+import {
+  profile as waitingProfile,
+  writeBundle,
+  readRun,
+} from "../helpers/runLogFixture.js";
 import { wireApplication } from "../../src/composition/main.js";
 import {
   executeRouting,
@@ -264,6 +273,10 @@ function registeredCases(): RunnerCase[] {
     { name: "preflight-git-worktree", body: preflightGitWorktree },
     { name: "artifact-git-repository", body: artifactGitRepository },
     { name: "store-owner-death-recovery", body: storeOwnerDeathRecovery },
+    {
+      name: "application-close-while-waiting",
+      body: applicationCloseWhileWaiting,
+    },
     { name: "store-concurrent-writer", body: storeConcurrentWriter },
     { name: "store-locked-coordination", body: storeLockedCoordination },
     { name: "process-worker-environment", body: processWorkerEnvironment },
@@ -1651,6 +1664,130 @@ async function storeOwnerDeathRecovery(): Promise<void> {
     }
   } finally {
     group.close();
+  }
+}
+
+async function applicationCloseWhileWaiting(): Promise<void> {
+  const processAdapter = createProcessAdapter(withRunnerObserver());
+  const home = runtimeTemp("secant-wait-home-");
+  const workspace = runtimeTemp("secant-wait-ws-");
+  const bundle = writeBundle([
+    {
+      id: "work",
+      kind: "agent",
+      session: "s",
+      prompt: { asset: "prompts/work.md" },
+    },
+  ]);
+  const spawned = await stage("start waiting Secant", () =>
+    processAdapter.spawnOwnedProcess({
+      role: "command",
+      executable,
+      args: [
+        fileURLToPath(
+          new URL("../composition/close-waiting-worker.ts", import.meta.url),
+        ),
+        home,
+        workspace,
+        bundle.folder,
+        bundle.id,
+      ],
+      cwd: process.cwd(),
+      env: process.env,
+      launchTimeoutMs: 5_000,
+    }),
+  );
+  assert.ok(spawned.ok);
+  const output = observeOutput(spawned.process.stdout);
+  const stderr = collectText(spawned.process.stderr);
+  try {
+    await stage("await interrupted Agent wait", async () => {
+      try {
+        await output.waitFor("waiting\n");
+      } catch (cause) {
+        const diagnostics = await stderr;
+        throw new Error(
+          `waiting Secant did not reach its wait: ${diagnostics}`,
+          { cause },
+        );
+      }
+    });
+    const stopped = await stage("close waiting Secant", () =>
+      spawned.process.interrupt(5_000),
+    );
+    assert.ok(
+      stopped.close.kind === "exited" || stopped.close.kind === "signal",
+    );
+    const diagnostics = await stderr;
+    assert.equal(diagnostics, "");
+  } finally {
+    await spawned.process.interrupt(5_000);
+  }
+  const requests: FakeTurnRequestRecord[] = [];
+  const wired = wireApplication({
+    secantHome: home,
+    launchCwd: workspace,
+    process: processAdapter,
+    harnessAdapter: createFake({
+      profile: waitingProfile(),
+      turns: [],
+      turnRequests: requests,
+    })(),
+    discoverClaudeCode: () => ({
+      kind: "found",
+      attempt: {
+        source: "path",
+        name: "fake-claude",
+        description: "fake Harness",
+      },
+    }),
+  });
+  try {
+    const listing = wired.runGroup.listRuns();
+    assert.equal(listing.length, 1);
+    assert.equal(listing[0]?.live, false);
+    const runId = listing[0]!.runId;
+    const halted = readRun(wired.projectionPort, runId);
+    assert.equal(halted.state, "halted");
+    assert.equal(
+      halted.actionOffers.some(
+        (offer) => offer.action === "send-follow-up-turn",
+      ),
+      false,
+    );
+    assert.equal(
+      halted.timeline.some((event) => event.event === "attempt-settled"),
+      false,
+    );
+    await stage("resume to waiting without sending", async () => {
+      assert.ok(
+        wired.projectionPort.submit({
+          operationId: "resume",
+          operation: "resume-run",
+          input: { runId },
+        }).admitted,
+      );
+      assert.equal(
+        (await awaitSettled(wired.projectionPort, "resume")).status,
+        "applied",
+      );
+      const waiting = readRun(wired.projectionPort, runId);
+      assert.equal(waiting.state, "blocked");
+      const followUp = waiting.actionOffers.find(
+        (offer) => offer.action === "send-follow-up-turn",
+      );
+      assert.ok(followUp?.action === "send-follow-up-turn");
+      assert.equal(followUp.turnId, "0.0:work#turn-1");
+      assert.deepEqual(requests, []);
+      assert.equal(
+        waiting.timeline.some((event) => event.event === "attempt-settled"),
+        false,
+      );
+    });
+  } finally {
+    await wired.shutdown();
+    wired.runGroup.close();
+    wired.catalog.close();
   }
 }
 

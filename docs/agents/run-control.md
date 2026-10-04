@@ -15,8 +15,8 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   ([execution's mapping](../../src/run/execution/AGENTS.md)): only `RUN_CANCEL_ABORT` throws (`RunCancelledError`, so cancel-run writes the rest through the
   held owner); a signal throws nothing, so `runAndSettle` returns through its normal path, and a signal leaves the claim live for the next open to reconcile.
 - `cancel-run` is cancel-as-abort for active work in this process; a held blocked Run is rested directly, a non-live blocked Run is acquired and rested, and a Run live
-  elsewhere takes the fresh-owner epoch-bump path. `shutdown()` has two phases: close and release blocked Runs without changing their state, then abort and await running
-  work with `SIGNAL_ABORT`, leaving those ownership records live for startup reconciliation.
+  elsewhere takes the fresh-owner epoch-bump path. `shutdown()` closes blocked Runs' held Harnesses, leaving follow-up waiting claims for Store reconciliation
+  and releasing other blocked claims without changing their rest. It then aborts and awaits running work with `SIGNAL_ABORT`, also leaving their claims live.
 - Cancel and shutdown race on the Run controller: whichever aborts first supplies its reason. Turn interrupt is bound separately; its Operation reports the
   Harness receipt and its own Turn's result, while the Run's eventual rest still reflects cancel or shutdown when either stops the Run.
 
@@ -44,15 +44,19 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 ## Follow-up after an Agent-step Interrupt
 
 - `send-follow-up-turn` (#354) is its own Operation and Offer, admitted only on the derived waiting basis: `holdBasis` (`run-projection.ts`) reads the
-  Run `blocked`, no gate or checkpoint, and execution's `waitingAgentTurn` on the current Agent Step. The same function serves the Offer, settle-time
-  admission (`claimHeldRun`, shared with the interactive controls), and Harness adoption, so the three never disagree. It is not the interactive send.
+  Run `blocked`, no gate or checkpoint, and the Store's `waitingAgentTurn` on the current Agent Step. The same function serves the Offer, settle-time
+  admission (`claimHeldRun`, shared with the interactive controls), Harness adoption, and shutdown, so those readers agree. It is not the interactive send.
 - It re-walks the Routing through `executeTrackedRouting` with the human's text as `followUp`; execution decides whether it still applies. The walk
   takes over the held Harness (`heldStep`, cleared from tracking first), so composition reuses it or, after a reopen, prepares one that resumes the
   detached Session. Like `send`, it settles at the follow-up Turn's admission (`settleAtAdmission`); a drive resting without admitting it settles
   `follow-up-turn-not-admitted`, and a fault after admission lands on the Run.
 - A follow-up while the previous drive is still in flight is refused as not waiting: the walk's `blocked` write pushes the Offer just before that drive's
   `finally` clears `tracking.promise`, so a client acting on the very first waiting snapshot can be refused once, exactly as an interactive send is.
-- Until #355, shutdown keeps a waiting Run `blocked` and releases it like any blocked Run; the Offer returns after a reopen with no Harness held.
+- Closing on this Agent-step waiting basis leaves the claim for Store reconciliation, which halts it without an `indeterminate` marker (#355, ADR 0035).
+  Resume re-mints the same open Attempt and pauses `blocked` with the same follow-up Turn target; it sends no prompt and counts no retry. A follow-up resumes
+  the detached Session. Crash recovery uses the same rule, and the halted Repeat-boundary Projection still names the interrupted Agent Step.
+- An interrupted Interactive or Entry Turn stays `blocked` across close, like any ordinary interactive wait: its next Turn already resumes the Session.
+  Gates and checkpoints also retain their blocked rests. A follow-up live at close follows the existing signal-stop rule, cancelling its Attempt and halting.
 
 ## Takeover
 

@@ -14,6 +14,7 @@ import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
 import type { ModelChoice } from "../../harness/harness.js";
 import type { ProcessAdapter } from "../../process/process.js";
+import { waitingAgentTurn } from "./agent-attempt.js";
 import { openArtifactRepo } from "./artifacts/artifacts.js";
 import {
   artifactBindings,
@@ -418,6 +419,28 @@ export function endRunOwnership(params: TEndRunOwnershipParams): void {
   }
 }
 
+function readAttemptLog(db: SQLiteBunDatabase) {
+  return db
+    .select({
+      attempt_id: attemptLog.attempt_id,
+      outcome: attemptLog.outcome,
+      at: attemptLog.at,
+      stage_ended: attemptLog.stage_ended,
+    })
+    .from(attemptLog)
+    .orderBy(asc(attemptLog.seq))
+    .all()
+    .map((row) => {
+      const parsed = attemptLogRow.parse(row);
+      return {
+        attemptId: parsed.attempt_id,
+        outcome: parsed.outcome,
+        at: parsed.at,
+        ...(parsed.stage_ended === true ? { endsStage: true as const } : {}),
+      };
+    });
+}
+
 export function reconcileRunStore(params: TReconcileRunStoreParams): boolean {
   const path = join(params.dir, "run.db");
   if (!existsSync(path)) return false;
@@ -456,6 +479,20 @@ export function reconcileRunStore(params: TReconcileRunStoreParams): boolean {
             .where(eq(runRecord.run_id, parsed.data.run_id))
             .run();
           settleAbandonedTurns(tx, params.at.toISOString());
+        }
+        if (
+          parsed.data.state === "blocked" &&
+          waitingAgentTurn({
+            turns: () => readTurns(tx),
+            attemptLog: () => readAttemptLog(tx),
+          }) !== undefined
+        ) {
+          // The Turn already settled, so halting a waiting Agent Step adds no
+          // indeterminate Attempt marker. Resume re-mints its open Attempt.
+          tx.update(runRecord)
+            .set({ state: "halted" })
+            .where(eq(runRecord.run_id, parsed.data.run_id))
+            .run();
         }
         writeRunOwnershipRow(tx, {
           ownerEpoch: ownership.ownerEpoch,
@@ -877,27 +914,7 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       return repo.read(versionId, name);
     },
     attemptLog() {
-      return db
-        .select({
-          attempt_id: attemptLog.attempt_id,
-          outcome: attemptLog.outcome,
-          at: attemptLog.at,
-          stage_ended: attemptLog.stage_ended,
-        })
-        .from(attemptLog)
-        .orderBy(asc(attemptLog.seq))
-        .all()
-        .map((row) => {
-          const parsed = attemptLogRow.parse(row);
-          return {
-            attemptId: parsed.attempt_id,
-            outcome: parsed.outcome,
-            at: parsed.at,
-            ...(parsed.stage_ended === true
-              ? { endsStage: true as const }
-              : {}),
-          };
-        });
+      return readAttemptLog(db);
     },
     recordMaterializationConflict(request) {
       const diagnosticId = randomUUID();

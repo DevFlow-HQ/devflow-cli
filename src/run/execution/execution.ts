@@ -52,11 +52,9 @@ import { guardedExecutionObserver } from "./observer.js";
 export {
   driveInteractiveTurn,
   interactiveTurnRest,
-  openAgentAttemptTurn,
   RUN_CANCEL_ABORT,
   RunCancelledError,
   SIGNAL_ABORT,
-  waitingAgentTurn,
 } from "./agent.js";
 export type {
   AgentFollowUp,

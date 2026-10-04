@@ -1,3 +1,4 @@
+export { openAgentAttemptTurn, waitingAgentTurn } from "./agent-attempt.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -1169,9 +1170,9 @@ export function openRunGroup(
   // named). A dead owner (or a pid equal to ours, which at open means a reused pid —
   // this process has claimed nothing yet — and also lets a same-process reopen
   // reconcile in tests) is reconciled by stored state: a `running`/`created` record
-  // is rested `halted` with the interrupted Attempt `indeterminate`; a `blocked`
-  // record stays `blocked` because nothing was cut off and the checkpoint still
-  // holds. Either way its ownership is released, running no Step work, so a reopened
+  // is rested `halted` with the interrupted Attempt `indeterminate`. A `blocked`
+  // Agent wait after Interrupt also halts, without a marker (#355, ADR 0035);
+  // gates, checkpoints, and Interactive waits keep their blocked rest. Either way its ownership is released, running no Step work, so a reopened
   // home never silently resumes execution (ADR 0019). An absent owner row reads as
   // unowned at epoch zero and is skipped.
   for (const row of db.select().from(runs).all()) {
