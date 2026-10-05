@@ -71,6 +71,7 @@ import {
 } from "./windows-harness-conformance.js";
 import { registerWindowsContainmentCases } from "./windows-contained-conformance.js";
 import { registerPosixExitedRootCases } from "./posix-exited-root-conformance.js";
+import { registerPosixLongTempCases } from "./posix-long-temp-conformance.js";
 import { registerPosixSignalFailureCases } from "./posix-signal-failure-conformance.js";
 import { registerStdinErrorCases } from "./stdin-error-conformance.js";
 
@@ -273,6 +274,7 @@ function registeredCases(): RunnerCase[] {
   registerWindowsHarnessCases((test) => cases.push(test));
   registerStdinErrorCases((test) => cases.push(test));
   registerPosixExitedRootCases((test) => cases.push(test));
+  registerPosixLongTempCases((test) => cases.push(test));
   registerPosixSignalFailureCases((test) => cases.push(test));
   cases.push(
     { name: "execution-real-command", body: executionRealCommand },

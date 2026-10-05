@@ -491,10 +491,25 @@ async function escapedPipeHolder(): Promise<void> {
     assert.ok(rootPid !== undefined);
     writeFileSync(leave, "exit");
     await waitForDeath(adapter, rootPid, "escaped holder root did not exit");
-    assert.deepEqual(await child.interrupt(100), {
-      close: { kind: "cleanup-timeout" },
-      escalated: true,
-    });
+    const interruption = await child.interrupt(100);
+    if (process.platform === "darwin") {
+      // XNU killpg1 skips SZOMB group members, then returns EPERM when the
+      // retained root is the group's only member. The escaped holder survives.
+      // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c
+      assert.equal(interruption.escalated, true);
+      assert.equal(interruption.close.kind, "cleanup-error");
+      assert.ok(interruption.close.kind === "cleanup-error");
+      assert.ok(interruption.close.cause instanceof Error);
+      assert.ok("code" in interruption.close.cause);
+      assert.equal(interruption.close.cause.code, "EPERM");
+      assert.ok("syscall" in interruption.close.cause);
+      assert.equal(interruption.close.cause.syscall, "kill");
+    } else {
+      assert.deepEqual(interruption, {
+        close: { kind: "cleanup-timeout" },
+        escalated: true,
+      });
+    }
     const close = await child.closed();
     assert.equal(close.kind, "cleanup-error");
     assert.ok(close.kind === "cleanup-error" && close.cause instanceof Error);

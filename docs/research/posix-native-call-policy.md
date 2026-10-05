@@ -118,3 +118,21 @@ present, so `kill(-pgid, 0)` is not a descendant-death test. Escaped descendants
 
 The concrete allowance under consideration is `bun:ffi` in one private Process file for this finite native launch/wait lifecycle,
 with no new package, helper executable, CLI mode, or general native-call permission. The implementation decision is now recorded in ADR 0030. Local Linux event/stdio and Process Interface conformance pass; macOS runtime qualification remains CI evidence, not a claim from source feasibility.
+
+## macOS CI root-cause qualification
+
+The first full matrix passed macOS copied-binary and consumer acceptance but exposed runtime-only edges. Nested supervisor TMPDIR paths exceeded
+Darwin's 104-byte Unix socket address capacity. A regression preserves the long authored cwd, argv, environment and TMPDIR while only private
+socket acquisition chooses a short path; restoring the original selection makes the regression fail.
+
+Bun 1.4.2's kqueue loop reports ordinary write-side EV_EOF as a connection reset for a full-duplex socket. Marking the parent output endpoint
+write-shut before launch moves it to the shutdown path, which ignores zero-error write EOF while retaining real errors. Native stdin/output
+endpoints also retire their unused halves. This fixes the stream lifecycle without filtering ECONNRESET.
+[Pinned kqueue EOF handling](https://github.com/oven-sh/bun/blob/bun-v1.4.2/packages/bun-usockets/src/eventing/epoll_kqueue.c#L363-L387),
+[reset translation](https://github.com/oven-sh/bun/blob/bun-v1.4.2/packages/bun-usockets/src/loop.c#L911-L926),
+[socket shutdown](https://github.com/oven-sh/bun/blob/bun-v1.4.2/packages/bun-usockets/src/socket.c#L717-L724).
+
+Darwin's explicit-group kill skips zombie members and returns EPERM when no eligible member remains. An escaped pipe holder therefore reports
+that native cleanup error against the retained root-only group; Linux reports the bounded drain timeout. The fixture asserts each exact result
+and confirms the escaped descendant remains alive until its own release handshake. Production preserves the native error.
+[Darwin group signalling](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c#L1709-L1718).

@@ -25,6 +25,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   group signal authority retires before final reap and permanently on ownership loss. Root evidence and output drain are independent.
   `reap` records a group signal, retaining an already-exited root's status/signal. Escaped pipe holders cause bounded cleanup failure.
   SIGCHLD plus yielding 25 ms live-root probes cover Bun's fallback waiter; native state never blocks the JS thread.
+  Unix stdio is one-way: end parent output sockets' unused write halves before launch to avoid Darwin's kqueue EOF reset.
+  Oversized TMPDIR socket names use a short private acquisition folder; child cwd, argv, and environment remain authored.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound
   again to die once force-killed. The bound is not split between the stages.
 - Owned stdin keeps its own `error` listener through teardown; child-process errors do not cover pipe errors. `closeStdin` reaps before returning that cause
