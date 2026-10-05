@@ -22,9 +22,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Coordination open retries migration once before corruption recovery: concurrent migrators may both read a stale journal, then the loser must reopen and
   observe the winner's committed generated ALTER rather than deleting the healthy database underneath it. Only `SQLITE_CORRUPT`/`SQLITE_NOTADB` enters
   destructive rebuild; permission, I/O, lock, and other failures propagate with their cause.
-- Destructive at open: when the coordination DB is intact (not rebuilt) it is authoritative, so any Run directory the `runs` registrations do not list is
-  treated as a crash orphan and `rmSync`'d recursively (`openRunGroup`). A slice that stages a Run directory outside `admitCreate`'s committed transaction
-  therefore loses it on the next open with no trace — the only safe way to add one is the `.creating` quarantine rename inside that transaction.
+- Startup quarantine cleanup and the registration snapshot/orphan sweep hold one immediate `coordination.db` transaction, shared with create/delete admission.
+  An intact coordinator is authoritative; unregistered directories are crash orphans. A live create's quarantine and renamed-before-commit directory
+  are protected by its admission lock. Delete reclamation takes the same lock after its registration commits, so a racing startup sweep cannot interrupt its rename.
 - Owner fencing is a monotonic epoch bumped on every `acquireRun`. Every canonical write opens one immediate `run.db` transaction, reads the epoch first,
   refuses a stale owner without writing, and otherwise performs the whole write in that transaction; private writers take that transaction and never open
   another. `publishAttempt` and `recordGateAnswer` keep a cheap check before staging Git but repeat the authoritative check inside the write transaction.

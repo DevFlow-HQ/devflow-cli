@@ -83,6 +83,9 @@ const SCENARIO_TIMEOUT_MS = 20_000;
 const CONCURRENT_CREATE_WORKER = fileURLToPath(
   new URL("../run/store/concurrent-create-worker.ts", import.meta.url),
 );
+const STARTUP_CREATE_WORKER = fileURLToPath(
+  new URL("../run/store/startup-create-worker.ts", import.meta.url),
+);
 const LOCKED_COORDINATION_WORKER = fileURLToPath(
   new URL("../run/store/locked-coordination-worker.ts", import.meta.url),
 );
@@ -292,6 +295,14 @@ function registeredCases(): RunnerCase[] {
       body: applicationCloseWhileWaiting,
     },
     { name: "store-concurrent-writer", body: storeConcurrentWriter },
+    {
+      name: "store-startup-during-staging",
+      body: () => storeStartupDuringCreate("staged"),
+    },
+    {
+      name: "store-startup-before-create-commit",
+      body: () => storeStartupDuringCreate("published"),
+    },
     { name: "store-locked-coordination", body: storeLockedCoordination },
     { name: "process-worker-environment", body: processWorkerEnvironment },
     {
@@ -1848,6 +1859,74 @@ async function storeConcurrentWriter(): Promise<void> {
   }
 }
 
+async function storeStartupDuringCreate(
+  mode: "staged" | "published",
+): Promise<void> {
+  const processAdapter = createProcessAdapter(withRunnerObserver());
+  const home = runtimeTemp("secant-runtime-startup-home-");
+  const workspace = runtimeTemp("secant-runtime-startup-ws-");
+  const writer = await stage(`park create ${mode}`, async () => {
+    const worker = await startStoreWriter({
+      processAdapter,
+      home,
+      workspace,
+      operationId: "startup-collision",
+      mode,
+      worker: STARTUP_CREATE_WORKER,
+    });
+    await worker.waitFor("parked\n");
+    return worker;
+  });
+  const runsDirectory = join(home, "runs");
+  const groupName = readdirSync(runsDirectory)[0];
+  assert.ok(groupName);
+  const groupDirectory = join(runsDirectory, groupName);
+  const directories = readdirSync(groupDirectory, {
+    withFileTypes: true,
+  }).filter((entry) => entry.isDirectory());
+  assert.equal(directories.length, 1);
+  assert.equal(directories[0]?.name.endsWith(".creating"), mode === "staged");
+
+  const opener = await stage("open group during publication", async () => {
+    const worker = await startStoreWriter({
+      processAdapter,
+      home,
+      workspace,
+      operationId: "startup-collision",
+      mode: "open",
+      worker: STARTUP_CREATE_WORKER,
+    });
+    await worker.waitFor("release-writer\n");
+    return worker;
+  });
+  await stage("commit create and read from concurrent opener", async () => {
+    await writer.process.writeStdin(new TextEncoder().encode("c"));
+    await Promise.all([
+      writer.waitFor("created\n"),
+      opener.waitFor("readable\n"),
+    ]);
+    await writer.process.writeStdin(new TextEncoder().encode("finish\n"));
+    await Promise.all([writer.close(), opener.close()]);
+  });
+  const group = openRunGroup(home, workspace, { process: processAdapter });
+  try {
+    const replay = group.createRun({
+      operationId: "startup-collision",
+      bundleSnapshotDigest: "sha256:ignored",
+      launch: {},
+      at: new Date("2026-10-05T00:00:00.000Z"),
+    });
+    assert.equal(replay.outcome, "already-created");
+    assert.deepEqual(
+      group.listRuns().map((run) => run.runId),
+      [replay.runId],
+    );
+    assert.ok(group.readRun(replay.runId).ok);
+  } finally {
+    group.close();
+  }
+}
+
 async function storeLockedCoordination(): Promise<void> {
   const processAdapter = createProcessAdapter(withRunnerObserver());
   const home = runtimeTemp("secant-runtime-locked-home-");
@@ -1910,7 +1989,8 @@ type TStartStoreWriterParams = {
   readonly home: string;
   readonly workspace: string;
   readonly operationId: string;
-  readonly mode?: "exit" | "hold" | "barrier";
+  readonly mode?: "exit" | "hold" | "barrier" | "staged" | "published" | "open";
+  readonly worker?: string;
 };
 
 async function startStoreWriter(params: TStartStoreWriterParams): Promise<{
@@ -1923,7 +2003,7 @@ async function startStoreWriter(params: TStartStoreWriterParams): Promise<{
     role: "command",
     executable,
     args: [
-      CONCURRENT_CREATE_WORKER,
+      params.worker ?? CONCURRENT_CREATE_WORKER,
       params.home,
       params.workspace,
       params.operationId,

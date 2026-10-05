@@ -266,6 +266,7 @@ test("a crash after staging leaves only a .creating quarantine the next open rem
   // after the run.db has been staged into `.creating` and before the rename.
   const groupDir = join(home, "runs", exampleGroupName());
   const bootstrap = openRunGroup(home, WORKSPACE);
+  const sibling = create(bootstrap, "sibling");
   bootstrap.close();
   const raw = new Database(join(groupDir, "coordination.db"));
   raw.exec("DROP TABLE operations");
@@ -282,7 +283,10 @@ test("a crash after staging leaves only a .creating quarantine the next open rem
     n.endsWith(".creating"),
   );
   assert.equal(quarantines.length, 1);
-  assert.equal(group.listRuns().length, 0);
+  assert.deepEqual(
+    group.listRuns().map((run) => run.runId),
+    [sibling.runId],
+  );
   group.close();
 
   // The next open removes the quarantine.
@@ -292,6 +296,11 @@ test("a crash after staging leaves only a .creating quarantine the next open rem
     readdirSync(groupDir).filter((n) => n.endsWith(".creating")).length,
     0,
   );
+  assert.deepEqual(
+    reopened.listRuns().map((run) => run.runId),
+    [sibling.runId],
+  );
+  assert.ok(reopened.readRun(sibling.runId).ok);
 });
 
 test("a .deleting quarantine from a crashed delete is removed on the next open", async (t) => {
@@ -299,11 +308,15 @@ test("a .deleting quarantine from a crashed delete is removed on the next open",
   const group = openRunGroup(home, WORKSPACE);
   const created = create(group, "op-1");
   assert.ok(created.outcome === "created");
+  const sibling = create(group, "sibling");
   group.close();
 
   // Simulate a delete that crashed after moving the store to its `.deleting`
   // quarantine but before reclaiming it.
   const groupDir = groupDirOf(home);
+  const raw = new Database(join(groupDir, "coordination.db"));
+  raw.run("DELETE FROM runs WHERE run_id = ?", [created.runId]);
+  raw.close();
   renameSync(
     join(groupDir, created.runId),
     join(groupDir, `${created.runId}.deleting`),
@@ -315,6 +328,7 @@ test("a .deleting quarantine from a crashed delete is removed on the next open",
     readdirSync(groupDir).filter((n) => n.endsWith(".deleting")).length,
     0,
   );
+  assert.ok(reopened.readRun(sibling.runId).ok);
 });
 
 test("an unregistered Run directory left by a crashed delete is swept on the next open", async (t) => {
@@ -322,6 +336,7 @@ test("an unregistered Run directory left by a crashed delete is swept on the nex
   const group = openRunGroup(home, WORKSPACE);
   const created = create(group, "op-1");
   assert.ok(created.outcome === "created");
+  const sibling = create(group, "sibling");
   group.close();
 
   // Simulate a delete that committed (registration gone) but crashed before its
@@ -336,7 +351,31 @@ test("an unregistered Run directory left by a crashed delete is swept on the nex
   t.after(() => reopened.close());
   // The orphan directory is gone, and it is not resurrected as a Run.
   assert.ok(!existsSync(join(groupDir, created.runId)));
-  assert.equal(reopened.listRuns().length, 0);
+  assert.deepEqual(
+    reopened.listRuns().map((run) => run.runId),
+    [sibling.runId],
+  );
+  assert.ok(reopened.readRun(sibling.runId).ok);
+});
+
+test("a renamed but uncommitted create is reclaimed while registered siblings remain readable", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  const sibling = create(group, "sibling");
+  group.close();
+  const groupDir = groupDirOf(home);
+  const orphan = join(groupDir, "uncommitted-create");
+  // A readable final directory alone never publishes a Run. Only its committed
+  // coordination registration does, as in the rename-before-commit crash window.
+  cpSync(join(groupDir, sibling.runId), orphan, { recursive: true });
+  const reopened = openRunGroup(home, WORKSPACE);
+  t.after(() => reopened.close());
+  assert.equal(existsSync(orphan), false);
+  assert.deepEqual(
+    reopened.listRuns().map((run) => run.runId),
+    [sibling.runId],
+  );
+  assert.ok(reopened.readRun(sibling.runId).ok);
 });
 
 test("an owned Run can still be deleted; the handle is closed before reclaim", async (t) => {

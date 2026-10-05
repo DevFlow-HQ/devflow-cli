@@ -973,29 +973,37 @@ export function openRunGroup(
     join(groupDir, "coordination.db"),
     groupDir,
   );
-  cleanQuarantine(groupDir);
-  // ADR 0023 retention: prune expired diagnostics at open (A9), before any Run is
-  // acquired. Best-effort and injectable-clock-driven for deterministic tests.
-  pruneDiagnostics(groupDir, (options.now ?? (() => new Date()))());
-  // Reconcile the directory against the registrations. An intact coordination DB
-  // is authoritative, so a Run directory it does not list is a crash orphan — an
-  // unpublished create (renamed but uncommitted) or a committed delete whose
-  // reclaim never ran — and is removed. Skipped after a rebuild, where the
-  // registrations were just re-seeded from these same directories.
-  if (!rebuilt) {
-    const registered = new Set(
-      db
-        .select({ run_id: runs.run_id })
-        .from(runs)
-        .all()
-        .map((row) => row.run_id),
+  // Recovery and publication share create/delete's coordination admission. The
+  // registration snapshot and its entire sweep must stay under this write lock:
+  // an uncommitted create may hold either a quarantine or its final directory.
+  try {
+    db.transaction(
+      (tx) => {
+        cleanQuarantine(groupDir);
+        // An intact coordinator is authoritative. After a rebuild, unreadable
+        // unregistered stores retain their canonical bytes for explicit deletion.
+        if (rebuilt) return;
+        const registered = new Set(
+          tx
+            .select({ run_id: runs.run_id })
+            .from(runs)
+            .all()
+            .map((row) => row.run_id),
+        );
+        for (const name of runDirNames(groupDir)) {
+          if (!registered.has(name)) {
+            rmSync(join(groupDir, name), { recursive: true, force: true });
+          }
+        }
+      },
+      { behavior: "immediate" },
     );
-    for (const name of runDirNames(groupDir)) {
-      if (!registered.has(name)) {
-        rmSync(join(groupDir, name), { recursive: true, force: true });
-      }
-    }
+  } catch (error) {
+    sqlite.close();
+    throw error;
   }
+  // ADR 0023 retention: best-effort expiry before any Run is acquired.
+  pruneDiagnostics(groupDir, (options.now ?? (() => new Date()))());
 
   // Every acquired Run's run.db handles, keyed by Run id, so the group can close
   // them all — and, before a delete reclaims a Run's directory, close exactly that
@@ -1202,7 +1210,9 @@ export function openRunGroup(
       // any owner's handle first so the rename is not blocked by an open file.
       if (result.outcome === "deleted") {
         closeRunHandles(runId);
-        reclaimRunDir(runId);
+        // A startup sweep or another delete may also reclaim these bytes. Take
+        // the same admission lock so existence, rename and removal cannot race.
+        db.transaction(() => reclaimRunDir(runId), { behavior: "immediate" });
       }
       return result;
     },
