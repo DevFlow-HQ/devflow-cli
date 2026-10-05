@@ -2470,6 +2470,13 @@ test("[live-model-change] a change reaching the live Turn is pending until the H
     [{ model: "beta", effort: "medium" }],
   );
   assert.equal(operationStatus(wired, "live-change"), "pending");
+  const pendingReceipt = wired.projectionPort.openProjection({
+    family: "operation",
+    operationId: "live-change",
+  });
+  t.after(() => pendingReceipt.close());
+  assert.equal(pendingReceipt.snapshot.modelChoiceChange, undefined);
+  const receiptUpdate = pendingReceipt.updates[Symbol.asyncIterator]().next();
   assert.deepEqual(readRun(wired, runId).modelChoice, {
     model: "alpha",
     effort: "high",
@@ -2489,6 +2496,10 @@ test("[live-model-change] a change reaching the live Turn is pending until the H
   assert.deepEqual(settled.modelChoiceChange, {
     choice: { model: "beta", effort: "medium" },
     reach: "live-turn",
+  });
+  assert.deepEqual(await receiptUpdate, {
+    done: false,
+    value: { kind: "durable", snapshot: settled },
   });
   const run = readRun(wired, runId);
   assert.deepEqual(run.modelChoice, { model: "beta", effort: "medium" });

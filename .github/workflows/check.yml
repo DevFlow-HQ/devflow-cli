@@ -73,6 +73,15 @@ jobs:
           Write-Host "Windows test TEMP and TMP: $testTemp"
           "TEMP=$testTemp" >> $env:GITHUB_ENV
           "TMP=$testTemp" >> $env:GITHUB_ENV
+      - name: operation-receipt-identity-and-lifetime
+        run: >-
+          bun run test --
+          tests/application/operation-receipt.test.ts
+          tests/application/projection-port.test.ts
+          tests/application/operation-settlement.test.ts
+          tests/application/requested-model.test.ts
+          tests/application/observer-lag.test.ts
+          tests/composition/application-log.test.ts
       - name: Test
         run: bun run test
       - name: Build

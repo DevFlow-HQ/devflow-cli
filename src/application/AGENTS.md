@@ -16,7 +16,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   settles `failed` and rests. Otherwise `derived.checkpoint` is a **derived Review checkpoint**, answered by `recordGateAnswer` exactly as M2 did (no `attempt_log`;
   the checkpoint stays derived). The live Gate is `derived.pendingGate?.gate ?? derived.checkpoint?.gate` (a blocked Run has exactly one), and the answer form must match
   `gate.shape` (`free-text` ⇒ `text`, `approve-reject` ⇒ `continue`/`stop`) or it is a `gate-shape-mismatch` Problem that changes nothing. Idempotency is keyed on the
-  operation id (`gate_answer` row for a checkpoint; the in-process operations map for both) — never on whether the gate settled, so a _different_ operation answering an
+  operation id (`gate_answer` row for a checkpoint; the in-process ledger for both) — never on whether the gate settled, so a _different_ operation answering an
   already-answered gate falls through to the staleness check and is refused, not silently masked as `applied`.
 - Cancelling an authored Human Gate retains its `pending_gate` record (#336); surface it as `derived.pendingGate` only while the stored Run state is
   `blocked`, so a terminal Run projects its stored state and offers deletion.
@@ -37,7 +37,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - A pre-M4 Run with no selection upgrades only once its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume write `claude-code` once
   through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems stay unselected (#139). A Run with no Model choice takes the preselection once
   at the resume drive or a reopened human Turn (`upgradeLegacyModelChoice`), never at reopen; no preselection halts with a model correction naming `secant run model`.
-- Human Turn admission reads the Run's selected Harness and its registration's static input rules before `admit` (#358). The read acquires no owner;
+- Human Turn admission reads the Run's selected Harness and its registration's static input rules before ledger admission (#358). The read acquires no owner;
   a pre-M4 unselected Run uses Claude Code's rules, matching its reopen/resume upgrade. A refusal consumes no Operation id and records no Turn.
 - Never `acquireRun` a Run merely to read it when it is live in another process: acquiring bumps the owner-fencing epoch and would abort the process
   running it. `readResource`/`runResult` read through the live in-process owner when present, else acquire-and-close a rested Run, else refuse with
@@ -80,9 +80,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   whenever the draft is otherwise ready and needs one; a direct `submitLaunch` skips it, so a model outside the Harness's list surfaces at the first Turn as
   a `not-started` `model-unavailable` Turn, not as a pre-create refusal.
 - The observer (`observer.ts`, #319) has a no-op default and never sees the logger. Application guards it once at resolution (#330): an observer
-  never throws into its caller or changes a Projection, qualification, or Operation outcome. Every new Operation is admitted through `admit`, which reports the
-  admission before scheduling settlement, so the record precedes an inline outcome; `submit` reports only replays and refusals. An Operation stored any
-  other way is never logged as admitted. Events carry ids, kinds, Problem codes, and typed failure fields only — never input, Turn text, or Problem prose.
+  never throws into its caller or changes a Projection, qualification, or Operation outcome. The private `OperationLedger.submit` owns receipt identity,
+  scheduling and records, reporting admission before even inline settlement. Replays compare both kind and fingerprint before fresh authorization;
+  refused ids remain unconsumed. Events carry ids, kinds, Problem codes, and typed failure fields only — never input, Turn text, or Problem prose.
   Tracked Operation admission, outcome, and replay carry their `runId`; pre-Run Operations omit it (#331). Application reports its own committed rests
   (cancel, Gate stop, prepare refusal, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
@@ -101,8 +101,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - App-release trust is a recorded Trust grant (operation id `app-release`) that the startup ensure (`shipped-bundles.ts`) writes only on an Entry whose
   origin is `built-in`, re-checked every startup, so launch, resume, and the timeline read it like any grant; `trustState` shows a grant on a built-in as
   `app-release`. Equal bytes a user imported first keep their own origin and trust (#227).
-- `createApplication` stays one closure: its `runs` and operations maps and observer Sets share settlement, owner-release, and shutdown ordering (#303 A3).
-  Its private children are `launch-preparation`, `harness-catalog`, `live-overlay`, and `subscription-lifecycle`.
+- `OperationLedger.submit/open` owns receipts and their subscriptions; settlers return applied metadata, never mutate ledger entries (#393).
+  Run authorization, Trust ordering, owners and abort stay in `createApplication`. The shared `SubscriptionLifecycle` ends observation before Run cleanup.
 
 ## Tests
 

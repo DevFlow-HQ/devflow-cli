@@ -84,8 +84,6 @@ import {
   interactiveTurnBusy,
   interactiveTurnNotAdmitted,
   interruptRejected,
-  operationIdReused,
-  operationNotFound,
   pathNotFound,
   runDiagnosticMissing,
   runExecutionFault,
@@ -116,6 +114,10 @@ import {
   sameModelChoice,
 } from "./model-choice.js";
 import type { ModelChange, ModelChoice } from "../harness/harness.js";
+import {
+  OperationLedger,
+  type OperationSettlement,
+} from "./operation-ledger.js";
 import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import { listRunsSnapshot } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
@@ -163,7 +165,6 @@ import type {
   SendInteractiveTurnInput,
   SteerTurnInput,
   OpenedProjection,
-  OperationOutcome,
   OperationSnapshot,
   ProjectionPort,
   ProjectionSelector,
@@ -310,7 +311,7 @@ interface TrackedRun {
   owner?: RunOwner;
   done: boolean;
   readonly abort: AbortController;
-  promise?: Promise<OperationOutcome>;
+  promise?: Promise<OperationSettlement>;
   readonly takeover?: boolean;
   readonly observers: Set<UpdateStream>;
   readonly live: LiveOverlayState;
@@ -422,17 +423,6 @@ export interface Application {
 // before Preflight (A10).
 const launchInputMap = z.record(z.string(), z.string());
 
-/** One admitted Operation as `createApplication` tracks it. */
-interface TrackedOperation {
-  readonly operation: Submission["operation"];
-  readonly replayKey: string;
-  outcome: OperationOutcome;
-  modelChoiceChange?: OperationSnapshot["modelChoiceChange"];
-  readonly observers: Set<UpdateStream>;
-  readonly runId?: string;
-  readonly settle: () => OperationOutcome | Promise<OperationOutcome>;
-}
-
 export function createApplication(deps: ApplicationDependencies): Application {
   const { catalog, runGroup, runExecution, prepareRunInteractiveStep } = deps;
   const observe = guardedApplicationObserver(deps.observe);
@@ -440,9 +430,6 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const launchWorkspacePath = canonicalizeWorkspacePath(
     deps.launchWorkspacePath,
   );
-  const scheduleSettlement =
-    deps.scheduleSettlement ??
-    ((settle: () => void | Promise<void>) => settle());
   const now = deps.now ?? (() => new Date());
   const subscriptions = new SubscriptionLifecycle();
   const harnessCatalog = createHarnessCatalog(
@@ -475,12 +462,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
     qualify: (id) => harnessCatalog.qualify(id),
     observe,
   });
-  // Each Operation carries a settler (run inline by default, deferred under a
-  // test), its outcome, and the streams watching it. Observers are added only
-  // while `pending` and delivered to exactly once on settlement, so a settled
-  // Operation holds no live observer to leak. `replayKey` decides whether a
-  // re-submitted operation id is a replay (equal) or a conflict (different).
-  const operations = new Map<string, TrackedOperation>();
+  const operations = new OperationLedger({
+    subscriptions,
+    observe,
+    scheduleSettlement: deps.scheduleSettlement,
+  });
   // A launched Run tracked in this process: its routing and Bundle facts, the
   // owner while it is live (so a snapshot read never fences the executing owner),
   // the in-memory latest state, the AbortController that stops its execution
@@ -615,7 +601,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     };
   }
 
-  function applyApproval(rawPath: string): OperationOutcome {
+  function applyApproval(rawPath: string): OperationSettlement {
     let canonicalPath: string;
     try {
       canonicalPath = canonicalizeWorkspacePath(rawPath);
@@ -630,84 +616,6 @@ export function createApplication(deps: ApplicationDependencies): Application {
       }
     }
     return { status: "applied" };
-  }
-
-  // Admits a new Operation: records it `pending`, reports the admission, then
-  // schedules its settlement, so the admission record precedes the outcome even
-  // when the settler runs inline.
-  function admit(
-    operationId: string,
-    entry: Omit<TrackedOperation, "outcome" | "observers">,
-  ): void {
-    operations.set(operationId, {
-      ...entry,
-      outcome: { status: "pending" },
-      observers: new Set<UpdateStream>(),
-    });
-    observe({
-      kind: "operation-admission",
-      operationId,
-      operation: entry.operation,
-      admission: "admitted",
-      ...(entry.runId !== undefined ? { runId: entry.runId } : {}),
-    });
-    scheduleSettlement(() => settleOperation(operationId));
-  }
-
-  // Settles a `pending` Operation: runs its settler, records the durable outcome
-  // in place (the observer Set and settler stay stable), and delivers it to any
-  // Projection opened on this id while it was pending. Runs via
-  // `scheduleSettlement`, so inline by default and deferred under a test.
-  function settleOperation(operationId: string): void | Promise<void> {
-    const entry = operations.get(operationId);
-    if (entry === undefined) return;
-    const record = (outcome: OperationOutcome): void => {
-      entry.outcome = outcome;
-      if (outcome.status !== "pending") {
-        observe({
-          kind: "operation-outcome",
-          operationId,
-          operation: entry.operation,
-          outcome: outcome.status,
-          ...(entry.runId !== undefined ? { runId: entry.runId } : {}),
-          ...(outcome.status === "not-applied"
-            ? { code: outcome.problem.code }
-            : {}),
-        });
-      }
-      const snapshot: OperationSnapshot = {
-        family: "operation",
-        operationId,
-        outcome,
-        ...(entry.modelChoiceChange === undefined
-          ? {}
-          : { modelChoiceChange: entry.modelChoiceChange }),
-      };
-      for (const observer of entry.observers) {
-        observer.push({ kind: "durable", snapshot });
-      }
-    };
-    // A synchronous settler (approve-workspace, delete, and a cancel of a Run not
-    // live in this process) settles inline so an `operation` Projection opened right
-    // after `submit` is already settled; a Run settler (launch, resume, answer) and a
-    // cancel-as-abort of an in-process live Run return a Promise, which settles on the
-    // stream's first durable update. Keeping the sync path sync preserves every such
-    // Operation's synchronous observation.
-    const recordFault = (error: unknown): void => {
-      record({
-        status: "not-applied",
-        problem: runExecutionFault(entry.runId, error, operationId),
-      });
-    };
-    try {
-      const settled = entry.settle();
-      if (settled instanceof Promise) {
-        return settled.then(record, recordFault);
-      }
-      record(settled);
-    } catch (error) {
-      recordFault(error);
-    }
   }
 
   // Push the current Run snapshot to every observer watching this Run. Called
@@ -1059,10 +967,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
     readonly runId: string;
     readonly tracking: TrackedRun;
     readonly owner: RunOwner;
-    readonly drive: () => Promise<OperationOutcome>;
+    readonly drive: () => Promise<OperationSettlement>;
     readonly retainOwner: () => boolean;
     readonly setRetainOwner: (retain: boolean) => void;
-  }): Promise<OperationOutcome> {
+  }): Promise<OperationSettlement> {
     const { runId, tracking, owner } = params;
     try {
       return await params.drive();
@@ -1111,7 +1019,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     tracking: TrackedRun,
     observed: RunOwner,
     failure: RunHarnessPreparationFailure,
-  ): OperationOutcome {
+  ): OperationSettlement {
     const problem = selectedHarnessUnavailable(runId, failure);
     const previous = tracking.problem;
     tracking.problem = problem;
@@ -1135,7 +1043,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     readonly heldStep?: RunInteractiveStep;
     readonly followUp?: AgentFollowUp;
   }): Promise<{
-    readonly outcome: OperationOutcome;
+    readonly outcome: OperationSettlement;
     readonly retainOwner: boolean;
   }> {
     if (
@@ -1336,7 +1244,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // checkpoint). Ownership stays held through `blocked` and is released only when
   // the Run reaches a resting state; a fenced owner or publication fault is a coordination/environment
   // fault that execution throws, carried here as a `not-applied` Problem.
-  async function runAndSettle(runId: string): Promise<OperationOutcome> {
+  async function runAndSettle(runId: string): Promise<OperationSettlement> {
     const tracking = runs.get(runId);
     if (
       tracking === undefined ||
@@ -1407,7 +1315,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // (#98). Called as the launch/resume Operation's settler: invoking `runAndSettle`
   // runs its synchronous prefix (which acquires the owner) before the first await,
   // so the promise captured here already has the owner in hand.
-  function startRun(runId: string): Promise<OperationOutcome> {
+  function startRun(runId: string): Promise<OperationSettlement> {
     const tracking = runs.get(runId);
     // A takeover that only re-acquires a Run resting `blocked` runs no execution:
     // `runAndSettle` re-fences the owner, leaves the Run blocked, and settles
@@ -1558,51 +1466,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         },
       };
     }
-    const operationId = selector.operationId;
-    const operation = operations.get(operationId);
-    const updates = subscriptions.open((updates) => {
-      if (operation?.outcome.status !== "pending") return () => {};
-      operation.observers.add(updates);
-      return () => {
-        operation.observers.delete(updates);
-      };
-    });
-    if (operation === undefined) {
-      // An id Secant never saw is a Problem snapshot, not a throw (#77).
-      return {
-        snapshot: {
-          family: "operation",
-          operationId,
-          outcome: {
-            status: "not-applied",
-            problem: operationNotFound(operationId),
-          },
-        },
-        catchUp: "fresh",
-        updates,
-        close() {
-          updates.close();
-        },
-      };
-    }
-    const snapshot: OperationSnapshot = {
-      family: "operation",
-      operationId,
-      outcome: operation.outcome,
-      ...(operation.modelChoiceChange === undefined
-        ? {}
-        : { modelChoiceChange: operation.modelChoiceChange }),
-    };
-    // Pending Operations deliver settlement; settled receipts remain idle.
-    // Both subscriptions stay open until their caller or Application ends them.
-    return {
-      snapshot,
-      catchUp: "fresh",
-      updates,
-      close() {
-        updates.close();
-      },
-    };
+    return operations.open(selector.operationId);
   }
 
   function openRunProjection(
@@ -1732,138 +1596,128 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     input: { readonly path: string },
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === input.path) {
-        return { admitted: true, operationId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    admit(operationId, {
-      operation: "approve-workspace",
-      replayKey: input.path,
-      settle: () => applyApproval(input.path),
-    });
-    return { admitted: true, operationId };
+    return operations.submit(
+      { operationId, operation: "approve-workspace", replayKey: input.path },
+      () => ({ admitted: true, settle: () => applyApproval(input.path) }),
+    );
   }
 
   function submitLaunch(
     operationId: string,
     input: LaunchRunInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === launchReplayKey(input)) {
+    return operations.submit(
+      {
+        operationId,
+        operation: "launch-run",
+        replayKey: launchReplayKey(input),
+      },
+      () => {
+        if (runGroup === undefined || runExecution === undefined) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        // The shared evaluator runs the ordered creation-free checks (installed
+        // Bundle, Workspace approval, pinned bytes and Composition, Preflight, and
+        // Trust) and returns the first failing one plus the resolved facts a create
+        // needs. It is the same evaluator the `launch-preparation` Projection reads,
+        // so a refusal here carries the correction target both clients route to, and
+        // the Trust grant is still recorded only *after* the Run is created below —
+        // a Problem here leaves no Run and no grant (#189, AC1/AC4).
+        const evaluation = launchPreparation.evaluate(input);
+        if (
+          evaluation.findings.length > 0 ||
+          evaluation.resolution === undefined
+        ) {
+          // Findings are non-empty whenever the resolution is absent; the fallback is
+          // a defensive impossibility, not a reachable branch.
+          return {
+            admitted: false,
+            problem: evaluation.findings[0] ?? runSupportUnavailable(),
+          };
+        }
+        const {
+          entry,
+          manifest,
+          selectedHarness,
+          requestedModel,
+          requestedEffort,
+          needsGrant,
+        } = evaluation.resolution;
+        // Every Agent-bearing Run carries a Model choice (ADR 0034). `submit` never
+        // qualifies, so it takes the choice the `launch-run` Offer resolved; a draft
+        // without one was not assessed and is refused before anything is created.
+        if (selectedHarness !== undefined && requestedModel === undefined) {
+          // Preflight admitted the selection from this registry, so it is present.
+          const registration = harnessInputRegistrations.get(selectedHarness);
+          if (registration === undefined) {
+            throw new Error(
+              `application: Harness ${selectedHarness} is not registered.`,
+            );
+          }
+          return {
+            admitted: false,
+            problem: modelChoiceRequired(registration.choice),
+          };
+        }
+
+        const created = runGroup.createRun({
+          operationId,
+          bundleSnapshotDigest: entry.digest,
+          launch: input.launchInputs,
+          selectedHarness,
+          ...(requestedModel !== undefined
+            ? {
+                modelChoice: {
+                  model: requestedModel,
+                  ...(requestedEffort !== undefined
+                    ? { effort: requestedEffort }
+                    : {}),
+                },
+              }
+            : {}),
+          at: new Date(),
+        });
+        if (needsGrant) {
+          catalog.grantTrust({
+            operationId,
+            digest: entry.digest,
+            installationGeneration: entry.installationGeneration,
+            grantedAt: new Date(),
+          });
+        }
+        const runId = created.runId;
+        if (
+          created.outcome === "created" &&
+          selectedHarness !== undefined &&
+          created.record.modelChoice !== undefined
+        ) {
+          const notice = saveLastModelChoice(
+            catalog,
+            selectedHarness,
+            created.record.modelChoice,
+          );
+          if (notice !== undefined) preferenceNotices.set(runId, notice);
+        }
+        runs.set(runId, {
+          digest: entry.digest,
+          routing: manifest.routing,
+          name: manifest.bundle.name,
+          id: manifest.bundle.id,
+          version: manifest.bundle.version,
+          state: created.record.state,
+          done: false,
+          abort: new AbortController(),
+          observers: observersForRun(runId),
+          live: liveOverlay.fresh(),
+        });
+        pushRunListUpdates();
         return {
           admitted: true,
-          operationId,
-          ...(existing.runId !== undefined ? { runId: existing.runId } : {}),
+          runId,
+          settle: () => startRun(runId),
         };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (runGroup === undefined || runExecution === undefined) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    // The shared evaluator runs the ordered creation-free checks (installed
-    // Bundle, Workspace approval, pinned bytes and Composition, Preflight, and
-    // Trust) and returns the first failing one plus the resolved facts a create
-    // needs. It is the same evaluator the `launch-preparation` Projection reads,
-    // so a refusal here carries the correction target both clients route to, and
-    // the Trust grant is still recorded only *after* the Run is created below —
-    // a Problem here leaves no Run and no grant (#189, AC1/AC4).
-    const evaluation = launchPreparation.evaluate(input);
-    if (evaluation.findings.length > 0 || evaluation.resolution === undefined) {
-      // Findings are non-empty whenever the resolution is absent; the fallback is
-      // a defensive impossibility, not a reachable branch.
-      return {
-        admitted: false,
-        problem: evaluation.findings[0] ?? runSupportUnavailable(),
-      };
-    }
-    const {
-      entry,
-      manifest,
-      selectedHarness,
-      requestedModel,
-      requestedEffort,
-      needsGrant,
-    } = evaluation.resolution;
-    // Every Agent-bearing Run carries a Model choice (ADR 0034). `submit` never
-    // qualifies, so it takes the choice the `launch-run` Offer resolved; a draft
-    // without one was not assessed and is refused before anything is created.
-    if (selectedHarness !== undefined && requestedModel === undefined) {
-      // Preflight admitted the selection from this registry, so it is present.
-      const registration = harnessInputRegistrations.get(selectedHarness);
-      if (registration === undefined) {
-        throw new Error(
-          `application: Harness ${selectedHarness} is not registered.`,
-        );
-      }
-      return {
-        admitted: false,
-        problem: modelChoiceRequired(registration.choice),
-      };
-    }
-
-    const created = runGroup.createRun({
-      operationId,
-      bundleSnapshotDigest: entry.digest,
-      launch: input.launchInputs,
-      selectedHarness,
-      ...(requestedModel !== undefined
-        ? {
-            modelChoice: {
-              model: requestedModel,
-              ...(requestedEffort !== undefined
-                ? { effort: requestedEffort }
-                : {}),
-            },
-          }
-        : {}),
-      at: new Date(),
-    });
-    if (needsGrant) {
-      catalog.grantTrust({
-        operationId,
-        digest: entry.digest,
-        installationGeneration: entry.installationGeneration,
-        grantedAt: new Date(),
-      });
-    }
-    const runId = created.runId;
-    if (
-      created.outcome === "created" &&
-      selectedHarness !== undefined &&
-      created.record.modelChoice !== undefined
-    ) {
-      const notice = saveLastModelChoice(
-        catalog,
-        selectedHarness,
-        created.record.modelChoice,
-      );
-      if (notice !== undefined) preferenceNotices.set(runId, notice);
-    }
-    runs.set(runId, {
-      digest: entry.digest,
-      routing: manifest.routing,
-      name: manifest.bundle.name,
-      id: manifest.bundle.id,
-      version: manifest.bundle.version,
-      state: created.record.state,
-      done: false,
-      abort: new AbortController(),
-      observers: observersForRun(runId),
-      live: liveOverlay.fresh(),
-    });
-    pushRunListUpdates();
-    admit(operationId, {
-      operation: "launch-run",
-      replayKey: launchReplayKey(input),
-      runId,
-      settle: () => startRun(runId),
-    });
-    return { admitted: true, operationId, runId };
+      },
+    );
   }
 
   // The Run-precondition re-check a resume runs before authorizing more work: the
@@ -1944,123 +1798,120 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     input: ResumeRunInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === resumeReplayKey(input)) {
+    return operations.submit(
+      {
+        operationId,
+        operation: "resume-run",
+        replayKey: resumeReplayKey(input),
+      },
+      () => {
+        if (
+          runGroup === undefined ||
+          runExecution === undefined ||
+          runProjection === undefined
+        ) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        const read = runGroup.readRun(input.runId);
+        if (!read.ok) {
+          return {
+            admitted: false,
+            problem:
+              read.problem.kind === "unknown-run"
+                ? runNotFound(input.runId)
+                : runStoreDamaged(input.runId),
+          };
+        }
+        const record = read.run;
+        const foreign = liveElsewhere(input.runId);
+        const takeoverMatches =
+          foreign !== undefined &&
+          foreign.ownerPid !== undefined &&
+          input.takeover?.ownerPid === foreign.ownerPid;
+        if (foreign !== undefined && !takeoverMatches) {
+          return {
+            admitted: false,
+            problem: runLiveElsewhere(input.runId, foreign.ownerPid),
+          };
+        }
+        const recovery =
+          record.state === "blocked" &&
+          runs.get(input.runId)?.owner === undefined
+            ? runSnapshot(runProjection!, input.runId, {})
+            : undefined;
+        const deferredCompletion =
+          recovery?.result.found === true &&
+          recovery.result.run.actionOffers.some(
+            (offer) => offer.action === "resume-run" && offer.available,
+          );
+        // Resume applies to a resting Run or an unapplied clean agent call (#372). A
+        // `running` record means the Run is live (here or elsewhere); resuming it would
+        // fence the process driving it. A `succeeded`/`cancelled` Run is terminal.
+        if (
+          (takeoverMatches &&
+            (record.state === "succeeded" || record.state === "cancelled")) ||
+          (!takeoverMatches &&
+            record.state !== "halted" &&
+            record.state !== "failed" &&
+            !deferredCompletion)
+        ) {
+          return {
+            admitted: false,
+            problem: runNotResumable(input.runId, record.state),
+          };
+        }
+        // Re-check Trust, Preflight, and that the exact pinned digest is still
+        // installed before authorizing more work (#86); a removed or replaced install
+        // is refused with a reinstall Problem, not resumed.
+        // Launch inputs are stored and read back opaque (RunRecord.launch: unknown).
+        // Validate them to the string map Preflight consumes before handing them on: a
+        // drifted or corrupt run.db row is a damaged store refused with a typed Problem
+        // here, ahead of Preflight, never a trusted cast (A10).
+        const launchInputs = launchInputMap.safeParse(record.launch ?? {});
+        if (!launchInputs.success) {
+          return { admitted: false, problem: runStoreDamaged(input.runId) };
+        }
+        const runnable = resumePreconditions({
+          digest: record.bundleSnapshotDigest,
+          launchInputs: launchInputs.data,
+          storedHarness: record.selectedHarness,
+        });
+        if ("problem" in runnable) {
+          return { admitted: false, problem: runnable.problem };
+        }
+        const manifest = runnable.manifest;
+        if (!takeoverMatches) {
+          const claim = runGroup.resumeRun(input.runId);
+          if (claim.outcome === "run-live-elsewhere") {
+            return {
+              admitted: false,
+              problem: runLiveElsewhere(input.runId, claim.ownerPid),
+            };
+          }
+          if (claim.outcome === "unknown-run") {
+            return { admitted: false, problem: runNotFound(input.runId) };
+          }
+        }
+        runs.set(input.runId, {
+          digest: record.bundleSnapshotDigest,
+          routing: manifest.routing,
+          name: manifest.bundle.name,
+          id: manifest.bundle.id,
+          version: manifest.bundle.version,
+          state: record.state,
+          done: false,
+          abort: new AbortController(),
+          ...(takeoverMatches ? { takeover: true } : {}),
+          observers: observersForRun(input.runId),
+          live: liveOverlay.fresh(),
+        });
         return {
           admitted: true,
-          operationId,
-          ...(existing.runId !== undefined ? { runId: existing.runId } : {}),
+          runId: input.runId,
+          settle: () => startRun(input.runId),
         };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (
-      runGroup === undefined ||
-      runExecution === undefined ||
-      runProjection === undefined
-    ) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    const read = runGroup.readRun(input.runId);
-    if (!read.ok) {
-      return {
-        admitted: false,
-        problem:
-          read.problem.kind === "unknown-run"
-            ? runNotFound(input.runId)
-            : runStoreDamaged(input.runId),
-      };
-    }
-    const record = read.run;
-    const foreign = liveElsewhere(input.runId);
-    const takeoverMatches =
-      foreign !== undefined &&
-      foreign.ownerPid !== undefined &&
-      input.takeover?.ownerPid === foreign.ownerPid;
-    if (foreign !== undefined && !takeoverMatches) {
-      return {
-        admitted: false,
-        problem: runLiveElsewhere(input.runId, foreign.ownerPid),
-      };
-    }
-    const recovery =
-      record.state === "blocked" && runs.get(input.runId)?.owner === undefined
-        ? runSnapshot(runProjection!, input.runId, {})
-        : undefined;
-    const deferredCompletion =
-      recovery?.result.found === true &&
-      recovery.result.run.actionOffers.some(
-        (offer) => offer.action === "resume-run" && offer.available,
-      );
-    // Resume applies to a resting Run or an unapplied clean agent call (#372). A
-    // `running` record means the Run is live (here or elsewhere); resuming it would
-    // fence the process driving it. A `succeeded`/`cancelled` Run is terminal.
-    if (
-      (takeoverMatches &&
-        (record.state === "succeeded" || record.state === "cancelled")) ||
-      (!takeoverMatches &&
-        record.state !== "halted" &&
-        record.state !== "failed" &&
-        !deferredCompletion)
-    ) {
-      return {
-        admitted: false,
-        problem: runNotResumable(input.runId, record.state),
-      };
-    }
-    // Re-check Trust, Preflight, and that the exact pinned digest is still
-    // installed before authorizing more work (#86); a removed or replaced install
-    // is refused with a reinstall Problem, not resumed.
-    // Launch inputs are stored and read back opaque (RunRecord.launch: unknown).
-    // Validate them to the string map Preflight consumes before handing them on: a
-    // drifted or corrupt run.db row is a damaged store refused with a typed Problem
-    // here, ahead of Preflight, never a trusted cast (A10).
-    const launchInputs = launchInputMap.safeParse(record.launch ?? {});
-    if (!launchInputs.success) {
-      return { admitted: false, problem: runStoreDamaged(input.runId) };
-    }
-    const runnable = resumePreconditions({
-      digest: record.bundleSnapshotDigest,
-      launchInputs: launchInputs.data,
-      storedHarness: record.selectedHarness,
-    });
-    if ("problem" in runnable) {
-      return { admitted: false, problem: runnable.problem };
-    }
-    const manifest = runnable.manifest;
-    if (!takeoverMatches) {
-      const claim = runGroup.resumeRun(input.runId);
-      if (claim.outcome === "run-live-elsewhere") {
-        return {
-          admitted: false,
-          problem: runLiveElsewhere(input.runId, claim.ownerPid),
-        };
-      }
-      if (claim.outcome === "unknown-run") {
-        return { admitted: false, problem: runNotFound(input.runId) };
-      }
-    }
-    runs.set(input.runId, {
-      digest: record.bundleSnapshotDigest,
-      routing: manifest.routing,
-      name: manifest.bundle.name,
-      id: manifest.bundle.id,
-      version: manifest.bundle.version,
-      state: record.state,
-      done: false,
-      abort: new AbortController(),
-      ...(takeoverMatches ? { takeover: true } : {}),
-      observers: observersForRun(input.runId),
-      live: liveOverlay.fresh(),
-    });
-    admit(operationId, {
-      operation: "resume-run",
-      replayKey: resumeReplayKey(input),
-      runId: input.runId,
-      settle: () => startRun(input.runId),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+      },
+    );
   }
 
   // Answer the durable Human Gate a `blocked` Run rests at (#85). Admitted at
@@ -2071,27 +1922,27 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     input: AnswerHumanGateInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === answerReplayKey(input)) {
-        return { admitted: true, operationId, runId: input.runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (
-      runGroup === undefined ||
-      runExecution === undefined ||
-      runProjection === undefined
-    ) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    admit(operationId, {
-      operation: "answer-human-gate",
-      replayKey: answerReplayKey(input),
-      runId: input.runId,
-      settle: () => startAnswer(operationId, input),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "answer-human-gate",
+        replayKey: answerReplayKey(input),
+      },
+      () => {
+        if (
+          runGroup === undefined ||
+          runExecution === undefined ||
+          runProjection === undefined
+        ) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        return {
+          admitted: true,
+          runId: input.runId,
+          settle: () => startAnswer(operationId, input),
+        };
+      },
+    );
   }
 
   // Start an answer's settlement and record its promise on the tracking entry the
@@ -2100,7 +1951,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function startAnswer(
     operationId: string,
     input: AnswerHumanGateInput,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     const promise = answerAndSettle(operationId, input);
     const tracking = runs.get(input.runId);
     if (tracking !== undefined) tracking.promise = promise;
@@ -2114,7 +1965,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   async function answerAndSettle(
     operationId: string,
     input: AnswerHumanGateInput,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     if (
       runGroup === undefined ||
       runExecution === undefined ||
@@ -2398,28 +2249,28 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // default, so a headless follower's answer unblocks the Turn promptly). The
   // request is ephemeral — never durable — so a Turn that already ended, a stale
   // generation, or an id no longer outstanding is refused precisely and answers
-  // nothing. Idempotent per operation id via the operations map.
+  // nothing. Idempotent per operation id through the ledger.
   function submitAnswerHarnessRequest(
     operationId: string,
     input: AnswerHarnessRequestInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === answerHarnessRequestReplayKey(input)) {
-        return { admitted: true, operationId, runId: input.runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (runGroup === undefined) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    admit(operationId, {
-      operation: "answer-harness-request",
-      replayKey: answerHarnessRequestReplayKey(input),
-      runId: input.runId,
-      settle: () => answerHarnessRequest(input),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "answer-harness-request",
+        replayKey: answerHarnessRequestReplayKey(input),
+      },
+      () => {
+        if (runGroup === undefined) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        return {
+          admitted: true,
+          runId: input.runId,
+          settle: () => answerHarnessRequest(input),
+        };
+      },
+    );
   }
 
   // Route one answer to the live Turn's control (#117): accepted settles the
@@ -2429,7 +2280,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // `request-answered` timeline record by execution.
   async function answerHarnessRequest(
     input: AnswerHarnessRequestInput,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     const tracking = runs.get(input.runId);
     if (
       tracking === undefined ||
@@ -2483,30 +2334,30 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     input: InterruptTurnInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === interruptTurnReplayKey(input)) {
-        return { admitted: true, operationId, runId: input.runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (runGroup === undefined) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    admit(operationId, {
-      operation: "interrupt-turn",
-      replayKey: interruptTurnReplayKey(input),
-      runId: input.runId,
-      settle: () => interruptTurnAndSettle(input),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "interrupt-turn",
+        replayKey: interruptTurnReplayKey(input),
+      },
+      () => {
+        if (runGroup === undefined) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        return {
+          admitted: true,
+          runId: input.runId,
+          settle: () => interruptTurnAndSettle(input),
+        };
+      },
+    );
   }
 
   // Reach only the named live Turn's bound interrupt. Execution maps the Harness
   // receipt and this Turn's result; its outcome never waits on later Run work.
   function interruptTurnAndSettle(
     input: InterruptTurnInput,
-  ): OperationOutcome | Promise<OperationOutcome> {
+  ): OperationSettlement | Promise<OperationSettlement> {
     const tracking = runs.get(input.runId);
     const owner =
       tracking !== undefined && !tracking.done ? tracking.owner : undefined;
@@ -2545,25 +2396,25 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     input: SteerTurnInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === steerTurnReplayKey(input)) {
-        return { admitted: true, operationId, runId: input.runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (runGroup === undefined) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    const refusal = steerRefusal(input);
-    if (refusal !== undefined) return { admitted: false, problem: refusal };
-    admit(operationId, {
-      operation: "steer-turn",
-      replayKey: steerTurnReplayKey(input),
-      runId: input.runId,
-      settle: () => steerTurnAndSettle(operationId, input),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "steer-turn",
+        replayKey: steerTurnReplayKey(input),
+      },
+      () => {
+        if (runGroup === undefined) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        const refusal = steerRefusal(input);
+        if (refusal !== undefined) return { admitted: false, problem: refusal };
+        return {
+          admitted: true,
+          runId: input.runId,
+          settle: () => steerTurnAndSettle(operationId, input),
+        };
+      },
+    );
   }
 
   // The ordered Steer admission checks (ADR 0040). The prepared profile decides
@@ -2621,7 +2472,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function steerTurnAndSettle(
     steerId: string,
     input: SteerTurnInput,
-  ): OperationOutcome | Promise<OperationOutcome> {
+  ): OperationSettlement | Promise<OperationSettlement> {
     const tracking = runs.get(input.runId);
     const owner =
       tracking !== undefined && !tracking.done ? tracking.owner : undefined;
@@ -2824,34 +2675,37 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     input: SendInteractiveTurnInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === sendInteractiveTurnReplayKey(input)) {
-        return { admitted: true, operationId, runId: input.runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (
-      runGroup === undefined ||
-      prepareRunInteractiveStep === undefined ||
-      runProjection === undefined
-    ) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    // Secant authors nothing: a blank Turn is refused before it is admitted, so no
-    // Turn is recorded and no stdin is ever written (AC1).
-    if (input.text.trim() === "") {
-      return { admitted: false, problem: interactiveTurnBlank(input.runId) };
-    }
-    const refused = admitHumanTurnText(input.runId, input.text);
-    if (refused !== undefined) return { admitted: false, ...refused };
-    admit(operationId, {
-      operation: "send-interactive-turn",
-      replayKey: sendInteractiveTurnReplayKey(input),
-      runId: input.runId,
-      settle: () => startSendInteractiveTurn(operationId, input),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "send-interactive-turn",
+        replayKey: sendInteractiveTurnReplayKey(input),
+      },
+      () => {
+        if (
+          runGroup === undefined ||
+          prepareRunInteractiveStep === undefined ||
+          runProjection === undefined
+        ) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        // Secant authors nothing: a blank Turn is refused before it is admitted, so no
+        // Turn is recorded and no stdin is ever written (AC1).
+        if (input.text.trim() === "") {
+          return {
+            admitted: false,
+            problem: interactiveTurnBlank(input.runId),
+          };
+        }
+        const refused = admitHumanTurnText(input.runId, input.text);
+        if (refused !== undefined) return { admitted: false, ...refused };
+        return {
+          admitted: true,
+          runId: input.runId,
+          settle: () => startSendInteractiveTurn(operationId, input),
+        };
+      },
+    );
   }
 
   // Read the Run a human Turn is admitted against (#122, #354), refusing a missing
@@ -2906,7 +2760,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function startSendInteractiveTurn(
     operationId: string,
     input: SendInteractiveTurnInput,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     if (
       runGroup === undefined ||
       prepareRunInteractiveStep === undefined ||
@@ -2949,12 +2803,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     readonly operationId: string;
     readonly tracking: TrackedRun;
     readonly notAdmitted: () => Problem;
-    readonly drive: (onAdmitted: () => void) => Promise<OperationOutcome>;
-  }): Promise<OperationOutcome> {
+    readonly drive: (onAdmitted: () => void) => Promise<OperationSettlement>;
+  }): Promise<OperationSettlement> {
     const { runId, operationId, tracking } = params;
     let admitted = false;
-    let settleAdmitted: (outcome: OperationOutcome) => void = () => {};
-    const admission = new Promise<OperationOutcome>((resolve) => {
+    let settleAdmitted: (outcome: OperationSettlement) => void = () => {};
+    const admission = new Promise<OperationSettlement>((resolve) => {
       settleAdmitted = resolve;
     });
     const turn = params.drive(() => {
@@ -2962,13 +2816,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
       settleAdmitted({ status: "applied" });
     });
     tracking.promise = turn;
-    const faultOnRun = (problem: Problem): OperationOutcome => {
+    const faultOnRun = (problem: Problem): OperationSettlement => {
       tracking.problem = problem;
       pushRunUpdate(runId);
       return { status: "applied" };
     };
     const turnEnd = turn.then(
-      (outcome): OperationOutcome => {
+      (outcome): OperationSettlement => {
         if (admitted) {
           return outcome.status === "not-applied"
             ? faultOnRun(outcome.problem)
@@ -2978,7 +2832,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           ? outcome
           : { status: "not-applied", problem: params.notAdmitted() };
       },
-      (error: unknown): OperationOutcome => {
+      (error: unknown): OperationSettlement => {
         if (!admitted) throw error;
         return faultOnRun(runExecutionFault(runId, error, operationId));
       },
@@ -2991,7 +2845,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     input: SendInteractiveTurnInput,
     begun: InteractiveContext,
     onAdmitted: () => void,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     const { tracking, owner, step } = begun;
     const { attemptId, session } = interactiveStepTarget(
       begun.facts.routing,
@@ -3115,33 +2969,33 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     input: SendFollowUpTurnInput,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === sendFollowUpTurnReplayKey(input)) {
-        return { admitted: true, operationId, runId: input.runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (
-      runGroup === undefined ||
-      runExecution === undefined ||
-      runProjection === undefined
-    ) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    // Secant authors nothing: a blank follow-up is refused before it is admitted.
-    if (input.text.trim() === "") {
-      return { admitted: false, problem: followUpTurnBlank(input.runId) };
-    }
-    const refused = admitHumanTurnText(input.runId, input.text);
-    if (refused !== undefined) return { admitted: false, ...refused };
-    admit(operationId, {
-      operation: "send-follow-up-turn",
-      replayKey: sendFollowUpTurnReplayKey(input),
-      runId: input.runId,
-      settle: () => startSendFollowUpTurn(operationId, input),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "send-follow-up-turn",
+        replayKey: sendFollowUpTurnReplayKey(input),
+      },
+      () => {
+        if (
+          runGroup === undefined ||
+          runExecution === undefined ||
+          runProjection === undefined
+        ) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        // Secant authors nothing: a blank follow-up is refused before it is admitted.
+        if (input.text.trim() === "") {
+          return { admitted: false, problem: followUpTurnBlank(input.runId) };
+        }
+        const refused = admitHumanTurnText(input.runId, input.text);
+        if (refused !== undefined) return { admitted: false, ...refused };
+        return {
+          admitted: true,
+          runId: input.runId,
+          settle: () => startSendFollowUpTurn(operationId, input),
+        };
+      },
+    );
   }
 
   // Legality is re-derived at settle time, synchronously, so a refusal never
@@ -3150,7 +3004,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function startSendFollowUpTurn(
     operationId: string,
     input: SendFollowUpTurnInput,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     const notWaiting = (state: string) =>
       followUpTurnNotWaiting(input.runId, input.turnId, state);
     const claimed = claimHeldRun(
@@ -3190,7 +3044,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     input: SendFollowUpTurnInput,
     claimed: ClaimedRun,
     onAdmitted: () => void,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     const { tracking, owner, record, facts } = claimed;
     const observed = observedOwner(owner, input.runId);
     // The walk admits only one human-origin Turn — the follow-up — so its durable
@@ -3252,27 +3106,23 @@ export function createApplication(deps: ApplicationDependencies): Application {
         : control === "end-stage"
           ? endStageReplayKey(input)
           : endInteractiveStepReplayKey(input);
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === replayKey) {
-        return { admitted: true, operationId, runId: input.runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (
-      runGroup === undefined ||
-      runExecution === undefined ||
-      runProjection === undefined
-    ) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    admit(operationId, {
-      operation: control,
-      replayKey,
-      runId: input.runId,
-      settle: () => startEndInteractiveStep(input, control),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+    return operations.submit(
+      { operationId, operation: control, replayKey },
+      () => {
+        if (
+          runGroup === undefined ||
+          runExecution === undefined ||
+          runProjection === undefined
+        ) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        return {
+          admitted: true,
+          runId: input.runId,
+          settle: () => startEndInteractiveStep(input, control),
+        };
+      },
+    );
   }
 
   // Decide End synchronously (as send does), so a refusal — support unavailable, not
@@ -3280,7 +3130,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   function startEndInteractiveStep(
     input: EndInteractiveStepInput,
     control: InteractiveControl,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     if (
       runGroup === undefined ||
       runExecution === undefined ||
@@ -3320,7 +3170,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     input: EndInteractiveStepInput,
     begun: InteractiveContext,
     endsStage: boolean,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     const { tracking, owner, record, facts, step } = begun;
     const observed = observedOwner(owner, input.runId);
     const { attemptId } = interactiveStepTarget(
@@ -3370,47 +3220,44 @@ export function createApplication(deps: ApplicationDependencies): Application {
       input.model ?? null,
       input.effort ?? null,
     ]);
-    const existing = operations.get(operationId);
-    if (existing !== undefined)
-      return existing.replayKey === replayKey
-        ? { admitted: true, operationId, runId: input.runId }
-        : { admitted: false, problem: operationIdReused(operationId) };
-    if (input.model === undefined && input.effort === undefined)
-      return {
-        admitted: false,
-        problem: {
-          code: "model-choice-change-required",
-          explanation: "A Model choice change needs a model or an effort.",
-          remediation:
-            "Supply --model <id> or --effort <level> to secant run model.",
-          possibleEffects: "none",
-        },
-      };
-    for (const value of [input.model, input.effort]) {
-      if (value !== undefined && value.trim().length === 0)
+    return operations.submit(
+      { operationId, operation: "change-model-choice", replayKey },
+      () => {
+        if (input.model === undefined && input.effort === undefined)
+          return {
+            admitted: false,
+            problem: {
+              code: "model-choice-change-required",
+              explanation: "A Model choice change needs a model or an effort.",
+              remediation:
+                "Supply --model <id> or --effort <level> to secant run model.",
+              possibleEffects: "none",
+            },
+          };
+        for (const value of [input.model, input.effort]) {
+          if (value !== undefined && value.trim().length === 0)
+            return {
+              admitted: false,
+              problem: {
+                code: "model-choice-blank",
+                explanation: "Model and effort values must not be blank.",
+                remediation: "Supply a model or effort name.",
+                possibleEffects: "none",
+              },
+            };
+        }
         return {
-          admitted: false,
-          problem: {
-            code: "model-choice-blank",
-            explanation: "Model and effort values must not be blank.",
-            remediation: "Supply a model or effort name.",
-            possibleEffects: "none",
-          },
+          admitted: true,
+          runId: input.runId,
+          settle: () => changeModelChoiceAndSettle(input),
         };
-    }
-    admit(operationId, {
-      operation: "change-model-choice",
-      replayKey,
-      runId: input.runId,
-      settle: () => changeModelChoiceAndSettle(operationId, input),
-    });
-    return { admitted: true, operationId, runId: input.runId };
+      },
+    );
   }
 
   async function changeModelChoiceAndSettle(
-    operationId: string,
     input: ChangeModelChoiceInput,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     const { runId } = input;
     if (runGroup === undefined)
       return { status: "not-applied", problem: runSupportUnavailable() };
@@ -3534,7 +3381,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     // Run and preference are written only once it applies (#348).
     const live = tracking?.live.changeModel;
     if (offer.reach === "live-turn" && held !== undefined && live !== undefined)
-      return new Promise<OperationOutcome>((resolve) => {
+      return new Promise<OperationSettlement>((resolve) => {
         const pendings = pendingModelChanges.get(runId) ?? new Set();
         pendingModelChanges.set(runId, pendings);
         const pending = {
@@ -3560,7 +3407,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
                       correction: "model",
                     },
                   }
-                : commitModelChoiceChange(runId, held, selected, operationId, {
+                : commitModelChoiceChange(runId, held, selected, {
                     ...change,
                     // Unanswered by the Turn's end, it applies from the next.
                     reach:
@@ -3580,7 +3427,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     // A pushed read uses this writer's owner, so observation never fences it.
     const transient = held === undefined;
     try {
-      return commitModelChoiceChange(runId, owner, selected, operationId, {
+      return commitModelChoiceChange(runId, owner, selected, {
         ...change,
         reach: "next-turn",
       });
@@ -3601,14 +3448,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }
 
   /** Write a resolved change to the Run, then the last-choice preference, and
-   *  record it on its Operation. */
+   *  return the applied receipt metadata. */
   function commitModelChoiceChange(
     runId: string,
     owner: RunOwner,
     harness: string,
-    operationId: string,
     result: NonNullable<OperationSnapshot["modelChoiceChange"]>,
-  ): OperationOutcome {
+  ): OperationSettlement {
     const written = observedOwner(owner, runId).changeModelChoice(
       result.choice,
     );
@@ -3616,10 +3462,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
       return { status: "not-applied", problem: runLiveElsewhere(runId) };
     saveRunModelChoice(runId, harness, result.choice);
     modelChoiceNotices.delete(runId);
-    const operation = operations.get(operationId);
-    if (operation !== undefined) operation.modelChoiceChange = result;
     pushRunUpdate(runId, owner);
-    return { status: "applied" };
+    return { status: "applied", modelChoiceChange: result };
   }
 
   /** A Harness answered a change on a live Turn (#348). A pending live change
@@ -3664,23 +3508,23 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     runId: string,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === cancelReplayKey(runId)) {
-        return { admitted: true, operationId, runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (runGroup === undefined) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    admit(operationId, {
-      operation: "cancel-run",
-      replayKey: cancelReplayKey(runId),
-      runId,
-      settle: () => cancelAndSettle(runId),
-    });
-    return { admitted: true, operationId, runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "cancel-run",
+        replayKey: cancelReplayKey(runId),
+      },
+      () => {
+        if (runGroup === undefined) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        return {
+          admitted: true,
+          runId,
+          settle: () => cancelAndSettle(runId),
+        };
+      },
+    );
   }
 
   // Rest a live Run `cancelled` — the only route to that terminal state (#87, #98).
@@ -3694,7 +3538,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // every Artifact intact. Other resting Runs have no cancel to make.
   function cancelAndSettle(
     runId: string,
-  ): OperationOutcome | Promise<OperationOutcome> {
+  ): OperationSettlement | Promise<OperationSettlement> {
     if (runGroup === undefined) {
       return { status: "not-applied", problem: runSupportUnavailable() };
     }
@@ -3791,7 +3635,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     runId: string,
     tracking: TrackedRun,
     owner: RunOwner,
-  ): Promise<OperationOutcome> {
+  ): Promise<OperationSettlement> {
     restRun(observedOwner(owner, runId), runId, "cancelled");
     try {
       await closeHeldStep(tracking);
@@ -3816,29 +3660,29 @@ export function createApplication(deps: ApplicationDependencies): Application {
     operationId: string,
     runId: string,
   ): SubmissionAdmission {
-    const existing = operations.get(operationId);
-    if (existing !== undefined) {
-      if (existing.replayKey === deleteReplayKey(runId)) {
-        return { admitted: true, operationId, runId };
-      }
-      return { admitted: false, problem: operationIdReused(operationId) };
-    }
-    if (runGroup === undefined) {
-      return { admitted: false, problem: runSupportUnavailable() };
-    }
-    admit(operationId, {
-      operation: "delete-run",
-      replayKey: deleteReplayKey(runId),
-      runId,
-      settle: () => deleteAndSettle(operationId, runId),
-    });
-    return { admitted: true, operationId, runId };
+    return operations.submit(
+      {
+        operationId,
+        operation: "delete-run",
+        replayKey: deleteReplayKey(runId),
+      },
+      () => {
+        if (runGroup === undefined) {
+          return { admitted: false, problem: runSupportUnavailable() };
+        }
+        return {
+          admitted: true,
+          runId,
+          settle: () => deleteAndSettle(operationId, runId),
+        };
+      },
+    );
   }
 
   function deleteAndSettle(
     operationId: string,
     runId: string,
-  ): OperationOutcome {
+  ): OperationSettlement {
     if (runGroup === undefined) {
       return { status: "not-applied", problem: runSupportUnavailable() };
     }
@@ -3855,7 +3699,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     runGroup: RunGroup,
     operationId: string,
     runId: string,
-  ): OperationOutcome {
+  ): OperationSettlement {
     // A live Run cannot be deleted (its store is in use); cancel it first.
     // ponytail: this liveness check is not transactional with the store delete,
     // and the Run Store's admitted delete deliberately does not re-check the claim
@@ -3960,31 +3804,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
 
   const projectionPort: ProjectionPort = {
     openProjection,
-    submit(submission: Submission): SubmissionAdmission {
-      const { operationId, operation } = submission;
-      const replay = operations.get(operationId);
-      const admission = dispatch(submission);
-      // `admit` reported a new admission before scheduling its settlement; a
-      // replay or a refusal settles nothing, so it is reported here.
-      if (!admission.admitted) {
-        observe({
-          kind: "operation-admission",
-          operationId,
-          operation,
-          admission: "not-admitted",
-          code: admission.problem.code,
-        });
-      } else if (replay !== undefined) {
-        observe({
-          kind: "operation-admission",
-          operationId,
-          operation,
-          admission: "replayed",
-          ...(replay.runId !== undefined ? { runId: replay.runId } : {}),
-        });
-      }
-      return admission;
-    },
+    submit: dispatch,
 
     readResource(
       reference:
