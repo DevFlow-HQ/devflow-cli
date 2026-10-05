@@ -13,6 +13,7 @@ import {
 import type {
   AnswerHumanGateOffer,
   CancelRunOffer,
+  ChangeModelChoiceOffer,
   ContinueRepeatOffer,
   EndStageOffer,
   DeleteRunOffer,
@@ -455,6 +456,7 @@ export function buildDetailsRows(params: {
   /** Set when the resting resume offer arms an indeterminate-Command-Attempt
    *  acknowledgement (#194 story 39); surfaced as recovery evidence too. */
   readonly resumeAcknowledgement: string | undefined;
+  readonly modelChoice: ChangeModelChoiceOffer | undefined;
   readonly cancel: CancelRunOffer | undefined;
   readonly remove: DeleteRunOffer | undefined;
   readonly armed: "cancel" | "delete" | undefined;
@@ -548,8 +550,19 @@ export function buildDetailsRows(params: {
   // Secondary lifecycle actions, moved off the main rail (#194 story 37): cancel
   // and delete render here with the consequence each Offer names, and their
   // confirm-armed prompt (AC3) shows in place while armed.
-  if (params.cancel !== undefined || params.remove !== undefined) {
+  if (
+    params.modelChoice !== undefined ||
+    params.cancel !== undefined ||
+    params.remove !== undefined
+  ) {
     push("  Actions:", "muted");
+    if (params.modelChoice !== undefined)
+      push(
+        params.modelChoice.available
+          ? `    m change Model choice · ${params.modelChoice.reach === "next-turn" ? "applies from the next Turn" : "requested until the Harness reports it"}`
+          : `    Model choice unavailable · ${params.modelChoice.problem.explanation}`,
+        "text",
+      );
     if (params.cancel !== undefined)
       push(`    c cancel — ${params.cancel.consequence}`, "text");
     if (params.remove !== undefined)

@@ -159,7 +159,9 @@ export function createLiveRunWorkbenchView(
 ): RunWorkbenchView {
   return {
     openRun: (runId) =>
-      followRunProjection(() => port.openProjection({ family: "run", runId })),
+      followRunProjection(() =>
+        port.openProjection({ family: "run", runId, prepareModelChoice: true }),
+      ),
     readResource: (reference) => port.readResource(reference),
     readTranscript: (reference) => port.readTranscript(reference),
     // The Gate answer: the same submit-and-settle protocol headless `run

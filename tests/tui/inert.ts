@@ -113,5 +113,6 @@ export function inertRunActionsView(): RunActionsView {
     cancel: () => () => refusal,
     remove: () => () => refusal,
     interrupt: () => () => refusal,
+    changeModelChoice: () => () => refusal,
   };
 }

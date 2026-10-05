@@ -232,6 +232,7 @@ function okActions(onRemove?: (runId: string) => void): RunActionsView {
       return () => ({ kind: "ok" });
     },
     interrupt: () => () => ({ kind: "ok" }),
+    changeModelChoice: () => () => ({ kind: "ok" }),
   };
 }
 

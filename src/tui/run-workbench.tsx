@@ -14,6 +14,7 @@ import type {
   AnswerHumanGateOffer,
   ApprovalDecisionName,
   CancelRunOffer,
+  ChangeModelChoiceOffer,
   DeleteRunOffer,
   ContinueRepeatOffer,
   EndInteractiveStepOffer,
@@ -74,7 +75,8 @@ import {
   type TimelineScroll,
 } from "./run-timeline.js";
 import { buildTimelineRows, type TimelineRow } from "./run-timeline-rows.js";
-import { wrapRows } from "./wrap.js";
+import { wrap, wrapRows } from "./wrap.js";
+import { createModelChoiceControl } from "./run-model-choice.js";
 import { WorkingScanner } from "./working-scanner.js";
 import { useExit } from "./vendor/exit.js";
 import { useDialog } from "./vendor/dialog.js";
@@ -258,6 +260,8 @@ export function RunWorkbench(props: {
   const modalControl = () =>
     requestControl.active() !== undefined || gateControl.active() !== undefined;
 
+  const modelChoiceModal = () => modalControl() || checkpointActive();
+
   const [scroll, setScroll] = createSignal<TimelineScroll>(AT_LIVE);
   const [focus, setFocus] = createSignal<Focus>("timeline");
   const [detailsOpen, setDetailsOpen] = createSignal(false);
@@ -275,6 +279,10 @@ export function RunWorkbench(props: {
   const offers = createMemo(() => {
     const list = actionableRun()?.actionOffers ?? [];
     return {
+      modelChoice: list.find(
+        (offer): offer is ChangeModelChoiceOffer =>
+          offer.action === "change-model-choice",
+      ),
       resume: list.find(
         (offer): offer is ResumeRunOffer => offer.action === "resume-run",
       ),
@@ -731,8 +739,24 @@ export function RunWorkbench(props: {
             : steerActive()
               ? STEER_HEIGHT
               : 1;
+  const modelChoice = createModelChoiceControl({
+    run,
+    offer: () => (modelChoiceModal() ? undefined : offers().modelChoice),
+    modal: modelChoiceModal,
+    dims,
+    dialog,
+    submit: actions.changeModelChoice,
+  });
+  const modelChoiceOffer = () =>
+    modelChoiceModal() || modelChoice.pending()
+      ? undefined
+      : offers().modelChoice;
+  const modelChoiceLines = () =>
+    modelChoice.messages().flatMap((line) => wrap(line, innerW()));
+
   const bottomHeight = () =>
     interactionHeight() +
+    modelChoiceLines().length +
     (!viewCurrent() && pendingOperation() !== undefined ? 1 : 0) +
     (actionReceipt() === undefined ? 0 : 1) +
     // A refused Run Action surfaces here, below the timeline, not on the Actions
@@ -785,6 +809,7 @@ export function RunWorkbench(props: {
       selected: selectedRef(),
       resumeAcknowledgement:
         resume?.available === true ? resume.acknowledgement : undefined,
+      modelChoice: modelChoiceOffer(),
       cancel: offers().cancel,
       remove: offers().remove,
       armed: armed === "cancel" || armed === "delete" ? armed : undefined,
@@ -1174,7 +1199,11 @@ export function RunWorkbench(props: {
   };
 
   const handleKey = (key: RendererKeyEvent) => {
-    if (dialog.stack.length > 0) return;
+    const topDialog = dialog.stack.at(-1);
+    if (topDialog !== undefined) {
+      topDialog.onKey?.(key);
+      return;
+    }
     const name = key.name ?? "";
     if (name === "c" && key.ctrl) {
       exit(); // Ctrl+C always quits, even from a text control
@@ -1295,6 +1324,10 @@ export function RunWorkbench(props: {
         setActionRefusal(undefined);
         setPending("acknowledge");
       } else dispatchResume();
+      return;
+    }
+    if (name === "m") {
+      modelChoice.open();
       return;
     }
     // Cancel and delete now live in the details panel (#194 story 37), so their keys
@@ -1428,6 +1461,8 @@ export function RunWorkbench(props: {
             <Workbench
               run={current}
               freshness={freshness}
+              modelChoiceLines={modelChoiceLines}
+              modelChoiceOffered={() => modelChoiceOffer()?.available === true}
               pendingOperation={pendingOperation}
               actionReceipt={actionReceipt}
               compactHeader={compactHeader}
@@ -1545,6 +1580,8 @@ function Workbench(props: {
   freshness: Accessor<TProjectionStreamHealth>;
   pendingOperation: Accessor<string | undefined>;
   actionReceipt: Accessor<TActionReceipt | undefined>;
+  modelChoiceLines: Accessor<readonly string[]>;
+  modelChoiceOffered: Accessor<boolean>;
   compactHeader: Accessor<boolean>;
   restingProse: Accessor<string | undefined>;
   detailsShown: Accessor<boolean>;
@@ -1636,10 +1673,11 @@ function Workbench(props: {
     if (health.kind === "catching-up") {
       return "View freshness · not Run state · catching up · controls unavailable · esc back · q quit";
     }
+    const model = props.modelChoiceOffered() ? "m model · " : "";
     const transcript = props.transcriptAvailable() ? " · t transcript" : "";
     return props.focus() === "details"
-      ? `↑/↓ select · enter open${transcript} · tab timeline · esc back · q quit`
-      : `↑/↓ scroll · d details${transcript} · end latest · esc back · q quit`;
+      ? `${model}↑/↓ select · enter open${transcript} · tab timeline · esc back · q quit`
+      : `${model}↑/↓ scroll · d details${transcript} · end latest · esc back · q quit`;
   };
 
   const displayState = () =>
@@ -1928,6 +1966,13 @@ function Workbench(props: {
         )}
       </Show>
 
+      <For each={props.modelChoiceLines()}>
+        {(line) => (
+          <text fg={theme.text} flexShrink={0} wrapMode="none">
+            {line}
+          </text>
+        )}
+      </For>
       {/* The bottom region: one control replaces the passive footer input while its
           offer is live, in precedence — an outstanding approval request, a free-text
           gate, a Review checkpoint, or the interactive-agent input (#92, #108, #117,

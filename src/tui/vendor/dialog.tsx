@@ -8,6 +8,7 @@ import {
   type ParentProps,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import type { RendererKeyEvent } from "../renderer/renderer.js";
 import { useBindings } from "../keymap.js";
 import { useTheme } from "./theme-context.js";
 
@@ -73,6 +74,7 @@ function init() {
     stack: [] as {
       element: () => JSX.Element;
       onClose?: () => void;
+      onKey?: (key: RendererKeyEvent) => void;
     }[],
   });
 
@@ -105,7 +107,7 @@ function init() {
   };
 
   useBindings(() => ({
-    enabled: store.stack.length > 0,
+    enabled: store.stack.length > 0 && store.stack.at(-1)?.onKey === undefined,
     bindings: [
       { key: "escape", desc: "Close dialog", group: "Dialog", cmd: dismissTop },
       { key: "ctrl+c", desc: "Close dialog", group: "Dialog", cmd: dismissTop },
@@ -118,13 +120,17 @@ function init() {
       setStore("stack", []);
       refocus();
     },
-    replace(element: () => JSX.Element, onClose?: () => void) {
+    replace(
+      element: () => JSX.Element,
+      onClose?: () => void,
+      onKey?: (key: RendererKeyEvent) => void,
+    ) {
       if (store.stack.length === 0) {
         focus = renderer.currentFocusedRenderable;
         focus?.blur();
       }
       for (const item of store.stack) item.onClose?.();
-      setStore("stack", [{ element, onClose }]);
+      setStore("stack", [{ element, onClose, onKey }]);
     },
     get stack() {
       return store.stack;

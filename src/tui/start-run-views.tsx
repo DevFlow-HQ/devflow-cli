@@ -636,6 +636,7 @@ export function ModelChoiceStep(props: {
         )}
       </For>
       <ModelChoicePicker
+        status={() => harnessFocusStatus(props.focus())}
         focus={props.focus}
         draft={props.draft}
         reset={props.reset}

@@ -2871,6 +2871,7 @@ function okActions(over: Partial<RunActionsView> = {}): RunActionsView {
     cancel: () => () => ({ kind: "ok" }),
     remove: () => () => ({ kind: "ok" }),
     interrupt: () => () => ({ kind: "ok" }),
+    changeModelChoice: () => () => ({ kind: "ok" }),
     ...over,
   };
 }
@@ -5771,4 +5772,396 @@ test("agent stage done reads as a Stage request while pending and a Stage end on
   const frame = t.captureCharFrame();
   assert.match(frame, /▸ Stage ended by the agent · no ticket left/);
   noOverflow(frame, 60);
+});
+
+// The Workbench Model-choice scenario (#351) runs in the canonical three-OS suite.
+const MODEL_OFFER = {
+  action: "change-model-choice",
+  runId: "run-1",
+  available: true,
+  currentChoice: { model: "fast", effort: "high" },
+  reach: "next-turn",
+  modelDeclaration: {
+    kind: "list",
+    models: [
+      {
+        model: "fast",
+        label: "Fast",
+        efforts: ["medium", "high"],
+        defaultEffort: "medium",
+      },
+      {
+        model: "deep",
+        label: "Deep",
+        efforts: ["medium"],
+        defaultEffort: "medium",
+      },
+    ],
+  },
+} as const;
+
+test("workbench-model-choice: m opens the shared picker and submits the model and effort through Run Actions (#351)", async () => {
+  const changes: unknown[] = [];
+  const { t, renderer } = await mountWorkbench(
+    runOf({
+      modelChoice: MODEL_OFFER.currentChoice,
+      actionOffers: [MODEL_OFFER],
+    }),
+    100,
+    40,
+    okActions({
+      changeModelChoice: (offer, choice) => {
+        changes.push({ offer, choice });
+        return () => ({
+          kind: "ok",
+          modelChoiceChange: { choice, reach: "next-turn" },
+        });
+      },
+    }),
+  );
+  try {
+    await press(t, renderer, "d");
+    assert.match(t.captureCharFrame(), /m change Model choice/);
+    await press(t, renderer, "m");
+    assert.match(t.captureCharFrame(), /1\. Choose a model/);
+    assert.match(t.captureCharFrame(), /Fast.*\[current\]/);
+    await press(t, renderer, "down");
+    await press(t, renderer, "return");
+    assert.match(t.captureCharFrame(), /2\. Choose effort/);
+    assert.match(t.captureCharFrame(), /deep does not offer high effort/);
+    await press(t, renderer, "return");
+    assert.deepEqual(changes, [
+      { offer: MODEL_OFFER, choice: { model: "deep", effort: "medium" } },
+    ]);
+    assert.doesNotMatch(t.captureCharFrame(), /Choose effort/);
+    assert.match(t.captureCharFrame(), /applies from the next Turn/);
+  } finally {
+    t.renderer.destroy();
+  }
+});
+
+test("workbench-model-choice: absent, unavailable, and stale Offers never open the picker", async () => {
+  const wb = await mountWorkbench(runOf());
+  try {
+    await press(wb.t, wb.renderer, "m");
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model|m model/);
+    wb.control.setRun(
+      runOf({
+        actionOffers: [
+          {
+            ...MODEL_OFFER,
+            available: false,
+            problem: {
+              code: "model-choice-checking",
+              explanation: "Model choices are being checked.",
+              remediation: "Wait for qualification.",
+              possibleEffects: "none",
+            },
+          },
+        ],
+      }),
+    );
+    await press(wb.t, wb.renderer, "d");
+    assert.match(
+      wb.t.captureCharFrame(),
+      /Model choice unavailable · Model choices are being checked/,
+    );
+    await press(wb.t, wb.renderer, "m");
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /Choose a model|m change Model choice/,
+    );
+    wb.control.setRun(runOf({ actionOffers: [MODEL_OFFER] }));
+    wb.control.setFreshness({
+      kind: "catching-up",
+      catchUp: "fresh",
+      lastConfirmedAt: "2026-10-05T00:00:00Z",
+    });
+    await press(wb.t, wb.renderer, "m");
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /Choose a model|m change Model choice/,
+    );
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+for (const [width, height] of [
+  [48, 24],
+  [60, 12],
+  [140, 44],
+]) {
+  test(`workbench-model-choice: m stays reachable at ${width}x${height} and resize preserves effort and focus`, async () => {
+    const wb = await mountWorkbench(
+      runOf({ actionOffers: [MODEL_OFFER] }),
+      width,
+      height,
+    );
+    try {
+      assert.match(wb.t.captureCharFrame(), /m model/);
+      await press(wb.t, wb.renderer, "d");
+      if (width < 60 || height < 15)
+        assert.doesNotMatch(wb.t.captureCharFrame(), /› Details/);
+      await press(wb.t, wb.renderer, "m");
+      await press(wb.t, wb.renderer, "down");
+      await press(wb.t, wb.renderer, "return");
+      noOverflow(wb.t.captureCharFrame(), width);
+      wb.t.resize(140, 44);
+      wb.renderer.resize(140, 44);
+      await wb.t.renderOnce();
+      const effort = wb.t.captureCharFrame();
+      assert.match(effort, /2\. Choose effort/);
+      assert.match(effort, /Model: Deep/);
+      assert.match(effort, /› medium \[current\]/);
+      assert.doesNotMatch(effort, /tab Harness/);
+      await press(wb.t, wb.renderer, "escape");
+      assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+      assert.match(wb.t.captureCharFrame(), /› Deep.*\[current\]/);
+      await press(wb.t, wb.renderer, "escape");
+      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+      assert.match(wb.t.captureCharFrame(), /Timeline/);
+      noOverflow(wb.t.captureCharFrame(), 140);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("workbench-model-choice: Port Escape steps back even when the real keymap also receives Escape", async () => {
+  const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
+  try {
+    await press(wb.t, wb.renderer, "m");
+    await press(wb.t, wb.renderer, "return");
+    assert.match(wb.t.captureCharFrame(), /Choose effort/);
+    wb.renderer.key("escape");
+    // Explicit Escape sequence avoids the terminal's lone-Esc disambiguation wait.
+    wb.t.mockInput.pressKey("\x1b[27u");
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /2\. Choose effort/);
+    await press(wb.t, wb.renderer, "c", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+    assert.deepEqual(wb.exits, []);
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+for (const modal of ["request", "gate", "checkpoint"] as const) {
+  test(`workbench-model-choice: a ${modal} closes the picker and owns its keys`, async () => {
+    const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
+    try {
+      await press(wb.t, wb.renderer, "m");
+      assert.match(wb.t.captureCharFrame(), /Choose a model/);
+      if (modal === "request") wb.control.setLive(requestOverlay());
+      else if (modal === "gate")
+        wb.control.setRun(
+          freeTextRunOf({ actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER] }),
+        );
+      else
+        wb.control.setRun(
+          blockedRunOf({ actionOffers: [MODEL_OFFER, ANSWER_OFFER] }),
+        );
+      await wb.t.renderOnce();
+      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+      if (modal === "checkpoint") {
+        await press(wb.t, wb.renderer, "d");
+        assert.doesNotMatch(wb.t.captureCharFrame(), /m change Model choice/);
+        await press(wb.t, wb.renderer, "tab");
+      }
+      await press(wb.t, wb.renderer, "m");
+      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+      if (modal === "request") {
+        await press(wb.t, wb.renderer, "escape");
+        assert.equal(wb.control.requests[0]?.decision, "deny");
+      } else if (modal === "gate") {
+        await type(wb.t, "351");
+        await press(wb.t, wb.renderer, "return");
+        assert.equal(wb.control.texts[0]?.text, "351");
+      } else {
+        await press(wb.t, wb.renderer, "return");
+        assert.equal(wb.control.answers[0]?.answer, "continue");
+      }
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const settlement of ["live-turn", "next-turn", "refused"] as const) {
+  test(`workbench-model-choice: a live request remains pending until its ${settlement} receipt`, async () => {
+    const offer = { ...MODEL_OFFER, reach: "live-turn" as const };
+    const [outcome, setOutcome] = createSignal<RunActionOutcome>({
+      kind: "pending",
+    });
+    let submissions = 0;
+    const wb = await mountWorkbench(
+      runOf({
+        selectedHarness: "codex",
+        modelChoice: offer.currentChoice,
+        actionOffers: [offer],
+      }),
+      60,
+      24,
+      okActions({
+        changeModelChoice: () => {
+          submissions += 1;
+          return outcome;
+        },
+      }),
+    );
+    try {
+      await press(wb.t, wb.renderer, "m");
+      assert.match(wb.t.captureCharFrame(), /requested until the Harness/);
+      await press(wb.t, wb.renderer, "return");
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(submissions, 1);
+      assert.match(wb.t.captureCharFrame(), /Model choice requested/);
+      assert.doesNotMatch(wb.t.captureCharFrame(), /applied to the live Turn/);
+      await press(wb.t, wb.renderer, "d");
+      assert.match(wb.t.captureCharFrame(), /› Details/);
+      assert.doesNotMatch(wb.t.captureCharFrame(), /m change Model choice/);
+      await press(wb.t, wb.renderer, "m");
+      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+      assert.equal(submissions, 1);
+      if (settlement === "refused")
+        setOutcome({
+          kind: "refused",
+          problem: {
+            code: "model-choice-refused",
+            explanation: "That model is blocked by your organisation.",
+            remediation: "Choose an allowed model.",
+            possibleEffects: "none",
+          },
+        });
+      else
+        setOutcome({
+          kind: "ok",
+          modelChoiceChange: { choice: offer.currentChoice, reach: settlement },
+        });
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      assert.doesNotMatch(frame, /Model choice requested/);
+      if (settlement === "live-turn")
+        assert.match(frame, /applied to the live Turn/);
+      else if (settlement === "next-turn")
+        assert.match(frame, /applies from the next Turn/);
+      else {
+        assert.match(frame, /Model choice not changed/);
+        assert.match(frame, /Choose an allowed model/);
+      }
+      assert.equal(frame.includes("\x1b"), false);
+      noOverflow(frame, 60);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("workbench-model-choice: the dialog holds timeline keys while durable activity still appends", async () => {
+  const base = { actionOffers: [MODEL_OFFER], timeline: events(80) };
+  const wb = await mountWorkbench(runOf(base));
+  try {
+    await press(wb.t, wb.renderer, "pageup");
+    const before = wb.t.captureCharFrame().match(/.* e\d+ .*/)?.[0];
+    assert.ok(before);
+    await press(wb.t, wb.renderer, "m");
+    await press(wb.t, wb.renderer, "end");
+    await press(wb.t, wb.renderer, "q");
+    await press(wb.t, wb.renderer, "d");
+    assert.deepEqual(wb.exits, []);
+    assert.match(wb.t.captureCharFrame(), /Choose a model/);
+    wb.control.setRun(runOf({ ...base, timeline: events(83) }));
+    await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "escape");
+    const after = wb.t.captureCharFrame();
+    assert.ok(after.includes(before));
+    assert.match(after, /new activities · Jump to latest/);
+    await press(wb.t, wb.renderer, "end");
+    assert.match(wb.t.captureCharFrame(), /e82/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /new activities/);
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+for (const effort of ["locked", "unavailable"] as const) {
+  test(`workbench-model-choice: Other uses native text and ${effort} effort remains truthful`, async () => {
+    const changes: unknown[] = [];
+    const offer = {
+      ...MODEL_OFFER,
+      modelDeclaration: { kind: "free-text" as const, efforts: [] },
+      ...(effort === "locked"
+        ? {
+            effortLock: {
+              effort: "high",
+              source: "CLAUDE_CODE_EFFORT_LEVEL=high",
+            },
+          }
+        : {}),
+    };
+    const wb = await mountWorkbench(
+      runOf({
+        state: "halted",
+        selectedHarness: "claude-code",
+        actionOffers: [offer],
+      }),
+      60,
+      24,
+      okActions({
+        changeModelChoice: (_, choice) => {
+          changes.push(choice);
+          return () => ({
+            kind: "ok",
+            modelChoiceChange: { choice, reach: "next-turn" },
+          });
+        },
+      }),
+    );
+    try {
+      await press(wb.t, wb.renderer, "m");
+      await press(wb.t, wb.renderer, "down");
+      await press(wb.t, wb.renderer, "return");
+      await type(wb.t, "custom-mq");
+      assert.match(wb.t.captureCharFrame(), /custom-mq/);
+      assert.deepEqual(wb.exits, []);
+      await press(wb.t, wb.renderer, "return");
+      const frame = wb.t.captureCharFrame();
+      assert.match(frame, /2\. Choose effort/);
+      if (effort === "locked") {
+        assert.match(frame, /Locked by CLAUDE_CODE_EFFORT_LEVEL=high/);
+        assert.match(frame, /high \[current\] \(locked\)/);
+      } else assert.match(frame, /This model has no effort setting/);
+      await press(wb.t, wb.renderer, "return");
+      assert.deepEqual(changes, [
+        {
+          model: "custom-mq",
+          ...(effort === "locked" ? { effort: "high" } : {}),
+        },
+      ]);
+      noOverflow(wb.t.captureCharFrame(), 60);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("workbench-model-choice: losing the Offer closes the dialog and late Harness refusals render in the timeline", async () => {
+  const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
+  try {
+    await press(wb.t, wb.renderer, "m");
+    wb.control.setRun({
+      ...runOf(),
+      modelChoiceNotice: "The Harness kept alpha because beta was refused.",
+    });
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+    assert.match(
+      wb.t.captureCharFrame(),
+      /The Harness kept alpha because beta was refused/,
+    );
+  } finally {
+    wb.t.renderer.destroy();
+  }
 });

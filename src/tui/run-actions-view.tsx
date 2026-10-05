@@ -6,6 +6,8 @@ import {
   type ParentProps,
 } from "solid-js";
 import type {
+  ChangeModelChoiceOffer,
+  OperationSnapshot,
   InterruptTurnOffer,
   Problem,
   ProjectionPort,
@@ -35,10 +37,18 @@ import { submitAndSettle } from "./submit-and-settle.js";
  *  the refusal rather than guessed at up front). */
 export type RunActionOutcome =
   | { readonly kind: "pending" }
-  | { readonly kind: "ok" }
+  | {
+      readonly kind: "ok";
+      readonly modelChoiceChange?: OperationSnapshot["modelChoiceChange"];
+    }
   | { readonly kind: "refused"; readonly problem: Problem };
 
 export interface RunActionsView {
+  /** Change the Run-wide choice, preserving the receipt's actual reach and effort reset. */
+  changeModelChoice(
+    offer: Extract<ChangeModelChoiceOffer, { available: true }>,
+    choice: NonNullable<ChangeModelChoiceOffer["currentChoice"]>,
+  ): Accessor<RunActionOutcome>;
   /** Resume a resting Run or perform the takeover named by its current Offer.
    *  Only an available Offer is dispatchable — an `available:false` Offer names a
    *  resume the Port cannot perform (#194 story 40), so the caller never reaches
@@ -96,6 +106,23 @@ export function createLiveRunActionsView(port: ProjectionPort): RunActionsView {
     };
   };
   return {
+    changeModelChoice: (offer, choice) => {
+      const settle = submitAndSettle(port, {
+        operationId: randomUUID(),
+        operation: "change-model-choice",
+        input: {
+          runId: offer.runId,
+          model: choice.model,
+          ...(choice.effort === undefined ? {} : { effort: choice.effort }),
+        },
+      });
+      return () => {
+        const outcome = settle();
+        return outcome.kind === "applied"
+          ? { ...outcome, kind: "ok" }
+          : outcome;
+      };
+    },
     resume: (offer) => {
       const settle = submitAndSettle(port, {
         operationId: randomUUID(),

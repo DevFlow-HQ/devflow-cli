@@ -1,6 +1,6 @@
 import { createSignal, type Accessor } from "solid-js";
 import type {
-  OperationOutcome,
+  OperationSnapshot,
   ObserverEnd,
   Problem,
   ProjectionPort,
@@ -20,7 +20,10 @@ import type {
  *  then `applied` or `refused` (a not-admitted or not-applied Problem). */
 export type SettleOutcome =
   | { readonly kind: "pending" }
-  | { readonly kind: "applied" }
+  | {
+      readonly kind: "applied";
+      readonly modelChoiceChange?: OperationSnapshot["modelChoiceChange"];
+    }
   | { readonly kind: "refused"; readonly problem: Problem };
 
 /**
@@ -45,9 +48,15 @@ export function submitAndSettle(
     setOutcome({ kind: "refused", problem: admission.problem });
     return outcome;
   }
-  const settle = (op: OperationOutcome): boolean => {
+  const settle = (snapshot: OperationSnapshot): boolean => {
+    const op = snapshot.outcome;
     if (op.status === "applied") {
-      setOutcome({ kind: "applied" });
+      setOutcome({
+        kind: "applied",
+        ...(snapshot.modelChoiceChange === undefined
+          ? {}
+          : { modelChoiceChange: snapshot.modelChoiceChange }),
+      });
       return true;
     }
     if (op.status === "not-applied") {
@@ -63,13 +72,13 @@ export function submitAndSettle(
         family: "operation",
         operationId: admission.operationId,
       });
-      if (settle(opened.snapshot.outcome)) {
+      if (settle(opened.snapshot)) {
         opened.close();
         break;
       }
       let end: ObserverEnd | undefined;
       for await (const update of opened.updates) {
-        if (update.kind === "durable" && settle(update.snapshot.outcome)) {
+        if (update.kind === "durable" && settle(update.snapshot)) {
           settled = true;
           break;
         }

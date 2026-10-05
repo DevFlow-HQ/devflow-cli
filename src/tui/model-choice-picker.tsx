@@ -4,12 +4,24 @@ import type { Accessor } from "solid-js";
 import type { HarnessFocus } from "../application/projection-port.js";
 import {
   effortLockSentence,
-  harnessFocusStatus,
   modelChoiceSourceLine,
   modelChoiceWords,
 } from "./harness-format.js";
 import { useTheme } from "./vendor/theme-context.js";
 import { wrap } from "./wrap.js";
+
+type PickerFocus = Pick<
+  HarnessFocus,
+  | "name"
+  | "modelDeclaration"
+  | "preselection"
+  | "harnessDefaults"
+  | "preferenceNotice"
+  | "unavailable"
+> & {
+  readonly id?: HarnessFocus["id"];
+  readonly effortLock?: NonNullable<HarnessFocus["preselection"]>["effortLock"];
+};
 
 type Choice = NonNullable<HarnessFocus["preselection"]>["choice"];
 export type ModelChoiceDraft =
@@ -32,13 +44,14 @@ interface EffortControl {
  *  the efforts the Harness declares for the draft's model. Effort can be edited
  *  only when it is unlocked and the model offers one. */
 export function effortControl(
-  focus: HarnessFocus | undefined,
+  focus: PickerFocus | undefined,
   draft: ModelChoiceDraft,
 ): EffortControl {
   const declaration = focus?.modelDeclaration;
   const choice = draft.kind === "chosen" ? draft.choice : undefined;
   const defaults = focus?.harnessDefaults;
   const lock =
+    focus?.effortLock ??
     focus?.preselection?.effortLock ??
     (defaults?.kind === "reported" || defaults?.kind === "fallback"
       ? defaults.effortLock
@@ -71,7 +84,8 @@ export interface ModelChoicePickerHandle {
 }
 
 export function ModelChoicePicker(props: {
-  focus: Accessor<HarnessFocus | undefined>;
+  focus: Accessor<PickerFocus | undefined>;
+  status: Accessor<string>;
   draft: Accessor<ModelChoiceDraft>;
   reset: Accessor<string | undefined>;
   enabled: Accessor<boolean>;
@@ -211,7 +225,7 @@ export function ModelChoicePicker(props: {
     const lines = [
       stage() === "effort" ? "2. Choose effort" : "1. Choose a model",
       `Harness: ${focus?.name ?? "(not selected)"} (${focus?.id ?? "none"})`,
-      harnessFocusStatus(focus),
+      props.status(),
     ];
     if (!props.enabled()) {
       lines.push(

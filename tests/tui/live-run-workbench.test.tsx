@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { testRender } from "@opentui/solid";
-import { createSignal } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import type {
   BundleCatalogSnapshot,
   BundleFocusSnapshot,
@@ -23,11 +23,12 @@ import {
   createLiveLaunchPreparationView,
   createLiveRunLaunchView,
   createLiveRunWorkbenchView,
+  createLiveRunActionsView,
   type BundleCatalogView,
   type RunLaunchView,
   type WorkspaceView,
 } from "../../src/tui/tui.js";
-import { makeFakeRenderer } from "./renderer-fixture.js";
+import { makeFakeRenderer, until } from "./renderer-fixture.js";
 import { createFake } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
@@ -439,4 +440,117 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
   if (!transcript.found) throw new Error("unreachable");
   const [entry] = transcript.entries.filter((e) => e.role === "user");
   assert.ok(entry?.content.includes(idea), entry?.content);
+});
+
+test("workbench-model-choice: the live read prepares the Offer and Run Actions preserves the applied choice, reach, and effort-reset receipt", async (t) => {
+  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
+  const harnessProfile: HarnessProfile = {
+    ...profile(),
+    modelSelection: {
+      at: "launch",
+      evidence: "scripted choices",
+      declaration: {
+        kind: "list",
+        models: [
+          {
+            model: "alpha",
+            label: "Alpha",
+            efforts: ["high"],
+            defaultEffort: "high",
+          },
+          {
+            model: "beta",
+            label: "Beta",
+            efforts: ["medium"],
+            defaultEffort: "medium",
+          },
+        ],
+      },
+    },
+  };
+  const wired = wireApplication({
+    secantHome: makeTempDir("secant-model-home-"),
+    launchCwd: makeTempDir("secant-model-ws-"),
+    process: createFakeBundleProcess({ executables: [process.execPath] }),
+    harnessAdapter: createFake({
+      profile: harnessProfile,
+      defaults: {
+        kind: "reported",
+        choice: { model: "alpha", effort: "high" },
+      },
+      turns: [],
+    })(),
+  });
+  t.after(() => {
+    wired.runGroup.close();
+    wired.catalog.close();
+  });
+  const bundle = writeAgentBundle();
+  const built = wired.bundleManagement.build(bundle.folder, {
+    noInstall: false,
+  });
+  assert.ok(built.ok);
+  const entry = wired.catalog
+    .listEntries()
+    .find((candidate) => candidate.id === bundle.id);
+  assert.ok(entry);
+  const created = wired.runGroup.createRun({
+    operationId: "seed-model-run",
+    bundleSnapshotDigest: entry.digest,
+    launch: {},
+    selectedHarness: "claude-code",
+    modelChoice: { model: "alpha", effort: "high" },
+    at: new Date(),
+  });
+  assert.equal(created.outcome, "created");
+  const owner = wired.runGroup.acquireRun(created.runId);
+  assert.ok(owner);
+  assert.ok(owner.writeState("halted").ok);
+  assert.ok(owner.release().ok);
+  owner.close();
+  const view = createLiveRunWorkbenchView(wired.projectionPort);
+  const projection = createRoot((dispose) => {
+    t.after(dispose);
+    return view.openRun(created.runId);
+  });
+  const changeOffer = () => {
+    const result = projection.snapshot().result;
+    return result.found
+      ? result.run.actionOffers.find(
+          (offer) => offer.action === "change-model-choice",
+        )
+      : undefined;
+  };
+  await until(() => changeOffer()?.available === true);
+  const offer = changeOffer();
+  assert.ok(offer?.available === true);
+  const actions = createLiveRunActionsView(wired.projectionPort);
+  const changed = actions.changeModelChoice(offer, { model: "beta" });
+  await until(() => changed().kind !== "pending");
+  assert.deepEqual(changed(), {
+    kind: "ok",
+    modelChoiceChange: {
+      choice: { model: "beta", effort: "medium" },
+      reach: "next-turn",
+      effortReset: {
+        previous: "high",
+        effort: "medium",
+        explanation:
+          "beta does not offer high effort. Effort changed to medium, its default.",
+      },
+    },
+  });
+  await until(() => {
+    const result = projection.snapshot().result;
+    return result.found && result.run.modelChoice?.model === "beta";
+  });
+  const refused = actions.changeModelChoice(offer, { model: "unknown" });
+  await until(() => refused().kind !== "pending");
+  const failure = refused();
+  assert.equal(failure.kind, "refused");
+  if (failure.kind === "refused")
+    assert.equal(failure.problem.code, "requested-model-unavailable");
+  const result = projection.snapshot().result;
+  assert.ok(result.found);
+  assert.deepEqual(result.run.modelChoice, { model: "beta", effort: "medium" });
 });

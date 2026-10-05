@@ -55,6 +55,11 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
 
 ## Modal stack and composes
 
+- A dialog with `onKey` takes every key from the Workbench's Renderer Port before screen dispatch (#351). The dialog primitive disables its
+  Escape/Ctrl+C keymap layer for that entry, so the shared picker's Escape can step from effort to model. Other dialogs keep their own keymap.
+- The interim `m` Model-choice picker uses the dialog stack and the `change-model-choice` Offer, including below the details hide size. A Request or
+  Human Gate closes it. Reach comes from the Offer while requested and from the Operation receipt once applied; a live change remains pending until observed.
+
 - The Workbench bottom region is a modal stack (#121): an outstanding approval Harness Request or a free-text Human Gate owns Esc and every printable key, so
   while either is up the Run Actions rail (r/c/x) and the two-press Esc interrupt are suppressed (`modalControl()` gates `anyActionOffer`/`actionLines` and the
   interrupt disarm). `interrupt-turn`/`steer-turn` offers stay present through an `awaiting-approval` Turn (run-projection derives them from liveness, not

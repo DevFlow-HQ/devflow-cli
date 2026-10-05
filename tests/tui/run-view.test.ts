@@ -471,7 +471,11 @@ test("the live Run view joins durable, overlay, and preview lanes and clears onl
   };
   const port = {
     openProjection(selector: ProjectionSelector) {
-      assert.deepEqual(selector, { family: "run", runId: "run-1" });
+      assert.deepEqual(selector, {
+        family: "run",
+        runId: "run-1",
+        prepareModelChoice: true,
+      });
       return opened;
     },
     submit() {

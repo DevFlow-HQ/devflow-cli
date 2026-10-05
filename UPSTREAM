@@ -71,7 +71,8 @@ copy date. Every path comes from the OpenCode checkout at commit 1ead9e3d7f.
 3. src/tui/vendor/dialog.tsx
    Copied from: packages/tui/src/ui/dialog.tsx
    Date: 2026-09-10 (Dialog un-exported 2026-09-12, #71 audit A12;
-     DialogContext un-exported 2026-09-30, #281)
+     DialogContext un-exported 2026-09-30, #281;
+     Port-driven dialog keys added 2026-10-05, #351)
    Local modifications:
      - Dropped the toast / clipboard copy-on-select handlers.
      - Dropped the OPENCODE_EXPERIMENTAL flag branches.
@@ -80,6 +81,9 @@ copy date. Every path comes from the OpenCode checkout at commit 1ead9e3d7f.
      - The Dialog component is module-private (only DialogProvider renders it);
        nothing imports it (#71 audit A12).
      - The DialogContext type is module-private; nothing imports it (#281).
+     - Entries may take Workbench Renderer Port keys via onKey. Such entries
+       disable the primitive's Escape/Ctrl+C keymap dismissal so the shared
+       Model-choice picker owns its Escape-to-step-back behavior (#351).
    Kept: the backdrop plus centred panel, the dialog stack, focus
      save/restore, and Escape / Ctrl+C dismissal.
 

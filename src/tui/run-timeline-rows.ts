@@ -69,6 +69,9 @@ export function buildTimelineRows(
       : [
           { key: "notice:model-choice-preference", text: run.preferenceNotice },
         ]),
+    ...(run.modelChoiceNotice === undefined
+      ? []
+      : [{ key: "notice:model-choice-refused", text: run.modelChoiceNotice }]),
     ...liveTimelineRows(run, overlay, preview),
   ];
 }
