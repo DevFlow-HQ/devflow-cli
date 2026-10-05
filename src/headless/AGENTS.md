@@ -47,6 +47,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   the follower before settlement is awaited, so an Agent Turn that pauses on approval is unblocked and the Run can rest; it is harmless for a Command-only Run.
 - Observer loss never strands headless work (#306): `followHarnessRequests` and `settledOutcome` reopen after `observer-lagged`. Any other end stops the follower, and
   `settledOutcome` returns `operation-observation-ended` (unknown effects) instead of the still-pending snapshot, so neither reopens into a spin at shutdown.
+- Launch preparation and Harness inspection share a private readiness waiter (#390): only `observer-lagged` reopens; every other end fails with no effects.
+  Launch waits for ready/not-ready; inspection waits for a missing Harness or qualification beyond `not-checked`, including valid negative results.
 - `run launch --harness claude-code|codex` forwards the semantic choice through `LaunchRunInput`; Application owns required/unknown/irrelevant refusal. Resume accepts
   no Harness flag and reuses the durable id. The option changes no frozen JSON field or exit code; selected-Harness Problems use the existing renderer (#146).
 - `run launch --model`/`--effort` forward the draft's Model choice, and an omitted one is resolved by launch preparation. `launchRun` submits the ready
@@ -64,8 +66,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The `--json` shapes are frozen: the three-OS CI gate parses specific fields (`.result.run.state`, `.checkpoint.completedIterations`, …), so renaming
   one breaks the gate. They are not uniform — `bundle inspect --json` prints the inner bundle while `bundle list --json` prints the snapshot — so match
   the existing shape a command already emits.
-- The `harness` command group lives in `harness-commands.ts`. `harness inspect` waits for the first durable focus update when its initial snapshot is
-  `not-checked` (#188). Its frozen JSON is the inner focused Harness, where `supportedModels` keeps its names-only shape (a `suggested` declaration
+- The `harness` command group lives in `harness-commands.ts`. `harness inspect` waits for settled qualification when its initial snapshot is
+  `not-checked` (#188, #390). Its frozen JSON is the inner focused Harness, where `supportedModels` keeps its names-only shape (a `suggested` declaration
   reads as `free-text`) and #341 adds `modelDeclaration` and `harnessDefaults` (text: `Reported settings:`) beside it, #342 `preselection`;
   `harness list --json` prints the whole list snapshot, and neither command derives or exposes Action Offers.
 - A locked launch prints its lock sentence on stderr, keeping stdout JSON unchanged (#347).

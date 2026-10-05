@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import type {
   HarnessFocusSnapshot,
-  OpenedProjection,
   Problem,
   ProjectionPort,
 } from "../application/projection-port.js";
 import type { CommandExecutor, HeadlessIO, SettleAction } from "./headless.js";
 import { renderHarnessFocus, renderHarnessRow } from "./render.js";
+import { awaitReadiness } from "./readiness.js";
 
 interface HarnessCommandDeps {
   readonly io: HeadlessIO;
@@ -93,41 +93,36 @@ async function inspectHarness(
   json: boolean,
   id: string,
 ): Promise<number> {
-  const opened = port.openProjection({
-    family: "harness-catalog",
-    focus: { id },
-  });
-  try {
-    const snapshot = await qualifiedSnapshot(opened);
-    if (!snapshot.result.found) {
-      return fail(io, json, snapshot.result.problem);
-    }
-    const harness = snapshot.result.harness;
-    if (json) {
-      io.out(`${JSON.stringify(harness, null, 2)}\n`);
-      return 0;
-    }
-    io.out(renderHarnessFocus(harness));
-    return 0;
-  } finally {
-    opened.close();
+  const observed = await qualifiedSnapshot(port, id);
+  if ("problem" in observed) return fail(io, json, observed.problem);
+  const snapshot = observed.snapshot;
+  if (!snapshot.result.found) {
+    return fail(io, json, snapshot.result.problem);
   }
+  const harness = snapshot.result.harness;
+  if (json) {
+    io.out(`${JSON.stringify(harness, null, 2)}\n`);
+    return 0;
+  }
+  io.out(renderHarnessFocus(harness));
+  return 0;
 }
 
-async function qualifiedSnapshot(
-  opened: OpenedProjection<HarnessFocusSnapshot>,
-): Promise<HarnessFocusSnapshot> {
-  const initial = opened.snapshot;
-  if (
-    !initial.result.found ||
-    initial.result.harness.qualification.state !== "not-checked"
-  ) {
-    return initial;
-  }
-
-  for await (const update of opened.updates) {
-    if (update.kind === "durable") return update.snapshot;
-    if (update.kind === "closed") break;
-  }
-  return initial;
+function qualifiedSnapshot(
+  port: ProjectionPort,
+  id: string,
+): Promise<{ snapshot: HarnessFocusSnapshot } | { problem: Problem }> {
+  return awaitReadiness({
+    open: () =>
+      port.openProjection({ family: "harness-catalog", focus: { id } }),
+    settled: (snapshot) =>
+      !snapshot.result.found ||
+      snapshot.result.harness.qualification.state !== "not-checked",
+    observationEnded: (reason) => ({
+      code: "harness-observation-ended",
+      explanation: `Harness ${id} observation ended before qualification completed (${reason ?? "stream ended"}).`,
+      remediation: "Try the inspection again.",
+      possibleEffects: "none",
+    }),
+  });
 }

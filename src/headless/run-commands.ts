@@ -22,6 +22,7 @@ import type {
 } from "../application/projection-port.js";
 import type { CommandExecutor, HeadlessIO, SettleAction } from "./headless.js";
 import { renderRun, renderRunList } from "./render.js";
+import { awaitReadiness } from "./readiness.js";
 import {
   addHarnessRequestsOption,
   parseHarnessRequestPolicy,
@@ -630,26 +631,21 @@ interface TLaunchRunParams {
   readonly harnessRequests: HarnessRequestPolicy;
 }
 
-/** Read the launch-preparation assessment for one draft (#189): return the settled
- *  snapshot, awaiting the first durable update when the initial snapshot is still
- *  `assessing` (the Harness is qualifying to resolve the Model choice), like
- *  `harness inspect` waits on its first focus update. */
-async function assessDraft(
+/** Wait for the draft's settled assessment before submitting a ready Offer. */
+function assessDraft(
   port: ProjectionPort,
   draft: LaunchRunInput,
-): Promise<LaunchPreparationSnapshot> {
-  const opened = port.openProjection({ family: "launch-preparation", draft });
-  try {
-    if (opened.snapshot.status !== "assessing") return opened.snapshot;
-    for await (const update of opened.updates) {
-      if (update.kind === "durable" && update.snapshot.status !== "assessing") {
-        return update.snapshot;
-      }
-    }
-    return opened.snapshot;
-  } finally {
-    opened.close();
-  }
+): Promise<{ snapshot: LaunchPreparationSnapshot } | { problem: Problem }> {
+  return awaitReadiness({
+    open: () => port.openProjection({ family: "launch-preparation", draft }),
+    settled: (snapshot) => snapshot.status !== "assessing",
+    observationEnded: (reason) => ({
+      code: "launch-observation-ended",
+      explanation: `Launch preparation observation ended before assessment completed (${reason ?? "stream ended"}).`,
+      remediation: "Try the launch again.",
+      possibleEffects: "none",
+    }),
+  });
 }
 
 /** Print every assessment finding and exit one (#189): `--json` prints the
@@ -687,7 +683,9 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
   // `launch-run` Offer's draft, which carries the Model choice the assessment
   // resolved — the same preselection the TUI shows (ADR 0034) — and the launch
   // reruns every authoritative check under identical rules.
-  const assessment = await assessDraft(port, draft);
+  const observed = await assessDraft(port, draft);
+  if ("problem" in observed) return fail(io, json, observed.problem);
+  const assessment = observed.snapshot;
   if (assessment.draft.preferenceNotice !== undefined)
     io.err(`${assessment.draft.preferenceNotice}\n`);
   if (assessment.status === "not-ready") {
@@ -702,10 +700,18 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
     (candidate): candidate is LaunchRunOffer =>
       candidate.action === "launch-run",
   );
+  if (offer === undefined) {
+    return fail(io, json, {
+      code: "launch-offer-missing",
+      explanation: "The settled launch assessment has no ready launch Offer.",
+      remediation: "Try the launch again; if it persists, report it.",
+      possibleEffects: "none",
+    });
+  }
   const admission = port.submit({
     operationId: randomUUID(),
     operation: "launch-run",
-    input: offer?.draft ?? draft,
+    input: offer.draft,
   });
   if (!admission.admitted) return fail(io, json, admission.problem);
   const runId = admission.runId;
