@@ -2,6 +2,8 @@
 
 Read this when changing tests or fixtures.
 
+Before changing expectations to resolve a failing check, follow [failing checks](./failing-checks.md).
+
 The default suite discovers tests recursively and is deterministic: it requires no network, credentials, installed Harness, real terminal, arbitrary
 sleep, or other unstable external state. Tests requiring those resources are opt-in. Tests are written against the `node:test` API and run under Bun's
 test runner (`bun test`), not `bun:test`; `bunfig.toml` records why the per-test timeout is a CLI `--timeout` flag rather than a `[test] timeout` key

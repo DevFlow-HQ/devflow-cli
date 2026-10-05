@@ -30,6 +30,11 @@ import {
   readLock,
 } from "./shipped-bundles.js";
 import { writeZip } from "../src/bundle/bundle.js";
+import {
+  catalogMigrations,
+  coordinationMigrations,
+  runMigrations,
+} from "../src/drizzle/migrations.js";
 import { TARGETS, hostTargetKey } from "./targets.js";
 import { installReplayerAt } from "../tests/harness/replayer-install.js";
 import { installCodexReplayerAt } from "../tests/harness/codex-replayer-install.js";
@@ -197,7 +202,7 @@ function assertRefuses(
 function assertMigrated(
   databasePath: string,
   label: string,
-  expected = 1,
+  expected: number,
 ): void {
   const database = new Database(databasePath);
   try {
@@ -393,20 +398,20 @@ await withCleanup(
           `Compiled binary did not migrate and open the pre-Drizzle home: ${JSON.stringify(listed)}`,
         );
       }
-      assertMigrated(join(legacyHome, "catalog.db"), "Catalog", 2);
-      assertMigrated(join(groupDir, "coordination.db"), "coordination", 2);
-      // The Run Store carries fourteen migrations: #108 added `pending_gate`, #116 added
-      // the Harness Turn records (`harness_session`/`turn`/`turn_event`/
-      // `transcript_entry`) and Attempt `effective_model`, #126 added the durable Turn
-      // `kind` column, and #125 added the Attempt Harness-identity columns
-      // (`harness`/`executable`/`executable_version`), #133 moved ownership into the
-      // Run Store, #134 added the persisted steer capability evidence, #138 added
-      // the Run's semantic selected-Harness id, #187 added the requested-model column,
-      // #213 added gate suggestions, #218 added the attempt-log End Stage mark,
-      // #340 added each Turn's requested model and effort, and #342 added the Run's
-      // Model choice effort, and #372 added agent-ended Attempt attribution.
+      // Compare the delivered binary's records with the source journals, so a new
+      // migration updates the expectation while missing or extra records still fail.
+      assertMigrated(
+        join(legacyHome, "catalog.db"),
+        "Catalog",
+        catalogMigrations.length,
+      );
+      assertMigrated(
+        join(groupDir, "coordination.db"),
+        "coordination",
+        coordinationMigrations.length,
+      );
       const runDatabasePath = join(groupDir, runId, "run.db");
-      assertMigrated(runDatabasePath, "Run Store", 14);
+      assertMigrated(runDatabasePath, "Run Store", runMigrations.length);
       assertLegacyRunRemainsUnselected(runDatabasePath);
     }
 

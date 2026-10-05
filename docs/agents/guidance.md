@@ -7,7 +7,7 @@ mechanics and reliability evidence are in [agent-guidance progressive disclosure
 ## Shape
 
 - Root `AGENTS.md` is the always-loaded index: one trigger line per focused document and per Module-local `AGENTS.md`. Its only rules of its own are
-  two short always-on sections: `## Failing checks`, that a failing check is fixed in the code that tripped it, and the `## Commits` convention
+  two short always-on sections: `## Failing checks`, that checks preserve defect detection and route to their repair guidance, and the `## Commits` convention
   every commit needs in context; everything else routes to a focused document.
 - `CLAUDE.md` is a one-line `@AGENTS.md` import, never a symlink. Git checks symlinks out as plain text wherever `core.symlinks` is off, which is
   the common Windows result.

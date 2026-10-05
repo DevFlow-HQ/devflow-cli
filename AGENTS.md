@@ -52,7 +52,7 @@ Before editing under a Module root that carries its own `AGENTS.md`, read that f
 
 ## Failing checks
 
-A failing check is fixed in the code that tripped it. Never edit a check, its policy, allowlist, or tests to make it pass; if no fix fits, stop and say so.
+Preserve what each check proves. Before fixing a failing check or changing an expectation, follow [failing checks](docs/agents/failing-checks.md).
 
 ## Commits
 
