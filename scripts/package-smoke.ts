@@ -41,6 +41,7 @@ import { installCodexReplayerAt } from "../tests/harness/codex-replayer-install.
 import { seedTestRepairWorkspace } from "../tests/helpers/testRepairWorkspace.js";
 import { readArchiveEntries } from "../tests/helpers/zip.js";
 import { runNamedScenario, withCleanup } from "./package-smoke/scenario.js";
+import { posixExitedRootAcceptance } from "./package-smoke/posix-exited-root.js";
 
 // Smokes the Bun compiled single-file executable (ADR 0030). It replaces the
 // npm-tarball smoke and keeps its install-then-run shape: copy the standalone
@@ -2390,6 +2391,14 @@ await withCleanup(
     await runNamedScenario(
       "signal-halt-then-resume",
       signalHaltThenResumeScenario,
+    );
+
+    await runNamedScenario("posix-exited-root-cleanup", () =>
+      posixExitedRootAcceptance({
+        binary,
+        smokeRoot,
+        env: homeEnv(join(smokeRoot, "posix-exited-root-home")),
+      }),
     );
 
     // #86 through the installed binary on every OS: a Run's owner is KILLED

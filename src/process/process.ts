@@ -13,6 +13,11 @@ import {
   type ContainmentFailureStage,
 } from "./windows-containment.js";
 import which from "which";
+import {
+  launchPosix,
+  PosixLaunchTimeout,
+  type PosixChild,
+} from "./posix-lifetime.js";
 
 // The process Module owns the "owned child process" mechanics that a Command step
 // and a Harness both need: it resolves a Command's authored executable to
@@ -22,8 +27,9 @@ import which from "which";
 //
 // It imports nothing from other Modules and reaches the OS only through
 // `node:child_process`, the primary `which` PATH walk, and the Windows-only
-// `where.exe` fallback. Windows owned launches use the private `bun:ffi`
-// containment file named in ADR 0030. Run execution, Application
+// `where.exe` fallback. POSIX asynchronous launches retain native root identity
+// through the private lifetime file; Windows owned launches use containment.
+// Both finite `bun:ffi` implementations are named in ADR 0030. Run execution, Application
 // (Preflight), and the Harness Module are its callers, so their precondition
 // checks and their spawns agree by construction (A40, D1).
 
@@ -251,7 +257,8 @@ type ChildRole = SpawnRole | "executable-lookup" | "tree-kill";
 /** One observed lifecycle fact of a child this Module spawned. Arguments,
  *  environment, and output never cross. Every child reports at most one
  *  settlement: `spawn-error` (it never ran), `exit` (it ended without a kill from
- *  Secant), or `reap` (it ended after Secant killed it). An asynchronous child
+ *  Secant), or `reap` (Secant signalled its owned tree). An already-exited POSIX root
+ *  retains its native status/signal when Secant cleans up descendants. An asynchronous child
  *  that never ran reports only `spawn-error`; every other child reports `spawn`
  *  first. A child with no settlement was still running when Secant stopped
  *  watching.
@@ -307,6 +314,11 @@ export type ChildFact =
  *  ignored, so a fact can never change a Process outcome. */
 export interface ProcessAdapterOptions {
   readonly observeChild?: (fact: ChildFact) => void;
+  /** Test-only numeric-group reuse seam; production uses native group signals. */
+  readonly testPosixSignalGroup?: (
+    pid: number,
+    signal: "SIGTERM" | "SIGKILL",
+  ) => void;
   /** Test-only containment failure; never wired by production composition. */
   readonly testWindowsContainmentFailure?: ContainmentFailureStage;
   /** Test-only gate simulating a member whose process handle signals late. */
@@ -469,7 +481,7 @@ function watchChild(
 
 /** What became of one spawned Command. `timeout` and `cancelled` are our own
  *  aborts (we killed the group); `signal` is a death by an outside signal we did
- *  not cause; `spawn-error` is a child that never ran. */
+ *  not cause; `spawn-error` means launch failed or cleanup could not produce a complete result. */
 export type SpawnResult =
   | {
       readonly kind: "exited";
@@ -529,7 +541,8 @@ const KILL_ESCALATION_MS = 3000;
 
 /** One owned lifetime observation. Successful exit/signal observations follow
  * output draining. Windows detects root exit on its handle and releases the job
- * before draining; cleanup errors and timeouts do not prove a complete drain. */
+ * before draining; POSIX retains an unreaped root until output drains. Cleanup
+ * errors and timeouts do not prove a complete drain. */
 export type OwnedProcessClose =
   | { readonly kind: "exited"; readonly status: number }
   | { readonly kind: "signal"; readonly signal: NodeJS.Signals | null }
@@ -610,22 +623,24 @@ export interface ProcessAdapter {
   ): Promise<SpawnOwnedProcessResult>;
 }
 
-/** Construct the real Node-compatible implementation behind the Process Seam. */
+/** Construct the real platform implementation behind the Process Seam. */
 export function createProcessAdapter(
   options: ProcessAdapterOptions = {},
 ): ProcessAdapter {
-  return new NodeProcessAdapter(
+  return new SystemProcessAdapter(
     guardedObserver(options),
     options.testWindowsContainmentFailure,
     options.testWindowsContainmentMemberGap,
+    options.testPosixSignalGroup,
   );
 }
 
-class NodeProcessAdapter implements ProcessAdapter {
+class SystemProcessAdapter implements ProcessAdapter {
   constructor(
     private readonly notify: Notify,
     private readonly containmentFailure?: ContainmentFailureStage,
     private readonly containmentMemberGap?: ProcessAdapterOptions["testWindowsContainmentMemberGap"],
+    private readonly posixSignalGroup?: ProcessAdapterOptions["testPosixSignalGroup"],
   ) {}
 
   resolveExecutable(
@@ -636,7 +651,9 @@ class NodeProcessAdapter implements ProcessAdapter {
   }
 
   spawnCommand(options: SpawnOptions): Promise<SpawnResult> {
-    return spawnCommandWithNode(options, this.notify);
+    return process.platform === "win32"
+      ? spawnCommandWithNode(options, this.notify)
+      : spawnCommandWithPosix(options, this.notify, this.posixSignalGroup);
   }
 
   spawnCommandSync(options: SpawnSyncOptions): SpawnSyncResult {
@@ -651,6 +668,7 @@ class NodeProcessAdapter implements ProcessAdapter {
       this.notify,
       this.containmentFailure,
       this.containmentMemberGap,
+      this.posixSignalGroup,
     );
   }
 }
@@ -688,9 +706,31 @@ async function spawnOwnedProcess(
   notify: Notify,
   failAt: ContainmentFailureStage | undefined,
   memberGap: ProcessAdapterOptions["testWindowsContainmentMemberGap"],
+  posixSignalGroup: ProcessAdapterOptions["testPosixSignalGroup"],
 ): Promise<SpawnOwnedProcessResult> {
-  if (process.platform !== "win32")
-    return spawnOwnedProcessWithNode(options, notify);
+  if (process.platform !== "win32") {
+    const watch = new ChildWatch(notify, options.role);
+    try {
+      const child = await launchPosix(
+        { ...options, env: withoutBunTestWorker(options.env) },
+        watch,
+        posixSignalGroup,
+      );
+      return {
+        ok: true,
+        process: new ManagedOwnedProcess({ kind: "posix", child }, watch),
+      };
+    } catch (cause) {
+      watch.failed(cause);
+      return {
+        ok: false,
+        failure:
+          cause instanceof PosixLaunchTimeout
+            ? { kind: "launch-timeout", cause }
+            : { kind: "spawn-error", cause },
+      };
+    }
+  }
   // Match Node's case-insensitive environment selection before both resolution
   // and CreateProcessW. Undefined keys are omitted, rather than shadowing a value.
   const env: NodeJS.ProcessEnv = {};
@@ -859,9 +899,9 @@ async function reapTimedOutLaunch(
     child.once("close", () => resolve(true)),
   );
   try {
-    killGroup(child, "SIGTERM", watch);
+    killWindowsChild(child, "SIGTERM", watch);
     if ((await settleWithin(closed, KILL_ESCALATION_MS)) === true) return;
-    killGroup(child, "SIGKILL", watch);
+    killWindowsChild(child, "SIGKILL", watch);
     await settleWithin(closed, KILL_ESCALATION_MS);
   } catch {
     // The launch result remains a typed timeout. Cleanup evidence cannot replace
@@ -871,7 +911,8 @@ async function reapTimedOutLaunch(
 
 type OwnedChild =
   | { readonly kind: "node"; readonly child: ChildProcessWithoutNullStreams }
-  | { readonly kind: "contained"; readonly child: ContainedChild };
+  | { readonly kind: "contained"; readonly child: ContainedChild }
+  | { readonly kind: "posix"; readonly child: PosixChild };
 
 /** Own the shared write, interruption, and cleanup-bound policy once. The
  * private child variants supply Node events or Windows handle observations. */
@@ -895,7 +936,7 @@ class ManagedOwnedProcess implements OwnedProcess {
     child.child.stdin.on("error", (error: Error) => {
       this.stdinError ??= error;
     });
-    if (child.kind === "contained") {
+    if (child.kind !== "node") {
       this.closePromise = child.child.close;
       return;
     }
@@ -962,6 +1003,7 @@ class ManagedOwnedProcess implements OwnedProcess {
   }
 
   private alive(): boolean {
+    if (this.child.kind === "posix") return this.child.child.active();
     return this.child.kind === "contained"
       ? this.child.child.alive()
       : alive(this.child.child);
@@ -970,7 +1012,8 @@ class ManagedOwnedProcess implements OwnedProcess {
   private kill(signal: "SIGTERM" | "SIGKILL"): void {
     if (this.child.kind === "contained") {
       if (this.child.child.terminate()) this.watch.killing(signal);
-    } else killGroup(this.child.child, signal, this.watch);
+    } else if (this.child.kind === "posix") this.child.child.signal(signal);
+    else killWindowsChild(this.child.child, signal, this.watch);
   }
 
   /** Graceful signal, bounded wait, then a forced escalation if it did not stop.
@@ -1005,8 +1048,11 @@ class ManagedOwnedProcess implements OwnedProcess {
       if (graceful !== undefined) return { close: graceful, escalated: false };
       this.kill("SIGKILL");
       const forced = await settleWithin(this.closePromise, gracefulMs);
+      if (forced === undefined && this.child.kind === "posix")
+        this.child.child.abandon(new Error("POSIX interrupt cleanup timeout"));
       return { close: forced ?? { kind: "cleanup-timeout" }, escalated: true };
     } catch (error) {
+      if (this.child.kind === "posix") this.child.child.abandon(error);
       return {
         close: { kind: "cleanup-error", cause: error },
         escalated: true,
@@ -1025,8 +1071,8 @@ class ManagedOwnedProcess implements OwnedProcess {
 
     const firstWait = await settleWithin(this.closePromise, stageTimeout(3));
     if (firstWait !== undefined) return firstWait;
-    // The process did not close within its share of the cleanup bound. One that
-    // exited but whose pipes are still held open is not killed, so no timeout.
+    // The owned lifetime did not close within its share of the cleanup bound.
+    // POSIX group authority remains valid after native root exit.
     if (this.alive()) this.watch.stopping("timeout");
     this.kill("SIGTERM");
 
@@ -1035,6 +1081,8 @@ class ManagedOwnedProcess implements OwnedProcess {
     this.kill("SIGKILL");
 
     const finalWait = await settleWithin(this.closePromise, stageTimeout(1));
+    if (finalWait === undefined && this.child.kind === "posix")
+      this.child.child.abandon(new Error("POSIX stdin cleanup timeout"));
     return finalWait ?? { kind: "cleanup-timeout" };
   }
 
@@ -1052,6 +1100,7 @@ class ManagedOwnedProcess implements OwnedProcess {
       }
       return close;
     } catch (error) {
+      if (this.child.kind === "posix") this.child.child.abandon(error);
       return {
         kind: "cleanup-error",
         cause: error,
@@ -1074,15 +1123,8 @@ async function settleWithin<T>(
   return result;
 }
 
-/**
- * Spawn a resolved Command target directly (never a shell), stream its output
- * under a byte cap, and settle to a typed SpawnResult. On POSIX the child is
- * detached so it leads its own process group; a timeout or cancel aborts, and the
- * whole group is killed — `kill(-pid, SIGTERM)` on POSIX, escalating to SIGKILL
- * after a grace period, and `taskkill /T /F` outright on Windows — so a grandchild
- * holding stdout open cannot outlive its parent (D2, #21). stdin is closed so a
- * command that reads it gets EOF rather than hanging.
- */
+/** Windows Command route: direct execution, capped streamed output, and
+ * taskkill /T /F cleanup. POSIX asynchronous roots use native lifetime ownership. */
 function spawnCommandWithNode(
   options: SpawnOptions,
   notify: Notify,
@@ -1100,10 +1142,6 @@ function spawnCommandWithNode(
       env: withoutBunTestWorker(options.env),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
-      // A detached POSIX child leads its own process group, so `kill(-pid, ...)`
-      // reaches every descendant. Windows has no process groups; taskkill /T walks
-      // the tree instead, so detaching there would only orphan the child.
-      detached: process.platform !== "win32",
     });
     const watch = watchChild(child, notify, options.role);
     // Stream stdout then stderr under a shared cap: past it, chunks are dropped and
@@ -1136,9 +1174,9 @@ function spawnCommandWithNode(
       watch.stopping(
         options.cancelSignal?.aborted ? "cancellation" : "timeout",
       );
-      killGroup(child, "SIGTERM", watch);
+      killWindowsChild(child, "SIGTERM", watch);
       escalation = setTimeout(
-        () => killGroup(child, "SIGKILL", watch),
+        () => killWindowsChild(child, "SIGKILL", watch),
         KILL_ESCALATION_MS,
       );
       escalation.unref?.();
@@ -1160,17 +1198,12 @@ function spawnCommandWithNode(
     // captured output is in hand — and, with the group killed, only once a
     // grandchild holding stdout open has died too.
     child.on("close", (code) => {
-      // Attribute the exit. On POSIX our kill delivers a signal (a null exit code),
-      // so a real exit code proves the child exited on its own — trust it even if an
-      // abort fired in the same tick, closing the natural-exit-vs-timeout race there.
-      // On Windows `taskkill /F` yields exit code 1, so a killed child has a non-null
-      // code; there the abort flag is the only signal that we killed it.
-      const killedByUs = process.platform === "win32" || code === null;
-      if (killedByUs && options.cancelSignal?.aborted) {
+      // taskkill /F yields a native status, so cancellation/timeout flags
+      // attribute Windows cleanup. POSIX retains its independent root evidence.
+      if (options.cancelSignal?.aborted) {
         return finish({ kind: "cancelled" });
       }
-      if (killedByUs && timeoutSignal.aborted)
-        return finish({ kind: "timeout" });
+      if (timeoutSignal.aborted) return finish({ kind: "timeout" });
       if (code === null) return finish({ kind: "signal" });
       let text = Buffer.concat([...stdoutChunks, ...stderrChunks]);
       if (truncated) {
@@ -1179,6 +1212,96 @@ function spawnCommandWithNode(
       finish({ kind: "exited", status: code, text });
     });
   });
+}
+
+async function spawnCommandWithPosix(
+  options: SpawnOptions,
+  notify: Notify,
+  signalGroup: ProcessAdapterOptions["testPosixSignalGroup"],
+): Promise<SpawnResult> {
+  const watch = new ChildWatch(notify, options.role);
+  const timeout = AbortSignal.timeout(options.timeoutMs);
+  const abort =
+    options.cancelSignal === undefined
+      ? timeout
+      : AbortSignal.any([timeout, options.cancelSignal]);
+  let child: PosixChild;
+  try {
+    child = await launchPosix(
+      {
+        ...options,
+        cwd: options.cwd ?? process.cwd(),
+        env: withoutBunTestWorker(options.env),
+        launchTimeoutMs: options.timeoutMs,
+      },
+      watch,
+      signalGroup,
+    );
+  } catch (cause) {
+    watch.failed(cause);
+    return { kind: "spawn-error" };
+  }
+  const stdout: Buffer[] = [],
+    stderr: Buffer[] = [];
+  let captured = 0,
+    truncated = false;
+  const collect = (into: Buffer[], bytes: Buffer): void => {
+    const remaining = Math.max(0, options.maxCaptureBytes - captured);
+    if (bytes.length > remaining) truncated = true;
+    if (remaining > 0) {
+      const chunk = bytes.subarray(0, remaining);
+      into.push(chunk);
+      captured += chunk.length;
+    }
+  };
+  child.stdout.on("data", (bytes: Buffer) => collect(stdout, bytes));
+  child.stderr.on("data", (bytes: Buffer) => collect(stderr, bytes));
+  child.stdin.end();
+  let escalation: ReturnType<typeof setTimeout> | undefined;
+  let forceBound: ReturnType<typeof setTimeout> | undefined;
+  const onAbort = (): void => {
+    if (!child.active()) return;
+    watch.stopping(options.cancelSignal?.aborted ? "cancellation" : "timeout");
+    try {
+      child.signal("SIGTERM");
+      escalation = setTimeout(() => {
+        try {
+          child.signal("SIGKILL");
+        } catch (cause) {
+          child.abandon(cause);
+          return;
+        }
+        forceBound = setTimeout(
+          () => child.abandon(new Error("POSIX Command cleanup timeout")),
+          KILL_ESCALATION_MS,
+        );
+      }, KILL_ESCALATION_MS);
+    } catch (cause) {
+      child.abandon(cause);
+    }
+  };
+  if (abort.aborted) onAbort();
+  else abort.addEventListener("abort", onAbort, { once: true });
+  try {
+    const close = await child.close;
+    // A stored native status proves natural exit even if abort raced it. An
+    // already-observed native signal also survives later descendant cleanup.
+    if (close.kind === "signal") {
+      if (child.rootSignalled() && options.cancelSignal?.aborted)
+        return { kind: "cancelled" };
+      if (child.rootSignalled() && timeout.aborted) return { kind: "timeout" };
+      return { kind: "signal" };
+    }
+    if (close.kind !== "exited") return { kind: "spawn-error" };
+    let text = Buffer.concat([...stdout, ...stderr]);
+    if (truncated)
+      text = Buffer.concat([text, Buffer.from(options.truncationMarker)]);
+    return { kind: "exited", status: close.status, text };
+  } finally {
+    clearTimeout(escalation);
+    clearTimeout(forceBound);
+    abort.removeEventListener("abort", onAbort);
+  }
 }
 
 /** Bun's test coordinator marks its workers in the inherited environment. A
@@ -1190,32 +1313,14 @@ function withoutBunTestWorker(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return childEnv;
 }
 
-/** Signal a spawned child and everything under it. On POSIX the negative pid
- *  targets the whole process group (the child was detached to lead one). On
- *  Windows both signals are `taskkill /T /F`: the polite form (no `/F`) only
- *  reaches a window, and a `windowsHide: true` child has none, so a graceful
- *  request would be sent into the void (#127 A6, verified on a Windows desktop
- *  2026-09-18). A not-found error means the child had already exited between the
- *  liveness check and the kill — swallow it (D2). */
-function killGroup(
+/** Node-backed Windows roots retain the existing live-tree guard. */
+function killWindowsChild(
   child: ChildProcess,
   signal: "SIGTERM" | "SIGKILL",
   watch: ChildWatch,
 ): void {
-  const pid = child.pid;
-  if (pid === undefined) return;
-  if (!alive(child)) return;
-  if (process.platform === "win32") {
-    killWindowsTree(pid, signal, watch);
-    return;
-  }
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    return;
-  }
-  watch.killing(signal);
+  if (child.pid === undefined || !alive(child)) return;
+  killWindowsTree(child.pid, signal, watch);
 }
 
 /** Windows cleanup for Node children, including uncontained owned fallbacks. */

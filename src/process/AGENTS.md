@@ -21,6 +21,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Fallback launch results and facts retain the acquisition cause for translated operational logging (#363).
   Interrupt and stdin-close escalation terminate the whole job with a private stop code and record a reap only after a successful kill request;
   callers use child facts and cleanup outcomes, never exit codes, because kill-on-close can report zero. Failed termination records no kill.
+- POSIX async roots are launched/reaped only by `posix-lifetime.ts` (ADR 0030, #387). WNOWAIT reserves root/group identity after exit;
+  group signal authority retires before final reap and permanently on ownership loss. Root evidence and output drain are independent.
+  `reap` records a group signal, retaining an already-exited root's status/signal. Escaped pipe holders cause bounded cleanup failure.
+  SIGCHLD plus yielding 25 ms live-root probes cover Bun's fallback waiter; native state never blocks the JS thread.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound
   again to die once force-killed. The bound is not split between the stages.
 - Owned stdin keeps its own `error` listener through teardown; child-process errors do not cover pipe errors. `closeStdin` reaps before returning that cause

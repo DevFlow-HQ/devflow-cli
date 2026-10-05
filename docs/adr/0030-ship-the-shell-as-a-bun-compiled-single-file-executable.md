@@ -50,7 +50,7 @@ decision: better-sqlite3 is moot under Bun (it needed a Bun fix to load at all a
 
 [ADR 0018](./0018-adopt-opencode-presentation-as-pinned-reduced-vendor.md)'s runtime-neutrality rule extends from vendored presentation source to
 **all target source**, with a named allowlist where `bun:` and `Bun.` are permitted: the SQLite adapter, the Windows console guard, the private Windows
-Process containment file, and the CLI entry check (which needs `Bun.main` to detect the compiled-binary entry, since `import.meta.main` is false in a Bun binary on Windows). The mechanical `Bun.*`
+Process containment file, the private POSIX root-lifetime file (amended 2026-10-05, #387), and the CLI entry check (which needs `Bun.main` to detect the compiled-binary entry, since `import.meta.main` is false in a Bun binary on Windows). The mechanical `Bun.*`
 ban in `tests/architecture/check-vendor-provenance.ts` becomes an allowlist instead of a blanket ban. No Node twin implementations exist —
 OpenCode's `#sqlite`/`#pty`/`#fff` Node sides serve only its Electron desktop build and are untested. This is achievable: OpenCode touches Bun APIs
 in 12 of 833 source files and cut from 321 call sites to 48 by replacing Bun calls with Node builtins.
@@ -62,6 +62,29 @@ in 12 of 833 source files and cut from 321 call sites to 48 by replacing Bun cal
 creation through `CreateProcessW`, with restricted stdio-handle inheritance, named pipes, and `RegisterWaitForSingleObject` exit observation.
 Native handles and bindings stay private to Process. A pre-execution containment failure releases its resources before the existing Node spawn
 fallback runs. Command spawns retain their existing cleanup. No native package is added.
+
+### POSIX root lifetime, 2026-10-05
+
+[#387](https://github.com/secantdev/secant/issues/387) adds `src/process/posix-lifetime.ts` to the exact per-file `bun:ffi` allowance.
+It owns `posix_spawn` session creation, spawn attributes/file actions, native socket stdio acquisition, close-on-exec setup, signal-disposition
+inspection, `waitid(WNOWAIT)` root observation, and final `waitpid` release against host libc/libSystem. No native package, helper process,
+helper CLI mode, shipped shim library, or runtime compilation is added. Synchronous Commands and Windows behavior retain their existing owners.
+
+The unreaped native root reserves its PID and group identity after exit. Output pipes never establish numeric signal authority.
+A targeted nonblocking wait immediately precedes every group signal on the same JavaScript thread; ownership loss permanently revokes authority.
+All signal authority retires before final reap. Native root evidence remains distinct from descendant cleanup and output drain.
+A Process `reap` fact means Secant signalled the owned group, whose native root may already have exited with the recorded status or signal.
+
+Unix-socket peers accepted through `node:net` provide normal streaming and backpressure; arbitrary-fd Socket import failed qualification.
+SIGCHLD supplies prompt observation. A yielding 25 ms targeted probe while root exit is unobserved also covers Bun's fallback waiter replacing
+that handler and a live root closing all stdio, at most 40 nonblocking syscalls per second per live root. Observation stops on native exit.
+Bun's broad no-orphans synchronous waits run on the same main/arming thread, so they cannot interleave between the ownership probe and group signal.
+Other native reapers and auto-reaping SIGCHLD dispositions are outside this ownership contract. An incompatible disposition rejects before launch.
+
+The fixed ABIs are glibc Linux x64 and Darwin macOS arm64. Darwin uses fixed `__ioctl` for close-on-exec rather than an invalid variadic FFI call.
+The [policy research](../research/posix-native-call-policy.md) records the native-call precedent and source/probe evidence.
+Standalone conformance and copied-binary acceptance remain mandatory on both POSIX targets; local Linux evidence does not qualify macOS.
+Escaped descendants remain outside group containment; a stalled drain returns a cleanup failure within the existing bound, without claiming death.
 
 ## Legacy conhost
 

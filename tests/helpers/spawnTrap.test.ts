@@ -16,6 +16,8 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test, { type TestContext } from "node:test";
 import { $, spawn as bunSpawn, spawnSync as bunSpawnSync } from "bun";
+import * as ffiNamespace from "bun:ffi";
+import { dlopen, ptr, read } from "bun:ffi";
 
 import { createProcessAdapter } from "../../src/process/process.js";
 import { failOnTrappedSpawn, globalHookRuns } from "./spawnTrap.js";
@@ -95,6 +97,16 @@ const ROUTES: readonly {
   { route: "Bun.spawn", reach: () => Bun.spawn([EXECUTABLE]) },
   { route: "Bun.spawnSync", reach: () => Bun.spawnSync([EXECUTABLE]) },
   { route: "Bun.$", reach: () => Bun.$`${EXECUTABLE}` },
+  {
+    route: "bun:ffi.posix_spawn",
+    reach: () =>
+      dlopen(EXECUTABLE, { posix_spawn: { args: [], returns: "i32" } }),
+  },
+  {
+    route: "bun:ffi.CreateProcessW",
+    reach: () =>
+      dlopen(EXECUTABLE, { CreateProcessW: { args: [], returns: "i32" } }),
+  },
 ];
 
 for (const { route, reach } of ROUTES) {
@@ -125,6 +137,30 @@ test("every import of the child-process module reaches the same trap", async (t)
   assertFailsTest(
     forms.map(() => ({ route: "child_process.spawnSync", where: inTest(t) })),
   );
+});
+
+test("every import of FFI traps native launch binding acquisition", async (t) => {
+  const dynamic = await import("bun:ffi");
+  const symbols = {
+    posix_spawn: { args: [], returns: "i32" },
+  } satisfies Parameters<typeof dlopen>[1];
+  const forms: readonly (() => unknown)[] = [
+    () => ffiNamespace.dlopen(EXECUTABLE, symbols),
+    () => dynamic.dlopen(EXECUTABLE, symbols),
+    () => require("bun:ffi").dlopen(EXECUTABLE, symbols),
+  ];
+  for (const reach of forms) {
+    assertNamed(thrownBy(reach), "bun:ffi.posix_spawn", inTest(t));
+  }
+  assertFailsTest(
+    forms.map(() => ({ route: "bun:ffi.posix_spawn", where: inTest(t) })),
+  );
+});
+
+test("FFI memory operations remain available without native launch symbols", () => {
+  const bytes = Uint8Array.of(17);
+  assert.equal(read.u8(ptr(bytes)), 17);
+  assert.doesNotThrow(failOnTrappedSpawn);
 });
 
 test("the spawn functions imported from bun reach the Bun traps", (t) => {
@@ -176,7 +212,15 @@ test("a spawn the real Process Adapter turns into spawn-error still fails its te
 
   assert.equal(result.ok, false);
   assert.equal(result.failure.kind, "spawn-error");
-  assertFailsTest([{ route: "child_process.spawn", where: inTest(t) }]);
+  assertFailsTest([
+    {
+      route:
+        process.platform === "win32"
+          ? "child_process.spawn"
+          : "bun:ffi.posix_spawn",
+      where: inTest(t),
+    },
+  ]);
 });
 
 test("a spawn behind a timer is named by the test that started it", async (t) => {

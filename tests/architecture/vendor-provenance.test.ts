@@ -146,6 +146,23 @@ test("an allowlisted target file may touch its permitted Bun API", () => {
   assert.deepEqual(checkVendorProvenance(root), []);
 });
 
+test("the POSIX lifetime allowance permits only bun:ffi in its named file", () => {
+  for (const extra of ["", "export const child = Bun.spawn(['true']);\n"]) {
+    const root = synthetic((folder) => {
+      mkdirSync(join(folder, "src", "process"), { recursive: true });
+      writeFileSync(
+        join(folder, "src", "process", "posix-lifetime.ts"),
+        'import { dlopen } from "bun:ffi";\nexport const native = dlopen;\n' +
+          extra,
+      );
+    });
+    assert.deepEqual(
+      rulesOf(checkVendorProvenance(root)),
+      extra === "" ? [] : ["vendor/bun-api-scope"],
+    );
+  }
+});
+
 test("an allowlisted file touching a Bun API other than its permitted one is rejected", () => {
   const root = synthetic((r) => {
     mkdirSync(join(r, "src", "run", "store"), { recursive: true });
