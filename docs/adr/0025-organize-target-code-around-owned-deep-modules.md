@@ -27,7 +27,12 @@ The v1 process architecture has no remote control channel. A live Run owned by a
 there. Catalog use/removal exclusion must survive concurrent invocations and recover conservatively after crashes; stale holders cannot authorize
 work, and expiry alone cannot prove a Run or its native work has stopped. The exact lock/record mechanism belongs to implementation and must uphold
 these Interface guarantees. Preflight owns a prepared Harness until successful Run handoff; one owner remains responsible for cleanup on every
-failure path. Durable creation followed by failed handoff leaves recoverable, non-advancing Run state, never orphaned external execution.
+failure path. Edited 2026-10-05: before successful preparation, the invocation-lived Harness Adapter owns initial acquired resources and
+unconfirmed failed or cancelled preparation cleanup. Composition constructs and closes that owner through the Harness Interface. Successful
+preparation transfers ownership exclusively to the Prepared Harness's caller, preserving Preflight's later Run handoff. The selected lifecycle
+and its pending implementation are recorded in
+[ADR 0022's initial preparation amendment](./0022-own-a-truthful-deep-harness-seam.md#amendment-2026-10-05-initial-preparation-ownership-through-invocation-shutdown).
+Durable creation followed by failed handoff leaves recoverable, non-advancing Run state, never orphaned external execution.
 
 The outer composition root constructs and connects dependencies; it may delegate to cohesive private wiring files and child roots. One logical
 root does not prescribe one large file. Source growth triggers cohesion review, while numerical caps and one-file-per-helper splitting would

@@ -67,7 +67,10 @@ Timeouts apply only to a closed set of mechanical operations—launch/protocol i
 control acknowledgement, and cleanup—never to agent thought, tools, subagents, approvals, clarifications, or a whole Turn. `close` is idempotent,
 rejects new work, expires requests, attempts supported graceful interruption, closes transports, and then bounds termination and process-tree reaping.
 Force-killing a Turn already proven complete is cleanup; killing unconfirmed active work produces `lost`. Cleanup failure is separate and cannot
-rewrite a settled Turn. Ownership transfers once from Preflight to the Run, so exactly one owner is always responsible for cleanup.
+rewrite a settled Turn. Edited 2026-10-05: before successful preparation, the invocation-lived Harness Adapter owns initial acquisitions,
+including failed or cancelled preparations with unconfirmed cleanup. Successful preparation transfers ownership exclusively to the Prepared
+Harness's caller; Preflight retains that responsibility until successful Run handoff. Exactly one owner remains responsible at each stage.
+The preparation lifecycle selected below is pending implementation.
 
 This Interface is also the test surface: every shipped Harness Adapter implements it beside a deterministic fake; a shared conformance suite exercises
 ordering, requests, controls, recovery, failure, and cleanup, while private versioned protocol fixtures and opt-in pinned real-runtime qualification
@@ -78,6 +81,59 @@ rejected a minimal `qualify/turn/close` facade because it hides stateful interac
 mechanism and invites caller coupling, and a whole-Step `execute` API because it drags orchestration below the Seam. The chosen prepared-Harness
 hybrid is narrower in vocabulary but deeper in guarantees; its cost is a stricter Adapter and conformance burden in exchange for truthful differences
 and one stable caller contract.
+
+## Amendment (2026-10-05): initial preparation ownership through invocation shutdown
+
+[Decide cleanup ownership for failed initial Harness preparation through invocation shutdown](https://github.com/secantdev/secant/issues/402)
+selects the existing Harness Adapter as the invocation-lived owner of initial, pre-handoff preparation resources. Composition constructs and
+finally closes it. This extends the Harness Interface with a per-preparation cancellation signal and an Adapter-level final `close` returning
+a separate typed preparation-cleanup report. Exact type names remain implementation choices. The existing Prepared Harness Interface and its
+post-handoff cleanup ownership remain unchanged. This amendment records an approved planning contract, not implemented lifecycle support.
+
+The Adapter registers each preparation before its first asynchronous operation, then owns acquired resources until confirmed disposal or
+exclusive successful handoff. Independent concurrent preparations retain separate Process, observer, and cancellation scopes. The qualification
+cache can remain shared, but a cache hit never reuses another preparation's Process or observer. Retaining unfinished preparations and
+unconfirmed initial resources is the deliberate exception to the earlier cache-only Adapter rule.
+
+Cancellation and successful handoff have one atomic ordering point immediately before publishing success. Cancellation or shutdown before
+handoff returns a typed preparation failure and leaves cleanup with the Adapter. Successful handoff first transfers ownership exclusively to
+the caller, which must receive the successful result and close the Prepared Harness if it no longer needs it. An expected cancellation or
+preparation refused after shutdown is a typed operational failure, not a thrown caller-contract violation. An already established startup failure
+retains its primary category and cause; cancellation and cleanup evidence cannot replace it.
+
+Cancellation belongs to the owner of the actual preparation. Closing a Projection ends its subscription. Shared Harness Catalog qualification
+continues until it settles or the invocation shuts down, so leaving one screen cannot cancel qualification another consumer awaits. A dedicated
+preparation can be cancelled through its own signal without affecting independent preparations.
+
+Composition begins final close across all Adapters before draining Application's existing Run owners. Each close synchronously closes
+preparation admission and cancels its pending preparations. Initial preparation cleanup proceeds concurrently under one shared five-second
+deadline across Adapters, resources, and cleanup stages. The budget begins when preparation shutdown starts; it is not five seconds per resource
+or a bound on the separately owned Run drain. Repeated close calls share one cleanup attempt and its immutable report without restarting or
+extending the deadline. Composition records the reports before closing stores and the operational log on normal completion, signals, errors,
+and startup or renderer failures after acquisition.
+
+A preparation still settling at the deadline counts as unresolved even when its launch has not returned a resource. A late acquisition remains
+owned and enters cleanup while the invocation lives; it cannot publish success after shutdown won or access already closed reporting sinks.
+Returning the bounded final report does not release an unconfirmed resource or prove that an external process stopped. The report preserves
+the observations at its deadline. Later confirmed closure releases private retention without rewriting that report.
+
+An incomplete cached cleanup receipt is distinct from independently confirmed final exit. The Adapter observes the latter through the Process
+Interface and releases ownership only when the owned resource lifetime is confirmed ended. Earlier cleanup failure remains historical evidence
+after a later confirmed exit. The preparation-cleanup report distinguishes all resources confirmed closed from unresolved work, with typed
+entries for preparation still settling and acquired resource closure unconfirmed. It preserves startup and cleanup failures separately, including
+their causes and useful diagnostics. Process handles, protocol connections, and native generation objects remain private.
+
+The Interface adds one final lifecycle operation rather than making each caller learn resource tracking and cleanup races. Those decisions stay
+local to the Harness Module; composition owns construction, shutdown ordering, and reporting. Existing Claude Code, Codex, and deterministic
+fake Adapters demonstrate the Seam. Verification exercises `prepare` and final `close` through that same Interface with an injected Process,
+including delayed acquisition, cancellation and handoff races, independent prepares, late exit, and truthful unresolved reports. Composition
+coverage includes qualification without a Run, failed Run preparation, normal headless completion, signals, TUI quit, and construction failure.
+
+We rejected a failed-prepare cleanup handle because it distributes retention and late-result obligations across failure callers. A Process scope
+would broaden ownership to other children and require coordination with successfully handed-off Prepared Harnesses. The selected contract costs
+per-preparation tracking and lifecycle conformance work. Retention scales with unresolved preparations and resources; the shutdown deadline
+bounds waiting, not memory or external-process lifetime. Broader post-handoff cleanup changes require a separate decision. This nonblocking M9
+hand-over does not change the approved milestone sequence or commission production implementation.
 
 ## Amendment (2026-09-07): skills, protocol drift, and model lists
 
