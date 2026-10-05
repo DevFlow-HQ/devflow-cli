@@ -75,9 +75,10 @@ export const attemptLog = sqliteTable("attempt_log", {
   attempt_id: text("attempt_id").notNull(),
   outcome: text("outcome").notNull(),
   at: text("at").notNull(),
-  // Set on the interactive Attempt a human's confirmed End Stage settled (#218): the
-  // human declared the human-controlled Repeat's stage complete. Null for every other
-  // Attempt, including a Continue, and for rows logged before the column existed.
+  // Set on the interactive Attempt settled by a human's confirmed End Stage or
+  // an accepted agent stage-done call applied after a clean Turn (ADR 0032), ending the
+  // human-controlled Repeat's stage. Completion origin is recorded separately in
+  // ended_by. Continue leaves this unset; other Attempts and earlier rows remain null.
   stage_ended: integer("stage_ended", { mode: "boolean" }),
   ended_by: text("ended_by"),
 });

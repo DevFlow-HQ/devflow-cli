@@ -60,9 +60,14 @@ export interface RunActionsView {
   cancel(runId: string): Accessor<RunActionOutcome>;
   /** Delete a resting or terminal Run: removes its store from disk (#87). */
   remove(runId: string): Accessor<RunActionOutcome>;
-  /** Interrupt the live Turn its Offer names (#118): stops the Turn, ends the
-   *  Attempt `cancelled`, and rests the Run `halted` (resumable). The Offer carries
-   *  the live `turnId`, so a control that named a settled Turn is refused. */
+  /** Interrupt the exact live Turn its Offer names (#118, ADR 0035). A confirmed
+   *  interruption ends only the Turn, leaves the Attempt open, and rests the Run
+   *  `blocked`, waiting for the human's next message in the same Harness Session.
+   *  A `lost` Turn or process-signal stop still halts the Run; Cancel ends it
+   *  `cancelled`. Closing Secant while an Agent Step waits after Interrupt halts
+   *  the Run on reconciliation; an Interactive agent Step's wait stays `blocked`.
+   *  The Offer carries the live `turnId`, so a control naming a settled Turn is
+   *  refused. */
   interrupt(offer: InterruptTurnOffer): Accessor<RunActionOutcome>;
 }
 

@@ -222,9 +222,10 @@ export interface PublishAttemptRequest {
   /** Present for autonomous Agent Attempts; absent for Command/Gate and synthetic
    *  interactive Attempts. */
   readonly agentEvidence?: AgentAttemptEvidence;
-  /** Marks the interactive Attempt a human's confirmed End Stage settles (#218), so
-   *  the scheduler exits its human-controlled Repeat and the Projection records a
-   *  human-declared completion. */
+  /** Marks the interactive Attempt settled by a human's confirmed End Stage or by
+   *  an accepted agent stage-done call applied after a clean Turn (ADR 0032). The
+   *  scheduler exits its human-controlled Repeat; completion origin is recorded
+   *  separately by `endedBy`. Continue leaves this unset. */
   readonly endsStage?: true;
   readonly endedBy?: "agent";
 }
