@@ -49,8 +49,8 @@ interrupt, recovery, and test invariants every Adapter shares stay in [the Harne
 - A refused response, failed write, unconfirmed stop, process close, or closing Session falls back to the process stop, which the internal stops
   (failed Turn write, init timeout or mismatch, corruption) always take. It uses the process Module's `interrupt(gracefulMs)`: graceful settles
   `interrupted` `process-only`, a force-kill `lost`, and a live child on Windows is force-killed at once, so its fallback settles `lost`. A process stop
-  claims the process before awaiting, and `onClosed` returns early when `this.process !== owned`; during a native stop it yields too, because the
-  closed channel sends that stop to its fallback, which settles the one authoritative result.
+  uses the same retirement owner as admission refusal, Model choice relaunch, native reap, natural close and final close. Incomplete cleanup retains
+  the child until independent final exit; recovery refuses meanwhile. Retired readers cannot dispatch into another Turn. Cleanup failure survives recovery.
 - Resume spawns with `--resume` (never `--session-id`) for a relaunch of a Session that already ran or a Turn carrying `resume`; init state is per process.
 - An unacknowledged resume sets the Session's private `unusableReason` (`markUnusable`); `submit` fails every later Turn with it, never a fresh conversation.
 
@@ -108,8 +108,8 @@ Each Adapter reports the five phases through `phases.ts`, settling each start on
 
 - **Claude Code.** Per-Session `launch` spans bridge start and spawn; close winning abandons it. Fresh init is `handshake`; resumed init is `recovery`,
   including relaunches of Sessions that ran before. Settlement before init fails that phase with the Turn's failure, or abandons it on interruption.
-  `control` spans each stop: native confirmation is ok, a natural result winning abandons it, and fallback includes process termination. An internal stop
-  after Turn settlement still reports its outcome. Keyless `cleanup` covers close; Session-keyed cleanup covers Windows interrupt reaping. Version has no phase.
+  `control` covers stops, including internal stops after settlement. Native confirmation succeeds; a natural result abandons it, and fallback includes termination.
+  Keyless `cleanup` covers close; Session-keyed cleanup covers process stops, admission, relaunch and Windows interrupt reaping. Version has no phase.
 - **Codex.** Keyless `launch` spans app-server spawn and `handshake` spans initialize, account and model reads at prepare and replacement. Replacement also
   reports the triggering Session's `recovery` around identity checks, launch and handshake. Handshake steps are `protocol-initialize`, `account-check` and
   `model-list`; the open step shares the handshake outcome, so login refusal fails `account-check`. Turn models are checked before recovery, never at prepare.

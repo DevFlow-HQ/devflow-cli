@@ -623,17 +623,94 @@ type LaunchOutcome =
   | { readonly ok: true }
   | { readonly ok: false; readonly category: string; readonly cause: unknown };
 
+interface RetiringClaudeProcess {
+  readonly owned: OwnedProcess;
+  readonly completion: Promise<OwnedProcessClose>;
+  result: OwnedProcessClose | undefined;
+  finalExit: boolean;
+}
+
+/** One retirement owns the cleanup attempt and retains an unconfirmed child.
+ * A cleanup receipt and the independent final lifetime observation are separate
+ * evidence. Historical cleanup failure survives exact-Session recovery. */
+class ClaudeRetirement {
+  private retained: RetiringClaudeProcess | undefined;
+  failure: HarnessFailure | undefined;
+
+  constructor(
+    private readonly name: string,
+    private readonly phases: HarnessPhaseObserver | undefined,
+  ) {}
+
+  retire(
+    owned: OwnedProcess,
+    cleanup: () => Promise<OwnedProcessClose>,
+    reportPhase: boolean,
+  ): Promise<OwnedProcessClose> {
+    if (this.retained?.owned === owned) return this.retained.completion;
+    const span = reportPhase
+      ? startPhase(this.phases, "cleanup", this.name)
+      : undefined;
+    const retirement: RetiringClaudeProcess = {
+      owned,
+      completion: Promise.resolve()
+        .then(cleanup)
+        .then((receipt) => {
+          const close = scrubClose(receipt);
+          retirement.result = close;
+          if (incompleteCleanup(close)) {
+            this.failure = cleanupFailure(
+              close,
+              describeClose(this.name, close),
+            );
+            span?.failed(this.failure);
+          } else span?.ok();
+          if (!incompleteCleanup(close) || retirement.finalExit) {
+            if (this.retained === retirement) this.retained = undefined;
+          }
+          return close;
+        }),
+      result: undefined,
+      finalExit: false,
+    };
+    this.retained = retirement;
+    void owned.closed().then((close) => {
+      if (incompleteCleanup(close)) return;
+      retirement.finalExit = true;
+      if (retirement.result !== undefined && this.retained === retirement)
+        this.retained = undefined;
+    });
+    return retirement.completion;
+  }
+
+  async recoverable(): Promise<boolean> {
+    await this.retained?.completion;
+    return this.retained === undefined;
+  }
+
+  async finish(): Promise<OwnedProcessClose | undefined> {
+    return this.retained?.completion;
+  }
+}
+
+function incompleteCleanup(close: OwnedProcessClose): boolean {
+  return close.kind === "cleanup-error" || close.kind === "cleanup-timeout";
+}
+
 class ClaudeCodeSession {
   readonly coordinate: RecoveryCoordinate;
   private process: OwnedProcess | undefined;
   private windowsProcess = false;
-  private unreaped: OwnedProcess | undefined;
-  private reapFailure: HarnessFailure | undefined;
+  private readonly retirement: ClaudeRetirement;
   private nativeControl: PhaseSpan | undefined;
   /** The Turn that owns `process`. A later Turn may be admitted before the prior
    *  child-close callback runs, so process ownership cannot be inferred from the
    *  Session's current `active` Turn (#134 A17). */
   private processTurn: ClaudeCodeTurn | undefined;
+  /** Final close still drains native truth into its original Turn. No later
+   *  Turn can start after close, and retirement never redirects this output. */
+  private closingOutput:
+    { readonly owned: OwnedProcess; readonly turn: ClaudeCodeTurn } | undefined;
   private launchPromise: Promise<LaunchOutcome> | undefined;
   private active: ClaudeCodeTurn | undefined;
   private closed = false;
@@ -688,6 +765,7 @@ class ClaudeCodeSession {
     private readonly containment: HarnessContainmentObserver | undefined,
   ) {
     this.coordinate = { opaque: sessionId };
+    this.retirement = new ClaudeRetirement(name, phases);
     this.closing = new Promise((resolve) => {
       this.signalClosing = resolve;
     });
@@ -762,11 +840,6 @@ class ClaudeCodeSession {
       turn.settleInterrupted("process");
       return;
     }
-    // Claim sole ownership of the process before awaiting: a concurrent `close`
-    // then sees no live process and cannot start its own termination sequence on
-    // the same child, so the two never report divergent closes. `onClosed` sees
-    // `this.process !== owned` and yields the result to this stop.
-    this.releaseProcess();
     this.active = undefined;
     this.interrupting = this.settleInterruption(
       turn,
@@ -836,7 +909,6 @@ class ClaudeCodeSession {
     turn.noteActivity(
       `${interruptFallbackReason(outcome, this.timeouts.controlMs)}; stopping the Claude Code process.`,
     );
-    this.releaseProcess();
     if (this.active === turn) this.active = undefined;
     await this.settleInterruption(turn, owned, span);
   }
@@ -863,8 +935,7 @@ class ClaudeCodeSession {
     }
   }
 
-  /** Give up the current process: its control channel settles every pending
-   *  request `closed`, and the next Turn launches a fresh process. */
+  /** Remove dispatch authority as retirement claims the child. */
   private releaseProcess(): void {
     this.closeControl();
     this.process = undefined;
@@ -886,9 +957,13 @@ class ClaudeCodeSession {
     owned: OwnedProcess,
     control: PhaseSpan,
   ): Promise<void> {
-    const outcome = await owned.interrupt(DEFAULT_CLEANUP_TIMEOUT_MS);
-    const close = scrubClose(outcome.close);
-    const failure = interruptionFailure(close, outcome.escalated);
+    let escalated = false;
+    const close = await this.retire(owned, async () => {
+      const outcome = await owned.interrupt(DEFAULT_CLEANUP_TIMEOUT_MS);
+      escalated = outcome.escalated;
+      return outcome.close;
+    });
+    const failure = interruptionFailure(close, escalated);
     if (failure === undefined) control.ok();
     else control.failed(failure);
     if (turn.settled) return;
@@ -920,13 +995,31 @@ class ClaudeCodeSession {
     const launch = this.launchPromise;
     if (launch !== undefined) await launch;
     await this.interrupting;
-    const owned = this.process ?? this.unreaped;
-    if (owned === undefined) {
-      if (this.reapFailure !== undefined)
+    const owned = this.process;
+    const processTurn = this.processTurn;
+    if (owned !== undefined && processTurn !== undefined)
+      this.closingOutput = { owned, turn: processTurn };
+    // Print mode may exit 1 after a natively interrupted Turn. Capture its
+    // confirmation before retirement clears the active process's Turn owner.
+    const nativeInterrupted =
+      this.processTurn?.settledKind === "interrupted" &&
+      this.processTurn.nativeConfirmed;
+    const result =
+      owned === undefined
+        ? await this.retirement.finish()
+        : await this.retire(
+            owned,
+            () => owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
+            false,
+          );
+    this.closingOutput = undefined;
+    if (result !== undefined) this.settleClosedTurn(processTurn, result);
+    if (result === undefined) {
+      if (this.retirement.failure !== undefined)
         return {
           clean: false,
           detail: "Claude Code cleanup was incomplete.",
-          failure: this.reapFailure,
+          failure: this.retirement.failure,
           session: this.name,
           availability: this.detached(),
         };
@@ -937,17 +1030,8 @@ class ClaudeCodeSession {
         availability: this.detached(),
       };
     }
-    // Print mode exits 1 when stdin closes after a natively aborted last Turn
-    // (#371's withdrawal recording). Keep that confirmation across onClosed,
-    // which can release the process while closeStdin is pending.
-    const nativeInterrupted =
-      this.processTurn?.settledKind === "interrupted" &&
-      this.processTurn.nativeConfirmed;
-    const result = scrubClose(
-      await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
-    );
     const clean =
-      this.reapFailure === undefined &&
+      this.retirement.failure === undefined &&
       result.kind === "exited" &&
       (result.status === 0 || (result.status === 1 && nativeInterrupted));
     const detail = describeClose(this.name, result);
@@ -967,7 +1051,7 @@ class ClaudeCodeSession {
     return {
       clean: false,
       ...common,
-      failure: this.reapFailure ?? cleanupFailure(result, detail),
+      failure: this.retirement.failure ?? cleanupFailure(result, detail),
     };
   }
 
@@ -987,27 +1071,9 @@ class ClaudeCodeSession {
       return;
     }
 
-    if (this.unreaped !== undefined) {
-      const owned = this.unreaped;
-      const finalExit = await Promise.race([
-        owned.closed(),
-        new Promise<undefined>((resolve) => {
-          const timer = setTimeout(
-            () => resolve(undefined),
-            DEFAULT_CLEANUP_TIMEOUT_MS,
-          );
-          void owned.closed().then(() => clearTimeout(timer));
-        }),
-      ]);
-      if (
-        finalExit === undefined ||
-        finalExit.kind === "cleanup-error" ||
-        finalExit.kind === "cleanup-timeout"
-      ) {
-        turn.settleCleanupRecoveryFailure();
-        return;
-      }
-      this.unreaped = undefined;
+    if (!(await this.retirement.recoverable())) {
+      turn.settleCleanupRecoveryFailure();
+      return;
     }
     if (turn.settled) return;
     if (this.closed) {
@@ -1021,9 +1087,8 @@ class ClaudeCodeSession {
     if (!admission.recorded) {
       const owned = this.process;
       if (owned !== undefined) {
-        this.releaseProcess();
         this.active = undefined;
-        await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS);
+        await this.retire(owned);
       }
       turn.settleNotStarted(
         "durable-admission",
@@ -1055,7 +1120,12 @@ class ClaudeCodeSession {
         prior.closed().then(() => true as const),
         new Promise<false>((resolve) => setImmediate(() => resolve(false))),
       ]);
-      if (closed && this.process === prior) this.releaseProcess();
+      if (closed && this.process === prior)
+        this.onClosed(prior, await prior.closed());
+      if (!(await this.retirement.recoverable())) {
+        turn.settleCleanupRecoveryFailure();
+        return;
+      }
     }
 
     // A reused child runs the choice it was launched or last changed with. A
@@ -1081,7 +1151,8 @@ class ClaudeCodeSession {
         turn.noteActivity(
           "Claude Code did not answer the Model choice change; relaunching the Session with it.",
         );
-        if (!(await this.retire(reused))) {
+        await this.retire(reused);
+        if (!(await this.retirement.recoverable())) {
           turn.settleCleanupRecoveryFailure();
           return;
         }
@@ -1174,6 +1245,7 @@ class ClaudeCodeSession {
         : undefined;
     if (owned === undefined || control === undefined) return false;
     void this.changeChoice(owned, control, choice).then((answer) => {
+      if (this.process !== owned) return;
       if (answer.kind !== "unanswered") {
         this.report(turn, choice, answer);
         return;
@@ -1282,25 +1354,17 @@ class ClaudeCodeSession {
     return { kind: "applied", observation };
   }
 
-  /** Close a process between Turns so the next launch resumes the Session: a
-   *  confirmed Windows interrupt's reap, or a reused child a changed choice
-   *  relaunches. It is retained as unreaped while closing, and stays so when its
-   *  cleanup is not confirmed (false), so no duplicate process starts. */
-  private async retire(owned: OwnedProcess): Promise<boolean> {
+  /** Claim before awaiting on every retirement route. Readers and close
+   * callbacks lose dispatch authority immediately; one owner keeps the receipt
+   * and retains the child until its cleanup or final exit is confirmed. */
+  private retire(
+    owned: OwnedProcess,
+    cleanup: () => Promise<OwnedProcessClose> = () =>
+      owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
+    reportPhase = true,
+  ): Promise<OwnedProcessClose> {
     if (this.process === owned) this.releaseProcess();
-    this.unreaped = owned;
-    const cleanup = startPhase(this.phases, "cleanup", this.name);
-    const close = scrubClose(
-      await owned.closeStdin(DEFAULT_CLEANUP_TIMEOUT_MS),
-    );
-    if (close.kind === "cleanup-error" || close.kind === "cleanup-timeout") {
-      this.reapFailure = cleanupFailure(close, describeClose(this.name, close));
-      cleanup.failed(this.reapFailure);
-      return false;
-    }
-    this.unreaped = undefined;
-    cleanup.ok();
-    return true;
+    return this.retirement.retire(owned, cleanup, reportPhase);
   }
 
   private async launch(turn: ClaudeCodeTurn): Promise<LaunchOutcome> {
@@ -1400,12 +1464,13 @@ class ClaudeCodeSession {
     this.relaunchForChoice = false;
     void this.consumeStdout(owned, control).catch((error) => {
       const redacted = redactSecrets(error);
-      this.active?.protocolCorruption(
+      this.outputTurn(owned)?.protocolCorruption(
         `stdout read failed: ${describe(redacted)}`,
         redacted,
       );
     });
     void this.consumeStderr(owned).catch((error) => {
+      if (this.outputTurn(owned) === undefined) return;
       this.stderr += ` stderr read failed: ${describe(redactSecrets(error))}`;
     });
     void owned.closed().then((result) => {
@@ -1423,11 +1488,11 @@ class ClaudeCodeSession {
     for (;;) {
       const next = await reader.next();
       if (next.kind === "line") {
-        this.consumeLine(next.value, control);
+        this.consumeLine(owned, next.value, control);
         continue;
       }
       if (next.kind === "truncated" && next.value.trim().startsWith("{")) {
-        this.active?.protocolCorruption("truncated JSON frame");
+        this.outputTurn(owned)?.protocolCorruption("truncated JSON frame");
       }
       return;
     }
@@ -1436,24 +1501,36 @@ class ClaudeCodeSession {
   private async consumeStderr(owned: OwnedProcess): Promise<void> {
     const decoder = new TextDecoder();
     for await (const chunk of owned.stderr) {
-      if (this.stderr.length >= MAX_STDERR_BYTES) continue;
+      if (
+        this.outputTurn(owned) === undefined ||
+        this.stderr.length >= MAX_STDERR_BYTES
+      )
+        continue;
       this.stderr += decoder
         .decode(chunk, { stream: true })
         .slice(0, MAX_STDERR_BYTES - this.stderr.length);
     }
-    if (this.stderr.length < MAX_STDERR_BYTES) this.stderr += decoder.decode();
+    if (
+      this.outputTurn(owned) !== undefined &&
+      this.stderr.length < MAX_STDERR_BYTES
+    )
+      this.stderr += decoder.decode();
   }
 
   /** A `control_response` belongs to the process's control channel, never to a
    *  Turn; every other frame is dispatched to the active Turn. */
-  private consumeLine(line: string, control: ControlChannel): void {
+  private consumeLine(
+    owned: OwnedProcess,
+    line: string,
+    control: ControlChannel,
+  ): void {
     const trimmed = line.trim();
     if (trimmed.length === 0 || !trimmed.startsWith("{")) return;
     let frame: unknown;
     try {
       frame = JSON.parse(trimmed);
     } catch (error) {
-      this.active?.protocolCorruption(
+      this.outputTurn(owned)?.protocolCorruption(
         "malformed JSON frame",
         redactSecrets(error),
       );
@@ -1465,7 +1542,13 @@ class ClaudeCodeSession {
       control.accept(parsed.frame);
       return;
     }
-    this.active?.acceptFrame(parsed);
+    this.outputTurn(owned)?.acceptFrame(parsed);
+  }
+
+  private outputTurn(owned: OwnedProcess): ClaudeCodeTurn | undefined {
+    if (this.process === owned) return this.active;
+    if (this.closingOutput?.owned === owned) return this.closingOutput.turn;
+    return undefined;
   }
 
   private onClosed(owned: OwnedProcess, close: OwnedProcessClose): void {
@@ -1474,8 +1557,15 @@ class ClaudeCodeSession {
     if (this.process !== owned) return;
     const result = scrubClose(close);
     const turn = this.processTurn;
-    this.releaseProcess();
+    void this.retire(owned, () => Promise.resolve(result), false);
     if (this.active === turn) this.active = undefined;
+    this.settleClosedTurn(turn, result);
+  }
+
+  private settleClosedTurn(
+    turn: ClaudeCodeTurn | undefined,
+    result: OwnedProcessClose,
+  ): void {
     if (turn === undefined || turn.settled) return;
     // A native stop in flight owns the result too: its control request just
     // settled `closed`, so it settles this unconfirmed close itself.

@@ -86,6 +86,8 @@ jobs:
         run: bun run test -- tests/harness/codex-semantic-schema.test.ts
       - name: model-choice-bounded-eligibility
         run: bun run test -- tests/application/requested-model.test.ts
+      - name: Claude fallback cleanup retains owner
+        run: bun run test -- tests/harness/claude-code-cleanup.test.ts
       - name: Test
         run: bun run test
       - name: Build

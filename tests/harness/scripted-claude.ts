@@ -17,6 +17,7 @@ import {
 import type {
   OwnedProcess,
   OwnedProcessClose,
+  OwnedProcessOptions,
   ProcessAdapter,
   ProcessInterruption,
   ProcessLaunchContainment,
@@ -41,6 +42,8 @@ export interface ScriptedClaude {
   readonly process: ProcessAdapter;
   /** Every stdin frame the Adapter wrote, per spawned process. */
   readonly writes: Frame[][];
+  readonly spawnOptions: OwnedProcessOptions[];
+  closed(): Promise<OwnedProcessClose>;
   /** How many times the Adapter stopped a process. */
   stops(): number;
   /** Resolves once the Adapter has read a `control_response` line: the reader
@@ -61,10 +64,12 @@ export function scriptedClaude(options: {
   readonly closeStdin?: () => Promise<OwnedProcessClose>;
   readonly settingsAnswer?: ControlAnswer;
   readonly containment?: ProcessLaunchContainment;
-  readonly interruption?: ProcessInterruption;
+  readonly interruption?:
+    ProcessInterruption | (() => Promise<ProcessInterruption>);
   readonly userFrame?: (index: number, frame: Frame) => readonly Frame[];
 }): ScriptedClaude {
   const writes: Frame[][] = [];
+  const spawnOptions: OwnedProcessOptions[] = [];
   let stops = 0;
   let markResponseRead!: () => void;
   const responseRead = new Promise<void>((resolve) => {
@@ -72,6 +77,7 @@ export function scriptedClaude(options: {
   });
   let current:
     | {
+        readonly closed: Promise<OwnedProcessClose>;
         readonly emit: (frame: Frame) => void;
         readonly settle: (close: OwnedProcessClose) => OwnedProcessClose;
       }
@@ -93,7 +99,8 @@ export function scriptedClaude(options: {
       },
     ],
   });
-  const spawnOwnedProcess: ProcessAdapter["spawnOwnedProcess"] = () => {
+  const spawnOwnedProcess: ProcessAdapter["spawnOwnedProcess"] = (launch) => {
+    spawnOptions.push(launch);
     const written: Frame[] = [];
     writes.push(written);
     const lines: string[] = [];
@@ -114,7 +121,7 @@ export function scriptedClaude(options: {
       resolveClose(close);
       return close;
     };
-    current = { emit, settle };
+    current = { emit, settle, closed };
     async function* stdout(): AsyncGenerator<Uint8Array> {
       for (;;) {
         const line = lines.shift();
@@ -195,11 +202,18 @@ export function scriptedClaude(options: {
       interrupt: () => {
         stopped ??= (async () => {
           stops += 1;
-          const interruption = options.interruption ?? {
-            close: { kind: "exited", status: 143 },
-            escalated: false,
-          };
-          settle(interruption.close);
+          const interruption =
+            typeof options.interruption === "function"
+              ? await options.interruption()
+              : (options.interruption ?? {
+                  close: { kind: "exited", status: 143 },
+                  escalated: false,
+                });
+          if (
+            interruption.close.kind !== "cleanup-error" &&
+            interruption.close.kind !== "cleanup-timeout"
+          )
+            settle(interruption.close);
           return interruption;
         })();
         return stopped;
@@ -221,6 +235,11 @@ export function scriptedClaude(options: {
       spawnOwnedProcess,
     },
     writes,
+    spawnOptions,
+    closed: () => {
+      assert.ok(current, "no scripted process is running");
+      return current.closed;
+    },
     stops: () => stops,
     responseRead,
     emit: (...frames) => {
