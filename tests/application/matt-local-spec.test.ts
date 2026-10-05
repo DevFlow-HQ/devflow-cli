@@ -61,8 +61,8 @@ function profile(harness: HarnessId): HarnessProfile {
     interruption: { mode: "process-only", evidence: "scripted fake" },
     approvals: { available: true, evidence: "scripted fake" },
     agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
+      available: true,
+      evidence: "Scripted agent calls.",
     },
     clarifications: { available: false, evidence: "scripted fake" },
     steer: { available: harness === "codex", evidence: "scripted fake" },
@@ -400,7 +400,10 @@ for (const harness of ["claude-code", "codex"] as const) {
     assert.ok(entry.includes(spec), entry);
     assertBundledSkill(entry, "to-tickets");
     assert.match(entry, /Do not publish any ticket in this Step/);
-    assert.match(entry, /End\s+Step control/);
+    assert.match(
+      entry,
+      /finished when I approve the\s+final breakdown in the conversation/,
+    );
     assert.deepEqual(planningFiles(area), ["spec.md"]);
     assert.deepEqual(agent.resumes, [false, true, false]);
 

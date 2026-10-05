@@ -1,7 +1,7 @@
 # Publish the tickets
 
-I approved the breakdown by ending the review Step. Publish exactly the tickets
-we settled on in this same conversation by following step 5 of the to-tickets
+The breakdown we settled on in this conversation is approved. Publish exactly the
+tickets we settled on in this same conversation by following step 5 of the to-tickets
 skill. Its `SKILL.md` is listed below by its bundled path. Wherever a skill tells
 you to call the Skill tool with a skill name, read that skill's `SKILL.md` from
 its bundled path instead of looking for an installed copy.

@@ -47,8 +47,8 @@ function profile(): HarnessProfile {
     interruption: { mode: "process-only", evidence: "scripted fake" },
     approvals: { available: true, evidence: "scripted fake" },
     agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
+      available: true,
+      evidence: "Scripted agent calls.",
     },
     clarifications: { available: false, evidence: "scripted fake" },
     steer: { available: false, evidence: "scripted fake" },

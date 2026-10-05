@@ -11,8 +11,7 @@ a skill name, read that skill's `SKILL.md` from its bundled path instead of
 looking for an installed copy.
 
 Do not write any files during this conversation — this is the interview, not the
-spec. I end the interview myself through Secant's End Step control; nothing
-either of us says in the conversation ends it.
+spec.
 
 Before you finish, sketch the seams at which the feature will be tested and
 confirm them with me, because the spec step cannot ask me questions. When you

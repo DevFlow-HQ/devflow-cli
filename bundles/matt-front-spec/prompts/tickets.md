@@ -14,7 +14,6 @@ Work through the skill up to and including quizzing me: propose the breakdown as
 a numbered list with each ticket's title, blocking edges, and what it delivers,
 then revise it with me across as many Turns as I need.
 
-Do not publish any ticket in this Step, even if I say the breakdown looks right.
-I approve the final breakdown myself through Secant's End Step control; nothing
-either of us says in the conversation approves it. A later step publishes exactly
-the breakdown we settled on here.
+Do not publish any ticket in this Step. This Step is finished when I approve the
+final breakdown in the conversation. A later step publishes exactly the breakdown
+we settled on here.

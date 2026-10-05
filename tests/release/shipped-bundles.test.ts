@@ -105,3 +105,35 @@ test("a lock entry with no allow-listed folder fails the build", () => {
     /dev\.secant\.gone@1\.0\.0 is locked but not built/,
   );
 });
+
+test("Matt 2.8.0 preserves every 2.7.0 skill byte and the spec prompt (#374)", () => {
+  const previous = join(
+    repoRoot,
+    "tests",
+    "application",
+    "fixtures",
+    "matt-2.7.0.wfb",
+  );
+  // The historical fixture was built from b345d108ae189c664a213d66d5e30f02459ed22e
+  // with buildBundle and matches that release's lock. Never refresh it from Matt 2.8.0.
+  assert.equal(
+    sha256(previous),
+    "9d9d2633fcb29275413909cda762421004e61b250cc034dbe6829ebbab516dfc",
+  );
+  const [matt] = buildShippedBundles(makeTempDir("secant-matt-unchanged-"));
+  assert.ok(matt);
+  assert.equal(matt.version, "2.8.0");
+  const preserved = (file: { path: string }) =>
+    file.path.startsWith("skills/") || file.path === "prompts/spec.md";
+  const oldEntries = readArchiveEntries(readFileSync(previous)).filter(
+    preserved,
+  );
+  const entries = readArchiveEntries(readFileSync(matt.file));
+  assert.deepEqual(entries.filter(preserved), oldEntries);
+  const manifest = JSON.parse(
+    entries
+      .find((entry) => entry.path === "manifest.json")!
+      .data.toString("utf8"),
+  );
+  assert.equal(manifest.requires.engine, ">=0.2.0");
+});

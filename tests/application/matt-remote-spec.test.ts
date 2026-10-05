@@ -47,8 +47,8 @@ function profile(harness: HarnessId): HarnessProfile {
     interruption: { mode: "process-only", evidence: "scripted fake" },
     approvals: { available: true, evidence: "scripted fake" },
     agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
+      available: true,
+      evidence: "Scripted agent calls.",
     },
     clarifications: { available: false, evidence: "scripted fake" },
     steer: { available: harness === "codex", evidence: "scripted fake" },
@@ -386,7 +386,10 @@ for (const harness of ["claude-code", "codex"] as const) {
       assert.ok(review.includes(specRef), review);
       assert.ok(review.includes(`tracker I chose: ${tracker}.`), review);
       assert.match(review, /Do not publish/);
-      assert.match(review, /End Step/);
+      assert.match(
+        review,
+        /finished when I approve the\s+final breakdown in the conversation/,
+      );
       assert.equal(RECEIPT_LINE.exec(review), null);
       let run = readRun(wired, runId);
       assert.equal(run.state, "blocked");
@@ -476,7 +479,7 @@ for (const harness of ["claude-code", "codex"] as const) {
 // Entry Turn, which tells the agent to reread the chosen tracker through its own tools,
 // state the chosen issue's URL or identifier before work, and never read another
 // tracker in its place. Secant reads no tracker status and keeps no frontier: the
-// only exits are Continue and a confirmed End Stage, whatever the agent reports.
+// human fallback controls are Continue and End Stage when the agent makes no call.
 
 type Offers = RunView["actionOffers"];
 const offered = (offers: Offers, action: Offers[number]["action"]) =>
@@ -522,7 +525,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       /- Any other tracker: [\s\S]*connected for it[\s\S]*tracker's own identifier/,
     ],
   ] as const) {
-    test(`[matt-remote-implement] [${harness}] each ${tracker} ticket gets a fresh Session that rereads the tracker; Continue and End Stage are the only exits (#225)`, async (t) => {
+    test(`[matt-remote-implement] [${harness}] each ${tracker} ticket gets a fresh Session that rereads the tracker; Continue and End Stage remain human fallbacks (#225)`, async (t) => {
       const agent = trackerAgent(harness, [
         ...PLANNING(specRef, tickets),
         { reply: `I chose ${reference}; it has no open blocker.` },
@@ -541,7 +544,10 @@ for (const harness of ["claude-code", "codex"] as const) {
       assert.ok(entry.includes(tickets.trimEnd()), entry);
       assert.match(entry, /Read the tracker now/);
       assert.match(entry, bullet);
-      assert.match(entry, /do not read another tracker in its place/);
+      assert.match(
+        entry,
+        /issue tracker the skills ask for is the tracker named above/,
+      );
       assert.equal(RECEIPT_LINE.exec(entry), null);
       let run = readRun(wired, runId);
       assert.equal(run.state, "blocked");

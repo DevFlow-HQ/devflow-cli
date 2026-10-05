@@ -23,10 +23,9 @@ installed copy. The issue tracker the skills ask for is the tracker named above,
 even if the repository's own configuration or docs name a different tracker.
 
 You and I manage the code, the commits, the review, and the ticket together.
-Update the chosen ticket's status in the tracker yourself as part of the work, so
-the next fresh conversation sees its current state. Secant does not read the
-tracker, close or move a ticket, or keep a list of tickets, and nothing either of
-us says in this conversation ends the ticket or the stage.
+Update the chosen ticket's status in the tracker yourself, and mark it done when you finish.
+The next fresh conversation sees its current state. Secant does not read the
+tracker, close or move a ticket, or keep a list of tickets.
 
 - Local: the Local tracker is the directory `{{run:working-area}}`. Each ticket is a
   file `issues/<NN>-<slug>.md` inside it, with a `Blocked by` line naming the
@@ -40,13 +39,3 @@ us says in this conversation ends the ticket or the stage.
 - Any other tracker: read it through the tool connected for it, such as an MCP
   server. Name the chosen ticket by the tracker's own identifier. Record progress
   on that ticket.
-
-If no ticket is ready, or you cannot read the tracker, say so plainly and stop:
-do not read another tracker in its place and do not start any other work. I
-decide what happens next.
-
-I may ask more questions in later messages of this same conversation. When I am
-finished with this ticket I press Continue, which does not close it: the next
-fresh conversation reads the tracker again and may choose it again if it is still
-open. When you and I have checked that no implementation ticket is left, I end
-the implementation stage myself.

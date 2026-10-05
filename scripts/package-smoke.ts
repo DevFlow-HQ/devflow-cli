@@ -1470,13 +1470,17 @@ await withCleanup(
           `A byte-different import of the built-in's identity was not the collision naming the built-in: ${collision.stdout}\n${collision.stderr}`,
         );
       }
-      // Upgrade path: an earlier Matt identity installed by the source CLI is
-      // already in the Catalog when the new binary first starts. The shallow CI
-      // checkout cannot rebuild the historical 2.6.0 bytes, so this copy proves
-      // version coexistence and preservation through the ordinary ensure path.
+      // The actual locked 2.7.0 archive is seeded before the new binary starts,
+      // so upgrade acceptance preserves historical bytes on shallow CI checkouts.
       const coexistHome = join(smokeRoot, "matt-upgrade-home");
       const coexistEnv = homeEnv(coexistHome);
-      const previous = await variant("matt-previous", "2.6.0");
+      const previous = join(
+        projectRoot,
+        "tests",
+        "application",
+        "fixtures",
+        "matt-2.7.0.wfb",
+      );
       run(
         process.execPath,
         [
@@ -1501,7 +1505,7 @@ await withCleanup(
       ).result.bundles as Row[];
       if (
         seeded.length !== 1 ||
-        seeded[0]?.version !== "2.6.0" ||
+        seeded[0]?.version !== "2.7.0" ||
         seeded[0]?.origin.kind !== "local-file"
       ) {
         throw new Error(
@@ -1514,12 +1518,12 @@ await withCleanup(
         upgraded[0]?.version !== matt.version ||
         upgraded[0]?.digest !== matt.digest ||
         upgraded[0]?.origin.kind !== "built-in" ||
-        upgraded[1]?.version !== "2.6.0" ||
+        upgraded[1]?.version !== "2.7.0" ||
         upgraded[1]?.digest !== seeded[0]?.digest ||
         upgraded[1]?.origin.kind !== "local-file"
       ) {
         throw new Error(
-          `The new Matt version did not install beside 2.6.0: ${JSON.stringify(upgraded)}`,
+          `The new Matt version did not install beside 2.7.0: ${JSON.stringify(upgraded)}`,
         );
       }
       const coexistBefore = catalogRows(coexistHome);

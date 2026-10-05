@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "bundle": {
     "id": "dev.secant.matt-front",
-    "version": "2.7.0",
+    "version": "2.8.0",
     "name": "Matt Front Spec",
     "description": "Grill and write the spec in one conversation, plan and publish tickets in a fresh conversation from the published spec, then implement one ready ticket per fresh conversation."
   },
@@ -84,7 +84,9 @@
         {
           "asset": "skills/grilling"
         }
-      ]
+      ],
+      "agentCompletion": ["step"],
+      "stepDoneWhen": "When the frontier is empty, asked whether I have any questions or concerns left or whether you may end the interview, and I have told you to end it, call step done with a one-line reason."
     },
     {
       "id": "choose-tracker",
@@ -133,7 +135,8 @@
         {
           "asset": "skills/to-tickets"
         }
-      ]
+      ],
+      "agentCompletion": ["step"]
     },
     {
       "id": "publish-tickets",
@@ -182,9 +185,15 @@
               {
                 "asset": "skills/codebase-design"
               }
-            ]
+            ],
+            "agentCompletion": true,
+            "stageDoneWhen": "When you read the tracker and no open implementation ticket is left, call stage done with a one-line reason instead. If tickets are open but none is ready, or you cannot read the tracker, do not call stage done; say so plainly and stop."
           }
-        ]
+        ],
+        "reviewCheckpoint": {
+          "interval": 50,
+          "message": "The agent has continued 50 tickets in a row on its own. Look over the work and the tracker, then Continue."
+        }
       }
     }
   ]

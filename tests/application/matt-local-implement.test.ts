@@ -19,6 +19,7 @@ import {
 } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import { call } from "../helpers/agentCompletion.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // [matt-local-implement] The maintained Matt Bundle implements one Local ticket per
@@ -29,7 +30,7 @@ import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 // choose one unblocked ready ticket and state its path, and follow the original
 // implement folder with tdd, code-review and codebase-design beside it. Questions
 // stay in that Session; Continue opens the next one without closing a ticket, and
-// only a confirmed End Stage ends the Run. Secant never edits a ticket file or
+// the human can end the stage when the agent makes no call. Secant never edits a ticket file or
 // keeps a ticket list, and a no-work, interrupted or lost Turn never moves on to
 // another ticket.
 
@@ -68,8 +69,8 @@ function profile(harness: HarnessId): HarnessProfile {
     interruption: { mode: "process-only", evidence: "scripted fake" },
     approvals: { available: true, evidence: "scripted fake" },
     agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
+      available: true,
+      evidence: "Scripted agent calls.",
     },
     clarifications: { available: false, evidence: "scripted fake" },
     steer: { available: harness === "codex", evidence: "scripted fake" },
@@ -116,7 +117,11 @@ const LOST: TurnScript = {
  *  and tickets as the maintained prompts ask. Each implementation Turn plays the
  *  next queued script (a completed Turn when the queue is empty), after running
  *  the queued action that stands in for the agent's own work in the tracker. */
-function mattAgent(harness: HarnessId) {
+function mattAgent(
+  harness: HarnessId,
+  planningCalls = false,
+  tickets: readonly (readonly [string, string])[] = TICKETS,
+) {
   const granted: (string | undefined)[] = [];
   const turns: { text: string; session: string }[] = [];
   const implementation: { script: TurnScript; act?: (area: string) => void }[] =
@@ -153,7 +158,7 @@ function mattAgent(harness: HarnessId) {
             if (ticketsReceipt !== undefined) {
               const issues = join(area, "issues");
               mkdirSync(issues, { recursive: true });
-              for (const [file, blockedBy] of TICKETS) {
+              for (const [file, blockedBy] of tickets) {
                 writeFileSync(
                   join(issues, file),
                   `# ${file}\n\n**Blocked by:** ${blockedBy}\n\n**Status:** ready-for-agent\n`,
@@ -165,7 +170,16 @@ function mattAgent(harness: HarnessId) {
               ? implementation.shift()
               : undefined;
             next?.act?.(area);
-            served.push(next?.script ?? completed("ok"));
+            const planning =
+              planningCalls &&
+              (text.startsWith("# Grill my idea") ||
+                text.startsWith("# Plan the tickets"))
+                ? {
+                    ...completed("Approved in conversation."),
+                    agentCalls: [call("Approved in conversation.")],
+                  }
+                : completed("ok");
+            served.push(next?.script ?? planning);
             return inner.startTurn(request);
           },
           close: () => inner.close(),
@@ -471,7 +485,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     assert.equal(iteration1.state, "blocked");
     assert.equal(iteration1.progress[iteration1.position]?.id, "implement");
 
-    // Only the confirmed End Stage ends the Run, as a human declaration.
+    // The human fallback ends the Run with a human declaration.
     await settle(wired, {
       operationId: "op-end-stage",
       operation: "end-stage",
@@ -636,3 +650,173 @@ test("[matt-local-implement] an Entry Turn that finds no ready ticket rests in i
     1,
   );
 });
+
+for (const harness of ["claude-code", "codex"] as const) {
+  test(`[${harness}] Matt calls end grill and planning, continue 50 tickets, hold for review, and end the stage (#374)`, async (t) => {
+    const tickets: [string, string][] = Array.from(
+      { length: 51 },
+      (_, index) => [`${index + 1}-ticket.md`, "None"],
+    );
+    const agent = mattAgent(harness, true, tickets);
+    for (const [file, blockedBy] of tickets) {
+      agent.implementation.push({
+        script: {
+          ...completed(`Finished ${file}.`),
+          agentCalls: [call(`Finished ${file}.`)],
+        },
+        act: (area) =>
+          writeFileSync(
+            join(area, "issues", file),
+            `# ${file}\n\n**Blocked by:** ${blockedBy}\n\n**Status:** done\n`,
+          ),
+      });
+    }
+    agent.implementation.push({
+      script: {
+        ...completed("No open implementation ticket is left."),
+        agentCalls: [
+          call("No open implementation ticket is left.", "empty", "stage_done"),
+        ],
+      },
+      act: (area) => {
+        for (const [file] of tickets)
+          assert.match(
+            readFileSync(join(area, "issues", file), "utf8"),
+            /Status:\*\* done/,
+          );
+      },
+    });
+    const { wired, workspace, digest } = wire(t, harness, agent.adapter);
+    const admission = wired.projectionPort.submit({
+      operationId: "op-launch",
+      operation: "launch-run",
+      input: {
+        bundle: { id: MATT_ID },
+        launchInputs: { idea: IDEA },
+        trustDigest: digest,
+        harness,
+        requestedModel: "fake-model",
+      },
+    });
+    assert.ok(admission.admitted && admission.runId);
+    const runId = admission.runId;
+    await awaitSettled(wired.projectionPort, "op-launch");
+    const grilled = readRun(wired, runId);
+    assert.equal(grilled.pendingGate?.gate.stepId, "choose-tracker");
+    assert.equal(
+      grilled.timeline.find((event) => event.event === "interactive-step-ended")
+        ?.endedBy,
+      "agent",
+    );
+    assert.ok(
+      agent.turns[0]?.text.endsWith(
+        "When the frontier is empty, asked whether I have any questions or concerns left or whether you may end the interview, and I have told you to end it, call step done with a one-line reason.",
+      ),
+    );
+    assert.doesNotMatch(
+      agent.turns[0]?.text ?? "",
+      /nothing\s+either of us says/,
+    );
+    assert.ok(grilled.pendingGate);
+    await settle(wired, {
+      operationId: "op-tracker",
+      operation: "answer-human-gate",
+      input: { runId, gate: grilled.pendingGate.gate, text: "Local" },
+    });
+    const held = await awaitRunRest(wired.projectionPort, runId);
+    assert.equal(held.state, "blocked");
+    assert.deepEqual(held.heldForReview, {
+      interval: 50,
+      message:
+        "The agent has continued 50 tickets in a row on its own. Look over the work and the tracker, then Continue.",
+      reason: "Finished 51-ticket.md.",
+    });
+    assert.deepEqual(
+      held.timeline
+        .filter((event) => event.event === "interactive-step-ended")
+        .map((event) => event.endedBy),
+      ["agent", "agent"],
+    );
+    const planned = agent.turns.find((turn) =>
+      turn.text.startsWith("# Plan the tickets"),
+    );
+    assert.ok(planned);
+    assert.ok(
+      planned.text.endsWith(
+        "When the work this step asked of you is finished, call step done with a one-line reason.",
+      ),
+    );
+    assert.match(planned.text, /Do not publish any ticket in this Step/);
+    assert.match(
+      planned.text,
+      /finished when I approve the\s+final breakdown in the conversation/,
+    );
+    assert.doesNotMatch(planned.text, /End Step/);
+    const published = agent.turns.find((turn) =>
+      turn.text.startsWith("# Publish the tickets"),
+    );
+    assert.ok(published);
+    assert.equal(planned.session, published.session);
+    assert.notEqual(planned.session, agent.turns[0]?.session);
+    assert.match(
+      published.text,
+      /The breakdown we settled on in this conversation is approved/,
+    );
+    const implementations = agent.turns.filter((turn) =>
+      turn.text.startsWith(IMPLEMENT_HEADING),
+    );
+    assert.equal(implementations.length, 51);
+    assert.equal(new Set(implementations.map((turn) => turn.session)).size, 51);
+    const entry = implementations[0]?.text;
+    assert.ok(entry);
+    assert.ok(
+      entry.endsWith(
+        "When the work this step asked of you is finished, call step done with a one-line reason.\nWhen you read the tracker and no open implementation ticket is left, call stage done with a one-line reason instead. If tickets are open but none is ready, or you cannot read the tracker, do not call stage done; say so plainly and stop.",
+      ),
+    );
+    assert.match(entry, /mark it done when you finish/);
+    assert.equal(
+      held.timeline.filter(
+        (event) =>
+          event.event === "repeat-continued" && event.endedBy === "agent",
+      ).length,
+      50,
+    );
+    assert.deepEqual(
+      held.timeline.filter((event) => event.agentCall !== undefined).at(-1)
+        ?.agentCall?.answer,
+      { outcome: "held-for-review" },
+    );
+    for (const action of [
+      "send-interactive-turn",
+      "continue-repeat",
+      "end-stage",
+    ])
+      assert.ok(held.actionOffers.some((offer) => offer.action === action));
+    const area = agent.granted.at(-1)!;
+    const before = trackerFiles(area);
+    await settle(wired, {
+      operationId: "op-reviewed",
+      operation: "continue-repeat",
+      input: { runId, stepId: "implement" },
+    });
+    const done = await awaitRunRest(wired.projectionPort, runId);
+    assert.equal(done.state, "succeeded");
+    assert.equal(done.completion, "agent-declared");
+    assert.equal(done.heldForReview, undefined);
+    const ended = done.timeline.find((event) => event.event === "stage-ended");
+    assert.equal(ended?.endedBy, "agent");
+    assert.equal(ended?.reason, "No open implementation ticket is left.");
+    assert.notEqual(
+      agent.turns.at(-1)?.session,
+      implementations.at(-1)?.session,
+    );
+    assert.deepEqual(trackerFiles(area), before);
+    assert.deepEqual(readdirSync(workspace), []);
+    assert.deepEqual(done.outputs.map((output) => output.name).sort(), [
+      "spec-ref",
+      "tickets-ref",
+      "tracker",
+    ]);
+  });
+}

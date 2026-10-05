@@ -46,8 +46,8 @@ function profile(harness: HarnessId): HarnessProfile {
     interruption: { mode: "process-only", evidence: "scripted fake" },
     approvals: { available: true, evidence: "scripted fake" },
     agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
+      available: true,
+      evidence: "Scripted agent calls.",
     },
     clarifications: { available: false, evidence: "scripted fake" },
     // Codex's one client-visible difference: native same-Turn steer.
@@ -131,6 +131,7 @@ function wire(
   harness: HarnessId,
   adapter: HarnessAdapter,
   supportsInteractiveTurns = true,
+  historical = false,
 ): { wired: Wiring; digest: string } {
   const workspace = makeTempDir("secant-matt-grill-ws-");
   const found = (name: string) => () => ({
@@ -157,7 +158,11 @@ function wire(
     wired.catalog.close();
   });
   // The maintained Bundle is built and installed exactly like a user's Bundle.
-  const built = wired.bundleManagement.build(MATT_FOLDER, { noInstall: false });
+  const built = historical
+    ? wired.bundleManagement.install(
+        join(repoRoot, "tests", "application", "fixtures", "matt-2.7.0.wfb"),
+      )
+    : wired.bundleManagement.build(MATT_FOLDER, { noInstall: false });
   assert.ok(built.ok, JSON.stringify(built));
   const entry = wired.catalog.listEntries().find((e) => e.id === MATT_ID);
   assert.ok(entry);
@@ -516,4 +521,54 @@ test("the headless client refuses the Matt grill at Preflight with the TUI remed
   assert.match(output, /Run this Bundle in the TUI\./);
   assert.equal(prepares(), 0);
   assert.deepEqual(wired.runGroup.listRuns(), []);
+});
+
+test("a Run pinned to Matt 2.7.0 keeps its prompt and human controls after 2.8.0 installs (#374)", async (t) => {
+  const { adapter } = scriptedAdapter("claude-code", [
+    [completed("Discussing."), completed("Still discussing.")],
+  ]);
+  const { wired, digest } = wire(t, "claude-code", adapter, true, true);
+  const runId = await launch(wired, digest, "claude-code");
+  const before = readRun(wired, runId);
+  assert.equal(before.bundle.version, "2.7.0");
+  assert.match(
+    userEntries(wired, before)[0] ?? "",
+    /nothing\s+either of us says in the conversation ends it/,
+  );
+  const output = join(makeTempDir("secant-matt-upgrade-"), "matt.wfb");
+  const built = wired.bundleManagement.build(MATT_FOLDER, {
+    noInstall: true,
+    output,
+  });
+  assert.ok(built.ok, JSON.stringify(built));
+  assert.deepEqual(wired.ensureShippedBundles([output]), []);
+  assert.deepEqual(wired.ensureShippedBundles([output]), []);
+  assert.deepEqual(
+    wired.catalog
+      .listEntries()
+      .map((entry) => entry.version)
+      .sort(),
+    ["2.7.0", "2.8.0"],
+  );
+  await submitAndSettle(wired, "op-old-turn", {
+    operationId: "op-old-turn",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "grill", text: "Continue the old interview." },
+  });
+  await awaitRunRest(wired.projectionPort, runId);
+  const after = readRun(wired, runId);
+  assert.deepEqual(after.bundle, before.bundle);
+  assert.equal(after.state, "blocked");
+  assert.ok(offer(after, "end-interactive-step"));
+  assert.equal(userEntries(wired, after).at(-1), "Continue the old interview.");
+  const ended = await submitAndSettle(wired, "op-old-end", {
+    operationId: "op-old-end",
+    operation: "end-interactive-step",
+    input: { runId, stepId: "grill" },
+  });
+  assert.equal(ended.status, "applied");
+  assert.equal(
+    readRun(wired, runId).pendingGate?.gate.stepId,
+    "choose-tracker",
+  );
 });
