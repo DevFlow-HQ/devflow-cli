@@ -281,6 +281,23 @@ export interface CommandParams extends CommandInvocation {
 }
 export type PlatformOverride = Partial<CommandInvocation>;
 
+/** Select each authored field as a whole; empty arguments and env replace the base. */
+export function resolveCommandInvocation({
+  command,
+  platform,
+}: {
+  readonly command: CommandParams;
+  readonly platform: Platform;
+}): CommandInvocation {
+  const override = command.platforms?.[platform];
+  return {
+    executable: override?.executable ?? command.executable,
+    arguments: override?.arguments ?? command.arguments,
+    workingDirectory: override?.workingDirectory ?? command.workingDirectory,
+    env: override?.env ?? command.env,
+  };
+}
+
 interface StepCommon {
   readonly id: string;
   readonly kind: StepKindName;

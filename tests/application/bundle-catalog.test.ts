@@ -17,6 +17,11 @@ import type {
 } from "../../src/application/projection-port.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import type {
+  AuthoredManifest,
+  CommandParams,
+  Platform,
+} from "../../src/workflow/workflow.js";
 
 // The `bundle-catalog` Projection over real installed bytes (issue #54). It opens
 // the family through the Projection Port, exactly as a client does, and asserts
@@ -42,6 +47,7 @@ interface Harness {
 async function harness(
   t: TestContext,
   engineVersion = "9.9.9",
+  hostPlatform: Platform = "linux",
 ): Promise<Harness> {
   const home = makeTempDir("secant-catalog-home-");
   const catalog = await openCatalog(home);
@@ -53,7 +59,7 @@ async function harness(
     catalog,
     launchWorkspacePath,
     engineVersion,
-    hostPlatform: "linux",
+    hostPlatform,
   });
   return {
     port: projectionPort,
@@ -431,5 +437,109 @@ test("no storage path, archive object, or SQLite type appears in any snapshot", 
     assert.equal(serialized.includes(h.home), false, serialized);
     assert.equal(serialized.includes("catalog.db"), false);
     assert.equal(serialized.includes(".wfb"), false);
+  }
+});
+
+test("the Execution summary reflects whole-field Command overrides on each selected platform", async (t) => {
+  for (const platform of [
+    "windows",
+    "macos",
+    "linux",
+  ] satisfies readonly Platform[]) {
+    const h = await harness(t, "9.9.9", platform);
+    const folder = makeTempDir("secant-summary-overrides-");
+    writeFileSync(join(folder, "base.sh"), "echo base\n");
+    writeFileSync(join(folder, "selected.sh"), "echo selected\n");
+    const base: CommandParams = {
+      executable: "base-runner",
+      arguments: ["base", { asset: "base.sh" }, { artifact: "source" }],
+      workingDirectory: "base",
+      env: { SECANT_COMMAND_BASE: { artifact: "source" } },
+    };
+    const commands: readonly CommandParams[] = [
+      base,
+      {
+        ...base,
+        platforms: {
+          [platform]: {
+            executable: "selected-runner",
+            workingDirectory: "selected",
+          },
+        },
+      },
+      {
+        ...base,
+        platforms: {
+          [platform]: {
+            executable: "selected-runner",
+            arguments: [{ asset: "selected.sh" }, { artifact: "source" }],
+            workingDirectory: "selected",
+            env: { SECANT_COMMAND_SELECTED: { asset: "selected.sh" } },
+          },
+        },
+      },
+      { ...base, platforms: { [platform]: { arguments: [], env: {} } } },
+    ];
+    const authored: AuthoredManifest = {
+      formatVersion: 1,
+      bundle: {
+        id: "dev.secant.summary-overrides",
+        version: "1.0.0",
+        name: "Overrides",
+        description: "Command overrides",
+      },
+      platforms: ["windows", "macos", "linux"],
+      inputs: { source: { type: "text", description: "Source" } },
+      assets: [
+        { path: "base.sh", kind: "script" },
+        { path: "selected.sh", kind: "script" },
+      ],
+      routing: commands.map((command, index) => ({
+        id: `command-${index}`,
+        kind: "command",
+        requires: ["source"],
+        command,
+      })),
+    };
+    writeFileSync(join(folder, "manifest.json"), JSON.stringify(authored));
+    h.build(folder);
+    const opened = h.port.openProjection({
+      family: "bundle-catalog",
+      focus: { id: "dev.secant.summary-overrides" },
+    });
+    t.after(() => opened.close());
+    const snapshot = opened.snapshot;
+    assert.ok(snapshot.result.found);
+    assert.equal(snapshot.result.bundle.executionSummary.platform, platform);
+    assert.deepEqual(snapshot.result.bundle.executionSummary.commands, [
+      {
+        stepId: "command-0",
+        executable: "base-runner",
+        workingDirectory: "base",
+        environmentVariableNames: ["SECANT_COMMAND_BASE"],
+        scripts: ["base.sh"],
+      },
+      {
+        stepId: "command-1",
+        executable: "selected-runner",
+        workingDirectory: "selected",
+        environmentVariableNames: ["SECANT_COMMAND_BASE"],
+        scripts: ["base.sh"],
+      },
+      {
+        stepId: "command-2",
+        executable: "selected-runner",
+        workingDirectory: "selected",
+        environmentVariableNames: ["SECANT_COMMAND_SELECTED"],
+        scripts: ["selected.sh", "selected.sh"],
+      },
+      {
+        stepId: "command-3",
+        executable: "base-runner",
+        workingDirectory: "base",
+        environmentVariableNames: [],
+        scripts: [],
+      },
+    ]);
   }
 });

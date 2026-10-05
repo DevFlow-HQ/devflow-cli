@@ -2,9 +2,9 @@ import { realpathSync, statSync } from "node:fs";
 import {
   agentCompletionCalls,
   flattenSteps,
+  resolveCommandInvocation,
   STEP_KINDS,
   type AuthoredManifest,
-  type CommandParams,
   type CompositionFinding,
   type LaunchInput,
   type Platform,
@@ -410,7 +410,10 @@ function checkCommands(
   const platform = selectPlatform(platforms, request.hostPlatform);
   for (const step of steps) {
     if (step.kind !== "command") continue;
-    const executable = selectExecutable(step.command, platform);
+    const { executable } = resolveCommandInvocation({
+      command: step.command,
+      platform,
+    });
     // The same resolver execution spawns through, so a pass here means the Command
     // will spawn (A40): a missing binary is refused, and a Windows `.cmd`/`.bat`
     // that is not an npm-style node shim is refused with the interpreter remedy.
@@ -577,15 +580,6 @@ function probeGitWorktreeRoot(
   return canonicalTop === workspacePath
     ? { ok: true }
     : { problem: worktreeRootFailed(workspacePath) };
-}
-
-// --- Platform / executable selection ---------------------------------------
-
-/** The Command invocation's executable for the selected platform: the platform
- *  override's `executable` if it names one, else the base (mirrors execution's
- *  `resolveInvocation` and the trust summary's platform selection). */
-function selectExecutable(command: CommandParams, platform: Platform): string {
-  return command.platforms?.[platform]?.executable ?? command.executable;
 }
 
 // --- Problems --------------------------------------------------------------

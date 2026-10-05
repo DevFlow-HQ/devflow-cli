@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import {
   flattenSteps,
+  resolveCommandInvocation,
   MAX_REVIEW_CHECKPOINT_INTERVAL,
   type AgentStep,
   type AttemptOutcome,
   type CommandInvocation,
-  type CommandParams,
   type CommandStep,
   type HumanGateShape,
   type HumanGateStep,
@@ -1037,7 +1037,10 @@ async function runCommand(
   step: CommandStep,
   context: StepContext,
 ): Promise<StepAttempt> {
-  const invocation = resolveInvocation(step.command, context.platform);
+  const invocation = resolveCommandInvocation({
+    command: step.command,
+    platform: context.platform,
+  });
   const args = invocation.arguments.map((token) =>
     resolveToken(token, context),
   );
@@ -1138,24 +1141,6 @@ function commandOutputs(
     // other declared output stays absent and the Run Store names it as missing.
   }
   return outputs;
-}
-
-/** Resolve a Command to its single invocation for the host platform: the platform
- *  override replaces each field it names (Partial semantics), the base fills the
- *  rest. This is how the Windows invocation is selected on Windows and the POSIX
- *  one elsewhere. */
-function resolveInvocation(
-  command: CommandParams,
-  platform: Platform,
-): CommandInvocation {
-  const override = command.platforms?.[platform];
-  if (override === undefined) return command;
-  return {
-    executable: override.executable ?? command.executable,
-    arguments: override.arguments ?? command.arguments,
-    workingDirectory: override.workingDirectory ?? command.workingDirectory,
-    env: override.env ?? command.env,
-  };
 }
 
 /** Resolve one argument or env value: a literal passes through; a `{asset}`

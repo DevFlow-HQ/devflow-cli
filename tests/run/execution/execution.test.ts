@@ -22,6 +22,7 @@ import {
 import type { ProcessAdapter } from "../../../src/process/process.js";
 import type { RunOwner } from "../../../src/run/store/store.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
+import { setEnvironmentForTest } from "../../helpers/environment.js";
 import { createFakeProcess } from "../../process/fake-adapter.js";
 import { openFakeRunGroup as openRunGroup } from "../store/fake-git-process.js";
 
@@ -1403,4 +1404,123 @@ test("a throwing observer preserves the original walk error during unwind", asyn
   controller.abort();
   await assert.rejects(pending, RunCancelledError);
   assert.equal(owner.attemptLog().length, 0);
+});
+
+test("Command execution applies whole-field overrides before resolving references and spawning", async (t) => {
+  setEnvironmentForTest(t, {
+    SECANT_COMMAND_BASE: undefined,
+    SECANT_COMMAND_SELECTED: undefined,
+  });
+  for (const platform of [
+    "windows",
+    "macos",
+    "linux",
+  ] satisfies readonly Platform[]) {
+    const { owner } = ownerForFreshRun(t, { source: "launch-source" });
+    const base: CommandParams = {
+      executable: "base-runner",
+      arguments: ["base", { asset: "base.sh" }, { artifact: "source" }],
+      workingDirectory: "base",
+      env: { SECANT_COMMAND_BASE: { artifact: "source" } },
+    };
+    const invocations: {
+      executable: string;
+      args: readonly string[];
+      cwd: string | undefined;
+      base: string | undefined;
+      selected: string | undefined;
+    }[] = [];
+    const executionProcess = createFakeProcess({
+      resolutionHandler: (name) => ({
+        kind: "found",
+        executable: name,
+        prefixArgs: [],
+      }),
+      commandHandler: (options) => {
+        invocations.push({
+          executable: options.executable,
+          args: options.args,
+          cwd: options.cwd,
+          base: options.env?.SECANT_COMMAND_BASE,
+          selected: options.env?.SECANT_COMMAND_SELECTED,
+        });
+        return { kind: "exited", status: 0, text: new Uint8Array() };
+      },
+    });
+    const selectedAsset = join(WORKSPACE, "selected.sh");
+    const baseAsset = join(WORKSPACE, "base.sh");
+    assert.deepEqual(
+      await run(
+        [
+          commandStep("base", base),
+          commandStep("partial", {
+            ...base,
+            platforms: {
+              [platform]: {
+                executable: "selected-runner",
+                workingDirectory: "selected",
+              },
+            },
+          }),
+          commandStep("replaced", {
+            ...base,
+            platforms: {
+              [platform]: {
+                executable: "selected-runner",
+                arguments: [{ asset: "selected.sh" }, { artifact: "source" }],
+                workingDirectory: "selected",
+                env: { SECANT_COMMAND_SELECTED: { asset: "selected.sh" } },
+              },
+            },
+          }),
+          commandStep("empty", {
+            ...base,
+            platforms: { [platform]: { arguments: [], env: {} } },
+          }),
+        ],
+        owner,
+        {
+          platform,
+          process: executionProcess,
+          resolveAsset: (asset) =>
+            asset === "base.sh"
+              ? baseAsset
+              : asset === "selected.sh"
+                ? selectedAsset
+                : undefined,
+        },
+      ),
+      { outcome: "succeeded" },
+    );
+    assert.deepEqual(invocations, [
+      {
+        executable: "base-runner",
+        args: ["base", baseAsset, "launch-source"],
+        cwd: join(WORKSPACE, "base"),
+        base: "launch-source",
+        selected: undefined,
+      },
+      {
+        executable: "selected-runner",
+        args: ["base", baseAsset, "launch-source"],
+        cwd: join(WORKSPACE, "selected"),
+        base: "launch-source",
+        selected: undefined,
+      },
+      {
+        executable: "selected-runner",
+        args: [selectedAsset, "launch-source"],
+        cwd: join(WORKSPACE, "selected"),
+        base: undefined,
+        selected: selectedAsset,
+      },
+      {
+        executable: "base-runner",
+        args: [],
+        cwd: join(WORKSPACE, "base"),
+        base: undefined,
+        selected: undefined,
+      },
+    ]);
+  }
 });

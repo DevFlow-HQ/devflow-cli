@@ -10,6 +10,7 @@ import {
   hasOnlyValidPromptSlots,
   type PlatformOverride,
   promptSlotReferences,
+  resolveCommandInvocation,
   type Reference,
   type RoutingNode,
   type Step,
@@ -259,9 +260,10 @@ export function checkComposition(
     // the reachable check when the manifest is built directly (as tests do).
     if (step.kind === "command" && manifest.platforms) {
       const unresolved = manifest.platforms.filter((platform) => {
-        const executable =
-          step.command.platforms?.[platform]?.executable ??
-          step.command.executable;
+        const { executable } = resolveCommandInvocation({
+          command: step.command,
+          platform,
+        });
         return typeof executable !== "string" || executable.trim() === "";
       });
       if (unresolved.length > 0) {

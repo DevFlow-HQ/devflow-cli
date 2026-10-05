@@ -810,3 +810,67 @@ test("human checkpoints allow defaults and uncapped intervals while Verdict chec
   assert.deepEqual(run(manifest({ routing: [step] })), []);
   assert.deepEqual(agentCompletionCalls([step], step), []);
 });
+
+test("composition checks each supported platform's selected Command executable", () => {
+  const authored = manifest({
+    platforms: ["windows", "macos"],
+    inputs: {},
+    assets: [],
+    routing: [
+      {
+        id: "selected-command",
+        kind: "command",
+        command: {
+          executable: "",
+          arguments: [],
+          platforms: {
+            windows: { executable: "windows-runner" },
+            macos: { arguments: [] },
+            linux: { executable: "unused-runner" },
+          },
+        },
+      },
+    ],
+  });
+  assert.deepEqual(checkComposition(authored, new Map()), [
+    {
+      code: "command-invocation-unresolved",
+      severity: "error",
+      target: "selected-command",
+      explanation:
+        'Command step "selected-command" does not resolve exactly one invocation on macos.',
+    },
+  ]);
+  assert.deepEqual(
+    checkComposition({ ...authored, platforms: ["windows"] }, new Map()),
+    [],
+  );
+  assert.deepEqual(
+    checkComposition(
+      manifest({
+        platforms: ["windows"],
+        routing: [
+          {
+            id: "selected-command",
+            kind: "command",
+            command: {
+              executable: "runner",
+              arguments: [],
+              platforms: { windows: { executable: " " } },
+            },
+          },
+        ],
+      }),
+      new Map(),
+    ),
+    [
+      {
+        code: "command-invocation-unresolved",
+        severity: "error",
+        target: "selected-command",
+        explanation:
+          'Command step "selected-command" does not resolve exactly one invocation on windows.',
+      },
+    ],
+  );
+});

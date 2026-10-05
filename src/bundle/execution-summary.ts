@@ -1,8 +1,8 @@
 import {
   type AuthoredManifest,
-  type CommandInvocation,
   type CommandParams,
   flattenSteps,
+  resolveCommandInvocation,
   type Platform,
   type StepKindName,
 } from "../workflow/workflow.js";
@@ -83,15 +83,7 @@ function resolveCommand(
   platform: Platform,
   scriptAssets: ReadonlySet<string>,
 ): BundleExecutionCommand {
-  // A per-platform override replaces only the fields it names; the base command
-  // supplies the rest (#9 per-platform parameter overrides).
-  const override = command.platforms?.[platform] ?? {};
-  const invocation: CommandInvocation = {
-    executable: override.executable ?? command.executable,
-    arguments: override.arguments ?? command.arguments,
-    workingDirectory: override.workingDirectory ?? command.workingDirectory,
-    env: override.env ?? command.env,
-  };
+  const invocation = resolveCommandInvocation({ command, platform });
   const scripts: string[] = [];
   for (const token of invocation.arguments) {
     if (

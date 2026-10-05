@@ -12,7 +12,12 @@ import {
 import { buildBundle, writeZip } from "../../src/bundle/bundle.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
-import type { AgentStep } from "../../src/workflow/workflow.js";
+import type {
+  AgentStep,
+  AuthoredManifest,
+  CommandParams,
+  Platform,
+} from "../../src/workflow/workflow.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import type { RunGroup } from "../../src/run/store/store.js";
 import {
@@ -55,12 +60,16 @@ function fixture(
   workspace: string,
   harnessRegistry: readonly ApplicationHarnessRegistration[] = [],
   gitProbe: GitProbe = "pass",
-  options: Pick<
-    Parameters<typeof createApplication>[0],
-    "engineVersion" | "supportsInteractiveTurns"
+  options: Partial<
+    Pick<
+      Parameters<typeof createApplication>[0],
+      "engineVersion" | "supportsInteractiveTurns" | "hostPlatform" | "process"
+    >
   > = {},
 ): Fixture {
-  const executionProcess = preflightProcess(workspace, gitProbe);
+  const executionProcess =
+    options.process ?? preflightProcess(workspace, gitProbe);
+  const platform = options.hostPlatform ?? hostPlatform();
   const catalog = openCatalog(makeTempDir("secant-pf-home-"));
   t.after(() => catalog.close());
   const runGroup = openRunGroup(makeTempDir("secant-pf-store-"), workspace);
@@ -70,13 +79,13 @@ function fixture(
     catalog,
     process: executionProcess,
     launchWorkspacePath: workspace,
-    hostPlatform: hostPlatform(),
+    hostPlatform: platform,
     runGroup,
     harnessRegistry,
     runExecution: ({ routing, owner }) =>
       executeRouting(routing, {
         owner,
-        platform: hostPlatform(),
+        platform,
         resolveAsset: () => undefined,
         process: executionProcess,
       }),
@@ -1043,3 +1052,111 @@ for (const agentCompletion of [undefined, false, true, ["step"]] as const) {
     assert.deepEqual(f.runGroup.listRuns(), []);
   });
 }
+
+test("Preflight probes the selected Command executable and refuses it before creating a Run", async (t) => {
+  const missing = "secant-no-such-binary-xyz";
+  for (const platform of [
+    "windows",
+    "macos",
+    "linux",
+  ] satisfies readonly Platform[]) {
+    const cases: readonly {
+      command: CommandParams;
+      executable: string;
+      admitted: boolean;
+    }[] = [
+      {
+        command: { executable: missing, arguments: [] },
+        executable: missing,
+        admitted: false,
+      },
+      {
+        command: {
+          executable: missing,
+          arguments: [],
+          platforms: { [platform]: { executable: "selected-runner" } },
+        },
+        executable: "selected-runner",
+        admitted: true,
+      },
+      {
+        command: {
+          executable: "base-runner",
+          arguments: [],
+          platforms: { [platform]: { executable: missing } },
+        },
+        executable: missing,
+        admitted: false,
+      },
+      {
+        command: {
+          executable: missing,
+          arguments: ["base"],
+          env: { BASE: "value" },
+          platforms: { [platform]: { arguments: [], env: {} } },
+        },
+        executable: missing,
+        admitted: false,
+      },
+    ];
+    for (const scenario of cases) {
+      const probes: string[] = [];
+      const process = createFakeProcess({
+        resolutionHandler: (name) => {
+          probes.push(name);
+          return name === missing
+            ? { kind: "not-found" }
+            : { kind: "found", executable: name, prefixArgs: [] };
+        },
+        commandHandler: () => ({
+          kind: "exited",
+          status: 0,
+          text: new Uint8Array(),
+        }),
+      });
+      const f = fixture(t, workspace(), [], "pass", {
+        hostPlatform: platform,
+        process,
+      });
+      const folder = makeTempDir("secant-pf-overrides-");
+      const authored: AuthoredManifest = {
+        formatVersion: 1,
+        bundle: {
+          id: "dev.secant.preflight-overrides",
+          version: "1.0.0",
+          name: "Overrides",
+          description: "Command overrides",
+        },
+        platforms: ["windows", "macos", "linux"],
+        inputs: {},
+        assets: [],
+        routing: [
+          {
+            id: "selected-command",
+            kind: "command",
+            command: scenario.command,
+          },
+        ],
+      };
+      writeFileSync(join(folder, "manifest.json"), JSON.stringify(authored));
+      const built = f.app.bundleManagement.build(folder, { noInstall: false });
+      assert.ok(built.ok, JSON.stringify(built));
+      const [entry] = f.catalog.listEntries();
+      assert.ok(entry);
+      const admission = launch(f, entry.id, { trustDigest: entry.digest });
+      assert.equal(admission.admitted, scenario.admitted);
+      assert.equal(probes[0], scenario.executable);
+      if (admission.admitted) {
+        await settled(f, "op-1");
+      } else {
+        assert.deepEqual(probes, [missing]);
+        assert.equal(admission.problem.code, "command-executable-not-found");
+        assert.deepEqual(admission.problem.details, {
+          step: "selected-command",
+          executable: missing,
+        });
+        assert.deepEqual(f.runGroup.listRuns(), []);
+      }
+    }
+  }
+});
