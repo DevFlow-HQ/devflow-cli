@@ -1031,6 +1031,87 @@ test("resume re-runs a Step that failed after a passed Repeat group, never resti
   assert.equal(fake.calls("check"), 1);
 });
 
+test("a re-walk leaves a Repeat group a later Step already reached, even after that Step rebinds the group's Verdict to fail", async (t) => {
+  const { owner, state } = ownerForFreshRun(t);
+  const fake = fakeExecutor();
+  const routing: RoutingNode[] = [
+    fakeStep(
+      "baseline",
+      { exit: 1 },
+      { produces: produces({ name: "passing", type: "verdict" }) },
+    ),
+    // Passes on its first iteration.
+    fakeRepeat("check", { passAt: 1 }, 5),
+    // Rebinds the group's `until` Verdict to `fail` after the group ended.
+    fakeStep(
+      "rebind",
+      { exit: 1 },
+      { produces: produces({ name: "passing", type: "verdict" }) },
+    ),
+    // Cannot spawn, so the Run rests failed and a resume re-walks the Routing.
+    commandStep(
+      "last",
+      { executable: "secant-no-such-binary-xyz", arguments: [] },
+      { produces: produces({ name: "last-done", type: "text" }), retry: 0 },
+    ),
+  ];
+
+  assert.deepEqual(await run(routing, owner, { spawnCommand: fake.spawn }), {
+    outcome: "failed",
+  });
+  assert.equal(dec(readBound(owner, "passing")), "fail");
+  assert.deepEqual(await run(routing, owner, { spawnCommand: fake.spawn }), {
+    outcome: "failed",
+  });
+  assert.equal(state(), "failed");
+  // The completed group and the rebinding Step each ran once; only `last` re-ran.
+  assert.equal(fake.calls("check"), 1);
+  assert.equal(fake.calls("rebind"), 1);
+  assert.deepEqual(
+    owner.attemptLog().map((entry) => `${entry.attemptId}:${entry.outcome}`),
+    [
+      "0.0:baseline:succeeded",
+      "0.0:check:succeeded",
+      "0.0:rebind:succeeded",
+      "0.0:last:failed",
+      "0.1:last:failed",
+    ],
+  );
+});
+
+test("a re-walk leaves a zero-Iteration Repeat group a later Step reached, even after that Step rebinds its Verdict to fail", async (t) => {
+  const { owner } = ownerForFreshRun(t);
+  const fake = fakeExecutor();
+  const routing: RoutingNode[] = [
+    // Binds `passing` = pass, so the group runs zero Iterations.
+    fakeStep(
+      "baseline",
+      { exit: 0 },
+      { produces: produces({ name: "passing", type: "verdict" }) },
+    ),
+    fakeRepeat("check", { exit: 1 }, 5),
+    fakeStep(
+      "rebind",
+      { exit: 1 },
+      { produces: produces({ name: "passing", type: "verdict" }) },
+    ),
+    commandStep(
+      "last",
+      { executable: "secant-no-such-binary-xyz", arguments: [] },
+      { produces: produces({ name: "last-done", type: "text" }), retry: 0 },
+    ),
+  ];
+
+  assert.deepEqual(await run(routing, owner, { spawnCommand: fake.spawn }), {
+    outcome: "failed",
+  });
+  assert.deepEqual(await run(routing, owner, { spawnCommand: fake.spawn }), {
+    outcome: "failed",
+  });
+  assert.equal(fake.calls("check"), 0);
+  assert.equal(fake.calls("rebind"), 1);
+});
+
 /** Read the bytes currently bound to an artifact name through the owner. */
 function readBound(owner: RunOwner, name: string): Uint8Array | undefined {
   const versionId = owner.currentVersion(name);

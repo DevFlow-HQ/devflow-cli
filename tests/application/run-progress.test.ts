@@ -407,7 +407,7 @@ test("each of several groups counts its own Iterations and Review grants (#384)"
   assert.deepEqual(h.runs, { baseline: 1, checkA: 2, mid: 1, checkB: 5 });
 });
 
-test("a group whose Verdict a later Command rebinds stays complete, and its Gate stays answerable (#384)", async (t) => {
+test("a group whose Verdict a later Command rebinds stays complete, and answering its Gate re-runs no Command (#384)", async (t) => {
   const h = home(t);
   const { app } = h.open();
   const [baseline, group, , gate, after] = repeatCommandGateRouting();
@@ -433,6 +433,15 @@ test("a group whose Verdict a later Command rebinds stays complete, and its Gate
   });
   assertAtGate(blocked);
   assert.deepEqual(h.runs, { baseline: 1, check: 1, outside: 1 });
+
+  await answer(app, blocked, "answer");
+  assert.deepEqual(progressOf(runOf(app, runId)), {
+    state: "succeeded",
+    progress: ALL_SUCCEEDED,
+    position: 5,
+    iterations: ["1"],
+  });
+  assert.deepEqual(h.runs, { baseline: 1, check: 1, outside: 1, after: 1 });
 });
 
 test("a reopened Run at the Gate projects the same Gate and answers from the new process (#384)", async (t) => {

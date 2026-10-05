@@ -44,6 +44,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   kind, keeps it halting (ADR 0019).
 - `runRepeatGroup` has two branches (#217): the Verdict-driven one re-reads `until` after each iteration and blocks at the Review cadence; the human-controlled
   one (`control: "human"`) reads no Verdict and raises no Gate, resting `blocked` at each iteration's interactive Step. Neither reads agent text to choose the exit.
+  A re-walk skips a group once a later node's Step has an Attempt: that records its exit, which the live `until` binding (rebindable later) does not.
 - `interactiveEndLegality` owns the ending controls' rules, shared by Application settlement and Offers: End Step outside a human-controlled Repeat,
   Continue or End Stage inside one, all only at a Turn boundary. A live Turn takes precedence over a position mismatch. Callers confirm the active Step
   and supply Turn liveness; Application includes its in-flight promise, while the Projection uses durable Turn records.

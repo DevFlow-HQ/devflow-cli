@@ -477,13 +477,24 @@ async function walkRouting(
   writeStateOrThrow(deps, "running");
 
   const lastIndex = routing.length - 1;
+  // The walk enters a node only once every earlier node completed, so an Attempt
+  // on a later node's Step records that an earlier Repeat group already ended. A
+  // re-walk skips that group rather than re-deciding its exit from the current
+  // `until` binding, which a later Step may have rebound (#384).
+  const reached = routing.map((node) =>
+    ("repeat" in node ? node.repeat.steps : [node]).some((step) =>
+      context.resume.attempted.has(step.id),
+    ),
+  );
   let restedSucceeded = false;
   for (let index = 0; index < routing.length; index++) {
     const node = routing[index]!;
     const isLastNode = index === lastIndex;
     const outcome =
       "repeat" in node
-        ? await runRepeatGroup(node.repeat, context, isLastNode)
+        ? reached.slice(index + 1).includes(true)
+          ? "succeeded-open"
+          : await runRepeatGroup(node.repeat, context, isLastNode)
         : await runStep(node, context, isLastNode);
     if (outcome === "failed") return { outcome: "failed" };
     if (outcome === "blocked") {
@@ -920,6 +931,8 @@ interface ResumeState {
   readonly attempts: ReadonlyMap<string, number>;
   /** Instance keys whose Attempt a confirmed End Stage settled (#218). */
   readonly stageEnded: ReadonlySet<string>;
+  /** Step ids with at least one recorded Attempt, in any Iteration. */
+  readonly attempted: ReadonlySet<string>;
 }
 
 /** Reconstruct the resume state from the attempt log: which Step instances
@@ -930,15 +943,17 @@ function buildResumeState(log: readonly AttemptLogEntry[]): ResumeState {
   const succeeded = new Set<string>();
   const attempts = new Map<string, number>();
   const stageEnded = new Set<string>();
+  const attempted = new Set<string>();
   for (const entry of log) {
     const decoded = decodeAttemptId(entry.attemptId);
     if (decoded === undefined) continue;
+    attempted.add(decoded.stepId);
     const key = instanceKey(decoded.stepId, decoded.iteration);
     attempts.set(key, (attempts.get(key) ?? 0) + 1);
     if (entry.outcome === "succeeded") succeeded.add(key);
     if (entry.endsStage === true) stageEnded.add(key);
   }
-  return { succeeded, attempts, stageEnded };
+  return { succeeded, attempts, stageEnded, attempted };
 }
 
 // --- Human Gate step (a durable pause, not a dispatch) ---------------------
