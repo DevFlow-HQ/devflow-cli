@@ -57,7 +57,7 @@ interface BuiltBundle {
   readonly identity: { readonly id: string; readonly version: string };
   readonly bytes: Uint8Array;
   readonly digest: string; // SHA-256 hex over the exact bytes
-  readonly findings: readonly string[]; // advisory build notes
+  readonly findings: readonly string[]; // composition warnings and packaging notes
 }
 
 export type BuildOutcome =
@@ -124,9 +124,6 @@ export function buildBundle(folder: string): BuildOutcome {
     manifest,
     readTextAssets(folder, manifest),
   );
-  // ponytail: every rule emits error-severity today, so a warning-only build
-  // still packages. When a warning rule first lands, carry warnings onto the
-  // success path (BuiltBundle) too, or they are computed and silently dropped.
   if (composition.some((finding) => finding.severity === "error")) {
     return { ok: false, composition };
   }
@@ -140,7 +137,9 @@ export function buildBundle(folder: string): BuildOutcome {
   }
   const platforms = manifest.platforms ?? [host];
 
-  const findings: string[] = [];
+  const findings = composition.map(
+    (finding) => `[${finding.code}] ${finding.target}: ${finding.explanation}`,
+  );
   if (manifest.platforms === undefined) {
     findings.push(`Inserted build-host platform: ${host}.`);
   }

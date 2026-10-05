@@ -9,6 +9,10 @@ import { openCatalog } from "../../src/catalog/catalog.js";
 import { buildBundle } from "../../src/bundle/bundle.js";
 import { openHeadlessHarness } from "../helpers/headlessHarness.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import {
+  freshSessionBundleFolder,
+  freshSessionBuildFindings,
+} from "../helpers/freshSessionBundle.js";
 import type { ApplicationHarnessQualification } from "../../src/application/application.js";
 import type { HarnessProfile } from "../../src/harness/harness.js";
 
@@ -652,6 +656,56 @@ test("bundle build prints the advisory findings in plain text on the success pat
   assert.match(h.stdout(), /^Findings:$/m);
   assert.match(h.stdout(), /Derived requires\.engine/);
 });
+
+for (const noInstall of [true, false]) {
+  for (const json of [false, true]) {
+    test(`warning-only Bundle build reports both Steps in ${json ? "JSON" : "text"} with ${noInstall ? "export only" : "installation"}`, async (t) => {
+      const h = await harness(t);
+      const folder = freshSessionBundleFolder();
+      const output = join(makeTempDir("secant-headless-warnings-"), "out.wfb");
+      const args = ["bundle", "build", folder];
+      if (noInstall) args.push("--no-install", "--output", output);
+      if (json) args.push("--json");
+      assert.equal(await runHeadless(h.clients, args, h.io), 0);
+      assert.equal(h.stderr(), "");
+      if (json) {
+        assert.deepEqual(JSON.parse(h.stdout()), {
+          identity: { id: "io.example.fresh-sessions", version: "1.0.0" },
+          digest:
+            "5ac73b8c73d729e2171db9a0f3460c5f3954c895a4d03f46bb0202b8922cf673",
+          findings: freshSessionBuildFindings,
+          ...(noInstall
+            ? { outputPath: output }
+            : { installed: { status: "installed" } }),
+        });
+      } else {
+        assert.ok(
+          h
+            .stdout()
+            .endsWith(
+              "Findings:\n" +
+                freshSessionBuildFindings
+                  .map((finding) => `  ${finding}\n`)
+                  .join(""),
+            ),
+          h.stdout(),
+        );
+        if (!noInstall) assert.match(h.stdout(), /^Installed\.$/m);
+      }
+      if (noInstall) assert.ok(existsSync(output));
+
+      h.reset();
+      assert.equal(
+        await runHeadless(h.clients, ["workspace", "--json"], h.io),
+        0,
+      );
+      assert.equal(
+        JSON.parse(h.stdout()).installedBundleCount,
+        noInstall ? 0 : 1,
+      );
+    });
+  }
+}
 
 test("bundle list shows the installed row and --json carries the snapshot", async (t) => {
   const h = await harness(t);

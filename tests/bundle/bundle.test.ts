@@ -15,6 +15,10 @@ import {
 } from "../../src/bundle/bundle.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { readArchiveEntries } from "../helpers/zip.js";
+import {
+  freshSessionBundleFolder,
+  freshSessionBuildFindings,
+} from "../helpers/freshSessionBundle.js";
 
 const proofBundle = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -94,6 +98,30 @@ test("building the same folder twice is byte-identical and leaves it unchanged",
     Buffer.compare(readFileSync(join(proofBundle, "manifest.json")), before),
     0,
   );
+});
+
+test("warning-only composition retains both Step findings without changing Bundle bytes", () => {
+  const folder = freshSessionBundleFolder();
+  const authored = readFileSync(join(folder, "manifest.json"));
+  const first = buildBundle(folder);
+  assert.ok(first.ok, JSON.stringify(first));
+  assert.deepEqual(first.built.findings, freshSessionBuildFindings);
+  // Captured before warnings crossed the build Interface (#391).
+  assert.equal(
+    first.built.digest,
+    "5ac73b8c73d729e2171db9a0f3460c5f3954c895a4d03f46bb0202b8922cf673",
+  );
+
+  const second = buildBundle(folder);
+  assert.ok(second.ok, JSON.stringify(second));
+  assert.deepEqual(second.built.findings, freshSessionBuildFindings);
+  assert.deepEqual(second.built.bytes, first.built.bytes);
+  assert.equal(second.built.digest, first.built.digest);
+  assert.deepEqual(readFileSync(join(folder, "manifest.json")), authored);
+  assert.deepEqual(readBundle(first.built.bytes, DEFAULT_BUDGETS), {
+    ok: true,
+    read: { identity: first.built.identity, digest: first.built.digest },
+  });
 });
 
 test("an omitted platforms becomes the build host; an authored subset is preserved", () => {
