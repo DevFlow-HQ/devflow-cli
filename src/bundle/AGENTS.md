@@ -22,6 +22,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   corrupt tree is re-derived from the bytes. Nothing keys on the tree; the digest over the bytes stays the only content identity.
 - Budgets are enforced by the constrained reader over untrusted bytes; Bundle content never relaxes them. A Bundle cannot raise its own input, expanded,
   or entry-count limits.
-- The relative-path helper (`relative-path.ts`, D8) accepts or rejects a manifest asset path and an archive entry name identically — but only for that
-  shared rule. Each side layers its own checks on top, so full validation is not identical: the manifest also rejects empty/whitespace, the archive also
-  rejects a trailing slash, non-UTF-8, and case-fold duplicate names, so `"foo/"` passes the manifest rule and fails the archive rule.
+- The relative-path helper canonicalizes backslashes, dot segments, and repeated separators before archive duplicate checks and declared-tree matching (#383).
+  Check a raw ZIP name's trailing separator before canonicalization: a manifest may declare `resources/`, but an archive may contain only its files.
+  Build retains physical filenames for reads but checks their archive identities through the ZIP rule before reporting success.
+  Build, import, inspection, and asset reads share declared-file coverage; an unclaimed archive entry is refused before Catalog writes.

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
@@ -8,6 +15,7 @@ import type { BundleManagement } from "../../src/application/bundle-management.j
 import {
   buildBundle,
   DEFAULT_BUDGETS,
+  readBundleAssets,
   writeZip,
   type Budgets,
 } from "../../src/bundle/bundle.js";
@@ -30,11 +38,14 @@ async function harness(
   t: TestContext,
   budgets: Budgets = DEFAULT_BUDGETS,
 ): Promise<{
+  readonly home: string;
   readonly catalog: ReturnType<typeof openCatalog>;
   readonly bundle: BundleManagement;
 }> {
   const home = makeTempDir("secant-install-home-");
-  const catalog = await openCatalog(home);
+  const catalog = await openCatalog(home, {
+    readAssets: (bytes) => readBundleAssets(bytes, budgets),
+  });
   t.after(() => catalog.close());
   const launchWorkspacePath = realpathSync.native(
     makeTempDir("secant-install-ws-"),
@@ -44,7 +55,7 @@ async function harness(
     launchWorkspacePath,
     bundleBudgets: budgets,
   });
-  return { catalog, bundle: bundleManagement };
+  return { home, catalog, bundle: bundleManagement };
 }
 
 function proofBytes(): Uint8Array {
@@ -59,9 +70,16 @@ function writeArchive(bytes: Uint8Array): string {
   return path;
 }
 
-function authoringFolder(manifest: unknown): string {
+function authoringFolder(
+  manifest: unknown,
+  files: Record<string, string> = {},
+): string {
   const dir = makeTempDir("secant-authoring-");
   writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2));
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), content);
+  }
   return dir;
 }
 
@@ -120,12 +138,14 @@ test("a byte-different archive of the same identity is an identity collision", a
   const h = await harness(t);
   assert.ok(h.bundle.build(proofBundle, { noInstall: false }).ok);
 
-  // Same manifest (same identity) but an extra entry, so the bytes and digest
-  // differ while the identity does not.
-  const different = writeZip([
-    ...readArchiveEntries(proofBytes()),
-    { path: "extra.txt", data: Buffer.from("different") },
-  ]);
+  // Change declared asset bytes while keeping the manifest and identity valid.
+  const different = writeZip(
+    readArchiveEntries(proofBytes()).map((entry) =>
+      entry.path === "manifest.json"
+        ? entry
+        : { ...entry, data: Buffer.concat([entry.data, Buffer.from("\n")]) },
+    ),
+  );
   const collision = h.bundle.install(writeArchive(different));
   assert.ok(!collision.ok);
   assert.equal(collision.problem.code, "bundle-identity-collision");
@@ -141,6 +161,68 @@ test("a rejected archive shape produces a distinct Problem before any write", as
   assert.equal(result.problem.code, "unsafe-path");
   assert.equal(h.catalog.countInstalledBundles(), 0);
 });
+
+for (const { path, code } of [
+  { path: "resources/x.txt/.", code: "duplicate-path" },
+  { path: "resources//x.txt", code: "duplicate-path" },
+  { path: "stray.txt", code: "unclaimed-entry" },
+]) {
+  test(`import refuses ${path} without managed bytes or a partial asset tree`, async (t) => {
+    const h = await harness(t);
+    const built = buildBundle(
+      authoringFolder(
+        {
+          formatVersion: 1,
+          bundle: {
+            id: "io.example.resources",
+            version: "1.0.0",
+            name: "Resources",
+            description: "Resource directory.",
+          },
+          inputs: {},
+          assets: [{ path: "resources/", kind: "resource" }],
+          routing: [],
+        },
+        { "resources/x.txt": "original", "resources/nested/y.txt": "nested" },
+      ),
+    );
+    assert.ok(built.ok, JSON.stringify(built));
+    const malformed = writeZip([
+      ...readArchiveEntries(built.built.bytes),
+      { path, data: Buffer.from("invalid") },
+    ]);
+    const result = h.bundle.install(writeArchive(malformed));
+    assert.ok(!result.ok, JSON.stringify(result));
+    assert.equal(result.problem.code, code);
+    assert.match(
+      result.problem.explanation,
+      code === "unclaimed-entry"
+        ? /declare it as an asset or remove it/
+        : /appears more than once/,
+    );
+    assert.equal(h.catalog.countInstalledBundles(), 0);
+    const store = join(h.home, "bundles");
+    assert.deepEqual(existsSync(store) ? readdirSync(store) : [], []);
+
+    const valid = h.bundle.install(writeArchive(built.built.bytes));
+    assert.ok(valid.ok, JSON.stringify(valid));
+    assert.equal(h.catalog.countInstalledBundles(), 1);
+    const root = h.catalog.assetRoot(built.built.digest);
+    assert.ok(root !== undefined);
+    assert.equal(
+      readFileSync(join(root, "resources/x.txt"), "utf8"),
+      "original",
+    );
+    assert.equal(
+      readFileSync(join(root, "resources/nested/y.txt"), "utf8"),
+      "nested",
+    );
+    assert.deepEqual(
+      readdirSync(store).sort(),
+      [built.built.digest, `${built.built.digest}.wfb`].sort(),
+    );
+  });
+}
 
 test("an exceeded budget rejects before install", async (t) => {
   const h = await harness(t, { ...DEFAULT_BUDGETS, maxInputBytes: 1 });

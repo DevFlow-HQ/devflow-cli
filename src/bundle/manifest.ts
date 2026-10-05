@@ -125,7 +125,8 @@ const relativePath = z
   .check((ctx) => {
     if (
       ctx.value.trim() === "" ||
-      normalizeRelativePath(ctx.value) === undefined
+      normalizeRelativePath(ctx.value) === undefined ||
+      normalizeRelativePath(ctx.value) === "."
     )
       ctx.issues.push({
         code: "custom",

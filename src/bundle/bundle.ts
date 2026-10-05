@@ -17,7 +17,13 @@ import {
   type CompositionFinding,
   type Platform,
 } from "../workflow/workflow.js";
-import { readZip, writeZip, type Budgets, type ZipEntry } from "./zip.js";
+import {
+  checkArchivePaths,
+  readZip,
+  writeZip,
+  type Budgets,
+  type ZipEntry,
+} from "./zip.js";
 
 // The Bundle Module's ZIP writer and budgets are public through this entry; the
 // constrained reader (`readZip`/`ZipReadResult`) stays private (install goes
@@ -107,6 +113,8 @@ export function buildBundle(folder: string): BuildOutcome {
   const entries = walk(folder);
   if ("finding" in entries) return { ok: false, finding: entries.finding };
 
+  const pathFinding = checkArchivePaths([MANIFEST_ENTRY, ...entries.files]);
+  if (pathFinding) return { ok: false, finding: pathFinding };
   const assetCheck = checkAssetTrees(folder, manifest.assets, entries.files);
   if (assetCheck) return { ok: false, finding: assetCheck };
 
@@ -340,7 +348,17 @@ function parsePackagedArchive(
     };
     return { ok: false, finding, findings: [finding] };
   }
-  return validatePackagedManifest(manifestText);
+  const parsed = validatePackagedManifest(manifestText);
+  if (!parsed.ok) return parsed;
+  const finding = checkAssetCoverage(
+    parsed.manifest.assets,
+    entries
+      .filter((entry) => entry.path !== MANIFEST_ENTRY)
+      .map((entry) => entry.path),
+  );
+  return finding === undefined
+    ? parsed
+    : { ok: false, finding, findings: [finding] };
 }
 
 // The one Composition check over a read archive, shared by install (`readBundle`)
@@ -454,6 +472,19 @@ function checkAssetTrees(
   assets: readonly AssetDecl[],
   files: readonly string[],
 ): BundleFinding | undefined {
+  for (const asset of assets) {
+    const kindError = checkAssetKind(folder, asset);
+    if (kindError) return kindError;
+  }
+  return checkAssetCoverage(assets, files);
+}
+
+// Build and import admit the same declared files; Catalog receives only entries
+// claimed by one non-overlapping asset tree.
+function checkAssetCoverage(
+  assets: readonly AssetDecl[],
+  files: readonly string[],
+): BundleFinding | undefined {
   // Overlap: no declared asset path may equal or be an ancestor of another.
   for (let i = 0; i < assets.length; i++) {
     for (let j = i + 1; j < assets.length; j++) {
@@ -467,11 +498,6 @@ function checkAssetTrees(
         };
       }
     }
-  }
-
-  for (const asset of assets) {
-    const kindError = checkAssetKind(folder, asset);
-    if (kindError) return kindError;
   }
 
   // Claim: every archived file belongs to exactly one asset tree.

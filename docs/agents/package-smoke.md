@@ -20,6 +20,8 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
   family with `not-checked` qualification.
 - **install-and-catalog**: the Proof Bundle built with `--no-install --output` (a written file is the standing zero-error Composition assertion on each
   OS), installed, re-installed as already installed at the equal digest, and listed.
+- **malformed-bundle-import** (#383): ordinary ZIP bytes with an aliased asset path or an undeclared file are refused by `bundle install`,
+  naming the finding, leaving no Catalog entry, managed archive, or partial asset tree on any OS.
 - **two-harness-proof-bundle** (#149): the installed Test Repair Proof Bundle run headlessly through the recorded Claude Code and Codex replayers in
   two fresh Workspaces differing only in `--harness`; each enters one repair iteration, passes its Verdict, and the authored approve-commit gate keeps
   Git unchanged until a separate `run answer --continue` succeeds and commits. Different effective models prove both Adapters were driven. Each launch

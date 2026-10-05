@@ -39,6 +39,7 @@ import { TARGETS, hostTargetKey } from "./targets.js";
 import { installReplayerAt } from "../tests/harness/replayer-install.js";
 import { installCodexReplayerAt } from "../tests/harness/codex-replayer-install.js";
 import { seedTestRepairWorkspace } from "../tests/helpers/testRepairWorkspace.js";
+import { readArchiveEntries } from "../tests/helpers/zip.js";
 import { runNamedScenario, withCleanup } from "./package-smoke/scenario.js";
 
 // Smokes the Bun compiled single-file executable (ADR 0030). It replaces the
@@ -654,6 +655,65 @@ await withCleanup(
       "install-and-catalog",
       installAndCatalogScenario,
     );
+
+    await runNamedScenario("malformed-bundle-import", async () => {
+      const entries = readArchiveEntries(
+        readFileSync(join(smokeRoot, "proof.wfb")),
+      );
+      const resource = entries.find((entry) => entry.path !== "manifest.json");
+      if (resource === undefined)
+        throw new Error("Proof Bundle has no asset files.");
+      const beforeFiles = readdirSync(join(secantHome, "bundles")).sort();
+      for (const { path, code } of [
+        { path: `${resource.path}/.`, code: "duplicate-path" },
+        { path: "stray.txt", code: "unclaimed-entry" },
+      ]) {
+        const id = `dev.secant.malformed-${code}`;
+        const malformed = writeZip([
+          ...entries.map((entry) => {
+            if (entry.path !== "manifest.json") return entry;
+            const manifest = JSON.parse(
+              Buffer.from(entry.data).toString("utf8"),
+            );
+            manifest.bundle.id = id;
+            return { ...entry, data: Buffer.from(JSON.stringify(manifest)) };
+          }),
+          { path, data: Buffer.from("invalid") },
+        ]);
+        const file = join(smokeRoot, `${code}.wfb`);
+        await writeFile(file, malformed);
+        assertRefuses(binary, [
+          {
+            args: ["bundle", "install", file],
+            match: code,
+            cwd: smokeRoot,
+            env: workspaceEnv,
+            detail: `did not report ${code}`,
+          },
+        ]);
+        const snapshot = JSON.parse(
+          run(binary, ["bundle", "list", "--json"], {
+            cwd: smokeRoot,
+            env: workspaceEnv,
+          }),
+        );
+        if (
+          (snapshot.result?.bundles ?? []).some(
+            (bundle: { id: string }) => bundle.id === id,
+          )
+        ) {
+          throw new Error(`Malformed Bundle ${id} left a Catalog entry.`);
+        }
+        if (
+          JSON.stringify(readdirSync(join(secantHome, "bundles")).sort()) !==
+          JSON.stringify(beforeFiles)
+        ) {
+          throw new Error(
+            `Malformed Bundle ${id} left managed bytes or a partial asset tree.`,
+          );
+        }
+      }
+    });
 
     async function twoHarnessProofBundleScenario(): Promise<void> {
       // The `two-harness-proof-bundle` scenario (#149, replacing the M3 single-Harness

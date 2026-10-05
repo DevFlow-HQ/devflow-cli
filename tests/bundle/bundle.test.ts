@@ -450,6 +450,39 @@ test("readBundle accepts real Proof Bundle bytes with its identity and digest", 
   assert.equal(outcome.read.digest, built.built.digest);
 });
 
+for (const alias of [
+  "resources/x.txt/.",
+  "resources/./x.txt",
+  "resources//x.txt",
+  "./resources/x.txt",
+  "resources\\x.txt",
+  "resources/./X.txt",
+]) {
+  test(`readBundle refuses a filesystem alias ${JSON.stringify(alias)}`, () => {
+    const built = buildBundle(
+      authoringFolder(
+        {
+          ...base(),
+          assets: [{ path: "resources", kind: "resource" }],
+        },
+        { "resources/x.txt": "original" },
+      ),
+    );
+    assert.ok(built.ok, JSON.stringify(built));
+    const bytes = repack(built.built.bytes, (entries) => [
+      ...entries,
+      { path: alias, data: Buffer.from("alias") },
+    ]);
+    const outcome = readBundle(bytes, DEFAULT_BUDGETS);
+    assert.ok(!outcome.ok && "finding" in outcome, JSON.stringify(outcome));
+    assert.equal(
+      outcome.finding.code,
+      alias.includes("X.txt") ? "case-colliding-path" : "duplicate-path",
+    );
+    assert.equal(readBundleAssets(bytes, DEFAULT_BUDGETS), undefined);
+  });
+}
+
 const archiveRejections: {
   name: string;
   bytes: () => Uint8Array;
@@ -464,6 +497,11 @@ const archiveRejections: {
   {
     name: "a directory entry",
     bytes: () => writeZip([{ path: "dir/", data: Buffer.alloc(0) }]),
+    code: "directory-entry",
+  },
+  {
+    name: "a backslash directory entry",
+    bytes: () => writeZip([{ path: "dir\\", data: Buffer.alloc(0) }]),
     code: "directory-entry",
   },
   {
@@ -668,9 +706,16 @@ test("readBundle rejects a decompression bomb that understates its expanded size
 for (const { input, safe } of [
   { input: "ok/file.txt", safe: true },
   { input: "a\\b.txt", safe: true }, // backslash normalizes to a forward slash
+  { input: "resources/./x.txt", safe: true },
+  { input: "resources//x.txt", safe: true },
+  { input: ".", safe: false },
+  { input: "./.", safe: false },
+  { input: "resources/../x.txt", safe: false },
   { input: "../evil.txt", safe: false },
   { input: "/abs.txt", safe: false },
   { input: "C:\\win.txt", safe: false },
+  { input: "./C:\\win.txt", safe: false },
+  { input: "./C:win.txt", safe: false },
 ]) {
   test(`the relative-path rule agrees on ${JSON.stringify(input)}`, () => {
     // Manifest ingress: the path rule fires in validateManifest (before any file
@@ -699,6 +744,154 @@ for (const { input, safe } of [
 
     assert.equal(manifestRejected, !safe, `manifest disagreed on ${input}`);
     assert.equal(archiveRejected, !safe, `archive disagreed on ${input}`);
+  });
+}
+
+for (const path of ["resources", "resources/", "resources/./", "resources//"]) {
+  test(`a declared directory ${JSON.stringify(path)} builds and imports expected bytes`, () => {
+    const built = buildBundle(
+      authoringFolder(
+        {
+          ...base(),
+          assets: [{ path, kind: "resource" }],
+        },
+        { "resources/x.txt": "original", "resources/nested/y.txt": "nested" },
+      ),
+    );
+    assert.ok(built.ok, JSON.stringify(built));
+    const read = readBundle(built.built.bytes, DEFAULT_BUDGETS);
+    assert.ok(read.ok, JSON.stringify(read));
+    assert.equal(read.read.digest, built.built.digest);
+    assert.deepEqual(
+      readBundleAssets(built.built.bytes, DEFAULT_BUDGETS)?.map((entry) => ({
+        path: entry.path,
+        text: decode(entry.data),
+      })),
+      [
+        { path: "resources/nested/y.txt", text: "nested" },
+        { path: "resources/x.txt", text: "original" },
+      ],
+    );
+    // Exercise the declared-directory grammar on imported, ordinary ZIP bytes too.
+    const imported = repack(built.built.bytes, (entries) =>
+      entries.map((entry) => {
+        if (entry.path !== "manifest.json") return entry;
+        const manifest = JSON.parse(decode(entry.data));
+        manifest.assets[0].path = path;
+        return { ...entry, data: Buffer.from(JSON.stringify(manifest)) };
+      }),
+    );
+    assert.ok(readBundle(imported, DEFAULT_BUDGETS).ok);
+    assert.deepEqual(
+      readBundleAssets(imported, DEFAULT_BUDGETS),
+      readBundleAssets(built.built.bytes, DEFAULT_BUDGETS),
+    );
+  });
+}
+
+test("build and import share canonical asset-tree overlap and coverage checks", () => {
+  const manifest = {
+    ...base(),
+    assets: [{ path: "resources/", kind: "resource" }],
+  };
+  const files = { "resources/x.txt": "original" };
+  const built = buildBundle(authoringFolder(manifest, files));
+  assert.ok(built.ok);
+  const overlapping = {
+    ...manifest,
+    assets: [
+      ...manifest.assets,
+      { path: "resources/./x.txt", kind: "resource" },
+    ],
+  };
+  const overlapBuild = buildBundle(authoringFolder(overlapping, files));
+  assert.ok(!overlapBuild.ok && "finding" in overlapBuild);
+  assert.equal(overlapBuild.finding.code, "overlapping-asset-trees");
+  const overlapBytes = repack(built.built.bytes, (entries) =>
+    entries.map((entry) => {
+      if (entry.path !== "manifest.json") return entry;
+      const packaged = JSON.parse(decode(entry.data));
+      packaged.assets = overlapping.assets;
+      return { ...entry, data: Buffer.from(JSON.stringify(packaged)) };
+    }),
+  );
+  const overlapRead = readBundle(overlapBytes, DEFAULT_BUDGETS);
+  assert.ok(!overlapRead.ok && "finding" in overlapRead);
+  assert.equal(overlapRead.finding.code, "overlapping-asset-trees");
+  assert.equal(readBundleAssets(overlapBytes, DEFAULT_BUDGETS), undefined);
+
+  const strayBuild = buildBundle(
+    authoringFolder(manifest, { ...files, "resources-other/x.txt": "stray" }),
+  );
+  assert.ok(!strayBuild.ok && "finding" in strayBuild);
+  assert.equal(strayBuild.finding.code, "unclaimed-entry");
+  const strayBytes = repack(built.built.bytes, (entries) => [
+    ...entries,
+    { path: "resources-other/x.txt", data: Buffer.from("stray") },
+  ]);
+  const strayRead = readBundle(strayBytes, DEFAULT_BUDGETS);
+  assert.ok(!strayRead.ok && "finding" in strayRead);
+  assert.deepEqual(strayRead.finding, strayBuild.finding);
+
+  const canonicalBytes = repack(built.built.bytes, (entries) =>
+    entries.map((entry) =>
+      entry.path === "manifest.json"
+        ? entry
+        : { ...entry, path: "./resources//x.txt/." },
+    ),
+  );
+  assert.ok(readBundle(canonicalBytes, DEFAULT_BUDGETS).ok);
+  assert.deepEqual(readBundleAssets(canonicalBytes, DEFAULT_BUDGETS), [
+    { path: "resources/x.txt", data: Buffer.from("original") },
+  ]);
+});
+
+for (const workingDirectory of [".", "", "./", ".//."]) {
+  test(`canonicalization preserves Workspace-root command directory ${JSON.stringify(workingDirectory)}`, () => {
+    const built = buildBundle(
+      authoringFolder({
+        ...base(),
+        routing: [
+          {
+            id: "command",
+            kind: "command",
+            command: { executable: "bun", arguments: [], workingDirectory },
+          },
+        ],
+      }),
+    );
+    assert.ok(built.ok, JSON.stringify(built));
+    const inspection = inspectBundle(built.built.bytes, DEFAULT_BUDGETS);
+    assert.ok(inspection.ok, JSON.stringify(inspection));
+    assert.ok(readBundle(built.built.bytes, DEFAULT_BUDGETS).ok);
+  });
+}
+
+for (const alias of ["x.txt\\.", "X.txt"]) {
+  test(`build refuses filesystem names with archive alias ${JSON.stringify(alias)}`, (t) => {
+    if (
+      process.platform === "win32" ||
+      (alias === "X.txt" && process.platform === "darwin")
+    ) {
+      t.skip(
+        "This platform's filesystem cannot reliably create these as distinct regular sibling filenames; ordinary ZIP alias tests cover import on every OS.",
+      );
+      return;
+    }
+    const outcome = buildBundle(
+      authoringFolder(
+        {
+          ...base(),
+          assets: [{ path: "resources", kind: "resource" }],
+        },
+        { "resources/x.txt": "original", [`resources/${alias}`]: "alias" },
+      ),
+    );
+    assert.ok(!outcome.ok && "finding" in outcome, JSON.stringify(outcome));
+    assert.equal(
+      outcome.finding.code,
+      alias === "X.txt" ? "case-colliding-path" : "duplicate-path",
+    );
   });
 }
 
@@ -754,13 +947,10 @@ test("readBundle refuses a shape-valid archive that does not compose with the bu
   );
 });
 
-test("readBundleAssets returns only the manifest-declared entries, never manifest.json or an unclaimed entry", () => {
-  const entries = readArchiveEntries(proofBytes());
-  const withStray = writeZip([
-    ...entries,
-    { path: "stray.txt", data: Buffer.from("not declared") },
-  ]);
-  const assets = readBundleAssets(withStray, DEFAULT_BUDGETS);
+test("readBundleAssets returns declared entries and rejects an unclaimed entry", () => {
+  const bytes = proofBytes();
+  const entries = readArchiveEntries(bytes);
+  const assets = readBundleAssets(bytes, DEFAULT_BUDGETS);
   assert.ok(assets !== undefined);
   const paths = assets.map((asset) => asset.path).sort();
   assert.ok(paths.length > 0);
@@ -773,6 +963,25 @@ test("readBundleAssets returns only the manifest-declared entries, never manifes
       .filter((path) => path !== "manifest.json")
       .sort(),
   );
+  const withStray = writeZip([
+    ...entries,
+    { path: "stray.txt", data: Buffer.from("not declared") },
+  ]);
+  const outcome = readBundle(withStray, DEFAULT_BUDGETS);
+  assert.ok(!outcome.ok && "finding" in outcome, JSON.stringify(outcome));
+  assert.equal(outcome.finding.code, "unclaimed-entry");
+  assert.equal(outcome.finding.path, "stray.txt");
+  assert.match(outcome.finding.message, /declare it as an asset or remove it/);
+  assert.equal(readBundleAssets(withStray, DEFAULT_BUDGETS), undefined);
+  for (const includeComposition of [true, false]) {
+    const inspection = inspectBundle(
+      withStray,
+      DEFAULT_BUDGETS,
+      includeComposition,
+    );
+    assert.ok(!inspection.ok && "finding" in inspection);
+    assert.equal(inspection.finding.code, "unclaimed-entry");
+  }
   // Bytes that are not a readable Bundle read as undefined, not a throw.
   assert.equal(
     readBundleAssets(new Uint8Array([1, 2, 3]), DEFAULT_BUDGETS),

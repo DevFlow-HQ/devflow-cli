@@ -159,6 +159,44 @@ export function readZip(bytes: Uint8Array, budgets: Budgets): ZipReadResult {
   }
 }
 
+// The authoring walk keeps physical names for file reads, but its generated
+// archive must satisfy the same canonical identity rule as received ZIP bytes.
+export function checkArchivePaths(
+  paths: readonly string[],
+): BundleFinding | undefined {
+  const names = new Set<string>();
+  const folded = new Set<string>();
+  try {
+    for (const path of paths) {
+      checkUniquePath(decodePath(Buffer.from(path, "utf8")), names, folded);
+    }
+    return undefined;
+  } catch (error) {
+    if (error instanceof ArchiveError) return error.finding;
+    throw error;
+  }
+}
+
+function checkUniquePath(
+  name: string,
+  names: Set<string>,
+  folded: Set<string>,
+): void {
+  if (names.has(name)) {
+    reject("duplicate-path", `Entry "${name}" appears more than once.`, name);
+  }
+  const lower = name.toLowerCase();
+  if (folded.has(lower)) {
+    reject(
+      "case-colliding-path",
+      `Entry "${name}" case-collides with another entry.`,
+      name,
+    );
+  }
+  names.add(name);
+  folded.add(lower);
+}
+
 class ArchiveError extends Error {
   constructor(readonly finding: BundleFinding) {
     super(finding.message);
@@ -301,20 +339,7 @@ function readEntries(buffer: Buffer, budgets: Budgets): ZipEntry[] {
       );
     }
     checkRegularFile(name, externalAttrs);
-    if (names.has(name)) {
-      reject("duplicate-path", `Entry "${name}" appears more than once.`, name);
-    }
-    const lower = name.toLowerCase();
-    if (folded.has(lower)) {
-      reject(
-        "case-colliding-path",
-        `Entry "${name}" case-collides with another entry.`,
-        name,
-      );
-    }
-    names.add(name);
-    folded.add(lower);
-
+    checkUniquePath(name, names, folded);
     expected += uncompSize;
     if (expected > budgets.maxExpandedBytes) {
       reject(
@@ -337,7 +362,7 @@ function readEntries(buffer: Buffer, budgets: Budgets): ZipEntry[] {
 // device, fifo, socket). A zero external-attrs (a DOS archive with no Unix mode)
 // carries no type and is treated as a regular file.
 function checkRegularFile(name: string, externalAttrs: number): void {
-  if (name.endsWith("/") || externalAttrs & DOS_DIRECTORY) {
+  if (externalAttrs & DOS_DIRECTORY) {
     reject(
       "directory-entry",
       `Entry "${name}" is a directory; a Bundle archives regular files only.`,
@@ -417,11 +442,20 @@ function decodePath(raw: Buffer): string {
   } catch {
     reject("non-utf8-path", "An archive entry name is not valid UTF-8.");
   }
+  // A raw directory entry must stay invalid even when normalization removes
+  // its trailing separator. Manifest directory declarations use the shared rule.
+  if (/[\\/]$/.test(name)) {
+    reject(
+      "directory-entry",
+      `Entry "${name}" is a directory; a Bundle archives regular files only.`,
+      name,
+    );
+  }
   const safe = normalizeRelativePath(name);
-  if (safe === undefined) {
+  if (safe === undefined || safe === ".") {
     reject(
       "unsafe-path",
-      `Entry "${name}" is an absolute or traversing path; a Bundle stores relative paths only.`,
+      `Entry "${name}" does not name a safe relative file; remove absolute, root-only, or traversing paths.`,
       name,
     );
   }
