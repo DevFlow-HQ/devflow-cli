@@ -82,6 +82,8 @@ jobs:
           tests/application/requested-model.test.ts
           tests/application/observer-lag.test.ts
           tests/composition/application-log.test.ts
+      - name: Codex semantic schema qualification
+        run: bun run test -- tests/harness/codex-semantic-schema.test.ts
       - name: Test
         run: bun run test
       - name: Build

@@ -5,6 +5,7 @@ const variantSchema = z.looseObject({
   properties: z.looseObject({
     method: discriminatorSchema.optional(),
     type: discriminatorSchema.optional(),
+    mode: discriminatorSchema.optional(),
   }),
   required: z.array(z.string()).optional(),
 });
@@ -35,7 +36,14 @@ const generatedSchema = z.looseObject({
     FileChangeRequestApprovalParams: shapeSchema,
     FileChangeRequestApprovalResponse: shapeSchema,
     FileChangeApprovalDecision: literalUnionSchema,
+    McpServerElicitationAction: enumSchema,
+    McpServerElicitationRequestParams: shapeSchema.extend({
+      oneOf: z.array(variantSchema),
+    }),
+    McpServerElicitationRequestResponse: shapeSchema,
     v2: z.looseObject({
+      ApprovalsReviewer: enumSchema,
+      AppToolApproval: enumSchema,
       TurnStatus: enumSchema,
       CommandExecutionStatus: enumSchema,
       PatchApplyStatus: enumSchema,
@@ -255,80 +263,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "additionalProperties",
   ),
   fact(
-    "elicitation metadata",
-    true,
-    "definitions",
-    "McpServerElicitationRequestParams",
-    "oneOf",
-    "0",
-    "properties",
-    "_meta",
-  ),
-  fact(
-    "ThreadStartParams config",
-    "object",
-    "definitions",
-    "v2",
-    "ThreadStartParams",
-    "properties",
-    "config",
-    "type",
-    "0",
-  ),
-  fact(
-    "ThreadStartParams approvalsReviewer",
-    "#/definitions/v2/ApprovalsReviewer",
-    "definitions",
-    "v2",
-    "ThreadStartParams",
-    "properties",
-    "approvalsReviewer",
-    "anyOf",
-    "0",
-    "$ref",
-  ),
-  fact(
-    "ThreadResumeParams config",
-    "object",
-    "definitions",
-    "v2",
-    "ThreadResumeParams",
-    "properties",
-    "config",
-    "type",
-    "0",
-  ),
-  fact(
-    "ThreadResumeParams approvalsReviewer",
-    "#/definitions/v2/ApprovalsReviewer",
-    "definitions",
-    "v2",
-    "ThreadResumeParams",
-    "properties",
-    "approvalsReviewer",
-    "anyOf",
-    "0",
-    "$ref",
-  ),
-  fact(
-    "user reviewer",
-    "user",
-    "definitions",
-    "v2",
-    "ApprovalsReviewer",
-    "enum",
-    "0",
-  ),
-  fact(
-    "MCP pre-approval",
-    "approve",
-    "definitions",
-    "v2",
-    "AppToolApproval",
-    "enum",
-    "3",
-  ),
-  fact(
     "elicitation server",
     "string",
     "definitions",
@@ -347,38 +281,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "type",
   ),
   fact(
-    "elicitation turn",
-    "string",
-    "definitions",
-    "McpServerElicitationRequestParams",
-    "properties",
-    "turnId",
-    "type",
-    "0",
-  ),
-  fact(
-    "elicitation message",
-    "string",
-    "definitions",
-    "McpServerElicitationRequestParams",
-    "oneOf",
-    "0",
-    "properties",
-    "message",
-    "type",
-  ),
-  fact(
-    "elicitation URL",
-    "string",
-    "definitions",
-    "McpServerElicitationRequestParams",
-    "oneOf",
-    "3",
-    "properties",
-    "url",
-    "type",
-  ),
-  fact(
     "elicitation response",
     "#/definitions/McpServerElicitationAction",
     "definitions",
@@ -386,22 +288,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "properties",
     "action",
     "$ref",
-  ),
-  fact(
-    "elicitation accept",
-    "accept",
-    "definitions",
-    "McpServerElicitationAction",
-    "enum",
-    "0",
-  ),
-  fact(
-    "elicitation decline",
-    "decline",
-    "definitions",
-    "McpServerElicitationAction",
-    "enum",
-    "1",
   ),
   fact(
     "user input answers",
@@ -438,17 +324,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "properties",
     "userAgent",
     "type",
-  ),
-  fact(
-    "initialize Codex home",
-    "#/definitions/v2/AbsolutePathBuf",
-    "definitions",
-    "InitializeResponse",
-    "properties",
-    "codexHome",
-    "allOf",
-    "0",
-    "$ref",
   ),
   fact(
     "initialize platform family",
@@ -519,18 +394,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "type",
   ),
   fact(
-    "turn/start effort",
-    "#/definitions/v2/ReasoningEffort",
-    "definitions",
-    "v2",
-    "TurnStartParams",
-    "properties",
-    "effort",
-    "anyOf",
-    "0",
-    "$ref",
-  ),
-  fact(
     "reasoning effort",
     "string",
     "definitions",
@@ -556,18 +419,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "ThreadReadResponse",
     "properties",
     "thread",
-    "$ref",
-  ),
-  fact(
-    "thread reasoning effort",
-    "#/definitions/v2/ReasoningEffort",
-    "definitions",
-    "v2",
-    "Thread",
-    "properties",
-    "reasoningEffort",
-    "anyOf",
-    "0",
     "$ref",
   ),
   fact(
@@ -697,17 +548,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "CommandExecutionRequestApprovalResponse",
     "properties",
     "decision",
-    "$ref",
-  ),
-  fact(
-    "command approval kind",
-    "#/definitions/CommandExecutionApprovalKind",
-    "definitions",
-    "CommandExecutionRequestApprovalParams",
-    "properties",
-    "kind",
-    "allOf",
-    "0",
     "$ref",
   ),
   fact(
@@ -923,6 +763,81 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
 
   const definitions = parsed.data.definitions;
   const checks = [
+    validateNullableReference(
+      definitions.v2.ThreadStartParams,
+      "approvalsReviewer",
+      "#/definitions/v2/ApprovalsReviewer",
+      "ThreadStartParams",
+    ),
+    validateNullableReference(
+      definitions.v2.ThreadResumeParams,
+      "approvalsReviewer",
+      "#/definitions/v2/ApprovalsReviewer",
+      "ThreadResumeParams",
+    ),
+    validateNullableReference(
+      definitions.v2.TurnStartParams,
+      "effort",
+      "#/definitions/v2/ReasoningEffort",
+      "turn/start",
+    ),
+    validateNullableReference(
+      definitions.v2.Thread,
+      "reasoningEffort",
+      "#/definitions/v2/ReasoningEffort",
+      "thread",
+    ),
+    validatePropertyReference(
+      definitions.InitializeResponse,
+      "codexHome",
+      "#/definitions/v2/AbsolutePathBuf",
+      "initialize",
+    ),
+    validatePropertyReference(
+      definitions.CommandExecutionRequestApprovalParams,
+      "kind",
+      "#/definitions/CommandExecutionApprovalKind",
+      "command approval",
+    ),
+    validateElicitation(definitions.McpServerElicitationRequestParams),
+    validateShape(
+      definitions.McpServerElicitationRequestResponse,
+      ["action"],
+      "elicitation response",
+    ),
+    validateNullableProperty(
+      definitions.v2.ThreadStartParams,
+      "config",
+      "object",
+      "ThreadStartParams",
+    ),
+    validateNullableProperty(
+      definitions.v2.ThreadResumeParams,
+      "config",
+      "object",
+      "ThreadResumeParams",
+    ),
+    validateNullableProperty(
+      definitions.McpServerElicitationRequestParams,
+      "turnId",
+      "string",
+      "elicitation",
+    ),
+    validateMembers(
+      definitions.v2.ApprovalsReviewer.enum,
+      ["user"],
+      "user reviewer",
+    ),
+    validateMembers(
+      definitions.v2.AppToolApproval.enum,
+      ["approve"],
+      "MCP pre-approval",
+    ),
+    validateMembers(
+      definitions.McpServerElicitationAction.enum,
+      ["accept", "decline"],
+      "elicitation action",
+    ),
     validateVariants(
       definitions.ClientRequest.oneOf,
       "method",
@@ -1078,9 +993,10 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       ["input", "threadId"],
       "turn/start params",
     ),
-    validateNullableStringProperty(
+    validateNullableProperty(
       definitions.v2.TurnStartParams,
       "model",
+      "string",
       "turn/start params",
     ),
     validateShape(
@@ -1121,7 +1037,12 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       "account/read response",
     ),
     validateShape(definitions.v2.Thread, ["id", "status"], "thread"),
-    validateNullableStringProperty(definitions.v2.Thread, "model", "thread"),
+    validateNullableProperty(
+      definitions.v2.Thread,
+      "model",
+      "string",
+      "thread",
+    ),
     validateShape(
       definitions.v2.ModelReroutedNotification,
       ["threadId", "toModel", "turnId"],
@@ -1188,12 +1109,13 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       ["itemId", "threadId", "turnId"],
       "command approval params",
     ),
-    validateNullableStringProperty(
+    validateNullableProperty(
       definitions.CommandExecutionRequestApprovalParams,
       "command",
+      "string",
       "command approval params",
     ),
-    validateEnumMembers(
+    validateMembers(
       definitions.CommandExecutionApprovalKind.enum,
       ["command"],
       "command approval kind",
@@ -1243,7 +1165,7 @@ type TVariant = z.infer<typeof variantSchema>;
 
 function validateVariants(
   variants: readonly TVariant[],
-  discriminator: "method" | "type",
+  discriminator: "method" | "type" | "mode",
   requiredVariants: TRequiredVariants,
   label: string,
 ): string | undefined {
@@ -1320,20 +1242,11 @@ function validateVariantFieldReferencesByDiscriminator(
       candidate.properties[discriminator]?.enum.includes(name),
     );
     if (variant === undefined) continue;
-    if (schemaReference(variant.properties[field]) !== expectedRef) {
+    if (!schemaHasReference(variant.properties[field], expectedRef)) {
       return `${label} '${name}.${field}' no longer references '${expectedRef}'`;
     }
   }
   return undefined;
-}
-
-function validateEnumMembers(
-  actual: readonly string[],
-  required: readonly string[],
-  label: string,
-): string | undefined {
-  const missing = required.find((member) => !actual.includes(member));
-  return missing === undefined ? undefined : `${label} is missing '${missing}'`;
 }
 
 function validatePrimitiveUnion(
@@ -1378,7 +1291,7 @@ function validateVariantFieldReferences(
     if (variant === undefined) continue;
     for (const [field, expectedRef] of Object.entries(fields)) {
       const property = variant.properties[field];
-      if (schemaReference(property) !== expectedRef) {
+      if (!schemaHasReference(property, expectedRef)) {
         return `thread item '${name}.${field}' no longer references '${expectedRef}'`;
       }
     }
@@ -1399,7 +1312,7 @@ function validateVariantArrayItemReferences(
       const property = variant.properties[field];
       if (
         !isRecord(property) ||
-        schemaReference(property.items) !== expectedRef
+        !schemaHasReference(property.items, expectedRef)
       ) {
         return `thread item '${name}.${field}' items no longer reference '${expectedRef}'`;
       }
@@ -1408,9 +1321,10 @@ function validateVariantArrayItemReferences(
   return undefined;
 }
 
-function validateNullableStringProperty(
+function validateNullableProperty(
   shape: z.infer<typeof shapeSchema>,
   field: string,
+  expectedType: string,
   label: string,
 ): string | undefined {
   const property = shape.properties?.[field];
@@ -1418,20 +1332,96 @@ function validateNullableStringProperty(
   const types = property.type;
   if (
     !Array.isArray(types) ||
-    !types.includes("string") ||
+    !types.includes(expectedType) ||
     !types.includes("null")
   ) {
-    return `${label} '${field}' is no longer nullable string`;
+    return `${label} '${field}' is no longer nullable ${expectedType}`;
   }
   return undefined;
 }
 
-function schemaReference(value: unknown): string | undefined {
-  if (!isRecord(value)) return undefined;
-  if (typeof value.$ref === "string") return value.$ref;
-  const allOf = value.allOf;
-  if (!Array.isArray(allOf) || !isRecord(allOf[0])) return undefined;
-  return typeof allOf[0].$ref === "string" ? allOf[0].$ref : undefined;
+function validateNullableReference(
+  shape: TShape,
+  field: string,
+  expectedRef: string,
+  label: string,
+): string | undefined {
+  const property = shape.properties?.[field];
+  const alternatives = isRecord(property) ? property.anyOf : undefined;
+  if (
+    !Array.isArray(alternatives) ||
+    !alternatives.some(
+      (candidate) => isRecord(candidate) && candidate.$ref === expectedRef,
+    ) ||
+    !alternatives.some(
+      (candidate) => isRecord(candidate) && candidate.type === "null",
+    )
+  ) {
+    return `${label} ${field} no longer references nullable '${expectedRef}'`;
+  }
+  return undefined;
+}
+
+function validatePropertyReference(
+  shape: TShape,
+  field: string,
+  expectedRef: string,
+  label: string,
+): string | undefined {
+  return schemaHasReference(shape.properties?.[field], expectedRef)
+    ? undefined
+    : `${label} '${field}' no longer references '${expectedRef}'`;
+}
+
+function schemaHasReference(value: unknown, expectedRef: string): boolean {
+  if (!isRecord(value)) return false;
+  if ("$ref" in value) return value.$ref === expectedRef;
+  return (
+    Array.isArray(value.allOf) &&
+    value.allOf.some(
+      (candidate) => isRecord(candidate) && candidate.$ref === expectedRef,
+    )
+  );
+}
+
+function validateElicitation(
+  shape: z.infer<
+    typeof generatedSchema
+  >["definitions"]["McpServerElicitationRequestParams"],
+): string | undefined {
+  const contract =
+    validateShape(shape, ["serverName", "threadId"], "elicitation params") ??
+    validateVariants(
+      shape.oneOf,
+      "mode",
+      {
+        form: ["message", "mode"],
+        url: ["message", "mode", "url"],
+      },
+      "elicitation",
+    );
+  if (contract !== undefined) return contract;
+  for (const mode of ["form", "url"]) {
+    const variant = shape.oneOf.find((candidate) =>
+      candidate.properties.mode?.enum.includes(mode),
+    );
+    // validateVariants established both consumed modes and their required fields.
+    if (variant === undefined) return `missing required elicitation '${mode}'`;
+    if (variant.type !== "object")
+      return `elicitation '${mode}' is no longer an object`;
+    for (const field of mode === "url"
+      ? ["message", "mode", "url"]
+      : ["message", "mode"]) {
+      const property = variant.properties[field];
+      if (!isRecord(property) || property.type !== "string") {
+        return `elicitation '${mode}.${field}' is no longer type 'string'`;
+      }
+    }
+    if (mode === "form" && variant.properties._meta !== true) {
+      return "elicitation form metadata changed from 'true'";
+    }
+  }
+  return undefined;
 }
 
 function validateMembers(
@@ -1488,14 +1478,6 @@ function validateSchemaFact(
 ): string | undefined {
   let current = schema;
   for (const segment of schemaFact.path) {
-    if (Array.isArray(current)) {
-      const index = Number(segment);
-      if (!Number.isInteger(index) || current[index] === undefined) {
-        return `${schemaFact.label} schema path is missing`;
-      }
-      current = current[index];
-      continue;
-    }
     if (!isRecord(current) || !(segment in current)) {
       return `${schemaFact.label} schema path is missing`;
     }
