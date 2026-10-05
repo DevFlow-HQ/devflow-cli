@@ -597,6 +597,8 @@ export interface RunOwner {
   /** Settle a Turn authoritatively (#116); immutable once settled. Refused if
    *  fenced. */
   settleTurn(request: SettleTurnRequest): WriteResult;
+  /** The first admitted, unsettled Turn, read without materializing Turn history. */
+  currentTurn(): Pick<TurnRecord, "turnId"> | undefined;
   /** Every admitted Turn, in sequence order. */
   turns(): readonly TurnRecord[];
   /** Every normalized durable Turn event, in append order. */

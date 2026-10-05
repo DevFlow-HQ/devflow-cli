@@ -1,3 +1,4 @@
+import { modelChoiceOffer } from "./model-choice.js";
 import type { ApplicationHarnessQualification } from "./harness-registry.js";
 import { waitingAgentTurn } from "../run/store/store.js";
 import { z } from "zod";
@@ -39,7 +40,6 @@ import {
   interactiveStepTarget,
 } from "../run/execution/execution.js";
 import type {
-  ChangeModelChoiceOffer,
   ActionOffer,
   Problem,
   RunCheckpointView,
@@ -63,7 +63,6 @@ import { RUN_TIMELINE_TRUNCATION_MARKER } from "./projection-port.js";
 import {
   bundleBytesCorrupt,
   bundleBytesMissing,
-  runLiveElsewhere,
   runNotFound,
   runStoreDamaged,
 } from "./problems.js";
@@ -368,7 +367,7 @@ function runResult(
                 modelChoiceOffer({
                   runId,
                   currentChoice: modelChoice,
-                  state: derivedRun.state,
+                  state: record.state,
                   foreignOwner: liveElsewhere ? listing : undefined,
                   qualification: context.modelChoiceQualification,
                   turnLive: isLive && liveTurn !== undefined,
@@ -854,84 +853,6 @@ function endStageOffer(runId: string, stepId: string): ActionOffer {
     stepId,
     consequence:
       "Secant has not checked the tracker. This ends the stage as complete; use it only after you and the agent verified the tickets are done.",
-  };
-}
-
-function modelChoiceOffer(params: {
-  readonly runId: string;
-  readonly currentChoice: ChangeModelChoiceOffer["currentChoice"];
-  readonly state: RunStateName;
-  readonly foreignOwner: RunListing | undefined;
-  readonly qualification: ApplicationHarnessQualification | undefined;
-  /** A Turn runs in this process now. */
-  readonly turnLive: boolean;
-}): ChangeModelChoiceOffer {
-  const qualified = params.qualification;
-  const base = {
-    action: "change-model-choice",
-    runId: params.runId,
-    reach:
-      params.turnLive &&
-      qualified?.ok === true &&
-      qualified.profile.modelChange.reach === "live-turn"
-        ? "live-turn"
-        : "next-turn",
-    ...(params.currentChoice === undefined
-      ? {}
-      : { currentChoice: params.currentChoice }),
-  } as const;
-  if (params.foreignOwner !== undefined)
-    return {
-      ...base,
-      available: false,
-      problem: runLiveElsewhere(params.runId, params.foreignOwner.ownerPid),
-    };
-  if (params.state === "succeeded" || params.state === "cancelled")
-    return {
-      ...base,
-      available: false,
-      problem: {
-        code: "run-terminal",
-        explanation: "A terminal Run's Model choice cannot be changed.",
-        remediation: "Launch a new Run to choose another model.",
-        possibleEffects: "none",
-      },
-    };
-  if (qualified === undefined)
-    return {
-      ...base,
-      available: false,
-      problem: {
-        code: "model-choice-checking",
-        explanation: "The selected Harness's Model choices need qualification.",
-        remediation: "Request Model choice preparation, then retry.",
-        possibleEffects: "none",
-      },
-    };
-  if (!qualified.ok)
-    return {
-      ...base,
-      available: false,
-      problem: {
-        code: "selected-harness-unavailable",
-        explanation:
-          "The selected Harness could not qualify for a Model choice change.",
-        remediation:
-          "Check its installation and authentication, then try again.",
-        possibleEffects: "none",
-        correction: "harness",
-      },
-    };
-  const { profile, defaults } = qualified;
-  return {
-    ...base,
-    available: true,
-    ...(profile.modelSelection.at === "unavailable"
-      ? {}
-      : { modelDeclaration: profile.modelSelection.declaration }),
-    ...(defaults.kind === "unavailable" || defaults.effortLock === undefined
-      ? {}
-      : { effortLock: defaults.effortLock }),
   };
 }
 

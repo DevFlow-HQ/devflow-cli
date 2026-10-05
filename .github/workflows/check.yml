@@ -84,6 +84,8 @@ jobs:
           tests/composition/application-log.test.ts
       - name: Codex semantic schema qualification
         run: bun run test -- tests/harness/codex-semantic-schema.test.ts
+      - name: model-choice-bounded-eligibility
+        run: bun run test -- tests/application/requested-model.test.ts
       - name: Test
         run: bun run test
       - name: Build

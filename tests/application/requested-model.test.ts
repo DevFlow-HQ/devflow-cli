@@ -1646,6 +1646,283 @@ for (const kind of ["reported", "fallback"] as const) {
   });
 }
 
+test("model-choice-bounded-eligibility", async (t) => {
+  for (const duringQualification of [
+    "unchanged",
+    "live",
+    "terminal",
+    "foreign",
+    "choice",
+    "terminal-before",
+    "foreign-before",
+  ] as const) {
+    await t.test(duringQualification, async (t) => {
+      const { wired, digest } = wireDeclaring(t, LISTED, REPORTED);
+      const workspaceView = wired.projectionPort.openProjection({
+        family: "workspace",
+      });
+      const workspace = workspaceView.snapshot.path;
+      workspaceView.close();
+      const home = makeTempDir("secant-bounded-choice-");
+      const group = openFakeRunGroup(home, workspace, {
+        selfPid: 1000,
+        isOwnerAlive: () => true,
+      });
+      t.after(() => group.close());
+      const foreign = openFakeRunGroup(home, workspace, {
+        selfPid: 2000,
+        isOwnerAlive: () => true,
+      });
+      t.after(() => foreign.close());
+      const created = group.createRun({
+        operationId: "seed",
+        bundleSnapshotDigest: digest,
+        launch: {},
+        selectedHarness: "claude-code",
+        modelChoice: { model: "alpha", effort: "high" },
+        at: new Date(),
+      });
+      const seeded = group.acquireRun(created.runId);
+      assert.ok(seeded);
+      assert.ok(seeded.writeState("halted").ok);
+      assert.ok(
+        seeded.admitTurn({
+          turnId: "historical-turn",
+          attemptId: "0.0:write",
+          session: "historical-session",
+          origin: "managed",
+          kind: "agent",
+          recoveryCoordinate: "historical-native",
+          input: "unrelated history",
+          harness: "claude-code",
+          at: new Date(),
+        }).ok,
+      );
+      assert.ok(
+        seeded.settleTurn({
+          turnId: "historical-turn",
+          session: "historical-session",
+          resultKind: "completed",
+          resultDetail: "{}",
+          availability: "open",
+          assistantContent: "unrelated transcript",
+          at: new Date(),
+        }).ok,
+      );
+      if (duringQualification === "live") {
+        assert.ok(
+          seeded.admitTurn({
+            turnId: "current-turn",
+            attemptId: "0.0:write",
+            session: "current-session",
+            origin: "managed",
+            kind: "agent",
+            recoveryCoordinate: "current-native",
+            input: "current input",
+            harness: "claude-code",
+            at: new Date(),
+          }).ok,
+        );
+        assert.ok(seeded.writeState("running").ok);
+      } else assert.ok(seeded.release().ok);
+      seeded.close();
+      let bounded = false;
+      let acquisitions = 0;
+      let historyReads = 0;
+      const observedGroup = {
+        ...group,
+        acquireRun(...args: Parameters<typeof group.acquireRun>) {
+          if (bounded) acquisitions++;
+          const owner = group.acquireRun(...args);
+          if (owner === undefined) return undefined;
+          return new Proxy(owner, {
+            get(target, key, receiver) {
+              if (
+                bounded &&
+                [
+                  "attemptLog",
+                  "turns",
+                  "turnEvents",
+                  "harnessSessions",
+                  "transcript",
+                  "transcriptPage",
+                  "artifactNames",
+                  "harnessEvidence",
+                  "materializationConflicts",
+                  "gateAnswers",
+                ].includes(String(key))
+              ) {
+                return () => {
+                  historyReads++;
+                  throw new Error(
+                    `Model-choice eligibility read unrelated ${String(key)}`,
+                  );
+                };
+              }
+              return Reflect.get(target, key, receiver);
+            },
+          });
+        },
+      };
+      const qualifying = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let qualifications = 0;
+      const app = createApplication({
+        catalog: wired.catalog,
+        process: fakeProcess(),
+        launchWorkspacePath: workspace,
+        runGroup: observedGroup,
+        runExecution: () => {
+          throw new Error("must not execute");
+        },
+        harnessRegistry: [
+          {
+            choice: {
+              id: "claude-code",
+              name: "Claude Code",
+              availability: "available",
+            },
+            inputRules: [],
+            servedCapabilities: [],
+            discover: () => ({
+              kind: "found",
+              source: "configured",
+              description: "fake",
+            }),
+            qualify: async () => {
+              qualifications++;
+              qualifying.resolve();
+              await release.promise;
+              return { ok: true, profile: profile(LISTED), defaults: REPORTED };
+            },
+          },
+        ],
+      });
+      t.after(() => app.shutdown());
+      const ordinary = app.projectionPort.openProjection({
+        family: "run",
+        runId: created.runId,
+      });
+      ordinary.close();
+      assert.equal(qualifications, 0, "ordinary Run reads never qualify");
+      const before = duringQualification.endsWith("-before");
+      if (before) {
+        const writer = (
+          duringQualification === "foreign-before" ? foreign : group
+        ).acquireRun(created.runId, { takeover: true });
+        assert.ok(writer);
+        if (duringQualification === "terminal-before")
+          assert.ok(writer.writeState("succeeded").ok);
+        writer.close();
+      }
+      const preparing = app.projectionPort.openProjection({
+        family: "run",
+        runId: created.runId,
+        prepareModelChoice: true,
+      });
+      assert.ok(preparing.snapshot.result.found);
+      const checking = preparing.snapshot.result.run.actionOffers.find(
+        (offer) => offer.action === "change-model-choice",
+      );
+      assert.ok(
+        checking?.action === "change-model-choice" && !checking.available,
+      );
+      assert.equal(
+        checking.problem.code,
+        before
+          ? duringQualification === "terminal-before"
+            ? "run-terminal"
+            : "run-live-elsewhere"
+          : "model-choice-checking",
+      );
+      preparing.close();
+      if (!before) await qualifying.promise;
+      bounded = true;
+      const admission = app.projectionPort.submit({
+        operationId: "bounded-change",
+        operation: "change-model-choice",
+        input: { runId: created.runId, effort: "low" },
+      });
+      assert.ok(admission.admitted);
+      if (
+        !before &&
+        duringQualification !== "unchanged" &&
+        duringQualification !== "live"
+      ) {
+        const writer = (
+          duringQualification === "foreign" ? foreign : group
+        ).acquireRun(created.runId, { takeover: true });
+        assert.ok(writer);
+        if (duringQualification === "terminal")
+          assert.ok(writer.writeState("succeeded").ok);
+        if (duringQualification === "choice")
+          assert.ok(
+            writer.changeModelChoice({ model: "beta", effort: "medium" }).ok,
+          );
+        writer.close();
+      }
+      release.resolve();
+      const outcome = await awaitSettled(
+        app.projectionPort,
+        admission.operationId,
+      );
+      const refused =
+        duringQualification === "terminal" ||
+        duringQualification === "foreign" ||
+        before;
+      assert.equal(
+        outcome.status,
+        refused ? "not-applied" : "applied",
+        JSON.stringify(outcome),
+      );
+      if (outcome.status === "not-applied")
+        assert.equal(
+          outcome.problem.code,
+          duringQualification.startsWith("terminal")
+            ? "run-terminal"
+            : "run-live-elsewhere",
+        );
+      assert.equal(
+        historyReads,
+        0,
+        "no history joins or transient Run Projection reads, including qualification and commit pushes",
+      );
+      assert.equal(
+        acquisitions,
+        refused ? 0 : 1,
+        "only the existing write owner is acquired",
+      );
+      bounded = false;
+      const final = app.projectionPort.openProjection({
+        family: "run",
+        runId: created.runId,
+        prepareModelChoice: true,
+      });
+      assert.ok(final.snapshot.result.found);
+      const offer = final.snapshot.result.run.actionOffers.find(
+        (offer) => offer.action === "change-model-choice",
+      );
+      assert.ok(offer?.action === "change-model-choice");
+      assert.equal(
+        offer.available,
+        !refused,
+        "Offer and intent use identical eligibility",
+      );
+      if (!offer.available && outcome.status === "not-applied")
+        assert.deepEqual(offer.problem, outcome.problem);
+      if (offer.available) {
+        assert.equal(offer.reach, "next-turn");
+        assert.deepEqual(offer.currentChoice, {
+          model: duringQualification === "choice" ? "beta" : "alpha",
+          effort: "low",
+        });
+      }
+      final.close();
+      assert.equal(qualifications, before ? 0 : 1);
+    });
+  }
+});
+
 function seedChoiceRun(
   wired: Wiring,
   digest: string,

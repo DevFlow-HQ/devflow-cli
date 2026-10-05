@@ -1,3 +1,4 @@
+import type { ApplicationHarnessQualification } from "./harness-registry.js";
 import { z } from "zod";
 import type { Catalog } from "../catalog/catalog.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   ModelDeclaration,
 } from "../harness/harness.js";
 import {
+  runLiveElsewhere,
   effortChoiceRequired,
   effortLocked,
   modelChoiceRequired,
@@ -14,6 +16,7 @@ import {
   requestedModelUnavailable,
 } from "./problems.js";
 import type {
+  ChangeModelChoiceOffer,
   HarnessChoice,
   Problem,
   OperationSnapshot,
@@ -416,4 +419,83 @@ function resolveEffort(params: {
     return { ok: true, effort: entry.defaultEffort };
   }
   return { ok: false, problem: effortChoiceRequired(harness, model, offered) };
+}
+
+/** The bounded eligibility rule shared by Run Offers and Model-choice admission. */
+export function modelChoiceOffer(params: {
+  readonly runId: string;
+  readonly currentChoice: ChangeModelChoiceOffer["currentChoice"];
+  readonly state: string;
+  readonly foreignOwner: { readonly ownerPid?: number } | undefined;
+  readonly qualification: ApplicationHarnessQualification | undefined;
+  /** A Turn runs in this process now. */
+  readonly turnLive: boolean;
+}): ChangeModelChoiceOffer {
+  const qualified = params.qualification;
+  const base = {
+    action: "change-model-choice",
+    runId: params.runId,
+    reach:
+      params.turnLive &&
+      qualified?.ok === true &&
+      qualified.profile.modelChange.reach === "live-turn"
+        ? "live-turn"
+        : "next-turn",
+    ...(params.currentChoice === undefined
+      ? {}
+      : { currentChoice: params.currentChoice }),
+  } as const;
+  if (params.foreignOwner !== undefined)
+    return {
+      ...base,
+      available: false,
+      problem: runLiveElsewhere(params.runId, params.foreignOwner.ownerPid),
+    };
+  if (params.state === "succeeded" || params.state === "cancelled")
+    return {
+      ...base,
+      available: false,
+      problem: {
+        code: "run-terminal",
+        explanation: "A terminal Run's Model choice cannot be changed.",
+        remediation: "Launch a new Run to choose another model.",
+        possibleEffects: "none",
+      },
+    };
+  if (qualified === undefined)
+    return {
+      ...base,
+      available: false,
+      problem: {
+        code: "model-choice-checking",
+        explanation: "The selected Harness's Model choices need qualification.",
+        remediation: "Request Model choice preparation, then retry.",
+        possibleEffects: "none",
+      },
+    };
+  if (!qualified.ok)
+    return {
+      ...base,
+      available: false,
+      problem: {
+        code: "selected-harness-unavailable",
+        explanation:
+          "The selected Harness could not qualify for a Model choice change.",
+        remediation:
+          "Check its installation and authentication, then try again.",
+        possibleEffects: "none",
+        correction: "harness",
+      },
+    };
+  const { profile, defaults } = qualified;
+  return {
+    ...base,
+    available: true,
+    ...(profile.modelSelection.at === "unavailable"
+      ? {}
+      : { modelDeclaration: profile.modelSelection.declaration }),
+    ...(defaults.kind === "unavailable" || defaults.effortLock === undefined
+      ? {}
+      : { effortLock: defaults.effortLock }),
+  };
 }

@@ -109,6 +109,7 @@ import type { UpdateStream } from "./update-stream.js";
 import {
   modelChoiceRefusalExplanation,
   preselectModelChoice,
+  modelChoiceOffer,
   resolveChangedModelChoice,
   saveLastModelChoice,
   sameModelChoice,
@@ -3261,29 +3262,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const { runId } = input;
     if (runGroup === undefined)
       return { status: "not-applied", problem: runSupportUnavailable() };
-    const foreign = liveElsewhere(runId);
-    if (foreign !== undefined)
-      return {
-        status: "not-applied",
-        problem: runLiveElsewhere(runId, foreign.ownerPid),
-      };
-    const initial = openRunProjection(runId, true);
-    try {
-      if (initial.snapshot.family === "run" && initial.snapshot.result.found) {
-        const offer = initial.snapshot.result.run.actionOffers.find(
-          (candidate) => candidate.action === "change-model-choice",
-        );
-        if (
-          offer?.action === "change-model-choice" &&
-          !offer.available &&
-          offer.problem.code !== "model-choice-checking"
-        )
-          return { status: "not-applied", problem: offer.problem };
-      }
-    } finally {
-      initial.close();
-    }
-    const read = runGroup.readRun(runId);
+    let read = runGroup.readRun(runId);
     if (!read.ok)
       return {
         status: "not-applied",
@@ -3292,43 +3271,104 @@ export function createApplication(deps: ApplicationDependencies): Application {
             ? runNotFound(runId)
             : runStoreDamaged(runId),
       };
-    const harness = read.run.selectedHarness;
-    if (harness !== undefined) await qualifyRunModelChoice(harness);
-    // Re-read the Offer after qualification: ownership, rest, and choice may
-    // change during the await. Offer preparation never acquires a foreign owner.
-    const projection = openRunProjection(runId);
-    let offer;
-    try {
-      const snapshot = projection.snapshot;
-      if (snapshot.family !== "run" || !snapshot.result.found)
+    // Legacy selection upgrades still belong to the existing Run owner. Modern
+    // Runs need only their immutable selection, never the Bundle or Run history.
+    if (read.run.selectedHarness === undefined) {
+      const derived = deriveRunFacts(
+        { runGroup, catalog, budgets },
+        read.run.bundleSnapshotDigest,
+      );
+      if ("problem" in derived)
+        return { status: "not-applied", problem: derived.problem };
+      if (!routingNeedsHarness(derived.facts.routing))
+        return {
+          status: "not-applied",
+          problem: {
+            code: "model-choice-irrelevant",
+            explanation:
+              "This Run has no Agent Steps and needs no Model choice.",
+            remediation: "Choose an Agent-bearing Run.",
+            possibleEffects: "none",
+          },
+        };
+      const foreign = runGroup
+        .listRuns()
+        .find(
+          (run) => run.runId === runId && run.live && !run.ownedByThisProcess,
+        );
+      if (foreign !== undefined)
+        return {
+          status: "not-applied",
+          problem: runLiveElsewhere(runId, foreign.ownerPid),
+        };
+      const tracking = runs.get(runId);
+      const held =
+        tracking !== undefined && !tracking.done ? tracking.owner : undefined;
+      const owner = held ?? runGroup.acquireRun(runId);
+      if (owner === undefined)
+        return { status: "not-applied", problem: runLiveElsewhere(runId) };
+      try {
+        upgradeLegacyHarnessSelection(owner, derived.facts.routing, runId);
+      } finally {
+        if (held === undefined) owner.close();
+      }
+      read = runGroup.readRun(runId);
+      if (!read.ok)
         return {
           status: "not-applied",
           problem:
-            snapshot.family === "run" && !snapshot.result.found
-              ? snapshot.result.problem
-              : runNotFound(runId),
+            read.problem.kind === "unknown-run"
+              ? runNotFound(runId)
+              : runStoreDamaged(runId),
         };
-      offer = snapshot.result.run.actionOffers.find(
-        (candidate) => candidate.action === "change-model-choice",
-      );
-    } finally {
-      projection.close();
     }
-    if (offer?.action !== "change-model-choice")
-      return {
-        status: "not-applied",
-        problem: {
-          code: "model-choice-irrelevant",
-          explanation: "This Run has no Agent Steps and needs no Model choice.",
-          remediation: "Choose an Agent-bearing Run.",
-          possibleEffects: "none",
-        },
-      };
-    if (!offer.available)
-      return { status: "not-applied", problem: offer.problem };
+    const initialListing = runGroup
+      .listRuns()
+      .find((run) => run.runId === runId);
+    const initial = modelChoiceOffer({
+      runId,
+      currentChoice: read.run.modelChoice,
+      state: read.run.state,
+      foreignOwner:
+        initialListing?.live && !initialListing.ownedByThisProcess
+          ? initialListing
+          : undefined,
+      qualification:
+        read.run.selectedHarness === undefined
+          ? undefined
+          : modelChoiceQualifications.get(read.run.selectedHarness),
+      turnLive: false,
+    });
+    if (!initial.available && initial.problem.code !== "model-choice-checking")
+      return { status: "not-applied", problem: initial.problem };
+    const harness = read.run.selectedHarness;
+    if (harness !== undefined) await qualifyRunModelChoice(harness);
+    // Qualification yields. Re-read canonical state, choice and ownership before
+    // resolving either half or acquiring a writer; tracking alone is not authority.
     const latest = runGroup.readRun(runId);
     if (!latest.ok)
-      return { status: "not-applied", problem: runNotFound(runId) };
+      return {
+        status: "not-applied",
+        problem:
+          latest.problem.kind === "unknown-run"
+            ? runNotFound(runId)
+            : runStoreDamaged(runId),
+      };
+    const listing = runGroup.listRuns().find((run) => run.runId === runId);
+    const eligibility = modelChoiceOffer({
+      runId,
+      currentChoice: latest.run.modelChoice,
+      state: latest.run.state,
+      foreignOwner:
+        listing?.live && !listing.ownedByThisProcess ? listing : undefined,
+      qualification:
+        latest.run.selectedHarness === undefined
+          ? undefined
+          : modelChoiceQualifications.get(latest.run.selectedHarness),
+      turnLive: false,
+    });
+    if (!eligibility.available)
+      return { status: "not-applied", problem: eligibility.problem };
     const selected = latest.run.selectedHarness;
     const qualification =
       selected === undefined
@@ -3376,57 +3416,71 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const tracking = runs.get(runId);
     const held =
       tracking !== undefined && !tracking.done ? tracking.owner : undefined;
-    const change = resolved.result;
-    // A change reaching the running Turn waits for its Harness to answer; the
-    // Run and preference are written only once it applies (#348).
-    const live = tracking?.live.changeModel;
-    if (offer.reach === "live-turn" && held !== undefined && live !== undefined)
-      return new Promise<OperationSettlement>((resolve) => {
-        const pendings = pendingModelChanges.get(runId) ?? new Set();
-        pendingModelChanges.set(runId, pendings);
-        const pending = {
-          choice: change.choice,
-          // Synchronous, so the write precedes the next Turn's start.
-          settle(answer: ModelChange | undefined): void {
-            if (!pendings.delete(pending)) return;
-            if (pendings.size === 0) pendingModelChanges.delete(runId);
-            resolve(
-              answer?.outcome === "refused"
-                ? {
-                    status: "not-applied",
-                    problem: {
-                      code: "model-choice-refused",
-                      explanation: modelChoiceRefusalExplanation(
-                        registration.choice.name,
-                        change.choice,
-                        answer.reason,
-                        latest.run.modelChoice,
-                      ),
-                      remediation: `Choose another Model choice, or run secant run model ${runId} with an available --model.`,
-                      possibleEffects: "none",
-                      correction: "model",
-                    },
-                  }
-                : commitModelChoiceChange(runId, held, selected, {
-                    ...change,
-                    // Unanswered by the Turn's end, it applies from the next.
-                    reach:
-                      answer?.outcome === "applied" ? "live-turn" : "next-turn",
-                  }),
-            );
-          },
-        };
-        pendings.add(pending);
-        void live(change.choice).then((receipt) => {
-          if (receipt.outcome === "rejected") pending.settle(undefined);
-        });
-      });
     const owner = held ?? runGroup.acquireRun(runId);
     if (owner === undefined)
       return { status: "not-applied", problem: runLiveElsewhere(runId) };
-    // A pushed read uses this writer's owner, so observation never fences it.
     const transient = held === undefined;
     try {
+      const offer = modelChoiceOffer({
+        runId,
+        currentChoice: latest.run.modelChoice,
+        state: latest.run.state,
+        foreignOwner: undefined,
+        qualification,
+        turnLive: listing?.live === true && owner.currentTurn() !== undefined,
+      });
+      const change = resolved.result;
+      // A change reaching the running Turn waits for its Harness to answer; the
+      // Run and preference are written only once it applies (#348).
+      const live = tracking?.live.changeModel;
+      if (
+        offer.reach === "live-turn" &&
+        held !== undefined &&
+        live !== undefined
+      )
+        return new Promise<OperationSettlement>((resolve) => {
+          const pendings = pendingModelChanges.get(runId) ?? new Set();
+          pendingModelChanges.set(runId, pendings);
+          const pending = {
+            choice: change.choice,
+            // Synchronous, so the write precedes the next Turn's start.
+            settle(answer: ModelChange | undefined): void {
+              if (!pendings.delete(pending)) return;
+              if (pendings.size === 0) pendingModelChanges.delete(runId);
+              resolve(
+                answer?.outcome === "refused"
+                  ? {
+                      status: "not-applied",
+                      problem: {
+                        code: "model-choice-refused",
+                        explanation: modelChoiceRefusalExplanation(
+                          registration.choice.name,
+                          change.choice,
+                          answer.reason,
+                          latest.run.modelChoice,
+                        ),
+                        remediation: `Choose another Model choice, or run secant run model ${runId} with an available --model.`,
+                        possibleEffects: "none",
+                        correction: "model",
+                      },
+                    }
+                  : commitModelChoiceChange(runId, held, selected, {
+                      ...change,
+                      // Unanswered by the Turn's end, it applies from the next.
+                      reach:
+                        answer?.outcome === "applied"
+                          ? "live-turn"
+                          : "next-turn",
+                    }),
+              );
+            },
+          };
+          pendings.add(pending);
+          void live(change.choice).then((receipt) => {
+            if (receipt.outcome === "rejected") pending.settle(undefined);
+          });
+        });
+      // A pushed read uses this writer's owner, so observation never fences it.
       return commitModelChoiceChange(runId, owner, selected, {
         ...change,
         reach: "next-turn",

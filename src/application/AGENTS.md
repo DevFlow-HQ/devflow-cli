@@ -29,8 +29,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   It applies the effort lock to any preselection and refuses contradicting effort with correction `effort`; `submit` requires a model and trusts the Offer's effort.
 - Each focus open and assessment reads Preferences outside the qualification cache; stale model/effort skips the whole choice with a notice.
   `saveLastModelChoice` runs after Run creation or a fenced choice change; failure keeps the Run choice and its notice across Projection reopen.
-- `run` reads offer a Model choice after explicit `prepareModelChoice` or qualification. Ordinary reads never prepare a Harness. Changes recheck the Offer; halves use
-  the Run, never Preferences. Pushed reads use the writer's owner. A change reaching the live Turn follows [run-control](../../docs/agents/run-control.md) (#348).
+- `run` Offers follow `prepareModelChoice` or qualification. Ordinary reads never prepare a Harness. Changes share `model-choice.ts` and re-read authority after qualification.
+  `RunOwner.currentTurn` avoids history (#395). Halves use the Run, never Preferences. Push with the writer's owner. See [live control](../../docs/agents/run-control.md).
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
   strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.

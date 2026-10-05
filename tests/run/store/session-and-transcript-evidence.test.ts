@@ -597,3 +597,54 @@ test("transcriptPage reads bounded, ordered pages and flags older history (#124)
     hasOlder: false,
   });
 });
+
+test("current Turn reads only the first unsettled semantic target", (t) => {
+  const home = makeTempDir("secant-current-turn-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "current-turn");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.equal(owner.currentTurn(), undefined);
+  for (const turnId of ["history", "first-live", "second-live"]) {
+    assert.ok(
+      owner.admitTurn({
+        turnId,
+        attemptId: "0.0:write",
+        session: "s",
+        origin: "managed",
+        kind: "agent",
+        input: "input",
+        recoveryCoordinate: "native",
+        harness: "claude-code",
+        at: AT,
+      }).ok,
+    );
+  }
+  const settle = (turnId: string) => {
+    assert.ok(
+      owner.settleTurn({
+        turnId,
+        session: "s",
+        resultKind: "completed",
+        resultDetail: "{}",
+        availability: "open",
+        at: AT,
+      }).ok,
+    );
+  };
+  settle("history");
+  // Retained history is not an input to the current-Turn read. A malformed
+  // historical payload would fail the full Turn-history parser.
+  const database = new Database(
+    join(groupDirOf(home), created.runId, "run.db"),
+  );
+  database.exec("UPDATE turn SET input = x'00' WHERE turn_id = 'history'");
+  database.close();
+  assert.deepEqual(owner.currentTurn(), { turnId: "first-live" });
+  settle("first-live");
+  assert.deepEqual(owner.currentTurn(), { turnId: "second-live" });
+  settle("second-live");
+  assert.equal(owner.currentTurn(), undefined);
+});

@@ -230,6 +230,20 @@ export function settleAbandonedTurns(tx: SQLiteBunDatabase, at: string): void {
   }
 }
 
+export function readCurrentTurn(
+  db: SQLiteBunDatabase,
+): Pick<TurnRecord, "turnId"> | undefined {
+  const row = db
+    .select({ turnId: turns.turn_id })
+    .from(turns)
+    .where(isNull(turns.result_kind))
+    .orderBy(asc(turns.sequence))
+    .get();
+  return row === undefined
+    ? undefined
+    : z.object({ turnId: z.string() }).parse(row);
+}
+
 export function readTurns(db: SQLiteBunDatabase): readonly TurnRecord[] {
   return db
     .select({

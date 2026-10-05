@@ -44,6 +44,7 @@ import type {
 import {
   admitTurn,
   appendTurnEvent,
+  readCurrentTurn,
   readHarnessSessions,
   readTranscript,
   readTranscriptPage,
@@ -1138,6 +1139,9 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     settleTurn(request) {
       const settled = guardedWrite((tx) => settleTurn(tx, request));
       return toWriteResult(settled);
+    },
+    currentTurn() {
+      return readCurrentTurn(db);
     },
     turns() {
       return readTurns(db);
