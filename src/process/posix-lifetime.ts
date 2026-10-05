@@ -22,6 +22,7 @@ function loadLibc() {
         returns: "i32",
       },
       close: { args: ["i32"], returns: "i32" },
+      shutdown: { args: ["i32", "i32"], returns: "i32" },
       sigaction: { args: ["i32", "ptr", "ptr"], returns: "i32" },
       sigemptyset: { args: ["ptr"], returns: "i32" },
       sigfillset: { args: ["ptr"], returns: "i32" },
@@ -151,6 +152,7 @@ async function createPipe(
   k: Libc,
   path: string,
   deadline: number,
+  childReads: boolean,
 ): Promise<Pipe> {
   const server = createServer({ allowHalfOpen: true });
   let socket: Socket | undefined;
@@ -199,6 +201,35 @@ async function createPipe(
       throw nativeError(errno(k), "connect");
     socket = await accepted;
     socket.on("error", () => {});
+    // stdio is one-way. Retire unused socket halves before child launch so
+    // closing a stdio fd delivers EOF rather than a duplex peer reset on Darwin.
+    if (childReads) {
+      if (k.shutdown(fd, 1) < 0)
+        throw nativeError(errno(k), "shutdown(stdin write half)");
+      socket.resume();
+    } else {
+      // Bun schedules the native shutdown on nextTick. Await its finish before
+      // closing the peer read half or launching a child that can close at once.
+      const writeShut = finished(socket, {
+        readable: false,
+        writable: true,
+        cleanup: true,
+      });
+      void writeShut.catch(() => {});
+      socket.end();
+      clearTimeout(timer);
+      await Promise.race([
+        writeShut,
+        new Promise<never>((_, fail) => {
+          timer = setTimeout(
+            () => fail(new PosixLaunchTimeout("POSIX stdio shutdown timeout")),
+            Math.max(0, deadline - Date.now()),
+          );
+        }),
+      ]);
+      if (k.shutdown(fd, 0) < 0)
+        throw nativeError(errno(k), "shutdown(output read half)");
+    }
     return { socket, fd };
   } catch (cause) {
     socket?.destroy();
@@ -244,7 +275,14 @@ export async function launchPosix(
   const k = (libc ??= loadLibc().symbols);
   const darwin = process.platform === "darwin";
   const deadline = Date.now() + options.launchTimeoutMs;
-  const folder = mkdtempSync(join(tmpdir(), "sp-"));
+  // Unix address limits apply to the complete encoded path, including NUL.
+  // Keep caller TMPDIR/cwd/env intact; only this private acquisition path moves.
+  const socketCapacity = darwin ? 104 : 108;
+  const socketParent =
+    Buffer.byteLength(join(tmpdir(), "sp-XXXXXX", "2")) + 1 <= socketCapacity
+      ? tmpdir()
+      : "/tmp";
+  const folder = mkdtempSync(join(socketParent, "sp-"));
   const pipes: Pipe[] = [];
   const attr = Buffer.alloc(darwin ? 8 : 336);
   const actions = Buffer.alloc(darwin ? 8 : 80);
@@ -293,7 +331,12 @@ export async function launchPosix(
       "spawn_chdir",
     );
     for (let n = 0; n < 3; n++) {
-      const pipe = await createPipe(k, join(folder, String(n)), deadline);
+      const pipe = await createPipe(
+        k,
+        join(folder, String(n)),
+        deadline,
+        n === 0,
+      );
       pipes.push(pipe);
       check(
         k.posix_spawn_file_actions_adddup2(ptr(actions), pipe.fd, n),

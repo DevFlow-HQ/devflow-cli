@@ -76,6 +76,8 @@ All signal authority retires before final reap. Native root evidence remains dis
 A Process `reap` fact means Secant signalled the owned group, whose native root may already have exited with the recorded status or signal.
 
 Unix-socket peers accepted through `node:net` provide normal streaming and backpressure; arbitrary-fd Socket import failed qualification.
+Their unused halves are shut down before launch, so Darwin's write-side kqueue EOF produces pipe-like close rather than a false reset.
+Private socket acquisition uses a short `/tmp` folder when the caller's TMPDIR would exceed the Unix address limit, without changing child inputs.
 SIGCHLD supplies prompt observation. A yielding 25 ms targeted probe while root exit is unobserved also covers Bun's fallback waiter replacing
 that handler and a live root closing all stdio, at most 40 nonblocking syscalls per second per live root. Observation stops on native exit.
 Bun's broad no-orphans synchronous waits run on the same main/arming thread, so they cannot interleave between the ownership probe and group signal.
