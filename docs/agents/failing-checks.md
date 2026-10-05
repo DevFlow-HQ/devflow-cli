@@ -8,6 +8,8 @@ Read this before fixing a failing check or changing its expected result. Resolve
 2. Establish the correct result from the authorized task, specification, schema, or declared assets. The failing implementation's output alone is not evidence.
 3. If the implementation violates that requirement, fix the implementation. If an authorized change makes the expectation stale, update the expectation.
 
+Limit check changes to what the authorized task requires. Keep unrelated passing checks out of the change.
+
 Proceed without asking for permission when that evidence establishes the correct change. This includes expected values, fixtures, and snapshots.
 Ask the user only when the intended behavior is unclear or the proposed change would reduce coverage of a requirement that still applies.
 
