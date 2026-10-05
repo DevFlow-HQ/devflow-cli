@@ -1,3 +1,4 @@
+import { TurnEventProducer } from "./turn-event-producer.js";
 import {
   bindAgentCallDeclarations,
   startPermissionBridge,
@@ -1320,8 +1321,7 @@ class CodexTurn implements HarnessTurn {
   private readonly controlTimeoutMs: number;
   private readonly phases: HarnessPhaseObserver | undefined;
   private readonly onSettled: () => void;
-  private readonly listeners = new Set<TurnEventListener>();
-  private readonly events: TurnEvent[] = [];
+  private readonly producer = new TurnEventProducer();
   private readonly resultPromise: Promise<TurnResult>;
   private resolveResult!: (result: TurnResult) => void;
   private admittedToRuntime = false;
@@ -1339,8 +1339,6 @@ class CodexTurn implements HarnessTurn {
   private finalContent: string | undefined;
   private terminalError: string | undefined;
   private readonly pendingNotifications: RuntimeNotification[] = [];
-  private preview = "";
-  private previewIndex: number | undefined;
   private lastObservation = "no authoritative Codex Turn observation";
   private recoveryPending = false;
   private readonly steers = new Map<string, PendingCodexSteer>();
@@ -1363,7 +1361,6 @@ class CodexTurn implements HarnessTurn {
   private nativeTarget = nativeTargetSlot();
   private interruptState: TInterruptControlState = { kind: "idle" };
   private closing = false;
-  private producerClosed = false;
   private reapInterrupt: (() => Promise<void>) | undefined;
   private interruptTimer: ReturnType<typeof setTimeout> | undefined;
   private reaping: Promise<void> | undefined;
@@ -1402,9 +1399,7 @@ class CodexTurn implements HarnessTurn {
   }
 
   subscribe(listener: TurnEventListener): TurnSubscription {
-    for (const event of this.events) listener(event);
-    if (!this.settled && !this.producerClosed) this.listeners.add(listener);
-    return { unsubscribe: () => this.listeners.delete(listener) };
+    return this.producer.subscribe(listener);
   }
 
   result(): Promise<TurnResult> {
@@ -1625,7 +1620,7 @@ class CodexTurn implements HarnessTurn {
         () => {
           if (
             this.settled ||
-            this.producerClosed ||
+            this.producer.sealed ||
             this.interruptState.kind === "idle"
           )
             return;
@@ -1773,7 +1768,7 @@ class CodexTurn implements HarnessTurn {
       this.admittedToRuntime &&
       this.turnId !== undefined &&
       !this.settled &&
-      !this.producerClosed &&
+      !this.producer.sealed &&
       !this.closing
     );
   }
@@ -1815,7 +1810,7 @@ class CodexTurn implements HarnessTurn {
   }
 
   answerAgentCall(answer: AgentCallAnswer): Promise<ControlReceipt> {
-    if (this.settled || this.producerClosed)
+    if (this.settled || this.producer.sealed)
       return Promise.resolve({ outcome: "rejected", reason: "expired" });
     const pending = this.calls.get(answer.callId.opaque);
     if (pending === undefined || pending.kind === "expired")
@@ -1972,7 +1967,7 @@ class CodexTurn implements HarnessTurn {
   }
 
   accept(notification: RuntimeNotification): void {
-    if (this.settled || this.producerClosed || !this.admittedToRuntime) return;
+    if (this.settled || this.producer.sealed || !this.admittedToRuntime) return;
     if (notification.kind === "activity") {
       this.emit({ kind: "activity", description: notification.description });
       return;
@@ -2075,7 +2070,7 @@ class CodexTurn implements HarnessTurn {
       case "preview":
         this.lastObservation = "Codex emitted assistant preview content";
         this.deliverSteersInHistory();
-        this.emitPreview(notification.delta);
+        this.producer.emitPreview(notification.delta);
         return;
       case "item-event":
         this.rereadEffectiveValues();
@@ -2092,7 +2087,7 @@ class CodexTurn implements HarnessTurn {
         }
         if (notification.event !== undefined) {
           if (notification.event.kind === "assistant-content") {
-            this.clearPreview();
+            this.producer.clearPreview();
             this.finalContent = notification.event.content;
             this.lastObservation =
               "Codex completed an authoritative agent message";
@@ -2118,7 +2113,7 @@ class CodexTurn implements HarnessTurn {
   }
 
   connectionEnded(cause?: unknown, afterReap = false): void {
-    if (this.settled || this.producerClosed) return;
+    if (this.settled || this.producer.sealed) return;
     if (this.recoveryPending) return;
     if (!this.admittedToRuntime) {
       this.settleNotStarted(
@@ -2432,7 +2427,7 @@ class CodexTurn implements HarnessTurn {
     this.turnId = undefined;
     this.nativeTarget = nativeTargetSlot();
     this.settleApprovals(true);
-    this.clearPreview();
+    this.producer.clearPreview();
     this.terminalError = undefined;
     this.lastObservation = "Codex left an accepted Steer unanswered";
     try {
@@ -2549,11 +2544,9 @@ class CodexTurn implements HarnessTurn {
   }
 
   private emit(event: TurnEvent): void {
-    if (this.settled || this.producerClosed) return;
     if (event.kind === "activity")
       event = { ...event, description: redactText(event.description) };
-    this.events.push(event);
-    for (const listener of this.listeners) listener(event);
+    this.producer.emit(event);
   }
 
   private confirmInterrupt(): void {
@@ -2567,26 +2560,6 @@ class CodexTurn implements HarnessTurn {
       this.interruptState.kind === "sent" ||
       this.interruptState.kind === "acknowledged"
     );
-  }
-
-  private emitPreview(delta: string): void {
-    if (this.settled || this.producerClosed) return;
-    this.preview += delta;
-    const event: TurnEvent = { kind: "preview", text: this.preview };
-    if (this.previewIndex === undefined) {
-      this.previewIndex = this.events.length;
-      this.events.push(event);
-    } else {
-      this.events[this.previewIndex] = event;
-    }
-    for (const listener of this.listeners) listener(event);
-  }
-
-  private clearPreview(): void {
-    if (this.previewIndex === undefined) return;
-    this.events.splice(this.previewIndex, 1);
-    this.previewIndex = undefined;
-    this.preview = "";
   }
 
   /** Model output proves the model saw every Steer already in history. */
@@ -2623,12 +2596,12 @@ class CodexTurn implements HarnessTurn {
   }
 
   private settle(result: TurnResult, confirmAnswers = false): void {
-    if (this.settled || this.producerClosed) return;
+    if (this.settled || this.producer.sealed) return;
     clearTimeout(this.interruptTimer);
     if (result.kind === "completed" || result.kind === "failed")
       this.interruptPhase?.abandoned();
     this.resolveTarget(undefined);
-    this.clearPreview();
+    this.producer.clearPreview();
     for (const [clientId, pending] of this.steers) {
       if (!pending.accepted) continue;
       // Codex delivers a Steer by writing it into history (ADR 0035); only a
@@ -2655,8 +2628,7 @@ class CodexTurn implements HarnessTurn {
       this.emit({ kind: "agent-call", phase: "expired", callId: { opaque } });
       pending.resolve({ outcome: "refused", reason: "request expired" });
     }
-    this.producerClosed = true;
-    this.listeners.clear();
+    this.producer.seal();
     if (
       this.reapInterrupt !== undefined &&
       (result.kind === "interrupted" ||

@@ -1,3 +1,4 @@
+import { TurnEventProducer } from "./turn-event-producer.js";
 import { reportContainment } from "./containment.js";
 // The Claude Code Harness Adapter — private to the Harness Module, re-exported
 // from `harness.ts` only through its factory. It discovers and qualifies the
@@ -68,7 +69,6 @@ import type {
   SteerCapability,
   SteerInput,
   SteerSettlement,
-  TurnEvent,
   TurnEventListener,
   TurnRequest,
   TurnResult,
@@ -1545,23 +1545,19 @@ class ClaudeCodeTurn implements HarnessTurn {
   settledKind: TurnResult["kind"] | undefined;
   interrupting = false;
   nativeConfirmed = false;
-  private producerClosed = false;
   readonly nativeConfirmation: Promise<void>;
   private confirmNative!: () => void;
   /** The last authoritative fact observed before truth could be lost — carried
    *  into a `lost` result so a caller sees how far the Turn got. */
   lastObservation = "no authoritative observation before the Turn ended";
   readonly request: TurnRequest;
-  private readonly listeners = new Set<TurnEventListener>();
-  private readonly events: TurnEvent[] = [];
+  private readonly producer = new TurnEventProducer();
   private readonly tools = new Map<string, string>();
   private readonly resultPromise: Promise<TurnResult>;
   private resolveResult!: (result: TurnResult) => void;
   private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
   /** The open handshake or recovery phase, awaiting init. */
   private initPhase: PhaseSpan | undefined;
-  private preview = "";
-  private previewIndex: number | undefined;
   /** Outstanding approval prompts, keyed by their exact request id. Several may
    *  coexist; each expires when the Turn ends, is interrupted, or is lost. */
   private readonly approvals = new Map<string, PendingApproval>();
@@ -1621,9 +1617,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   subscribe(listener: TurnEventListener): TurnSubscription {
-    for (const event of this.events) listener(event);
-    this.listeners.add(listener);
-    return { unsubscribe: () => this.listeners.delete(listener) };
+    return this.producer.subscribe(listener);
   }
 
   result(): Promise<TurnResult> {
@@ -1723,24 +1717,24 @@ class ClaudeCodeTurn implements HarnessTurn {
         status: "outstanding",
         resolve,
       });
-      this.emit({ kind: "request-raised", request });
+      this.producer.emit({ kind: "request-raised", request });
     });
   }
 
   raiseAgentCall(call: AgentCall): Promise<AgentCallReply> {
-    if (this.settled || this.producerClosed || this.interrupting)
+    if (this.settled || this.producer.sealed || this.interrupting)
       return Promise.resolve({
         outcome: "refused",
         reason: "no Turn in progress",
       });
     return new Promise((resolve) => {
       this.calls.set(call.callId.opaque, { status: "outstanding", resolve });
-      this.emit({ kind: "agent-call", phase: "raised", call });
+      this.producer.emit({ kind: "agent-call", phase: "raised", call });
     });
   }
 
   answerAgentCall(answer: AgentCallAnswer): Promise<ControlReceipt> {
-    if (this.settled || this.producerClosed || this.interrupting)
+    if (this.settled || this.producer.sealed || this.interrupting)
       return Promise.resolve({ outcome: "rejected", reason: "expired" });
     const pending = this.calls.get(answer.callId.opaque);
     if (pending === undefined)
@@ -1774,7 +1768,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       return Promise.resolve({ outcome: "rejected", reason: "shape-mismatch" });
     }
     pending.status = "settled";
-    this.emit({
+    this.producer.emit({
       kind: "request-answered",
       requestId: answer.requestId,
       by: "human",
@@ -1796,13 +1790,17 @@ class ClaudeCodeTurn implements HarnessTurn {
     for (const [opaque, pending] of this.calls) {
       if (pending.status !== "outstanding") continue;
       pending.status = "settled";
-      this.emit({ kind: "agent-call", phase: "expired", callId: { opaque } });
+      this.producer.emit({
+        kind: "agent-call",
+        phase: "expired",
+        callId: { opaque },
+      });
       pending.resolve({ outcome: "refused", reason: "request expired" });
     }
     for (const pending of this.approvals.values()) {
       if (pending.status !== "outstanding") continue;
       pending.status = "settled";
-      this.emit({
+      this.producer.emit({
         kind: "request-expired",
         requestId: pending.request.requestId,
       });
@@ -1853,7 +1851,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   /** Dispatch one parsed frame. A known type whose schema failed arrives as
    *  `other` and is generic activity, never corruption (frames.ts). */
   acceptFrame(parsed: ParsedFrame): void {
-    if (this.settled || this.producerClosed) return;
+    if (this.settled || this.producer.sealed) return;
     if (parsed.kind === "elicitation") {
       this.declineElicitation(parsed.frame);
       return;
@@ -1876,7 +1874,8 @@ class ClaudeCodeTurn implements HarnessTurn {
         this.acceptStatus(parsed.frame);
         return;
       }
-      if (parsed.kind !== "result") this.emit(genericActivity(parsed.type));
+      if (parsed.kind !== "result")
+        this.producer.emit(genericActivity(parsed.type));
       return;
     }
     switch (parsed.kind) {
@@ -1901,7 +1900,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       case "telemetry":
         return;
       case "other":
-        this.emit(genericActivity(parsed.type));
+        this.producer.emit(genericActivity(parsed.type));
     }
   }
 
@@ -1909,7 +1908,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     const id = frame.request_id;
     if (this.elicitations.has(id)) return;
     this.elicitations.add(id);
-    this.emit({
+    this.producer.emit({
       kind: "elicitation-declined",
       harness: HARNESS_NAME,
       server: redactText(frame.request.mcp_server_name ?? "unknown"),
@@ -1918,7 +1917,7 @@ class ClaudeCodeTurn implements HarnessTurn {
         ? {}
         : { url: redactText(frame.request.url) }),
     });
-    if (!this.elicitations.has(id) || this.producerClosed || this.interrupting)
+    if (!this.elicitations.has(id) || this.producer.sealed || this.interrupting)
       return;
     void this.session
       .writeInput(this, encodeElicitationDecline(id))
@@ -1926,7 +1925,7 @@ class ClaudeCodeTurn implements HarnessTurn {
         if (
           !this.elicitations.delete(id) ||
           this.settled ||
-          this.producerClosed
+          this.producer.sealed
         )
           return;
         if (!written)
@@ -1937,7 +1936,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   protocolCorruption(detail: string, cause?: unknown): void {
-    if (this.settled || this.producerClosed) return;
+    if (this.settled || this.producer.sealed) return;
     this.settleLost("completion", detail, {
       phase: "turn",
       category: "protocol-corruption",
@@ -1963,7 +1962,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   /** Native confirmation detaches the exact Session. Windows reaps before the
    *  result resolves; POSIX reuses its process. A relaunch always uses --resume. */
   settleInterrupted(stop: "native" | "process"): void {
-    if (this.settled || this.producerClosed) return;
+    if (this.settled || this.producer.sealed) return;
     if (stop === "native") {
       this.nativeConfirmed = true;
       this.confirmNative();
@@ -2066,7 +2065,7 @@ class ClaudeCodeTurn implements HarnessTurn {
         return;
       }
       this.betweenExchanges = false;
-      this.emit({
+      this.producer.emit({
         kind: "session",
         availability: { state: "open" },
         facts: sessionFacts(frame, this.session.coordinate),
@@ -2105,14 +2104,21 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.initPhase = undefined;
     this.lastObservation = "Claude Code acknowledged the Session at init";
     const facts = sessionFacts(frame, this.session.coordinate);
-    this.emit({ kind: "session", availability: { state: "open" }, facts });
-    this.emit({ kind: "model", observation: this.session.model() });
-    this.emit({ kind: "activity", description: describeSessionFacts(facts) });
+    this.producer.emit({
+      kind: "session",
+      availability: { state: "open" },
+      facts,
+    });
+    this.producer.emit({ kind: "model", observation: this.session.model() });
+    this.producer.emit({
+      kind: "activity",
+      description: describeSessionFacts(facts),
+    });
   }
 
   observeModel(observation: ModelObservation, change?: ModelChange): void {
     if (this.settled) return;
-    this.emit({
+    this.producer.emit({
       kind: "model",
       observation,
       ...(change === undefined ? {} : { change }),
@@ -2126,9 +2132,9 @@ class ClaudeCodeTurn implements HarnessTurn {
       if (blockType === "text") {
         const content = block.text;
         if (content !== undefined) {
-          this.clearPreview();
+          this.producer.clearPreview();
           this.lastObservation = `assistant content: ${truncate(content)}`;
-          this.emit({
+          this.producer.emit({
             kind: "assistant-content",
             content,
             ...(parentActivity !== undefined ? { parentActivity } : {}),
@@ -2140,7 +2146,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       const tool = block.name ?? "unknown tool";
       const id = block.id;
       if (id !== undefined) this.tools.set(id, tool);
-      this.emit({
+      this.producer.emit({
         kind: "tool-activity",
         activity: {
           tool,
@@ -2158,7 +2164,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       if (block.type !== "tool_result") continue;
       const id = block.tool_use_id;
       const tool = id === undefined ? undefined : this.tools.get(id);
-      this.emit({
+      this.producer.emit({
         kind: "tool-activity",
         activity: {
           tool: tool ?? "unknown tool",
@@ -2174,7 +2180,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     const delta = frame.event.delta;
     if (delta === undefined || delta.type !== "text_delta") return;
     const text = delta.text;
-    if (text !== undefined) this.emitPreview(text);
+    if (text !== undefined) this.producer.emitPreview(text);
   }
 
   /** A Steer's lifecycle: `started` is model exposure, `cancelled` the drop an
@@ -2196,7 +2202,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   private acceptStatus(frame: StatusFrame): void {
     if (frame.compact_result !== undefined) {
       if (frame.compact_result !== "success") this.compactionFailed = true;
-      this.emit({
+      this.producer.emit({
         kind: "activity",
         description:
           frame.compact_result === "success"
@@ -2206,13 +2212,13 @@ class ClaudeCodeTurn implements HarnessTurn {
       return;
     }
     if (frame.status === "compacting") {
-      this.emit({
+      this.producer.emit({
         kind: "activity",
         description: "Claude Code is compacting the conversation.",
       });
       return;
     }
-    this.emit(genericActivity(frame.type));
+    this.producer.emit(genericActivity(frame.type));
   }
 
   private delivered(pending: PendingSteer): SteerSettlement {
@@ -2229,7 +2235,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     settlement: SteerSettlement,
   ): void {
     this.steers.delete(uuid);
-    this.emit({
+    this.producer.emit({
       kind: "steer",
       steerId: pending.input.steerId,
       text: pending.input.text,
@@ -2259,7 +2265,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       frame.user_message_uuids.length > 0 &&
       !frame.user_message_uuids.some((uuid) => this.messages.has(uuid))
     ) {
-      this.emit({
+      this.producer.emit({
         kind: "activity",
         description:
           "Claude Code ended an exchange for a message this Turn did not send; it is ignored.",
@@ -2267,7 +2273,8 @@ class ClaudeCodeTurn implements HarnessTurn {
       return;
     }
     const usage = usageObservation(frame);
-    if (usage !== undefined) this.emit({ kind: "usage", observation: usage });
+    if (usage !== undefined)
+      this.producer.emit({ kind: "usage", observation: usage });
     for (const uuid of frame.user_message_uuids) {
       const pending = this.steers.get(uuid);
       if (pending !== undefined) {
@@ -2296,7 +2303,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       this.boundaries += 1;
       this.betweenExchanges = true;
       this.lastObservation = "Claude Code ended a native exchange";
-      this.emit({
+      this.producer.emit({
         kind: "activity",
         description: `Claude Code ended an exchange; the Turn stays open for ${this.steers.size} pending Steer(s).`,
       });
@@ -2390,37 +2397,11 @@ class ClaudeCodeTurn implements HarnessTurn {
 
   /** Report one live activity line, such as why a native stop fell back. */
   noteActivity(description: string): void {
-    this.emit({ kind: "activity", description });
-  }
-
-  private emit(event: TurnEvent): void {
-    if (this.settled || this.producerClosed) return;
-    this.events.push(event);
-    for (const listener of this.listeners) listener(event);
-  }
-
-  private emitPreview(delta: string): void {
-    if (this.settled || this.producerClosed) return;
-    this.preview += delta;
-    const event: TurnEvent = { kind: "preview", text: this.preview };
-    if (this.previewIndex === undefined) {
-      this.previewIndex = this.events.length;
-      this.events.push(event);
-    } else {
-      this.events[this.previewIndex] = event;
-    }
-    for (const listener of this.listeners) listener(event);
-  }
-
-  private clearPreview(): void {
-    if (this.previewIndex === undefined) return;
-    this.events.splice(this.previewIndex, 1);
-    this.previewIndex = undefined;
-    this.preview = "";
+    this.producer.emit({ kind: "activity", description });
   }
 
   private settle(result: TurnResult): void {
-    if (this.settled || this.producerClosed) return;
+    if (this.settled || this.producer.sealed) return;
     this.clearHandshake();
     // A Turn that settles before init ends its init phase with the Turn's
     // failure, or abandoned when it was interrupted.
@@ -2428,7 +2409,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     if (failure === undefined) this.initPhase?.abandoned();
     else this.initPhase?.failed(failure);
     this.initPhase = undefined;
-    this.clearPreview();
+    this.producer.clearPreview();
     // Terminal ordering: drop every Steer still pending, then expire every
     // outstanding prompt (their events publish here), before the producer
     // closes and the one result settles.
@@ -2441,8 +2422,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.heldResult = undefined;
     this.expireOutstanding();
     this.resolveSent(false);
-    this.producerClosed = true;
-    this.listeners.clear();
+    this.producer.seal();
     if (
       result.kind === "interrupted" &&
       result.detail.interruption.mode === "active-turn" &&

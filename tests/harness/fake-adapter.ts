@@ -434,7 +434,7 @@ class FakeTurn {
     // start. This is replay to a new consumer, not a new event, so it does not
     // breach terminal ordering even after the result has settled.
     for (const event of this.buffer) listener(event);
-    this.listeners.add(listener);
+    if (!this.settled) this.listeners.add(listener);
     return {
       unsubscribe: () => {
         this.listeners.delete(listener);
@@ -749,6 +749,7 @@ class FakeTurn {
   private settle(result: TurnResult): void {
     if (this.settled) return;
     this.terminal = true;
+    this.removePreviews();
     for (const steer of this.steers.values()) {
       this.emit({
         kind: "steer",
@@ -773,6 +774,7 @@ class FakeTurn {
       }
     }
     this.settled = true;
+    this.listeners.clear();
     this.resolveResult(result);
   }
 
@@ -781,11 +783,23 @@ class FakeTurn {
     options: { readonly record: boolean } = { record: true },
   ): void {
     if (this.settled) throw new Error("emit after result: terminal ordering");
-    this.buffer.push(event);
+    if (event.kind === "assistant-content") this.removePreviews();
+    const preview =
+      event.kind === "preview"
+        ? this.buffer.findIndex((retained) => retained.kind === "preview")
+        : -1;
+    if (preview < 0) this.buffer.push(event);
+    else this.buffer[preview] = event;
     if (options.record && HISTORY_KINDS.has(event.kind)) {
       this.history.push(event);
     }
     for (const listener of this.listeners) listener(event);
+  }
+
+  private removePreviews(): void {
+    for (let index = this.buffer.length - 1; index >= 0; index -= 1) {
+      if (this.buffer[index].kind === "preview") this.buffer.splice(index, 1);
+    }
   }
 
   private defaultInterrupt(): TurnResult {

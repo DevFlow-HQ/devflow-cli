@@ -30,6 +30,7 @@ import {
   runPrepareProfileCases,
   runRequestedModelCases,
   runTurnLifecycleCases,
+  runTurnProducerTraceCases,
   runWritableDirectoryGrantCases,
   type ApprovalRequestScenarios,
   type InterruptRecoveryScenarios,
@@ -347,6 +348,28 @@ export function registerClaudeCodeReplayerConformance(
     },
   };
   runTurnLifecycleCases(turnScenarios, register);
+  runTurnProducerTraceCases(
+    {
+      label: "claude-code",
+      streaming: turnScenarios.baseline,
+      live: [
+        { kind: "preview", text: "hel" },
+        { kind: "preview", text: "hello" },
+        {
+          kind: "assistant-content",
+          content: "hello",
+          parentActivity: "toolu_parent",
+        },
+      ],
+      previews: ["hel", "hello"],
+      content: {
+        kind: "assistant-content",
+        content: "hello",
+        parentActivity: "toolu_parent",
+      },
+    },
+    register,
+  );
 
   const APPROVAL_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const CONCURRENT_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -671,6 +694,33 @@ export function registerCodexReplayerConformance(
         });
         return () => createCodexAdapter({ path: installed.path, env: {} });
       },
+    },
+    register,
+  );
+
+  runTurnProducerTraceCases(
+    {
+      label: "codex",
+      inputText: CODEX_RECORDING_INPUT.completion,
+      streaming: () => () =>
+        createCodexAdapter({
+          path: installCodexReplayer("completion").path,
+          env: {},
+        }),
+      live: [
+        { kind: "preview", text: "record" },
+        { kind: "preview", text: "recorded" },
+        { kind: "preview", text: "recorded completion" },
+        { kind: "preview", text: "recorded completion." },
+        { kind: "assistant-content", content: "recorded completion." },
+      ],
+      previews: [
+        "record",
+        "recorded",
+        "recorded completion",
+        "recorded completion.",
+      ],
+      content: { kind: "assistant-content", content: "recorded completion." },
     },
     register,
   );

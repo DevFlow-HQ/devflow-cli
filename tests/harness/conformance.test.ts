@@ -18,6 +18,7 @@ import {
   type ConformanceScenarios,
   type ModelDeclarationScenarios,
   runConformanceSuite,
+  runTurnProducerTraceCases,
   runAgentCallCases,
   runModelChangeCases,
   runModelDeclarationCases,
@@ -635,6 +636,34 @@ runAgentCallCases(
                 : LOST_COMPLETION,
         }),
       ),
+  },
+  test,
+);
+
+runTurnProducerTraceCases(
+  {
+    label: "fake",
+    streaming: () =>
+      createFake(
+        fake({
+          events: [
+            SESSION_OPEN,
+            { kind: "preview", text: "hel" },
+            { kind: "activity", description: "between deltas" },
+            { kind: "preview", text: "hello" },
+            { kind: "assistant-content", content: "hello" },
+          ],
+          pace: async () => {},
+          result: COMPLETED_OPEN,
+        }),
+      ),
+    live: [
+      { kind: "preview", text: "hel" },
+      { kind: "preview", text: "hello" },
+      { kind: "assistant-content", content: "hello" },
+    ],
+    previews: ["hel", "hello"],
+    content: { kind: "assistant-content", content: "hello" },
   },
   test,
 );

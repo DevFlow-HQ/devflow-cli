@@ -219,6 +219,98 @@ interface ReplayScenario {
  *  graceful signal) truthfully settles `lost` with interruption unknown (ADR 0022). */
 export type InterruptOutcome = "interrupted" | "lost";
 
+/** Content streaming is shared normalized policy. Native Session, model and
+ * diagnostic facts stay in each provider's existing conformance groups. */
+export function runTurnProducerTraceCases(
+  scenarios: {
+    readonly label: string;
+    readonly inputText?: string;
+    streaming(): TestHarnessAdapterFactory;
+    readonly live: readonly TurnEvent[];
+    readonly previews: readonly string[];
+    readonly content: Extract<
+      TurnEvent,
+      { readonly kind: "assistant-content" }
+    >;
+  },
+  register: RegisterConformanceCase,
+): void {
+  register(
+    `[${scenarios.label}] Turn producer trace parity: streaming, replay, replacement and unsubscribe`,
+    async () => {
+      const prepared = await prepare(scenarios.streaming());
+      try {
+        const turn = prepared.startTurn(
+          request(recorder().recorder, { text: scenarios.inputText }),
+        );
+        const early: TurnEvent[] = [];
+        const late: TurnEvent[] = [];
+        const unsubscribed: TurnEvent[] = [];
+        const snapshots: TurnEvent[][] = [];
+        const cancelled = turn.subscribe((event) => {
+          if (isContentEvent(event)) unsubscribed.push(event);
+        });
+        let joined = false;
+        turn.subscribe((event) => {
+          early.push(event);
+          if (event.kind !== "preview") return;
+          const snapshot: TurnEvent[] = [];
+          turn
+            .subscribe((retained) => {
+              if (isContentEvent(retained)) snapshot.push(retained);
+            })
+            .unsubscribe();
+          snapshots.push(snapshot);
+          if (joined) return;
+          joined = true;
+          cancelled.unsubscribe();
+          // Join between dispatches, so this subscriber receives the retained
+          // preview once and then the remaining live content.
+          queueMicrotask(() => {
+            turn.subscribe((next) => {
+              if (isContentEvent(next)) late.push(next);
+            });
+          });
+        });
+        const result = await turn.result();
+        assert.equal(result.kind, "completed");
+        assert.deepEqual(early.filter(isContentEvent), scenarios.live);
+        assert.deepEqual(late, scenarios.live);
+        assert.deepEqual(unsubscribed, [scenarios.live[0]]);
+        assert.deepEqual(
+          snapshots,
+          scenarios.previews.map((text) => [{ kind: "preview", text }]),
+          "a streaming replay retains only the latest preview",
+        );
+        const history: TurnEvent[] = [];
+        turn.subscribe((event) => history.push(event)).unsubscribe();
+        assert.deepEqual(history.filter(isContentEvent), [scenarios.content]);
+        assert.deepEqual(
+          history,
+          early.filter((event) => event.kind !== "preview"),
+          "authoritative content replaces preview without reordering other facts",
+        );
+        const count = early.length;
+        await prepared.close();
+        assert.equal(early.length, count, "no live event follows settlement");
+        const afterClose: TurnEvent[] = [];
+        turn.subscribe((event) => afterClose.push(event)).unsubscribe();
+        assert.deepEqual(
+          afterClose,
+          history,
+          "terminal history survives cleanup",
+        );
+      } finally {
+        await prepared.close();
+      }
+    },
+  );
+}
+
+function isContentEvent(event: TurnEvent): boolean {
+  return event.kind === "preview" || event.kind === "assistant-content";
+}
+
 export function runTurnLifecycleCases(
   scenarios: TurnLifecycleScenarios,
   register: RegisterConformanceCase,

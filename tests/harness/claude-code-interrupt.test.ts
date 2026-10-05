@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { HarnessPhaseFact } from "../../src/harness/harness.js";
+import type { HarnessPhaseFact, TurnEvent } from "../../src/harness/harness.js";
 import {
   SESSION_ID,
   abortedResult,
@@ -315,7 +315,7 @@ for (const kind of ["contained", "fallback"] as const) {
 }
 
 for (const containment of ["contained", "fallback"] as const) {
-  test(`a ${containment} native stop reaps before settlement and resumes the same Session`, async () => {
+  test(`Turn producer trace parity: a ${containment} native stop seals before reap and resumes the same Session`, async () => {
     let closes = 0;
     let release!: () => void;
     let reaping!: () => void;
@@ -326,11 +326,24 @@ for (const containment of ["contained", "fallback"] as const) {
       release = resolve;
     });
     const scripted = scriptedClaude({
-      answer: "confirm",
+      answer: (_frame, emit) => emit(abortedResult),
       containment:
         containment === "contained"
           ? { kind: "contained" }
           : { kind: "fallback", cause: new Error("unavailable") },
+      userFrame: (index) =>
+        index === 0
+          ? [
+              init,
+              {
+                type: "stream_event",
+                event: {
+                  type: "content_block_delta",
+                  delta: { type: "text_delta", text: "unfinished" },
+                },
+              },
+            ]
+          : [],
       closeStdin: async () => {
         closes += 1;
         reaping();
@@ -340,39 +353,116 @@ for (const containment of ["contained", "fallback"] as const) {
     });
     const phases: HarnessPhaseFact[] = [];
     const harness = await prepare(scripted, { phases });
-    const { turn, events } = await liveTurnOn(harness);
-    let settled = false;
-    void turn.result().then(() => {
-      settled = true;
-    });
-    const stopping = turn.interrupt();
-    await started;
-    assert.equal(settled, false);
-    const count = events.length;
-    scripted.emit({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "late" }] },
-    });
-    release();
-    await stopping;
-    const result = await turn.result();
-    assert.equal(result.kind, "interrupted");
-    assert.equal(events.length, count);
-    assert.deepEqual(controlSettlements(phases), ["ok"]);
-    assert.ok(
-      phases.some(
-        (fact) =>
-          fact.kind === "phase-end" &&
-          fact.phase === "cleanup" &&
-          fact.session === "planning" &&
-          fact.outcome === "ok",
-      ),
-    );
-    const next = await liveTurnOn(harness, "again");
-    assert.equal(scripted.writes.length, 2);
-    scripted.emit({ type: "result", subtype: "success", result: "continued" });
-    assert.equal((await next.turn.result()).kind, "completed");
-    assert.equal((await harness.close()).clean, true);
+    try {
+      const turn = harness.startTurn(turnRequest("go"));
+      const events: TurnEvent[] = [];
+      await new Promise<void>((resolve) =>
+        turn.subscribe((event) => {
+          events.push(event);
+          if (event.kind === "preview") resolve();
+        }),
+      );
+      let settled = false;
+      void turn.result().then(() => {
+        settled = true;
+      });
+      assert.deepEqual(
+        await turn.steer({ steerId: "pending", text: "queued guidance" }),
+        { outcome: "accepted" },
+      );
+      const stopping = turn.interrupt();
+      await started;
+      assert.equal(settled, false);
+      const terminalFacts = (trace: readonly TurnEvent[]) =>
+        trace
+          .filter((event) => event.kind === "steer" || event.kind === "preview")
+          .map((event) =>
+            event.kind === "steer"
+              ? {
+                  kind: event.kind,
+                  steerId: event.steerId,
+                  text: event.text,
+                  settlement: event.settlement,
+                }
+              : event,
+          );
+      const expected = [
+        {
+          kind: "steer",
+          steerId: "pending",
+          text: "queued guidance",
+          settlement: { kind: "dropped", reason: "interrupt" },
+        },
+      ];
+      assert.deepEqual(terminalFacts(events), [
+        { kind: "preview", text: "unfinished" },
+        ...expected,
+      ]);
+      const replay: TurnEvent[] = [];
+      turn.subscribe((event) => replay.push(event));
+      assert.deepEqual(
+        terminalFacts(replay),
+        expected,
+        "terminal preview is removed before result settlement",
+      );
+      const sealedHistory = [...replay];
+      const count = events.length;
+      const [interruptRequest] = controlRequests(scripted);
+      assert.ok(interruptRequest);
+      scripted.emit(
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "late" }] },
+        },
+        controlResponse(interruptRequest, "success"),
+      );
+      // The delayed acknowledgement is read after the late content, proving both
+      // were drained while reap and result settlement were still held.
+      await scripted.responseRead;
+      assert.equal(settled, false);
+      assert.equal(events.length, count);
+      assert.deepEqual(replay, sealedHistory);
+      release();
+      await stopping;
+      const result = await turn.result();
+      assert.equal(result.kind, "interrupted");
+      assert.equal(events.length, count);
+      assert.deepEqual(
+        replay,
+        sealedHistory,
+        "a subscriber joining during reap receives history only",
+      );
+      const history: TurnEvent[] = [];
+      turn.subscribe((event) => history.push(event)).unsubscribe();
+      assert.deepEqual(
+        history,
+        sealedHistory,
+        "settlement preserves the sealed order",
+      );
+      assert.deepEqual(controlSettlements(phases), ["ok"]);
+      assert.ok(
+        phases.some(
+          (fact) =>
+            fact.kind === "phase-end" &&
+            fact.phase === "cleanup" &&
+            fact.session === "planning" &&
+            fact.outcome === "ok",
+        ),
+      );
+      const next = harness.startTurn(turnRequest("again"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(scripted.writes.length, 2);
+      scripted.emit(init, {
+        type: "result",
+        subtype: "success",
+        result: "continued",
+      });
+      assert.equal((await next.result()).kind, "completed");
+      assert.equal((await harness.close()).clean, true);
+    } finally {
+      release();
+      await harness.close();
+    }
   });
 }
 

@@ -5240,3 +5240,122 @@ function stdinWatch(
     },
   };
 }
+
+test("[codex] Turn producer trace parity: seal precedes held native reap and preserves final facts", async () => {
+  const installed = installSyntheticCodexReplayer();
+  installed.configureTurn({
+    withholdTerminal: true,
+    interruptTerminal: "interrupted",
+    steerTerminal: "history-only",
+    approvals: [
+      { id: "held", kind: "command", itemId: "tool", command: "bun test" },
+    ],
+  });
+  const native = createProcessAdapter(withRunnerObserver());
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let began!: () => void;
+  const reaping = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const processAdapter: ProcessAdapter = {
+    resolveExecutable: (name, options) =>
+      native.resolveExecutable(name, options),
+    spawnCommand: (options) => native.spawnCommand(options),
+    spawnCommandSync: (options) => native.spawnCommandSync(options),
+    spawnOwnedProcess: async (options) => {
+      const launched = await native.spawnOwnedProcess(options);
+      if (!launched.ok) return launched;
+      const owned = launched.process;
+      return {
+        ok: true,
+        // Exercise confirm-then-reap on every host through launch evidence.
+        containment: { kind: "contained" },
+        process: {
+          stdout: owned.stdout,
+          stderr: owned.stderr,
+          writeStdin: (bytes) => owned.writeStdin(bytes),
+          closed: () => owned.closed(),
+          interrupt: (timeout) => owned.interrupt(timeout),
+          closeStdin: async (timeout) => {
+            began();
+            await held;
+            return owned.closeStdin(timeout);
+          },
+        },
+      };
+    },
+  };
+  const preparedResult = await createCodexAdapter(
+    { path: installed.path, env: {} },
+    processAdapter,
+  ).prepare({ workspace: process.cwd() });
+  assert.ok(preparedResult.ok);
+  const prepared = preparedResult.harness;
+  try {
+    const turn = prepared.startTurn(turnRequest());
+    const events = observeEvents(turn);
+    await waitForRequestCount(turn, events, 1);
+    assert.deepEqual(
+      await turn.steer({ steerId: "pending", text: "queued guidance" }),
+      { outcome: "accepted" },
+    );
+    let settled = false;
+    void turn.result().then(() => {
+      settled = true;
+    });
+    const interrupted = turn.interrupt();
+    await reaping;
+    assert.equal(
+      settled,
+      false,
+      "producer seals while authoritative result awaits reap",
+    );
+    const finalFacts = events
+      .filter(
+        (event) => event.kind === "steer" || event.kind === "request-expired",
+      )
+      .map((event) =>
+        event.kind === "steer"
+          ? {
+              kind: event.kind,
+              steerId: event.steerId,
+              text: event.text,
+              settlement: event.settlement,
+            }
+          : { kind: event.kind },
+      );
+    assert.deepEqual(finalFacts, [
+      {
+        kind: "steer",
+        steerId: "pending",
+        text: "queued guidance",
+        settlement: { kind: "delivered", delivery: "within-turn" },
+      },
+      { kind: "request-expired" },
+    ]);
+    const history: TurnEvent[] = [];
+    turn.subscribe((event) => history.push(event));
+    assert.deepEqual(
+      history,
+      events.filter((event) => event.kind !== "preview"),
+    );
+    const sealed = [...history];
+    release();
+    assert.equal((await interrupted).outcome, "accepted");
+    assert.equal((await turn.result()).kind, "interrupted");
+    assert.deepEqual(history, sealed, "settlement appends no live facts");
+    const terminal: TurnEvent[] = [];
+    turn.subscribe((event) => terminal.push(event)).unsubscribe();
+    assert.deepEqual(
+      terminal,
+      sealed,
+      "late replay keeps final expiry and Steer order",
+    );
+  } finally {
+    release();
+    await prepared.close();
+  }
+});
