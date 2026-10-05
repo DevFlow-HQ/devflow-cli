@@ -1295,8 +1295,14 @@ export function RunWorkbench(props: {
       return;
     }
     // Inspection overlay owns its own key loop while open (A26): it consumes the
-    // key (scroll or Escape-to-close) and reports that it did.
-    if (inspection.handleKey(name)) return;
+    // key (scroll or Escape-to-close), or hands back its footer's `q` (#392) for
+    // the same guarded Exit the Workbench's own `q` takes.
+    const inspected = inspection.handleKey(name);
+    if (inspected === "quit") {
+      exit();
+      return;
+    }
+    if (inspected === "consumed") return;
     if (run() === undefined) {
       if (name === "escape") props.onLeave();
       return;

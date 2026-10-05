@@ -124,15 +124,17 @@ function transcriptInspection(
  *  by paging, so it has no such cap. */
 const MAX_INSPECT_LINES = 500;
 
+type InspectionKey = "ignored" | "consumed" | "quit";
+
 export interface InspectionController {
   /** The open inspection, or undefined when the overlay is closed. */
   readonly inspecting: Accessor<Inspection | undefined>;
   /** Open one Openable: resolve its reference (or newest transcript page), strip
    *  escapes, bound the lines. */
   open(target: Openable): void;
-  /** Handle a key while the overlay is open. Returns true if it consumed the
-   *  key (the overlay is open), so the Workbench stops dispatching it further. */
-  handleKey(name: string): boolean;
+  /** Handle a key: `ignored` while closed, `quit` for the footer's `q` (#392),
+   *  else `consumed`, so every other key stays inside the overlay. */
+  handleKey(name: string): InspectionKey;
   /** The display lines, wrapped at the width, including a truncation marker or a
    *  Problem's text. */
   readonly lines: Accessor<readonly string[]>;
@@ -318,15 +320,18 @@ export function createInspection(deps: {
   const viewportH = () => Math.max(1, deps.interiorH() - 2); // title + footer
   const window = () => timelineWindow(scroll(), wrapped().heights, viewportH());
 
-  const handleKey = (name: string): boolean => {
+  const handleKey = (name: string): InspectionKey => {
     const current = inspecting();
-    if (current === undefined) return false;
+    if (current === undefined) return "ignored";
     if (name === "escape") {
       setInspecting(undefined);
-      return true;
+      return "consumed";
     }
+    // The footer advertises `q quit`; the overlay stays open so a declined quit
+    // confirmation returns to the same view.
+    if (name === "q") return "quit";
     const action = SCROLL_KEYS[name];
-    if (action === undefined) return true;
+    if (action === undefined) return "consumed";
     // At the top of a transcript with older history, page older before scrolling,
     // so the upward step reveals the just-loaded older entries.
     if (
@@ -340,7 +345,7 @@ export function createInspection(deps: {
     setScroll((prev) =>
       scrollTimeline(prev, action, wrapped().heights, viewportH()),
     );
-    return true;
+    return "consumed";
   };
 
   return { inspecting, open, handleKey, lines, window };

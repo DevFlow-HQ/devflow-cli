@@ -8,6 +8,7 @@ import {
   inertLaunchPreparationView,
   inertRunActionsView,
   inertRunListView,
+  liveRunListView,
 } from "./inert.js";
 import type {
   BundleCatalogView,
@@ -157,26 +158,7 @@ async function mountApproved(
 ) {
   const [snapshot] = createSignal<WorkspaceSnapshot>(approved(startupNotices));
   const view: WorkspaceView = { snapshot, approve() {} };
-  const runList: RunListView = suppliedRunList ?? {
-    openRunList: () => ({
-      state: () => ({
-        rows: Array.from({ length: liveRunCount }, (_, index) => ({
-          runId: `run-${index + 1}`,
-          bundleName: "Smoke",
-          activityAt: "2026-01-01T00:00:00.000Z",
-          live: true,
-          ownedByThisProcess: true,
-          ownerPid: 4000,
-          group: "today" as const,
-        })),
-        filter: "all" as const,
-        beginningOfHistory: true,
-        hasMore: false,
-      }),
-      setResumable() {},
-      loadMore() {},
-    }),
-  };
+  const runList = suppliedRunList ?? liveRunListView(liveRunCount);
   const exits: unknown[] = [];
   const t = await testRender(
     () => (

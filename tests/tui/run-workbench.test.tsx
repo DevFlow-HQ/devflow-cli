@@ -17,6 +17,7 @@ import {
   inertLaunchPreparationView,
   inertRunActionsView,
   inertRunListView,
+  liveRunListView,
 } from "./inert.js";
 import type {
   AnswerOutcome,
@@ -24,6 +25,7 @@ import type {
   RunActionOutcome,
   RunActionsView,
   RunLaunchView,
+  RunListView,
   RunWorkbenchView,
   TRunViewFreshness,
   WorkspaceView,
@@ -458,6 +460,7 @@ async function mountApp(
   height: number,
   actions?: RunActionsView,
   reducedMotion = false,
+  runList: RunListView = inertRunListView(),
 ) {
   const exits: unknown[] = [];
   const t = await testRender(
@@ -469,7 +472,7 @@ async function mountApp(
         preparation={inertLaunchPreparationView()}
         launch={launchTo(launchRunId)}
         run={control.view}
-        runList={inertRunListView()}
+        runList={runList}
         actions={actions ?? inertRunActionsView()}
         renderer={renderer.port}
         reducedMotion={reducedMotion}
@@ -493,6 +496,7 @@ async function mountWorkbench(
   height = 40,
   actions?: RunActionsView,
   reducedMotion = false,
+  runList?: RunListView,
 ) {
   const control = makeRunView(snapshotOf(run));
   const renderer = makeFakeRenderer(width, height);
@@ -504,6 +508,7 @@ async function mountWorkbench(
     height,
     actions,
     reducedMotion,
+    runList,
   );
   await t.waitForFrame((f) => f.includes("Timeline"));
   return { t, control, renderer, exits };
@@ -6514,5 +6519,154 @@ for (const interactive of [false, true]) {
     assert.deepEqual(received, [original]);
     await press(wb.t, wb.renderer, "escape");
     assert.deepEqual(received, [original, original]);
+  });
+}
+
+// --- inspection quit (#392) -------------------------------------------------
+
+// The inspection footer advertises `q quit`; q there takes the same guarded Exit as
+// the Workbench's own q, while every other bare letter stays inside the overlay.
+// Scripted Projection and Renderer values cover this client contract; no Harness.
+
+/** A Run offering resume, cancel and delete, with one text output and one Session
+ *  transcript, so every Run-action letter has something to leak to. */
+function inspectableRun(): RunView {
+  return runOf({
+    state: "halted",
+    actionOffers: [RESUME_OFFER, CANCEL_OFFER, DELETE_OFFER],
+    outputs: [
+      {
+        name: "log",
+        type: "text",
+        reference: {
+          runId: "run-1",
+          artifactName: "log",
+          versionId: "v1",
+          type: "text",
+        },
+      },
+    ],
+    sessions: transcriptRun().sessions,
+  });
+}
+
+async function mountInspectable(runList?: RunListView) {
+  const dispatched: string[] = [];
+  const record = (action: string) => () => {
+    dispatched.push(action);
+    return () => ({ kind: "ok" }) as const;
+  };
+  const wb = await mountWorkbench(
+    inspectableRun(),
+    100,
+    40,
+    okActions({
+      resume: record("resume"),
+      cancel: record("cancel"),
+      remove: record("delete"),
+    }),
+    false,
+    runList,
+  );
+  wb.control.setRead("log", {
+    found: true,
+    type: "text",
+    content: "log line one\nlog line two",
+  });
+  wb.control.setTranscript("", {
+    found: true,
+    type: "transcript-page",
+    entries: txEntries("user", "N1", "N2", "N3", "N4", "N5", "N6", "N7"),
+  });
+  return { ...wb, dispatched };
+}
+
+/** Each inspection kind, opened the way a user reaches it from the details panel,
+ *  which stays shown underneath, so its c/x would arm if a key leaked. */
+const INSPECTIONS = [
+  {
+    kind: "output",
+    title: /log \(text\)/,
+    footer: /↑\/↓ scroll · esc close · q quit/,
+    open: async (wb: Awaited<ReturnType<typeof mountInspectable>>) => {
+      await press(wb.t, wb.renderer, "d"); // details focus, log selected
+      await press(wb.t, wb.renderer, "return");
+    },
+    reopen: "return", // Escape leaves the details focus on the log
+  },
+  {
+    kind: "transcript",
+    title: /Session transcript/,
+    footer: /↑ at top loads older · esc close · q quit/,
+    open: async (wb: Awaited<ReturnType<typeof mountInspectable>>) => {
+      await press(wb.t, wb.renderer, "d");
+      await press(wb.t, wb.renderer, "t");
+    },
+    reopen: "t",
+  },
+] as const;
+
+for (const inspection of INSPECTIONS) {
+  test(`workbench-inspection-quit: q in ${inspection.kind} inspection quits at once with no live Run`, async () => {
+    const wb = await mountInspectable();
+    await inspection.open(wb);
+    const frame = wb.t.captureCharFrame();
+    assert.match(frame, inspection.title);
+    assert.match(frame, inspection.footer);
+
+    await press(wb.t, wb.renderer, "q");
+    assert.deepEqual(wb.exits, [undefined]);
+  });
+
+  test(`workbench-inspection-quit: q in ${inspection.kind} inspection asks first with live Runs; Keep Running keeps the inspection`, async () => {
+    const wb = await mountInspectable(liveRunListView(1));
+    await inspection.open(wb);
+    await press(wb.t, wb.renderer, "end");
+    const before = wb.t.captureCharFrame();
+
+    await press(wb.t, wb.renderer, "q");
+    await wb.t.waitForFrame((f) => f.includes("Halt 1 live Run and quit?"));
+    assert.deepEqual(wb.exits, []);
+
+    wb.t.mockInput.pressEnter(); // the default, Keep Running
+    await wb.t.waitForFrame((f) => !f.includes("Halt 1 live Run and quit?"));
+    assert.deepEqual(wb.exits, []);
+    assert.equal(wb.t.captureCharFrame(), before); // same overlay, same scroll
+
+    await press(wb.t, wb.renderer, "q");
+    await wb.t.waitForFrame((f) => f.includes("Halt 1 live Run and quit?"));
+    wb.t.mockInput.pressArrow("right");
+    wb.t.mockInput.pressEnter(); // Halt and Quit
+    await wb.t.waitFor(() => wb.exits.length === 1);
+    assert.deepEqual(wb.exits, [undefined]);
+  });
+
+  test(`workbench-inspection-quit: ${inspection.kind} inspection keeps Escape, Ctrl+C and Run-action letters on their routes`, async () => {
+    const wb = await mountInspectable();
+    await inspection.open(wb);
+    const open = wb.t.captureCharFrame();
+
+    // Run-action and screen letters stay inside the modal overlay: none arms,
+    // confirms or dispatches beneath it.
+    for (const key of ["r", "c", "x", "y", "t", "d", "s", "m"]) {
+      await press(wb.t, wb.renderer, key);
+    }
+    assert.deepEqual(wb.dispatched, []);
+    assert.deepEqual(wb.exits, []);
+    assert.equal(wb.t.captureCharFrame(), open);
+
+    // Escape closes the overlay only: the Workbench stays, its own footer back.
+    await press(wb.t, wb.renderer, "escape");
+    const closed = wb.t.captureCharFrame();
+    assert.doesNotMatch(closed, inspection.footer);
+    assert.match(closed, /Timeline/);
+    assert.match(closed, /esc back · q quit/);
+    assert.deepEqual(wb.exits, []);
+
+    // Ctrl+C keeps its global quit route from inside the overlay.
+    await press(wb.t, wb.renderer, inspection.reopen);
+    assert.match(wb.t.captureCharFrame(), inspection.footer);
+    await press(wb.t, wb.renderer, "c", { ctrl: true });
+    assert.deepEqual(wb.exits, [undefined]);
   });
 }
