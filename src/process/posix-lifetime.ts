@@ -209,7 +209,7 @@ async function createPipe(
       socket.resume();
     } else {
       // Bun schedules the native shutdown on nextTick. Await its finish before
-      // closing the peer read half or launching a child that can close at once.
+      // launching a child that can close at once.
       const writeShut = finished(socket, {
         readable: false,
         writable: true,
@@ -227,8 +227,8 @@ async function createPipe(
           );
         }),
       ]);
-      if (k.shutdown(fd, 0) < 0)
-        throw nativeError(errno(k), "shutdown(output read half)");
+      // The writer owns this half-close. Its peer read half is already EOF;
+      // Darwin rejects a second SHUT_RD on that peer with ENOTCONN.
     }
     return { socket, fd };
   } catch (cause) {
