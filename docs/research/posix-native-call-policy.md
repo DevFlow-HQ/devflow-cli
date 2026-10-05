@@ -127,7 +127,8 @@ socket acquisition chooses a short path; restoring the original selection makes 
 
 Bun 1.4.2's kqueue loop reports ordinary write-side EV_EOF as a connection reset for a full-duplex socket. Marking the parent output endpoint
 write-shut before launch moves it to the shutdown path, which ignores zero-error write EOF while retaining real errors. Native stdin/output
-endpoints also retire their unused halves. This fixes the stream lifecycle without filtering ECONNRESET.
+use one owner per half-close: child stdin closes its write half, and parent output closes its write half, placing the peer read half at EOF.
+This fixes the stream lifecycle without filtering ECONNRESET.
 [Pinned kqueue EOF handling](https://github.com/oven-sh/bun/blob/bun-v1.4.2/packages/bun-usockets/src/eventing/epoll_kqueue.c#L363-L387),
 [reset translation](https://github.com/oven-sh/bun/blob/bun-v1.4.2/packages/bun-usockets/src/loop.c#L911-L926),
 [socket shutdown](https://github.com/oven-sh/bun/blob/bun-v1.4.2/packages/bun-usockets/src/socket.c#L717-L724).
@@ -136,3 +137,9 @@ Darwin's explicit-group kill skips zombie members and returns EPERM when no elig
 that native cleanup error against the retained root-only group; Linux reports the bounded drain timeout. The fixture asserts each exact result
 and confirms the escaped descendant remains alive until its own release handshake. Production preserves the native error.
 [Darwin group signalling](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c#L1709-L1718).
+
+The first correction's explicit peer SHUT_RD was redundant after awaiting parent write shutdown. XNU `unp_shutdown` already marks that peer
+SS_CANTRCVMORE; `soshutdownlock_final` then rejects a second read shutdown with ENOTCONN. The resulting pre-launch error reproduced in Codex and
+Claude version probes. Removing the redundant operation preserves EOF ordering and real-error propagation, rather than accepting ENOTCONN as success.
+[Peer EOF transition](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/uipc_usrreq.c#L2222-L2233),
+[duplicate-shutdown rejection](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/uipc_socket.c#L4343-L4356).
