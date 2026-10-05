@@ -45,6 +45,7 @@ const SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 // Interfaces. The Windows console guard imports `bun:ffi` for its `GetConsoleWindow`
 // + `IsWindowVisible` conhost probe. The private Windows Process containment
 // file imports `bun:ffi` for at-creation Job Objects and handle-based exit.
+// The private POSIX lifetime file retains native root/group identity through drain.
 // A site reaching for a *different* Bun API —
 // `Bun.spawn` in the Run Store, say — is rejected until ADR 0030 names it, so the
 // grant is per API, not a blanket pass for the file; and an entry whose file no
@@ -60,6 +61,7 @@ const BUN_API_ALLOWLIST = new Map<string, ReadonlySet<string>>([
   ["src/run/store/store.ts", new Set(["bun:sqlite"])],
   ["src/tui/renderer/conhost-notice.ts", new Set(["bun:ffi"])],
   ["src/process/windows-containment.ts", new Set(["bun:ffi"])],
+  ["src/process/posix-lifetime.ts", new Set(["bun:ffi"])],
 ]);
 
 /** The Bun API a node touching the `Bun` global reaches for, normalised to a

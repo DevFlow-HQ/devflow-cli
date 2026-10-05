@@ -34,8 +34,10 @@ The gate separates three independently attributable, blocking layers (ADR 0027's
 - **Compiled-binary acceptance** exercises Command, Harness, interruption, recovery, and Git through the copied binary in the consumer job.
 
 A real child under `bun test` fails its test. `bunfig.toml` preloads the spawn trap (`tests/helpers/spawnTrap.ts`, which documents the routes it
-covers) ahead of every file; it is the one `bun:test` import, because only Bun offers module mocks and preload hooks. Every child-process and Bun spawn
-throws, and a global hook fails the test that reached one even when the caller turned the throw into a value. The failure names the route and the test.
+covers) ahead of every file; it is the one `bun:test` import, because only Bun offers module mocks and preload hooks. Child-process and Bun spawn routes
+throw; native Process binding acquisition through `bun:ffi.dlopen` throws when the requested symbols include `posix_spawn` or `CreateProcessW`.
+Other FFI libraries and exports stay available. A global hook fails the test that reached a launch route even when the caller turned the throw into a value.
+The failure names the route and the test.
 There is no allowlist; the fix is a fake Process.
 
 The checked-in [subprocess migration ledger](../subprocess-test-migration-ledger.md) is complete: every row is `done` and stays as a historical coverage

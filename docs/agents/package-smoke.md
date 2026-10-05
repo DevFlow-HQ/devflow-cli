@@ -55,6 +55,9 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **run-list-and-delete**: listing Previous Runs over `bundle-catalog`/`run-list`, refusing to cancel a resting Run, and deleting a Run's store.
 - **signal-halt-then-resume**: a Run interrupted by SIGINT mid-execution rests `halted` (POSIX aborts the live Run and leaves the claim live;
   Windows SIGINT terminates and leaves the same claim), and a later `resume` completes it.
+- **posix-exited-root-cleanup** (#387, Linux and macOS): an ordinary Command's root exits 17 while a descendant holds inherited output pipes and ignores
+  SIGTERM. SIGINT to the copied binary forces descendant cleanup under an independent parent bound; the operational log records one `reap` with status 17,
+  the descendant is dead, and the reopened Run retains its captured output and `fail` Verdict. Fixture failure cleanup uses a release-file handshake.
 - **owner-death-recovery** (#86): a Run whose owner is killed by SIGKILL, uncatchable, so the claim is left live at a now-dead pid, is reconciled
   `halted` by a later invocation running no Step work, and a plain `resume` (no `--takeover`) recovers it to `succeeded`, re-running no earlier Step.
   This is the one compiled-binary home for owner death; the process-free suite never spawns.
@@ -66,9 +69,9 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **windows-app-execution-alias**: when the runner exposes a `pwsh` or `winget` alias that `where.exe` finds after the primary PATH walk misses, a
   Command naming it passes Preflight and runs; a runner without such an alias records the reasoned gap.
 - **no-interactive-terminal** (#55): with piped stdio the TUI launch rejects with the `no-interactive-terminal` Problem before any renderer exists.
-- **operational-log** (#318, #323): the only scenario that sets `SECANT_LOG_DIR`. `--help`, `--version`, and a parse error write no log; a successful
-  and a refused headless command each write one valid JSONL file with matching start and end records (Secant invocation id, client, version, platform,
-  exit status, elapsed time), the approval's Operation admission and outcome sharing one id (#319), and no trace of a seeded environment value or
+- **operational-log** (#318, #323): sets an isolated `SECANT_LOG_DIR`, as does the POSIX root-lifetime proof. `--help`, `--version`, and a parse error
+  write no log; a successful and a refused headless command each write one valid JSONL file with matching start and end records (Secant invocation id,
+  client, version, platform, exit status, elapsed time), the approval's Operation admission and outcome sharing one id (#319), and no trace of a seeded environment value or
   argument; a Secant home that is a file fails fatally, flushes its failure record, and names the file on stderr; the no-TTY TUI launch is logged as a
   `tui` Secant invocation; and startup removes a file last written 31 days ago while retaining a 10-day-old file, unrelated files in the override
   folder, and a matching old file outside it. A two-Command Run launched with `SECANT_LOG_DETAIL` unset and then `1` (#325) adds only `debug`

@@ -9,7 +9,9 @@
 // copies, and through a module mock, which also rebinds an ESM import linked
 // before the trap ran (Bun 1.4.2 copies the functions at link time). Bun's spawn,
 // spawnSync, and shell are replaced too; Bun builds its child-process module on
-// them, so they also catch `ChildProcess#spawn`. Each trap
+// them, so they also catch `ChildProcess#spawn`. Native Process bindings are
+// rejected at dlopen acquisition when their symbol table requests posix_spawn or
+// CreateProcessW; other FFI exports and libraries retain their implementation. Each trap
 // records the route and the test that reached it, then throws. The global hook
 // below fails that test afterwards, so a caller that turns the throw into a value,
 // as the Process Adapter does with `spawn-error`, cannot hide the spawn. There is
@@ -111,6 +113,19 @@ mock.module("node:child_process", () => ({
   ...childProcess,
   default: childProcess,
 }));
+// Preserve both the CommonJS object and already-linked ESM imports, as above.
+// Reject binding acquisition before native launch setup can allocate resources.
+const ffi: typeof import("bun:ffi") = createRequire(import.meta.url)("bun:ffi");
+const nativeDlopen = ffi.dlopen;
+const guardedDlopen: typeof ffi.dlopen = (name, symbols) => {
+  for (const launch of ["posix_spawn", "CreateProcessW"]) {
+    if (Object.hasOwn(symbols, launch)) return trap(`bun:ffi.${launch}`)();
+  }
+  return nativeDlopen(name, symbols);
+};
+ffi.dlopen = guardedDlopen;
+mock.module("bun:ffi", () => ({ ...ffi }));
+
 Object.assign(Bun, {
   spawn: trap("Bun.spawn"),
   spawnSync: trap("Bun.spawnSync"),

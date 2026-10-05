@@ -58,8 +58,9 @@ An `index.ts` is valid for one cohesive Module after declaring it in that table.
   clients. Extract a small common value only for demonstrated consumers. A central `types/`, `models/`, or utility barrel is not a default owner.
 - SQLite belongs to Catalog and Run Store; OpenTUI belongs to presentation/renderer; Harness-native dependencies belong to Harness;
   the operational log's writer belongs to composition. Target code
-  excludes OpenCode domain imports and PTY transport; Bun APIs (`Bun.*` calls and `bun:` imports) are confined to a named per-API allowlist of five
-  target files — the CLI entry (`Bun.main`), the Catalog and Run Store SQLite adapters (`bun:sqlite`), the Windows console guard and private Process containment file
+  excludes OpenCode domain imports and PTY transport; Bun APIs (`Bun.*` calls and `bun:` imports) are confined to a named per-API allowlist of six
+  target files — the CLI entry (`Bun.main`), the Catalog and Run Store SQLite adapters (`bun:sqlite`), the Windows console guard and private Process containment
+  and POSIX lifetime files
   (`bun:ffi`), each keyed to the one specifier it needs (D6). No target source spawns with `shell: true`; every spawn resolves its executable and runs it directly
   ([ADR 0030](../adr/0030-ship-the-shell-as-a-bun-compiled-single-file-executable.md#runtime-neutrality)). Renderer drawing may use OpenTUI directly;
   the Renderer Port covers lifecycle only.
