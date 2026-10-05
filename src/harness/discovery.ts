@@ -12,6 +12,7 @@ export const CLAUDE_CODE_SERVED_CAPABILITIES: Readonly<Record<string, true>> =
   Object.freeze({
     "agent-turn": true,
     "interactive-turns": true,
+    agentCalls: true,
   });
 
 /** The static capabilities the shipped Codex Adapter serves. */
@@ -19,6 +20,7 @@ export const CODEX_SERVED_CAPABILITIES: Readonly<Record<string, true>> =
   Object.freeze({
     "agent-turn": true,
     "interactive-turns": true,
+    agentCalls: true,
   });
 
 // Harness imports only Process. Composition checks this local declaration

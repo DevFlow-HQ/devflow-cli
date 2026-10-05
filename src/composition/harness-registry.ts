@@ -33,10 +33,6 @@ import {
  *  phase observer from each prepare's options, as the native Adapters do. */
 export interface HarnessRegistryOverrides {
   readonly claudeCodeAdapter?: HarnessAdapter;
-  /** Declared capabilities for injected test Adapters; production keeps its static registrations. */
-  readonly harnessCapabilities?: Partial<
-    Record<"claude-code" | "codex", readonly string[]>
-  >;
   readonly codexAdapter?: HarnessAdapter;
   readonly discoverClaudeCode?: () => HarnessDiscovery;
   readonly discoverCodex?: () => HarnessDiscovery;
@@ -72,9 +68,7 @@ export class HarnessRegistry {
           name: "Claude Code",
           availability: "available",
         },
-        servedCapabilities:
-          overrides.harnessCapabilities?.["claude-code"] ??
-          Object.keys(CLAUDE_CODE_SERVED_CAPABILITIES),
+        servedCapabilities: Object.keys(CLAUDE_CODE_SERVED_CAPABILITIES),
         inputRules: CLAUDE_CODE_INPUT_RULES,
         discover: () => {
           const discovery =
@@ -97,9 +91,7 @@ export class HarnessRegistry {
     const codex: THarnessRegistryEntry = {
       application: {
         choice: { id: "codex", name: "Codex", availability: "available" },
-        servedCapabilities:
-          overrides.harnessCapabilities?.codex ??
-          Object.keys(CODEX_SERVED_CAPABILITIES),
+        servedCapabilities: Object.keys(CODEX_SERVED_CAPABILITIES),
         inputRules: CODEX_INPUT_RULES,
         discover: () => {
           const discovery =

@@ -90,6 +90,7 @@ import {
 import { redactSecrets, redactText } from "./secrets.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
+  CLAUDE_CODE_SERVED_CAPABILITIES,
   discoverClaudeCode,
   discoveredHarnessTarget,
   type DiscoveredHarnessTarget,
@@ -2708,7 +2709,7 @@ function buildProfile(
         "Approvals are raised through the Secant-hosted MCP permission bridge.",
     },
     agentCalls: {
-      available: true,
+      available: CLAUDE_CODE_SERVED_CAPABILITIES.agentCalls === true,
       evidence:
         "Session-attached loopback MCP calls use --mcp-config and narrowly scoped --allowedTools; user and managed deny rules retain authority.",
     },

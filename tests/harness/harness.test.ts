@@ -80,6 +80,7 @@ test("Codex discovery shares configured-then-PATH order and served capabilities"
   assert.deepEqual(CODEX_SERVED_CAPABILITIES, {
     "agent-turn": true,
     "interactive-turns": true,
+    agentCalls: true,
   });
 });
 
@@ -102,6 +103,7 @@ test("Claude Code discovery shares configured-then-PATH order and served capabil
   assert.deepEqual(CLAUDE_CODE_SERVED_CAPABILITIES, {
     "agent-turn": true,
     "interactive-turns": true,
+    agentCalls: true,
   });
 });
 

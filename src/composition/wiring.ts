@@ -127,10 +127,6 @@ export interface WiringOverrides {
    * native Adapter; tests inject one, which reads its Process and phase observer
    * from each prepare's options. */
   readonly harnessAdapter?: HarnessAdapter;
-  /** Declared capabilities for injected test Adapters; production keeps its static registrations. */
-  readonly harnessCapabilities?: Partial<
-    Record<"claude-code" | "codex", readonly string[]>
-  >;
   /** A Codex Adapter test seam. Production constructs the native Adapter. */
   readonly codexHarnessAdapter?: HarnessAdapter;
   /** Whether the launching client can relay human turn-taking (#116, #122). The TUI
@@ -295,7 +291,6 @@ export function wireApplication(
         invocation,
         {
           claudeCodeAdapter: overrides.harnessAdapter,
-          harnessCapabilities: overrides.harnessCapabilities,
           codexAdapter: overrides.codexHarnessAdapter,
           discoverClaudeCode: overrides.discoverClaudeCode,
           discoverCodex: overrides.discoverCodex,

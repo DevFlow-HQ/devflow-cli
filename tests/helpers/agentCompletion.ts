@@ -4,7 +4,6 @@ import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { wireApplication } from "../../src/composition/main.js";
 import {
-  CLAUDE_CODE_SERVED_CAPABILITIES,
   type HarnessAdapter,
   HarnessProfile,
   TurnRequest,
@@ -167,12 +166,6 @@ export async function launchAgentCompletionRun(
     launchCwd: workspacePath,
     supportsInteractiveTurns: true,
     harnessAdapter: adapter,
-    harnessCapabilities: {
-      "claude-code": [
-        ...Object.keys(CLAUDE_CODE_SERVED_CAPABILITIES),
-        "agentCalls",
-      ],
-    },
     process: createFakeBundleProcess(),
     discoverClaudeCode: () => ({
       kind: "found",

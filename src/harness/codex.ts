@@ -48,6 +48,7 @@ import {
 } from "./harness.js";
 import {
   CODEX_EXECUTABLE_ENV,
+  CODEX_SERVED_CAPABILITIES,
   discoverCodex,
   discoveredHarnessTarget,
   type DiscoveredHarnessTarget,
@@ -2887,7 +2888,7 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
         "Qualified command and file approvals expose exact actions; allow accepts once and deny declines once.",
     },
     agentCalls: {
-      available: true,
+      available: CODEX_SERVED_CAPABILITIES.agentCalls === true,
       evidence:
         "Qualified per-Session MCP attachment on thread start and every resume; authenticated calls are answered or expired before producer close.",
     },

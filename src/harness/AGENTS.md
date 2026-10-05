@@ -9,8 +9,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   (`PrepareOptions.workspace`, the directory every Session runs against) and the one additional writable directory (`writableDirectory`), the named
   native-Adapter test seams on their override types (including Codex's recorder-only observer and between-Turn app-server lifecycle control), and the
   executable env constants (`CLAUDE_CODE_EXECUTABLE_ENV` / `SECANT_CLAUDE_CODE` and
-  `CODEX_EXECUTABLE_ENV` / `SECANT_CODEX`) — the synchronous discovery outcome and static served-capability table that Preflight shares
-  with the Adapter (the resolved spawn target stays private), and the frozen static Harness input-rule declarations (ADR 0040),
+  `CODEX_EXECUTABLE_ENV` / `SECANT_CODEX`), synchronous discovery and static served-capability tables read by Preflight before discovery
+  and used for Agent-call profile availability (#377, ADR 0033; spawn targets stay private), and the frozen Harness input-rule declarations (ADR 0040),
   typed locally and checked structurally against Workflow by composition; and the permission-bridge factory (`startPermissionBridge`), exported so the fixture
   recorder composes the production bridge instead of a copy (#127 D3) and so redaction tests register a bearer the way production does (#334);
   its surface is named Session attachments (launch flags, bearer, URL, and opaque call declarations) and teardown, never an MCP type;

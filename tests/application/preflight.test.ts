@@ -955,6 +955,11 @@ for (const supportsInteractiveTurns of [false, true]) {
           ? "harness-capability-unmet"
           : "interactive-step-needs-tui",
       );
+      if (supportsInteractiveTurns) {
+        assert.match(admission.problem.explanation, /agentCalls/);
+        assert.equal(admission.problem.correction, "harness");
+        assert.equal(admission.problem.details?.unmet, "agentCalls");
+      }
       const view = f.app.projectionPort.openProjection({
         family: "launch-preparation",
         draft: {

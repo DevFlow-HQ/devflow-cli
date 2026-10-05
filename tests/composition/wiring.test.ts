@@ -40,6 +40,7 @@ import {
   wiringProcess,
 } from "../helpers/wiringDoubles.js";
 
+import { call, completed } from "../helpers/agentCompletion.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { home, readLog } from "./log-sink.js";
 import {
@@ -56,6 +57,143 @@ import {
 /** Await a submitted Run Operation's settled outcome (execution settles async). */
 async function settled(wired: Wiring, operationId: string): Promise<void> {
   await awaitSettled(wired.projectionPort, operationId);
+}
+
+for (const harness of ["claude-code", "codex"] as const) {
+  for (const assess of [false, true]) {
+    test(`production ${harness} registration launches an opted-in Bundle, assessment=${assess}`, async (t) => {
+      const discoveries = { "claude-code": 0, codex: 0 };
+      const adapter = (name: string) =>
+        createFake({
+          profile: {
+            ...profile(),
+            harness: name,
+            agentCalls: { available: true, evidence: "Scripted calls." },
+          },
+          turns: [
+            { agentCalls: [call("Work is complete.")], result: completed },
+          ],
+        })();
+      const discovery = (id: typeof harness) => () => {
+        discoveries[id]++;
+        return {
+          kind: "found" as const,
+          attempt: {
+            source: "path" as const,
+            name: id,
+            description: "scripted",
+          },
+        };
+      };
+      const workspacePath = realpathSync.native(
+        makeTempDir("secant-call-preflight-workspace-"),
+      );
+      const wired = wireApplication({
+        secantHome: makeTempDir("secant-call-preflight-home-"),
+        launchCwd: workspacePath,
+        supportsInteractiveTurns: true,
+        harnessAdapter: adapter("Claude Code"),
+        codexHarnessAdapter: adapter("Codex"),
+        discoverClaudeCode: discovery("claude-code"),
+        discoverCodex: discovery("codex"),
+        process: createFakeBundleProcess(),
+      });
+      t.after(async () => {
+        await wired.shutdown();
+        wired.runGroup.close();
+        wired.catalog.close();
+      });
+      const bundle = writeBundle([
+        {
+          id: "work",
+          kind: "interactive-agent",
+          session: "s",
+          entryTurn: true,
+          agentCompletion: true,
+          prompt: { asset: "prompts/work.md" },
+        },
+      ]);
+      const built = wired.bundleManagement.build(bundle.folder, {
+        noInstall: false,
+      });
+      assert.ok(built.ok, JSON.stringify(built));
+      const entry = wired.catalog.listEntries().find((e) => e.id === bundle.id);
+      assert.ok(entry);
+      const port = wired.projectionPort;
+      assert.ok(
+        port.submit({
+          operationId: "approve",
+          operation: "approve-workspace",
+          input: { path: workspacePath },
+        }).admitted,
+      );
+      const input = {
+        bundle: { id: entry.id },
+        launchInputs: {},
+        harness,
+        trustDigest: entry.digest,
+        requestedModel: "fake",
+      };
+      if (assess) {
+        const view = port.openProjection({
+          family: "launch-preparation",
+          draft: input,
+        });
+        try {
+          assert.deepEqual(view.snapshot.findings, []);
+          assert.equal(view.snapshot.status, "assessing");
+          let ready = false;
+          for await (const update of view.updates) {
+            if (update.kind !== "durable") continue;
+            assert.equal(
+              update.snapshot.status,
+              "ready",
+              JSON.stringify(update.snapshot.findings),
+            );
+            assert.deepEqual(update.snapshot.findings, []);
+            ready = true;
+            break;
+          }
+          assert.ok(ready, "Assessment must publish readiness.");
+        } finally {
+          view.close();
+        }
+        assert.deepEqual(wired.runGroup.listRuns(), []);
+        assert.equal(
+          wired.catalog.getTrustGrant(
+            entry.digest,
+            entry.installationGeneration,
+          ),
+          undefined,
+        );
+      }
+      const admission = port.submit({
+        operationId: "launch",
+        operation: "launch-run",
+        input,
+      });
+      assert.ok(admission.admitted, JSON.stringify(admission));
+      assert.ok(admission.runId);
+      assert.equal((await awaitSettled(port, "launch")).status, "applied");
+      const run = port.openProjection({
+        family: "run",
+        runId: admission.runId,
+      });
+      try {
+        assert.ok(run.snapshot.result.found);
+        assert.equal(run.snapshot.result.run.selectedHarness, harness);
+        assert.equal(run.snapshot.result.run.state, "succeeded");
+        assert.equal(run.snapshot.result.run.completion, "agent-declared");
+      } finally {
+        run.close();
+      }
+      assert.equal(discoveries[harness], assess ? 2 : 1);
+      assert.equal(
+        discoveries[harness === "codex" ? "claude-code" : "codex"],
+        0,
+      );
+    });
+  }
 }
 
 test("Harness catalog qualification prepares, reads the Harness defaults, and immediately closes before publishing the profile", async (t) => {

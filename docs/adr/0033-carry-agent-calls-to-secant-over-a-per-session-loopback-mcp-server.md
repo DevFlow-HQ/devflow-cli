@@ -36,8 +36,12 @@ managed deny rule still wins, leaving the Step waiting for the human as before.
 the Secant-owned description, and the reason's maximum length — on each Turn, bound when the Session opens; a different set on a later Turn is a
 caller-contract violation. The Turn's event stream gains a data-only agent-call event, the Turn handle gains one closed control that answers it and
 reports an expired or already-settled race, and a call still unanswered at Turn end expires before the producer closes. An evidence-bearing
-`agentCalls` capability joins the profile, so Preflight refuses a Run whose opted-in Steps need calls the installed Harness cannot prove, and Codex
-qualification probes the MCP configuration it relies on. Above the Interface, one predicate owned by Run execution decides whether a call is legal
+`agentCalls` capability joins the profile, and Codex qualification probes the MCP configuration it relies on. **Clarified 2026-10-05 (#377):**
+Preflight uses the Harness-owned static served-capability table to refuse an opted-in Step before discovery, Run creation, or Trust.
+That table declares whether the Adapter implements the channel. Each successfully qualified profile derives `agentCalls.available` from its
+Adapter's table and retains the native evidence. An installed executable must still qualify before it can prepare a Turn; Codex's required MCP
+schema facts remain part of that qualification. Assessment qualifies, while direct submit and resume keep their synchronous, spawn-free Preflight.
+The Adapter's Turn guard remains the final caller-contract check. Above the Interface, one predicate owned by Run execution decides whether a call is legal
 where the Step sits, shared with the human's controls; the pending call is recorded as a Turn event and applied through the Application's existing
 End Step settlement. The MCP listener is a private Module inside the Harness, shared by both Adapters, with no Port, and the token is redacted from
 Codex diagnostics as it already is from Claude Code's.
