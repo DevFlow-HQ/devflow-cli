@@ -64,6 +64,8 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **command-gate** (#89, the M2 gate): the maintained Command-only gate Bundle built, installed, and run to completion; its Repeat check fails twice and
   passes on the third iteration with a Review interval of two, so the Run blocks exactly once, and the `git-worktree-root` probe runs the real Git from
   the binary. Nothing in target source knows this Bundle exists.
+- **repeat-command-gate-progress** (#384): an ordinary Command-only Bundle (failing baseline, Repeat passing first Iteration, outside Command, Gate,
+  final Command) rests at its stored Gate and Offer on launch and a later `run show --json`; `run answer --continue` succeeds; each Command ran once.
 - **windows-cmd-shim**: a Command naming an npm-style `.cmd` shim resolves through the shim, while a broken shim is refused at Preflight (POSIX has no
   shim, so it is skipped there).
 - **windows-app-execution-alias**: when the runner exposes a `pwsh` or `winget` alias that `where.exe` finds after the primary PATH walk misses, a

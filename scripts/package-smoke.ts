@@ -2739,6 +2739,180 @@ await withCleanup(
 
     await runNamedScenario("command-gate", commandGateScenario);
 
+    // Run progress by Step and Iteration identity (#384): an ordinary Command-only
+    // Bundle whose passing Repeat is followed by an outside Command and an authored
+    // Human Gate. The launch must rest at the stored Gate with its answer Offer —
+    // never treat the outside Command's Attempt as another Iteration — and a
+    // separate `run answer` invocation must advance the Run without re-running any
+    // completed Command. Each Command appends one line to its own marker file.
+    async function repeatCommandGateProgressScenario(): Promise<void> {
+      const home = join(smokeRoot, "repeat-gate-home");
+      const workspace = join(smokeRoot, "repeat-gate-workspace");
+      const markers = join(smokeRoot, "repeat-gate-markers");
+      await mkdir(workspace, { recursive: true });
+      await mkdir(markers, { recursive: true });
+      const env = homeEnv(home);
+      const runtime = basename(process.execPath);
+      const id = "dev.secant.repeat-command-gate-progress";
+      const command = (
+        step: string,
+        exit: number,
+        produces: readonly { name: string; type: string }[],
+      ) => ({
+        id: step,
+        kind: "command",
+        produces,
+        command: {
+          executable: runtime,
+          arguments: [
+            "-e",
+            `require('node:fs').appendFileSync(${JSON.stringify(join(markers, step))}, 'ran\\n');process.exit(${exit})`,
+          ],
+        },
+      });
+      const manifest = {
+        formatVersion: 1,
+        bundle: {
+          id,
+          version: "1.0.0",
+          name: "Repeat Command Gate Progress",
+          description: "A Repeat, an outside Command, and a Human Gate.",
+        },
+        platforms: ["windows", "macos", "linux"],
+        inputs: {},
+        assets: [],
+        routing: [
+          command("baseline", 1, [{ name: "passing", type: "verdict" }]),
+          {
+            repeat: {
+              until: "passing",
+              reviewCheckpoint: { interval: 3, message: "review the check" },
+              steps: [
+                command("check", 0, [{ name: "passing", type: "verdict" }]),
+              ],
+            },
+          },
+          command("outside", 0, [{ name: "outside-log", type: "text" }]),
+          {
+            id: "gate",
+            kind: "human-gate",
+            shape: "approve-reject",
+            message: "approve the outside change",
+          },
+          command("after", 0, [{ name: "after-log", type: "text" }]),
+        ],
+      };
+      run(binary, ["workspace", "approve"], { cwd: workspace, env });
+      const installed = await buildAndInstall(
+        binary,
+        join(smokeRoot, "repeat-gate-bundle"),
+        manifest,
+        { build: workspace, list: workspace, env, label: "repeat-gate" },
+      );
+      const ranOnce = (steps: readonly string[]): void => {
+        for (const step of ["baseline", "check", "outside", "after"]) {
+          const file = join(markers, step);
+          const lines = existsSync(file)
+            ? readFileSync(file, "utf8").split("\n").filter(Boolean).length
+            : 0;
+          if (lines !== (steps.includes(step) ? 1 : 0)) {
+            throw new Error(
+              `Command ${step} ran ${lines} times; expected ${steps.includes(step) ? 1 : 0}.`,
+            );
+          }
+        }
+      };
+      const gate = (runId: string) => ({
+        runId,
+        stepId: "gate",
+        attemptId: "0.0:gate",
+        shape: "approve-reject",
+      });
+      const atGate = (snapshot: {
+        runId: string;
+        result: {
+          run: {
+            state: string;
+            position: number;
+            progress: { id: string; status: string }[];
+            pendingGate?: { gate: unknown };
+            checkpoint?: unknown;
+            actionOffers: { action: string; gate?: unknown }[];
+            timeline: { event: string }[];
+          };
+        };
+      }): void => {
+        const run = snapshot.result.run;
+        const expected = JSON.stringify({
+          state: "blocked",
+          position: 3,
+          progress: [
+            "baseline:succeeded",
+            "check:succeeded",
+            "outside:succeeded",
+            "gate:blocked",
+            "after:pending",
+          ],
+          gate: gate(snapshot.runId),
+          offer: gate(snapshot.runId),
+          checkpoint: false,
+          iterations: 1,
+        });
+        const actual = JSON.stringify({
+          state: run.state,
+          position: run.position,
+          progress: run.progress.map((step) => `${step.id}:${step.status}`),
+          gate: run.pendingGate?.gate,
+          offer: run.actionOffers.find(
+            (offer) => offer.action === "answer-human-gate",
+          )?.gate,
+          checkpoint: run.checkpoint !== undefined,
+          iterations: run.timeline.filter((e) => e.event === "iteration")
+            .length,
+        });
+        if (actual !== expected) {
+          throw new Error(
+            `The Run did not rest at the stored Gate: ${actual} (expected ${expected}).`,
+          );
+        }
+      };
+
+      const launched = JSON.parse(
+        run(
+          binary,
+          ["run", "launch", id, "--trust", installed.digest, "--json"],
+          { cwd: workspace, env, expect: 2 },
+        ),
+      );
+      atGate(launched);
+      ranOnce(["baseline", "check", "outside"]);
+      const runId: string = launched.runId;
+      // A separate invocation reads the same Gate back from durable state.
+      atGate(
+        JSON.parse(
+          run(binary, ["run", "show", runId, "--json"], {
+            cwd: workspace,
+            env,
+          }),
+        ),
+      );
+      const answered = run(binary, ["run", "answer", runId, "--continue"], {
+        cwd: workspace,
+        env,
+      });
+      if (!answered.includes("State: succeeded")) {
+        throw new Error(
+          `Answering the Gate did not advance the Run: ${answered}`,
+        );
+      }
+      ranOnce(["baseline", "check", "outside", "after"]);
+    }
+
+    await runNamedScenario(
+      "repeat-command-gate-progress",
+      repeatCommandGateProgressScenario,
+    );
+
     const commandBundle = (
       id: string,
       name: string,

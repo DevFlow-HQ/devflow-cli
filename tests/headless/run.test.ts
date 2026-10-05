@@ -20,12 +20,17 @@ import type {
 import { createApplication } from "../helpers/application.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
-import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+import {
+  countingBundleProcess,
+  createFakeBundleProcess,
+} from "../helpers/fakeBundleProcess.js";
 import {
   hostPlatform,
+  repeatCommandGateRouting,
   writeCommandBundle,
   writeGateBundle,
   writeRepeatBundle,
+  writeRoutingBundle,
   type GateBundleOptions,
   type RepeatBundleOptions,
 } from "../helpers/commandBundle.js";
@@ -1170,6 +1175,87 @@ test("a free-text gate rests blocked naming run answer --text, and answering con
     0,
   );
   assert.match(h.stdout(), /^v2\.0\.0$/m);
+});
+
+test("[repeat-command-gate-progress] run show targets the Gate after a passing Repeat and an outside Command, and run answer re-runs no Command (#384)", async (t) => {
+  const { process, runs } = countingBundleProcess();
+  const h = openHeadlessHarness(t, { slug: "secant-runcli", process });
+  const bundle = writeRoutingBundle({
+    id: "dev.secant.repeat-command-gate",
+    routing: repeatCommandGateRouting(),
+  });
+  assert.equal(await h.run(["bundle", "build", bundle.folder]), 0);
+  h.reset();
+  const digest = h.catalog
+    .listEntries()
+    .find((entry) => entry.id === bundle.id)!.digest;
+  h.catalog.approveWorkspace(h.workspace, new Date());
+  assert.equal(await h.run(["run", "launch", bundle.id, "--trust", digest]), 2);
+  const runId = /^Run (\S+)$/m.exec(h.stdout())![1]!;
+  h.reset();
+
+  assert.equal(await h.run(["run", "show", runId]), 0);
+  const shown = h.stdout();
+  assert.match(shown, /^State: blocked$/m);
+  assert.match(shown, /^Position: step 4 of 5$/m);
+  assert.match(shown, /durable Human Gate/);
+  assert.match(shown, /message: approve the outside change/);
+  assert.match(
+    shown,
+    /gate: approve-reject at step gate \(attempt 0\.0:gate\)/,
+  );
+  assert.ok(
+    shown.includes(`secant run answer ${runId} --continue  # approve:`),
+    shown,
+  );
+  assert.match(shown, /^ {2}outside \(command\): succeeded$/m);
+  assert.match(shown, /^ {2}gate \(human-gate\): blocked$/m);
+  h.reset();
+
+  assert.equal(await h.run(["run", "show", runId, "--json"]), 0);
+  const run = (
+    JSON.parse(h.stdout()) as {
+      result: {
+        run: {
+          progress: { id: string; status: string }[];
+          position: number;
+          pendingGate?: { gate: unknown };
+          checkpoint?: unknown;
+          actionOffers: { action: string; gate?: unknown }[];
+        };
+      };
+    }
+  ).result.run;
+  h.reset();
+  const gate = {
+    runId,
+    stepId: "gate",
+    attemptId: "0.0:gate",
+    shape: "approve-reject",
+  };
+  assert.deepEqual(
+    run.progress.map((step) => `${step.id}:${step.status}`),
+    [
+      "baseline:succeeded",
+      "check:succeeded",
+      "outside:succeeded",
+      "gate:blocked",
+      "after:pending",
+    ],
+  );
+  assert.equal(run.position, 3);
+  assert.deepEqual(run.pendingGate?.gate, gate);
+  assert.equal(run.checkpoint, undefined);
+  assert.deepEqual(
+    run.actionOffers.find((offer) => offer.action === "answer-human-gate")
+      ?.gate,
+    gate,
+  );
+  assert.deepEqual(runs, { baseline: 1, check: 1, outside: 1 });
+
+  assert.equal(await h.run(["run", "answer", runId, "--continue"]), 0);
+  assert.match(h.stdout(), /^State: succeeded$/m);
+  assert.deepEqual(runs, { baseline: 1, check: 1, outside: 1, after: 1 });
 });
 
 test("an authored approve-reject gate: --continue advances succeeded, --stop rests failed (#108, AC2)", async (t) => {

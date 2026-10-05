@@ -49,8 +49,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   so a later Attempt never moves an earlier event. ISO 8601 sorts lexicographically, so the string compare is the time compare.
 - Each event's `step` and each Session's plain name come from stored Attempt ids (`attemptStepId`, `attemptIteration`, #289): a Session whose recorded name
   differs from its Step's authored one was scoped to an Attempt, so it reads "<authored>, iteration <n>". Nothing new is persisted.
-- When the Attempt log ends on a passing Repeat Verdict, projection advances beyond the group before inspecting the next node. An authored Human Gate already has a
-  durable `pending_gate` then but deliberately has no Attempt-log entry until answered; parking on the deciding Command would hide the gate and its answer Offer.
+- `run-progress.ts` owns Run progress (#384): each Attempt counts for its Step and Iteration (`attemptStepId`/`attemptIteration`), never as another group's
+  Iteration, and a Review grant resets only its own group. A group ends once a later node is reached (an Attempt or pending Gate), End Stage closes its last
+  Iteration, or `until` passes. The Projection and every control (hold basis, Gate answers, interactive admission) read its `deriveRun`.
 - `liveElsewhere` (a Run live in another process, owner pid alive) is refused before resume/answer claim anything (`run-live-elsewhere`, owner named), and `readResource`
   refuses it too; `listRuns` throwing on a malformed row is caught in cancel/delete so nothing throws out of `submit` (A4).
 - The client `RunStateName` has no `created` and gains `cancelled` (A7); the Run Store still records `created` internally, and `toRunState` maps it to `running` for the
@@ -92,9 +93,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and
   independently exposes the latest Agent-step Attempt's normalized name/executable/version as `run.harness` plus its sibling `effectiveModel` (#125, #147).
   Resume may replace only the observed fields; Command-only Runs omit both selection and observations.
-- `deriveRun`'s walk assumes `attempt_log` holds only per-Step Attempts, but the Run Store already appends the reconciliation `indeterminate` marker row
-  there (see [the Run Store's notes](../run/store/AGENTS.md)). The marker is harmless only because its outcome is not `succeeded`, not because the walk
-  excludes it — keep that true if you add marker rows.
+- The Run Store appends the reconciliation `indeterminate` marker row to `attempt_log` (see [the Run Store's notes](../run/store/AGENTS.md)). Its id names
+  no Step, so progress attributes it to none: it is neither a success nor evidence a node was reached.
 - One settle path (`submitEndInteractiveStep` → `startEndInteractiveStep`) backs `end-interactive-step`, `continue-repeat` (#217), and `end-stage` (#218), so no
   iteration settles twice. Run execution's `interactiveEndLegality` owns the position and mid-Turn rules; Application only translates its refusals
   through `interactiveControlMismatch` and `interactiveStepMidTurn`. Claim and promise ordering remain [run-control's](../../docs/agents/run-control.md).

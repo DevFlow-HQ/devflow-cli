@@ -131,7 +131,7 @@ export function writeRepeatBundle(options: RepeatBundleOptions): CommandBundle {
   const id = options.id ?? "dev.secant.repeat-loop";
   const version = options.version ?? "1.0.0";
   const folder = makeTempDir("secant-repeat-bundle-");
-  const counter = join(makeTempDir("secant-repeat-counter-"), "counter");
+  const counter = newCounterFile();
 
   const baselineScript = options.baselinePass
     ? "process.exit(0)"
@@ -139,10 +139,7 @@ export function writeRepeatBundle(options: RepeatBundleOptions): CommandBundle {
   const checkScript =
     options.passAt === undefined
       ? "process.exit(1)"
-      : `const fs=require('node:fs');const p=${JSON.stringify(counter)};` +
-        `let n=0;try{n=Number(fs.readFileSync(p,'utf8'))||0;}catch{}` +
-        `n++;fs.writeFileSync(p,String(n));` +
-        `console.log('iteration '+n);process.exit(n>=${options.passAt}?0:1);`;
+      : counterScript(counter, options.passAt);
 
   const manifest = {
     formatVersion: 1,
@@ -196,6 +193,136 @@ export function writeRepeatBundle(options: RepeatBundleOptions): CommandBundle {
     JSON.stringify(manifest, null, 2),
   );
   return { folder, id, version };
+}
+
+/** A fresh per-Bundle counter file path for `counterScript`. */
+function newCounterFile(): string {
+  return join(makeTempDir("secant-repeat-counter-"), "counter");
+}
+
+/** The Repeat `check` script: read, increment and write the counter file, print
+ *  `iteration N`, and exit 0 (a `pass` Verdict) from the `passAt`th run on. The
+ *  Process doubles reproduce exactly this shape. */
+function counterScript(counter: string, passAt: number): string {
+  return (
+    `const fs=require('node:fs');const p=${JSON.stringify(counter)};` +
+    `let n=0;try{n=Number(fs.readFileSync(p,'utf8'))||0;}catch{}` +
+    `n++;fs.writeFileSync(p,String(n));` +
+    `console.log('iteration '+n);process.exit(n>=${passAt}?0:1);`
+  );
+}
+
+/** A Command routing node whose `-e` script the Process doubles interpret. The
+ *  script opens with a comment naming its Step, which `commandStepOf` reads back. */
+export function commandNode(
+  id: string,
+  script: string,
+  produces: readonly { name: string; type: "text" | "verdict" }[] = [
+    { name: `${id}-log`, type: "text" },
+  ],
+  retry?: number,
+): Record<string, unknown> {
+  return {
+    id,
+    kind: "command",
+    ...(retry !== undefined ? { retry } : {}),
+    produces,
+    command: {
+      executable: RUNTIME_NAME,
+      arguments: ["-e", `/*${id}*/${script}`],
+    },
+  };
+}
+
+/** The Step a `commandNode` script names, or undefined for any other script. */
+export function commandStepOf(script: string): string | undefined {
+  return /^\/\*([^*]+)\*\//.exec(script)?.[1];
+}
+
+/** A Verdict-driven Repeat group whose one `stepId` Command binds `until` and
+ *  passes from its `passAt`th iteration (never, when omitted). */
+export function repeatNode(options: {
+  readonly stepId: string;
+  readonly until: string;
+  readonly interval: number;
+  readonly passAt?: number;
+  readonly retry?: number;
+}): Record<string, unknown> {
+  return {
+    repeat: {
+      until: options.until,
+      reviewCheckpoint: {
+        interval: options.interval,
+        message: `review ${options.stepId}`,
+      },
+      steps: [
+        commandNode(
+          options.stepId,
+          options.passAt === undefined
+            ? "process.exit(1)"
+            : counterScript(newCounterFile(), options.passAt),
+          [
+            { name: options.until, type: "verdict" },
+            { name: `${options.stepId}-log`, type: "text" },
+          ],
+          options.retry,
+        ),
+      ],
+    },
+  };
+}
+
+/** An ordinary Bundle authoring folder over an authored Routing, Command-only
+ *  unless a node says otherwise. */
+export function writeRoutingBundle(options: {
+  readonly id: string;
+  readonly routing: readonly unknown[];
+}): CommandBundle {
+  const folder = makeTempDir("secant-routing-bundle-");
+  const manifest = {
+    formatVersion: 1,
+    bundle: {
+      id: options.id,
+      version: "1.0.0",
+      name: "Routing",
+      description: "An authored-Routing test Bundle.",
+    },
+    platforms: ["windows", "macos", "linux"],
+    inputs: {},
+    assets: [],
+    routing: options.routing,
+  };
+  writeFileSync(
+    join(folder, "manifest.json"),
+    JSON.stringify(manifest, null, 2),
+  );
+  return { folder, id: options.id, version: "1.0.0" };
+}
+
+/** The #384 Routing: a failing `baseline` Verdict, a Repeat whose `check` passes
+ *  on its first Iteration, an `outside` Command, a Human `gate` (approve-reject
+ *  unless asked; a free-text one binds `answer`), and an `after` Command. Each
+ *  Command's script names its Step, so a Process double can count its runs. */
+export function repeatCommandGateRouting(
+  shape: HumanGateShape = "approve-reject",
+): unknown[] {
+  return [
+    commandNode("baseline", "process.exit(1)", [
+      { name: "passing", type: "verdict" },
+    ]),
+    repeatNode({ stepId: "check", until: "passing", interval: 3, passAt: 1 }),
+    commandNode("outside", "console.log('outside')"),
+    {
+      id: "gate",
+      kind: "human-gate",
+      shape,
+      message: "approve the outside change",
+      ...(shape === "free-text"
+        ? { produces: [{ name: "answer", type: "text" }] }
+        : {}),
+    },
+    commandNode("after", "console.log('after')"),
+  ];
 }
 
 export interface MaterializationBundleOptions {

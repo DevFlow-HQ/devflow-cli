@@ -52,13 +52,11 @@ import {
   ensureShippedBundles,
   type ShippedBundleEnsure,
 } from "./shipped-bundles.js";
+import { deriveRun, type HoldBasis } from "./run-progress.js";
 import {
-  deriveRun,
   deriveRunFacts,
   GATE_ANSWER_ARTIFACT,
-  holdBasis,
   runSnapshot,
-  type HoldBasis,
   type RunFacts,
   type RunProjectionDependencies,
   type RunSteerCapability,
@@ -927,15 +925,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     owner: RunOwner,
     runId: string,
   ): HoldBasis | undefined {
-    const derived = deriveRun(
-      routing,
-      owner.attemptLog(),
-      state,
-      runId,
-      owner,
-      owner.gateAnswers(),
-    );
-    return holdBasis(derived, owner);
+    return deriveRun(routing, state, runId, owner).hold;
   }
 
   async function adoptHeldStep(
@@ -2080,15 +2070,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
       owner: activeOwner,
       drive: async () => {
         const observed = observedOwner(activeOwner, input.runId);
-        const log = activeOwner.attemptLog();
         const priorAnswers = activeOwner.gateAnswers();
         const derived = deriveRun(
           facts.routing,
-          log,
           record.state,
           input.runId,
           activeOwner,
-          priorAnswers,
         );
         // Idempotent replay of the *same* operation id: settle `applied` without
         // re-validating the (now-moved) Gate or re-driving execution. Keyed on the
@@ -2195,16 +2182,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
           return driven.outcome;
         }
 
-        // A derived Review checkpoint: the M2 continue/stop path (unchanged, #85).
-        // The cumulative iteration count this grant/stop resets from: the prior grant
-        // offset plus the iterations completed since it.
+        // A derived Review checkpoint: the M2 continue/stop path (#85). The grant or
+        // stop resets the checkpointed group's count at its completed Iterations.
         const answer = input.answer!;
-        const priorOffset =
-          priorAnswers.length === 0
-            ? 0
-            : priorAnswers[priorAnswers.length - 1]!.iterationsAtGrant;
-        const iterationsAtGrant =
-          priorOffset + (derived.checkpoint?.completedIterations ?? 0);
+        const iterationsAtGrant = derived.checkpointIterations ?? 0;
         const recorded = observed.recordGateAnswer({
           operationId,
           gateAttemptId: input.gate.attemptId,
@@ -2633,14 +2614,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       ({ owner, record, facts }) => {
         // Confirm the Run derives to `blocked` at this exact interactive Step — not
         // a derived checkpoint, an authored gate, or a Step it has moved past.
-        const derived = deriveRun(
-          facts.routing,
-          owner.attemptLog(),
-          record.state,
-          runId,
-          owner,
-          owner.gateAnswers(),
-        );
+        const derived = deriveRun(facts.routing, record.state, runId, owner);
         const current = derived.statuses[derived.position];
         // `blocked` is the boundary (between Turns); `running` is a live human Turn,
         // which runs under `running` so a crash reconciles it via the #118 path

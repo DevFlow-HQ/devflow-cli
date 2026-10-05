@@ -1,6 +1,6 @@
 import { modelChoiceOffer } from "./model-choice.js";
 import type { ApplicationHarnessQualification } from "./harness-registry.js";
-import { waitingAgentTurn } from "../run/store/store.js";
+import { deriveRun, type IterationMark } from "./run-progress.js";
 import { z } from "zod";
 import type { Catalog, CatalogEntry } from "../catalog/catalog.js";
 import { inspectBundle, type Budgets } from "../bundle/bundle.js";
@@ -10,19 +10,15 @@ import {
   flattenSteps,
   humanReviewCheckpoint,
   inHumanRepeat,
-  MAX_REVIEW_CHECKPOINT_INTERVAL,
   type AgentStep,
   type Platform,
-  type RepeatGroup,
   type RoutingNode,
-  type Step,
 } from "../workflow/workflow.js";
 import type {
   AttemptLogEntry,
   GateAnswerRecord,
   HarnessSessionRecord,
   MaterializationConflict,
-  PendingGateRecord,
   RunGroup,
   RunListing,
   RunOwner,
@@ -46,13 +42,10 @@ import type {
   RunConflictView,
   RunGateReference,
   RunOutputView,
-  RunPendingGateView,
   RunResult,
   RunSessionView,
   RunSnapshot,
   RunStateName,
-  RunStepProgress,
-  RunStepStatus,
   RunTimelineEvent,
   RunTimelineKind,
   RunTranscriptEntryView,
@@ -167,20 +160,10 @@ function runResult(
     conflicts: readonly MaterializationConflict[],
     gateAnswers: readonly GateAnswerRecord[],
   ): RunResult => {
-    // Derive progress and the `blocked` state from the Routing and the ordered
-    // attempt log (ADR 0020, #84): a Repeat group loops, so a flat succeeded-
-    // advances-one-Step mapping no longer identifies the current Step. Stored
-    // `blocked` preserves reconciliation; the checkpoint facts are re-derived from
-    // the current Step Attempt and Verdict binding. A persisted
-    // `halted` (#88) passes through and marks its current Step `blocked`.
-    const derivedRun = deriveRun(
-      facts.routing,
-      log,
-      trackedState,
-      runId,
-      owner,
-      gateAnswers,
-    );
+    // Progress, Iterations, and the interaction the Run waits on, by Step and
+    // Iteration identity (#384) — the one derivation Application controls also
+    // admit by. A persisted `halted` (#88) marks its current Step `blocked`.
+    const derivedRun = deriveRun(facts.routing, trackedState, runId, owner);
     // The conflict resting the Run is the latest recorded one; earlier conflicts
     // stay on the timeline as history. It is surfaced only while `halted`.
     const active =
@@ -199,14 +182,14 @@ function runResult(
     const liveTurn = !liveElsewhere
       ? turns.find((turn) => turn.resultKind === undefined)
       : undefined;
-    // Why the Run holds its current Step for the human, read by the one hold-basis
-    // derivation the Application also admits and adopts by (#122, #354): an
-    // interactive-agent Step at a Turn boundary, or an Agent Step's Attempt an
-    // Interrupt left waiting. Neither needs a durable gate record.
+    // Why the Run holds its current Step for the human, the hold basis the
+    // Application also admits and adopts by (#122, #354): an interactive-agent Step
+    // at a Turn boundary, or an Agent Step's Attempt an Interrupt left waiting.
+    // Neither needs a durable gate record.
     const current = derivedRun.statuses[derivedRun.position];
     const held =
       !liveElsewhere && owner !== undefined && liveTurn === undefined
-        ? holdBasis(derivedRun, owner)
+        ? derivedRun.hold
         : undefined;
     const interactiveStep =
       held?.kind === "interactive" ? held.step : undefined;
@@ -287,10 +270,7 @@ function runResult(
         lastAttemptOutcome: log[log.length - 1]?.outcome,
         hasConflict: active !== undefined,
         waitingForFollowUp:
-          owner !== undefined &&
-          current?.kind === "agent" &&
-          attemptStepId(waitingAgentTurn(owner)?.attemptId ?? "") ===
-            current.id,
+          current?.kind === "agent" && derivedRun.waitingTurn !== undefined,
         sessions,
         ...(currentInteractive !== undefined
           ? {
@@ -739,30 +719,6 @@ function resumeRunOffer(
 
 /** The `answer-human-gate` offer for a blocked Run: names the consequence of each
  *  answer so a client presents them without re-deriving the model (#85). */
-/** The `run` Projection view of an authored pending Human Gate (#108): the durable
- *  record's message and free-text output, plus the exact Gate reference a client
- *  answers against (the producing Attempt id). */
-function pendingGateView(
-  runId: string,
-  pending: PendingGateRecord,
-): RunPendingGateView {
-  return {
-    gate: {
-      runId,
-      stepId: pending.stepId,
-      attemptId: pending.attemptId,
-      shape: pending.shape,
-    },
-    message: pending.message,
-    ...(pending.outputArtifactName !== undefined
-      ? { outputArtifactName: pending.outputArtifactName }
-      : {}),
-    ...(pending.suggestions !== undefined
-      ? { suggestions: pending.suggestions }
-      : {}),
-  };
-}
-
 function answerHumanGateOffer(
   gate: RunGateReference,
   authored: boolean,
@@ -912,494 +868,6 @@ function deleteRunOffer(runId: string): ActionOffer {
     consequence:
       "remove the Run and its stored history and Artifacts from disk.",
   };
-}
-
-/** Why a `blocked` Run holds its current Step for the human, with no gate or
- *  checkpoint (#122, #354): an interactive-agent Step between Turns, or an Agent
- *  Step whose open Attempt an Interrupt left waiting — execution's Attempt-level
- *  basis, on that Step. Its single-derivation rule is run-control's. */
-export type HoldBasis =
-  | { readonly kind: "interactive"; readonly step: RunStepProgress }
-  | {
-      readonly kind: "follow-up";
-      readonly step: RunStepProgress;
-      readonly turn: TurnRecord;
-    };
-
-export function holdBasis(
-  derived: DerivedRun,
-  run: Pick<RunOwner, "turns" | "attemptLog">,
-): HoldBasis | undefined {
-  if (
-    derived.state !== "blocked" ||
-    derived.checkpoint !== undefined ||
-    derived.pendingGate !== undefined
-  ) {
-    return undefined;
-  }
-  const step = derived.statuses[derived.position];
-  if (step?.kind === "interactive-agent") return { kind: "interactive", step };
-  if (step?.kind !== "agent") return undefined;
-  const turn = waitingAgentTurn(run);
-  return turn !== undefined && attemptStepId(turn.attemptId) === step.id
-    ? { kind: "follow-up", step, turn }
-    : undefined;
-}
-
-/** Map a stored/tracked canonical state to the client vocabulary (#98 A7). The
- *  retired `created` reads as `running` — a launched Run is observed running from
- *  the moment it is admitted — and every other stored state is already one of
- *  RunStateName. */
-function toRunState(state: string): RunStateName {
-  switch (state) {
-    case "running":
-    case "blocked":
-    case "succeeded":
-    case "failed":
-    case "halted":
-    case "cancelled":
-      return state;
-    default:
-      return "running";
-  }
-}
-
-/** One completed Repeat-group Iteration on the timeline, with the log index of the
- *  Attempt that completed it, so an equal-instant sort keeps the mark beside that
- *  Attempt rather than after the next Step's events (#289). */
-interface IterationMark {
-  readonly event: RunTimelineEvent;
-  readonly logIndex: number;
-}
-
-export interface DerivedRun {
-  /** The effective state, including the `blocked` a checkpoint pause derives from
-   *  the attempt log here (execution also stores `blocked` durably, so a killed Run
-   *  reconciles blocked; this derivation supplies the checkpoint facts). */
-  readonly state: RunStateName;
-  readonly statuses: RunStepProgress[];
-  readonly position: number;
-  /** One mark per completed Repeat-group iteration, for the timeline. */
-  readonly iterationEvents: readonly IterationMark[];
-  /** The Review checkpoint facts, present only when the state derives to `blocked`
-   *  at a derived Review checkpoint. */
-  readonly checkpoint?: RunCheckpointView;
-  /** The authored Human Gate facts, present only when the state is `blocked` at an
-   *  authored `human-gate` Step (#108). A blocked Run derives exactly one of
-   *  `checkpoint` or `pendingGate`. */
-  readonly pendingGate?: RunPendingGateView;
-}
-
-/**
- * Derive per-Step progress, the effective Run state, the per-iteration timeline,
- * and the Review checkpoint from the Routing and the ordered attempt log (ADR
- * 0020, #84). A Repeat group loops, so a flat succeeded-advances-one-Step mapping
- * no longer identifies the current Step; and the `blocked` checkpoint facts are
- * re-derived here from the current Step Attempt — which needs the `until` Verdict
- * binding, readable only through the owner. Execution also stores `blocked`
- * durably (a killed Run reconciles blocked), but its checkpoint facts still come
- * from this derivation, not the stored state.
- *
- * The attempt log carries no Step link, so iterations are reconstructed by
- * consuming attempts node by node: a Step consumes its `failed` retries then its
- * one terminal Attempt; a Repeat group consumes complete span-iterations. This is
- * exact when the Repeat group is the terminal reached node — every trailing
- * Attempt is one of its iterations — which a `blocked` Run always is, since the
- * block stops the walk. (ponytail: a group the walk has already passed with ≥1
- * iteration contributes no iteration events, because a precise mid-Routing count
- * needs the attempt→Step link the Store does not yet surface; a `succeeded` Run's
- * progress is taken from the terminal state, so this is only a timeline nicety.)
- */
-export function deriveRun(
-  routing: readonly RoutingNode[],
-  log: readonly AttemptLogEntry[],
-  state: string,
-  runId: string,
-  owner: RunOwner | undefined,
-  gateAnswers: readonly GateAnswerRecord[],
-): DerivedRun {
-  // The offset the derived checkpoint count and the block decision reset from:
-  // the latest grant's cumulative iteration count (#85). Zero before any grant,
-  // so the first block still reports the full interval.
-  const grantOffset =
-    gateAnswers.length === 0
-      ? 0
-      : gateAnswers[gateAnswers.length - 1]!.iterationsAtGrant;
-  const steps = flattenSteps(routing);
-  const statuses: RunStepProgress[] = steps.map((step) => ({
-    id: step.id,
-    kind: step.kind,
-    status: "pending",
-  }));
-  const flatIndex = new Map<Step, number>();
-  steps.forEach((step, index) => flatIndex.set(step, index));
-  const mark = (step: Step, status: RunStepStatus): void => {
-    const index = flatIndex.get(step)!;
-    statuses[index] = { ...statuses[index]!, status };
-  };
-
-  // A rested `succeeded` Run: every Step ran to completion. Progress is taken from
-  // the terminal state; iteration events are counted only for a trailing group.
-  if (state === "succeeded") {
-    for (const step of steps) mark(step, "succeeded");
-    return {
-      state: toRunState(state),
-      statuses,
-      position: steps.length,
-      iterationEvents: trailingGroupIterations(routing, log),
-    };
-  }
-
-  const iterationEvents: IterationMark[] = [];
-  // The status of the Step the walk is currently paused at (log exhausted): a
-  // failed Run's current Step failed; a running Run's is running; a `halted` Run's
-  // (a Materialization conflict, #88) or a durably `blocked` Run's (an authored
-  // Human Gate whose facts we cannot read here because the owner is absent — a Run
-  // live in another process, #108) current Step is blocked; a `created` Run has not
-  // started, so its Steps stay pending.
-  const stalledStatus: RunStepStatus =
-    state === "failed"
-      ? "failed"
-      : state === "running"
-        ? "running"
-        : state === "halted" || state === "blocked"
-          ? "blocked"
-          : "pending";
-  let cursor = 0;
-  for (const node of routing) {
-    if (!("repeat" in node)) {
-      const result = consumeStep(log, cursor);
-      cursor = result.next;
-      if (!result.complete) {
-        // An authored Human Gate the walk paused at: the Run rests `blocked`
-        // durably (a pending_gate record whose producing Attempt has not settled),
-        // distinct from a derived Review checkpoint (#108). Its facts come from the
-        // durable record, read through the owner.
-        const pending =
-          node.kind === "human-gate" ? owner?.pendingGate() : undefined;
-        if (
-          state === "blocked" &&
-          pending !== undefined &&
-          pending.stepId === node.id
-        ) {
-          mark(node, "blocked");
-          return {
-            state: "blocked",
-            statuses,
-            position: flatIndex.get(node)!,
-            iterationEvents,
-            pendingGate: pendingGateView(runId, pending),
-          };
-        }
-        mark(node, stalledStatus);
-        return {
-          state: toRunState(state),
-          statuses,
-          position: flatIndex.get(node)!,
-          iterationEvents,
-        };
-      }
-      mark(node, "succeeded");
-      continue;
-    }
-    // A Repeat group: consume complete span-iterations until the log runs out.
-    const span = node.repeat.steps;
-    let iterations = 0;
-    for (;;) {
-      const iteration = consumeSpan(log, cursor, span);
-      if (!iteration.complete) {
-        // The log ran out mid-iteration: the group is the current node, paused at
-        // `iteration.stalled`. Earlier span Steps of this iteration already ran.
-        // (An authored Human Gate cannot appear in a Repeat span — the Composition
-        // check rejects that, #108 — so the only stall here is a Step's own pause.)
-        markSpanBefore(span, iteration.stalled, mark);
-        mark(iteration.stalled, stalledStatus);
-        return {
-          state: toRunState(state),
-          statuses,
-          position: flatIndex.get(iteration.stalled)!,
-          iterationEvents,
-        };
-      }
-      // A span that consumed no Attempts (a degenerate empty group Composition
-      // rejects) would loop forever; stop rather than spin or mis-mark.
-      if (iteration.next === cursor) break;
-      cursor = iteration.next;
-      iterations++;
-      iterationEvents.push({
-        event: {
-          at: iteration.at,
-          event: "iteration",
-          detail: String(iterations),
-        },
-        logIndex: iteration.next - 1,
-      });
-      for (const spanStep of span) mark(spanStep, "succeeded");
-      // A confirmed End Stage (#218) exits a human-controlled group after this
-      // iteration, so the walk moves to the next node rather than project another.
-      if (iteration.endsStage) break;
-      if (cursor >= log.length) {
-        // A passing Verdict ends the group even when the next node has not settled
-        // an Attempt yet. This is the normal shape when that node is an authored
-        // Human Gate: its durable pending-gate record exists, but it deliberately
-        // has no attempt-log entry until answered. Advance so the next node can
-        // project that gate instead of misreporting the deciding Command as live.
-        const until = "until" in node.repeat ? node.repeat.until : undefined;
-        const versionId =
-          until !== undefined ? owner?.currentVersion(until) : undefined;
-        if (
-          owner !== undefined &&
-          until !== undefined &&
-          versionId !== undefined &&
-          readVerdict(owner, versionId, until) === "pass"
-        ) {
-          break;
-        }
-        // No more Attempts: the group is the terminal reached node — derive the
-        // block from its current (last) Step Attempt.
-        return finishTerminalGroup(
-          node.repeat,
-          span,
-          iterations,
-          grantOffset,
-          state,
-          statuses,
-          flatIndex,
-          mark,
-          iterationEvents,
-          runId,
-          owner,
-          log,
-        );
-      }
-      // More Attempts remain: the group passed and the walk moves on (greedy — see
-      // the ponytail above; exact when the group is the terminal node).
-    }
-  }
-  // Every node consumed cleanly with the log exhausted at a boundary: the Run is
-  // between Steps (a transient running snapshot).
-  return {
-    state: toRunState(state),
-    statuses,
-    position: steps.length,
-    iterationEvents,
-  };
-}
-
-/** Consume one Step's Attempts from `cursor`: skip its `failed` retries, then its
- *  terminal `succeeded`. `complete` is false when the log runs out first (the Step
- *  is the current one). */
-function consumeStep(
-  log: readonly AttemptLogEntry[],
-  cursor: number,
-): { next: number; complete: boolean; at?: string } {
-  let i = cursor;
-  while (i < log.length) {
-    const entry = log[i]!;
-    i++;
-    if (entry.outcome === "succeeded")
-      return { next: i, complete: true, at: entry.at };
-  }
-  return { next: i, complete: false };
-}
-
-/** Consume one full span iteration (every span Step completing). `complete` is
- *  false, with the `stalled` Step, when the log runs out partway through. */
-function consumeSpan(
-  log: readonly AttemptLogEntry[],
-  cursor: number,
-  span: readonly Step[],
-):
-  | { complete: true; next: number; at: string; endsStage: boolean }
-  | { complete: false; stalled: Step; next: number } {
-  let probe = cursor;
-  let at = "";
-  for (const spanStep of span) {
-    const result = consumeStep(log, probe);
-    if (!result.complete) {
-      return { complete: false, stalled: spanStep, next: result.next };
-    }
-    probe = result.next;
-    at = result.at ?? at;
-  }
-  // A non-empty span consumed every Step; an empty span (Composition rejects one)
-  // consumes nothing, which `next === cursor` lets the caller detect and stop on.
-  const endsStage = log
-    .slice(cursor, probe)
-    .some((entry) => entry.endsStage === true);
-  return { complete: true, next: probe, at, endsStage };
-}
-
-/** Mark every span Step before `stalled` as succeeded (they ran this iteration). */
-function markSpanBefore(
-  span: readonly Step[],
-  stalled: Step,
-  mark: (step: Step, status: RunStepStatus) => void,
-): void {
-  for (const spanStep of span) {
-    if (spanStep === stalled) return;
-    mark(spanStep, "succeeded");
-  }
-}
-
-/** Finish a Repeat group that is the terminal reached node: derive `blocked` when
- *  the review cadence is reached without a pass, else leave it running. */
-function finishTerminalGroup(
-  repeat: RepeatGroup["repeat"],
-  span: readonly Step[],
-  iterations: number,
-  grantOffset: number,
-  state: string,
-  statuses: RunStepProgress[],
-  flatIndex: Map<Step, number>,
-  mark: (step: Step, status: RunStepStatus) => void,
-  iterationEvents: readonly IterationMark[],
-  runId: string,
-  owner: RunOwner | undefined,
-  log: readonly AttemptLogEntry[],
-): DerivedRun {
-  const current = span[span.length - 1]!;
-  const position = flatIndex.get(current)!;
-  // A human-controlled Repeat (#217) never raises the Verdict-driven Gate: Continue
-  // is each iteration's review, so only the interactive pause below can rest it. Its
-  // agent-Continue checkpoint surfaces as `heldForReview`, read from the held call.
-  if ("until" in repeat) {
-    const interval = Math.min(
-      repeat.reviewCheckpoint.interval,
-      MAX_REVIEW_CHECKPOINT_INTERVAL,
-    );
-    // Iterations since the last grant: a `continue` grant resets the count, so one
-    // grant buys exactly one more interval (ADR 0020, #85). Before any grant the
-    // offset is zero, so this is the full iteration count.
-    const sinceGrant = iterations - grantOffset;
-    const versionId = owner?.currentVersion(repeat.until);
-    const verdict =
-      owner !== undefined && versionId !== undefined
-        ? readVerdict(owner, versionId, repeat.until)
-        : undefined;
-    const passes = verdict === "pass";
-
-    // Blocked: the cadence is reached *since the last grant*, the Verdict still does
-    // not pass, and the Run has not failed. The block is derived from the current
-    // Step Attempt.
-    if (
-      state !== "failed" &&
-      !passes &&
-      versionId !== undefined &&
-      sinceGrant >= interval
-    ) {
-      mark(current, "blocked");
-      const lastAttempt = log[log.length - 1]!;
-      const checkpoint: RunCheckpointView = {
-        message: repeat.reviewCheckpoint.message,
-        interval,
-        completedIterations: sinceGrant,
-        latestVerdict: {
-          name: repeat.until,
-          // Normalize the value actually read (M2 Verdicts are pass/fail); this
-          // branch already established it is not `pass`.
-          value: verdict === "pass" ? "pass" : "fail",
-          reference: {
-            runId,
-            artifactName: repeat.until,
-            versionId,
-            type: "verdict",
-          },
-        },
-        gate: {
-          runId,
-          stepId: current.id,
-          attemptId: lastAttempt.attemptId,
-          shape: "approve-reject",
-        },
-      };
-      return {
-        state: "blocked",
-        statuses,
-        position,
-        iterationEvents,
-        checkpoint,
-      };
-    }
-  }
-
-  // Short of the cadence but resting `blocked` or `halted` with an interactive
-  // first span Step: the next iteration opened on it and it awaits Turns without
-  // an Attempt (#216), so the log ends exactly at the iteration boundary. An Agent
-  // first span Step an Interrupt holds open waits the same way (#354).
-  const waiting = owner !== undefined ? waitingAgentTurn(owner) : undefined;
-  if (
-    ((state === "blocked" || state === "halted") &&
-      span[0]!.kind === "interactive-agent") ||
-    ((state === "blocked" || state === "halted") &&
-      waiting !== undefined &&
-      attemptStepId(waiting.attemptId) === span[0]!.id)
-  ) {
-    mark(span[0]!, "blocked");
-    return {
-      state: toRunState(state),
-      statuses,
-      position: flatIndex.get(span[0]!)!,
-      iterationEvents,
-    };
-  }
-  // Not blocked: the loop is still short of its cadence (a live mid-loop snapshot),
-  // or the Run failed on the last span Step.
-  mark(current, state === "failed" ? "failed" : "running");
-  return { state: toRunState(state), statuses, position, iterationEvents };
-}
-
-/** Iteration events for a trailing Repeat group in a rested `succeeded` Run: every
- *  Attempt after the preceding nodes is one of the group's iterations. */
-function trailingGroupIterations(
-  routing: readonly RoutingNode[],
-  log: readonly AttemptLogEntry[],
-): IterationMark[] {
-  const last = routing[routing.length - 1];
-  if (last === undefined || !("repeat" in last)) return [];
-  // Consume the preceding nodes to find where the group's Attempts begin.
-  let cursor = 0;
-  for (const node of routing.slice(0, -1)) {
-    if ("repeat" in node) {
-      for (;;) {
-        const iteration = consumeSpan(log, cursor, node.repeat.steps);
-        // Stop on a partial iteration or one that consumed nothing (an empty span).
-        if (!iteration.complete || iteration.next === cursor) break;
-        cursor = iteration.next;
-        if (iteration.endsStage || cursor >= log.length) break;
-      }
-    } else {
-      cursor = consumeStep(log, cursor).next;
-    }
-  }
-  const span = last.repeat.steps;
-  const events: IterationMark[] = [];
-  let iterations = 0;
-  while (cursor < log.length) {
-    const iteration = consumeSpan(log, cursor, span);
-    if (!iteration.complete) break;
-    cursor = iteration.next;
-    iterations++;
-    events.push({
-      event: {
-        at: iteration.at,
-        event: "iteration",
-        detail: String(iterations),
-      },
-      logIndex: iteration.next - 1,
-    });
-  }
-  return events;
-}
-
-/** The `pass`/`fail` value of a Verdict at a version, or undefined if unreadable. */
-function readVerdict(
-  owner: RunOwner,
-  versionId: string,
-  name: string,
-): string | undefined {
-  const bytes = owner.readArtifact(versionId, name);
-  return bytes === undefined ? undefined : new TextDecoder().decode(bytes);
 }
 
 /** Narrow a stored Session availability to the client union, defaulting an

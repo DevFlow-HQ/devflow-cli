@@ -6,7 +6,7 @@ import type {
 } from "../../src/process/process.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
-import { RUNTIME_NAME } from "./commandBundle.js";
+import { commandStepOf, RUNTIME_NAME } from "./commandBundle.js";
 
 // The one deterministic Process double for the double-backed headless harness. It
 // interprets exactly the `<runtime> -e <script>` shapes the `commandBundle.ts`
@@ -110,6 +110,11 @@ interface FakeBundleProcessOptions {
    *  resolve as found at exactly that path, as the real resolver resolves an
    *  absolute non-shim path. */
   readonly executables?: readonly string[];
+  /** Sees every Command first; a returned result replaces the interpreted one, so
+   *  a test can count runs or script one failed or interrupted Attempt. */
+  readonly onCommand?: (
+    options: SpawnOptions,
+  ) => SpawnResult | Promise<SpawnResult> | undefined;
 }
 
 /** The shared Process double for the double-backed headless harness. It resolves
@@ -127,7 +132,28 @@ export function createFakeBundleProcess(
       declared.has(name)
         ? { kind: "found", executable: name, prefixArgs: [] }
         : { kind: "not-found" },
-    commandHandler: fakeBundleCommand,
+    commandHandler: (spawnOptions) =>
+      options.onCommand?.(spawnOptions) ?? fakeBundleCommand(spawnOptions),
     syncCommandHandler: (spawnOptions) => git.spawnCommandSync(spawnOptions),
   });
+}
+
+/** The Bundle Process double counting each `commandNode` Step's spawns by Step
+ *  id. `first` may replace a Step's first run (a scripted failure or interruption). */
+export function countingBundleProcess(
+  first?: (
+    step: string,
+    options: SpawnOptions,
+  ) => SpawnResult | Promise<SpawnResult> | undefined,
+): { readonly process: ProcessAdapter; readonly runs: Record<string, number> } {
+  const runs: Record<string, number> = {};
+  const process = createFakeBundleProcess({
+    onCommand: (options) => {
+      const step = commandStepOf(options.args[1] ?? "");
+      if (step === undefined) return undefined;
+      runs[step] = (runs[step] ?? 0) + 1;
+      return runs[step] === 1 ? first?.(step, options) : undefined;
+    },
+  });
+  return { process, runs };
 }

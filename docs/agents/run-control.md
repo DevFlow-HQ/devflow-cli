@@ -51,8 +51,8 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 
 ## Follow-up after an Agent-step Interrupt
 
-- `send-follow-up-turn` (#354) is its own Operation and Offer, admitted only on the derived waiting basis: `holdBasis` (`run-projection.ts`) reads the
-  Run `blocked`, no gate or checkpoint, and the Store's `waitingAgentTurn` on the current Agent Step. The same function serves the Offer, settle-time
+- `send-follow-up-turn` (#354) is its own Operation and Offer, admitted only on the derived waiting basis: `deriveRun(...).hold` (`run-progress.ts`) reads the
+  Run `blocked`, no gate or checkpoint, and the Store's `waitingAgentTurn` on the current Agent Step. The same derivation serves the Offer, settle-time
   admission (`claimHeldRun`, shared with the interactive controls), Harness adoption, and shutdown, so those readers agree. It is not the interactive send.
 - It re-walks the Routing through `executeTrackedRouting` with the human's text as `followUp`; execution decides whether it still applies. The walk
   takes over the held Harness (`heldStep`, cleared from tracking first), so composition reuses it or, after a reopen, prepares one that resumes the

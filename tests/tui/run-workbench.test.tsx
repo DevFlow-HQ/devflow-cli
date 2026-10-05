@@ -7,11 +7,23 @@ import {
   reviewedLoop,
   across,
 } from "../helpers/agentCompletion.js";
-import { followRun } from "../helpers/settleOperation.js";
+import { awaitSettled, followRun } from "../helpers/settleOperation.js";
+import { realpathSync } from "node:fs";
+import { openCatalog } from "../../src/catalog/catalog.js";
+import { executeRouting } from "../../src/run/execution/execution.js";
+import { createApplication } from "../helpers/application.js";
+import {
+  hostPlatform,
+  repeatCommandGateRouting,
+  writeRoutingBundle,
+} from "../helpers/commandBundle.js";
+import { countingBundleProcess } from "../helpers/fakeBundleProcess.js";
+import { makeTempDir } from "../helpers/tempDir.js";
+import { openFakeRunGroup } from "../run/store/fake-git-process.js";
 import { test } from "node:test";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
-import { App } from "../../src/tui/tui.js";
+import { App, createLiveRunWorkbenchView } from "../../src/tui/tui.js";
 import {
   inertHarnessCatalogView,
   inertLaunchPreparationView,
@@ -453,7 +465,7 @@ function blockedRunOf(over: Partial<RunView> = {}): RunView {
 // screens read the real terminal + keymap (mockInput); the Workbench reads the
 // injected fake Renderer Port, which we then drive with `renderer.key`.
 async function mountApp(
-  control: ReturnType<typeof makeRunView>,
+  control: { readonly view: RunWorkbenchView },
   renderer: FakeRenderer,
   launchRunId: string,
   width: number,
@@ -6521,6 +6533,87 @@ for (const interactive of [false, true]) {
     assert.deepEqual(received, [original, original]);
   });
 }
+
+// The Workbench answers an authored free-text Gate; approve-reject keeps the
+// headless path (run-gate-control.tsx), covered by tests/headless/run.test.ts.
+test("[repeat-command-gate-progress] the Workbench answers the Gate after a passing Repeat and an outside Command, re-running no Command (#384)", async (context) => {
+  const { process, runs } = countingBundleProcess();
+  const catalog = openCatalog(makeTempDir("secant-wb-progress-home-"));
+  context.after(() => catalog.close());
+  const workspace = realpathSync.native(makeTempDir("secant-wb-progress-ws-"));
+  const runGroup = openFakeRunGroup(
+    makeTempDir("secant-wb-progress-store-"),
+    workspace,
+  );
+  context.after(() => runGroup.close());
+  const app = createApplication({
+    process,
+    catalog,
+    launchWorkspacePath: workspace,
+    hostPlatform: hostPlatform(),
+    runGroup,
+    runExecution: ({ routing, owner }) =>
+      executeRouting(routing, {
+        owner,
+        platform: hostPlatform(),
+        resolveAsset: () => undefined,
+        process,
+      }),
+  });
+  context.after(() => app.shutdown());
+  const bundle = writeRoutingBundle({
+    id: "dev.secant.repeat-command-gate",
+    routing: repeatCommandGateRouting("free-text"),
+  });
+  assert.ok(app.bundleManagement.build(bundle.folder, { noInstall: false }).ok);
+  const digest = catalog.listEntries().find((e) => e.id === bundle.id)!.digest;
+  catalog.approveWorkspace(workspace, new Date());
+  const launched = app.projectionPort.submit({
+    operationId: "launch",
+    operation: "launch-run",
+    input: { bundle: { id: bundle.id }, launchInputs: {}, trustDigest: digest },
+  });
+  assert.ok(launched.admitted);
+  await awaitSettled(app.projectionPort, "launch");
+  const runId = launched.runId!;
+
+  const renderer = makeFakeRenderer(100, 40);
+  const { t } = await mountApp(
+    { view: createLiveRunWorkbenchView(app.projectionPort) },
+    renderer,
+    runId,
+    100,
+    40,
+  );
+  await t.waitForFrame((frame) => frame.includes("Human Gate ·"));
+  const frame = t.captureCharFrame();
+  assert.match(frame, /BLOCKED · durable Human Gate/);
+  assert.match(frame, /Human Gate · approve the outside change/);
+  assert.match(frame, /step 4 of 5/);
+  assert.match(
+    frame,
+    /Progress: ✓ baseline · ✓ check · ✓ outside · ⏸ gate · · after/,
+  );
+  assert.deepEqual(runs, { baseline: 1, check: 1, outside: 1 });
+
+  await type(t, "ship it");
+  await press(t, renderer, "return");
+  const done = await followRun(app.projectionPort, runId, (run) =>
+    run.state === "succeeded" ? run : undefined,
+  );
+  assert.deepEqual(
+    done.progress.map((step) => `${step.id}:${step.status}`),
+    [
+      "baseline:succeeded",
+      "check:succeeded",
+      "outside:succeeded",
+      "gate:succeeded",
+      "after:succeeded",
+    ],
+  );
+  assert.deepEqual(runs, { baseline: 1, check: 1, outside: 1, after: 1 });
+  await t.waitForFrame((next) => !next.includes("BLOCKED"));
+});
 
 // --- inspection quit (#392) -------------------------------------------------
 
