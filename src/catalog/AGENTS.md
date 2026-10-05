@@ -12,8 +12,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Entry.
 - The installation generation is a private monotonic increment (max + 1 per install), and a Trust grant is keyed on `(digest, installation_generation)`
   (`schema.ts` primary key), so reinstalling identical bytes lands a fresh generation and voids any earlier grant on that digest.
-- The asset tree is re-extracted lazily outside the install write lock (`assetRoot`), so two processes launching one digest can both rewrite the same tree;
-  each writes identical files, so the loser of the rename simply sees the winner's tree.
+- A missing or incomplete asset tree is repaired (`repairTree`) under the install's immediate write lock, after re-reading the managed bytes and
+  re-checking the tree, so concurrent repairs of one digest serialize across processes: a waiting caller reuses the tree the first one published, and only
+  one extraction ever uses the staging path. A repair waits on the same 5-second `busy_timeout` as an install and throws past it.
+- An intact tree is read without the lock: a repair replaces only a tree it found incomplete under the lock, and an install writes a tree only for a digest
+  it newly installs.
 - Tree intactness is a size check per declared asset, not a hash (`treeIntact`), so a same-length edit survives until the next reinstall; the managed bytes
   remain the authority either way.
 - Extracted asset files are made read-only on POSIX only (`chmod 0o444`); Windows gets no read-only attribute, and directories stay writable on both, so a

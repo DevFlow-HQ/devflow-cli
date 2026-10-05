@@ -170,7 +170,9 @@ export interface Catalog {
    * the managed bytes, never an identity or a second source of truth: a missing
    * or corrupt tree is re-extracted from the bytes here before the directory is
    * returned, and only missing bytes read as not installed (ADR 0021, #100).
-   * Nothing else about the store layout crosses this Interface.
+   * Concurrent callers across processes serialize the repair, so each returns a
+   * completed tree; a failed repair throws. Nothing else about the store layout
+   * crosses this Interface.
    */
   assetRoot(digest: string): string | undefined;
   /** Release the database; safe to call from a `finally` — it does not throw. */
@@ -245,7 +247,9 @@ export function openCatalog(
   // On POSIX each file is made read-only (a Run must never edit the shared
   // layer); Windows gets no read-only attribute, which would only obstruct the
   // sweep and rewrite below. Throws on a storage fault or unreadable bytes after
-  // removing the staging tree; the caller owns the final tree's cleanup.
+  // removing the staging tree; the caller owns the final tree's cleanup. Every
+  // caller holds the write lock (an install or `repairTree`), so the one staging
+  // path is never shared between extractions.
   // ponytail: files are read-only, directories stay writable, so a rewrite can
   // `rmSync` the old tree without a chmod pass first. Lock the directories too
   // if a Run is ever seen adding files beside the assets.
@@ -296,6 +300,24 @@ export function openCatalog(
         return false;
       }
     });
+  }
+
+  // Repair joins installation's coordination: under the same BEGIN IMMEDIATE
+  // write lock an install takes, it re-reads the managed bytes and re-checks the
+  // tree, so a caller that waited behind another process's repair reuses the
+  // tree the other process published instead of replacing it. Waiting shares the
+  // install's `busy_timeout`, past which the repair throws. A failed extraction
+  // throws and the transaction, which wrote no row, releases the lock.
+  function repairTree(digest: string): string | undefined {
+    return db.transaction(
+      (): string | undefined => {
+        const bytes = readManaged(digest);
+        if (bytes === undefined) return undefined;
+        if (!treeIntact(digest, bytes)) extractTree(digest, bytes);
+        return treePath(digest);
+      },
+      { behavior: "immediate" },
+    );
   }
 
   function readManaged(digest: string): Uint8Array | undefined {
@@ -587,19 +609,13 @@ export function openCatalog(
     assetRoot(digest) {
       const bytes = readManaged(digest);
       if (bytes === undefined) return undefined;
+      // An intact tree is read without the lock: a repair replaces only a tree
+      // it finds incomplete under the lock, and an install writes a tree only
+      // for a digest it newly installs, so neither removes this one.
       // ponytail: the archive is re-read on every ask to know what "intact"
-      // means, and the re-extraction runs outside the install lock, so two
-      // processes launching one digest can both rewrite the same tree — each
-      // writes identical files, so the loser of the rename sees the winner's
-      // tree. Cache the declared paths or take the write lock if either bites.
-      if (!treeIntact(digest, bytes)) {
-        try {
-          extractTree(digest, bytes);
-        } catch (error) {
-          if (!treeIntact(digest, bytes)) throw error;
-        }
-      }
-      return treePath(digest);
+      // means. Cache the declared paths if that ever shows up in launch time.
+      if (treeIntact(digest, bytes)) return treePath(digest);
+      return repairTree(digest);
     },
     /**
      * Release the connection and the catalog file handle. Deterministic because

@@ -20,6 +20,7 @@ import {
   type BundleOrigin,
 } from "../../src/catalog/catalog.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import { observeCatalogAdmission } from "./catalog-admission.js";
 
 function digestOf(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -486,20 +487,152 @@ test("a missing or corrupt tree is re-extracted from the managed bytes; missing 
   const root = catalog.assetRoot(digest);
   assert.ok(root !== undefined);
 
-  // Deleted by hand: re-extracted on the next ask.
+  const store = join(home, "bundles");
+  const committed = [digest, `${digest}.wfb`];
+
+  // Deleted by hand: re-extracted on the next ask, with no staging left behind.
   rmSync(root, { recursive: true, force: true });
   assert.equal(catalog.assetRoot(digest), root);
   assert.equal(readFileSync(join(root, "prompt.md"), "utf8"), "do the work");
+  assert.deepEqual(readdirSync(store).sort(), committed);
 
   // Corrupt (a declared file truncated): re-extracted from the bytes.
   chmodSync(join(root, "prompt.md"), 0o644);
   writeFileSync(join(root, "prompt.md"), "x");
   assert.equal(catalog.assetRoot(digest), root);
   assert.equal(readFileSync(join(root, "prompt.md"), "utf8"), "do the work");
+  assert.deepEqual(readdirSync(store).sort(), committed);
 
   // The bytes are the authority: without them there is nothing to derive from.
   rmSync(join(home, "bundles", `${digest}.wfb`));
   assert.equal(catalog.assetRoot(digest), undefined);
+});
+
+// Repair joins installation coordination, so these cases stand a second Catalog
+// over the same home in for a concurrent process: the admission hook runs it, or
+// removes the bytes, at the moment the first caller waits to repair.
+
+function installedWithMissingTree(t: test.TestContext) {
+  const home = makeTempDir("secant-catalog-");
+  const first = openCatalog(home, { readAssets: readStubAssets });
+  const second = openCatalog(home, { readAssets: readStubAssets });
+  t.after(() => {
+    first.close();
+    second.close();
+  });
+  const bytes = new Uint8Array([6, 6]);
+  first.installBundle(install("io.example.a", "1.0.0", bytes));
+  const digest = digestOf(bytes);
+  const root = first.assetRoot(digest);
+  assert.ok(root !== undefined);
+  rmSync(root, { recursive: true, force: true });
+  return { home, first, second, digest, root };
+}
+
+test("a caller waiting to repair reuses the tree another caller published", (t) => {
+  const { home, first, second, digest, root } = installedWithMissingTree(t);
+  let waited = false;
+  const restore = observeCatalogAdmission({
+    before: () => {
+      if (waited) return;
+      waited = true;
+      // The other caller repairs completely while this one waits for admission.
+      assert.equal(second.assetRoot(digest), root);
+      writeFileSync(join(root, "published-by-second"), "kept");
+    },
+  });
+  t.after(restore);
+
+  assert.equal(first.assetRoot(digest), root);
+  restore();
+  assert.equal(
+    waited,
+    true,
+    "repair did not wait on installation coordination",
+  );
+  // Rebuilding would have removed the undeclared file the winner's tree holds.
+  assert.equal(readFileSync(join(root, "published-by-second"), "utf8"), "kept");
+  assert.equal(readFileSync(join(root, "prompt.md"), "utf8"), "do the work");
+  assert.deepEqual(readdirSync(join(home, "bundles")).sort(), [
+    digest,
+    `${digest}.wfb`,
+  ]);
+});
+
+test("managed bytes gone by the time repair is admitted read as not installed", (t) => {
+  const { home, first, digest, root } = installedWithMissingTree(t);
+  let admitted = false;
+  const restore = observeCatalogAdmission({
+    before: () => {
+      admitted = true;
+      rmSync(join(home, "bundles", `${digest}.wfb`));
+    },
+  });
+  t.after(restore);
+
+  assert.equal(first.assetRoot(digest), undefined);
+  restore();
+  assert.equal(
+    admitted,
+    true,
+    "repair did not wait on installation coordination",
+  );
+  assert.equal(existsSync(root), false);
+});
+
+test("a failed repair throws, releases coordination, and a later repair succeeds", (t) => {
+  const home = makeTempDir("secant-catalog-");
+  let assets: readonly { path: string; data: Buffer }[] = treeAssets;
+  const catalog = openCatalog(home, { readAssets: () => assets });
+  t.after(() => catalog.close());
+  const bytes = new Uint8Array([2, 2]);
+  catalog.installBundle(install("io.example.a", "1.0.0", bytes));
+  const digest = digestOf(bytes);
+  const root = catalog.assetRoot(digest);
+  assert.ok(root !== undefined);
+  rmSync(root, { recursive: true, force: true });
+
+  // A declared file that must also be a directory: extraction cannot complete.
+  assets = [
+    { path: "prompt.md", data: Buffer.from("do the work") },
+    { path: "prompt.md/inner.md", data: Buffer.from("unreachable") },
+  ];
+  assert.throws(() => catalog.assetRoot(digest));
+  assert.deepEqual(readdirSync(join(home, "bundles")), [`${digest}.wfb`]);
+
+  // Coordination was released: another connection is admitted at once.
+  const other = new Database(join(home, "catalog.db"));
+  t.after(() => other.close());
+  other.exec("PRAGMA busy_timeout = 0");
+  other.exec("BEGIN IMMEDIATE");
+  other.exec("ROLLBACK");
+
+  assets = treeAssets;
+  assert.equal(catalog.assetRoot(digest), root);
+  assert.equal(readFileSync(join(root, "prompt.md"), "utf8"), "do the work");
+  assert.deepEqual(readdirSync(join(home, "bundles")).sort(), [
+    digest,
+    `${digest}.wfb`,
+  ]);
+});
+
+test("an intact tree is read while another connection holds installation coordination", (t) => {
+  const home = makeTempDir("secant-catalog-");
+  const catalog = openCatalog(home, { readAssets: readStubAssets });
+  t.after(() => catalog.close());
+  const bytes = new Uint8Array([4, 4]);
+  catalog.installBundle(install("io.example.a", "1.0.0", bytes));
+  const digest = digestOf(bytes);
+  const root = catalog.assetRoot(digest);
+  assert.ok(root !== undefined);
+
+  const holder = new Database(join(home, "catalog.db"));
+  holder.exec("BEGIN IMMEDIATE");
+  t.after(() => {
+    holder.exec("ROLLBACK");
+    holder.close();
+  });
+  assert.equal(catalog.assetRoot(digest), root);
 });
 
 test("a Catalog opened without an asset reader derives an empty tree", async (t) => {
