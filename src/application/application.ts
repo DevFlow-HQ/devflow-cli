@@ -118,7 +118,7 @@ import {
   type OperationSettlement,
 } from "./operation-ledger.js";
 import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
-import { listRunsSnapshot } from "./run-list.js";
+import { listRunsSnapshot, summarizeRuns } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
 // Re-exported through the Module entry so clients and tests reach the page size
 // without importing the internal resolver file (module-boundaries).
@@ -537,6 +537,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
     },
   });
   const workspaceObservers = new Set<UpdateStream>();
+  // The Run summary last pushed to Workspace observers, serialized (#396).
+  let pushedRunSummary: string | undefined;
   const bundleCatalogObservers = new Set<UpdateStream>();
   const runListObservers = new Set<{
     readonly updates: UpdateStream;
@@ -591,6 +593,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         ? { state: "approved", approvedAt: approval.approvedAt }
         : { state: "unapproved" },
       installedBundleCount: catalog.countInstalledBundles(),
+      runSummary: summarizeRuns(runGroup),
       startupNotices: shippedBundles.notices,
       harnesses: harnessChoices,
       actionOffers: approval
@@ -674,10 +677,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
         observer.push({ kind: "durable", snapshot });
       }
     }
-    pushRunListUpdates();
+    pushRunCollectionUpdates();
   }
 
-  function pushRunListUpdates(): void {
+  // Fan a change to the Workspace's Runs — a write, admission, release, rest, or
+  // delete — out to every Run-list page and to the Workspace's Run summary (#396).
+  function pushRunCollectionUpdates(): void {
+    pushRunSummary();
     if (runProjection === undefined) return;
     for (const observer of runListObservers) {
       const options = {
@@ -691,6 +697,20 @@ export function createApplication(deps: ApplicationDependencies): Application {
           : { ...options, before: observer.before },
       );
       observer.updates.push({ kind: "durable", snapshot });
+    }
+  }
+
+  // Push the Workspace snapshot only when its Run summary moved, so the frequent
+  // Run writes that cannot change a count stay off the Workspace stream. An opened
+  // Workspace observer resets the comparison, so it never misses a later change.
+  function pushRunSummary(): void {
+    if (workspaceObservers.size === 0) return;
+    const snapshot = workspaceSnapshot();
+    const summary = JSON.stringify(snapshot.runSummary);
+    if (summary === pushedRunSummary) return;
+    pushedRunSummary = summary;
+    for (const observer of workspaceObservers) {
+      observer.push({ kind: "durable", snapshot });
     }
   }
 
@@ -1478,6 +1498,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (selector.family === "workspace") {
       const updates = subscriptions.open((updates) => {
         workspaceObservers.add(updates);
+        pushedRunSummary = undefined;
         return () => {
           workspaceObservers.delete(updates);
         };
@@ -1735,7 +1756,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           observers: observersForRun(runId),
           live: liveOverlay.fresh(),
         });
-        pushRunListUpdates();
+        pushRunCollectionUpdates();
         return {
           admitted: true,
           runId,
@@ -1930,6 +1951,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
           observers: observersForRun(input.runId),
           live: liveOverlay.fresh(),
         });
+        // The resume claim made this Run live here before its drive writes.
+        pushRunCollectionUpdates();
         return {
           admitted: true,
           runId: input.runId,
@@ -2076,6 +2099,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
         live: liveOverlay.fresh(),
       };
       runs.set(input.runId, tracking);
+      // The claim makes this Run live here before the drive's first write.
+      pushRunCollectionUpdates();
     }
     if (tracking === undefined || owner === undefined) {
       return { status: "not-applied", problem: runStoreDamaged(input.runId) };
@@ -2593,6 +2618,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
         live: liveOverlay.fresh(),
       };
       runs.set(runId, tracking);
+      // The claim makes this Run live here before the drive's first write.
+      pushRunCollectionUpdates();
     }
     if (tracking === undefined || owner === undefined) {
       return { problem: runStoreDamaged(runId) };
@@ -3683,7 +3710,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       } finally {
         owner.close();
       }
-      pushRunListUpdates();
+      pushRunCollectionUpdates();
       runs.delete(runId);
       return { status: "applied" };
     } catch {
@@ -3773,6 +3800,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     runGroup.deleteRun({ operationId, runId });
     // Tell any observer its subject is gone before the tracking entry is dropped (#98).
     pushRunClosed(runId);
+    pushRunCollectionUpdates();
     runs.delete(runId);
     windowsCleanupFallbacks.delete(runId);
     preferenceNotices.delete(runId);

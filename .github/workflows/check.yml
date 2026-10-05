@@ -90,6 +90,11 @@ jobs:
         run: bun run test -- tests/harness/claude-code-cleanup.test.ts
       - name: retained-step-fault-shutdown
         run: bun run test -- tests/application/retained-step-shutdown.test.ts
+      - name: authoritative-run-summary
+        run: >-
+          bun run test --
+          tests/application/run-list.test.ts
+          tests/tui/screens.test.tsx
       - name: Test
         run: bun run test
       - name: Build

@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { realpathSync as realpath } from "node:fs";
+import { readdirSync, realpathSync as realpath, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { Database } from "bun:sqlite";
 import {
   createApplication,
   type Application,
 } from "../../src/application/application.js";
-import type { RunListSnapshot } from "../../src/application/projection-port.js";
+import type {
+  RunListSnapshot,
+  RunSummary,
+} from "../../src/application/projection-port.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
 import type { ProcessAdapter, SpawnResult } from "../../src/process/process.js";
-import type { RunGroup } from "../../src/run/store/store.js";
+import type { RunCounts, RunGroup } from "../../src/run/store/store.js";
 import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
@@ -49,29 +54,73 @@ const executionProcess: ProcessAdapter = (() => {
   };
 })();
 
+/** Calls the Application makes on the Run Store Interface, so a summary case
+ *  can assert how much Run Store work one observation performs. */
+interface StoreCalls {
+  listRuns: number;
+  readRun: number;
+  countRuns: number;
+  acquireRun: number;
+}
+
 interface Fixture {
   readonly app: Application;
   readonly catalog: Catalog;
   readonly runGroup: RunGroup;
+  readonly home: string;
   readonly workspace: string;
   readonly digest: string;
+  readonly id: string;
+  readonly calls: StoreCalls;
 }
 
-function fixture(t: TestContext): Fixture {
+interface TFixtureOptions {
+  readonly scheduleSettlement?: (settle: () => void | Promise<void>) => void;
+  /** Replace the Application's Run Store count read (a malformed registration). */
+  readonly countRuns?: () => RunCounts;
+}
+
+function fixture(t: TestContext, options: TFixtureOptions = {}): Fixture {
   const catalog = openCatalog(makeTempDir("secant-runlist-home-"));
   t.after(() => catalog.close());
   const workspace = realpath(makeTempDir("secant-runlist-ws-"));
-  const runGroup = openRunGroup(
-    makeTempDir("secant-runlist-store-"),
-    workspace,
-  );
+  const home = makeTempDir("secant-runlist-store-");
+  const runGroup = openRunGroup(home, workspace);
   t.after(() => runGroup.close());
+  const calls: StoreCalls = {
+    listRuns: 0,
+    readRun: 0,
+    countRuns: 0,
+    acquireRun: 0,
+  };
+  const countedGroup: RunGroup = {
+    ...runGroup,
+    listRuns() {
+      calls.listRuns += 1;
+      return runGroup.listRuns();
+    },
+    readRun(runId) {
+      calls.readRun += 1;
+      return runGroup.readRun(runId);
+    },
+    countRuns() {
+      calls.countRuns += 1;
+      return (options.countRuns ?? runGroup.countRuns)();
+    },
+    acquireRun(runId, acquire) {
+      calls.acquireRun += 1;
+      return runGroup.acquireRun(runId, acquire);
+    },
+  };
   const app = createApplication({
     catalog,
     process: executionProcess,
     launchWorkspacePath: workspace,
     hostPlatform: hostPlatform(),
-    runGroup,
+    runGroup: countedGroup,
+    ...(options.scheduleSettlement !== undefined
+      ? { scheduleSettlement: options.scheduleSettlement }
+      : {}),
     runExecution: ({ routing, owner }) =>
       executeRouting(routing, {
         owner,
@@ -87,7 +136,16 @@ function fixture(t: TestContext): Fixture {
   const built = app.bundleManagement.build(cmd.folder, { noInstall: false });
   assert.ok(built.ok, JSON.stringify(built));
   const entry = catalog.listEntries().find((e) => e.id === cmd.id)!;
-  return { app, catalog, runGroup, workspace, digest: entry.digest };
+  return {
+    app,
+    catalog,
+    runGroup,
+    home,
+    workspace,
+    digest: entry.digest,
+    id: cmd.id,
+    calls,
+  };
 }
 
 /** Seed a resting Run at `at` with canonical `state`, releasing the claim. */
@@ -228,4 +286,228 @@ test("an unparseable cursor yields an empty page, not a throw or the whole list"
   assert.equal(snapshot.empty, false);
   assert.equal(snapshot.beginningOfHistory, true);
   assert.equal(snapshot.nextCursor, undefined);
+});
+
+// --- authoritative-run-summary (#396) ----------------------------------------
+//
+// The Workspace's Run summary that Home and the guarded quit read: the Previous
+// Runs total and the Runs this instance owns live, from one Run Store traversal
+// that never acquires a Run.
+
+function summary(app: Application): RunSummary {
+  const opened = app.projectionPort.openProjection({ family: "workspace" });
+  const snapshot = opened.snapshot;
+  opened.close();
+  return snapshot.runSummary;
+}
+
+function known(count: number): { state: "known"; count: number } {
+  return { state: "known", count };
+}
+
+/** Whether a summary count is known and equals `count`. */
+function counts(
+  summary: RunSummary,
+  field: keyof RunSummary,
+  count: number,
+): boolean {
+  const value = summary[field];
+  return value.state === "known" && value.count === count;
+}
+
+/** Create a Run straight through the Store, owned by this process from staging. */
+function createOwned(f: Fixture, digest = f.digest): string {
+  const created = f.runGroup.createRun({
+    operationId: randomUUID(),
+    bundleSnapshotDigest: digest,
+    launch: {},
+    at: NOW,
+  });
+  if (created.outcome !== "created") throw new Error("unreachable");
+  return created.runId;
+}
+
+/** Hold an owned Run at `state` without releasing its ownership. */
+function holdOwned(f: Fixture, state: string): string {
+  const runId = createOwned(f);
+  const owner = f.runGroup.acquireRun(runId)!;
+  owner.writeState(state);
+  owner.close();
+  return runId;
+}
+
+/** Make a Run's record unreadable while its ownership row stays intact. */
+function damageRecord(f: Fixture, runId: string): void {
+  const raw = new Database(join(f.home, "runs", groupName(f), runId, "run.db"));
+  raw.run("UPDATE run_record SET selected_harness = ?", ["unknown"]);
+  raw.close();
+}
+
+function groupName(f: Fixture): string {
+  return readdirSync(join(f.home, "runs"))[0]!;
+}
+
+/** Follow the `workspace` Projection; `until` resolves on the first snapshot (the
+ *  open one or a later durable update) whose summary matches. */
+function followWorkspace(app: Application) {
+  const opened = app.projectionPort.openProjection({ family: "workspace" });
+  const updates = opened.updates[Symbol.asyncIterator]();
+  let latest = opened.snapshot;
+  let pushes = 0;
+  return {
+    pushes: () => pushes,
+    close: () => opened.close(),
+    async until(matches: (summary: RunSummary) => boolean): Promise<void> {
+      while (!matches(latest.runSummary)) {
+        const next = await updates.next();
+        if (next.done === true) throw new Error("workspace stream closed");
+        if (next.value.kind === "durable") {
+          latest = next.value.snapshot;
+          pushes += 1;
+        }
+      }
+    },
+  };
+}
+
+test("authoritative-run-summary: counts readable history and this instance's canonical ownership", async (t) => {
+  const f = fixture(t);
+  seedRun(f, new Date(2026, 5, 15, 9, 0, 0), "succeeded");
+  // Missing Bundle bytes still count: the list names the Run by its digest.
+  const missingBytes = seedRun(f, new Date(2026, 5, 15, 9, 1, 0), "halted");
+  {
+    const raw = new Database(
+      join(f.home, "runs", groupName(f), missingBytes, "run.db"),
+    );
+    raw.run("UPDATE run_record SET bundle_snapshot_digest = ?", [
+      "sha256:gone",
+    ]);
+    raw.close();
+  }
+  // A damaged record at rest is omitted from the total.
+  damageRecord(f, seedRun(f, new Date(2026, 5, 15, 9, 2, 0), "failed"));
+  // A Run another process (pid 1000) owns live counts as history, not as ours.
+  const foreign = openRunGroup(f.home, f.workspace, { selfPid: 1000 });
+  foreign.createRun({
+    operationId: randomUUID(),
+    bundleSnapshotDigest: f.digest,
+    launch: {},
+    at: NOW,
+  });
+  foreign.close();
+  // Owned here: created, driving, held at blocked, and one whose record is damaged.
+  createOwned(f);
+  holdOwned(f, "running");
+  holdOwned(f, "blocked");
+  damageRecord(f, createOwned(f));
+
+  assert.deepEqual(summary(f.app), {
+    previousRuns: known(6),
+    ownedLiveRuns: known(4),
+  });
+  // The total is the Previous Runs list's own count.
+  assert.equal(list(f.app).rows.length, 6);
+});
+
+test("authoritative-run-summary: unreadable ownership is unavailable, never a false zero", async (t) => {
+  const f = fixture(t);
+  seedRun(f, new Date(2026, 5, 15, 9, 0, 0), "succeeded");
+  const corrupt = seedRun(f, new Date(2026, 5, 15, 9, 1, 0), "succeeded");
+  writeFileSync(
+    join(f.home, "runs", groupName(f), corrupt, "run.db"),
+    "garbage",
+  );
+
+  assert.deepEqual(summary(f.app), {
+    previousRuns: known(1),
+    ownedLiveRuns: { state: "unavailable" },
+  });
+});
+
+test("authoritative-run-summary: an unreadable registration leaves both counts unavailable and the Workspace open", async (t) => {
+  const f = fixture(t, {
+    countRuns: () => {
+      throw new Error("Run Store: a runs row is malformed.");
+    },
+  });
+
+  assert.deepEqual(summary(f.app), {
+    previousRuns: { state: "unavailable" },
+    ownedLiveRuns: { state: "unavailable" },
+  });
+});
+
+test("authoritative-run-summary: admission, rest, release, deletion and resumed work update the summary", async (t) => {
+  const pending: (() => void | Promise<void>)[] = [];
+  const f = fixture(t, {
+    scheduleSettlement: (settle) => void pending.push(settle),
+  });
+  const flush = async (): Promise<void> => {
+    for (const settle of pending.splice(0)) await settle();
+  };
+  f.catalog.approveWorkspace(f.workspace, NOW);
+  const workspace = followWorkspace(f.app);
+  t.after(() => workspace.close());
+  await workspace.until((s) => counts(s, "previousRuns", 0));
+
+  // Admission: a launched Run is owned here before it settles.
+  const launched = f.app.projectionPort.submit({
+    operationId: randomUUID(),
+    operation: "launch-run",
+    input: { bundle: { id: f.id }, launchInputs: {}, trustDigest: f.digest },
+  });
+  assert.ok(launched.admitted, JSON.stringify(launched));
+  await workspace.until(
+    (s) => counts(s, "previousRuns", 1) && counts(s, "ownedLiveRuns", 1),
+  );
+
+  // Rest and release: the Run rests and this instance lets it go.
+  await flush();
+  await workspace.until((s) => counts(s, "ownedLiveRuns", 0));
+
+  // Resume: admission claims a halted Run before its drive settles. The launch
+  // recorded the Trust grant the resume re-checks.
+  const halted = seedRun(f, new Date(2026, 5, 15, 9, 0, 0), "halted");
+  const resumed = f.app.projectionPort.submit({
+    operationId: randomUUID(),
+    operation: "resume-run",
+    input: { runId: halted },
+  });
+  assert.ok(resumed.admitted, JSON.stringify(resumed));
+  await workspace.until((s) => counts(s, "ownedLiveRuns", 1));
+  await flush();
+  await workspace.until((s) => counts(s, "ownedLiveRuns", 0));
+
+  // Deletion removes a Run from the total.
+  const deleted = f.app.projectionPort.submit({
+    operationId: randomUUID(),
+    operation: "delete-run",
+    input: { runId: launched.runId! },
+  });
+  assert.ok(deleted.admitted);
+  await flush();
+  await workspace.until((s) => counts(s, "previousRuns", 1));
+});
+
+test("authoritative-run-summary: 101 Runs are counted in one Run Store traversal", async (t) => {
+  const f = fixture(t);
+  for (let i = 0; i < 101; i++) {
+    seedRun(f, new Date(2026, 5, 15, 0, 0, i), "succeeded");
+  }
+  f.calls.listRuns = 0;
+  f.calls.readRun = 0;
+  f.calls.countRuns = 0;
+  f.calls.acquireRun = 0;
+
+  assert.deepEqual(summary(f.app), {
+    previousRuns: known(101),
+    ownedLiveRuns: known(0),
+  });
+  // One traversal, no per-record reads, no page drain, and no Run acquired.
+  assert.deepEqual(f.calls, {
+    listRuns: 0,
+    readRun: 0,
+    countRuns: 1,
+    acquireRun: 0,
+  });
 });

@@ -2,10 +2,12 @@ import {
   deriveRunFacts,
   type RunProjectionDependencies,
 } from "./run-projection.js";
+import type { RunCounts, RunGroup } from "../run/store/store.js";
 import type {
   RunListGroup,
   RunListRow,
   RunListSnapshot,
+  RunSummary,
 } from "./projection-port.js";
 
 // The Previous Runs join (#87), beside `run-projection.ts`. It reads the Run
@@ -115,6 +117,39 @@ export function listRunsSnapshot(
     ...(hasMore && last !== undefined
       ? { nextCursor: encodeCursor(last) }
       : {}),
+  };
+}
+
+const UNAVAILABLE = { state: "unavailable" } as const;
+
+/**
+ * The Workspace's Run summary (#396) from one Run Store count that never acquires
+ * a Run. The total keeps this list's meaning — a Run whose record reads, named or
+ * not — without reading a page or a Bundle. Owned-live comes from canonical
+ * ownership, so neither unreadable history nor in-process tracking can hide it.
+ * Unreadable ownership or registration is `unavailable`, never zero. Without a Run
+ * Store the Application can own no Run, but it cannot know the history either.
+ */
+export function summarizeRuns(runGroup: RunGroup | undefined): RunSummary {
+  if (runGroup === undefined) {
+    return {
+      previousRuns: UNAVAILABLE,
+      ownedLiveRuns: { state: "known", count: 0 },
+    };
+  }
+  let counts: RunCounts;
+  try {
+    counts = runGroup.countRuns();
+  } catch {
+    // A malformed registration row: no count can be trusted.
+    return { previousRuns: UNAVAILABLE, ownedLiveRuns: UNAVAILABLE };
+  }
+  return {
+    previousRuns: { state: "known", count: counts.readable },
+    ownedLiveRuns:
+      counts.ownershipUnreadable > 0
+        ? UNAVAILABLE
+        : { state: "known", count: counts.ownedByThisProcess },
   };
 }
 

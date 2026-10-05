@@ -4,7 +4,7 @@ import { testRender } from "@opentui/solid";
 import { TextAttributes } from "@opentui/core";
 import { createSignal } from "solid-js";
 import { App, createLiveRunLaunchView } from "../../src/tui/tui.js";
-import { inertRunActionsView, inertRunListView } from "./inert.js";
+import { inertRunActionsView, inertRunListView, runSummary } from "./inert.js";
 import type {
   BundleCatalogView,
   HarnessCatalogView,
@@ -104,6 +104,7 @@ function approvedWorkspace(
     path: WORKSPACE,
     approval: { state: "approved", approvedAt: "2026-01-01T00:00:00.000Z" },
     installedBundleCount: 2,
+    runSummary: runSummary(),
     startupNotices: [],
     harnesses,
     actionOffers: [],

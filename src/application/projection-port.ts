@@ -408,6 +408,8 @@ export interface WorkspaceSnapshot {
   readonly path: string;
   readonly approval: WorkspaceApprovalState;
   readonly installedBundleCount: number;
+  /** The Workspace's Run counts Home and the quit guard read (#396). */
+  readonly runSummary: RunSummary;
   /** One notice per Shipped Bundle the startup ensure could not install, naming
    *  cause and remedy; Secant still starts and every other Bundle stays usable
    *  (ADR 0029). Empty when every Shipped Bundle is installed. */
@@ -417,6 +419,23 @@ export interface WorkspaceSnapshot {
    *  behind composition; clients receive only stable choice facts. */
   readonly harnesses: readonly HarnessChoice[];
   readonly actionOffers: readonly ActionOffer[];
+}
+
+/** A count read from canonical Run truth, or `unavailable` when that truth could
+ *  not be read safely. Never a guessed zero. */
+type RunCount =
+  | { readonly state: "known"; readonly count: number }
+  | { readonly state: "unavailable" };
+
+/** Counts over the Workspace's Runs, read without acquiring or fencing any Run.
+ *  `previousRuns` is the Previous Runs total: Runs whose record reads, including
+ *  one whose Bundle bytes are gone. `ownedLiveRuns` is the Runs this Secant
+ *  instance owns from creation until it releases them (admitted, driving, or held
+ *  at `blocked`), read from canonical ownership even when a record will not read,
+ *  and `unavailable` when any Run's ownership cannot be read. */
+export interface RunSummary {
+  readonly previousRuns: RunCount;
+  readonly ownedLiveRuns: RunCount;
 }
 
 /** One semantic Harness selection exposed to both clients. `availability` is

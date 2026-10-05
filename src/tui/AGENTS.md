@@ -61,7 +61,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The quit confirmation (`app.tsx` `GuardedExitProvider`/`QuitConfirmation`) lives on the vendored dialog stack, not a bare `<Show>` overlay: every screen's bindings are
   gated `dialog.stack.length === 0`, so being on the stack is what makes it modal (else `q`/`return` fire the underlying screen too). Escape/Ctrl+C dismissal comes from the
   dialog primitive. Route's approval-clear effect is a one-shot guarded on an `approvalOpen` signal so it never clears the quit dialog, and the approval dialog's `onClose`
-  declines only while still unapproved — a programmatic clear once approved is not a decline.
+  declines only while still unapproved — a programmatic clear once approved is not a decline. Its count, like Home's total, is the followed `workspace` snapshot's
+  `runSummary` (#396), never Previous Runs paging; an `unavailable` owned count still opens the dialog, never quits at once.
 - The legacy-conhost notice (`renderer/conhost-notice.ts`, #70) gates the TUI at the `runTuiApp` seam before any renderer exists; `WT_SESSION` short-circuits the
   probe. `createStdinKeypress` reads one raw key and must hand stdin back paused, cooked, and listener-free **without destroying it** — the teardown's
   `createProcessStdinRelease` does destroy it, and OpenTUI takes stdin next. Ctrl+C at the wait exits 130. Its `bun:ffi` import is allowlisted per file,

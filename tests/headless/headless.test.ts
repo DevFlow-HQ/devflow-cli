@@ -119,6 +119,12 @@ test("approve then show --json reports approved with the canonical path", async 
         .approvedAt,
     },
     installedBundleCount: 0,
+    // Additive (#396). This harness wires no Run Store: it can own no Run, and
+    // its history is unavailable rather than a false zero.
+    runSummary: {
+      previousRuns: { state: "unavailable" },
+      ownedLiveRuns: { state: "known", count: 0 },
+    },
     startupNotices: [],
     harnesses: [],
     actionOffers: [],

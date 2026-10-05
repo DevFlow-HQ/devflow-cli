@@ -11,6 +11,7 @@ import type {
   HarnessFocusSnapshot,
   LaunchPreparationSnapshot,
   LaunchRunInput,
+  RunSummary,
 } from "../../src/application/projection-port.js";
 
 // Inert seams for the App screens a given render never opens (A28): an empty
@@ -33,28 +34,16 @@ export function inertRunListView(): RunListView {
   };
 }
 
-/** A Previous Runs list of `count` Runs live in this process, which the guarded
- *  quit counts before it exits (#392 shares it with the Home quit cases). */
-export function liveRunListView(count: number): RunListView {
+/** A Workspace Run summary of `previousRuns` Runs, `ownedLiveRuns` of them live
+ *  in this instance, which the guarded quit counts before it exits (#396; #392
+ *  shares it with the Home quit cases). */
+export function runSummary(
+  ownedLiveRuns = 0,
+  previousRuns = ownedLiveRuns,
+): RunSummary {
   return {
-    openRunList: () => ({
-      state: () => ({
-        rows: Array.from({ length: count }, (_, index) => ({
-          runId: `run-${index + 1}`,
-          bundleName: "Smoke",
-          activityAt: "2026-01-01T00:00:00.000Z",
-          live: true,
-          ownedByThisProcess: true,
-          ownerPid: 4000,
-          group: "today" as const,
-        })),
-        filter: "all",
-        beginningOfHistory: true,
-        hasMore: false,
-      }),
-      setResumable() {},
-      loadMore() {},
-    }),
+    previousRuns: { state: "known", count: previousRuns },
+    ownedLiveRuns: { state: "known", count: ownedLiveRuns },
   };
 }
 

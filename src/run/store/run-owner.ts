@@ -357,6 +357,40 @@ export function readRunOwnership(
   }
 }
 
+interface TRunCensus {
+  readonly recordReadable: boolean;
+  readonly ownership: TRunOwnership | typeof DAMAGED;
+}
+
+/** One `run.db` open that reads the record's readability and the ownership row
+ *  separately, so a Run whose record will not parse still reports its owner
+ *  (#396). An absent or unopenable store has unreadable ownership, never unowned. */
+export function readRunCensus(params: TReadRunStoreParams): TRunCensus {
+  const path = join(params.dir, "run.db");
+  if (!existsSync(path)) return { recordReadable: false, ownership: DAMAGED };
+  let database: TRunDatabaseHandle | undefined;
+  try {
+    database = params.openDatabase(path);
+    let recordReadable = false;
+    try {
+      recordReadable = readRunRecordRow(database.db) !== DAMAGED;
+    } catch {
+      // An unreadable record leaves the separate ownership row to decide.
+    }
+    let ownership: TRunOwnership | typeof DAMAGED = DAMAGED;
+    try {
+      ownership = readRunOwnershipRow(database.db);
+    } catch {
+      // A malformed ownership row stays unreadable.
+    }
+    return { recordReadable, ownership };
+  } catch {
+    return { recordReadable: false, ownership: DAMAGED };
+  } finally {
+    database?.close();
+  }
+}
+
 interface TClaimRunOwnershipParams extends TReadRunStoreParams {
   readonly selfPid: number;
   readonly isOwnerAlive: (pid: number) => boolean;

@@ -107,8 +107,10 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   answer stays valid across it (#117).
 - At Turn end `bindAnswer(undefined)` clears any still-outstanding request, bumps the generation, and sets the live phase to `settling` before announcing the overlay, so
   a resumed Run starts clean. The durable `request-expired` timeline row is execution's write, not the live lane's.
-- A **durable** push (`pushRunUpdate`) fans out to this Run's observers **and** every Run-list observer (`pushRunListUpdates`); a **live overlay** channel push reaches
-  this Run's observers only.
+- A **durable** push (`pushRunUpdate`) fans out to this Run's observers **and** every Run-list observer and the Workspace Run summary (`pushRunCollectionUpdates`);
+  a **live overlay** channel push reaches this Run's observers only. Launch and resume admission, cancel, and delete call that fan-out directly. The summary
+  (`summarizeRuns`, #396) is one `countRuns` read and pushes only when a count changes; the quit guard trusts it, so a new ownership change or claim must reach the fan-out.
+  Each fan-out with a Workspace observer open (always, in the TUI) opens every registered `run.db` once: O(Runs) per durable write.
 - A late-joining observer catches up on the current overlay at open, so a follower connecting after a request was raised still sees it. By design a client can
   therefore receive live and preview updates for a Turn whose durable start it never saw: a headless follower opening mid-Turn observes the live request even though its
   durable Turn-start snapshot predates the connection.

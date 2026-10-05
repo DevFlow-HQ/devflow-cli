@@ -29,7 +29,7 @@ import {
   inertLaunchPreparationView,
   inertRunActionsView,
   inertRunListView,
-  liveRunListView,
+  runSummary,
 } from "./inert.js";
 import type {
   AnswerOutcome,
@@ -37,7 +37,6 @@ import type {
   RunActionOutcome,
   RunActionsView,
   RunLaunchView,
-  RunListView,
   RunWorkbenchView,
   TRunViewFreshness,
   WorkspaceView,
@@ -91,12 +90,13 @@ const WORKSPACE = "/tmp/secant-workbench-ws";
 
 // --- fake App seams the flow needs to reach the Workbench ------------------
 
-function approvedWorkspace(): WorkspaceView {
+function approvedWorkspace(ownedLiveRuns = 0): WorkspaceView {
   const [snapshot] = createSignal<WorkspaceSnapshot>({
     family: "workspace",
     path: WORKSPACE,
     approval: { state: "approved", approvedAt: "2026-01-01T00:00:00.000Z" },
     installedBundleCount: 1,
+    runSummary: runSummary(ownedLiveRuns),
     startupNotices: [],
     harnesses: [],
     actionOffers: [],
@@ -472,19 +472,19 @@ async function mountApp(
   height: number,
   actions?: RunActionsView,
   reducedMotion = false,
-  runList: RunListView = inertRunListView(),
+  ownedLiveRuns = 0,
 ) {
   const exits: unknown[] = [];
   const t = await testRender(
     () => (
       <App
-        view={approvedWorkspace()}
+        view={approvedWorkspace(ownedLiveRuns)}
         bundles={oneBundle()}
         harnesses={inertHarnessCatalogView()}
         preparation={inertLaunchPreparationView()}
         launch={launchTo(launchRunId)}
         run={control.view}
-        runList={runList}
+        runList={inertRunListView()}
         actions={actions ?? inertRunActionsView()}
         renderer={renderer.port}
         reducedMotion={reducedMotion}
@@ -508,7 +508,7 @@ async function mountWorkbench(
   height = 40,
   actions?: RunActionsView,
   reducedMotion = false,
-  runList?: RunListView,
+  ownedLiveRuns?: number,
 ) {
   const control = makeRunView(snapshotOf(run));
   const renderer = makeFakeRenderer(width, height);
@@ -520,7 +520,7 @@ async function mountWorkbench(
     height,
     actions,
     reducedMotion,
-    runList,
+    ownedLiveRuns,
   );
   await t.waitForFrame((f) => f.includes("Timeline"));
   return { t, control, renderer, exits };
@@ -6643,7 +6643,7 @@ function inspectableRun(): RunView {
   });
 }
 
-async function mountInspectable(runList?: RunListView) {
+async function mountInspectable(ownedLiveRuns?: number) {
   const dispatched: string[] = [];
   const record = (action: string) => () => {
     dispatched.push(action);
@@ -6659,7 +6659,7 @@ async function mountInspectable(runList?: RunListView) {
       remove: record("delete"),
     }),
     false,
-    runList,
+    ownedLiveRuns,
   );
   wb.control.setRead("log", {
     found: true,
@@ -6712,7 +6712,7 @@ for (const inspection of INSPECTIONS) {
   });
 
   test(`workbench-inspection-quit: q in ${inspection.kind} inspection asks first with live Runs; Keep Running keeps the inspection`, async () => {
-    const wb = await mountInspectable(liveRunListView(1));
+    const wb = await mountInspectable(1);
     await inspection.open(wb);
     await press(wb.t, wb.renderer, "end");
     const before = wb.t.captureCharFrame();

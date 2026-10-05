@@ -1,10 +1,10 @@
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import { createEffect, For, Show, type Accessor } from "solid-js";
+import { For, Show, type Accessor } from "solid-js";
+import type { RunSummary } from "../application/projection-port.js";
 import { useBindings } from "./keymap.js";
 import { useHarnessCatalogView } from "./harness-view.js";
 import { isQualified } from "./harness-format.js";
-import { useRunListView } from "./run-list-view.js";
 import { useExit } from "./vendor/exit.js";
 import { useDialog } from "./vendor/dialog.js";
 import { useTheme } from "./vendor/theme-context.js";
@@ -27,7 +27,6 @@ export function Home(props: {
 }) {
   const { theme } = useTheme();
   const view = useWorkspaceView();
-  const previousRuns = useRunListView().openRunList();
   const harnesses = useHarnessCatalogView().openList();
   const exit = useExit();
   const dialog = useDialog();
@@ -36,9 +35,6 @@ export function Home(props: {
 
   // Start a Run is the first and default entry so the primary task is one keypress
   // away (#191); Workflow Bundles, Previous Runs, and Harnesses sit beside it.
-  createEffect(() => {
-    if (previousRuns.state().hasMore) previousRuns.loadMore();
-  });
   const entries = () => [
     { label: "Start a Run", open: () => props.onStartRun() },
     { label: "Workflow Bundles", open: () => props.onOpenBundles() },
@@ -98,7 +94,7 @@ export function Home(props: {
         <text fg={theme.textMuted} flexShrink={0}>
           {homeSummary({
             bundleCount: view.snapshot().installedBundleCount,
-            runCount: previousRuns.state().rows.length,
+            previousRuns: view.snapshot().runSummary.previousRuns,
             qualifiedHarness: harnesses().harnesses.find((harness) =>
               isQualified(harness.qualification),
             )?.name,
@@ -130,12 +126,17 @@ export function Home(props: {
 
 type THomeSummaryParams = {
   bundleCount: number;
-  runCount: number;
+  previousRuns: RunSummary["previousRuns"];
   qualifiedHarness: string | undefined;
 };
 
 function homeSummary(params: THomeSummaryParams): string {
-  const base = `${params.bundleCount} installed ${params.bundleCount === 1 ? "Bundle" : "Bundles"} · ${params.runCount} previous ${params.runCount === 1 ? "Run" : "Runs"}`;
+  // The Workspace's own Run total (#396); unreadable history says so, never zero.
+  const runs =
+    params.previousRuns.state === "known"
+      ? `${params.previousRuns.count} previous ${params.previousRuns.count === 1 ? "Run" : "Runs"}`
+      : "previous Runs unavailable";
+  const base = `${params.bundleCount} installed ${params.bundleCount === 1 ? "Bundle" : "Bundles"} · ${runs}`;
   return params.qualifiedHarness === undefined
     ? base
     : `${base} · ${params.qualifiedHarness} qualified`;

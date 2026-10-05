@@ -6,6 +6,7 @@ import {
   For,
   Match,
   onMount,
+  Show,
   Switch,
   type ParentProps,
 } from "solid-js";
@@ -32,11 +33,7 @@ import {
   RunActionsViewProvider,
   type RunActionsView,
 } from "./run-actions-view.js";
-import {
-  RunListViewProvider,
-  useRunListView,
-  type RunListView,
-} from "./run-list-view.js";
+import { RunListViewProvider, type RunListView } from "./run-list-view.js";
 import { RunWorkbench } from "./run-workbench.js";
 import { RunWorkbenchViewProvider, type RunWorkbenchView } from "./run-view.js";
 import { StartRun } from "./start-run.js";
@@ -220,13 +217,14 @@ function Fallback(props: { error: unknown; exit: Exit }) {
 // (the backdrop and centred panel come from `Dialog`, as the approval dialog).
 // Living on the dialog stack is what makes it modal: every screen's key bindings
 // are gated on `dialog.stack.length === 0`, so while this is up none of them fire
-// alongside its own. `q` with any live Run this instance owns opens it once;
+// alongside its own. `q` with any live Run this instance owns — or with an owned
+// count the Application could not read (`liveRunCount` undefined) — opens it once;
 // Return on the default "Keep Running" — like Escape / Ctrl+C, which the dialog
 // primitive dismisses — leaves every Run running, while "Halt and Quit" takes the
 // shared exit path, which drains (aborts and rests) every live Run through the
 // same drain SIGINT uses.
 function QuitConfirmation(props: {
-  liveRunCount: number;
+  liveRunCount: number | undefined;
   onKeepRunning: () => void;
   onHaltAndQuit: () => void;
 }) {
@@ -249,12 +247,20 @@ function QuitConfirmation(props: {
       { key: "tab", desc: "Next option", group: "Quit", cmd: toggle },
     ],
   }));
-  const noun = props.liveRunCount === 1 ? "Run" : "Runs";
+  const title =
+    props.liveRunCount === undefined
+      ? "Halt live Runs and quit?"
+      : `Halt ${props.liveRunCount} live ${props.liveRunCount === 1 ? "Run" : "Runs"} and quit?`;
   return (
     <box paddingLeft={2} paddingRight={2} gap={1}>
       <text attributes={TextAttributes.BOLD} fg={theme.text}>
-        {`Halt ${props.liveRunCount} live ${noun} and quit?`}
+        {title}
       </text>
+      <Show when={props.liveRunCount === undefined}>
+        <text fg={theme.warning}>
+          Secant could not read which Runs this instance owns.
+        </text>
+      </Show>
       <text fg={theme.textMuted} paddingBottom={1}>
         All live Runs in this Secant instance will rest halted.
       </text>
@@ -292,7 +298,7 @@ function QuitConfirmation(props: {
 
 function GuardedExitProvider(props: ParentProps<{ exit: Exit }>) {
   const dialog = useDialog();
-  const runs = useRunListView().openRunList();
+  const view = useWorkspaceView();
   const exit: Exit = (reason) => {
     // Only the plain quit binding is guarded; a reason (a decline or a render
     // failure) exits at once, without draining or confirming.
@@ -300,14 +306,12 @@ function GuardedExitProvider(props: ParentProps<{ exit: Exit }>) {
       props.exit(reason);
       return;
     }
-    // Read the whole Previous Runs list, then count the Runs live in this
-    // instance. Launch never gates on other live Runs (ADR 0031), so this count
-    // is consulted only here, at quit: with none live, quit at once; otherwise
-    // one confirmation naming the count, then the shared drain.
-    while (runs.state().hasMore) runs.loadMore();
-    const count = runs
-      .state()
-      .rows.filter((row) => row.live && row.ownedByThisProcess).length;
+    // The Workspace's Run summary counts the Runs this instance owns live (#396).
+    // Launch never gates on other live Runs (ADR 0031), so this count is consulted
+    // only here, at quit: with none live, quit at once; otherwise one confirmation
+    // naming the count — or saying it could not be read — then the shared drain.
+    const owned = view.snapshot().runSummary.ownedLiveRuns;
+    const count = owned.state === "known" ? owned.count : undefined;
     if (count === 0) {
       props.exit();
       return;

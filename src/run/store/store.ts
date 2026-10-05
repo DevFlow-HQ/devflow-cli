@@ -37,6 +37,7 @@ import {
   acquireRunOwner,
   claimRunOwnership,
   endRunOwnership,
+  readRunCensus,
   readRunOwnership,
   readRunStore,
   reconcileRunStore,
@@ -93,6 +94,13 @@ export interface RunListing {
   readonly live: boolean;
   readonly ownerPid?: number;
   readonly ownedByThisProcess: boolean;
+}
+
+/** The group's registrations counted by canonical fact (#396); see `countRuns`. */
+export interface RunCounts {
+  readonly readable: number;
+  readonly ownedByThisProcess: number;
+  readonly ownershipUnreadable: number;
 }
 
 /** Why a Run could not be read: its store is damaged, or no such Run exists. */
@@ -666,6 +674,15 @@ export interface RunGroup {
   ): RunOwner | undefined;
   /** Every registered Run in this group. Order is unspecified. */
   listRuns(): readonly RunListing[];
+  /**
+   * Count the registered Runs in one traversal that opens each Run Store once and
+   * never acquires or fences (#396). `readable` counts records `readRun` would
+   * read; `ownedByThisProcess` counts ownership naming this process whether or not
+   * its record reads; `ownershipUnreadable` counts stores whose ownership cannot be
+   * read, which is never folded into unowned. Throws on a malformed `runs` row,
+   * as `listRuns` does.
+   */
+  countRuns(): RunCounts;
   /** A Run's canonical record, or a Problem when its store is damaged or absent. */
   readRun(runId: string): ReadRunResult;
   /** Release every file handle (coordination and any acquired Run). */
@@ -1287,6 +1304,25 @@ export function openRunGroup(
             ownedByThisProcess: ownerPid === selfPid,
           };
         });
+    },
+    countRuns() {
+      let readable = 0;
+      let ownedByThisProcess = 0;
+      let ownershipUnreadable = 0;
+      for (const row of db.select().from(runs).all()) {
+        const parsed = registrationRow.safeParse(row);
+        if (!parsed.success) {
+          throw new Error("Run Store: a runs row is malformed.");
+        }
+        const census = readRunCensus({
+          dir: join(groupDir, parsed.data.run_id),
+          openDatabase: openRunDatabase,
+        });
+        if (census.recordReadable) readable += 1;
+        if (census.ownership === DAMAGED) ownershipUnreadable += 1;
+        else if (census.ownership.ownerPid === selfPid) ownedByThisProcess += 1;
+      }
+      return { readable, ownedByThisProcess, ownershipUnreadable };
     },
     readRun(runId) {
       // Registration is authoritative, so readRun agrees with listRuns: a Run the

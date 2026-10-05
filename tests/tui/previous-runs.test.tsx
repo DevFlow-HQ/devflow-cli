@@ -16,6 +16,7 @@ import type {
 import {
   inertHarnessCatalogView,
   inertLaunchPreparationView,
+  runSummary,
 } from "./inert.js";
 import { makeFakeRenderer, until } from "./renderer-fixture.js";
 import type {
@@ -47,12 +48,13 @@ const SMALLEST_SUPPORTED_WIDTH = 30;
 
 // --- App seams --------------------------------------------------------------
 
-function approvedWorkspace(): WorkspaceView {
+function approvedWorkspace(ownedLiveRuns = 0): WorkspaceView {
   const [snapshot] = createSignal<WorkspaceSnapshot>({
     family: "workspace",
     path: WORKSPACE,
     approval: { state: "approved", approvedAt: "2026-01-01T00:00:00.000Z" },
     installedBundleCount: 1,
+    runSummary: runSummary(ownedLiveRuns),
     startupNotices: [],
     harnesses: [],
     actionOffers: [],
@@ -327,6 +329,8 @@ interface MountOptions {
   onRemove?: (runId: string) => void;
   width?: number;
   height?: number;
+  /** The Workspace summary's live Runs owned here, which the guarded quit counts. */
+  ownedLiveRuns?: number;
 }
 
 async function mountHome(options: MountOptions = {}) {
@@ -337,7 +341,7 @@ async function mountHome(options: MountOptions = {}) {
   const t = await testRender(
     () => (
       <App
-        view={approvedWorkspace()}
+        view={approvedWorkspace(options.ownedLiveRuns)}
         bundles={noBundles()}
         harnesses={inertHarnessCatalogView()}
         preparation={inertLaunchPreparationView()}
@@ -562,6 +566,7 @@ test("previous-runs-verified: focus, state-free rows, and guarded quit", async (
     ],
     width: SMALLEST_SUPPORTED_WIDTH,
     height: 16,
+    ownedLiveRuns: 1,
   });
 
   const rowLine = selectedLine(t.captureCharFrame());

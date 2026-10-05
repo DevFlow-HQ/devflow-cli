@@ -901,3 +901,83 @@ test("changing a Model choice refreshes and persists it, clears absent effort, a
   assert.ok(read.ok);
   assert.deepEqual(read.run.modelChoice, { model: "gamma" });
 });
+
+test("countRuns reads readable records and ownership in one pass, independently (#396)", (t) => {
+  // This process is pid 2000; pid 1000 is a live foreign process.
+  const home = makeTempDir("secant-store-");
+  const foreign = openRunGroup(home, WORKSPACE, { selfPid: 1000 });
+  const foreignLive = create(foreign, "op-foreign");
+  assert.ok(foreignLive.outcome === "created");
+  foreign.close();
+
+  const group = openRunGroup(home, WORKSPACE, {
+    selfPid: 2000,
+    isOwnerAlive: (pid) => pid === 1000,
+  });
+  t.after(() => group.close());
+  const rested = create(group, "op-rested");
+  assert.ok(rested.outcome === "created");
+  group.endRun(rested.runId);
+  const ownedHere = create(group, "op-owned");
+  assert.ok(ownedHere.outcome === "created");
+  const ownedDamaged = create(group, "op-owned-damaged", {
+    selectedHarness: "claude-code",
+  });
+  assert.ok(ownedDamaged.outcome === "created");
+
+  // A record that will not parse leaves the ownership row readable: the Run is
+  // still owned here even though its history cannot render.
+  const raw = new Database(
+    join(groupDirOf(home), ownedDamaged.runId, "run.db"),
+  );
+  raw.run("UPDATE run_record SET selected_harness = ?", ["unknown"]);
+  raw.close();
+
+  assert.deepEqual(group.countRuns(), {
+    readable: 3,
+    ownedByThisProcess: 2,
+    ownershipUnreadable: 0,
+  });
+});
+
+test("countRuns reports a run.db it cannot open as unreadable ownership, never unowned (#396)", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const healthy = create(group, "op-healthy");
+  assert.ok(healthy.outcome === "created");
+  const corrupt = create(group, "op-corrupt");
+  assert.ok(corrupt.outcome === "created");
+  const missing = create(group, "op-missing");
+  assert.ok(missing.outcome === "created");
+  writeFileSync(join(groupDirOf(home), corrupt.runId, "run.db"), "garbage");
+  renameSync(
+    join(groupDirOf(home), missing.runId, "run.db"),
+    join(groupDirOf(home), missing.runId, "run.db.moved"),
+  );
+
+  assert.deepEqual(group.countRuns(), {
+    readable: 1,
+    ownedByThisProcess: 1,
+    ownershipUnreadable: 2,
+  });
+  // The detailed listing keeps its own rule: a damaged store lists unowned.
+  assert.equal(group.listRuns().filter((run) => run.live).length, 1);
+});
+
+test("countRuns reports a malformed ownership row as unreadable (#396)", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-1");
+  assert.ok(created.outcome === "created");
+  const raw = new Database(join(groupDirOf(home), created.runId, "run.db"));
+  raw.run("UPDATE run_owner SET owner_pid = ?", ["not-a-pid"]);
+  raw.close();
+
+  assert.deepEqual(group.countRuns(), {
+    readable: 1,
+    ownedByThisProcess: 0,
+    ownershipUnreadable: 1,
+  });
+});
