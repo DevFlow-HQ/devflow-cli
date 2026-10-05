@@ -30,9 +30,9 @@ test("a clean Entry Turn applies the latest step done through the Projection Por
     requests[0]?.agentCalls?.map((c) => c.id),
     ["step_done"],
   );
-  assert.match(
-    requests[0]?.input.text ?? "",
-    /Discuss the plan\.[\s\S]*step_done[\s\S]*one-line reason/,
+  assert.equal(
+    requests[0]?.input.text,
+    "Discuss the plan.\n\nWhen the work this step asked of you is finished, call step done with a one-line reason.",
   );
   const ended = run.timeline.find((e) => e.event === "interactive-step-ended");
   assert.equal(ended?.endedBy, "agent");
@@ -170,6 +170,50 @@ test("the next Entry Turn is settled by the same Application loop", async (t) =>
   );
 });
 
+for (const agentCompletion of [
+  true,
+  ["stage", "step"],
+  ["stage", "step", "stage"],
+]) {
+  test(`Entry Turn defaults follow skill lines in step-then-stage order for ${JSON.stringify(agentCompletion)}`, async (t) => {
+    const routing = [
+      {
+        repeat: {
+          control: "human",
+          steps: [
+            {
+              id: "implement",
+              kind: "interactive-agent",
+              session: "s",
+              entryTurn: true,
+              agentCompletion,
+              prompt: { asset: "prompt.md" },
+              uses: [{ asset: "skill" }],
+            },
+          ],
+        },
+      },
+    ];
+    const { wired, requests } = await setup(
+      t,
+      [{ result: completed }],
+      routing,
+    );
+    await awaitSettled(wired.projectionPort, "launch");
+    const input = requests[0]?.input.text;
+    assert.ok(input);
+    const skillLine = input.split("\n")[2];
+    assert.match(
+      skillLine ?? "",
+      /^Read the skill instructions at .*SKILL\.md before you begin\.$/,
+    );
+    assert.equal(
+      input,
+      `Discuss the plan.\n\n${skillLine}\n\nWhen the work this step asked of you is finished, call step done with a one-line reason.\nWhen no work is left for this stage, call stage done with a one-line reason instead.`,
+    );
+  });
+}
+
 test("author sentences follow the prompt and skill lines verbatim", async (t) => {
   const sentence =
     "Call step_done when the plan is agreed. Give a one-line reason.";
@@ -198,6 +242,62 @@ test("author sentences follow the prompt and skill lines verbatim", async (t) =>
   );
   assert.equal(input.slice(input.lastIndexOf("\n\n") + 2), sentence);
 });
+
+for (const { name, fields, expected } of [
+  {
+    name: "step author text beside the stage default",
+    fields: {
+      stepDoneWhen: "Call step done once the plan is agreed. Give one reason.",
+    },
+    expected:
+      "Discuss the plan.\n\nCall step done once the plan is agreed. Give one reason.\nWhen no work is left for this stage, call stage done with a one-line reason instead.",
+  },
+  {
+    name: "stage author text beside the step default",
+    fields: {
+      stageDoneWhen:
+        "Call stage done if no tickets remain. Give a one-line reason instead.",
+    },
+    expected:
+      "Discuss the plan.\n\nWhen the work this step asked of you is finished, call step done with a one-line reason.\nCall stage done if no tickets remain. Give a one-line reason instead.",
+  },
+  {
+    name: "both author texts",
+    fields: {
+      stepDoneWhen: "Call step done. Explain why.",
+      stageDoneWhen: "Call stage done. Explain why instead.",
+    },
+    expected:
+      "Discuss the plan.\n\nCall step done. Explain why.\nCall stage done. Explain why instead.",
+  },
+  {
+    name: "only the stage default when step done is off",
+    fields: { agentCompletion: ["stage"] },
+    expected:
+      "Discuss the plan.\n\nWhen no work is left for this stage, call stage done with a one-line reason instead.",
+  },
+  {
+    name: "no instructions when completion is off",
+    fields: { agentCompletion: false },
+    expected: "Discuss the plan.",
+  },
+]) {
+  test(`Entry Turn sends ${name} verbatim`, async (t) => {
+    const routing = reviewedLoop().map(({ repeat }) => ({
+      repeat: {
+        ...repeat,
+        steps: repeat.steps.map((step) => ({ ...step, ...fields })),
+      },
+    }));
+    const { wired, requests } = await setup(
+      t,
+      [{ result: completed }],
+      routing,
+    );
+    await awaitSettled(wired.projectionPort, "launch");
+    assert.equal(requests[0]?.input.text, expected);
+  });
+}
 
 test("a Step without an Entry Turn gets no injected input", async (t) => {
   const { wired, runId, requests } = await setup(

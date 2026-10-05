@@ -1465,13 +1465,16 @@ function entryPrompt(
   routing: readonly RoutingNode[],
   prompt: string,
 ): string {
-  const sentences = agentCompletionCalls(routing, step).map((call) =>
-    call === "step"
-      ? (step.stepDoneWhen ??
-        "When this step is done, call step_done with a one-line reason.")
-      : (step.stageDoneWhen ??
-        "When this stage is done, call stage_done with a one-line reason."),
-  );
+  const enabled = agentCompletionCalls(routing, step);
+  const sentences = (["step", "stage"] as const)
+    .filter((call) => enabled.includes(call))
+    .map((call) =>
+      call === "step"
+        ? (step.stepDoneWhen ??
+          "When the work this step asked of you is finished, call step done with a one-line reason.")
+        : (step.stageDoneWhen ??
+          "When no work is left for this stage, call stage done with a one-line reason instead."),
+    );
   return sentences.length === 0
     ? prompt
     : `${prompt}\n\n${sentences.join("\n")}`;
