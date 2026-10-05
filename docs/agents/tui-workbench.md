@@ -88,6 +88,8 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
 
 ## Run Actions, details panel, and live updates
 
+- Every confirmation dispatches its captured Offer, after checking its semantic target against the current Offer (#389). A replacement or withdrawal
+  clears the arm; reappearance requires a fresh arm. Unchanged targets retain the original consequence across unrelated updates and fresh objects.
 - A destructive Run Action (cancel or delete) arms a confirming keypress before it dispatches (`run-workbench.tsx` `pending`): `y` confirms, Escape backs out.
   An ordinary resume dispatches at once; a resume Offer carrying a takeover form first confirms once and names the foreign owner process.
 - `ResumeRunOffer` is a `SteerTurnOffer`-style union (#194): `available:false` renders `resume — unavailable · <reason>` and `r` no-ops (story 40); an

@@ -18,6 +18,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The Run Workbench (`run-workbench.tsx`) is the one screen that takes its keys, size, and resize from the injected Renderer Port (`size`/`onKey`/`onResize`,
   A13) instead of `@opentui/keymap` + `useTerminalDimensions`: a single raw-key pipeline drives every control, so its input and layout are driven by a fake
   renderer in tests. Every other screen keeps the keymap/`useTerminalDimensions` path. Drawing still goes through OpenTUI elements — the Port never carries it.
+- Workbench Step-ending Offers expose Run and Step ids, not an Attempt id. Resume evidence is ownerPid and acknowledgement; Interrupt exposes turnId
+  (#389). Confirmation lifecycle rules live in [Workbench interaction](../../docs/agents/tui-workbench.md).
 - `follow.ts` alone owns Projection observer health and reconnect ordering. A terminal update preserves last-known state as `disconnected`; explicit reconnect
   crosses `loading` and `catching-up` before `current`. Workbench Operation controls read only current offers, while timeline live-edge remains a separate scroll fact.
 - The timeline's scroll/live-edge/anchor/new-activity is a pure reducer over row heights (`run-timeline.ts`), not OpenTUI's `<scrollbox>` (which OpenCode's

@@ -69,6 +69,7 @@ export function InteractiveInput(props: {
   endOffered: Accessor<boolean>;
   sendOffered: Accessor<boolean>;
   endArmed: Accessor<boolean>;
+  endConsequence: Accessor<string | undefined>;
   continueOffer: Accessor<ContinueRepeatOffer | undefined>;
   continueArmed: Accessor<boolean>;
   endStageOffer: Accessor<EndStageOffer | undefined>;
@@ -98,7 +99,7 @@ export function InteractiveInput(props: {
       const text = (line: string) => ({ text: line });
       if (props.endArmed())
         return text(
-          "  ⚠ End this interactive Step? Press y to confirm · esc to keep",
+          `  ⚠ End this interactive Step? Press y to confirm · esc to keep — ${props.endConsequence() ?? ""}`,
         );
       // The confirm leads with its keys so a narrow clip keeps them (#217).
       const continueOffer = props.continueOffer();
@@ -117,7 +118,9 @@ export function InteractiveInput(props: {
       const interrupt = props.interrupt();
       if (interrupt !== undefined)
         return props.interruptArmed()
-          ? text("  ⚠ Press esc again to interrupt · any other key cancels")
+          ? text(
+              `  ⚠ Press esc again to interrupt · any other key cancels — ${interrupt.consequence}`,
+            )
           : { interrupt };
       if (props.sendOffered() && props.followUp())
         return text("  enter send reply · esc back");

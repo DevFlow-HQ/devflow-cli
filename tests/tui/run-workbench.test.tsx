@@ -6165,3 +6165,354 @@ test("workbench-model-choice: losing the Offer closes the dialog and late Harnes
     wb.t.renderer.destroy();
   }
 });
+
+test("workbench-confirmation-target-identity: End Step cannot adopt a replacement Step", async () => {
+  const wb = await mountWorkbench(interactiveRunOf());
+  await press(wb.t, wb.renderer, "e", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /End this interactive Step\?/);
+  wb.control.setRun(
+    interactiveRunOf({
+      progress: [
+        { id: "next-step", kind: "interactive-agent", status: "running" },
+      ],
+      actionOffers: [
+        { ...SEND_OFFER, stepId: "next-step" },
+        { ...END_OFFER, stepId: "next-step" },
+      ],
+    }),
+  );
+  await press(wb.t, wb.renderer, "y");
+  assert.deepEqual(wb.control.ends, []);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /End this interactive Step\?/);
+});
+
+// #389 exercises supported client snapshots. It does not measure how often a
+// live Harness produces a replacement, and Step Offers expose no Attempt id.
+for (const ending of [
+  {
+    offer: END_OFFER,
+    key: "e",
+    prompt: /End this interactive Step\?/,
+    writes: "ends",
+  },
+  {
+    offer: CONTINUE_OFFER,
+    key: "n",
+    prompt: /y continue/,
+    writes: "continues",
+  },
+  {
+    offer: END_STAGE_OFFER,
+    key: "e",
+    prompt: /y end stage/,
+    writes: "endStages",
+  },
+] as const) {
+  test(`workbench-confirmation-target-identity: ${ending.offer.action} rejects a replaced Run or Step`, async () => {
+    for (const replacement of [
+      { ...ending.offer, stepId: "next-step" },
+      { ...ending.offer, runId: "run-replacement" },
+    ]) {
+      const wb = await mountWorkbench(
+        interactiveRunOf({ actionOffers: [SEND_OFFER, ending.offer] }),
+      );
+      await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+      assert.match(wb.t.captureCharFrame(), ending.prompt);
+      wb.control.setRun(
+        interactiveRunOf({ actionOffers: [SEND_OFFER, replacement] }),
+      );
+      await press(wb.t, wb.renderer, "y");
+      assert.deepEqual(wb.control[ending.writes], []);
+      assert.doesNotMatch(wb.t.captureCharFrame(), ending.prompt);
+    }
+  });
+
+  test(`workbench-confirmation-target-identity: ${ending.offer.action} withdrawal and reappearance require a fresh arm`, async () => {
+    const initial = interactiveRunOf({
+      actionOffers: [SEND_OFFER, ending.offer],
+    });
+    const wb = await mountWorkbench(initial);
+    await type(wb.t, "kept draft");
+    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    wb.control.setRun(interactiveRunOf({ actionOffers: [SEND_OFFER] }));
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), ending.prompt);
+    wb.control.setRun(initial);
+    await press(wb.t, wb.renderer, "y");
+    assert.deepEqual(wb.control[ending.writes], []);
+    assert.match(wb.t.captureCharFrame(), /> kept draft/);
+    await type(wb.t, " editable");
+    assert.match(wb.t.captureCharFrame(), /> kept draft editable/);
+    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    await press(wb.t, wb.renderer, "y");
+    assert.deepEqual(wb.control[ending.writes], [
+      { runId: "run-1", stepId: "discuss" },
+    ]);
+  });
+
+  test(`workbench-confirmation-target-identity: ${ending.offer.action} retains intent through updates and resize`, async () => {
+    const original = {
+      ...ending.offer,
+      consequence: "ORIGINAL consequence " + "long warning ".repeat(30),
+    };
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER, original] }),
+      160,
+      32,
+    );
+    await type(wb.t, "kept draft");
+    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    const armed = wb.t.captureCharFrame();
+    assert.match(armed, ending.prompt);
+    assert.match(armed, /ORIGINAL consequence/);
+    wb.control.setRun(
+      interactiveRunOf({
+        timeline: [{ at: "T1", event: "turn-started" }],
+        actionOffers: [
+          { ...SEND_OFFER },
+          { ...original, consequence: "REPLACEMENT wording" },
+        ],
+      }),
+    );
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /ORIGINAL consequence/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /REPLACEMENT wording/);
+    // The captured target and the fixed three-row input survive both widths.
+    for (const width of [48, 100, 160]) {
+      wb.renderer.resize(width, 32);
+      wb.t.resize(width, 32);
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      noOverflow(frame, width);
+      assert.equal(
+        frame.split("\n").findIndex((line) => line.includes("> kept draft")),
+        29,
+      );
+      assert.doesNotMatch(frame, /REPLACEMENT wording/);
+    }
+    await type(wb.t, "y");
+    assert.doesNotMatch(wb.t.captureCharFrame(), /> kept drafty/);
+    await press(wb.t, wb.renderer, "escape");
+    assert.doesNotMatch(wb.t.captureCharFrame(), ending.prompt);
+    await type(wb.t, " editable");
+    assert.match(wb.t.captureCharFrame(), /> kept draft editable/);
+    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    await press(wb.t, wb.renderer, "y");
+    assert.deepEqual(wb.control[ending.writes], [
+      { runId: "run-1", stepId: "discuss" },
+    ]);
+  });
+}
+
+for (const recovery of [
+  {
+    offer: { ...RESUME_OFFER, takeover: { ownerPid: 7331 } },
+    prompt: /Take over from process 7331/,
+  },
+  { offer: RESUME_ACK_OFFER, prompt: /y to acknowledge and resume/ },
+  {
+    offer: { ...RESUME_ACK_OFFER, takeover: { ownerPid: 7331 } },
+    prompt: /Take over from process 7331/,
+  },
+] as const) {
+  test(`workbench-confirmation-target-identity: resume captures ${recovery.prompt.source} and its consequence`, async () => {
+    const received: ResumeRunOffer[] = [];
+    const original: Extract<ResumeRunOffer, { available: true }> =
+      recovery.offer;
+    const initial = runOf({ state: "halted", actionOffers: [original] });
+    const wb = await mountWorkbench(
+      initial,
+      160,
+      40,
+      okActions({
+        resume: (offer) => {
+          received.push(offer);
+          return () => ({ kind: "ok" });
+        },
+      }),
+    );
+    await press(wb.t, wb.renderer, "r");
+    assert.match(wb.t.captureCharFrame(), recovery.prompt);
+    // A new object for the same normalized target must not reset the arm.
+    wb.control.setRun(
+      runOf({
+        state: "halted",
+        actionOffers: [
+          {
+            ...original,
+            ...(original.takeover === undefined
+              ? {}
+              : { takeover: { ...original.takeover } }),
+            consequence: "REPLACEMENT resume consequence",
+          },
+        ],
+        timeline: [{ at: "T1", event: "turn-started" }],
+      }),
+    );
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), recovery.prompt);
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /REPLACEMENT resume consequence/,
+    );
+    await press(wb.t, wb.renderer, "y");
+    assert.deepEqual(received, [original]);
+  });
+}
+
+for (const replacement of [
+  {
+    ...RESUME_ACK_OFFER,
+    acknowledgement: "Different command effects may repeat.",
+  },
+  { ...RESUME_ACK_OFFER, acknowledgement: undefined },
+  { ...RESUME_ACK_OFFER, takeover: { ownerPid: 8442 } },
+  { ...RESUME_ACK_OFFER, runId: "run-replacement" },
+  RESUME_UNAVAILABLE_OFFER,
+] as const) {
+  test(`workbench-confirmation-target-identity: changed resume evidence clears acknowledgement (${JSON.stringify(replacement)})`, async () => {
+    const received: ResumeRunOffer[] = [];
+    const wb = await mountWorkbench(
+      runOf({ state: "halted", actionOffers: [RESUME_ACK_OFFER] }),
+      100,
+      40,
+      okActions({
+        resume: (offer) => {
+          received.push(offer);
+          return () => ({ kind: "ok" });
+        },
+      }),
+    );
+    await press(wb.t, wb.renderer, "r");
+    wb.control.setRun(runOf({ state: "halted", actionOffers: [replacement] }));
+    await press(wb.t, wb.renderer, "y");
+    assert.deepEqual(received, []);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /y to acknowledge and resume/);
+  });
+}
+
+test("workbench-confirmation-target-identity: takeover owner changes and withdrawal cannot silently resume", async () => {
+  const original = { ...RESUME_ACK_OFFER, takeover: { ownerPid: 7331 } };
+  for (const replacement of [
+    { ...original, takeover: { ownerPid: 8442 } },
+    { ...original, takeover: undefined },
+    { ...original, acknowledgement: "Different acknowledgement" },
+    undefined,
+  ]) {
+    const received: ResumeRunOffer[] = [];
+    const initial = runOf({ state: "halted", actionOffers: [original] });
+    const wb = await mountWorkbench(
+      initial,
+      100,
+      40,
+      okActions({
+        resume: (offer) => {
+          received.push(offer);
+          return () => ({ kind: "ok" });
+        },
+      }),
+    );
+    await press(wb.t, wb.renderer, "r");
+    wb.control.setRun(
+      runOf({
+        state: "halted",
+        actionOffers: replacement === undefined ? [] : [replacement],
+      }),
+    );
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Take over from process 7331/);
+    wb.control.setRun(initial);
+    await press(wb.t, wb.renderer, "y");
+    assert.deepEqual(received, []);
+    await press(wb.t, wb.renderer, "r");
+    await press(wb.t, wb.renderer, "y");
+    assert.deepEqual(received, [original]);
+  }
+});
+
+for (const interactive of [false, true]) {
+  test(`workbench-confirmation-target-identity: ${interactive ? "input" : "rail"} Interrupt cannot migrate to a replacement Turn`, async () => {
+    const received: (typeof INTERRUPT_OFFER)[] = [];
+    const liveRun = interactive ? liveInteractiveRunOf : liveTurnRunOf;
+    const wb = await mountWorkbench(
+      liveRun(),
+      160,
+      40,
+      okActions({
+        interrupt: (offer) => {
+          received.push(offer);
+          return () => ({ kind: "ok" });
+        },
+      }),
+    );
+    await press(wb.t, wb.renderer, "escape");
+    assert.match(wb.t.captureCharFrame(), /Press esc again to interrupt/);
+    wb.control.setRun(
+      liveRun({ actionOffers: [{ ...INTERRUPT_OFFER, turnId: "turn-next" }] }),
+    );
+    await wb.t.renderOnce();
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /Press esc again to interrupt/,
+    );
+    await press(wb.t, wb.renderer, "escape");
+    assert.deepEqual(received, []);
+    await press(wb.t, wb.renderer, "escape");
+    assert.deepEqual(received, [{ ...INTERRUPT_OFFER, turnId: "turn-next" }]);
+  });
+
+  test(`workbench-confirmation-target-identity: ${interactive ? "input" : "rail"} Interrupt preserves captured wording and clears on withdrawal`, async () => {
+    const received: (typeof INTERRUPT_OFFER)[] = [];
+    const liveRun = interactive ? liveInteractiveRunOf : liveTurnRunOf;
+    const original = {
+      ...INTERRUPT_OFFER,
+      consequence: "ORIGINAL Turn consequence " + "long warning ".repeat(20),
+    };
+    const initial = liveRun({ actionOffers: [original] });
+    const wb = await mountWorkbench(
+      initial,
+      160,
+      32,
+      okActions({
+        interrupt: (offer) => {
+          received.push(offer);
+          return () => ({ kind: "ok" });
+        },
+      }),
+    );
+    await press(wb.t, wb.renderer, "escape");
+    wb.control.setRun(
+      liveRun({
+        actionOffers: [
+          { ...original, consequence: "REPLACEMENT Turn wording" },
+        ],
+        timeline: [{ at: "T1", event: "turn-started" }],
+      }),
+    );
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /ORIGINAL Turn consequence/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /REPLACEMENT Turn wording/);
+    for (const width of [48, 100, 160]) {
+      wb.renderer.resize(width, 32);
+      wb.t.resize(width, 32);
+      await wb.t.renderOnce();
+      noOverflow(wb.t.captureCharFrame(), width);
+      assert.match(wb.t.captureCharFrame(), /Press esc again to interrupt/);
+    }
+    await press(wb.t, wb.renderer, "escape");
+    assert.deepEqual(received, [original]);
+    wb.control.setRun(initial);
+    await press(wb.t, wb.renderer, "escape");
+    wb.control.setRun(liveRun({ actionOffers: [] }));
+    await wb.t.renderOnce();
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /Press esc again to interrupt/,
+    );
+    wb.control.setRun(initial);
+    await press(wb.t, wb.renderer, "escape");
+    assert.deepEqual(received, [original]);
+    await press(wb.t, wb.renderer, "escape");
+    assert.deepEqual(received, [original, original]);
+  });
+}

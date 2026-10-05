@@ -123,6 +123,46 @@ const INTERACTIVE_HEIGHT = 3;
  *  interactive input it mirrors. */
 const STEER_HEIGHT = 3;
 
+type TAvailableResume = Extract<ResumeRunOffer, { available: true }>;
+type TConfirmation =
+  | {
+      readonly kind: "takeover" | "acknowledge";
+      readonly offer: TAvailableResume;
+    }
+  | { readonly kind: "cancel"; readonly offer: CancelRunOffer }
+  | { readonly kind: "delete"; readonly offer: DeleteRunOffer }
+  | { readonly kind: "end-step"; readonly offer: EndInteractiveStepOffer }
+  | { readonly kind: "continue"; readonly offer: ContinueRepeatOffer }
+  | { readonly kind: "end-stage"; readonly offer: EndStageOffer };
+type TConfirmationOffer = TConfirmation["offer"] | InterruptTurnOffer;
+
+// Only coordinates exposed by the Projection Port participate in identity.
+// Step endings carry no Attempt coordinate. Copy and consequences stay captured.
+function confirmationTarget(offer: TConfirmationOffer): string {
+  switch (offer.action) {
+    case "resume-run":
+      return JSON.stringify([
+        offer.action,
+        offer.runId,
+        offer.takeover?.ownerPid,
+        offer.acknowledgement,
+      ]);
+    case "interrupt-turn":
+      return JSON.stringify([offer.action, offer.runId, offer.turnId]);
+    case "end-interactive-step":
+    case "continue-repeat":
+    case "end-stage":
+      return JSON.stringify([offer.action, offer.runId, offer.stepId]);
+    case "cancel-run":
+    case "delete-run":
+      return JSON.stringify([offer.action, offer.runId]);
+    default: {
+      const exhaustive: never = offer;
+      return exhaustive;
+    }
+  }
+}
+
 type TActionOperation = "resume" | "cancel" | "delete" | "interrupt";
 type TAppliedActionOperation = Exclude<TActionOperation, "delete">;
 
@@ -305,16 +345,8 @@ export function RunWorkbench(props: {
     };
   });
   const [actionRefusal, setActionRefusal] = createSignal<Problem | undefined>();
-  const [pending, setPending] = createSignal<
-    | "takeover"
-    | "acknowledge"
-    | "cancel"
-    | "delete"
-    | "end-step"
-    | "continue"
-    | "end-stage"
-    | undefined
-  >();
+  const [confirmation, setConfirmation] = createSignal<TConfirmation>();
+  const pending = () => confirmation()?.kind;
   // A dispatched Run Action followed to settlement: resume drives execution and a
   // cancel-as-abort aborts a live Run, both asynchronous now (#98), so the outcome
   // starts `pending` and the effect below reports it. A second dispatch while one
@@ -327,24 +359,24 @@ export function RunWorkbench(props: {
   // The Interrupt is a two-press bound key (Esc while a Turn is live, spec story 18):
   // the first press arms it and shows the hint, the second dispatches. It disarms on
   // any other key and whenever the live-Turn Offer disappears.
-  const [interruptArmed, setInterruptArmed] = createSignal(false);
+  const [interruptConfirmation, setInterruptConfirmation] =
+    createSignal<InterruptTurnOffer>();
+  const interruptArmed = () => interruptConfirmation() !== undefined;
   const actionInFlight = () => {
     const flight = actionFlight();
     return flight !== undefined && flight.outcome().kind === "pending";
   };
 
-  const dispatchResume = () => {
-    const offer = offers().resume;
+  const dispatchResume = (offer: TAvailableResume) => {
     // An unavailable resume (#194 story 40) is never dispatched — the Port has
     // said it cannot proceed, so the control is truthful, not actionable.
-    if (offer === undefined || !offer.available || actionInFlight()) return;
+    if (!confirmationCurrent(offer) || actionInFlight()) return;
     setActionRefusal(undefined);
     setActionReceipt({ kind: "pending", operation: "resume" });
     setActionFlight({ op: "resume", outcome: actions.resume(offer) });
   };
-  const dispatchInterrupt = () => {
-    const offer = offers().interrupt;
-    if (offer === undefined || actionInFlight()) return;
+  const dispatchInterrupt = (offer: InterruptTurnOffer) => {
+    if (!confirmationCurrent(offer) || actionInFlight()) return;
     setActionRefusal(undefined);
     setActionReceipt({ kind: "pending", operation: "interrupt" });
     setActionFlight({ op: "interrupt", outcome: actions.interrupt(offer) });
@@ -353,27 +385,28 @@ export function RunWorkbench(props: {
   // first press arms, the second dispatches. Arming clears the input's refusal line,
   // so the armed confirm that replaces the hint line is never hidden (#294).
   const armOrDispatchInterrupt = () => {
-    if (!interruptArmed()) {
+    const armed = interruptConfirmation();
+    const offer = offers().interrupt;
+    if (offer === undefined || actionInFlight()) return;
+    if (armed === undefined || !confirmationCurrent(armed)) {
       setInteractiveRefusal(undefined);
-      setInterruptArmed(true);
+      setInterruptConfirmation(structuredClone(offer));
       return;
     }
-    setInterruptArmed(false);
-    dispatchInterrupt();
+    setInterruptConfirmation(undefined);
+    dispatchInterrupt(armed);
   };
   // Called on the confirming keypress. Cancel keeps the Run's history; delete
   // removes it and leaves the Workbench for the list once it settles, since the
   // Run is then gone.
-  const confirmCancel = () => {
-    const offer = offers().cancel;
-    if (offer === undefined || actionInFlight()) return;
+  const confirmCancel = (offer: CancelRunOffer) => {
+    if (!confirmationCurrent(offer) || actionInFlight()) return;
     setActionRefusal(undefined);
     setActionReceipt({ kind: "pending", operation: "cancel" });
     setActionFlight({ op: "cancel", outcome: actions.cancel(offer.runId) });
   };
-  const confirmDelete = () => {
-    const offer = offers().remove;
-    if (offer === undefined || actionInFlight()) return;
+  const confirmDelete = (offer: DeleteRunOffer) => {
+    if (!confirmationCurrent(offer) || actionInFlight()) return;
     setActionRefusal(undefined);
     setActionReceipt({ kind: "pending", operation: "delete" });
     setActionFlight({ op: "delete", outcome: actions.remove(offer.runId) });
@@ -464,6 +497,57 @@ export function RunWorkbench(props: {
       ),
     };
   });
+  const currentConfirmationOffer = (
+    action: TConfirmationOffer["action"],
+  ): TConfirmationOffer | undefined => {
+    switch (action) {
+      case "resume-run": {
+        const resume = offers().resume;
+        return resume?.available === true ? resume : undefined;
+      }
+      case "cancel-run":
+        return offers().cancel;
+      case "delete-run":
+        return offers().remove;
+      case "interrupt-turn":
+        return offers().interrupt;
+      case "end-interactive-step":
+        return interactiveOffers().end;
+      case "continue-repeat":
+        return interactiveOffers().continue;
+      case "end-stage":
+        return interactiveOffers().endStage;
+      default: {
+        const exhaustive: never = action;
+        return exhaustive;
+      }
+    }
+  };
+  const confirmationCurrent = (offer: TConfirmationOffer) => {
+    const current = currentConfirmationOffer(offer.action);
+    return (
+      current !== undefined &&
+      confirmationTarget(current) === confirmationTarget(offer)
+    );
+  };
+  createEffect(() => {
+    const armed = confirmation();
+    if (armed !== undefined && !confirmationCurrent(armed.offer))
+      setConfirmation(undefined);
+  });
+  // Views use the captured Offer while armed, including its original consequence.
+  const confirmationOffers = () => {
+    const armed = confirmation();
+    const current = offers();
+    return {
+      ...current,
+      resume:
+        armed?.offer.action === "resume-run" ? armed.offer : current.resume,
+      cancel: armed?.kind === "cancel" ? armed.offer : current.cancel,
+      remove: armed?.kind === "delete" ? armed.offer : current.remove,
+      interrupt: interruptConfirmation() ?? current.interrupt,
+    };
+  };
   // The follow-up compose (#354): an Interrupt that leaves an Agent Step's Attempt
   // waiting hands the bottom input to the person as their reply to the agent. It
   // mounts from the Offer alone, never the Step kind, and hands back to the rail once
@@ -535,23 +619,20 @@ export function RunWorkbench(props: {
       outcome: view.steer(offer.runId, offer.turnId, text),
     });
   };
-  const confirmEndStep = () => {
-    const offer = interactiveOffers().end;
-    if (offer === undefined || interactivePending()) return;
+  const confirmEndStep = (offer: EndInteractiveStepOffer) => {
+    if (!confirmationCurrent(offer) || interactivePending()) return;
     setInteractiveRefusal(undefined);
     setInteractiveOutcome(() =>
       view.endInteractiveStep(offer.runId, offer.stepId),
     );
   };
-  const confirmContinue = () => {
-    const offer = interactiveOffers().continue;
-    if (offer === undefined || interactivePending()) return;
+  const confirmContinue = (offer: ContinueRepeatOffer) => {
+    if (!confirmationCurrent(offer) || interactivePending()) return;
     setInteractiveRefusal(undefined);
     setInteractiveOutcome(() => view.continueRepeat(offer.runId, offer.stepId));
   };
-  const confirmEndStage = () => {
-    const offer = interactiveOffers().endStage;
-    if (offer === undefined || interactivePending()) return;
+  const confirmEndStage = (offer: EndStageOffer) => {
+    if (!confirmationCurrent(offer) || interactivePending()) return;
     setInteractiveRefusal(undefined);
     setInteractiveOutcome(() => view.endStage(offer.runId, offer.stepId));
   };
@@ -798,7 +879,7 @@ export function RunWorkbench(props: {
   const detailsRows = (): readonly DetailsRow[] => {
     const current = run();
     if (current === undefined) return [];
-    const resume = offers().resume;
+    const resume = confirmationOffers().resume;
     const armed = pending();
     return buildDetailsRows({
       run: current,
@@ -810,8 +891,8 @@ export function RunWorkbench(props: {
       resumeAcknowledgement:
         resume?.available === true ? resume.acknowledgement : undefined,
       modelChoice: modelChoiceOffer(),
-      cancel: offers().cancel,
-      remove: offers().remove,
+      cancel: confirmationOffers().cancel,
+      remove: confirmationOffers().remove,
       armed: armed === "cancel" || armed === "delete" ? armed : undefined,
     });
   };
@@ -826,7 +907,7 @@ export function RunWorkbench(props: {
       // Cancel/delete confirm in the panel (#194 story 37); if it closes mid-arm,
       // drop the confirm so no invisible destructive action stays armed.
       const armed = pending();
-      if (armed === "cancel" || armed === "delete") setPending(undefined);
+      if (armed === "cancel" || armed === "delete") setConfirmation(undefined);
     }
   });
 
@@ -853,15 +934,11 @@ export function RunWorkbench(props: {
     setAnswerRefusal,
   );
 
-  // The Interrupt disarms whenever the live-Turn Offer leaves (the Turn settled or
-  // was lost) or a request/gate modal takes over, so a stale "again to interrupt"
-  // hint never lingers under the request control that now owns Esc.
+  // A replaced/withdrawn Turn or a modal clears the two-press arm.
   createEffect(() => {
-    if (
-      (offers().interrupt === undefined || modalControl()) &&
-      interruptArmed()
-    )
-      setInterruptArmed(false);
+    const armed = interruptConfirmation();
+    if (armed !== undefined && (!confirmationCurrent(armed) || modalControl()))
+      setInterruptConfirmation(undefined);
   });
 
   // Follow a dispatched Run Action to settlement. A refusal surfaces in the
@@ -1166,7 +1243,7 @@ export function RunWorkbench(props: {
       armOrDispatchInterrupt();
       return;
     }
-    if (interruptArmed()) setInterruptArmed(false);
+    if (interruptArmed()) setInterruptConfirmation(undefined);
     if (name === "e" && key.ctrl) {
       // End Step is offered only at a Turn boundary; arm the confirming keypress.
       // ponytail: the same Ctrl+E also reaches the focused field's built-in Ctrl+E→
@@ -1174,19 +1251,27 @@ export function RunWorkbench(props: {
       // override to unbind it is the research's optional step, deferred (tui/AGENTS.md).
       // In a human-controlled Repeat the same key arms End Stage (#218) instead:
       // the two Offers never coexist.
-      if (interactiveOffers().end !== undefined) {
+      const { end, endStage } = interactiveOffers();
+      if (end !== undefined) {
         setInteractiveRefusal(undefined);
-        setPending("end-step");
-      } else if (interactiveOffers().endStage !== undefined) {
+        setConfirmation({ kind: "end-step", offer: structuredClone(end) });
+      } else if (endStage !== undefined) {
         setInteractiveRefusal(undefined);
-        setPending("end-stage");
+        setConfirmation({
+          kind: "end-stage",
+          offer: structuredClone(endStage),
+        });
       }
       return;
     }
     if (name === "n" && key.ctrl) {
-      if (interactiveOffers().continue !== undefined) {
+      const continueOffer = interactiveOffers().continue;
+      if (continueOffer !== undefined) {
         setInteractiveRefusal(undefined);
-        setPending("continue");
+        setConfirmation({
+          kind: "continue",
+          offer: structuredClone(continueOffer),
+        });
       }
       return;
     }
@@ -1249,18 +1334,37 @@ export function RunWorkbench(props: {
     // key is ignored while the confirmation stays armed, so a stray keystroke never
     // dispatches it. (It sits ahead of the interactive input so End Step's own
     // confirm suspends typing.)
-    if (pending() !== undefined) {
+    const armed = confirmation();
+    if (armed !== undefined) {
       if (name === "y") {
-        const action = pending();
-        setPending(undefined);
-        if (action === "takeover" || action === "acknowledge") dispatchResume();
-        else if (action === "cancel") confirmCancel();
-        else if (action === "delete") confirmDelete();
-        else if (action === "continue") confirmContinue();
-        else if (action === "end-stage") confirmEndStage();
-        else confirmEndStep();
+        setConfirmation(undefined);
+        switch (armed.kind) {
+          case "takeover":
+          case "acknowledge":
+            dispatchResume(armed.offer);
+            break;
+          case "cancel":
+            confirmCancel(armed.offer);
+            break;
+          case "delete":
+            confirmDelete(armed.offer);
+            break;
+          case "continue":
+            confirmContinue(armed.offer);
+            break;
+          case "end-stage":
+            confirmEndStage(armed.offer);
+            break;
+          case "end-step":
+            confirmEndStep(armed.offer);
+            break;
+          default: {
+            const exhaustive: never = armed;
+            return exhaustive;
+          }
+        }
       } else if (name === "escape") {
-        setPending(undefined);
+        setConfirmation(undefined);
       }
       return;
     }
@@ -1297,7 +1401,7 @@ export function RunWorkbench(props: {
       armOrDispatchInterrupt();
       return;
     }
-    if (interruptArmed()) setInterruptArmed(false);
+    if (interruptArmed()) setInterruptConfirmation(undefined);
     // Steer opens on `s` while an available steer Offer is present and the timeline
     // holds focus (#148), mirroring the interrupt arm's gating so it never shadows the
     // Details/checkpoint Esc regions. An unavailable Harness shows the reason but `s`
@@ -1319,11 +1423,14 @@ export function RunWorkbench(props: {
     if (name === "r" && resume?.available === true) {
       if (resume.takeover !== undefined) {
         setActionRefusal(undefined);
-        setPending("takeover");
+        setConfirmation({ kind: "takeover", offer: structuredClone(resume) });
       } else if (resume.acknowledgement !== undefined) {
         setActionRefusal(undefined);
-        setPending("acknowledge");
-      } else dispatchResume();
+        setConfirmation({
+          kind: "acknowledge",
+          offer: structuredClone(resume),
+        });
+      } else dispatchResume(resume);
       return;
     }
     if (name === "m") {
@@ -1336,14 +1443,16 @@ export function RunWorkbench(props: {
     // ponytail: reachable only when the panel fits; on a terminal too small for the
     // panel, open a wider one to cancel/delete — the same breakpoint all panel
     // content already lives behind.
-    if (name === "c" && offers().cancel !== undefined && detailsShown()) {
+    const cancel = offers().cancel;
+    if (name === "c" && cancel !== undefined && detailsShown()) {
       setActionRefusal(undefined);
-      setPending("cancel");
+      setConfirmation({ kind: "cancel", offer: structuredClone(cancel) });
       return;
     }
-    if (name === "x" && offers().remove !== undefined && detailsShown()) {
+    const remove = offers().remove;
+    if (name === "x" && remove !== undefined && detailsShown()) {
       setActionRefusal(undefined);
-      setPending("delete");
+      setConfirmation({ kind: "delete", offer: structuredClone(remove) });
       return;
     }
     // Review checkpoint interaction (#92): the two controls replace the footer
@@ -1484,7 +1593,7 @@ export function RunWorkbench(props: {
               control={control}
               answerPending={answerPending}
               answerRefusal={answerRefusal}
-              actionOffers={offers}
+              actionOffers={confirmationOffers}
               anyActionOffer={anyActionOffer}
               actionRefusal={actionRefusal}
               // Only resume's takeover/acknowledge confirm on the rail; cancel/delete
@@ -1494,7 +1603,9 @@ export function RunWorkbench(props: {
               interactiveActive={inputActive}
               interactiveFollowUp={() => followUpOffer() !== undefined}
               interactiveRestored={draftRestored}
-              interactiveInterrupt={interactiveInterrupt}
+              interactiveInterrupt={() =>
+                interruptConfirmation() ?? interactiveInterrupt()
+              }
               interactiveSteerOffered={() =>
                 interactiveInterrupt() !== undefined && steerAvailable()
               }
@@ -1508,9 +1619,25 @@ export function RunWorkbench(props: {
               draft={draft}
               onDraftInput={(value) => setDraft(value)}
               endStepArmed={() => pending() === "end-step"}
-              interactiveContinue={() => interactiveOffers().continue}
+              endStepConsequence={() => {
+                const armed = confirmation();
+                return armed?.kind === "end-step"
+                  ? armed.offer.consequence
+                  : undefined;
+              }}
+              interactiveContinue={() => {
+                const armed = confirmation();
+                return armed?.kind === "continue"
+                  ? armed.offer
+                  : interactiveOffers().continue;
+              }}
               continueArmed={() => pending() === "continue"}
-              interactiveEndStage={() => interactiveOffers().endStage}
+              interactiveEndStage={() => {
+                const armed = confirmation();
+                return armed?.kind === "end-stage"
+                  ? armed.offer
+                  : interactiveOffers().endStage;
+              }}
               endStageArmed={() => pending() === "end-stage"}
               interactivePending={interactivePending}
               interactiveRefusal={interactiveRefusal}
@@ -1625,6 +1752,7 @@ function Workbench(props: {
   draft: Accessor<string>;
   onDraftInput: (value: string) => void;
   endStepArmed: Accessor<boolean>;
+  endStepConsequence: Accessor<string | undefined>;
   interactivePending: Accessor<boolean>;
   interactiveRefusal: Accessor<InteractiveRefusal | undefined>;
   steerActive: Accessor<boolean>;
@@ -1855,7 +1983,7 @@ function Workbench(props: {
           <Show when={!props.interactiveActive() && props.interruptArmed()}>
             <text fg={theme.warning} flexShrink={0}>
               {clip(
-                "  ⚠ Press esc again to interrupt · any other key cancels",
+                `  ⚠ Press esc again to interrupt · any other key cancels — ${props.actionOffers().interrupt?.consequence ?? ""}`,
                 w(),
               )}
             </text>
@@ -2013,6 +2141,7 @@ function Workbench(props: {
               endOffered={props.interactiveEndOffered}
               sendOffered={props.interactiveSendOffered}
               endArmed={props.endStepArmed}
+              endConsequence={props.endStepConsequence}
               continueOffer={props.interactiveContinue}
               continueArmed={props.continueArmed}
               endStageOffer={props.interactiveEndStage}
