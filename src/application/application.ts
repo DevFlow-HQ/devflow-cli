@@ -409,11 +409,15 @@ export interface Application {
    *  install, which the `workspace` Projection also carries. Composition calls it
    *  once, before either client reads. */
   ensureShippedBundles(files: readonly string[]): readonly Problem[];
-  /** End subscriptions with application-shutdown, close blocked Runs' Harnesses,
-   *  leave follow-up waits' claims for reconciliation and release other blocked
-   *  claims without changing their rest, then abort every
-   *  running Run and await settlement. Composition calls this from its OS-signal
-   *  handler before teardown, so no prepared Harness or child is left running. */
+  /** End subscriptions with application-shutdown, then drain every Run this
+   *  process owns with no work in flight, whatever its durable state: close its
+   *  held Harness, release a blocked rest's claim without changing it, and leave
+   *  follow-up waits' and mid-work claims for reconciliation. Then abort every
+   *  running Run, await settlement, drain what those drives retained, and await
+   *  drains already in flight. A failed drain skips no other; the call rejects
+   *  with it once all have run. Composition
+   *  calls this from its OS-signal handler before teardown, so no prepared Harness
+   *  or child is left running. */
   shutdown(): Promise<void>;
 }
 
@@ -954,6 +958,47 @@ export function createApplication(deps: ApplicationDependencies): Application {
     await heldStep.close();
   }
 
+  // Drains in flight, so shutdown also awaits one a cancel or a drive began.
+  const drains = new Set<Promise<void>>();
+
+  // Drain what this process retains for a Run it stops owning: the held Step, then
+  // the claim (unless left for Store reconciliation), then the owner. `done` is set
+  // before the first await, so no concurrent cancel or shutdown selects them again.
+  // `leaveClaim` is read after the Step closes, inside the cleanup, so a failing
+  // read still closes the owner.
+  function drainRetained(
+    runId: string,
+    tracking: TrackedRun,
+    owner: RunOwner,
+    leaveClaim: () => boolean = () => false,
+  ): Promise<void> {
+    tracking.done = true;
+    const drain = closeRetained(runId, tracking, owner, leaveClaim);
+    drains.add(drain);
+    const forget = () => drains.delete(drain);
+    void drain.then(forget, forget);
+    return drain;
+  }
+
+  async function closeRetained(
+    runId: string,
+    tracking: TrackedRun,
+    owner: RunOwner,
+    leaveClaim: () => boolean,
+  ): Promise<void> {
+    try {
+      await closeHeldStep(tracking);
+    } finally {
+      tracking.owner = undefined;
+      try {
+        if (!leaveClaim()) owner.release();
+      } finally {
+        owner.close();
+        pushRunUpdate(runId);
+      }
+    }
+  }
+
   async function driveWithAbortProtocol(params: {
     readonly runId: string;
     readonly tracking: TrackedRun;
@@ -984,18 +1029,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       if (params.retainOwner()) {
         tracking.done = false;
       } else {
-        try {
-          await closeHeldStep(tracking);
-        } finally {
-          tracking.owner = undefined;
-          tracking.done = true;
-          try {
-            owner.release();
-          } finally {
-            owner.close();
-            pushRunUpdate(runId);
-          }
-        }
+        await drainRetained(runId, tracking, owner);
       }
     }
   }
@@ -3666,17 +3700,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
   ): Promise<OperationSettlement> {
     restRun(observedOwner(owner, runId), runId, "cancelled");
     try {
-      await closeHeldStep(tracking);
+      await drainRetained(runId, tracking, owner);
     } finally {
-      tracking.owner = undefined;
-      tracking.done = true;
-      try {
-        owner.release();
-      } finally {
-        owner.close();
-        pushRunUpdate(runId);
-        runs.delete(runId);
-      }
+      runs.delete(runId);
     }
     return { status: "applied" };
   }
@@ -3891,46 +3917,72 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }
 
   async function shutdownRuns(): Promise<void> {
-    // Abort every Run live in this process, then await each settlement so its child
-    // is dead and its store is consistent before teardown. Each aborts with the
-    // signal reason, so runAndSettle leaves the claim live for the next open to
-    // reconcile `halted` (ADR 0019, #98). Filter on `promise` (set in the same
-    // synchronous prefix that sets `owner`), so the set aborted is exactly the set
-    // awaited — shutdown never resolves before a live Run's settlement it aborted.
-    const blocked = [...runs.entries()].filter(
-      ([, tracking]) =>
-        !tracking.done &&
-        tracking.promise === undefined &&
-        tracking.owner !== undefined &&
-        tracking.state === "blocked",
-    );
-    for (const [runId, tracking] of blocked) {
-      const owner = tracking.owner!;
-      // Leave an interrupted Agent Step's waiting claim for Store reconciliation
-      // to halt on reopen (ADR 0035). Other blocked rests retain their state and
-      // release ownership, keeping gates and interactive waits answerable.
-      const waiting =
-        currentHoldBasis(tracking.routing, tracking.state, owner, runId)
-          ?.kind === "follow-up";
-      try {
-        await closeHeldStep(tracking);
-      } finally {
-        tracking.owner = undefined;
-        tracking.done = true;
-        try {
-          if (!waiting) owner.release();
-        } finally {
-          owner.close();
-          pushRunUpdate(runId);
-        }
-      }
-    }
+    // Drain every Run this process owns with no work in flight, then abort every
+    // Run live in this process and await each settlement so its child is dead and
+    // its store is consistent before teardown. Each aborts with the signal reason,
+    // so runAndSettle leaves the claim live for the next open to reconcile `halted`
+    // (ADR 0019, #98). Filter on `promise` (set in the same synchronous prefix that
+    // sets `owner`), so the set aborted is exactly the set awaited — shutdown never
+    // resolves before a live Run's settlement it aborted. A drive the signal stopped
+    // can still retain its owner and Step, so a second drain follows, and a drain a
+    // cancel or a drive's release already began is awaited too. A failed drain
+    // skips no other drain and no abort; shutdown rejects once all have run.
+    const failures = await drainOwnedIdleRuns();
     const live = [...runs.values()].filter(
       (tracking) => !tracking.done && tracking.promise !== undefined,
     );
     for (const tracking of live) tracking.abort.abort(SIGNAL_ABORT);
     await Promise.all(
       live.map((tracking) => tracking.promise!.catch(() => undefined)),
+    );
+    failures.push(...(await drainOwnedIdleRuns()));
+    // Their own callers report those drains' failures.
+    await Promise.allSettled(drains);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        "application: shutdown cleanup failed",
+      );
+    }
+  }
+
+  // Select by retained ownership, never the durable state: a drive that faulted
+  // mid-Turn leaves its owner and Step held with the Run still `running` (#385).
+  async function drainOwnedIdleRuns(): Promise<unknown[]> {
+    const owned = [...runs.entries()].filter(
+      ([, tracking]) =>
+        !tracking.done &&
+        tracking.promise === undefined &&
+        tracking.owner !== undefined,
+    );
+    const failures: unknown[] = [];
+    for (const [runId, tracking] of owned) {
+      const owner = tracking.owner!;
+      try {
+        await drainRetained(runId, tracking, owner, () =>
+          leavesClaimAtShutdown(runId, tracking, owner),
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    return failures;
+  }
+
+  // Gates, checkpoints, and interactive waits keep their blocked rest and release
+  // ownership, so they stay answerable. An interrupted Agent Step's waiting claim
+  // is left for Store reconciliation to halt on reopen (ADR 0035), as is any Run
+  // stopped mid-work: released, an unowned `running` record is never reconciled.
+  function leavesClaimAtShutdown(
+    runId: string,
+    tracking: TrackedRun,
+    owner: RunOwner,
+  ): boolean {
+    if (tracking.state !== "blocked") return true;
+    return (
+      currentHoldBasis(tracking.routing, tracking.state, owner, runId)?.kind ===
+      "follow-up"
     );
   }
 

@@ -88,6 +88,8 @@ jobs:
         run: bun run test -- tests/application/requested-model.test.ts
       - name: Claude fallback cleanup retains owner
         run: bun run test -- tests/harness/claude-code-cleanup.test.ts
+      - name: retained-step-fault-shutdown
+        run: bun run test -- tests/application/retained-step-shutdown.test.ts
       - name: Test
         run: bun run test
       - name: Build

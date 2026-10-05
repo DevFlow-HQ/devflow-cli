@@ -15,8 +15,13 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   ([execution's mapping](../../src/run/execution/AGENTS.md)): only `RUN_CANCEL_ABORT` throws (`RunCancelledError`, so cancel-run writes the rest through the
   held owner); a signal throws nothing, so `runAndSettle` returns through its normal path, and a signal leaves the claim live for the next open to reconcile.
 - `cancel-run` is cancel-as-abort for active work in this process; a held blocked Run is rested directly, a non-live blocked Run is acquired and rested, and a Run live
-  elsewhere takes the fresh-owner epoch-bump path. `shutdown()` closes blocked Runs' held Harnesses, leaving follow-up waiting claims for Store reconciliation
-  and releasing other blocked claims without changing their rest. It then aborts and awaits running work with `SIGNAL_ABORT`, also leaving their claims live.
+  elsewhere takes the fresh-owner epoch-bump path. `shutdown()` drains every Run it owns with no work in flight, selected by retained ownership, never the durable
+  state (#385): a drive that faulted mid-Turn retains its owner and Step with the Run still `running`. It closes the held Harness, releases a blocked
+  rest's claim without changing it, and leaves follow-up waiting claims and any non-blocked claim for Store reconciliation, since an unowned `running`
+  record is never reconciled. It then aborts and awaits running work with `SIGNAL_ABORT`, also leaving their claims live. Last, it drains what those
+  drives retained and awaits any drain a cancel or a drive's release already began. A failed drain skips no other drain or abort; shutdown rejects
+  with it once all have run. Those three paths drain a retained Step and owner through `drainRetained`, which marks the Run done before its first
+  await.
 - Cancel and shutdown race on the Run controller: whichever aborts first supplies its reason. Turn interrupt is bound separately; its Operation reports the
   Harness receipt and its own Turn's result, while the Run's eventual rest still reflects cancel or shutdown when either stops the Run.
 
