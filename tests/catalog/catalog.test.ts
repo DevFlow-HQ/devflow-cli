@@ -689,3 +689,57 @@ test("a malformed Preference row throws at Catalog read ingress", (t) => {
   database.exec("INSERT INTO preferences (key, value) VALUES ('bad', x'00')");
   assert.throws(() => catalog.getPreference("bad"));
 });
+
+test("paired Preference updates roll back together and return partial saves under one transaction", (t) => {
+  const home = makeTempDir("secant-preferences-pair-");
+  const catalog = openCatalog(home);
+  const database = new Database(join(home, "catalog.db"));
+  t.after(() => {
+    database.close();
+    catalog.close();
+  });
+  catalog.setPreference("theme", "everforest");
+  catalog.setPreference("appearance", "dark");
+  const encoded = '{ "model": "gpt-5", "effort": "high" }';
+  catalog.setPreference("last-model-choice:codex", encoded);
+  database.exec(
+    "CREATE TRIGGER fail_appearance BEFORE UPDATE ON preferences WHEN NEW.key = 'appearance' BEGIN SELECT RAISE(ABORT, 'injected'); END",
+  );
+  assert.throws(() =>
+    catalog.changePreferences(
+      { theme: "nord", appearance: "light" },
+      (getPreference) => ({
+        theme: getPreference("theme"),
+        appearance: getPreference("appearance"),
+      }),
+    ),
+  );
+  assert.equal(catalog.getPreference("theme"), "everforest");
+  assert.equal(catalog.getPreference("appearance"), "dark");
+  database.exec("DROP TRIGGER fail_appearance");
+  assert.deepEqual(
+    catalog.changePreferences(
+      { theme: "nord", appearance: "light" },
+      (getPreference) => ({
+        theme: getPreference("theme"),
+        appearance: getPreference("appearance"),
+      }),
+    ),
+    { theme: "nord", appearance: "light" },
+  );
+  assert.deepEqual(
+    catalog.changePreferences({ appearance: "dark" }, (getPreference) => ({
+      theme: getPreference("theme"),
+      appearance: getPreference("appearance"),
+    })),
+    { theme: "nord", appearance: "dark" },
+  );
+  assert.equal(catalog.getPreference("last-model-choice:codex"), encoded);
+  assert.throws(() =>
+    catalog.changePreferences({ theme: "dracula" }, () => {
+      throw new Error("resolver failure");
+    }),
+  );
+  assert.equal(catalog.getPreference("theme"), "nord");
+  assert.equal(catalog.getPreference("appearance"), "dark");
+});

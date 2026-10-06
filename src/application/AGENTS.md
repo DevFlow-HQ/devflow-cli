@@ -4,6 +4,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- Home-scoped `preferences` needs no Harness or approval. Its keys are raw strings; `change-preferences` returns the transaction's saved pair.
+  The ledger replays receipts without saving again; failed saves are not-applied with no effects.
 - Windows fallback notices are live launch evidence retained per Run for this Application lifetime (#363), across tracking replacement and Projection reopen.
   A fresh Application learns a notice only from a new fallback launch; the notice is not persisted Run truth.
 - Every canonical Run write goes through `observedOwner`, whose getter reads the refreshed `record`. It intercepts `selectHarness`, `selectModelChoice`,
@@ -113,7 +115,5 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - Read [run-control](../../docs/agents/run-control.md) before changing deferred settlement, cancel or shutdown, Turn interrupt or steer, takeover, the
   interactive-Step drive, or the live overlay; the abort-reason mapping is [execution's](../run/execution/AGENTS.md).
-- `createApplication`'s regions, in order: (1) state, observers, `observedOwner`, and the execution drivers (`runAndSettle`, `startRun`); (2) Projection dispatch
-  (`openProjection`, `openRunProjection`), with the catalog and launch-preparation families in their own files; (3) approval, launch, and resume (`submitApprove`,
-  `submitLaunch`, `resumePreconditions`, `submitResume`); (4) gate and Harness-request answering, then Turn interrupt and steer (`submitAnswer` through `steerTurnAndSettle`);
-  (5) interactive turns (`claimHeldRun` through `runInteractiveEnd`, the follow-up included), then cancel, delete, read-acquire, and `shutdown`.
+- `createApplication` keeps Run ownership, observers, admission, execution drives and shutdown together. Catalog, Harness Catalog,
+  launch preparation and home-scoped Preferences delegate their Projections and use cases to private files.

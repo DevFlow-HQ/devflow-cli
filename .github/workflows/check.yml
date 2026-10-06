@@ -108,6 +108,13 @@ jobs:
           tests/release/shipped-bundles.test.ts
           tests/headless/interactive-agent.test.ts
           tests/tui/run-workbench.test.tsx
+      - name: m10-home-and-preferences
+        run: >-
+          bun run test --
+          tests/catalog/catalog.test.ts
+          tests/application/preferences.test.ts
+          tests/headless/settings.test.ts
+          tests/architecture/preferences-palettes.test.ts
       - name: Test
         run: bun run test
       - name: Build

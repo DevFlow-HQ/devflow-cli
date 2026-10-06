@@ -11,6 +11,7 @@ import type {
 } from "../application/projection-port.js";
 import { renderFocus, renderRow } from "./render.js";
 import { registerRunCommands, splitSelector } from "./run-commands.js";
+import { registerSettingsCommands } from "./settings-commands.js";
 import { registerHarnessCommands } from "./harness-commands.js";
 
 // The headless client speaks the Application Interfaces and nothing else: the
@@ -166,6 +167,8 @@ function buildProgram(
     "before",
     "Running `secant` with no command opens the interactive workspace shell.\n",
   );
+
+  registerSettingsCommands(program, { io, execute, settle, fail });
 
   const workspace = program
     .command("workspace")

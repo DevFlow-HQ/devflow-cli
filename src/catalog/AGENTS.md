@@ -4,8 +4,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
-- Preferences hold opaque string values per key. Each `setPreference` is an immediate upsert of that key only, with the latest commit winning.
-  A malformed row throws at read ingress; Application catches only the Preference read and validates its meaning, preserving Catalog-wide failures.
+- Preferences hold opaque string values per key. `setPreference` upserts one key; `changePreferences` writes a patch and resolves its result
+  through Preference reads in one immediate transaction. A thrown resolver or failed write rolls back every supplied key.
+  Latest commits win; unrelated keys and their encoding stay untouched.
+  A malformed row throws at read ingress; Application defaults each appearance key independently, preserving Catalog-wide failures.
 
 - First-install-wins is decided inside one immediate write transaction (`commitInstall`): a second install of the same identity whose digest already matches
   returns `already-installed`, and an identity collision (same id/version, different digest) returns `identity-collision` changing neither the store nor the

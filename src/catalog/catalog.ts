@@ -107,6 +107,14 @@ export interface Catalog {
   getPreference(key: string): string | undefined;
   /** Atomically replace only this key. The latest committed write wins. */
   setPreference(key: string, value: string): void;
+  /** Replace supplied keys, then resolve a result through ordinary Preference
+   * reads inside the same immediate transaction. A throw rolls back the patch. */
+  changePreferences<Result>(
+    patch: Readonly<Record<string, string>>,
+    read: (
+      getPreference: Catalog["getPreference"],
+    ) => Result extends PromiseLike<unknown> ? never : Result,
+  ): Result;
   /** The approval for an exact canonical path, or undefined when none exists. */
   getWorkspaceApproval(path: string): WorkspaceApproval | undefined;
   /**
@@ -560,6 +568,31 @@ export function openCatalog(
         },
         { behavior: "immediate" },
       );
+    },
+    changePreferences(patch, read) {
+      return db.transaction(
+        (tx) => {
+          for (const [key, value] of Object.entries(patch)) {
+            tx.insert(preferences)
+              .values({ key, value })
+              .onConflictDoUpdate({ target: preferences.key, set: { value } })
+              .run();
+          }
+          return {
+            result: read((key) => {
+              const row = tx
+                .select()
+                .from(preferences)
+                .where(eq(preferences.key, key))
+                .get();
+              return row === undefined
+                ? undefined
+                : preferenceRow.parse(row).value;
+            }),
+          };
+        },
+        { behavior: "immediate" },
+      ).result;
     },
     getWorkspaceApproval: readApproval,
     approveWorkspace(path, approvedAt) {

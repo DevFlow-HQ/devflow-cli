@@ -10,6 +10,7 @@
 /** Which bounded Projection to open. Selectors are closed and typed. */
 export type ProjectionSelector =
   | { readonly family: "workspace" }
+  | { readonly family: "preferences" }
   | { readonly family: "operation"; readonly operationId: string }
   // `bundle-catalog` with no `focus` is the list; with a `focus` it is the exact
   // inspection of one Installed Bundle. Read-only: this family offers no Actions.
@@ -59,6 +60,7 @@ export interface HarnessFocusSelector {
  *  closed set of Operations grows one variant per slice. */
 export type Submission =
   | ApproveWorkspaceSubmission
+  | ChangePreferencesSubmission
   | LaunchRunSubmission
   | ChangeModelChoiceSubmission
   | ResumeRunSubmission
@@ -73,6 +75,16 @@ export type Submission =
   | EndStageSubmission
   | CancelRunSubmission
   | DeleteRunSubmission;
+
+export interface ChangePreferencesInput {
+  readonly theme?: string;
+  readonly appearance?: string;
+}
+interface ChangePreferencesSubmission {
+  readonly operationId: string;
+  readonly operation: "change-preferences";
+  readonly input: ChangePreferencesInput;
+}
 
 /** The decisions a tool-approval Harness Request offers (#117). Mirrors the
  *  Harness Module's `ApprovalDecision` without importing it — the Port imports
@@ -393,6 +405,7 @@ export type CatchUp = "fresh" | "continuous" | "rebased";
 
 export type ProjectionSnapshot =
   | WorkspaceSnapshot
+  | PreferencesSnapshot
   | OperationSnapshot
   | BundleCatalogSnapshot
   | BundleFocusSnapshot
@@ -401,6 +414,19 @@ export type ProjectionSnapshot =
   | LaunchPreparationSnapshot
   | RunSnapshot
   | RunListSnapshot;
+
+/** Saved home-scoped appearance, independent of Workspace approval and Harnesses. */
+export interface AppearancePreferences {
+  readonly theme: string;
+  readonly appearance: "dark" | "light";
+}
+export interface PreferencesSnapshot {
+  readonly family: "preferences";
+  readonly preferences: AppearancePreferences;
+  readonly supportedThemes: readonly string[];
+  readonly notice?: Problem;
+  readonly actionOffers: readonly ActionOffer[];
+}
 
 /** The one launch Workspace: its canonical path and approval state. */
 export interface WorkspaceSnapshot {
@@ -637,6 +663,8 @@ export interface OperationSnapshot {
   readonly family: "operation";
   readonly operationId: string;
   readonly outcome: OperationOutcome;
+  /** The resolved saved pair from the applied change's atomic transaction. */
+  readonly preferencesChange?: AppearancePreferences;
   /** Additive result of an applied change; preference notices remain on the Run.
    *  `reach` says whether the running Turn took it (#348) or it applies from the
    *  next Turn. */
@@ -1290,6 +1318,7 @@ export interface LaunchPreparationSnapshot {
 /** A typed opportunity bound to an exact target. The closed set grows one
  *  variant per slice; each offer names the consequence of taking it. */
 export type ActionOffer =
+  | { readonly action: "change-preferences" }
   | ApproveWorkspaceOffer
   | LaunchRunOffer
   | AnswerHumanGateOffer
@@ -1698,6 +1727,9 @@ export interface ProjectionPort {
   // snapshot type it names, so clients drop their `as` casts. A `bundle-catalog`
   // selector splits on `focus` — present is the focus, absent is the list. The
   // final union signature admits a dynamically-typed selector.
+  openProjection(selector: {
+    readonly family: "preferences";
+  }): OpenedProjection<PreferencesSnapshot>;
   openProjection(selector: {
     readonly family: "workspace";
   }): OpenedProjection<WorkspaceSnapshot>;

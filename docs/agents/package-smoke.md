@@ -13,6 +13,8 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 
 - **compiled-binary-interface**: the copied binary answers `--help` and `--version` exactly (on macOS after `codesign --verify --deep --strict`), and an
   unknown command or flag exits non-zero with usage before any composition wiring (#72).
+- **m10-settings-consumer** (#408): defaults, text/JSON, paired and partial saves, a second invocation in another unapproved Workspace,
+  invalid/empty no-write refusals, Model-choice bytes, atomic rollback, preference-read fallback, stdout/stderr separation and exits through the copied binary.
 - **relocated-pre-drizzle-home**: the checked-in pre-Drizzle fixture relocated beneath the isolated install, proving the binary migrates and opens it
   through its embedded migration registries. Each database's recorded migration count must exactly match its declared journal, including Catalog Preferences (#343).
 - **workspace-catalog**: `workspace approve` then `workspace --json` reports the approved, realpath-canonical directory.

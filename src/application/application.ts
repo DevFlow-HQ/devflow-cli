@@ -144,7 +144,9 @@ import {
   steerTurnReplayKey,
 } from "./replay-keys.js";
 export { canonicalizeWorkspacePath } from "./replay-keys.js";
+import { createPreferences } from "./preferences.js";
 import type {
+  PreferencesSnapshot,
   AnswerHarnessRequestInput,
   AnswerHumanGateInput,
   BundleCatalogSnapshot,
@@ -472,6 +474,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     observe,
     scheduleSettlement: deps.scheduleSettlement,
   });
+  const preferences = createPreferences({ catalog, operations, subscriptions });
   // A launched Run tracked in this process: its routing and Bundle facts, the
   // owner while it is live (so a snapshot read never fences the executing owner),
   // the in-memory latest state, the AbortController that stops its execution
@@ -1382,6 +1385,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // switch over the closed selector families, so no snapshot cast is needed here
   // or in either client.
   function openProjection(selector: {
+    readonly family: "preferences";
+  }): OpenedProjection<PreferencesSnapshot>;
+  function openProjection(selector: {
     readonly family: "workspace";
   }): OpenedProjection<WorkspaceSnapshot>;
   function openProjection(selector: {
@@ -1420,6 +1426,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }): OpenedProjection<RunListSnapshot>;
   function openProjection(selector: ProjectionSelector): OpenedProjection;
   function openProjection(selector: ProjectionSelector): OpenedProjection {
+    if (selector.family === "preferences") return preferences.open();
     if (selector.family === "run") {
       return openRunProjection(selector.runId, selector.prepareModelChoice);
     }
@@ -3842,6 +3849,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // default, deferred under a test) and publishes the outcome then.
   function dispatch(submission: Submission): SubmissionAdmission {
     switch (submission.operation) {
+      case "change-preferences":
+        return preferences.submit(submission.operationId, submission.input);
       case "approve-workspace":
         return submitApprove(submission.operationId, submission.input);
       case "launch-run":

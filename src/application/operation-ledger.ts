@@ -19,6 +19,7 @@ import type { UpdateStream } from "./update-stream.js";
 export type OperationSettlement =
   | {
       readonly status: "applied";
+      readonly preferencesChange?: OperationSnapshot["preferencesChange"];
       readonly modelChoiceChange?: NonNullable<
         OperationSnapshot["modelChoiceChange"]
       >;
@@ -187,6 +188,10 @@ export class OperationLedger {
       family: "operation",
       operationId: receipt.identity.operationId,
       outcome,
+      ...(settlement.status === "applied" &&
+      settlement.preferencesChange !== undefined
+        ? { preferencesChange: settlement.preferencesChange }
+        : {}),
       ...(settlement.status === "applied" &&
       settlement.modelChoiceChange !== undefined
         ? { modelChoiceChange: settlement.modelChoiceChange }

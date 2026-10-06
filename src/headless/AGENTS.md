@@ -35,9 +35,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `run show` labels the immutable `run.selectedHarness` as `Selected Harness:` and the latest Agent-step Attempt's `run.harness`/`effectiveModel` facts as
   `Observed Harness:`/`Observed executable:`/`Observed version:`/`Observed effective model:` (#125, #147). The version prints unadorned since it may contain
   parentheses. `selectedHarness` is additive, the existing observed JSON fields stay unchanged, and Command-only Runs omit all of them so their frozen shape is unchanged.
-- The `run` command group lives in `run-commands.ts` and registers onto the program `buildProgram` passes (A25); it is handed `io`/`execute`/`fail`/`settle`
-  and shares `settledOutcome` and `settleAndReportRun` (the await-settlement-then-report tail, A24). `splitSelector` lives there too and `bundle inspect`
-  imports it (A24).
+- Command groups register onto the configured program with `io`/`execute`/`fail`/`settle`. Run and settings share the receipt waiter in
+  `operation-settlement.ts`; Run owns `settleAndReportRun` and `splitSelector`, also used by `bundle inspect`.
+- Settings show JSON is only the theme/appearance pair. Set JSON is the Operation receipt, with `preferencesChange` only on an applied save.
+  Fallback notices use stderr and exit zero; failed saves retain not-applied receipts and exit one. Bare settings prints help without composition.
 - `launch`/`resume` answer approval Harness Requests while following the live Run (#117), all through one owner — `harness-requests.ts` holds the
   `--harness-requests` option (`addHarnessRequestsOption`, declared on both commands), its parser, and the follower (A34; the option was declared verbatim on
   each command and the follower wrapped in an identical try/finally before). `followHarnessRequests` opens the `run` Projection and, on each `live` overlay,

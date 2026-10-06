@@ -42,6 +42,7 @@ import { installCodexReplayerAt } from "../tests/harness/codex-replayer-install.
 import { seedTestRepairWorkspace } from "../tests/helpers/testRepairWorkspace.js";
 import { readArchiveEntries } from "../tests/helpers/zip.js";
 import { runNamedScenario, withCleanup } from "./package-smoke/scenario.js";
+import { settingsConsumer } from "./package-smoke/settings.js";
 import { posixExitedRootAcceptance } from "./package-smoke/posix-exited-root.js";
 
 // Smokes the Bun compiled single-file executable (ADR 0030). It replaces the
@@ -331,6 +332,14 @@ await withCleanup(
     const binary = await runNamedScenario(
       "compiled-binary-interface",
       compiledBinaryInterfaceScenario,
+    );
+
+    await runNamedScenario("m10-settings-consumer", () =>
+      settingsConsumer(
+        binary,
+        smokeRoot,
+        homeEnv(join(smokeRoot, "settings-home")),
+      ),
     );
 
     // Approve a temporary Workspace under a temporary SECANT_HOME, then read it

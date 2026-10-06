@@ -23,3 +23,5 @@ Bundle prompt rules apply to both clients. Build and install refuse authored pro
 Launch Preparation and headless launch report a selected-Harness finding with `harness` as its correction; installed Bundles remain usable on a compatible
 Harness. Execution checks substituted prompts before Turn admission, failing an Agent Attempt or blocking an Interactive Entry. The missing resting
 explanation remains M11's presentation work. Headless still has no compose or typed Slash commands.
+
+Saved theme and dark/light Preferences have headless parity through `settings show` and `settings set` ([ADR 0037](./adr/0037-own-saved-presentation-preferences-in-catalog-and-apply-themes-independently.md)). Preview and active appearance belong to the TUI; settings changes saved values for a later launch and leaves headless output plain.

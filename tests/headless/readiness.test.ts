@@ -149,6 +149,11 @@ function scriptedReadiness(
     };
   }
   function open(selector: {
+    family: "preferences";
+  }): OpenedProjection<
+    import("../../src/application/projection-port.js").PreferencesSnapshot
+  >;
+  function open(selector: {
     family: "workspace";
   }): OpenedProjection<WorkspaceSnapshot>;
   function open(
