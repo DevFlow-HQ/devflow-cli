@@ -21,7 +21,7 @@ import {
   openFakeRunGroup as openRunGroup,
 } from "../run/store/fake-git-process.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { previewEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
+import { usageEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
 
 // #117 AC2: through the Port, the live overlay of a Run executing an Agent Turn
@@ -477,7 +477,7 @@ test("a slow Run observer ends observer-lagged while a healthy one follows the s
     turns: [
       {
         ...turn,
-        events: previewEvents(previews),
+        events: usageEvents(previews),
         pace: async (index) => {
           await opened;
           await healthyRead(index);
@@ -510,10 +510,15 @@ test("a slow Run observer ends observer-lagged while a healthy one follows the s
   });
   const healthyEnded = (async () => {
     for await (const update of healthy.updates) {
-      if (update.kind === "preview") {
-        healthyPreviews.push(update.text);
+      if (
+        update.kind === "live" &&
+        update.overlay.usage !== undefined &&
+        healthyPreviews.at(-1) !== update.overlay.usage
+      ) {
+        healthyPreviews.push(update.overlay.usage!);
         while (previewWaiters.length > 0) previewWaiters.shift()?.();
-      } else if (update.kind === "live" && update.overlay.outstanding.length) {
+      }
+      if (update.kind === "live" && update.overlay.outstanding.length) {
         raisedOnHealthy(update.overlay);
       } else if (update.kind === "closed") {
         return update.reason;
@@ -555,7 +560,7 @@ test("a slow Run observer ends observer-lagged while a healthy one follows the s
     current.outstanding.map((request) => request.requestId),
     ["req-edit"],
   );
-  assert.equal(current.preview, `p${previews - 1}`);
+  assert.equal(current.usage, `p${previews - 1}`);
 
   // The reopened Offer still answers the live Turn, and the Run rests succeeded.
   const offer = current.offers[0]!;

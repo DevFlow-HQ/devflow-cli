@@ -19,19 +19,21 @@ import { makeTempDir } from "./tempDir.js";
 export const UNREAD_UPDATE_BOUND = 1_000;
 export const UNREAD_UNIT_BOUND = 8 * 1024 * 1024;
 
-/** `count` scripted preview Turn events, `p0` onward. */
-export function previewEvents(count: number): TurnEvent[] {
+/** `count` scripted usage Turn events, `p0` onward. */
+export function usageEvents(count: number): TurnEvent[] {
   return Array.from({ length: count }, (_, index) => ({
-    kind: "preview" as const,
-    text: `p${index}`,
+    kind: "usage" as const,
+    observation: { summary: `p${index}` },
   }));
 }
 
 export interface LiveRun {
   readonly port: ProjectionPort;
   readonly runId: string;
+  readonly storeHome: string;
   readonly owner: RunOwner;
   readonly channel: RequestChannel;
+  reopen(): ProjectionPort;
   /** Let the injected execution return `succeeded`, then await the launch outcome. */
   finish(): Promise<void>;
 }
@@ -39,11 +41,20 @@ export interface LiveRun {
 /** Launch a Run whose injected execution holds its Turn open: the test drives every
  *  durable write, live overlay, and preview through the execution's own owner and
  *  request channel, so the update order and count are exact and no child spawns. */
-export async function openLiveRun(t: TestContext): Promise<LiveRun> {
+export async function openLiveRun(
+  t: TestContext,
+  options: {
+    scheduleHistoryPreview?: (
+      callback: () => void,
+      delayMs: number,
+    ) => () => void;
+  } = {},
+): Promise<LiveRun> {
   const catalog = openCatalog(makeTempDir("secant-lag-home-"));
   t.after(() => catalog.close());
   const workspace = realpathSync.native(makeTempDir("secant-lag-ws-"));
-  const runGroup = openRunGroup(makeTempDir("secant-lag-store-"), workspace);
+  const storeHome = makeTempDir("secant-lag-store-");
+  const runGroup = openRunGroup(storeHome, workspace);
   t.after(() => runGroup.close());
   let release!: () => void;
   const released = new Promise<void>((resolve) => {
@@ -56,6 +67,7 @@ export async function openLiveRun(t: TestContext): Promise<LiveRun> {
     },
   );
   const app = createApplication({
+    ...options,
     catalog,
     // Preflight resolves the Command Bundle's executable; nothing ever spawns.
     process: createFakeProcess({
@@ -96,8 +108,17 @@ export async function openLiveRun(t: TestContext): Promise<LiveRun> {
   return {
     port,
     runId: launched.runId!,
+    storeHome,
     owner,
     channel,
+    reopen: () =>
+      createApplication({
+        catalog,
+        process: createFakeProcess({}),
+        launchWorkspacePath: workspace,
+        hostPlatform: hostPlatform(),
+        runGroup,
+      }).projectionPort,
     async finish() {
       release();
       const outcome = await awaitSettled(port, "launch-lag");

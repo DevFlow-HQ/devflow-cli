@@ -30,8 +30,6 @@ export interface LiveOverlayState {
   /** The live Turn's Session commands (ADR 0040), which Steer admission refuses
    *  while the Turn works. */
   sessionCommands?: readonly string[];
-  activity?: string;
-  preview?: string;
   context?: RunLiveOverlay["context"];
   usage?: string;
   active: boolean;
@@ -54,6 +52,10 @@ export interface LiveOverlayChannel {
 interface ModelChangeListener {
   reported(runId: string, change: ModelChange): void;
   ended(runId: string): void;
+  message(
+    runId: string,
+    message: NonNullable<LiveObservation["message"]>,
+  ): void;
 }
 
 /** Own the Application's ephemeral Turn overlay behind one tracking accessor.
@@ -91,8 +93,6 @@ export function createLiveOverlay(
       phase: outstanding.length > 0 ? "awaiting-approval" : live.phase,
       outstanding,
       offers,
-      ...(live.activity !== undefined ? { activity: live.activity } : {}),
-      ...(live.preview !== undefined ? { preview: live.preview } : {}),
       ...(live.context !== undefined ? { context: live.context } : {}),
       ...(live.usage !== undefined ? { usage: live.usage } : {}),
     };
@@ -176,25 +176,16 @@ export function createLiveOverlay(
         if (tracking === undefined) return;
         const live = tracking.live;
         live.active = true;
-        if (observation.activity !== undefined)
-          live.activity = observation.activity;
+        if (observation.message !== undefined)
+          modelChanges.message(runId, observation.message);
         if (observation.context !== undefined)
           live.context = observation.context;
         if (observation.usage !== undefined) live.usage = observation.usage;
         if (
-          observation.preview !== undefined &&
-          observation.activity === undefined &&
           observation.context === undefined &&
           observation.usage === undefined
-        ) {
-          live.preview = observation.preview;
-          for (const observer of tracking.observers) {
-            observer.push({ kind: "preview", text: observation.preview });
-          }
+        )
           return;
-        }
-        if (observation.preview !== undefined)
-          live.preview = observation.preview;
         push(runId);
       },
     };

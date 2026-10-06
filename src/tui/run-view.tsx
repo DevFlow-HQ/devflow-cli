@@ -18,6 +18,7 @@ import type {
   RunLiveOverlay,
   RunGateReference,
   RunSnapshot,
+  SessionHistorySnapshot,
   TranscriptExportReference,
   TranscriptPageReference,
   TranscriptRead,
@@ -50,21 +51,28 @@ export type AnswerOutcome = SettleOutcome;
 export type TRunViewFreshness = TProjectionStreamHealth;
 
 /** The durable Run snapshot joined with its explicitly separate ephemeral Turn
- * overlay and replaceable assistant preview. The Port keeps those update kinds
+ * control overlay. The Port keeps those update kinds
  * distinct; this view seam preserves that distinction while giving the Workbench
  * one lifecycle-owned subscription. */
 export interface RunWorkbenchProjection {
   readonly snapshot: Accessor<RunSnapshot>;
   readonly live: Accessor<RunLiveOverlay | undefined>;
-  readonly preview: Accessor<string | undefined>;
   readonly freshness: Accessor<TRunViewFreshness>;
   reconnect(): void;
 }
 
 export interface RunWorkbenchView {
   /** Opens the `run` Projection for one Run id; closes it on cleanup of the
-   *  calling owner. Durable, live-overlay, and preview updates remain separate. */
+   *  calling owner. History opens separately by Session. */
   openRun(runId: string): RunWorkbenchProjection;
+  openHistory(
+    runId: string,
+    session: string,
+  ): {
+    readonly snapshot: Accessor<SessionHistorySnapshot>;
+    readonly freshness: Accessor<TRunViewFreshness>;
+    reconnect(): void;
+  };
   /** Resolves one output or diagnostic reference to its bytes, or a Problem. */
   readResource(
     reference: ResourceReference | DiagnosticReference,
@@ -162,6 +170,41 @@ export function createLiveRunWorkbenchView(
       followRunProjection(() =>
         port.openProjection({ family: "run", runId, prepareModelChoice: true }),
       ),
+    openHistory(runId, session) {
+      const followed = followProjectionUpdates<
+        SessionHistorySnapshot,
+        SessionHistorySnapshot
+      >({
+        open: () =>
+          port.openProjection({ family: "session-history", runId, session }),
+        seed: (snapshot) => snapshot,
+        reduce: (snapshot, update) => {
+          if (update.kind === "durable") return update.snapshot;
+          if (update.kind !== "history-preview" || !snapshot.result.found)
+            return snapshot;
+          const history = snapshot.result.history;
+          const rows = [
+            ...history.rows.filter(
+              (row) =>
+                row.id !== update.row.id && row.position >= update.windowStart,
+            ),
+            update.row,
+          ].sort((a, b) => a.position.localeCompare(b.position));
+          return {
+            ...snapshot,
+            result: {
+              found: true,
+              history: { ...history, rows, hasEarlier: update.hasEarlier },
+            },
+          };
+        },
+      });
+      return {
+        snapshot: followed.state,
+        freshness: followed.freshness,
+        reconnect: followed.reconnect,
+      };
+    },
     readResource: (reference) => port.readResource(reference),
     readTranscript: (reference) => port.readTranscript(reference),
     // The Gate answer: the same submit-and-settle protocol headless `run
@@ -244,10 +287,7 @@ export function createLiveRunWorkbenchView(
   };
 }
 
-/** Follow all three update lanes of an opened Run Projection. Preview-only
- * updates replace the current preview without changing the overlay generation;
- * a settling overlay is cleared once the durable `turn-settled` truth lands, so
- * replaceable text can never remain beside its authoritative content. */
+/** Follow Run facts and the control overlay. Session history owns message reconciliation. */
 function followRunProjection(
   open: () => OpenedProjection<RunSnapshot>,
 ): RunWorkbenchProjection {
@@ -259,7 +299,6 @@ function followRunProjection(
   return {
     snapshot: () => followed.state().snapshot,
     live: () => followed.state().live,
-    preview: () => followed.state().preview,
     freshness: followed.freshness,
     reconnect: followed.reconnect,
   };
@@ -268,8 +307,7 @@ function followRunProjection(
 interface FollowedRun {
   readonly snapshot: RunSnapshot;
   readonly live?: RunLiveOverlay;
-  readonly preview?: string;
-  readonly settledCountAtSettling?: number;
+  readonly terminalObserved?: true;
 }
 
 function reduceRunUpdate(
@@ -277,39 +315,36 @@ function reduceRunUpdate(
   update: ProjectionUpdate<RunSnapshot>,
 ): FollowedRun {
   if (update.kind === "durable") {
-    const settledCount = settledTurnCount(update.snapshot);
     const settled =
-      state.live?.phase === "settling" &&
-      state.settledCountAtSettling !== undefined &&
-      settledCount > state.settledCountAtSettling;
-    // Drop the live overlay and preview once the Turn's authoritative truth lands (the
-    // settling watermark passed) or once durable liveness leaves live-here. A lost Turn
+      settledTurnCount(update.snapshot) > settledTurnCount(state.snapshot);
+    // Drop the live overlay once the Turn's authoritative settlement lands or once durable liveness leaves live-here. A lost Turn
     // otherwise leaves the last overlay standing — a dead approval-request control over a
     // Run no longer live here, the header still claiming an ephemeral Harness Request (A8).
     if (settled || !isLiveHere(update.snapshot)) {
-      return { snapshot: update.snapshot };
+      return {
+        snapshot: update.snapshot,
+        ...(settled ? { terminalObserved: true } : {}),
+      };
     }
     return { ...state, snapshot: update.snapshot };
   }
   if (update.kind === "live") {
-    return {
-      ...state,
-      live: update.overlay,
-      preview: update.overlay.preview,
-      settledCountAtSettling:
-        update.overlay.phase === "settling"
-          ? settledTurnCount(state.snapshot)
-          : undefined,
-    };
+    if (update.overlay.phase === "settling" && state.terminalObserved === true)
+      return state;
+    if (
+      update.overlay.phase === "settling" &&
+      settledTurnCount(state.snapshot) > 0 &&
+      state.snapshot.result.found &&
+      !state.snapshot.result.run.actionOffers.some(
+        (offer) => offer.action === "interrupt-turn",
+      )
+    )
+      return { snapshot: state.snapshot, terminalObserved: true };
+    return { snapshot: state.snapshot, live: update.overlay };
   }
-  if (update.kind === "preview") {
-    return {
-      ...state,
-      preview: update.text.length > 0 ? update.text : undefined,
-    };
-  }
+
   // A `closed` update ends the follow (observer lagged, subject gone, shutdown) with
-  // the last live overlay still in state; clear it and the preview so a lost Turn
+  // the last live overlay still in state; clear it so a lost Turn
   // leaves no dead request control up (A8).
   if (update.kind === "closed") {
     return { snapshot: state.snapshot };

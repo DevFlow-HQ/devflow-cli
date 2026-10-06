@@ -353,15 +353,13 @@ export function registerClaudeCodeReplayerConformance(
       label: "claude-code",
       streaming: turnScenarios.baseline,
       live: [
-        { kind: "preview", text: "hel" },
-        { kind: "preview", text: "hello" },
         {
           kind: "assistant-content",
           content: "hello",
           parentActivity: "toolu_parent",
         },
       ],
-      previews: ["hel", "hello"],
+      previews: [],
       content: {
         kind: "assistant-content",
         content: "hello",
@@ -708,10 +706,26 @@ export function registerCodexReplayerConformance(
           env: {},
         }),
       live: [
-        { kind: "preview", text: "record" },
-        { kind: "preview", text: "recorded" },
-        { kind: "preview", text: "recorded completion" },
-        { kind: "preview", text: "recorded completion." },
+        {
+          kind: "message-preview",
+          messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+          content: "record",
+        },
+        {
+          kind: "message-preview",
+          messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+          content: "recorded",
+        },
+        {
+          kind: "message-preview",
+          messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+          content: "recorded completion",
+        },
+        {
+          kind: "message-preview",
+          messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+          content: "recorded completion.",
+        },
         {
           kind: "assistant-content",
           messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",

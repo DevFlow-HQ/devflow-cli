@@ -137,9 +137,20 @@ jobs:
           tests/composition/wiring.test.ts
       - name: m10-previous-release-conversation
         run: bun run test -- tests/run/store/conversation-migration.test.ts
+      - name: m10-session-history
+        run: >-
+          bun run test --
+          tests/application/session-history.test.ts
+          tests/application/observer-lag.test.ts
+          tests/harness/message-facts.test.ts
+          tests/tui/run-view.test.ts
+          tests/tui/run-workbench.test.tsx
+          tests/tui/live-run-workbench.test.tsx
       - name: m10-interruption-and-transcript
         run: >-
           bun run test --
+          tests/application/session-history.test.ts
+          tests/harness/message-facts.test.ts
           tests/run/store/session-and-transcript-evidence.test.ts
           tests/run/execution/agent.test.ts
           tests/application/transcript-resource.test.ts

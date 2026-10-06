@@ -185,6 +185,11 @@ function scriptedReadiness(
     selector: Extract<ProjectionSelector, { family: "launch-preparation" }>,
   ): OpenedProjection<LaunchPreparationSnapshot>;
   function open(
+    selector: Extract<ProjectionSelector, { family: "session-history" }>,
+  ): OpenedProjection<
+    import("../../src/application/projection-port.js").SessionHistorySnapshot
+  >;
+  function open(
     selector: Extract<ProjectionSelector, { family: "run" }>,
   ): OpenedProjection<RunSnapshot>;
   function open(

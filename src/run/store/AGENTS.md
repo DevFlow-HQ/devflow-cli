@@ -99,7 +99,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
 - Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session — two Sessions' Turns
   interleave in one numbering.
-- `turn_event.payload` is Secant-shaped JSON, never a raw protocol frame. The Store validates conversation message and delivered-Steer metadata at ingress;
+- `turn_event.payload` is Secant-shaped JSON, never a raw protocol frame. The Store validates message and delivered-Steer metadata, preserving `historyOrder`;
   other event evidence stays opaque and the Projection reads it tolerantly. An unrecognized event kind projects nothing.
 - There are no foreign keys and no `foreign_keys` pragma anywhere in either schema (only `busy_timeout` is set), so referential integrity rests entirely on the write
   transactions that keep related rows consistent; nothing the database enforces stands behind them.

@@ -77,7 +77,11 @@ function streamed(count: number): TurnEvent[] {
       case 0:
         return { kind: "assistant-content", content: SEEDED_CONTENT };
       case 1:
-        return { kind: "preview", text: SEEDED_CONTENT };
+        return {
+          kind: "message-preview",
+          messageId: "preview-message",
+          content: SEEDED_CONTENT,
+        };
       default:
         return { kind: "activity", description: SEEDED_CONTENT };
     }

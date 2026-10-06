@@ -1373,8 +1373,6 @@ test("one stream-json Turn yields normalized events and an authoritative complet
       "session",
       "model",
       "activity",
-      "preview",
-      "preview",
       "assistant-content",
       "tool-activity",
       "tool-activity",
@@ -1383,9 +1381,11 @@ test("one stream-json Turn yields normalized events and an authoritative complet
     ],
   );
   assert.deepEqual(
-    events.flatMap((event) => (event.kind === "preview" ? [event.text] : [])),
-    ["hel", "hello"],
-    "each preview replaces the prior value with accumulated text",
+    events.flatMap((event) =>
+      event.kind === "message-preview" ? [event.content] : [],
+    ),
+    [],
+    "unqualified streaming identity produces no message preview",
   );
   const sessionEvent = events.find((event) => event.kind === "session");
   assert.equal(sessionEvent?.kind, "session");

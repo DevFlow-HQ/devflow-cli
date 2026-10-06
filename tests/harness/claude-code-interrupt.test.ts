@@ -338,6 +338,13 @@ for (const containment of ["contained", "fallback"] as const) {
               {
                 type: "stream_event",
                 event: {
+                  type: "message_start",
+                  message: { id: "preview-message" },
+                },
+              },
+              {
+                type: "stream_event",
+                event: {
                   type: "content_block_delta",
                   delta: { type: "text_delta", text: "unfinished" },
                 },
@@ -359,7 +366,7 @@ for (const containment of ["contained", "fallback"] as const) {
       await new Promise<void>((resolve) =>
         turn.subscribe((event) => {
           events.push(event);
-          if (event.kind === "preview") resolve();
+          if (event.kind === "message-preview") resolve();
         }),
       );
       let settled = false;
@@ -375,7 +382,10 @@ for (const containment of ["contained", "fallback"] as const) {
       assert.equal(settled, false);
       const terminalFacts = (trace: readonly TurnEvent[]) =>
         trace
-          .filter((event) => event.kind === "steer" || event.kind === "preview")
+          .filter(
+            (event) =>
+              event.kind === "steer" || event.kind === "message-preview",
+          )
           .map((event) =>
             event.kind === "steer"
               ? {
@@ -395,7 +405,11 @@ for (const containment of ["contained", "fallback"] as const) {
         },
       ];
       assert.deepEqual(terminalFacts(events), [
-        { kind: "preview", text: "unfinished" },
+        {
+          kind: "message-preview",
+          messageId: "preview-message",
+          content: "unfinished",
+        },
         ...expected,
       ]);
       const replay: TurnEvent[] = [];

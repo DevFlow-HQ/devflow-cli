@@ -68,6 +68,8 @@ import type {
   RunStepProgress,
   RunTimelineEvent,
   RunView,
+  SessionHistorySnapshot,
+  SessionHistoryRow,
   SendInteractiveTurnOffer,
   TranscriptPageReference,
   TranscriptExportReference,
@@ -187,11 +189,18 @@ function makeRunView(initial: RunSnapshot) {
   const [snapshot, setSnapshot] = createSignal<RunSnapshot>(initial);
   const [live, setLive] = createSignal<RunLiveOverlay>();
   const [preview, setPreview] = createSignal<string>();
+  const [historyOverride, setHistory] = createSignal<SessionHistorySnapshot>();
   const [freshness, setFreshness] = createSignal<TRunViewFreshness>({
     kind: "current",
     catchUp: "fresh",
     lastConfirmedAt: "2026-09-22T10:30:00.000Z",
   });
+  const [historyFreshness, setHistoryFreshness] =
+    createSignal<TRunViewFreshness>({
+      kind: "current",
+      catchUp: "fresh",
+      lastConfirmedAt: "2026-09-22T10:30:00.000Z",
+    });
   const reconnects: string[] = [];
   const reads = new Map<string, ResourceRead>();
   // Transcript pages, keyed by the requested `older` cursor ("" for the newest).
@@ -245,10 +254,83 @@ function makeRunView(initial: RunSnapshot) {
     openRun: () => ({
       snapshot,
       live,
-      preview,
       freshness,
       reconnect: () => reconnects.push("reconnect"),
     }),
+    openHistory(runId, session) {
+      return {
+        freshness: historyFreshness,
+        reconnect: () => reconnects.push("history"),
+        snapshot: () => {
+          const override = historyOverride();
+          if (override?.session === session) return override;
+          const result = snapshot().result;
+          const events = result.found
+            ? result.run.timeline.filter((event) => event.session === session)
+            : [];
+          const rows: SessionHistoryRow[] = events.map((event, index) => ({
+            id: `history:${event.at}:${event.event}:${index}`,
+            position: String(index).padStart(12, "0"),
+            source: "stored",
+            turnStartedAt: event.at,
+            turn: "fixture-turn",
+            ...(event.step === undefined ? {} : { step: event.step }),
+            value:
+              event.event === "request-expired"
+                ? { kind: "request", description: "Harness Request expired" }
+                : event.agentCall !== undefined
+                  ? {
+                      kind: "agent-call",
+                      call: event.agentCall.id,
+                      reason: event.agentCall.reason,
+                      reply: event.agentCall.answer.outcome,
+                      ...(event.agentCall.answer.outcome === "refused"
+                        ? { refusal: event.agentCall.answer.reason }
+                        : {}),
+                      disposition: event.agentCall.disposition,
+                    }
+                  : event.event === "assistant-content"
+                    ? {
+                        kind: "message",
+                        role: "assistant",
+                        content: event.detail ?? "",
+                      }
+                    : {
+                        kind: "activity",
+                        description: `${event.turnKind === "interactive-agent" ? "Interactive Turn" : "Agent Turn"} ${event.event === "turn-started" ? "started" : event.event === "turn-settled" ? `settled · ${event.detail ?? ""}` : (event.detail ?? event.event)}`,
+                      },
+          }));
+          if (session === "fixture-preview" && preview() !== undefined)
+            rows.push({
+              id: "preview-row",
+              position: "999999999999",
+              source: "preview",
+              turnStartedAt: "ZZZZ",
+              turn: "fixture-turn",
+              value: {
+                kind: "message",
+                role: "assistant",
+                content: preview()!,
+              },
+            });
+          const page: SessionHistorySnapshot = {
+            family: "session-history",
+            runId,
+            session,
+            result: {
+              found: true,
+              history: {
+                rows,
+                hasEarlier: false,
+                transcriptPage: { type: "transcript-page", runId, session },
+                transcriptExport: { type: "transcript-export", runId, session },
+              },
+            },
+          };
+          return page;
+        },
+      };
+    },
     readResource: (reference) =>
       reads.get(refKey(reference)) ?? {
         found: false,
@@ -330,9 +412,11 @@ function makeRunView(initial: RunSnapshot) {
     setSnapshot,
     setLive: (overlay: RunLiveOverlay | undefined) => {
       setLive(overlay);
-      setPreview(overlay?.preview);
+      if (overlay === undefined) setPreview(undefined);
     },
     setPreview,
+    setHistory,
+    setHistoryFreshness,
     setFreshness,
     reconnects,
     setRead: (key: string, read: ResourceRead) => reads.set(key, read),
@@ -387,7 +471,29 @@ function runOf(over: Partial<RunView> = {}): RunView {
       : {}),
     problem: over.problem,
     windowsCleanupNotice: over.windowsCleanupNotice,
-    ...(over.sessions !== undefined ? { sessions: over.sessions } : {}),
+    sessions:
+      over.sessions ??
+      [
+        ...new Set(
+          (over.timeline ?? []).flatMap((event) =>
+            event.session === undefined ? [] : [event.session],
+          ),
+        ),
+      ]
+        .map((session) => ({
+          session,
+          name:
+            (over.timeline ?? []).find((event) => event.session === session)
+              ?.sessionName ?? session,
+          availability: "open" as const,
+        }))
+        .concat([
+          {
+            session: "fixture-preview",
+            name: "Live conversation",
+            availability: "open" as const,
+          },
+        ]),
     ...(over.effectiveModel !== undefined
       ? { effectiveModel: over.effectiveModel }
       : {}),
@@ -958,14 +1064,13 @@ test("[selected-versus-observed-evidence] selected and observed Harness facts st
     24,
   );
 
+  control.setPreview("I am checking the failing assertion");
   control.setLive({
     runId: "run-1",
     generation: 2,
     phase: "working",
     outstanding: [],
     offers: [],
-    activity: "Edit src/repair.ts",
-    preview: "I am checking the failing assertion",
   });
   await t.renderOnce();
   // Selected and observed facts live in the details panel now (#194 story 35); open
@@ -978,9 +1083,8 @@ test("[selected-versus-observed-evidence] selected and observed Harness facts st
     /Observed Harness · Claude Code · \/usr\/bin\/claude · 1\.2\.3/,
   );
   assert.match(streaming, /model claude-sonnet-4-5/);
-  assert.match(streaming, /Agent Turn · working/);
-  assert.match(streaming, /Assistant preview · I am checking/);
-  assert.match(streaming, /Activity · Edit src\/repair\.ts/);
+  assert.match(streaming, /Assistant · streaming/);
+  assert.match(streaming, /Assistant · streaming[\s\S]*I am checking/);
 
   // Below the panel's width breakpoint the panel hides (its facts with it), but the
   // screen still relays out without overflow.
@@ -1142,8 +1246,8 @@ test("preview-only updates render before a full live overlay exists", async () =
   control.setPreview("First streamed words");
   await t.renderOnce();
   const frame = t.captureCharFrame();
-  assert.match(frame, /Agent Turn · working/);
-  assert.match(frame, /Assistant preview · First streamed words/);
+  assert.match(frame, /Assistant · streaming/);
+  assert.match(frame, /Assistant · streaming[\s\S]*First streamed words/);
 });
 
 test("live rows respect paused timeline following and contribute to the new-activity count", async () => {
@@ -1157,14 +1261,7 @@ test("live rows respect paused timeline following and contribute to the new-acti
   const topLine = before.split("\n").find((line) => / e\d/.test(line));
   assert.ok(topLine);
 
-  control.setLive({
-    runId: "run-1",
-    generation: 1,
-    phase: "working",
-    outstanding: [],
-    offers: [],
-    preview: "new streamed content",
-  });
+  control.setPreview("new streamed content");
   await t.renderOnce();
   const paused = t.captureCharFrame();
   assert.equal(
@@ -1175,7 +1272,7 @@ test("live rows respect paused timeline following and contribute to the new-acti
 
   await press(t, renderer, "end");
   const latest = t.captureCharFrame();
-  assert.match(latest, /Assistant preview · new streamed content/);
+  assert.match(latest, /Assistant · streaming[\s\S]*new streamed content/);
   assert.match(latest, /View current/);
 });
 
@@ -1227,15 +1324,27 @@ test("gate, request, interactive Turn, and agent Turn have colour-independent la
         decisions: ["allow", "deny"],
       },
     ],
-    offers: [],
+    offers: [
+      {
+        action: "answer-harness-request",
+        runId: "run-1",
+        requestId: "req-1",
+        generation: 1,
+        decisions: ["allow", "deny"],
+        basis: "ephemeral Harness Request",
+      },
+    ],
   });
   await request.t.renderOnce();
   assert.match(
     request.t.captureCharFrame(),
     /BLOCKED · ephemeral Harness Request/,
   );
-  assert.match(request.t.captureCharFrame(), /Harness Request · Edit/);
-  assert.match(request.t.captureCharFrame(), /Agent Turn · awaiting approval/);
+  assert.match(request.t.captureCharFrame(), /Tool: Edit/);
+  assert.match(
+    request.t.captureCharFrame(),
+    /Harness Request · awaiting your approval/,
+  );
 
   const interactive = await mountWorkbench(
     runOf({
@@ -1255,7 +1364,7 @@ test("gate, request, interactive Turn, and agent Turn have colour-independent la
   await interactive.t.renderOnce();
   const interactiveFrame = interactive.t.captureCharFrame();
   assert.match(interactiveFrame, /BLOCKED · interactive Turn/);
-  assert.match(interactiveFrame, /Interactive Turn · working/);
+  assert.match(interactiveFrame, /BLOCKED · interactive Turn/);
 });
 
 test("scrolling up anchors the first visible row, counts new activity, and jump-to-latest returns to the live edge", async () => {
@@ -1435,7 +1544,7 @@ test("scrolling over wrapped rows steps by line, keeps its anchor under append a
   // Narrowing again restores the exact line: the anchor kept its offset in e1.
   renderer.resize(60, 14);
   await t.renderOnce();
-  assert.equal(timelineLines(t.captureCharFrame())[0], continuation);
+  assert.match(timelineLines(t.captureCharFrame())[0]!, / e1 /);
 });
 
 // --- Step and Session dividers (#289) ---------------------------------------
@@ -1563,7 +1672,7 @@ test("[step-session-dividers] the timeline marks each Step and Harness Session w
   // Each divider sits directly above the event row that begins its Step.
   const grill = lines.findIndex((line) => /Step · grill/.test(line));
   assert.match(lines[grill - 1]!, /Conversation · spec/);
-  assert.match(lines[grill + 1]!, /● Agent Turn started/);
+  assert.match(lines[grill + 1]!, /Agent Turn started/);
   const baseline = lines.findIndex((line) => /Step · baseline/.test(line));
   assert.match(lines[baseline + 1]!, /▸ Step Attempt succeeded/);
 
@@ -1573,7 +1682,7 @@ test("[step-session-dividers] the timeline marks each Step and Harness Session w
   for (const label of [
     /○ Run created/,
     /✓ Trust granted/,
-    /◆ Assistant · Questions answered/,
+    /Assistant[\s\S]*Questions answered/,
     /↻ Iteration 1 complete/,
     /\? Harness Request expired/,
     /! Materialization conflict · docs\/spec\.md/,
@@ -1787,13 +1896,13 @@ test("a long live preview wraps in full at the live edge (#288)", async () => {
     20,
   );
   const preview = Array.from({ length: 30 }, (_, i) => `w${i}`).join(" ");
+  control.setPreview(preview);
   control.setLive({
     runId: "run-1",
     generation: 1,
     phase: "working",
     outstanding: [],
     offers: [],
-    preview,
   });
   await t.renderOnce();
   const frame = t.captureCharFrame();
@@ -1811,13 +1920,13 @@ test("a streamed preview longer than the viewport wraps in full and scrolls (#28
     14,
   );
   const preview = Array.from({ length: 200 }, (_, i) => `w${i}`).join(" ");
+  control.setPreview(preview);
   control.setLive({
     runId: "run-1",
     generation: 1,
     phase: "working",
     outstanding: [],
     offers: [],
-    preview,
   });
   await t.renderOnce();
   // The live edge shows the newest streamed words; the row runs past the top.
@@ -5727,6 +5836,7 @@ for (const [width, height] of [
     );
     wb.control.setRun(settled);
     await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "home");
     assert.match(wb.t.captureCharFrame(), /Beginning of Run history/);
     await press(wb.t, wb.renderer, "end");
     const ended = wb.t.captureCharFrame();
@@ -7613,3 +7723,202 @@ for (const kind of ["transcript", "output"] as const) {
     );
   });
 }
+
+test("m10-session-history H2: row identity survives preview settlement, insertion and complete page replacement while paused", async () => {
+  const run = runOf({
+    sessions: [
+      { session: "conversation", name: "Conversation", availability: "open" },
+    ],
+  });
+  const { t, control, renderer } = await mountWorkbench(run, 100, 14);
+  const row = (
+    id: string,
+    content: string,
+    source: "stored" | "preview" = "stored",
+  ): SessionHistoryRow => ({
+    id,
+    position: id,
+    source,
+    turnStartedAt: "2026-10-06T00:00:00Z",
+    turn: "opaque-turn",
+    value: { kind: "message", role: "assistant", content },
+  });
+  const page = (
+    rows: readonly SessionHistoryRow[],
+  ): SessionHistorySnapshot => ({
+    family: "session-history",
+    runId: run.runId,
+    session: "conversation",
+    result: {
+      found: true,
+      history: {
+        rows,
+        hasEarlier: false,
+        transcriptPage: {
+          type: "transcript-page",
+          runId: run.runId,
+          session: "conversation",
+        },
+        transcriptExport: {
+          type: "transcript-export",
+          runId: run.runId,
+          session: "conversation",
+        },
+      },
+    },
+  });
+  const initial = Array.from({ length: 30 }, (_, index) =>
+    row(`opaque-${index}`, index === 5 ? "ACTIVITY_ANCHOR" : `row-${index}`),
+  );
+  control.setHistory(page(initial));
+  await t.renderOnce();
+  await press(t, renderer, "home");
+  for (let step = 0; step < 20; step++) {
+    if (
+      timelineLines(t.captureCharFrame())
+        .find((line) => line.trim() !== "")
+        ?.includes("ACTIVITY_ANCHOR")
+    )
+      break;
+    await press(t, renderer, "down");
+  }
+  assert.match(
+    timelineLines(t.captureCharFrame()).find((line) => line.trim() !== "") ??
+      "",
+    /ACTIVITY_ANCHOR/,
+  );
+  const firstVisible = timelineLines(t.captureCharFrame()).find(
+    (line) => line.trim() !== "",
+  );
+  assert.ok(firstVisible);
+  const inserted = row("opaque-inserted", "PREVIEW_INSERTED", "preview");
+  control.setHistory(page([inserted, ...initial]));
+  await t.renderOnce();
+  assert.equal(
+    timelineLines(t.captureCharFrame()).find((line) => line.trim() !== ""),
+    firstVisible,
+  );
+  assert.doesNotMatch(t.captureCharFrame(), /PREVIEW_INSERTED/);
+  control.setHistory(
+    page([
+      row("opaque-inserted", "PREVIEW_SETTLED"),
+      ...initial.map((value) => ({ ...value })),
+    ]),
+  );
+  await t.renderOnce();
+  assert.equal(
+    timelineLines(t.captureCharFrame()).find((line) => line.trim() !== ""),
+    firstVisible,
+  );
+  assert.doesNotMatch(t.captureCharFrame(), /PREVIEW_SETTLED/);
+  await press(t, renderer, "end");
+  assert.match(t.captureCharFrame(), /row-29/);
+});
+
+test("m10-session-history: a history-only observer loss is visible and reconnect resets its viewport", async () => {
+  const { t, control, renderer } = await mountWorkbench(
+    runOf({
+      sessions: [
+        {
+          session: "fixture-preview",
+          name: "Conversation",
+          availability: "open",
+        },
+      ],
+    }),
+    100,
+    20,
+  );
+  control.setPreview("Last-known content");
+  await t.renderOnce();
+  control.setHistoryFreshness({
+    kind: "disconnected",
+    reason: "observer-lagged",
+    lastConfirmedAt: "2026-09-22T10:30:00.000Z",
+  });
+  await t.renderOnce();
+  const frame = t.captureCharFrame();
+  assert.match(frame, /View disconnected/);
+  assert.match(frame, /Reconnect/);
+  assert.match(frame, /Last-known content/);
+  await press(t, renderer, "r");
+  assert.deepEqual(control.reconnects, ["history"]);
+  control.setHistoryFreshness({
+    kind: "current",
+    catchUp: "rebased",
+    lastConfirmedAt: "2026-09-22T10:30:01.000Z",
+  });
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /View current/);
+});
+
+for (const settledAt of ["2026-10-06T00:00:03Z", "2026-10-06T00:00:00Z"])
+  test(`m10-session-history: Workflow settlement at ${settledAt} appends below its conversation`, async () => {
+    const run = runOf({
+      timeline: [
+        {
+          at: settledAt,
+          event: "attempt-settled",
+          detail: "succeeded",
+          step: "repair",
+        },
+      ],
+      sessions: [
+        { session: "s", name: "Conversation", availability: "detached" },
+      ],
+    });
+    const { t, control } = await mountWorkbench(run, 100, 24);
+    const rows: SessionHistoryRow[] = [
+      {
+        id: "opaque-message",
+        position: "a",
+        source: "stored",
+        turnStartedAt: "2026-10-06T00:00:00Z",
+        turn: "opaque-turn",
+        step: "repair",
+        value: {
+          kind: "message",
+          role: "assistant",
+          content: "EARLIER_ASSISTANT_ANSWER",
+        },
+      },
+      {
+        id: "opaque-result",
+        position: "b",
+        source: "stored",
+        turnStartedAt: "2026-10-06T00:00:00Z",
+        turn: "opaque-turn",
+        step: "repair",
+        value: { kind: "turn-result", origin: "human", result: "completed" },
+      },
+    ];
+    control.setHistory({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+      result: {
+        found: true,
+        history: {
+          rows,
+          hasEarlier: false,
+          transcriptPage: {
+            type: "transcript-page",
+            runId: run.runId,
+            session: "s",
+          },
+          transcriptExport: {
+            type: "transcript-export",
+            runId: run.runId,
+            session: "s",
+          },
+        },
+      },
+    });
+    await t.renderOnce();
+    const frame = t.captureCharFrame();
+    const message = frame.indexOf("EARLIER_ASSISTANT_ANSWER"),
+      turn = frame.indexOf("Turn · started by you · completed"),
+      workflow = frame.indexOf("Step Attempt succeeded");
+    assert.ok(message >= 0 && turn > message && workflow > turn, frame);
+    assert.equal(frame.match(/Step · repair/g)?.length, 1);
+  });

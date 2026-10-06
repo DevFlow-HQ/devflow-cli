@@ -648,9 +648,17 @@ runTurnProducerTraceCases(
         fake({
           events: [
             SESSION_OPEN,
-            { kind: "preview", text: "hel" },
+            {
+              kind: "message-preview",
+              messageId: "preview-message",
+              content: "hel",
+            },
             { kind: "activity", description: "between deltas" },
-            { kind: "preview", text: "hello" },
+            {
+              kind: "message-preview",
+              messageId: "preview-message",
+              content: "hello",
+            },
             { kind: "assistant-content", content: "hello" },
           ],
           pace: async () => {},
@@ -658,8 +666,12 @@ runTurnProducerTraceCases(
         }),
       ),
     live: [
-      { kind: "preview", text: "hel" },
-      { kind: "preview", text: "hello" },
+      { kind: "message-preview", messageId: "preview-message", content: "hel" },
+      {
+        kind: "message-preview",
+        messageId: "preview-message",
+        content: "hello",
+      },
       { kind: "assistant-content", content: "hello" },
     ],
     previews: ["hel", "hello"],

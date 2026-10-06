@@ -1,6 +1,6 @@
 # Message fact qualification
 
-#411 consumes message identity and settlement only from the authentic recordings below.
+#411 and #412 consume message identity, streaming text and settlement only from the authentic recordings below.
 Their existing `recording.json` files own recording time, version, redactions and refresh commands.
 No fixture bytes changed. Synthetic scripts establish terminal races and ordering only.
 
@@ -13,7 +13,10 @@ Claude Code `interrupt/turn-1.stdout`, version 2.1.288, qualifies streaming
 `event.type: message_start`, `event.message.id`, `parent_tool_use_id`, and
 `text_delta` text. It contains the partial text `#`. The native-Adapter test retains
 that text with `incomplete: true` when interrupted, before authoritative result settlement.
-An unidentified synthetic preview stays absent from the stored conversation.
+An unidentified synthetic preview stays absent from live history and the stored conversation.
+The same qualified id accompanies every complete `message-preview` replacement.
+A copied authentic stream followed by a synthetic successful result tests unfinished
+text at a successful terminal boundary; it establishes a semantic race, not a new wire field.
 `steer-within/steered.stdout`, also 2.1.288, contains matching streaming and full-message ids.
 The synthetic `two-turns` recording supplies no native qualification.
 

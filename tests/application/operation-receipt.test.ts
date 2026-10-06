@@ -299,7 +299,7 @@ test("operation-receipt-identity-and-lifetime: a lagged Run observer leaves its 
   );
   const waiting = receiptReaders.map((reader) => reader.next());
   for (let index = 0; index <= UNREAD_UPDATE_BOUND; index++)
-    run.channel.observe({ preview: `p${index}` });
+    run.channel.observe({ usage: `p${index}` });
   const slowReader = slow.updates[Symbol.asyncIterator]();
   assert.deepEqual(await slowReader.next(), {
     done: false,

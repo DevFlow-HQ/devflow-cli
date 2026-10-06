@@ -89,10 +89,12 @@ function runViewOf(run: RunView): RunWorkbenchView {
     result: { found: true, run },
   });
   return {
+    openHistory() {
+      throw new Error("history not used in this test");
+    },
     openRun: () => ({
       snapshot,
       live: () => undefined,
-      preview: () => undefined,
       freshness: () => ({
         kind: "current",
         catchUp: "fresh",
@@ -144,10 +146,12 @@ function disappearingRunView(run: RunView): {
   const base = runViewOf(run);
   return {
     view: {
+      openHistory() {
+        throw new Error("history not used in this test");
+      },
       openRun: () => ({
         snapshot,
         live: () => undefined,
-        preview: () => undefined,
         freshness: () => ({
           kind: "current",
           catchUp: "rebased",
@@ -201,10 +205,12 @@ function missingRunView(run: RunView): RunWorkbenchView {
     },
   });
   return {
+    openHistory() {
+      throw new Error("history not used in this test");
+    },
     openRun: () => ({
       snapshot,
       live: () => undefined,
-      preview: () => undefined,
       freshness: () => ({
         kind: "current",
         catchUp: "fresh",

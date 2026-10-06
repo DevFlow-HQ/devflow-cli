@@ -2261,7 +2261,8 @@ class ClaudeCodeTurn implements HarnessTurn {
           .join("");
         if (block.text !== undefined && !emittedText) {
           emittedText = true;
-          this.producer.clearPreview(frame.message.id);
+          if (frame.message.id !== undefined)
+            this.producer.clearPreview(frame.message.id);
           this.lastObservation = `assistant content: ${truncate(content)}`;
           this.producer.emit({
             kind: "assistant-content",

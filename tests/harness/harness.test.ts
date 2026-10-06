@@ -51,7 +51,7 @@ test("the closed vocabulary sets are exactly what the Interface fixes", () => {
       "request-raised",
       "request-answered",
       "request-expired",
-      "preview",
+      "message-preview",
       "context",
       "usage",
       "activity",

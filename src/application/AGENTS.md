@@ -10,7 +10,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   A fresh Application learns a notice only from a new fallback launch; the notice is not persisted Run truth.
 - Every canonical Run write goes through `observedOwner`, whose getter reads the refreshed `record`. It intercepts `selectHarness`, `selectModelChoice`,
   `changeModelChoice`, `writeState`, `publishAttempt`, `recordMaterializationConflict`, `recordGateAnswer`, `recordPendingGate`, `admitTurn`,
-  and Steer and Agent call `appendTurnEvent` writes, pushing after commit. A new owner method compiles without pushing unless intercepted (A3).
+  every `appendTurnEvent`, and `settleTurn`, pushing after commit. A new owner method compiles without pushing unless intercepted (A3).
   A `run` Projection joins the Run-scoped observer Set even while rested; later tracking entries reuse it so resume and human drivers cannot orphan the stream.
 - `answer-human-gate` serves two gate mechanisms off one Port operation (#108). The Projection derivation decides which: `derived.pendingGate` present is an
   **authored** gate, answered by settling its producing Attempt through `observedOwner.publishAttempt` (into `attempt_log`, so the resumed walk skips the gate) —
@@ -89,9 +89,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Tracked Operation admission, outcome, and replay carry their `runId`; pre-Run Operations omit it (#331). Application reports its own committed rests
   (cancel, Gate stop, prepare refusal, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
-- Steer and Agent-call `appendTurnEvent` writes push a durable snapshot immediately (#356, #372). Other Turn writes push no snapshot until an intercepted write;
-  activity reaches open clients through the separate live overlay. The Projection validates Steer payloads and exposes full text separately from capped timeline detail.
-  Transcript Resources retain opaque entry ids across reads and prepend (#411), independent of live history. Headless excludes them; pages retain 20 entries.
+- `session-history` (#412) bounds stored/live rows together at 200 and issues subscription ids/positions. Reconcile pages before publication; previews share a 50 ms budget.
+  Settlement cancels stale previews; the last observer cancels the timer. Admitted appends carry `historyOrder`, retained through shutdown's partial settlements.
+  Transcript Resources retain separate entry ids across reads/prepend, excluded from headless; pages still hold 20 entries.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and
   independently exposes the latest Agent-step Attempt's normalized name/executable/version as `run.harness` plus its sibling `effectiveModel` (#125, #147).
   Resume may replace only the observed fields; Command-only Runs omit both selection and observations.

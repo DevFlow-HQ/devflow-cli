@@ -46,8 +46,8 @@ async function stillPending(pending: Promise<unknown>): Promise<boolean> {
 function previewText(
   result: IteratorResult<ProjectionUpdate<RunSnapshot>>,
 ): string | undefined {
-  return !result.done && result.value.kind === "preview"
-    ? result.value.text
+  return !result.done && result.value.kind === "live"
+    ? result.value.overlay.usage
     : undefined;
 }
 
@@ -89,7 +89,7 @@ test("a slow observer retains every update up to the bound in order, uncoalesced
   for (let index = 0; index < RETAINED_UPDATES; index += 1) {
     if (index === 10) run.owner.writeState("running");
     else if (index === 20) run.channel.raised({ ...REQUEST });
-    else run.channel.observe({ preview: `p${index}` });
+    else run.channel.observe({ usage: `p${index}` });
   }
 
   for (let index = 0; index < RETAINED_UPDATES; index += 1) {
@@ -121,7 +121,7 @@ test("one update past the bound ends only the slow subscription, once, while a h
   const healthy = openRun(t, run);
 
   for (let index = 0; index <= RETAINED_UPDATES; index += 1) {
-    run.channel.observe({ preview: `p${index}` });
+    run.channel.observe({ usage: `p${index}` });
     // The healthy observer reads each update as it lands.
     assert.equal(previewText(await healthy.next()), `p${index}`);
   }
@@ -131,7 +131,7 @@ test("one update past the bound ends only the slow subscription, once, while a h
   await assertLagged(slow.next);
 
   // Later updates never reach the ended subscription; the healthy one keeps them.
-  run.channel.observe({ preview: "after" });
+  run.channel.observe({ usage: "after" });
   assert.equal(previewText(await healthy.next()), "after");
   assert.deepEqual(await slow.next(), { done: true, value: undefined });
 
@@ -153,7 +153,7 @@ test("reopening after observer-lagged reads the current snapshot and live overla
 
   run.channel.raised({ ...REQUEST });
   for (let index = 0; index < RETAINED_UPDATES; index += 1) {
-    run.channel.observe({ preview: `p${index}` });
+    run.channel.observe({ usage: `p${index}` });
   }
   await assertLagged(slow.next);
   slow.opened.close();
@@ -172,7 +172,7 @@ test("reopening after observer-lagged reads the current snapshot and live overla
       ["req-edit"],
     );
     assert.equal(overlay.offers[0]?.generation, overlay.generation);
-    assert.equal(overlay.preview, `p${RETAINED_UPDATES - 1}`);
+    assert.equal(overlay.usage, `p${RETAINED_UPDATES - 1}`);
   }
   assert.equal(await stillPending(reopened.next()), true);
   await run.finish();
@@ -185,12 +185,12 @@ test("an oversized update is retained alone, and an update queued behind it ends
   const oversized = "x".repeat(RETAINED_UNITS + 1);
 
   // An empty backlog admits one update even past the payload budget.
-  run.channel.observe({ preview: oversized });
+  run.channel.observe({ usage: oversized });
   assert.equal(previewText(await reader.next())?.length, oversized.length);
 
   // The reader drained it, so the next update lands in an empty backlog again;
   // the slow observer still holds the oversized one and overflows.
-  run.channel.observe({ preview: "after" });
+  run.channel.observe({ usage: "after" });
   assert.equal(previewText(await reader.next()), "after");
   await assertLagged(slow.next);
   await run.finish();
@@ -200,17 +200,18 @@ test("retained payload bounds the backlog exactly at its budget, well below the 
   const run = await openLiveRun(t);
   const reader = openRun(t, run);
   const slow = openRun(t, run);
-  const half = "y".repeat(RETAINED_UNITS / 2);
+  // The retained overlay adds 86 units for its fixed keys and values.
+  const half = "y".repeat(RETAINED_UNITS / 2 - 86);
 
   // Two halves fill both backlogs exactly to the budget; neither overflows.
-  run.channel.observe({ preview: half });
-  run.channel.observe({ preview: half });
+  run.channel.observe({ usage: half });
+  run.channel.observe({ usage: half });
   assert.equal(previewText(await reader.next()), half);
   assert.equal(previewText(await reader.next()), half);
 
   // One more unit overflows the slow observer at a backlog of two updates; the
   // drained reader takes it.
-  run.channel.observe({ preview: "z" });
+  run.channel.observe({ usage: "z" });
   assert.equal(previewText(await reader.next()), "z");
   await assertLagged(slow.next);
   await run.finish();

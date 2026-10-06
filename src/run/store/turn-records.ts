@@ -64,12 +64,14 @@ const harnessSessionRow = z.object({
 // Unknown or unqualified metadata remains absent.
 const assistantMessage = z.object({
   messageId: z.string().min(1),
+  historyOrder: z.number().int().nonnegative().optional(),
   content: z.string(),
   incomplete: z.literal(true).optional(),
   parentActivity: z.string().optional(),
 });
 const deliveredSteer = z.object({
   steerId: z.string().min(1),
+  historyOrder: z.number().int().nonnegative().optional(),
   text: z.string(),
   sentAt: z.string(),
   settlement: z.object({

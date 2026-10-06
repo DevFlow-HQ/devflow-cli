@@ -132,7 +132,7 @@ export function wrapRows(
       typeof row === "string" ? { rules: [], text: row } : row;
     const wrapped = [
       ...rules.flatMap((rule) => ruleLines(rule, width)),
-      ...wrap(text, width, hang),
+      ...text.split(/\r?\n/).flatMap((line) => wrap(line, width, hang)),
     ];
     for (const line of wrapped) lines.push(line);
     heights.push(wrapped.length);

@@ -22,11 +22,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   (#389). Confirmation lifecycle rules live in [Workbench interaction](../../docs/agents/tui-workbench.md).
 - `follow.ts` alone owns Projection observer health and reconnect ordering. A terminal update preserves last-known state as `disconnected`; explicit reconnect
   crosses `loading` and `catching-up` before `current`. Workbench Operation controls read only current offers, while timeline live-edge remains a separate scroll fact.
-- The timeline's scroll/live-edge/anchor/new-activity is a pure reducer over row heights (`run-timeline.ts`), not OpenTUI's `<scrollbox>` (which OpenCode's
-  session timeline uses). `run-timeline-rows.ts` joins append-only durable history with stable-key replaceable live tail rows. The Seam takes each row's
-  display-line count: it scrolls display lines (a page is half the viewport, OpenCode's), but a paused anchor is a `row` plus a line `offset`, so it keeps
-  naming the same first-visible row while rows land and across a resize that rewraps them, and the new-activity count is rows with a line below the viewport.
-  Neither invariant exists in the scrollbox.
+- Workbench history (#412) consumes keyed complete Session pages and complete preview values. `mapArray` retains subscriptions by semantic Session;
+  ordinary Run updates never reopen them. `run-history-scroll.ts` stores opaque row ids and displayed-line offsets, and uses ordinals only for layout.
+  A removed anchor chooses the nearest prior survivor, ties later, at offset zero; a short or empty page stays paused. Dividers count toward their content row.
 - The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
   `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.

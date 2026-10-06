@@ -130,8 +130,12 @@ export class UpdateStream<
 }
 
 function unitsOf(update: DeliveredUpdate<ProjectionSnapshot>): number {
-  if (update.kind === "preview") return update.text.length;
-  const payload = update.kind === "durable" ? update.snapshot : update.overlay;
+  const payload =
+    update.kind === "durable"
+      ? update.snapshot
+      : update.kind === "history-preview"
+        ? update
+        : update.overlay;
   const cached = measured.get(payload);
   if (cached !== undefined) return cached;
   const units = measure(payload);

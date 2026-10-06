@@ -3529,7 +3529,7 @@ test("[codex-recorded-conformance] completion replays exact client traffic", asy
     model: "gpt-6.1-sol",
     effort: "high",
   });
-  assert.ok(events.some((event) => event.kind === "preview"));
+  assert.ok(events.some((event) => event.kind === "message-preview"));
   assert.deepEqual(
     events.filter((event) => event.kind === "assistant-content"),
     [
@@ -3542,7 +3542,7 @@ test("[codex-recorded-conformance] completion replays exact client traffic", asy
   );
   const replayed: TurnEvent[] = [];
   turn.subscribe((event) => replayed.push(event));
-  assert.ok(replayed.every((event) => event.kind !== "preview"));
+  assert.ok(replayed.every((event) => event.kind !== "message-preview"));
   await prepared.close();
   assert.deepEqual(
     installed
@@ -5377,7 +5377,7 @@ test("[codex] Turn producer trace parity: seal precedes held native reap and pre
     turn.subscribe((event) => history.push(event));
     assert.deepEqual(
       history,
-      events.filter((event) => event.kind !== "preview"),
+      events.filter((event) => event.kind !== "message-preview"),
     );
     const sealed = [...history];
     release();

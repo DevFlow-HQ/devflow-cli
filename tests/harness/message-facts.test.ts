@@ -75,7 +75,7 @@ test("m10-observed-harness-facts: authentic Claude stream identity retains only 
     const turn = harness.startTurn(turnRequest("Stream a reply"));
     turn.subscribe((e) => {
       events.push(e);
-      if (e.kind === "preview") ready();
+      if (e.kind === "message-preview") ready();
     });
     await preview;
     await turn.interrupt();
@@ -111,11 +111,15 @@ test("m10-observed-harness-facts: unqualified stream identity stays absent", asy
     const turn = harness.startTurn(turnRequest("Stream"));
     turn.subscribe((e) => {
       events.push(e);
-      if (e.kind === "preview") ready();
+      if (e.kind === "session") ready();
     });
     await preview;
     await turn.interrupt();
     await turn.result();
+    assert.equal(
+      events.some((e) => e.kind === "message-preview"),
+      false,
+    );
     assert.equal(
       events.filter((e) => e.kind === "assistant-content").length,
       0,
@@ -156,7 +160,8 @@ for (const completeSecond of [false, true]) {
       const turn = harness.startTurn(turnRequest("Stream two messages"));
       turn.subscribe((e) => {
         events.push(e);
-        if (e.kind === "preview" && e.text.endsWith("continued.")) ready();
+        if (e.kind === "message-preview" && e.content.endsWith("continued."))
+          ready();
       });
       if (!completeSecond) {
         await preview;
@@ -202,3 +207,39 @@ for (const completeSecond of [false, true]) {
     }
   });
 }
+
+test("m10-interruption-and-transcript: successful settlement retains unfinished identified text as incomplete", async () => {
+  const streamed = frames("interrupt/turn-1.stdout").filter(
+    (frame) => frame.type === "stream_event",
+  );
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    userFrame: () => [
+      init,
+      ...streamed,
+      { type: "result", subtype: "success", result: "" },
+    ],
+  });
+  const harness = await prepare(scripted);
+  try {
+    const events: TurnEvent[] = [];
+    const turn = harness.startTurn(
+      turnRequest("Success without message terminal"),
+    );
+    turn.subscribe((event) => events.push(event));
+    assert.equal((await turn.result()).kind, "completed");
+    assert.deepEqual(
+      events.filter((event) => event.kind === "assistant-content"),
+      [
+        {
+          kind: "assistant-content",
+          messageId: "msg_011CfftdJe6vfYEfgBUZaDUq",
+          content: "#",
+          incomplete: true,
+        },
+      ],
+    );
+  } finally {
+    await harness.close();
+  }
+});

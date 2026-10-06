@@ -93,8 +93,6 @@ const WORKING: RunLiveOverlay = {
   phase: "working",
   outstanding: [],
   offers: [],
-  activity: "Inspecting the failure",
-  preview: "Working",
 };
 
 async function flushUpdates(): Promise<void> {
@@ -169,7 +167,6 @@ const REQUESTING: RunLiveOverlay = {
       basis: "ephemeral Harness Request",
     },
   ],
-  preview: "Editing a.ts",
 };
 
 test("a closed update clears the live overlay and preview so a lost Turn leaves no dead control (A8) — fails at HEAD", async () => {
@@ -179,13 +176,11 @@ test("a closed update clears the live overlay and preview so a lost Turn leaves 
   updates.push({ kind: "live", overlay: REQUESTING });
   await flushUpdates();
   assert.equal(projection.live()?.outstanding.length, 1);
-  assert.equal(projection.preview(), "Editing a.ts");
   // The follow loop breaks (subject gone) with the last overlay still in state; HEAD
   // returned the state untouched, keeping a dead request control standing.
   updates.push({ kind: "closed", reason: "subject-gone" });
   await flushUpdates();
   assert.equal(projection.live(), undefined);
-  assert.equal(projection.preview(), undefined);
   dispose();
   updates.end();
 });
@@ -282,7 +277,7 @@ test("a real Run stream that lags reports loss, and reconnect restores the curre
   // before its follow loop can read.
   const burst = UNREAD_UPDATE_BOUND + 100;
   for (let index = 0; index < burst; index += 1) {
-    run.channel.observe({ preview: `p${index}` });
+    run.channel.observe({ usage: `p${index}` });
   }
   await microtasksUntil(() => healthKind(projection) === "disconnected");
   const lost = projection.freshness();
@@ -302,7 +297,6 @@ test("a real Run stream that lags reports loss, and reconnect restores the curre
     projection.live()?.outstanding.map((request) => request.requestId),
     ["req-edit"],
   );
-  assert.equal(projection.preview(), `p${burst - 1}`);
   await run.finish();
 });
 
@@ -386,7 +380,6 @@ test("shutdown disconnects the Run view, clears live controls, and ends a pendin
   if (freshness.kind === "disconnected")
     assert.equal(freshness.reason, "application-shutdown");
   assert.equal(live.projection.live(), undefined);
-  assert.equal(live.projection.preview(), undefined);
   live.dispose();
   live.updates.end();
 
@@ -453,12 +446,11 @@ test("a durable update whose liveness leaves live-here drops the live overlay (A
   });
   await flushUpdates();
   assert.equal(projection.live(), undefined);
-  assert.equal(projection.preview(), undefined);
   dispose();
   updates.end();
 });
 
-test("the live Run view joins durable, overlay, and preview lanes and clears only after authoritative settlement", async () => {
+test("the live Run view follows durable and control-overlay lanes and clears only after authoritative settlement", async () => {
   const initial = snapshotOf(runOf());
   const updates = new UpdateQueue<ProjectionUpdate<RunSnapshot>>();
   let closes = 0;
@@ -492,23 +484,23 @@ test("the live Run view joins durable, overlay, and preview lanes and clears onl
     return dispose;
   });
 
-  updates.push({ kind: "preview", text: "First words" });
+  updates.push({
+    kind: "live",
+    overlay: { ...WORKING, usage: "First report" },
+  });
   await flushUpdates();
-  assert.equal(projection.live(), undefined);
-  assert.equal(projection.preview(), "First words");
+  assert.equal(projection.live()?.usage, "First report");
 
   updates.push({ kind: "live", overlay: WORKING });
   await flushUpdates();
-  assert.equal(projection.live()?.activity, "Inspecting the failure");
-  assert.equal(projection.preview(), "Working");
+  assert.equal(projection.live()?.phase, "working");
 
-  updates.push({ kind: "preview", text: "" });
+  updates.push({ kind: "live", overlay: { ...WORKING, usage: "" } });
   await flushUpdates();
-  assert.equal(projection.preview(), undefined);
 
   updates.push({
     kind: "live",
-    overlay: { ...WORKING, phase: "settling", preview: "Final draft" },
+    overlay: { ...WORKING, phase: "settling" },
   });
   updates.push({
     kind: "durable",
@@ -522,7 +514,6 @@ test("the live Run view joins durable, overlay, and preview lanes and clears onl
   });
   await flushUpdates();
   assert.equal(projection.live()?.phase, "settling");
-  assert.equal(projection.preview(), "Final draft");
 
   const settled = snapshotOf(
     runOf({
@@ -539,7 +530,6 @@ test("the live Run view joins durable, overlay, and preview lanes and clears onl
   await flushUpdates();
   assert.deepEqual(projection.snapshot(), settled);
   assert.equal(projection.live(), undefined);
-  assert.equal(projection.preview(), undefined);
 
   const beforeDispose = projection.snapshot();
   dispose();
@@ -551,4 +541,41 @@ test("the live Run view joins durable, overlay, and preview lanes and clears onl
   await flushUpdates();
   assert.deepEqual(projection.snapshot(), beforeDispose);
   updates.end();
+});
+
+test("m10-session-history: an immediate durable Turn settlement clears control overlay before its trailing settling observation", async (t) => {
+  const run = await openLiveRun(t);
+  t.after(run.finish);
+  run.owner.admitTurn({
+    turnId: "turn",
+    attemptId: "0.0:echo",
+    session: "s",
+    origin: "human",
+    kind: "interactive-agent",
+    input: "Hello",
+    recoveryCoordinate: "private",
+    harness: "codex",
+    at: new Date(),
+  });
+  let projection!: RunWorkbenchProjection;
+  const dispose = createRoot((dispose) => {
+    projection = createLiveRunWorkbenchView(run.port).openRun(run.runId);
+    return dispose;
+  });
+  t.after(dispose);
+  run.channel.bindAnswer(async () => ({ outcome: "accepted" }));
+  await flushUpdates();
+  assert.equal(projection.live()?.phase, "working");
+  run.owner.settleTurn({
+    turnId: "turn",
+    session: "s",
+    resultKind: "completed",
+    resultDetail: "{}",
+    availability: "detached",
+    at: new Date(),
+  });
+  run.channel.bindAnswer(undefined);
+  await flushUpdates();
+  assert.equal(projection.live(), undefined);
+  await run.finish();
 });

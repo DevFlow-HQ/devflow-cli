@@ -119,6 +119,7 @@ import {
   OperationLedger,
   type OperationSettlement,
 } from "./operation-ledger.js";
+import { createSessionHistory } from "./session-history.js";
 import { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import { listRunsSnapshot, summarizeRuns } from "./run-list.js";
 import { readTranscriptResource } from "./transcript-resource.js";
@@ -181,6 +182,7 @@ import type {
   TranscriptRead,
   RunListSnapshot,
   RunSnapshot,
+  SessionHistorySnapshot,
   Submission,
   SubmissionAdmission,
   WorkspaceSnapshot,
@@ -389,6 +391,10 @@ export interface ApplicationDependencies {
   /** The clock the `run-list` Projection groups rows by (Today / Yesterday /
    *  Older). Defaults to the wall clock; a test injects a fixed instant (#87). */
   readonly now?: () => Date;
+  readonly scheduleHistoryPreview?: (
+    callback: () => void,
+    delayMs: number,
+  ) => () => void;
   /** Whether the launching client can relay human turn-taking (#116). Headless
    *  cannot, so it refuses an `interactive-agent` Bundle at Preflight; the TUI sets
    *  this true. Defaults to false. */
@@ -534,8 +540,54 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // while the Run rests joins here before a later Operation creates or replaces
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
   const runObservers = new Map<string, Set<UpdateStream>>();
+  const history = createSessionHistory({
+    subscriptions,
+    schedule:
+      deps.scheduleHistoryPreview ??
+      ((callback, delay) => {
+        const timer = setTimeout(callback, delay);
+        timer.unref();
+        return () => clearTimeout(timer);
+      }),
+    read(runId) {
+      if (runGroup === undefined)
+        return { found: false, problem: runSupportUnavailable() };
+      const read = runGroup.readRun(runId);
+      if (!read.ok)
+        return {
+          found: false,
+          problem:
+            read.problem.kind === "unknown-run"
+              ? runNotFound(runId)
+              : runStoreDamaged(runId),
+        };
+      if (liveElsewhere(runId) !== undefined)
+        return { found: false, problem: runLiveElsewhere(runId) };
+      const held = runs.get(runId)?.owner;
+      const owner = held ?? runGroup.acquireRun(runId);
+      if (owner === undefined)
+        return { found: false, problem: runStoreDamaged(runId) };
+      try {
+        return {
+          found: true,
+          records: {
+            turns: owner.turns(),
+            events: owner.turnEvents(),
+            transcript: owner.transcript(),
+            sessions: owner.harnessSessions().map((s) => s.session),
+            harness: read.run.selectedHarness,
+          },
+        };
+      } catch {
+        return { found: false, problem: runStoreDamaged(runId) };
+      } finally {
+        if (held === undefined) owner.close();
+      }
+    },
+  });
   const liveOverlay = createLiveOverlay((runId) => runs.get(runId), {
     reported: reportedModelChange,
+    message: (runId, message) => history.observe(runId, message),
     ended: (runId) => {
       for (const pending of [...(pendingModelChanges.get(runId) ?? [])])
         pending.settle(undefined);
@@ -682,6 +734,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         observer.push({ kind: "durable", snapshot });
       }
     }
+    history.publish(runId);
     pushRunCollectionUpdates();
   }
 
@@ -747,6 +800,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // removes the store, so any open `run` Projection is closed rather than left to
   // read a Run that no longer exists. Pushed before the tracking entry is dropped.
   function pushRunClosed(runId: string): void {
+    history.closed(runId);
     const observers = runObservers.get(runId);
     if (observers === undefined) return;
     for (const observer of observers) observer.end("subject-gone");
@@ -793,14 +847,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
         return owner.record;
       },
       appendTurnEvent(event) {
-        const receipt = owner.appendTurnEvent(event);
-        if (
-          (event.kind === "steer" ||
-            event.kind === "agent-call" ||
-            event.kind === "agent-call-expired") &&
-          receipt.ok
-        )
-          pushRunUpdate(runId);
+        const receipt = owner.appendTurnEvent(history.append(runId, event));
+        if (receipt.ok) pushRunUpdate(runId);
+        return receipt;
+      },
+      settleTurn(request) {
+        const receipt = owner.settleTurn(request);
+        if (receipt.ok) pushRunUpdate(runId);
         return receipt;
       },
       selectHarness(selectedHarness) {
@@ -1385,6 +1438,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // switch over the closed selector families, so no snapshot cast is needed here
   // or in either client.
   function openProjection(selector: {
+    readonly family: "session-history";
+    readonly runId: string;
+    readonly session: string;
+  }): OpenedProjection<SessionHistorySnapshot>;
+  function openProjection(selector: {
     readonly family: "preferences";
   }): OpenedProjection<PreferencesSnapshot>;
   function openProjection(selector: {
@@ -1426,6 +1484,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }): OpenedProjection<RunListSnapshot>;
   function openProjection(selector: ProjectionSelector): OpenedProjection;
   function openProjection(selector: ProjectionSelector): OpenedProjection {
+    if (selector.family === "session-history")
+      return history.open(selector.runId, selector.session);
     if (selector.family === "preferences") return preferences.open();
     if (selector.family === "run") {
       return openRunProjection(selector.runId, selector.prepareModelChoice);
@@ -3949,6 +4009,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
 
   let shutdownPromise: Promise<void> | undefined;
   function shutdown(): Promise<void> {
+    history.shutdown();
     subscriptions.shutdown();
     return (shutdownPromise ??= shutdownRuns().finally(() => {
       shutdownPromise = undefined;

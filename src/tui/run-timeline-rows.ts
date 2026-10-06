@@ -3,6 +3,8 @@ import type {
   RunLiveOverlay,
   RunTimelineEvent,
   RunView,
+  SessionHistoryView,
+  SessionHistoryValue,
 } from "../application/projection-port.js";
 import type { Rule } from "./wrap.js";
 
@@ -12,6 +14,12 @@ import type { Rule } from "./wrap.js";
 export interface TimelineRow {
   readonly key: string;
   readonly text: string;
+  readonly at?: string;
+  readonly placementRank?: number;
+  readonly step?: string;
+  readonly session?: string;
+  readonly sessionName?: string;
+  readonly iterationEnd?: true;
   readonly oneLine?: boolean;
   /** Live rows have none: they carry no Step or Session of their own. */
   readonly dividers?: readonly Rule[];
@@ -28,16 +36,29 @@ export function sessionDivider(name: string): Rule {
   return { glyph: "═", title: `Conversation · ${name}` };
 }
 
-/** Join authoritative history with replaceable live Turn rows. Durable tool rows
- * remain the ordered history; current activity and preview are
- * stable-key tail rows that replace in place as the overlay changes. */
+/** Display complete history values in their supplied order beside timestamped Workflow facts. */
 export function buildTimelineRows(
   run: RunView,
-  overlay: RunLiveOverlay | undefined,
-  preview: string | undefined,
+  histories: readonly {
+    readonly name: string;
+    readonly session: string;
+    readonly history: SessionHistoryView;
+  }[],
 ): readonly TimelineRow[] {
+  const conversation = [
+    ...durableTimelineRows(
+      run.timeline.filter((event) => event.session === undefined),
+    ),
+    ...histories.flatMap(({ name, session, history }) =>
+      historyTimelineRows(history, name, session),
+    ),
+  ].sort(
+    (a, b) =>
+      (a.at ?? "").localeCompare(b.at ?? "") ||
+      (a.placementRank ?? 1) - (b.placementRank ?? 1),
+  );
   return [
-    ...durableTimelineRows(run.timeline),
+    ...attachDividers(conversation),
     ...(run.pendingAgentCompletion !== undefined
       ? [
           {
@@ -72,7 +93,6 @@ export function buildTimelineRows(
     ...(run.modelChoiceNotice === undefined
       ? []
       : [{ key: "notice:model-choice-refused", text: run.modelChoiceNotice }]),
-    ...liveTimelineRows(run, overlay, preview),
   ];
 }
 
@@ -85,20 +105,18 @@ export function buildTimelineRows(
 function durableTimelineRows(
   timeline: readonly RunTimelineEvent[],
 ): TimelineRow[] {
-  let step: string | undefined;
-  let session: string | undefined;
   return timeline.map((event, index) => {
-    const dividers: Rule[] = [];
-    if (event.session !== undefined && event.session !== session) {
-      dividers.push(sessionDivider(event.sessionName ?? event.session));
-      session = event.session;
-    }
-    if (event.step !== undefined && event.step !== step) {
-      dividers.push(stepDivider(event.step));
-    }
-    step = event.event === "iteration" ? undefined : (event.step ?? step);
     return {
       key: `durable:${event.at}:${event.event}:${index}`,
+      at: event.at,
+      placementRank:
+        event.event === "run-created" || event.event === "trust-granted"
+          ? 0
+          : 2,
+      step: event.step,
+      session: event.session,
+      sessionName: event.sessionName,
+      ...(event.event === "iteration" ? { iterationEnd: true } : {}),
       text:
         event.endedBy === "agent"
           ? durableLabel(event)
@@ -106,7 +124,6 @@ function durableTimelineRows(
       ...(event.agentCall !== undefined || event.endedBy === "agent"
         ? { oneLine: true }
         : {}),
-      dividers,
     };
   });
 }
@@ -198,37 +215,60 @@ function durableLabel(event: RunTimelineEvent): string {
   }
 }
 
-function liveTimelineRows(
-  run: RunView,
-  overlay: RunLiveOverlay | undefined,
-  preview: string | undefined,
+function historyTimelineRows(
+  history: SessionHistoryView,
+  name: string,
+  session: string,
 ): readonly TimelineRow[] {
-  if (overlay === undefined && preview === undefined) return [];
-  const rows: TimelineRow[] = [];
-  const stepKind = run.progress[run.position]?.kind;
-  const turnLabel =
-    stepKind === "interactive-agent" ? "Interactive Turn" : "Agent Turn";
-  const phase = overlay?.phase.replace("-", " ") ?? "working";
-  rows.push({ key: "live:turn", text: `● ${turnLabel} · ${phase}` });
-  if (preview !== undefined) {
-    rows.push({
-      key: "live:preview",
-      text: `✎ Assistant preview · ${oneLine(preview)}`,
-    });
+  return history.rows.map((row, index) => {
+    const dividers: Rule[] = [];
+    if (index === 0 && history.hasEarlier)
+      dividers.push({ glyph: "─", title: "Earlier conversation is not shown" });
+    return {
+      key: row.id,
+      at: row.turnStartedAt,
+      step: row.step,
+      session,
+      sessionName: name,
+      text: historyLabel(row.value, row.source === "preview"),
+      ...(row.value.kind === "agent-call" ? { oneLine: true } : {}),
+      dividers,
+    };
+  });
+}
+function attachDividers(rows: readonly TimelineRow[]): TimelineRow[] {
+  let step: string | undefined;
+  let session: string | undefined;
+  return rows.map((row) => {
+    const dividers: Rule[] = [...(row.dividers ?? [])];
+    if (row.session !== undefined && row.session !== session) {
+      dividers.push(sessionDivider(row.sessionName ?? row.session));
+      session = row.session;
+    }
+    if (row.step !== undefined && row.step !== step)
+      dividers.push(stepDivider(row.step));
+    step = row.iterationEnd === true ? undefined : (row.step ?? step);
+    return { ...row, dividers };
+  });
+}
+
+function historyLabel(value: SessionHistoryValue, preview: boolean): string {
+  switch (value.kind) {
+    case "message":
+      return `${value.role === "user" ? "You" : "Assistant"}${preview ? " · streaming" : value.incomplete ? " · incomplete" : ""}\n${value.content}`;
+    case "entry-prompt":
+      return "Secant started the Step";
+    case "steer":
+      return `Steer · ${value.delivery}\n${value.content}`;
+    case "agent-call":
+      return `Agent call ${value.call} · ${value.reply.replaceAll("-", " ")}${value.refusal === undefined ? "" : ` · ${value.refusal}`} · ${screenReason(value.reason)} · ${value.disposition}`;
+    case "request":
+      return `? ${value.description}`;
+    case "activity":
+      return `↳ ${value.description}`;
+    case "turn-result":
+      return `Turn · ${value.origin === "managed" ? "Secant started the Step" : value.origin === "human" ? "started by you" : "origin unknown"} · ${value.result}${value.harness === undefined ? "" : ` · ${value.harness}`}${value.model === undefined ? "" : ` · ${value.model}`}${value.durationMs === undefined ? "" : ` · ${value.durationMs} ms`}`;
   }
-  if (overlay?.activity !== undefined) {
-    rows.push({
-      key: "live:activity",
-      text: `↳ Activity · ${oneLine(overlay.activity)}`,
-    });
-  }
-  for (const request of overlay?.outstanding ?? []) {
-    rows.push({
-      key: `live:request:${request.requestId}`,
-      text: `? Harness Request · ${request.tool} · ${oneLine(request.input)}`,
-    });
-  }
-  return rows;
 }
 
 /** Collapse whitespace so a serialized tool input or usage string stays one line. */

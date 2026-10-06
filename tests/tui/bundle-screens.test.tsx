@@ -214,6 +214,9 @@ function noLaunch(): RunLaunchView {
  *  App props the Workbench needs (#91). */
 function noRunView(): RunWorkbenchView {
   return {
+    openHistory() {
+      throw new Error("history not used in this test");
+    },
     openRun() {
       throw new Error("run workbench not used in this test");
     },

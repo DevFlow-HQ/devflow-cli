@@ -1,7 +1,14 @@
+import {
+  historyWindow,
+  reconcileHistoryScroll,
+  scrollHistory,
+  type HistoryScroll,
+} from "./run-history-scroll.js";
 import { TextAttributes } from "@opentui/core";
 import {
   createEffect,
   createMemo,
+  mapArray,
   createSignal,
   For,
   onCleanup,
@@ -74,12 +81,9 @@ import {
   type InteractiveRefusal,
 } from "./run-workbench-views.js";
 import {
-  AT_LIVE,
   SCROLL_KEYS,
-  scrollTimeline,
   timelineWindow,
   type TimelineAction,
-  type TimelineScroll,
 } from "./run-timeline.js";
 import {
   buildTimelineRows,
@@ -229,8 +233,7 @@ export function RunWorkbench(props: {
   const opened = view.openRun(props.runId);
   const snapshot = opened.snapshot;
   const live = opened.live;
-  const preview = opened.preview;
-  const freshness = opened.freshness;
+  const runFreshness = opened.freshness;
 
   const [dims, setDims] = createSignal(props.renderer.size());
   onCleanup(
@@ -241,6 +244,30 @@ export function RunWorkbench(props: {
     const result = snapshot().result;
     return result.found ? result.run : undefined;
   };
+  const historyFollowers = mapArray(
+    () => run()?.sessions?.map((session) => session.session) ?? [],
+    (session) => ({
+      session,
+      followed: view.openHistory(props.runId, session),
+    }),
+  );
+  const freshness = () => {
+    const current = runFreshness();
+    if (current.kind !== "current") return current;
+    return (
+      historyFollowers()
+        .map(({ followed }) => followed.freshness())
+        .find((health) => health.kind !== "current") ?? current
+    );
+  };
+  const histories = () =>
+    historyFollowers().flatMap(({ session, followed }) => {
+      const result = followed.snapshot().result;
+      const name =
+        run()?.sessions?.find((row) => row.session === session)?.name ??
+        session;
+      return result.found ? [{ name, session, history: result.history }] : [];
+    });
   const viewCurrent = () => freshness().kind === "current";
   const actionableRun = () => (viewCurrent() ? run() : undefined);
   const notFound = (): Problem | undefined => {
@@ -313,7 +340,7 @@ export function RunWorkbench(props: {
 
   const modelChoiceModal = () => modalControl() || checkpointActive();
 
-  const [scroll, setScroll] = createSignal<TimelineScroll>(AT_LIVE);
+  const [scroll, setScroll] = createSignal<HistoryScroll>({ mode: "live" });
   const [focus, setFocus] = createSignal<Focus>("timeline");
   const [detailsOpen, setDetailsOpen] = createSignal(false);
   const [detailsFull, setDetailsFull] = createSignal(false);
@@ -1324,7 +1351,7 @@ export function RunWorkbench(props: {
   const timelineRows = createMemo<readonly TimelineRow[]>(() => {
     const current = run();
     if (current === undefined) return [];
-    return buildTimelineRows(current, live(), preview());
+    return buildTimelineRows(current, histories());
   });
   // Each row wraps at the interior width (#288), so the reducer windows display
   // lines while holding its anchor and badge in rows. The beginning marker always
@@ -1347,8 +1374,28 @@ export function RunWorkbench(props: {
       TIMELINE_HANG,
     ),
   );
+  createEffect(
+    on(
+      () =>
+        [
+          timelineRows().map((row) => row.key),
+          timelineWrapped().heights,
+        ] as const,
+      ([keys, heights]) =>
+        setScroll((current) =>
+          reconcileHistoryScroll(current, { keys, heights }),
+        ),
+    ),
+  );
   const win = () =>
-    timelineWindow(scroll(), timelineWrapped().heights, viewportH());
+    historyWindow(
+      scroll(),
+      {
+        keys: timelineRows().map((row) => row.key),
+        heights: timelineWrapped().heights,
+      },
+      viewportH(),
+    );
   const beginningVisible = () => win().top === 0;
   const visibleLines = () => {
     const w = win();
@@ -1357,7 +1404,15 @@ export function RunWorkbench(props: {
 
   const scrollBy = (action: TimelineAction) =>
     setScroll((prev) =>
-      scrollTimeline(prev, action, timelineWrapped().heights, viewportH()),
+      scrollHistory(
+        prev,
+        action,
+        {
+          keys: timelineRows().map((row) => row.key),
+          heights: timelineWrapped().heights,
+        },
+        viewportH(),
+      ),
     );
 
   const moveSelection = (delta: number) => {
@@ -1471,7 +1526,12 @@ export function RunWorkbench(props: {
       return;
     }
     if (name === "r" && freshness().kind === "disconnected") {
-      opened.reconnect();
+      if (runFreshness().kind === "disconnected") opened.reconnect();
+      const disconnected = historyFollowers().filter(
+        ({ followed }) => followed.freshness().kind === "disconnected",
+      );
+      if (disconnected.length > 0) setScroll({ mode: "live" });
+      for (const { followed } of disconnected) followed.reconnect();
       return;
     }
     // A pending takeover/Cancel/Delete/End-Step waits for its confirming keypress:

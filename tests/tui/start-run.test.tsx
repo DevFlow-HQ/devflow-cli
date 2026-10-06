@@ -670,6 +670,9 @@ function trustPreparation(bundle: InstalledBundleFocus): LaunchPreparationView {
 // get there. This stub throws if opened, so a stray transition is caught.
 function noRunView(): RunWorkbenchView {
   return {
+    openHistory() {
+      throw new Error("history not used in this test");
+    },
     openRun() {
       throw new Error("run workbench not opened in this test");
     },
@@ -713,6 +716,9 @@ function noRunView(): RunWorkbenchView {
 // Run, so the receipt-replacement tests can assert the transition into it (#91).
 function succeedingRunView(): RunWorkbenchView {
   return {
+    openHistory() {
+      throw new Error("history not used in this test");
+    },
     openRun(runId) {
       const [snapshot] = createSignal<RunSnapshot>({
         family: "run",
@@ -742,7 +748,6 @@ function succeedingRunView(): RunWorkbenchView {
       return {
         snapshot,
         live: () => undefined,
-        preview: () => undefined,
         freshness: () => ({
           kind: "current",
           catchUp: "fresh",

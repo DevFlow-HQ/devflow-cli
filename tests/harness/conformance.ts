@@ -253,7 +253,7 @@ export function runTurnProducerTraceCases(
         let joined = false;
         turn.subscribe((event) => {
           early.push(event);
-          if (event.kind !== "preview") return;
+          if (event.kind !== "message-preview") return;
           const snapshot: TurnEvent[] = [];
           turn
             .subscribe((retained) => {
@@ -275,11 +275,22 @@ export function runTurnProducerTraceCases(
         const result = await turn.result();
         assert.equal(result.kind, "completed");
         assert.deepEqual(early.filter(isContentEvent), scenarios.live);
-        assert.deepEqual(late, scenarios.live);
+        assert.deepEqual(
+          late,
+          scenarios.previews.length === 0 ? [] : scenarios.live,
+        );
         assert.deepEqual(unsubscribed, [scenarios.live[0]]);
         assert.deepEqual(
           snapshots,
-          scenarios.previews.map((text) => [{ kind: "preview", text }]),
+          scenarios.previews.map((content) => [
+            {
+              kind: "message-preview",
+              messageId:
+                scenarios.live.find((event) => event.kind === "message-preview")
+                  ?.messageId ?? "preview-message",
+              content,
+            },
+          ]),
           "a streaming replay retains only the latest preview",
         );
         const history: TurnEvent[] = [];
@@ -287,7 +298,7 @@ export function runTurnProducerTraceCases(
         assert.deepEqual(history.filter(isContentEvent), [scenarios.content]);
         assert.deepEqual(
           history,
-          early.filter((event) => event.kind !== "preview"),
+          early.filter((event) => event.kind !== "message-preview"),
           "authoritative content replaces preview without reordering other facts",
         );
         const count = early.length;
@@ -308,7 +319,7 @@ export function runTurnProducerTraceCases(
 }
 
 function isContentEvent(event: TurnEvent): boolean {
-  return event.kind === "preview" || event.kind === "assistant-content";
+  return event.kind === "message-preview" || event.kind === "assistant-content";
 }
 
 export function runTurnLifecycleCases(

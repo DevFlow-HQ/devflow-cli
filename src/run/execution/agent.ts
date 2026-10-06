@@ -118,8 +118,12 @@ export type LiveModelChangeFn = (
 
 /** Coalesced live observations for the overlay (never durable). */
 export interface LiveObservation {
-  readonly activity?: string;
-  readonly preview?: string;
+  readonly message?: {
+    readonly turnId: string;
+    readonly session: string;
+    readonly messageId: string;
+    readonly content: string;
+  };
   readonly context?: Extract<
     TurnEvent,
     { readonly kind: "context" }
@@ -152,7 +156,7 @@ export interface RequestChannel {
    *  Harness runs as its own commands, replaced at each Session fact and cleared
    *  (`undefined`) when the Turn ends. Steer admission refuses them mid-Turn. */
   sessionCommands(commands: readonly string[] | undefined): void;
-  /** Merge live overlay observations (activity / preview / context / usage). */
+  /** Forward identified message replacements and live context/usage observations. */
   observe(observation: LiveObservation): void;
 }
 
@@ -632,7 +636,7 @@ async function driveHarnessTurn(
         );
       }
       recordTurnEvent(owner, turnId, event, answerSources);
-      if (channel !== undefined) notifyChannel(channel, event);
+      if (channel !== undefined) notifyChannel(channel, event, turnId, session);
       if (event.kind === "model" && event.change !== undefined)
         channel?.modelChanged(event.change);
     });
@@ -895,9 +899,14 @@ function unusableTurnResult(session: string): TurnResult {
 }
 
 /** Relay one Turn event to the live request-answer channel (#117): approval
- *  requests toggle the outstanding set; preview, context, usage, and activity are
- *  coalesced observations. Durable recording is separate (`recordTurnEvent`). */
-function notifyChannel(channel: RequestChannel, event: TurnEvent): void {
+ *  requests toggle the outstanding set; identified message previews, context, and usage
+ *  are live observations. Durable recording is separate (`recordTurnEvent`). */
+function notifyChannel(
+  channel: RequestChannel,
+  event: TurnEvent,
+  turnId: string,
+  session: string,
+): void {
   switch (event.kind) {
     case "session":
       if (event.facts !== undefined)
@@ -919,8 +928,15 @@ function notifyChannel(channel: RequestChannel, event: TurnEvent): void {
     case "request-expired":
       channel.settled(event.requestId.opaque);
       return;
-    case "preview":
-      channel.observe({ preview: event.text });
+    case "message-preview":
+      channel.observe({
+        message: {
+          turnId,
+          session,
+          messageId: event.messageId,
+          content: event.content,
+        },
+      });
       return;
     case "context":
       channel.observe({ context: event.observation });
@@ -929,12 +945,7 @@ function notifyChannel(channel: RequestChannel, event: TurnEvent): void {
       channel.observe({ usage: event.observation.summary });
       return;
     case "activity":
-      channel.observe({ activity: event.description });
-      return;
     case "tool-activity":
-      channel.observe({
-        activity: `${event.activity.tool} ${event.activity.phase}`,
-      });
       return;
     default:
       return;

@@ -505,7 +505,11 @@ export type TurnEvent =
       readonly answer: RequestAnswer;
     }
   | { readonly kind: "request-expired"; readonly requestId: RequestId }
-  | { readonly kind: "preview"; readonly text: string }
+  | {
+      readonly kind: "message-preview";
+      readonly messageId: string;
+      readonly content: string;
+    }
   | { readonly kind: "context"; readonly observation: ContextObservation }
   | { readonly kind: "usage"; readonly observation: UsageObservation }
   | { readonly kind: "activity"; readonly description: string }
@@ -535,7 +539,7 @@ export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "request-raised",
   "request-answered",
   "request-expired",
-  "preview",
+  "message-preview",
   "context",
   "usage",
   "activity",

@@ -105,9 +105,9 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   the panel once; the container reserves exactly `detailsRows().length` rows, so render and row accounting never drift. Recovery lines appear only when their Run-view fact is
   present. `c`/`x` act only while the panel is shown, confirm in the panel; the rail keeps only resume and the live-Turn interrupt/steer. A terminal/`halted` rest also shows
   one `restingProse` line beside the header state word (colour is never the only signal); `blocked` keeps that prose only in the panel, and `headerRows()` counts it.
-- A live update is told from a durable one by kind, and the settling watermark drives the preview-to-authoritative swap (`reduceRunUpdate`, `run-view.tsx`):
-  a `live` overlay at phase `settling` records the durable `settledCountAtSettling`; the next `durable` update whose settled-Turn count passes it drops the
-  live overlay and preview and shows the authoritative snapshot alone. A `preview` update only refreshes the streaming text.
+- Immediate durable Turn settlement clears the Run control overlay (`reduceRunUpdate`, `run-view.tsx`); a trailing `settling` observation cannot restore it (#412).
+  Session-history subscriptions independently reconcile complete pages and keyed preview values, retaining Application-issued ids through wrapping and settlement.
+  History-only observer loss is visible and reconnectable; reopening issues fresh ids and resets the viewport. Workflow facts follow their Turn, including equal-time ties.
 
 ## Read next
 

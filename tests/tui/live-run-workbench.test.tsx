@@ -145,7 +145,11 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
               kind: "model",
               observation: { known: true, model: "fake-sonnet" },
             },
-            { kind: "preview", text: "Streaming the repair" },
+            {
+              kind: "message-preview",
+              messageId: "repair-message",
+              content: "Streaming the repair",
+            },
             {
               kind: "tool-activity",
               activity: {
@@ -271,9 +275,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) => frame.includes("Review"));
   rendered.mockInput.pressEnter();
-  await rendered.waitForFrame((frame) =>
-    frame.includes("Harness Request · Edit"),
-  );
+  await rendered.waitForFrame((frame) => frame.includes("Tool: Edit"));
 
   // The approval request replaces the bottom input with the inline decision control
   // naming the exact tool and input and both offered decisions (#121 AC1).
@@ -282,8 +284,8 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   );
   const frame = rendered.captureCharFrame();
   assert.match(frame, /BLOCKED · ephemeral Harness Request/);
-  assert.match(frame, /Assistant preview · Streaming the repair/);
-  assert.match(frame, /Activity · delegating to subagent/);
+  assert.match(frame, /Assistant · streaming[\s\S]*Streaming the repair/);
+  assert.match(frame, /Edit started/);
   assert.match(frame, /Context · used 12500 tokens, capacity 200000 tokens/);
   assert.match(frame, /Usage · estimated 25 tokens/);
   assert.match(frame, /Tool: Edit/); // the exact tool
@@ -298,7 +300,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   // completion — the whole client wiring, not a hand-built Port submit (#121 AC1).
   fakeRenderer.key("return");
   await rendered.waitForFrame((next) => next.includes("SUCCEEDED"));
-  assert.match(rendered.captureCharFrame(), /Tool activity · Edit started/);
+  assert.match(rendered.captureCharFrame(), /Edit started/);
   assert.doesNotMatch(rendered.captureCharFrame(), /Assistant preview/);
   // The Harness identity and effective model live in the details panel now (#194
   // story 35), read from the durable `harness` view — not the old model-only header
@@ -326,7 +328,13 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
       defaults: REPORTED_DEFAULTS,
       turns: [
         {
-          events: [{ kind: "assistant-content", content: question }],
+          events: [
+            {
+              kind: "assistant-content",
+              messageId: "fixture-message",
+              content: question,
+            },
+          ],
           result: {
             kind: "completed",
             detail: {

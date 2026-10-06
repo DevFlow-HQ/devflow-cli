@@ -170,6 +170,7 @@ function noRun(): RunWorkbenchView {
     throw new Error("run workbench not used in this test");
   };
   return {
+    openHistory: unused,
     openRun: unused,
     readResource: unused,
     readTranscript: unused,

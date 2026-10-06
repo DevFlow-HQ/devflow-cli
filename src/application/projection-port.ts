@@ -9,6 +9,11 @@
 
 /** Which bounded Projection to open. Selectors are closed and typed. */
 export type ProjectionSelector =
+  | {
+      readonly family: "session-history";
+      readonly runId: string;
+      readonly session: string;
+    }
   | { readonly family: "workspace" }
   | { readonly family: "preferences" }
   | { readonly family: "operation"; readonly operationId: string }
@@ -413,6 +418,7 @@ export type ProjectionSnapshot =
   | HarnessFocusSnapshot
   | LaunchPreparationSnapshot
   | RunSnapshot
+  | SessionHistorySnapshot
   | RunListSnapshot;
 
 /** Saved home-scoped appearance, independent of Workspace approval and Harnesses. */
@@ -1221,6 +1227,69 @@ export interface RunView {
   };
 }
 
+export interface SessionHistorySnapshot {
+  readonly family: "session-history";
+  readonly runId: string;
+  readonly session: string;
+  readonly result:
+    | { readonly found: true; readonly history: SessionHistoryView }
+    | { readonly found: false; readonly problem: Problem };
+}
+export interface SessionHistoryView {
+  readonly rows: readonly SessionHistoryRow[];
+  readonly hasEarlier: boolean;
+  readonly transcriptPage: TranscriptPageReference;
+  readonly transcriptExport: TranscriptExportReference;
+}
+export interface SessionHistoryRow {
+  readonly id: string;
+  /** Opaque, lexically ordered within this subscription. */
+  readonly position: string;
+  readonly source: "stored" | "preview";
+  /** Secant admission time places this Turn beside Workflow facts without exposing storage order. */
+  readonly turnStartedAt: string;
+  readonly turn: string;
+  readonly step?: string;
+  readonly value: SessionHistoryValue;
+}
+export type SessionHistoryValue =
+  | {
+      readonly kind: "message";
+      readonly role: "user" | "assistant";
+      readonly content: string;
+      readonly incomplete?: true;
+    }
+  | { readonly kind: "entry-prompt"; readonly content: string }
+  | {
+      readonly kind: "steer";
+      readonly content: string;
+      readonly delivery:
+        | "waiting"
+        | "within-turn"
+        | "after-boundary"
+        | "re-delivered"
+        | "not-delivered"
+        | "unconfirmed";
+    }
+  | {
+      readonly kind: "agent-call";
+      readonly call: string;
+      readonly reason: string;
+      readonly reply: "accepted" | "held-for-review" | "refused";
+      readonly refusal?: string;
+      readonly disposition: "pending" | "completed" | "dropped";
+    }
+  | {
+      readonly kind: "turn-result";
+      readonly origin: "human" | "managed" | "unknown";
+      readonly result: string;
+      readonly harness?: string;
+      readonly model?: string;
+      readonly durationMs?: number;
+    }
+  | { readonly kind: "request"; readonly description: string }
+  | { readonly kind: "activity"; readonly description: string };
+
 export interface RunSnapshot {
   readonly family: "run";
   readonly runId: string;
@@ -1581,7 +1650,7 @@ export interface RunOutstandingRequest {
 /** The live overlay of a Run executing an Agent Turn (#117): the ephemeral,
  *  never-durable view an open `run` Projection receives as `live` updates beside
  *  its durable snapshot. It carries the Turn phase, every outstanding approval
- *  request with its answer Offer, the current activity and coalesced preview text,
+ *  request with its answer Offer,
  *  the latest reported context and usage observations, and a monotonic `generation` that
  *  bumps on every change — a client answers a request against the generation it
  *  saw, and a later generation makes that answer stale. Blocked status while a
@@ -1592,8 +1661,6 @@ export interface RunLiveOverlay {
   readonly phase: TurnPhase;
   readonly outstanding: readonly RunOutstandingRequest[];
   readonly offers: readonly AnswerHarnessRequestOffer[];
-  readonly activity?: string;
-  readonly preview?: string;
   /** Independent reported measurements and capacities, replaced on each report. No calculated occupancy. */
   readonly context?: {
     readonly usedTokens?: number;
@@ -1614,10 +1681,13 @@ export type ProjectionUpdate<
   // The live overlay of a Run executing an Agent Turn (#117). Ephemeral: it is
   // never stored and never replaces the durable snapshot — a client joins the two.
   | { readonly kind: "live"; readonly overlay: RunLiveOverlay }
-  // A coalesced preview-text-only update (#117), lighter than a full overlay so a
-  // stream of streaming previews does not bump the answer generation. Absent text
-  // clears the current preview.
-  | { readonly kind: "preview"; readonly text: string }
+  // Application-selected complete live row replacement and retention window (#412).
+  | {
+      readonly kind: "history-preview";
+      readonly row: SessionHistoryRow;
+      readonly windowStart: string;
+      readonly hasEarlier: boolean;
+    }
   | { readonly kind: "closed"; readonly reason: ObserverEnd };
 /** Why the Application ended an open subscription: its one `closed` update, after
  *  which the iterator completes. `observer-lagged` means only this subscription
@@ -1742,6 +1812,11 @@ export interface ProjectionPort {
   // snapshot type it names, so clients drop their `as` casts. A `bundle-catalog`
   // selector splits on `focus` — present is the focus, absent is the list. The
   // final union signature admits a dynamically-typed selector.
+  openProjection(selector: {
+    readonly family: "session-history";
+    readonly runId: string;
+    readonly session: string;
+  }): OpenedProjection<SessionHistorySnapshot>;
   openProjection(selector: {
     readonly family: "preferences";
   }): OpenedProjection<PreferencesSnapshot>;

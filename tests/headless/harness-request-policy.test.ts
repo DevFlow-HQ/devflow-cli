@@ -15,7 +15,7 @@ import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { writeCommandBundle } from "../helpers/commandBundle.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { previewEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
+import { usageEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 
 // #117 AC3/AC5 and the `--harness-requests` flag: the permission bridge is started
 // only for Runs whose routing needs a Harness (an Agent Step), so a Command-only
@@ -395,7 +395,7 @@ test("the follower reopens after observer-lagged and still answers the approval,
     turns: [
       {
         ...script.turns[0]!,
-        events: previewEvents(UNREAD_UPDATE_BOUND + 50),
+        events: usageEvents(UNREAD_UPDATE_BOUND + 50),
       },
     ],
   });
@@ -445,7 +445,7 @@ test("[windows-cleanup-notice] observer lag reopens the Run and retains one stde
       turns: [
         {
           ...script.turns[0]!,
-          events: previewEvents(UNREAD_UPDATE_BOUND + 50),
+          events: usageEvents(UNREAD_UPDATE_BOUND + 50),
         },
       ],
     },

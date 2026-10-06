@@ -103,8 +103,8 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 ## Live overlay
 
 - The private `live-overlay.ts` channel carries a `generation` that a raised or settled request bumps, each pushing a fresh overlay, so an answer formed against a
-  superseded generation is refused as stale. A `preview`-only observation is a coalesced update that deliberately does **not** bump the generation, so an in-flight
-  answer stays valid across it (#117).
+  superseded generation is refused as stale. Identified message previews go to per-Session history without bumping this generation,
+  so an in-flight answer stays valid across them (#412).
 - At Turn end `bindAnswer(undefined)` clears any still-outstanding request, bumps the generation, and sets the live phase to `settling` before announcing the overlay, so
   a resumed Run starts clean. The durable `request-expired` timeline row is execution's write, not the live lane's.
 - A **durable** push (`pushRunUpdate`) fans out to this Run's observers **and** every Run-list observer and the Workspace Run summary (`pushRunCollectionUpdates`);
@@ -112,7 +112,7 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   (`summarizeRuns`, #396) is one `countRuns` read and pushes only when a count changes; the quit guard trusts it, so a new ownership change or claim must reach the fan-out.
   Each fan-out with a Workspace observer open (always, in the TUI) opens every registered `run.db` once: O(Runs) per durable write.
 - A late-joining observer catches up on the current overlay at open, so a follower connecting after a request was raised still sees it. By design a client can
-  therefore receive live and preview updates for a Turn whose durable start it never saw: a headless follower opening mid-Turn observes the live request even though its
+  therefore receive live control updates for a Turn whose durable start it never saw: a headless follower opening mid-Turn observes the live request even though its
   durable Turn-start snapshot predates the connection.
 - An approval Request's answer names its own source — `human` or `client-policy` (`HarnessAnswerSource`); the client declaring provenance is what lets the durable
   timeline render "answered by client policy" (`run-projection`) without the Adapter knowing a client policy exists.

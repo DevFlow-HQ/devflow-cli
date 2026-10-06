@@ -765,7 +765,18 @@ class FakeTurn {
   private settle(result: TurnResult): void {
     if (this.settled) return;
     this.terminal = true;
+    const previews = this.buffer.filter(
+      (event) => event.kind === "message-preview",
+    );
     this.removePreviews();
+    for (const event of previews)
+      if (event.kind === "message-preview")
+        this.emit({
+          kind: "assistant-content",
+          messageId: event.messageId,
+          content: event.content,
+          incomplete: true,
+        });
     for (const steer of this.steers.values()) {
       this.emit({
         kind: "steer",
@@ -799,10 +810,15 @@ class FakeTurn {
     options: { readonly record: boolean } = { record: true },
   ): void {
     if (this.settled) throw new Error("emit after result: terminal ordering");
-    if (event.kind === "assistant-content") this.removePreviews();
+    if (event.kind === "assistant-content")
+      this.removePreviews(event.messageId);
     const preview =
-      event.kind === "preview"
-        ? this.buffer.findIndex((retained) => retained.kind === "preview")
+      event.kind === "message-preview"
+        ? this.buffer.findIndex(
+            (retained) =>
+              retained.kind === "message-preview" &&
+              retained.messageId === event.messageId,
+          )
         : -1;
     if (preview < 0) this.buffer.push(event);
     else this.buffer[preview] = event;
@@ -812,9 +828,14 @@ class FakeTurn {
     for (const listener of this.listeners) listener(event);
   }
 
-  private removePreviews(): void {
+  private removePreviews(messageId?: string): void {
     for (let index = this.buffer.length - 1; index >= 0; index -= 1) {
-      if (this.buffer[index].kind === "preview") this.buffer.splice(index, 1);
+      const event = this.buffer[index];
+      if (
+        event.kind === "message-preview" &&
+        (messageId === undefined || event.messageId === messageId)
+      )
+        this.buffer.splice(index, 1);
     }
   }
 
