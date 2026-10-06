@@ -805,6 +805,18 @@ await withCleanup(
       } finally {
         catalog.close();
       }
+      const claudeDirectory = join(smokeRoot, "input-rules-claude");
+      const codexDirectory = join(smokeRoot, "input-rules-codex");
+      installReplayerAt(claudeDirectory, "2.1.273 (Claude Code)");
+      installCodexReplayerAt(codexDirectory, "test-repair", false, {
+        earlierInvocations: ["codex-qualification"],
+      });
+      const env: NodeJS.ProcessEnv = {
+        ...workspaceEnv,
+        PATH: `${claudeDirectory}${delimiter}${codexDirectory}${delimiter}${workspaceEnv.PATH ?? ""}`,
+      };
+      delete env.SECANT_CLAUDE_CODE;
+      delete env.SECANT_CODEX;
       assertRefuses(binary, [
         {
           args: [
@@ -820,21 +832,10 @@ await withCleanup(
           ],
           match: "harness-input-reserved",
           cwd: workspaceDirectory,
-          env: workspaceEnv,
+          env,
           detail: "did not refuse selected-Harness prompt rules",
         },
       ]);
-      const replayer = installCodexReplayerAt(
-        join(smokeRoot, "input-rules-codex"),
-        "test-repair",
-        false,
-        { earlierInvocations: ["codex-qualification"] },
-      );
-      const env: NodeJS.ProcessEnv = {
-        ...workspaceEnv,
-        PATH: `${replayer.path}${delimiter}${workspaceEnv.PATH ?? ""}`,
-      };
-      delete env.SECANT_CODEX;
       const compatible = JSON.parse(
         run(
           binary,
