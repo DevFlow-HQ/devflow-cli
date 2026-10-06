@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -369,7 +370,7 @@ test("[selected-versus-observed-evidence] headless distinguishes durable selecti
   // The first prepare is launch preparation's qualification; the second, the
   // launch drive's, refuses, and the resume's third succeeds.
   let prepareCount = 0;
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     async prepare(options) {
       prepareCount++;
       if (prepareCount === 2) {
@@ -387,7 +388,7 @@ test("[selected-versus-observed-evidence] headless distinguishes durable selecti
       }
       return successful.prepare(options);
     },
-  };
+  });
   const wired = wireApplication({
     secantHome: makeTempDir("secant-headless-codex-home-"),
     launchCwd: workspace,
@@ -884,7 +885,7 @@ test("run answer settles a refused Harness preparation after the Gate as a non-s
   // and it refuses on the drive the answer starts.
   let prepares = 0;
   const fake = createFake(plainScript());
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     prepare(options) {
       prepares += 1;
       return prepares === 3
@@ -899,7 +900,7 @@ test("run answer settles a refused Harness preparation after the Gate as a non-s
           })
         : fake().prepare(options);
     },
-  };
+  });
   const workspace = makeTempDir("secant-agent-gate-ws-");
   const wired = wireApplication({
     secantHome: makeTempDir("secant-agent-gate-home-"),

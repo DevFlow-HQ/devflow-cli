@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -441,12 +442,12 @@ test("[legacy-run-harness-upgrade] a Command-only Run remains unselected and pre
     secantHome: fixture.home,
     launchCwd: fixture.workspace,
     process: fakeProcess(),
-    harnessAdapter: {
+    harnessAdapter: ownPreparations({
       prepare(options) {
         prepareCount++;
         return adapter.prepare(options);
       },
-    },
+    }),
   });
   t.after(() => {
     wiring.runGroup.close();

@@ -1,3 +1,8 @@
+import {
+  PreparationOwner,
+  type InitialPreparation,
+  type PreparationClock,
+} from "./preparation-owner.js";
 import { TurnEventProducer } from "./turn-event-producer.js";
 import {
   bindAgentCallDeclarations,
@@ -97,6 +102,8 @@ const AUTHENTICATION_REQUIRED =
   "Authentication required for Codex. Log in separately through Codex, then retry.";
 
 export interface CodexAdapterOverrides {
+  /** Deterministic initial-cleanup clock/timer Seam. Production omits it. */
+  readonly preparationClock?: PreparationClock;
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
   /** Cache-key-only platform seam. Production uses the immutable host profile;
@@ -171,7 +178,7 @@ type TLiveQualification =
 
 /** The factory a composition root calls. Each `prepare` supplies the Process
  *  Interface and phase observer its Prepared Harness uses; the Adapter keeps
- *  only its schema-qualification cache. */
+ *  its schema-qualification cache and owns initial acquisitions until handoff. */
 export function createCodexAdapter(
   overrides: CodexAdapterOverrides,
 ): HarnessAdapter {
@@ -179,30 +186,53 @@ export function createCodexAdapter(
 }
 
 class CodexAdapter implements HarnessAdapter {
+  private readonly preparations: PreparationOwner;
+
+  close(options?: Parameters<HarnessAdapter["close"]>[0]) {
+    return this.preparations.close(options);
+  }
+
+  prepare(options: PrepareOptions): Promise<PrepareResult> {
+    return this.preparations.prepare(options, (scoped, initial) =>
+      this.acquire(scoped, initial),
+    );
+  }
+
   private readonly cache = new Set<string>();
 
-  constructor(private readonly overrides: CodexAdapterOverrides) {}
+  constructor(private readonly overrides: CodexAdapterOverrides) {
+    this.preparations = new PreparationOwner(overrides.preparationClock);
+  }
 
-  async prepare(options: PrepareOptions): Promise<PrepareResult> {
+  private async acquire(
+    options: PrepareOptions,
+    initial: InitialPreparation,
+  ): Promise<PrepareResult> {
+    const refuse = (failure: HarnessFailure): PrepareResult => {
+      initial.failed(failure);
+      return { ok: false, failure };
+    };
     const nativePlatform = this.overrides.platform ?? process.platform;
     const platform = harnessPlatform(nativePlatform);
     if (platform === undefined) {
-      return failed(
-        "unsupported-platform",
-        `Codex is not supported on platform '${nativePlatform}'.`,
+      return refuse(
+        failure(
+          "unsupported-platform",
+          `Codex is not supported on platform '${nativePlatform}'.`,
+        ),
       );
     }
 
     const writableFailure = writableDirectoryFailure(options.writableDirectory);
     if (writableFailure !== undefined) {
-      return { ok: false, failure: writableFailure };
+      return refuse(writableFailure);
     }
 
     const processAdapter = options.process;
     const discovery = this.discover(options);
-    if (!discovery.ok) return discovery;
+    if (!discovery.ok) return refuse(discovery.failure);
     const version = await this.probeVersion(processAdapter, discovery.target);
-    if (!version.ok) return version;
+    if (!version.ok) return refuse(version.failure);
     this.overrides.recordingObserver?.version(version.value);
 
     const probeRevision = this.overrides.probeRevision?.() ?? PROBE_REVISION;
@@ -222,7 +252,7 @@ class CodexAdapter implements HarnessAdapter {
         discovery.target,
         probeRevision,
       );
-      if (!schema.ok) return schema;
+      if (!schema.ok) return refuse(schema.failure);
       if (cacheKey !== undefined) this.cache.add(cacheKey);
     }
 
@@ -232,6 +262,7 @@ class CodexAdapter implements HarnessAdapter {
       discovery.target,
       options.workspace,
       options.containment,
+      initial,
     );
     if (!live.ok) return { ok: false, failure: live.failure };
     const profile = buildProfile({
@@ -455,6 +486,7 @@ class CodexAdapter implements HarnessAdapter {
     target: TDiscoveredTarget,
     workspace: string,
     containment: PrepareOptions["containment"],
+    initial?: InitialPreparation,
   ): Promise<TLiveQualification> {
     const launch = startPhase(phases, "launch");
     const spawned = await processAdapter.spawnOwnedProcess({
@@ -472,6 +504,7 @@ class CodexAdapter implements HarnessAdapter {
         "Could not launch Codex app-server.",
         spawned.failure.cause,
       );
+      initial?.failed(launchFailure);
       launch.failed(launchFailure);
       return { ok: false, failure: launchFailure };
     }
@@ -494,6 +527,7 @@ class CodexAdapter implements HarnessAdapter {
         step = startPhase(phases, "handshake", undefined, next);
       },
       spawned.containment !== undefined,
+      initial,
     );
     if (live.ok) {
       step.ok();
@@ -509,6 +543,7 @@ class CodexAdapter implements HarnessAdapter {
     child: OwnedProcess,
     nextStep: (step: HarnessPhaseStep) => void,
     windowsProcess: boolean,
+    initial?: InitialPreparation,
   ): Promise<TLiveQualification> {
     const connection = new CodexQualificationConnection(
       child,
@@ -519,8 +554,9 @@ class CodexAdapter implements HarnessAdapter {
       child.stderr,
       this.overrides.recordingObserver,
     );
-    const refuse = (failure: HarnessFailure, includeStderr: boolean) =>
-      failedQualification({
+    const refuse = (failure: HarnessFailure, includeStderr: boolean) => {
+      initial?.failed(failure);
+      return failedQualification({
         generation: {
           windowsProcess,
           process: child,
@@ -532,7 +568,9 @@ class CodexAdapter implements HarnessAdapter {
         cleanupTimeoutMs:
           this.overrides.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS,
         observer: this.overrides.recordingObserver,
+        initial,
       });
+    };
     try {
       await connection.initialize();
       nextStep("account-check");
@@ -2966,10 +3004,6 @@ function failureWithNativeCode(
   };
 }
 
-function failed(category: string, diagnostics: string): PrepareResult {
-  return { ok: false, failure: failure(category, diagnostics) };
-}
-
 function failedProbe(
   category: string,
   diagnostics: string,
@@ -2982,6 +3016,7 @@ interface TFailedQualification {
   readonly failure: HarnessFailure;
   readonly cleanupTimeoutMs: number;
   readonly includeStderr: boolean;
+  readonly initial?: InitialPreparation;
   readonly observer?: CodexRecordingObserver;
 }
 
@@ -2989,18 +3024,41 @@ async function failedQualification(
   options: TFailedQualification,
 ): Promise<Extract<TLiveQualification, { ok: false }>> {
   const closed = await options.generation.process.closeStdin(
-    options.cleanupTimeoutMs,
+    Math.min(
+      options.cleanupTimeoutMs,
+      options.initial?.remainingMs() ?? options.cleanupTimeoutMs,
+    ),
   );
   options.observer?.closed(
     closed.kind,
     closed.kind === "exited" ? closed.status : undefined,
   );
   const diagnosticResult = await options.generation.diagnostics.settle(
-    options.cleanupTimeoutMs,
+    Math.min(
+      options.cleanupTimeoutMs,
+      options.initial?.remainingMs() ?? options.cleanupTimeoutMs,
+    ),
   );
   const stderr = options.includeStderr ? diagnosticResult.text : "";
   let diagnostics = options.failure.diagnostics ?? options.failure.category;
   diagnostics = appendStderr(diagnostics, stderr);
+  if (options.initial !== undefined) {
+    if (diagnosticResult.cause !== undefined) {
+      options.initial.cleanupFailed({
+        phase: "cleanup",
+        category: "diagnostic-drain",
+        possibleEffects: "none",
+        cause: redactSecrets(diagnosticResult.cause),
+      });
+    }
+    return {
+      ok: false,
+      failure: { ...options.failure, diagnostics },
+      ...(closed.kind === "cleanup-error" || closed.kind === "cleanup-timeout"
+        ? { unreaped: options.generation }
+        : {}),
+    };
+  }
   const causes: unknown[] = [];
   if (options.failure.cause !== undefined) causes.push(options.failure.cause);
   if (diagnosticResult.cause !== undefined) {

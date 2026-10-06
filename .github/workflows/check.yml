@@ -115,6 +115,12 @@ jobs:
           tests/application/preferences.test.ts
           tests/headless/settings.test.ts
           tests/architecture/preferences-palettes.test.ts
+      - name: m10-initial-preparation-ownership
+        run: >-
+          bun run test --
+          tests/harness/preparation-ownership.test.ts
+          tests/composition/preparation-lifetime.test.ts
+          tests/composition/wiring.test.ts
       - name: Test
         run: bun run test
       - name: Build

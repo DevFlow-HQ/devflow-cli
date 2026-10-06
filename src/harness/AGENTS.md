@@ -61,8 +61,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   pays for it: `reported`, or the Adapter's declared `fallback` with its reason (Codex: the `model/list` default at its own default effort; Claude
   Code: Opus (latest) at medium). Claude probes settings outside the profile cache (#347); a failed read falls back, never throws. An
   `effortLock` carries an opaque `source`. Composition's qualify path is its one caller.
-- `PrepareOptions.process` and `phases` (#333) serve that prepare and its Prepared Harness alone; a cache hit never reuses an earlier Process or observer.
-  The current cache-only lifetime's selected, unimplemented exception is [ADR 0022's preparation amendment](../../docs/adr/0022-own-a-truthful-deep-harness-seam.md).
+- Each prepare and cache hit keeps its own Process, phases and signal (#333, #407). Signal cancellation stops only initial preparation.
+  Adapter close retains acquisitions until Process `closed()` confirms exit; its immutable report separates startup failure from cleanup history.
 - `PrepareOptions.writableDirectory` (#214) is validated by the one shared `writableDirectoryFailure` (`writable-directory.ts`) before anything
   native runs (not an existing absolute directory ⇒ typed `writable-directory-unavailable`). Claude Code forwards it as `--add-dir` on every launch; Codex
   sends a per-thread `sandbox_workspace_write.writable_roots` config override and refuses the Turn `writable-directory-refused` only when an acknowledged

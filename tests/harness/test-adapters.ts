@@ -30,7 +30,7 @@ export type TestPrepareOptions = Omit<PrepareOptions, "process"> & {
 
 /** A Harness Adapter whose prepares default their Process. It is still a
  *  `HarnessAdapter`, so composition and the shared suites accept it. */
-export interface TestHarnessAdapter {
+export interface TestHarnessAdapter extends Pick<HarnessAdapter, "close"> {
   prepare(options: TestPrepareOptions): Promise<PrepareResult>;
 }
 
@@ -59,6 +59,7 @@ function withProcess(
   processAdapter: ProcessAdapter = createProcessAdapter(withRunnerObserver()),
 ): TestHarnessAdapter {
   return {
+    close: (options) => adapter.close(options),
     prepare: (options) =>
       adapter.prepare({
         ...options,

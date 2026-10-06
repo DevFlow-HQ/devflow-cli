@@ -1,7 +1,7 @@
 # Harness Adapter Internals
 
-Read this before changing the private internals of the Claude Code or Codex Adapter under `src/harness/`. The Harness Interface, terminal ordering,
-interrupt, recovery, and test invariants every Adapter shares stay in [the Harness Module's notes](../../src/harness/AGENTS.md).
+Read before changing native Adapter internals. [Harness notes](../../src/harness/AGENTS.md) own shared Interface, terminal, recovery and test invariants.
+Initial preparation uses `preparation-owner.ts` (#407), following [ADR 0022's retention, handoff and deadline contract](../adr/0022-own-a-truthful-deep-harness-seam.md).
 
 ## Claude Code Adapter
 

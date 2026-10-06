@@ -848,6 +848,8 @@ export type HarnessContainmentObserver = (fact: {
 }) => void;
 
 export interface PrepareOptions {
+  /** Dedicated cancellation belongs to this preparation, never a Projection subscription. */
+  readonly signal?: AbortSignal;
   /** Launch evidence for this prepare and every replacement process it owns.
    * Throwing observers never change launch or Turn outcomes. */
   readonly containment?: HarnessContainmentObserver;
@@ -882,6 +884,36 @@ export type PrepareResult =
  */
 export interface HarnessAdapter {
   prepare(options: PrepareOptions): Promise<PrepareResult>;
+  /** Final invocation close. Closes admission synchronously; repeated calls
+   * return the same immutable deadline observations. Prepared Harnesses already
+   * handed to callers remain exclusively theirs. */
+  close(options?: PreparationCloseOptions): Promise<PreparationCleanupReport>;
+}
+
+/** Absolute monotonic deadline, shared across Adapters by composition. */
+export interface PreparationCloseOptions {
+  readonly deadline?: number;
+}
+
+/** Initial acquisitions only. Historical failure is distinct from present
+ * unresolved work; native resources never cross this Interface. */
+export interface PreparationCleanupReport {
+  readonly status: "closed" | "unresolved";
+  readonly preparations: readonly PreparationCleanupEntry[];
+}
+
+interface PreparationFailure extends Omit<HarnessFailure, "cause"> {
+  readonly cause?: import("./safe-cause.js").SafeCause;
+}
+
+interface PreparationCleanupEntry {
+  readonly preparation: number;
+  readonly startupFailure?: PreparationFailure;
+  readonly cleanupFailures: readonly PreparationFailure[];
+  readonly unresolved: readonly (
+    | { readonly kind: "preparation-pending" }
+    | { readonly kind: "closure-unconfirmed"; readonly resource: number }
+  )[];
 }
 
 // ---------------------------------------------------------------------------

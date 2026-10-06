@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { withClients } from "../../src/composition/main.js";
@@ -301,7 +302,7 @@ for (const containment of ["fallback", "contained"] as const) {
             description: "PATH name 'claude'",
           },
         }),
-        harnessAdapter: {
+        harnessAdapter: ownPreparations({
           async prepare(options) {
             const result = await options.process.spawnOwnedProcess({
               role: "harness-runtime",
@@ -321,7 +322,7 @@ for (const containment of ["fallback", "contained"] as const) {
               },
             };
           },
-        },
+        }),
       },
     );
     assert.equal(status, 0);

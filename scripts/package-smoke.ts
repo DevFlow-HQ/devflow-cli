@@ -3331,6 +3331,30 @@ await withCleanup(
           end.client === client &&
           end.exitStatus === exitStatus &&
           typeof end.elapsedMs === "number";
+        if (events.includes("harness-preparation-cleanup")) {
+          const preparations = log.records.filter(
+            (record) => record.event === "harness-preparation-cleanup",
+          );
+          if (
+            JSON.stringify(
+              preparations.map((record) => [
+                record.harness,
+                record.status,
+                record.preparations,
+                record.pending,
+                record.unconfirmed,
+              ]),
+            ) !==
+            JSON.stringify([
+              ["claude-code", "closed", 0, 0, 0],
+              ["codex", "closed", 0, 0, 0],
+            ])
+          ) {
+            throw new Error(
+              `Unexpected initial preparation reports: ${log.text}`,
+            );
+          }
+        }
         if (!matches) {
           throw new Error(
             `Unexpected ${client} lifecycle records: ${log.text}`,
@@ -3361,6 +3385,8 @@ await withCleanup(
           "invocation-start",
           "operation-admission",
           "operation-outcome",
+          "harness-preparation-cleanup",
+          "harness-preparation-cleanup",
           "invocation-end",
         ],
         0,
@@ -3388,7 +3414,12 @@ await withCleanup(
       expectLifecycle(
         recordsIn("refused"),
         "headless",
-        ["invocation-start", "invocation-end"],
+        [
+          "invocation-start",
+          "harness-preparation-cleanup",
+          "harness-preparation-cleanup",
+          "invocation-end",
+        ],
         1,
       );
 

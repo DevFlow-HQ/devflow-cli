@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerPreparationLifetime } from "../harness/preparation-lifetime.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -346,6 +347,7 @@ function registeredCases(): RunnerCase[] {
 
   // The runner supervisor itself over its fixture program (#326).
   registerSupervisorConformance((name, body) => cases.push({ name, body }));
+  registerPreparationLifetime((name, body) => cases.push({ name, body }));
   return cases;
 }
 

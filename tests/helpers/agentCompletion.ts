@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -120,52 +121,55 @@ export async function launchAgentCompletionRun(
   const requests: TurnRequest[] = [];
   const answers: AgentCallAnswer[] = [];
   let prepares = 0;
-  const adapter: HarnessAdapter = {
-    async prepare(options) {
-      const prepared = await createFake({
-        profile: profile(),
-        turns:
-          typeof turns === "function"
-            ? turns(prepares++, requests.length)
-            : turns,
-      })().prepare(options);
-      if (!prepared.ok) return prepared;
-      return {
-        ok: true,
-        harness: {
-          ...prepared.harness,
-          profile: prepared.harness.profile,
-          readDefaults: () => prepared.harness.readDefaults(),
-          close: () => prepared.harness.close(),
-          startTurn(request) {
-            requests.push(request);
-            const turn = prepared.harness.startTurn(request);
-            return {
-              ...turn,
-              result: () => turn.result(),
-              subscribe: (listener) => turn.subscribe(listener),
-              interrupt: () => turn.interrupt(),
-              steer: (input) => turn.steer(input),
-              answerRequest: (answer) => turn.answerRequest(answer),
-              changeModel: (choice) => turn.changeModel(choice),
+  const adapter = (): HarnessAdapter =>
+    ownPreparations({
+      async prepare(options) {
+        const prepared = await createFake({
+          profile: profile(),
+          turns:
+            typeof turns === "function"
+              ? turns(prepares++, requests.length)
+              : turns,
+        })().prepare(options);
+        if (!prepared.ok) return prepared;
+        return {
+          ok: true,
+          harness: {
+            ...prepared.harness,
+            profile: prepared.harness.profile,
+            readDefaults: () => prepared.harness.readDefaults(),
+            close: () => prepared.harness.close(),
+            startTurn(request) {
+              requests.push(request);
+              const turn = prepared.harness.startTurn(request);
+              return {
+                ...turn,
+                result: () => turn.result(),
+                subscribe: (listener) => turn.subscribe(listener),
+                interrupt: () => turn.interrupt(),
+                steer: (input) => turn.steer(input),
+                answerRequest: (answer) => turn.answerRequest(answer),
+                changeModel: (choice) => turn.changeModel(choice),
 
-              answerAgentCall(answer) {
-                answers.push(answer);
-                return turn.answerAgentCall(answer);
-              },
-            };
+                answerAgentCall(answer) {
+                  answers.push(answer);
+                  return turn.answerAgentCall(answer);
+                },
+              };
+            },
           },
-        },
-      };
-    },
-  };
+        };
+      },
+    });
   const home = makeTempDir("secant-agent-done-home-");
   const workspacePath = makeTempDir("secant-agent-done-ws-");
   const options = {
     secantHome: home,
     launchCwd: workspacePath,
     supportsInteractiveTurns: true,
-    harnessAdapter: adapter,
+    get harnessAdapter() {
+      return adapter();
+    },
     process: createFakeBundleProcess(),
     discoverClaudeCode: () => ({
       kind: "found",

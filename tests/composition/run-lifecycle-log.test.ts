@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -635,7 +636,7 @@ for (const gateKind of ["authored", "checkpoint"] as const) {
 test("a preparation refusal after Continue logs the committed halted rest and correlated refusal", async (t) => {
   let runId = "";
   let prepares = 0;
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     prepare(options) {
       if (++prepares === 2)
         return Promise.resolve({
@@ -651,7 +652,7 @@ test("a preparation refusal after Continue logs the committed halted rest and co
         turns: [{ result: COMPLETED }],
       })().prepare(options);
     },
-  };
+  });
   const logged = await invocation(
     t,
     {

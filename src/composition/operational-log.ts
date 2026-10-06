@@ -73,6 +73,12 @@ function recordLevel(record: OperationalRecord): "debug" | "info" | "warn" {
       return record.status === "not-ready" ? "warn" : "info";
     case "harness-phase-end":
       return record.status === "failed" ? "warn" : "info";
+    case "harness-preparation-failure":
+    case "harness-preparation-cleanup-failure":
+    case "invocation-cleanup-failure":
+      return "warn";
+    case "harness-preparation-cleanup":
+      return record.status === "closed" ? "info" : "warn";
     case "harness-cleanup":
       return record.status === "clean" ? "info" : "warn";
     case "runner-scenario-end":

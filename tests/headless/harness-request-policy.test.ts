@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -139,7 +140,7 @@ function spyAdapter(inner: HarnessAdapter): {
 } {
   let prepares = 0;
   let closes = 0;
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     async prepare(options): Promise<PrepareResult> {
       prepares++;
       const result = await inner.prepare(options);
@@ -158,7 +159,7 @@ function spyAdapter(inner: HarnessAdapter): {
         },
       };
     },
-  };
+  });
   return { adapter, prepareCount: () => prepares, closeCount: () => closes };
 }
 
@@ -219,12 +220,12 @@ function wireAgent(
     launchCwd: workspace,
     process: createFakeBundleProcess(),
     harnessAdapter: fallback
-      ? {
+      ? ownPreparations({
           prepare(options) {
             options.containment?.({ kind: "fallback" });
             return spy.adapter.prepare(options);
           },
-        }
+        })
       : spy.adapter,
     discoverClaudeCode: () => ({
       kind: "found",

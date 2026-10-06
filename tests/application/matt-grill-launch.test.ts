@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -113,7 +114,7 @@ function scriptedAdapter(
 ): { adapter: HarnessAdapter; prepares: () => number } {
   let prepares = 0;
   return {
-    adapter: {
+    adapter: ownPreparations({
       prepare(options) {
         const turns = scripts[Math.min(prepares, scripts.length - 1)]!;
         prepares += 1;
@@ -121,7 +122,7 @@ function scriptedAdapter(
           options,
         );
       },
-    },
+    }),
     prepares: () => prepares,
   };
 }

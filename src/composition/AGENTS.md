@@ -14,6 +14,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   the Run's `runId`. Its Process goes to Command Steps, the Run's Harness prepare, and (via `processForRun`) the owner's Artifact Git; qualification
   stays unscoped. The Adapter is stateless but for its observer, so each `runScope` call builds an equivalent scope with its own Process rather than
   caching one per Run; an injected `process` instance is shared, so its children carry no `runId`.
+- `withWiredApplication` owns partial construction and final disposal (#407). Close both Adapter admissions before Application drain, share one
+  five-second initial-cleanup deadline, record reports before stores/log close, and suppress late reporting. Prepared Harness handoffs stay exclusive.
 - Composition owns the qualify prepare-then-close pairing: a registration's catalog qualification prepares its private Adapter against the canonical
   launch Workspace, reads its defaults (`readDefaults`, #341), and immediately closes it. Only a clean close publishes the captured profile and
   defaults, and a throwing defaults read is a `prepare-exception` after the close; prepare or cleanup failure crosses as normalized

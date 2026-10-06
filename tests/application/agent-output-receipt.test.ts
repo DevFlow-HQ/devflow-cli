@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -107,7 +108,7 @@ function receiptAgent(
   const inputs: string[] = [];
   return {
     inputs,
-    adapter: {
+    adapter: ownPreparations({
       async prepare(prepareOptions) {
         if (
           options.squatReceiptRoot === true &&
@@ -139,7 +140,7 @@ function receiptAgent(
           },
         };
       },
-    },
+    }),
   };
 }
 

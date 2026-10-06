@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import {
   runMain,
   stage,
   withTimeout,
+  runnerLogFolder,
 } from "../helpers/standalone.js";
 
 // The real-terminal lifecycle suite (#56). It runs the compiled shell under a
@@ -166,10 +167,12 @@ async function runScenario(
     mkdtempSync(join(tmpdir(), "secant-terminal-log-")),
     "log",
   );
+  const operationalLogs = runnerLogFolder();
   const env = {
     ...process.env,
     SECANT_HOME: home,
     SECANT_TERMINAL_LOG: logPath,
+    SECANT_LOG_DIR: operationalLogs,
   };
   const cleanup = [home, workspace, dirname(logPath)];
 
@@ -177,6 +180,7 @@ async function runScenario(
   let proc: PtyProcess | undefined;
   try {
     stage("approve workspace", () => approveWorkspace(binary, workspace, env));
+    const priorLogs = new Set(readdirSync(operationalLogs));
 
     const pty = stage("spawn shell", () =>
       spawnPty([binary], {
@@ -231,6 +235,41 @@ async function runScenario(
       }
       assertRestoredModes(label, output);
     });
+
+    stage(
+      "m10-initial-preparation-ownership: assert reports before terminal exit",
+      () => {
+        const folder = operationalLogs;
+        const invocations: {
+          event: string;
+          harness?: string;
+          status?: string;
+          client?: string;
+        }[][] = readdirSync(folder)
+          .filter((name) => !priorLogs.has(name))
+          .map((name) =>
+            readFileSync(join(folder, name), "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line)),
+          );
+        const invocation = invocations.find(
+          (records) => records[0]?.client === "tui",
+        );
+        assert.ok(invocation);
+        assert.deepEqual(
+          invocation
+            .filter((record) => record.event === "harness-preparation-cleanup")
+            .map((record) => [record.harness, record.status])
+            .sort(),
+          [
+            ["claude-code", "closed"],
+            ["codex", "closed"],
+          ],
+        );
+        assert.equal(invocation.at(-1)?.event, "invocation-end");
+      },
+    );
 
     stage("assert one teardown", () => {
       // Exactly one teardown across the exit path (the composition root's

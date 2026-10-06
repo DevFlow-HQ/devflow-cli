@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import { readFileSync } from "node:fs";
 import type {
   CleanupReport,
@@ -54,7 +55,7 @@ export function qualificationAdapter(
   trace: string[],
   cleanup: CleanupReport = { clean: true, detail: "closed" },
 ): HarnessAdapter {
-  return {
+  return ownPreparations({
     async prepare(options) {
       trace.push(`prepare:${options.workspace}`);
       return {
@@ -75,7 +76,7 @@ export function qualificationAdapter(
         },
       };
     },
-  };
+  });
 }
 
 export function wiringProcess(): ProcessAdapter {

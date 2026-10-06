@@ -29,8 +29,7 @@ work, and expiry alone cannot prove a Run or its native work has stopped. The ex
 these Interface guarantees. Preflight owns a prepared Harness until successful Run handoff; one owner remains responsible for cleanup on every
 failure path. Edited 2026-10-05: before successful preparation, the invocation-lived Harness Adapter owns initial acquired resources and
 unconfirmed failed or cancelled preparation cleanup. Composition constructs and closes that owner through the Harness Interface. Successful
-preparation transfers ownership exclusively to the Prepared Harness's caller, preserving Preflight's later Run handoff. The selected lifecycle
-and its pending implementation are recorded in
+preparation transfers ownership exclusively to the Prepared Harness's caller, preserving Preflight's later Run handoff. The selected lifecycle, implemented by #407 (2026-10-06), is recorded in
 [ADR 0022's initial preparation amendment](./0022-own-a-truthful-deep-harness-seam.md#amendment-2026-10-05-initial-preparation-ownership-through-invocation-shutdown).
 Durable creation followed by failed handoff leaves recoverable, non-advancing Run state, never orphaned external execution.
 

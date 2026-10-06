@@ -7,6 +7,7 @@ import {
   type PreparedHarness,
   type PrepareOptions,
   type PrepareResult,
+  type PreparationCleanupReport,
   type SafeCause,
 } from "../harness/harness.js";
 import type { ProcessAdapter } from "../process/process.js";
@@ -191,5 +192,58 @@ function failureFields(
     ...(failure.cause === undefined
       ? {}
       : { cause: translateCause(failure.cause) }),
+  };
+}
+
+/** Record deadline observations separately from Prepared Harness cleanup. */
+export function recordPreparationCleanup(
+  report: PreparationCleanupReport,
+  harness: SelectedHarnessId,
+  log: Recorder | undefined,
+): void {
+  log?.record({
+    event: "harness-preparation-cleanup",
+    harness,
+    status: report.status,
+    preparations: report.preparations.length,
+    pending: report.preparations.filter((entry) =>
+      entry.unresolved.some((work) => work.kind === "preparation-pending"),
+    ).length,
+    unconfirmed: report.preparations.reduce(
+      (count, entry) =>
+        count +
+        entry.unresolved.filter((work) => work.kind === "closure-unconfirmed")
+          .length,
+      0,
+    ),
+  });
+  for (const entry of report.preparations) {
+    if (entry.startupFailure !== undefined) {
+      log?.record({
+        event: "harness-preparation-failure",
+        harness,
+        preparation: entry.preparation,
+        ...preparationFailureFields(entry.startupFailure),
+      });
+    }
+    for (const failure of entry.cleanupFailures) {
+      log?.record({
+        event: "harness-preparation-cleanup-failure",
+        harness,
+        preparation: entry.preparation,
+        ...preparationFailureFields(failure),
+      });
+    }
+  }
+}
+
+function preparationFailureFields(
+  failure: NonNullable<
+    PreparationCleanupReport["preparations"][number]["startupFailure"]
+  >,
+): Readonly<Record<string, string | SafeCause>> {
+  return {
+    ...failureFields({ ...failure, cause: undefined }),
+    ...(failure.cause === undefined ? {} : { cause: failure.cause }),
   };
 }

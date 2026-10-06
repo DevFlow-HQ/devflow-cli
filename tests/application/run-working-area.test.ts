@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -101,7 +102,7 @@ function planningAgent(kind: "completed" | "failed", file: string) {
   const inner = createFake(script(kind))();
   const granted: (string | undefined)[] = [];
   const inputs: string[] = [];
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     async prepare(options: PrepareOptions) {
       granted.push(options.writableDirectory);
       const prepared = await inner.prepare(options);
@@ -123,7 +124,7 @@ function planningAgent(kind: "completed" | "failed", file: string) {
         },
       };
     },
-  };
+  });
   return { adapter, granted, inputs };
 }
 

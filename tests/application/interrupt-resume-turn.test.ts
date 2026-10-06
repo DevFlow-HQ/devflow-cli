@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -220,7 +221,7 @@ function sequencedAdapter(
   record?: HarnessRecord,
 ): HarnessAdapter {
   let index = 0;
-  return {
+  return ownPreparations({
     async prepare(options) {
       const script = scripts[Math.min(index, scripts.length - 1)]!;
       index += 1;
@@ -252,7 +253,7 @@ function sequencedAdapter(
         },
       };
     },
-  };
+  });
 }
 
 /** A fake Process that resolves any executable and reaches no real child; Git store
@@ -820,7 +821,7 @@ async function failedInterruptScenario(
       }),
   );
   let index = 0;
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     async prepare(prepareOptions) {
       const prepared = await createFake({
         profile: INTERRUPT_PROFILE,
@@ -875,7 +876,7 @@ async function failedInterruptScenario(
         },
       };
     },
-  };
+  });
   const workspace = makeTempDir("secant-interrupt-ws-");
   const bundleProcess = createFakeBundleProcess({
     executables: [process.execPath],
@@ -1198,10 +1199,17 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
       spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
       spawnCommandSync: (options) => git.spawnCommandSync(options),
     },
-    harnessAdapter: sequencedAdapter(
-      [{ profile: claudeProfile(), turns: [completedTurn(), blockingTurn()] }],
-      record,
-    ),
+    get harnessAdapter() {
+      return sequencedAdapter(
+        [
+          {
+            profile: claudeProfile(),
+            turns: [completedTurn(), blockingTurn()],
+          },
+        ],
+        record,
+      );
+    },
     discoverClaudeCode: () => ({
       kind: "found",
       attempt: {

@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -163,7 +164,7 @@ test("a not-ready Harness's result carries the typed failure and a translated ca
     readonly message: string;
   }[] = [
     {
-      adapter: {
+      adapter: ownPreparations({
         async prepare() {
           return {
             ok: false,
@@ -178,7 +179,7 @@ test("a not-ready Harness's result carries the typed failure and a translated ca
             },
           };
         },
-      },
+      }),
       failure: {
         phase: "prepare",
         category: "protocol-corruption",
@@ -188,11 +189,11 @@ test("a not-ready Harness's result carries the typed failure and a translated ca
       message: "invalid native response",
     },
     {
-      adapter: {
+      adapter: ownPreparations({
         async prepare() {
           throw new Error("prepare threw");
         },
-      },
+      }),
       failure: {
         phase: "prepare",
         category: "prepare-exception",
@@ -408,7 +409,7 @@ function writeAgentBundle(prompt: string): { folder: string; id: string } {
 }
 
 test("an assessment's model check is its own stage, and the qualification it needs nests inside it", async () => {
-  const listed: HarnessAdapter = {
+  const listed: HarnessAdapter = ownPreparations({
     async prepare(options) {
       const prepared = await qualificationAdapter([]).prepare(options);
       if (!prepared.ok) return prepared;
@@ -430,7 +431,7 @@ test("an assessment's model check is its own stage, and the qualification it nee
         },
       };
     },
-  };
+  });
   const h = wiredHome(listed);
   const agent = writeAgentBundle("Do the work.");
   await withClients(async (clients) => {

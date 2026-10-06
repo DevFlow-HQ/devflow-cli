@@ -70,7 +70,7 @@ Force-killing a Turn already proven complete is cleanup; killing unconfirmed act
 rewrite a settled Turn. Edited 2026-10-05: before successful preparation, the invocation-lived Harness Adapter owns initial acquisitions,
 including failed or cancelled preparations with unconfirmed cleanup. Successful preparation transfers ownership exclusively to the Prepared
 Harness's caller; Preflight retains that responsibility until successful Run handoff. Exactly one owner remains responsible at each stage.
-The preparation lifecycle selected below is pending implementation.
+The preparation lifecycle selected below is implemented by #407 (2026-10-06).
 
 This Interface is also the test surface: every shipped Harness Adapter implements it beside a deterministic fake; a shared conformance suite exercises
 ordering, requests, controls, recovery, failure, and cleanup, while private versioned protocol fixtures and opt-in pinned real-runtime qualification
@@ -88,7 +88,7 @@ and one stable caller contract.
 selects the existing Harness Adapter as the invocation-lived owner of initial, pre-handoff preparation resources. Composition constructs and
 finally closes it. This extends the Harness Interface with a per-preparation cancellation signal and an Adapter-level final `close` returning
 a separate typed preparation-cleanup report. Exact type names remain implementation choices. The existing Prepared Harness Interface and its
-post-handoff cleanup ownership remain unchanged. This amendment records an approved planning contract, not implemented lifecycle support.
+post-handoff cleanup ownership remain unchanged. This amendment recorded the approved planning contract. Implemented in M10 by #407 (2026-10-06).
 
 The Adapter registers each preparation before its first asynchronous operation, then owns acquired resources until confirmed disposal or
 exclusive successful handoff. Independent concurrent preparations retain separate Process, observer, and cancellation scopes. The qualification

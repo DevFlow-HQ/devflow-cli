@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -241,7 +242,7 @@ test("Harness catalog still closes the qualification when the defaults read thro
   const wired = wireApplication({
     secantHome: makeTempDir("secant-wire-defaults-throw-home-"),
     launchCwd: makeTempDir("secant-wire-defaults-throw-ws-"),
-    harnessAdapter: {
+    harnessAdapter: ownPreparations({
       async prepare(options) {
         const prepared = await reads.prepare(options);
         if (!prepared.ok) return prepared;
@@ -255,7 +256,7 @@ test("Harness catalog still closes the qualification when the defaults read thro
           },
         };
       },
-    },
+    }),
     process: wiringProcess(),
   });
   t.after(() => {
@@ -332,54 +333,57 @@ const qualificationFailureCases: readonly {
 }[] = [
   {
     name: "typed prepare refusal",
-    adapter: () => ({
-      async prepare() {
-        return {
-          ok: false,
-          failure: {
-            phase: "prepare",
-            category: "protocol-corruption",
-            possibleEffects: "none",
-            diagnostics: "The qualification response was invalid.",
-            cause: new Error("invalid native response"),
-          },
-        };
-      },
-    }),
+    adapter: () =>
+      ownPreparations({
+        async prepare() {
+          return {
+            ok: false,
+            failure: {
+              phase: "prepare",
+              category: "protocol-corruption",
+              possibleEffects: "none",
+              diagnostics: "The qualification response was invalid.",
+              cause: new Error("invalid native response"),
+            },
+          };
+        },
+      }),
     category: "protocol-corruption",
     possibleEffects: "none",
   },
   {
     name: "thrown prepare",
-    adapter: () => ({
-      async prepare() {
-        throw new Error("prepare threw");
-      },
-    }),
+    adapter: () =>
+      ownPreparations({
+        async prepare() {
+          throw new Error("prepare threw");
+        },
+      }),
     category: "prepare-exception",
     possibleEffects: "none",
   },
   {
     name: "thrown close",
-    adapter: () => ({
-      async prepare() {
-        return {
-          ok: true,
-          harness: {
-            profile: QUALIFICATION_PROFILE,
-            async readDefaults() {
-              return QUALIFICATION_DEFAULTS;
+    adapter: () =>
+      ownPreparations({
+        async prepare() {
+          return {
+            ok: true,
+            harness: {
+              profile: QUALIFICATION_PROFILE,
+              async readDefaults() {
+                return QUALIFICATION_DEFAULTS;
+              },
+              startTurn() {
+                throw new Error("qualification must not start a Turn");
+              },
+              async close() {
+                throw new Error("close threw");
+              },
             },
-            startTurn() {
-              throw new Error("qualification must not start a Turn");
-            },
-            async close() {
-              throw new Error("close threw");
-            },
-          },
-        };
-      },
-    }),
+          };
+        },
+      }),
     category: "cleanup-exception",
     possibleEffects: "unknown",
   },
@@ -1120,7 +1124,7 @@ test("a preparation failure on a fenced owner records the refusal without claimi
     observer.runGroup.close();
     observer.catalog.close();
   });
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     prepare(options) {
       if (++prepares === 2) {
         replacement = observer.runGroup.acquireRun(runId, { takeover: true });
@@ -1139,7 +1143,7 @@ test("a preparation failure on a fenced owner records the refusal without claimi
         turns: [{ result: COMPLETED }],
       })().prepare(options);
     },
-  };
+  });
   const bundle = writeBundle([
     agentStep("draft", 0),
     { id: "gate", kind: "human-gate", shape: "approve-reject", message: "ok?" },
@@ -1545,6 +1549,8 @@ test("two overlapping Runs sharing one Session attribute every Harness and child
       ["harness-phase-start", "cleanup"],
       ["harness-phase-end", "cleanup"],
       ["harness-cleanup", undefined],
+      ["harness-preparation-cleanup", undefined],
+      ["harness-preparation-cleanup", undefined],
     ],
   );
 });
@@ -1654,3 +1660,30 @@ for (const harness of ["claude-code", "codex"] as const) {
     });
   }
 }
+test("m10-initial-preparation-ownership: headless completion closes both admissions before Run drain", async () => {
+  const trace: string[] = [];
+  const named = (name: string): HarnessAdapter => {
+    const adapter = qualificationAdapter([]);
+    return {
+      prepare: (options) => adapter.prepare(options),
+      close(options) {
+        trace.push(`admission:${name}`);
+        return adapter.close(options);
+      },
+    };
+  };
+  await withClients(
+    () => {
+      trace.push("command");
+      return 0;
+    },
+    {
+      secantHome: makeTempDir("secant-preparation-exit-"),
+      launchCwd: process.cwd(),
+      process: wiringProcess(),
+      harnessAdapter: named("claude"),
+      codexHarnessAdapter: named("codex"),
+    },
+  );
+  assert.deepEqual(trace, ["command", "admission:claude", "admission:codex"]);
+});

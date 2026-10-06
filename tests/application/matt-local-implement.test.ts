@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -126,7 +127,7 @@ function mattAgent(
   const turns: { text: string; session: string }[] = [];
   const implementation: { script: TurnScript; act?: (area: string) => void }[] =
     [];
-  const adapter: HarnessAdapter = {
+  const adapter: HarnessAdapter = ownPreparations({
     async prepare(options) {
       granted.push(options.writableDirectory);
       // The fake reads its scripted Turns by index as each Turn starts, so this
@@ -186,7 +187,7 @@ function mattAgent(
         },
       };
     },
-  };
+  });
   return { adapter, granted, turns, implementation };
 }
 

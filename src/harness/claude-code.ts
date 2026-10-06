@@ -1,3 +1,8 @@
+import {
+  PreparationOwner,
+  type InitialPreparation,
+  type PreparationClock,
+} from "./preparation-owner.js";
 import { TurnEventProducer } from "./turn-event-producer.js";
 import { reportContainment } from "./containment.js";
 // The Claude Code Harness Adapter — private to the Harness Module, re-exported
@@ -129,6 +134,8 @@ const AUTHENTICATION_REQUIRED =
  *  own `ResolveExecutableOptions`, so the Windows `.cmd`-shim and refusal paths
  *  are driven cross-OS exactly as that Module drives them. */
 export interface ClaudeCodeAdapterOverrides {
+  /** Deterministic initial-cleanup clock/timer Seam. Production omits it. */
+  readonly preparationClock?: PreparationClock;
   /** Where the configured-executable env var is read (default `process.env`). */
   readonly env?: NodeJS.ProcessEnv;
   /** Host platform for the profile and the shim rule (default `process.platform`). */
@@ -150,7 +157,7 @@ export interface ClaudeCodeAdapterOverrides {
 
 /** The factory a composition root calls. Each `prepare` supplies the Process
  *  Interface and phase observer its Prepared Harness uses; the Adapter keeps
- *  only its qualification cache. The overrides exist only for tests. */
+ *  its qualification cache and owns initial acquisitions until handoff. The overrides exist only for tests. */
 export function createClaudeCodeAdapter(
   overrides: ClaudeCodeAdapterOverrides,
 ): HarnessAdapter {
@@ -163,32 +170,55 @@ interface DiscoveredTarget extends DiscoveredHarnessTarget {
 }
 
 class ClaudeCodeAdapter implements HarnessAdapter {
+  private readonly preparations: PreparationOwner;
+
+  close(options?: Parameters<HarnessAdapter["close"]>[0]) {
+    return this.preparations.close(options);
+  }
+
+  prepare(options: PrepareOptions): Promise<PrepareResult> {
+    return this.preparations.prepare(options, (scoped, initial) =>
+      this.acquire(scoped, initial),
+    );
+  }
+
   /** Qualification cache, private to the Adapter, keyed by the discovered
    *  target's path and file identity. Same path + identical bytes ⇒ the probed
    *  version cannot have changed, so the cached profile is reused without
    *  re-running `--version`; any drift in either requalifies. */
   private readonly cache = new Map<string, HarnessProfile>();
 
-  constructor(private readonly overrides: ClaudeCodeAdapterOverrides) {}
+  constructor(private readonly overrides: ClaudeCodeAdapterOverrides) {
+    this.preparations = new PreparationOwner(overrides.preparationClock);
+  }
 
-  async prepare(options: PrepareOptions): Promise<PrepareResult> {
+  private async acquire(
+    options: PrepareOptions,
+    initial: InitialPreparation,
+  ): Promise<PrepareResult> {
+    const refuse = (failure: HarnessFailure): PrepareResult => {
+      initial.failed(failure);
+      return { ok: false, failure };
+    };
     const platform = harnessPlatform(
       this.overrides.platform ?? process.platform,
     );
     if (platform === undefined) {
-      return failed(
-        "unsupported-platform",
-        `Claude Code is not supported on platform '${process.platform}'.`,
+      return refuse(
+        failure(
+          "unsupported-platform",
+          `Claude Code is not supported on platform '${process.platform}'.`,
+        ),
       );
     }
     const writableFailure = writableDirectoryFailure(options.writableDirectory);
     if (writableFailure !== undefined) {
-      return { ok: false, failure: writableFailure };
+      return refuse(writableFailure);
     }
 
     const processAdapter = options.process;
     const discovery = this.discover(processAdapter, options);
-    if (!discovery.ok) return { ok: false, failure: discovery.failure };
+    if (!discovery.ok) return refuse(discovery.failure);
     const target = discovery.target;
     const spawn: ProcessAdapter["spawnOwnedProcess"] = (spawnOptions) =>
       processAdapter.spawnOwnedProcess(spawnOptions);
@@ -222,7 +252,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
     }
 
     const probe = await this.probeVersion(processAdapter, target);
-    if (!probe.ok) return { ok: false, failure: probe.failure };
+    if (!probe.ok) return refuse(probe.failure);
 
     const profile = buildProfile(target, probe.version, platform);
     this.cache.set(cacheKey, profile);
@@ -2864,8 +2894,4 @@ function failure(category: string, diagnostics: string): HarnessFailure {
     possibleEffects: "none",
     diagnostics,
   };
-}
-
-function failed(category: string, diagnostics: string): PrepareResult {
-  return { ok: false, failure: failure(category, diagnostics) };
 }

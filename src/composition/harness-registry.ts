@@ -27,6 +27,7 @@ import {
 import type { SelectedHarnessId } from "../run/store/store.js";
 import {
   prepareRecorded,
+  recordPreparationCleanup,
   type ReportingScope,
   type ScopedPrepareOptions,
 } from "./harness-log.js";
@@ -67,7 +68,7 @@ export class HarnessRegistry {
 
   constructor(
     qualificationWorkspace: string,
-    invocation: ReportingScope,
+    private readonly invocation: ReportingScope,
     overrides: HarnessRegistryOverrides,
   ) {
     const { process } = invocation;
@@ -126,6 +127,21 @@ export class HarnessRegistry {
       ["claude-code", claudeCode],
       ["codex", codex],
     ]);
+  }
+
+  private closing: Promise<void> | undefined;
+
+  /** All calls close admission synchronously before composition starts Run drain. */
+  close(): Promise<void> {
+    if (this.closing !== undefined) return this.closing;
+    const deadline = performance.now() + 5000;
+    const reports = Array.from(this.entries, ([harness, entry]) =>
+      entry.adapter.close({ deadline }).then((report) => {
+        recordPreparationCleanup(report, harness, this.invocation.log);
+      }),
+    );
+    this.closing = Promise.all(reports).then(() => undefined);
+    return this.closing;
   }
 
   applicationRegistrations(): readonly ApplicationHarnessRegistration[] {

@@ -1,3 +1,5 @@
+import { ownPreparations } from "./preparation-double.js";
+import { createFakeProcess } from "../process/fake-adapter.js";
 // The deterministic fake Harness Adapter. It lives in the `harness` test domain
 // and implements the Harness Adapter Interface (src/harness/harness.ts) from a
 // per-test script. It exists for what a recording of a real Harness cannot
@@ -118,6 +120,7 @@ export type FakeModelChangeAnswer = {
 
 /** The whole scripted Adapter. */
 export interface FakeScript {
+  readonly preparationClock?: Parameters<typeof ownPreparations>[1];
   readonly profile: HarnessProfile;
   /** When set, `prepare` returns this failure instead of a prepared Harness. */
   readonly prepareFailure?: HarnessFailure;
@@ -175,10 +178,23 @@ const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
  *  a scripted `prepareFailure`), and a cleanup on that Prepared Harness's first
  *  `close` (failing with the report's failure). Elapsed time is always zero. */
 export function createFake(script: FakeScript): TestHarnessAdapterFactory {
-  return () => new FakeAdapter(script);
+  return () => {
+    const owned = ownPreparations(
+      new FakeAdapter(script),
+      script.preparationClock,
+    );
+    return {
+      prepare: (options) =>
+        owned.prepare({
+          ...options,
+          process: options.process ?? createFakeProcess({}),
+        }),
+      close: (options) => owned.close(options),
+    };
+  };
 }
 
-class FakeAdapter implements TestHarnessAdapter {
+class FakeAdapter implements Pick<TestHarnessAdapter, "prepare"> {
   constructor(private readonly script: FakeScript) {}
 
   prepare(options: TestPrepareOptions): Promise<PrepareResult> {

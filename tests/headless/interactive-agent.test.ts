@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -155,7 +156,7 @@ async function launchInteractive(
   const adapter: HarnessAdapter =
     counts === undefined
       ? fake
-      : {
+      : ownPreparations({
           async prepare(options) {
             counts.prepares += 1;
             if (
@@ -188,7 +189,7 @@ async function launchInteractive(
               },
             };
           },
-        };
+        });
   const home = makeTempDir("secant-interactive-home-");
   const wired = wireApplication({
     secantHome: home,
@@ -814,7 +815,7 @@ test("a fault after admission reaches the Run, since the send already settled ap
     profile: profile(),
     turns: [COMPLETED_DETACHED],
   })();
-  const faulting: HarnessAdapter = {
+  const faulting: HarnessAdapter = ownPreparations({
     async prepare(options) {
       const prepared = await fake.prepare(options);
       if (!prepared.ok) return prepared;
@@ -843,7 +844,7 @@ test("a fault after admission reaches the Run, since the send already settled ap
         },
       };
     },
-  };
+  });
   const { wired, runId } = await launchInteractive(t, faulting);
 
   const sent = wired.projectionPort.submit({
@@ -871,7 +872,7 @@ test("a Turn that rejects after admission puts its fault on the Run (#290)", asy
     profile: profile(),
     turns: [LOST_ON_INTERRUPT],
   })();
-  const failingClose: HarnessAdapter = {
+  const failingClose: HarnessAdapter = ownPreparations({
     async prepare(options) {
       const prepared = await fake.prepare(options);
       if (!prepared.ok) return prepared;
@@ -889,7 +890,7 @@ test("a Turn that rejects after admission puts its fault on the Run (#290)", asy
         },
       };
     },
-  };
+  });
   const { wired, runId } = await launchInteractive(t, failingClose);
   const sent = wired.projectionPort.submit({
     operationId: "op-send-rejects",
@@ -1429,12 +1430,12 @@ function perPrepareAdapter(
   turnsPerPrepare: readonly FakeScript["turns"][],
 ): HarnessAdapter {
   let prepares = 0;
-  return {
+  return ownPreparations({
     prepare(options) {
       const turns = turnsPerPrepare[prepares++] ?? [];
       return createFake({ profile: profile(), turns })().prepare(options);
     },
-  };
+  });
 }
 
 async function endStep(

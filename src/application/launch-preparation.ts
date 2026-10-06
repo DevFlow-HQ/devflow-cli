@@ -228,7 +228,12 @@ export function createLaunchPreparation(
   function open(
     draft: LaunchRunInput,
   ): OpenedProjection<LaunchPreparationSnapshot> {
-    const updates = deps.subscriptions.open<LaunchPreparationSnapshot>();
+    let subscribed = true;
+    const updates = deps.subscriptions.open<LaunchPreparationSnapshot>(
+      () => () => {
+        subscribed = false;
+      },
+    );
     const evaluation = evaluate(draft);
     const resolution = evaluation.resolution;
     const syncFindings = evaluation.findings;
@@ -253,11 +258,12 @@ export function createLaunchPreparation(
       deps.observe({ kind: "model-check-start", harness });
       let assessed: TModelAssessment;
       try {
-        assessed = assessModelChoice(
-          harness,
-          resolution,
-          await deps.qualify(harness),
-        );
+        const qualification = await deps.qualify(harness);
+        if (!subscribed) {
+          deps.observe({ kind: "model-check-settle", harness });
+          return;
+        }
+        assessed = assessModelChoice(harness, resolution, qualification);
       } catch (error) {
         assessed = assessModelChoice(harness, resolution, {
           ok: false,

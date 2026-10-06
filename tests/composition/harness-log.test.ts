@@ -60,11 +60,16 @@ const discoverClaudeCode = () =>
     },
   }) as const;
 
-/** The records a Harness reported, with the base fields every record carries
+/** Prepared Harness phases, usage and cleanup. Initial-preparation reports
+ *  have independent conformance in preparation-lifetime.test.ts. The records, with the base fields every record carries
  *  (already pinned by `assertBase`) dropped. */
 function harnessRecords(records: readonly Record<string, unknown>[]) {
   return records
-    .filter((record) => String(record.event).startsWith("harness-"))
+    .filter(
+      (record) =>
+        String(record.event).startsWith("harness-") &&
+        !String(record.event).startsWith("harness-preparation-"),
+    )
     .map(({ time: _time, invocationId: _id, ...rest }) => rest);
 }
 

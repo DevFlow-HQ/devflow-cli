@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -48,8 +49,52 @@ test("a headless Secant invocation writes its start and end records to one priva
   const log = readLog(folder);
   assert.equal(log.name, `2026-10-02T09-08-07-006Z-${process.pid}.jsonl`);
   assertBase(log.records);
-  const [start, end] = log.records;
-  assert.equal(log.records.length, 2);
+  const start = log.records[0];
+  const end = log.records.at(-1);
+  assert.equal(log.records.length, 4);
+  assert.deepEqual(
+    log.records
+      .slice(1, -1)
+      .map(
+        ({
+          level,
+          event,
+          harness,
+          status,
+          preparations,
+          pending,
+          unconfirmed,
+        }) => ({
+          level,
+          event,
+          harness,
+          status,
+          preparations,
+          pending,
+          unconfirmed,
+        }),
+      ),
+    [
+      {
+        level: "info",
+        event: "harness-preparation-cleanup",
+        harness: "claude-code",
+        status: "closed",
+        preparations: 0,
+        pending: 0,
+        unconfirmed: 0,
+      },
+      {
+        level: "info",
+        event: "harness-preparation-cleanup",
+        harness: "codex",
+        status: "closed",
+        preparations: 0,
+        pending: 0,
+        unconfirmed: 0,
+      },
+    ],
+  );
   assert.deepEqual(Object.keys(start!).slice(0, 3), [
     "level",
     "time",
@@ -103,6 +148,8 @@ test("the end record carries the command's exit status, and no argument reaches 
     log.records.map((record) => [record.event, record.exitStatus]),
     [
       ["invocation-start", undefined],
+      ["harness-preparation-cleanup", undefined],
+      ["harness-preparation-cleanup", undefined],
       ["invocation-end", 1],
     ],
   );
@@ -276,7 +323,7 @@ test("detail-off drops records before serialization or a wall-clock read", async
           },
         },
       },
-      harnessAdapter: {
+      harnessAdapter: ownPreparations({
         prepare(options) {
           options.phases?.({
             kind: "phase-start",
@@ -293,7 +340,7 @@ test("detail-off drops records before serialization or a wall-clock read", async
             },
           });
         },
-      },
+      }),
     },
   );
   assert.equal(status, 0);
@@ -303,6 +350,9 @@ test("detail-off drops records before serialization or a wall-clock read", async
     "invocation-start",
     "qualification-start",
     "qualification-result",
+    "harness-preparation-cleanup",
+    "harness-preparation-failure",
+    "harness-preparation-cleanup",
     "invocation-end",
   ]);
   assert.equal(
@@ -528,7 +578,12 @@ test("startup prunes logs by last write, keeping the 30-day boundary and fresh f
     .map((line) => JSON.parse(line));
   assert.deepEqual(
     records.map((record) => record.event),
-    ["invocation-start", "invocation-end"],
+    [
+      "invocation-start",
+      "harness-preparation-cleanup",
+      "harness-preparation-cleanup",
+      "invocation-end",
+    ],
   );
 });
 
@@ -603,7 +658,12 @@ test("startup prunes the default log folder before opening the active file again
   assert.equal(log.name, `2099-10-02T09-08-07-006Z-${process.pid}.jsonl`);
   assert.deepEqual(
     log.records.map((record) => record.event),
-    ["invocation-start", "invocation-end"],
+    [
+      "invocation-start",
+      "harness-preparation-cleanup",
+      "harness-preparation-cleanup",
+      "invocation-end",
+    ],
   );
 });
 

@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -384,12 +385,12 @@ async function launch(
 
   const adapter = createFake(script)();
   let prepareCount = 0;
-  const countedAdapter = {
+  const countedAdapter = ownPreparations({
     prepare(options: Parameters<typeof adapter.prepare>[0]) {
       prepareCount++;
       return adapter.prepare(options);
     },
-  };
+  });
   const wired =
     bundle.selectedHarness === "codex"
       ? wireApplication({
@@ -551,7 +552,7 @@ test("[both-client-harness-selection] selected Harness authentication and protoc
     secantHome: home,
     launchCwd: workspace,
     process: fakeProcess(),
-    codexHarnessAdapter: {
+    codexHarnessAdapter: ownPreparations({
       async prepare() {
         prepareCount++;
         const authentication = prepareCount === 1;
@@ -573,7 +574,7 @@ test("[both-client-harness-selection] selected Harness authentication and protoc
           },
         };
       },
-    },
+    }),
     discoverCodex: () => ({
       kind: "found",
       attempt: {

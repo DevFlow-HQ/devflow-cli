@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,12 +24,6 @@ export function steppingClock() {
   };
 }
 
-const unpreparedHarness: HarnessAdapter = {
-  prepare() {
-    throw new Error("no Harness is prepared in these tests");
-  },
-};
-
 export interface Home {
   readonly folder: string;
   readonly notices: string[];
@@ -38,6 +33,11 @@ export interface Home {
 export function home(folder?: string): Home {
   const logFolder = folder ?? join(makeTempDir("secant-oplog-"), "logs");
   const notices: string[] = [];
+  const unpreparedHarness: HarnessAdapter = ownPreparations({
+    prepare() {
+      throw new Error("no Harness is prepared in these tests");
+    },
+  });
   return {
     folder: logFolder,
     notices,

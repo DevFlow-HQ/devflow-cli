@@ -138,7 +138,10 @@ export function createHarnessCatalog(
     openFocus(
       selection: HarnessFocusSelector,
     ): OpenedProjection<HarnessFocusSnapshot> {
-      const updates = subscriptions.open<HarnessFocusSnapshot>();
+      let subscribed = true;
+      const updates = subscriptions.open<HarnessFocusSnapshot>(() => () => {
+        subscribed = false;
+      });
       const registration = registrationFor(selection.id);
       if (registration === undefined) {
         return openedFocus(
@@ -156,6 +159,7 @@ export function createHarnessCatalog(
       }
 
       void qualifyRegistration(registration).then((qualification) => {
+        if (!subscribed) return;
         updates.push({
           kind: "durable",
           snapshot: focusSnapshot(

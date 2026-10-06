@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -100,7 +101,7 @@ function secondPrepareRefuses(
   evidence: Evidence,
   onRefuse?: () => void,
 ): HarnessAdapter {
-  return {
+  return ownPreparations({
     async prepare(options) {
       evidence.prepares += 1;
       if (evidence.prepares === 2) {
@@ -126,7 +127,7 @@ function secondPrepareRefuses(
         },
       };
     },
-  };
+  });
 }
 
 /** The shared Command double, counting every Command Step spawn. */

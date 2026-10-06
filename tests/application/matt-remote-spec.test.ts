@@ -1,3 +1,4 @@
+import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -88,7 +89,7 @@ function trackerAgent(
   const inputs: string[] = [];
   return {
     inputs,
-    adapter: {
+    adapter: ownPreparations({
       async prepare(options) {
         const prepared: PreparedHarness[] = [];
         for (const turn of turns) {
@@ -121,7 +122,7 @@ function trackerAgent(
           },
         };
       },
-    },
+    }),
   };
 }
 

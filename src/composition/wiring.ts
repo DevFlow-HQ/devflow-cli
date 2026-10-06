@@ -30,6 +30,7 @@ import {
   type RunOwner,
 } from "../run/store/store.js";
 import {
+  translateCause,
   type HarnessAdapter,
   type HarnessDiscovery,
   type PreparedHarness,
@@ -193,6 +194,8 @@ export function resolveHostContext(overrides: WiringOverrides): HostContext {
 }
 
 export interface Wiring extends Application {
+  /** Final invocation disposal, including stores. Idempotent across signals. */
+  close(): Promise<void>;
   readonly catalog: Catalog;
   readonly runGroup: RunGroup;
   /** The startup ensure's notices, one per Shipped Bundle it could not install. */
@@ -227,7 +230,25 @@ function shippedBundleFiles(dir: string): string[] {
 export function wireApplication(
   overrides: WiringOverrides = {},
   log?: Pick<OperationalLog, "record">,
+  lifetime = new InvocationLifetime(),
 ): Wiring {
+  // Native child observations can arrive after the bounded report. Stop before
+  // stores/logging close, while keeping their Harness resource owner alive.
+  const sink = log;
+  log =
+    sink === undefined
+      ? undefined
+      : {
+          record: (record) => {
+            if (lifetime.reporting) {
+              try {
+                sink.record(record);
+              } catch {
+                /* Observation cannot change cleanup. */
+              }
+            }
+          },
+        };
   const {
     secantHome,
     engineVersion,
@@ -271,10 +292,11 @@ export function wireApplication(
   const catalog = openCatalog(secantHome, {
     readAssets: (bytes) => readBundleAssets(bytes, DEFAULT_BUDGETS),
   });
+  lifetime.catalog = catalog;
   // Sweep the per-Run extraction directory earlier releases wrote under the home;
   // Runs copy nothing now.
-  rmSync(join(secantHome, "run-assets"), { recursive: true, force: true });
   try {
+    rmSync(join(secantHome, "run-assets"), { recursive: true, force: true });
     // The Run Store groups Runs by the resolved absolute Workspace path; open it
     // against the same canonicalisation the Application applies (A6, A20), through
     // the one exported canonicaliser rather than a second `realpathSync.native`
@@ -285,61 +307,66 @@ export function wireApplication(
       process: processAdapter,
       processForRun: (runId) => runScope(runId).process,
     });
-    try {
-      const harnessRegistry = new HarnessRegistry(
-        canonicalLaunchWorkspacePath,
-        invocation,
-        {
-          claudeCodeAdapter: overrides.harnessAdapter,
-          codexAdapter: overrides.codexHarnessAdapter,
-          discoverClaudeCode: overrides.discoverClaudeCode,
-          discoverCodex: overrides.discoverCodex,
-        },
-      );
-      const application = createApplication({
+    lifetime.runGroup = runGroup;
+    const harnessRegistry = new HarnessRegistry(
+      canonicalLaunchWorkspacePath,
+      invocation,
+      {
+        claudeCodeAdapter: overrides.harnessAdapter,
+        codexAdapter: overrides.codexHarnessAdapter,
+        discoverClaudeCode: overrides.discoverClaudeCode,
+        discoverCodex: overrides.discoverCodex,
+      },
+    );
+    lifetime.harnessRegistry = harnessRegistry;
+    const application = createApplication({
+      catalog,
+      launchWorkspacePath,
+      engineVersion,
+      ...(host !== undefined ? { hostPlatform: host } : {}),
+      runGroup,
+      // The headless client cannot relay human turn-taking; an interactive-agent
+      // Bundle is refused at Preflight (#116). The TUI root sets this true.
+      supportsInteractiveTurns: overrides.supportsInteractiveTurns ?? false,
+      harnessRegistry: harnessRegistry.applicationRegistrations(),
+      process: processAdapter,
+      runExecution: makeRunExecution({
         catalog,
-        launchWorkspacePath,
-        engineVersion,
-        ...(host !== undefined ? { hostPlatform: host } : {}),
-        runGroup,
-        // The headless client cannot relay human turn-taking; an interactive-agent
-        // Bundle is refused at Preflight (#116). The TUI root sets this true.
-        supportsInteractiveTurns: overrides.supportsInteractiveTurns ?? false,
-        harnessRegistry: harnessRegistry.applicationRegistrations(),
-        process: processAdapter,
-        runExecution: makeRunExecution({
-          catalog,
-          platform: host ?? "linux",
-          harnessRegistry,
-          runScope,
-          ...(observe !== undefined ? { observe } : {}),
-        }),
-        prepareRunInteractiveStep: makePrepareRunInteractiveStep(
-          harnessRegistry,
-          runScope,
-          observe,
-        ),
-        // Pre-Run Application facts (#319) beside the Attempt outcomes it settles.
-        ...(log !== undefined && observe !== undefined
-          ? { observe: applicationObserver(log, logClock, observe) }
-          : {}),
-      });
-      // Every startup, in both roots, before either client reads (ADR 0029). A
-      // failure is a notice, never a thrown startup error.
-      const startupNotices = application.ensureShippedBundles(
-        shippedBundleFiles(
-          overrides.shippedBundleDir ?? join(import.meta.dirname, "builtin"),
-        ),
-      );
-      return { catalog, runGroup, startupNotices, ...application };
-    } catch (error) {
-      runGroup.close();
-      throw error;
-    }
+        platform: host ?? "linux",
+        harnessRegistry,
+        runScope,
+        ...(observe !== undefined ? { observe } : {}),
+      }),
+      prepareRunInteractiveStep: makePrepareRunInteractiveStep(
+        harnessRegistry,
+        runScope,
+        observe,
+      ),
+      // Pre-Run Application facts (#319) beside the Attempt outcomes it settles.
+      ...(log !== undefined && observe !== undefined
+        ? { observe: applicationObserver(log, logClock, observe) }
+        : {}),
+    });
+    lifetime.application = application;
+    // Every startup, in both roots, before either client reads (ADR 0029). A
+    // failure is a notice, never a thrown startup error.
+    const startupNotices = application.ensureShippedBundles(
+      shippedBundleFiles(
+        overrides.shippedBundleDir ?? join(import.meta.dirname, "builtin"),
+      ),
+    );
+    return {
+      catalog,
+      runGroup,
+      startupNotices,
+      ...application,
+      shutdown: () => lifetime.shutdown(),
+      close: () => lifetime.dispose(),
+    };
   } catch (error) {
     // Construction can throw (e.g. the launch path no longer resolves); close
     // the Catalog we opened before rethrowing, so no caller leaks it.
-    catalog.close();
+    void lifetime.dispose().catch(() => {});
     throw error;
   }
 }
@@ -650,4 +677,77 @@ function treeResolver(catalog: Catalog, digest: string): AssetResolver {
     if (!target.startsWith(root + sep)) return undefined;
     return existsSync(target) ? target : undefined;
   };
+}
+
+/** The two client roots share acquisition and disposal, including partial wiring. */
+export async function withWiredApplication<T>(
+  overrides: WiringOverrides,
+  log: OperationalLog,
+  use: (wiring: Wiring) => Promise<T>,
+): Promise<T> {
+  const lifetime = new InvocationLifetime();
+  let result:
+    | { readonly ok: true; readonly value: T }
+    | { readonly ok: false; readonly error: unknown };
+  try {
+    result = {
+      ok: true,
+      value: await use(wireApplication(overrides, log, lifetime)),
+    };
+  } catch (error) {
+    result = { ok: false, error };
+    log.fatal(error);
+  }
+  try {
+    await lifetime.dispose();
+  } catch (error) {
+    // Preserve a primary construction/client failure separately from cleanup.
+    log.record({
+      event: "invocation-cleanup-failure",
+      cause: translateCause(error),
+    });
+    if (result.ok) throw error;
+  }
+  if (!result.ok) throw result.error;
+  return result.value;
+}
+
+class InvocationLifetime {
+  catalog: Catalog | undefined;
+  runGroup: RunGroup | undefined;
+  harnessRegistry: HarnessRegistry | undefined;
+  application: Application | undefined;
+  reporting = true;
+  private shuttingDown: Promise<void> | undefined;
+  private disposing: Promise<void> | undefined;
+
+  shutdown(): Promise<void> {
+    if (this.shuttingDown !== undefined) return this.shuttingDown;
+    // The shared deadline starts here, and both admission closes happen before
+    // Application's synchronous shutdown work or its first await.
+    const preparations = this.harnessRegistry?.close() ?? Promise.resolve();
+    const runs = this.application?.shutdown() ?? Promise.resolve();
+    this.shuttingDown = Promise.allSettled([preparations, runs]).then(
+      (outcomes) => {
+        this.reporting = false;
+        const failures = outcomes.flatMap((outcome) =>
+          outcome.status === "rejected" ? [outcome.reason] : [],
+        );
+        if (failures.length > 0)
+          throw new AggregateError(failures, "Invocation cleanup failed");
+      },
+    );
+    return this.shuttingDown;
+  }
+
+  dispose(): Promise<void> {
+    this.disposing ??= this.shutdown().finally(() => {
+      try {
+        this.runGroup?.close();
+      } finally {
+        this.catalog?.close();
+      }
+    });
+    return this.disposing;
+  }
 }
