@@ -13,6 +13,7 @@ import {
   scriptedClaude,
   turnRequest,
 } from "./scripted-claude.js";
+import { replayRecordedLine } from "./codex-replay-path.js";
 
 const frame = z.record(z.string(), z.unknown());
 function recordedClaudeResult(name: string, file: string) {
@@ -74,8 +75,11 @@ test("m10-observed-harness-facts: authentic Claude counters and per-model capaci
 
 // Replay authentic stdout through the production Adapter and an injected Process.
 // Only request ids and Workspace placeholders change; fixtures stay byte-faithful.
-async function codexFacts(t: TestContext, extra: readonly object[] = []) {
-  const workspace = makeTempDir("secant-observed-codex-");
+async function codexFacts(
+  t: TestContext,
+  extra: readonly object[] = [],
+  workspace = makeTempDir("secant-observed-codex-"),
+) {
   const traffic = z
     .object({
       traffic: z.array(
@@ -87,7 +91,7 @@ async function codexFacts(t: TestContext, extra: readonly object[] = []) {
         readFileSync(
           new URL("./fixtures/codex/test-repair/case.json", import.meta.url),
           "utf8",
-        ).replaceAll("«WORKSPACE»", JSON.stringify(workspace).slice(1, -1)),
+        ),
       ),
     );
   const envelope = z.looseObject({
@@ -104,7 +108,9 @@ async function codexFacts(t: TestContext, extra: readonly object[] = []) {
       !["stdin", "stdout"].includes(entry.direction)
     )
       continue;
-    const value = envelope.parse(JSON.parse(entry.line));
+    const value = envelope.parse(
+      JSON.parse(replayRecordedLine(entry.line, workspace)),
+    );
     if (entry.direction === "stdin") {
       if (value.id !== undefined && value.method !== undefined)
         requests.set(value.id, value.method);
@@ -220,6 +226,15 @@ test("m10-observed-harness-facts: authentic Codex total and last usage are not c
     false,
   );
   assert.ok(events.some((event) => event.kind === "tool-activity"));
+});
+
+test("m10-observed-harness-facts: recorded Codex observations survive Windows Workspace paths in nested JSON", async (t) => {
+  const events = await codexFacts(t, [], "D:\\a\\secant\\workspace");
+  assert.deepEqual(events.filter((event) => event.kind === "context").at(-1), {
+    kind: "context",
+    observation: { limitTokens: 258400 },
+  });
+  assert.equal(events.filter((event) => event.kind === "usage").length, 5);
 });
 
 test("m10-observed-harness-facts: Claude noise stays private, unfamiliar tools stay other and malformed optional figures stay absent", async (t) => {
