@@ -289,7 +289,7 @@ async function driveCase(
       await firstEvent(
         turn,
         (event) =>
-          event.kind === "tool-activity" || event.kind === "request-raised",
+          event.kind === "tool-call" || event.kind === "request-raised",
       );
       const receipt = await turn.interrupt();
       if (receipt.outcome !== "accepted") {
@@ -307,7 +307,7 @@ async function driveCase(
       await firstEvent(
         first,
         (event) =>
-          event.kind === "tool-activity" || event.kind === "request-raised",
+          event.kind === "tool-call" || event.kind === "request-raised",
       );
       const receipt = await first.interrupt();
       if (receipt.outcome !== "accepted") {

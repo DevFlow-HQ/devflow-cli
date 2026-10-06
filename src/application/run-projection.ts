@@ -1,3 +1,4 @@
+import { readToolCallEvent } from "../run/store/store.js";
 import { createHash } from "node:crypto";
 import { modelChoiceOffer } from "./model-choice.js";
 import type { ApplicationHarnessQualification } from "./harness-registry.js";
@@ -1087,6 +1088,15 @@ function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
       at: event.at,
       event: "assistant-content",
       detail: timelineDetail(content ?? ""),
+    };
+  }
+  if (event.kind === "tool-call") {
+    const call = readToolCallEvent(event);
+    if (call === undefined) return undefined;
+    return {
+      at: event.at,
+      event: "tool-activity",
+      detail: `${call.tool} ${call.outcome.kind === "running" ? "started" : "completed"}`,
     };
   }
   if (event.kind === "tool-activity") {

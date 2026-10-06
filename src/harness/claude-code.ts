@@ -25,6 +25,8 @@ import { ControlChannel, type ControlOutcome } from "./claude-code/control.js";
 import {
   ClaudeEffort,
   contentBlocks,
+  observedToolStart,
+  observedToolResult,
   encodeUserMessage,
   encodeElicitationDecline,
   type ElicitationFrame,
@@ -75,6 +77,7 @@ import type {
   SteerInput,
   SteerSettlement,
   TurnEventListener,
+  ToolCall,
   TurnRequest,
   TurnResult,
   TurnSubscription,
@@ -107,7 +110,7 @@ const DENY_MESSAGE = "The tool use was denied.";
 
 /** This Adapter's revision, stamped onto every profile it produces so a cached
  *  qualification from an older Adapter is never mistaken for a current one. */
-const ADAPTER_REVISION = "claude-code-5";
+const ADAPTER_REVISION = "claude-code-6";
 
 const HARNESS_NAME = "claude-code";
 
@@ -1672,7 +1675,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   lastObservation = "no authoritative observation before the Turn ended";
   readonly request: TurnRequest;
   private readonly producer = new TurnEventProducer();
-  private readonly tools = new Map<string, string>();
+  private readonly tools = new Map<string, ToolCall>();
   private readonly resultPromise: Promise<TurnResult>;
   private resolveResult!: (result: TurnResult) => void;
   private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2276,39 +2279,28 @@ class ClaudeCodeTurn implements HarnessTurn {
         continue;
       }
       if (blockType !== "tool_use") continue;
-      const tool = block.name ?? "unknown tool";
+      if (
+        block.name === "mcp__secant__step_done" ||
+        block.name === "mcp__secant__stage_done"
+      )
+        continue;
       const id = block.id;
-      if (id !== undefined) this.tools.set(id, tool);
-      this.producer.emit({
-        kind: "tool-activity",
-        activity: {
-          tool: displayTool(tool),
-          phase: "started",
-          summary: displayToolSummary(tool, block.input),
-          ...(parentActivity !== undefined ? { parentActivity } : {}),
-        },
-      });
+      if (id === undefined || this.tools.has(id)) continue;
+      const call = observedToolStart(block, randomUUID());
+      this.tools.set(id, call);
+      this.producer.emit({ kind: "tool-call", call });
     }
   }
 
   private acceptToolResults(frame: MessageFrame): void {
-    const parentActivity = frame.parent_tool_use_id ?? undefined;
     for (const block of contentBlocks(frame)) {
-      if (block.type !== "tool_result") continue;
-      const id = block.tool_use_id;
-      const tool = id === undefined ? undefined : this.tools.get(id);
-      this.producer.emit({
-        kind: "tool-activity",
-        activity: {
-          tool: tool === undefined ? "other" : displayTool(tool),
-          phase: "completed",
-          summary:
-            tool === undefined
-              ? summarize(block.content)
-              : displayToolSummary(tool, block.content),
-          ...(parentActivity !== undefined ? { parentActivity } : {}),
-        },
-      });
+      if (block.type !== "tool_result" || block.tool_use_id === undefined)
+        continue;
+      const start = this.tools.get(block.tool_use_id);
+      if (start === undefined || start.outcome.kind !== "running") continue;
+      const call = observedToolResult(frame, block, start);
+      this.tools.set(block.tool_use_id, call);
+      this.producer.emit({ kind: "tool-call", call });
     }
   }
 
@@ -2623,43 +2615,6 @@ function describeSessionFacts(facts: SessionFacts): string {
 
 // A tool_use is known work even when its tool name is unfamiliar. Unknown
 // protocol frames never reach this classifier. Native MCP tool names stay useful.
-const DISPLAY_TOOLS: ReadonlySet<string> = new Set([
-  "Read",
-  "Edit",
-  "Write",
-  "Bash",
-  "Glob",
-  "Grep",
-  "WebFetch",
-  "WebSearch",
-  "Task",
-  "Agent",
-  "Skill",
-  "TodoWrite",
-  "ToolSearch",
-  "AskUserQuestion",
-  "EnterPlanMode",
-  "ExitPlanMode",
-  "NotebookEdit",
-]);
-function displayTool(tool: string): string {
-  return DISPLAY_TOOLS.has(tool) || tool.startsWith("mcp__") ? tool : "other";
-}
-function displayToolSummary(tool: string, value: unknown): string {
-  const summary = summarize(value);
-  return displayTool(tool) === "other" ? `${tool} · ${summary}` : summary;
-}
-
-function summarize(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === undefined) return "";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "unavailable";
-  }
-}
-
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

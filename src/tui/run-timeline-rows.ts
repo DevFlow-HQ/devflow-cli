@@ -262,6 +262,16 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
       return `Steer · ${value.delivery}\n${value.content}`;
     case "agent-call":
       return `Agent call ${value.call} · ${value.reply.replaceAll("-", " ")}${value.refusal === undefined ? "" : ` · ${value.refusal}`} · ${screenReason(value.reason)} · ${value.disposition}`;
+    case "tool": {
+      const label = value.outcome.kind;
+      const detail =
+        value.outcome.kind === "failed"
+          ? value.outcome.error
+          : value.outcome.kind === "declined"
+            ? value.outcome.reason
+            : undefined;
+      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}\n${value.input}${detail === undefined ? "" : `\n${detail}`}`;
+    }
     case "request":
       return `? ${value.description}`;
     case "activity":

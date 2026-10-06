@@ -174,7 +174,47 @@ async function codexFacts(
               ...notifications
                 .slice(0, terminal)
                 .map((value) => envelope.parse(value)),
-              ...extra.map((value) => envelope.parse(value)),
+              ...extra.map((value) => {
+                const extra = z
+                  .looseObject({
+                    method: z.string().optional(),
+                    params: z
+                      .looseObject({
+                        threadId: z.unknown().optional(),
+                        turnId: z.unknown().optional(),
+                        item: z.unknown().optional(),
+                      })
+                      .optional(),
+                  })
+                  .parse(value);
+                if (
+                  extra.params?.item !== undefined &&
+                  extra.params.threadId === undefined
+                ) {
+                  const correlated = z
+                    .object({
+                      params: z.object({
+                        threadId: z.string(),
+                        turn: z.object({ id: z.string() }),
+                      }),
+                    })
+                    .parse(
+                      notifications.find(
+                        (value) =>
+                          envelope.parse(value).method === "turn/started",
+                      ),
+                    );
+                  return {
+                    ...extra,
+                    params: {
+                      ...extra.params,
+                      threadId: correlated.params.threadId,
+                      turnId: correlated.params.turn.id,
+                    },
+                  };
+                }
+                return envelope.parse(value);
+              }),
               ...notifications
                 .slice(terminal)
                 .map((value) => envelope.parse(value)),
@@ -225,7 +265,7 @@ test("m10-observed-harness-facts: authentic Codex total and last usage are not c
     events.some((event) => event.kind === "activity"),
     false,
   );
-  assert.ok(events.some((event) => event.kind === "tool-activity"));
+  assert.ok(events.some((event) => event.kind === "tool-call"));
 });
 
 test("m10-observed-harness-facts: recorded Codex observations survive Windows Workspace paths in nested JSON", async (t) => {
@@ -309,27 +349,31 @@ test("m10-observed-harness-facts: Claude noise stays private, unfamiliar tools s
     1,
     "only the existing Session description is activity",
   );
+  const calls = events
+    .filter((event) => event.kind === "tool-call")
+    .map((event) => event.call);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.callId, calls[1]?.callId);
   assert.deepEqual(
-    events.filter((event) => event.kind === "tool-activity"),
+    calls.map((call) => ({
+      tool: call.tool,
+      input: call.input,
+      outcome: call.outcome,
+    })),
     [
       {
-        kind: "tool-activity",
-        activity: {
-          tool: "other",
-          phase: "started",
-          summary: 'UnfamiliarWork · {"path":"README.md"}',
-        },
+        tool: "other",
+        input: 'UnfamiliarWork · {"path":"README.md"}',
+        outcome: { kind: "running" },
       },
       {
-        kind: "tool-activity",
-        activity: {
-          tool: "other",
-          phase: "completed",
-          summary: "UnfamiliarWork · done",
-        },
+        tool: "other",
+        input: 'UnfamiliarWork · {"path":"README.md"}',
+        outcome: { kind: "completed" },
       },
     ],
   );
+  assert.notEqual(calls[0]?.callId, "call");
   assert.deepEqual(
     events.filter((event) => event.kind === "context"),
     [
@@ -471,12 +515,18 @@ test("m10-observed-harness-facts: Codex ignores foreign accounting and unknown/r
       },
     ],
   );
-  assert.ok(
+  assert.equal(
     events.some(
       (event) =>
-        event.kind === "tool-activity" &&
-        event.activity.tool === "other" &&
-        event.activity.summary === "UnfamiliarWork · completed",
+        event.kind === "tool-call" &&
+        event.call.input.includes("UnfamiliarWork"),
+    ),
+    false,
+    "synthetic dynamic-tool fields are not native qualification",
+  );
+  assert.ok(
+    events.some(
+      (event) => event.kind === "tool-call" && event.call.tool === "command",
     ),
   );
   assert.doesNotMatch(
@@ -551,5 +601,455 @@ test("m10-observed-harness-facts: authentic Claude message usage is visible befo
     events.filter((event) => event.kind === "usage").at(-1)?.observation
       .summary ?? "",
     /^exchange: input 2, output 4 tokens/,
+  );
+});
+
+function recordedToolFrames(caseName: string, files: readonly string[]) {
+  return files.flatMap((file) =>
+    readFileSync(
+      new URL(`./fixtures/claude-code/${caseName}/${file}`, import.meta.url),
+      "utf8",
+    )
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => frame.parse(JSON.parse(line)))
+      .filter((value) => value.type === "assistant" || value.type === "user"),
+  );
+}
+async function claudeTools(
+  t: TestContext,
+  frames: readonly Record<string, unknown>[],
+) {
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    userFrame: () => [
+      init,
+      ...frames,
+      { type: "result", subtype: "success", is_error: false },
+    ],
+  });
+  const harness = await prepare(scripted);
+  t.after(() => harness.close());
+  const turn = harness.startTurn(turnRequest("tools"));
+  const events: TurnEvent[] = [];
+  turn.subscribe((event) => events.push(event));
+  assert.equal((await turn.result()).kind, "completed");
+  const before = events.length;
+  scripted.emit(...frames);
+  assert.equal(
+    events.length,
+    before,
+    "no tool fact follows the authoritative result",
+  );
+  return events
+    .filter((event) => event.kind === "tool-call")
+    .map((event) => event.call);
+}
+test("m10-observed-harness-facts: authentic Claude Read/Edit ids, main inputs and reported line counts are qualified", async (t) => {
+  const calls = await claudeTools(
+    t,
+    recordedToolFrames("test-repair", [
+      "stdout-0.stdout",
+      "stdout-final.stdout",
+    ]),
+  );
+  assert.deepEqual(
+    calls.map((call) => ({
+      tool: call.tool,
+      input: call.input,
+      outcome: call.outcome,
+      count: call.count,
+    })),
+    [
+      {
+        tool: "read",
+        input: "«WORKSPACE»/sum.mjs",
+        outcome: { kind: "running" },
+        count: undefined,
+      },
+      {
+        tool: "read",
+        input: "«WORKSPACE»/sum.mjs",
+        outcome: { kind: "completed" },
+        count: { value: 2, unit: "lines" },
+      },
+      {
+        tool: "read",
+        input: "«WORKSPACE»/sum.test.mjs",
+        outcome: { kind: "running" },
+        count: undefined,
+      },
+      {
+        tool: "read",
+        input: "«WORKSPACE»/sum.test.mjs",
+        outcome: { kind: "completed" },
+        count: { value: 5, unit: "lines" },
+      },
+      {
+        tool: "file-change",
+        input: "«WORKSPACE»/sum.mjs",
+        outcome: { kind: "running" },
+        count: undefined,
+      },
+      {
+        tool: "file-change",
+        input: "«WORKSPACE»/sum.mjs",
+        outcome: { kind: "completed" },
+        count: undefined,
+      },
+    ],
+  );
+  assert.equal(calls[0]?.callId, calls[1]?.callId);
+  assert.equal(calls[2]?.callId, calls[3]?.callId);
+  assert.notEqual(calls[0]?.callId, calls[2]?.callId);
+  assert.equal(
+    calls.every((call) => call.parentCallId === undefined),
+    true,
+  );
+  assert.doesNotMatch(JSON.stringify(calls), /toolu_/);
+});
+test("m10-observed-harness-facts: authentic Claude Glob and Write preserve reported fields", async (t) => {
+  const glob = await claudeTools(
+    t,
+    recordedToolFrames("matt-front", ["implement-0.stdout"]),
+  );
+  assert.equal(glob[0]?.tool, "search");
+  assert.equal(glob[0]?.input, "**/*");
+  assert.equal(glob[1]?.callId, glob[0]?.callId);
+  assert.deepEqual(glob[1]?.count, { value: 2, unit: "files" });
+  const write = await claudeTools(
+    t,
+    recordedToolFrames("model-change", ["turn-1a.stdout", "turn-1b.stdout"]),
+  );
+  assert.deepEqual(
+    write.map((call) => [call.tool, call.input, call.outcome.kind]),
+    [
+      ["file-change", "«WORKSPACE»/note.txt", "running"],
+      ["file-change", "«WORKSPACE»/note.txt", "completed"],
+    ],
+  );
+});
+test("m10-observed-harness-facts: authentic Claude rejected Write is declined, independent of Turn success", async (t) => {
+  const calls = await claudeTools(
+    t,
+    recordedToolFrames("steer-cancel", ["turn-1.stdout", "cancelled.stdout"]),
+  );
+  const declined = calls.find((call) => call.outcome.kind === "declined");
+  assert.ok(declined?.outcome.kind === "declined");
+  assert.match(declined.outcome.reason ?? "", /tool use was rejected/);
+  assert.equal(declined.tool, "file-change");
+  assert.equal(declined.count, undefined);
+});
+test("m10-observed-harness-facts: authentic Claude external MCP result text does not infer refusal from elicitation", async (t) => {
+  const calls = await claudeTools(
+    t,
+    recordedToolFrames("elicitation-declined", [
+      "before.stdout",
+      "after.stdout",
+    ]),
+  );
+  assert.deepEqual(
+    calls
+      .filter((call) => call.tool === "mcp")
+      .map((call) => [call.tool, call.input, call.outcome.kind]),
+    [
+      ["mcp", "mcp__setup__setup · {}", "running"],
+      ["mcp", "mcp__setup__setup · {}", "completed"],
+    ],
+  );
+});
+test("m10-observed-harness-facts: authentic Codex call ids correlate statuses and main inputs without exposing native ids", async (t) => {
+  const calls = (await codexFacts(t))
+    .filter((event) => event.kind === "tool-call")
+    .map((event) => event.call);
+  const first = calls[0]!;
+  assert.equal(first.tool, "command");
+  assert.equal(first.input, "/bin/bash -lc pwd");
+  assert.equal(first.outcome.kind, "running");
+  assert.equal(calls[1]?.callId, first.callId);
+  assert.equal(calls[1]?.outcome.kind, "completed");
+  assert.ok(calls.some((call) => call.outcome.kind === "failed"));
+  assert.ok(
+    calls.some(
+      (call) => call.tool === "file-change" && call.input.endsWith("sum.mjs"),
+    ),
+  );
+  assert.equal(
+    calls.every(
+      (call) => call.count === undefined && call.parentCallId === undefined,
+    ),
+    true,
+  );
+  assert.doesNotMatch(JSON.stringify(calls), /call_qIdYVG/);
+});
+
+test("m10-observed-harness-facts: authentic Claude reused native ids are scoped to each Secant Turn and Session", async (t) => {
+  const frames = recordedToolFrames("test-repair", [
+    "stdout-0.stdout",
+    "stdout-final.stdout",
+  ]);
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    userFrame: () => [
+      init,
+      ...frames,
+      { type: "result", subtype: "success", is_error: false },
+    ],
+  });
+  const harness = await prepare(scripted);
+  t.after(() => harness.close());
+  const ids: string[] = [];
+  for (const session of ["planning", "planning", "another"]) {
+    const turn = harness.startTurn({
+      ...turnRequest(`turn-${ids.length}`),
+      session,
+    });
+    const events: TurnEvent[] = [];
+    turn.subscribe((event) => events.push(event));
+    assert.equal((await turn.result()).kind, "completed");
+    const calls = events
+      .filter((event) => event.kind === "tool-call")
+      .map((event) => event.call);
+    assert.equal(calls[0]?.callId, calls[1]?.callId);
+    ids.push(calls[0]!.callId);
+  }
+  assert.equal(new Set(ids).size, 3);
+});
+test("m10-observed-harness-facts: malformed and absent optional Claude counts stay unknown while observed errors remain separate", async (t) => {
+  const frames = recordedToolFrames("test-repair", [
+    "stdout-0.stdout",
+    "stdout-final.stdout",
+  ]);
+  const malformed = frames.map((value) =>
+    frame.parse(
+      JSON.parse(
+        JSON.stringify(value).replace('"numLines":2', '"numLines":"malformed"'),
+      ),
+    ),
+  );
+  const calls = await claudeTools(t, malformed);
+  assert.equal(calls[1]?.count, undefined);
+  assert.deepEqual(calls[1]?.outcome, { kind: "completed" });
+  const failure = await claudeTools(t, [
+    {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "one",
+            name: "Read",
+            input: { file_path: "file.ts" },
+          },
+        ],
+      },
+    },
+    {
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "one",
+            is_error: true,
+            content: "Observed failure",
+          },
+        ],
+      },
+    },
+  ]);
+  assert.deepEqual(failure[1]?.outcome, {
+    kind: "failed",
+    error: "Observed failure",
+  });
+  assert.equal(failure[1]?.count, undefined);
+});
+test("m10-observed-harness-facts: authentic Claude Secant Agent calls never duplicate as ordinary MCP tool rows", async (t) => {
+  const calls = await claudeTools(
+    t,
+    recordedToolFrames("agent-call", ["before.stdout"]),
+  );
+  assert.equal(
+    calls.some(
+      (call) =>
+        call.tool === "mcp" && call.input.includes("mcp__secant__step_done"),
+    ),
+    false,
+  );
+  assert.ok(
+    calls.some(
+      (call) => call.tool === "other" && call.input.includes("ToolSearch"),
+    ),
+  );
+});
+
+test("m10-observed-harness-facts: authentic Codex external MCP items preserve input and exclude Secant declarations", async (t) => {
+  const recorded = z
+    .object({
+      traffic: z.array(
+        z.object({ direction: z.string(), line: z.string().optional() }),
+      ),
+    })
+    .parse(
+      JSON.parse(
+        readFileSync(
+          new URL("./fixtures/codex/agent-calls/case.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+    );
+  const notices = recorded.traffic.flatMap((entry) => {
+    if (entry.direction !== "stdout" || entry.line === undefined) return [];
+    const value = z
+      .object({
+        method: z.string().optional(),
+        params: z
+          .object({ item: z.looseObject({ type: z.string() }) })
+          .optional(),
+      })
+      .safeParse(JSON.parse(entry.line));
+    return value.success &&
+      ["item/started", "item/completed"].includes(value.data.method ?? "") &&
+      value.data.params?.item.type === "mcpToolCall"
+      ? [
+          {
+            method: value.data.method,
+            params: { item: value.data.params.item },
+          },
+        ]
+      : [];
+  });
+  const events = await codexFacts(t, notices);
+  const calls = events.flatMap((event) =>
+    event.kind === "tool-call" && event.call.tool === "mcp" ? [event.call] : [],
+  );
+  assert.deepEqual(
+    calls.map((call) => [call.input, call.outcome.kind]),
+    [
+      ["recording_external/needs_approval · {}", "running"],
+      ["recording_external/needs_approval · {}", "completed"],
+      ["recording_external/ask_form · {}", "running"],
+      ["recording_external/ask_form · {}", "completed"],
+      ["recording_external/ask_url · {}", "running"],
+      ["recording_external/ask_url · {}", "completed"],
+    ],
+  );
+  assert.equal(calls[0]?.callId, calls[1]?.callId);
+  assert.notEqual(calls[0]?.callId, calls[2]?.callId);
+  assert.doesNotMatch(JSON.stringify(calls), /step_done|call_iN7t/);
+});
+
+test("m10-observed-harness-facts: unqualified Codex command refusal and file-change failure/refusal statuses remain absent", async (t) => {
+  const events = await codexFacts(t, [
+    {
+      method: "item/started",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "mcpToolCall",
+          id: "unqualified-mcp",
+          server: "external",
+          tool: "tool",
+          arguments: {},
+          status: "inProgress",
+        },
+      },
+    },
+    {
+      method: "item/completed",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "mcpToolCall",
+          id: "unqualified-mcp",
+          server: "external",
+          tool: "tool",
+          arguments: {},
+          status: "failed",
+        },
+      },
+    },
+    {
+      method: "item/started",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "commandExecution",
+          id: "unqualified-command",
+          command: "do work",
+          status: "inProgress",
+        },
+      },
+    },
+    {
+      method: "item/completed",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "commandExecution",
+          id: "unqualified-command",
+          command: "do work",
+          status: "declined",
+        },
+      },
+    },
+    {
+      method: "item/started",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "fileChange",
+          id: "unqualified-file",
+          changes: [
+            { path: "file.ts", kind: { type: "update", move_path: null } },
+          ],
+          status: "inProgress",
+        },
+      },
+    },
+    {
+      method: "item/completed",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "fileChange",
+          id: "unqualified-file",
+          changes: [
+            { path: "file.ts", kind: { type: "update", move_path: null } },
+          ],
+          status: "failed",
+        },
+      },
+    },
+    {
+      method: "item/completed",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "fileChange",
+          id: "unqualified-file",
+          changes: [
+            { path: "file.ts", kind: { type: "update", move_path: null } },
+          ],
+          status: "declined",
+        },
+      },
+    },
+  ]);
+  const calls = events.flatMap((event) =>
+    event.kind === "tool-call" &&
+    ["do work", "update file.ts", "external/tool · {}"].includes(
+      event.call.input,
+    )
+      ? [event.call]
+      : [],
+  );
+  assert.deepEqual(
+    calls.map((call) => [call.tool, call.input, call.outcome.kind]),
+    [
+      ["mcp", "external/tool · {}", "running"],
+      ["command", "do work", "running"],
+      ["file-change", "update file.ts", "running"],
+    ],
   );
 });

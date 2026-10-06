@@ -1158,21 +1158,9 @@ test("supported Codex item lifecycles use semantic Harness events", async () => 
   const events = observeEvents(turn);
   assert.equal((await turn.result()).kind, "completed");
   const tools = events
-    .filter((event) => event.kind === "tool-activity")
-    .map((event) => event.activity.tool);
-  assert.deepEqual(
-    new Set(tools),
-    new Set([
-      "command",
-      "file-change",
-      "mcp:docs/read",
-      "subagent",
-      "web-search",
-      "other",
-      "image-view",
-      "image-generation",
-    ]),
-  );
+    .filter((event) => event.kind === "tool-call")
+    .map((event) => event.call.tool);
+  assert.deepEqual(new Set(tools), new Set(["command", "file-change", "mcp"]));
   assert.equal(
     events.some(
       (event) =>
@@ -1181,13 +1169,14 @@ test("supported Codex item lifecycles use semantic Harness events", async () => 
     ),
     false,
   );
-  assert.ok(
+  assert.equal(
     events.some(
       (event) =>
-        event.kind === "tool-activity" &&
-        event.activity.tool === "other" &&
-        event.activity.summary.includes("custom"),
+        event.kind === "tool-call" &&
+        ["web", "subagent", "other"].includes(event.call.tool),
     ),
+    false,
+    "unqualified synthetic item shapes stay absent; the fake covers the full semantic vocabulary",
   );
   await prepared.close();
 });
@@ -3465,7 +3454,7 @@ test("the recorder observer captures runtime traffic and shutdown through the pr
     ),
   );
   assert.equal(executableVersion, "codex-cli 0.160.0");
-  assert.equal(protocolVersion, "codex-probe-4");
+  assert.equal(protocolVersion, "codex-probe-5");
   assert.ok(schemaBytes > 0);
   assert.ok(
     observed.some(
@@ -3833,15 +3822,14 @@ async function waitForToolOrRequest(
 ): Promise<void> {
   if (
     events.some(
-      (event) =>
-        event.kind === "tool-activity" || event.kind === "request-raised",
+      (event) => event.kind === "tool-call" || event.kind === "request-raised",
     )
   ) {
     return;
   }
   await new Promise<void>((resolve) => {
     const subscription = turn.subscribe((event) => {
-      if (event.kind !== "tool-activity" && event.kind !== "request-raised") {
+      if (event.kind !== "tool-call" && event.kind !== "request-raised") {
         return;
       }
       subscription.unsubscribe();
@@ -3914,7 +3902,7 @@ test("Codex profile is truthful and user-compatible", async () => {
   if (!result.ok) throw new Error("unreachable");
   const { profile } = result.harness;
   assert.equal(profile.harness, "codex");
-  assert.equal(profile.adapterRevision, "codex-probe-4");
+  assert.equal(profile.adapterRevision, "codex-probe-5");
   assert.equal(profile.recovery.mode, "native-reattach");
   assert.match(profile.recovery.evidence, /thread\/resume.*exact/i);
   assert.equal(profile.interruption.mode, "active-turn");

@@ -742,3 +742,71 @@ test("m10-interruption-and-transcript: each settled message and delivered Steer 
     "settlement adds no final copy",
   );
 });
+
+test("m10-interruption-and-transcript: tool starts and observed settlements survive crash reconciliation without fabricated results or transcript entries", (t) => {
+  const home = makeTempDir("secant-tool-crash-");
+  const group = openRunGroup(home, WORKSPACE);
+  const created = create(group, "tool-crash");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  assert.ok(owner.writeState("running").ok);
+  assert.ok(
+    owner.admitTurn({
+      turnId: "turn",
+      attemptId: "0.0:write",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      input: "Prompt",
+      recoveryCoordinate: "private",
+      harness: "codex",
+      at: AT,
+    }).ok,
+  );
+  const append = (callId: string, historyOrder: number, outcome: object) =>
+    owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-call",
+      payload: JSON.stringify({
+        callId,
+        parentCallId: "private-parent",
+        tool: "read",
+        input: "file",
+        historyOrder,
+        outcome,
+      }),
+      at: AT,
+    });
+  append("settled", 2, { kind: "running" });
+  append("unmatched", 3, { kind: "running" });
+  append("settled", 99, { kind: "completed" });
+  // Repeated starts and contradictory late results cannot rewrite observed truth.
+  append("settled", 100, { kind: "running" });
+  append("settled", 100, { kind: "failed", error: "late" });
+  const events = owner
+    .turnEvents()
+    .filter((event) => event.kind === "tool-call");
+  assert.equal(events.length, 3);
+  assert.equal(JSON.parse(events[2]!.payload).historyOrder, 2);
+  assert.equal(JSON.parse(events[2]!.payload).parentCallId, "private-parent");
+  assert.deepEqual(
+    owner.transcript().map((entry) => entry.content),
+    ["Prompt"],
+  );
+  owner.close();
+  group.close();
+  const reopened = openRunGroup(home, WORKSPACE);
+  t.after(() => reopened.close());
+  const recovered = reopened.acquireRun(created.runId);
+  assert.ok(recovered);
+  t.after(() => recovered.close());
+  assert.equal(recovered.turns()[0]?.resultKind, "lost");
+  assert.deepEqual(
+    recovered.turnEvents().filter((event) => event.kind === "tool-call"),
+    events,
+  );
+  assert.deepEqual(
+    recovered.transcript().map((entry) => entry.content),
+    ["Prompt"],
+  );
+});

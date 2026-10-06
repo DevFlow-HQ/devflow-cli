@@ -118,6 +118,11 @@ export type LiveModelChangeFn = (
 
 /** Coalesced live observations for the overlay (never durable). */
 export interface LiveObservation {
+  readonly tool?: {
+    readonly turnId: string;
+    readonly session: string;
+    readonly call: Extract<TurnEvent, { kind: "tool-preview" }>["call"];
+  };
   readonly message?: {
     readonly turnId: string;
     readonly session: string;
@@ -928,6 +933,9 @@ function notifyChannel(
     case "request-expired":
       channel.settled(event.requestId.opaque);
       return;
+    case "tool-preview":
+      channel.observe({ tool: { turnId, session, call: event.call } });
+      return;
     case "message-preview":
       channel.observe({
         message: {
@@ -945,7 +953,7 @@ function notifyChannel(
       channel.observe({ usage: event.observation.summary });
       return;
     case "activity":
-    case "tool-activity":
+    case "tool-call":
       return;
     default:
       return;
@@ -1242,15 +1250,11 @@ function recordTurnEvent(
       }),
       at: new Date(),
     });
-  } else if (event.kind === "tool-activity") {
+  } else if (event.kind === "tool-call") {
     owner.appendTurnEvent({
       turnId,
-      kind: "tool-activity",
-      payload: JSON.stringify({
-        tool: event.activity.tool,
-        phase: event.activity.phase,
-        summary: event.activity.summary,
-      }),
+      kind: "tool-call",
+      payload: JSON.stringify(event.call),
       at: new Date(),
     });
   } else if (event.kind === "request-raised") {

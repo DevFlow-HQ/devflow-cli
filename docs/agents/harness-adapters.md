@@ -2,7 +2,7 @@
 
 Read before changing native Adapter internals. [Harness notes](../../src/harness/AGENTS.md) own shared Interface, terminal, recovery and test invariants.
 Message identities and terminal partials follow [native qualification provenance](../../tests/harness/message-facts-provenance.md) (#411).
-Initial preparation uses `preparation-owner.ts` (#407), following [ADR 0022's retention, handoff and deadline contract](../adr/0022-own-a-truthful-deep-harness-seam.md).
+Tools follow [tool provenance](../../tests/harness/tool-facts-provenance.md) (#414); preparation follows `preparation-owner.ts` and ADR 0022 (#407).
 
 ## Claude Code Adapter
 

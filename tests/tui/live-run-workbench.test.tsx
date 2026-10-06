@@ -151,11 +151,12 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
               content: "Streaming the repair",
             },
             {
-              kind: "tool-activity",
-              activity: {
-                tool: "Edit",
-                phase: "started",
-                summary: "editing src/fix.ts",
+              kind: "tool-call",
+              call: {
+                callId: "scripted-call",
+                tool: "file-change",
+                input: "editing src/fix.ts",
+                outcome: { kind: "running" },
               },
             },
             { kind: "activity", description: "delegating to subagent" },
@@ -285,7 +286,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   const frame = rendered.captureCharFrame();
   assert.match(frame, /BLOCKED · ephemeral Harness Request/);
   assert.match(frame, /Assistant · streaming[\s\S]*Streaming the repair/);
-  assert.match(frame, /Edit started/);
+  assert.match(frame, /Tool · file change · running/);
   assert.match(frame, /Context · used 12500 tokens, capacity 200000 tokens/);
   assert.match(frame, /Usage · estimated 25 tokens/);
   assert.match(frame, /Tool: Edit/); // the exact tool
@@ -300,7 +301,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   // completion — the whole client wiring, not a hand-built Port submit (#121 AC1).
   fakeRenderer.key("return");
   await rendered.waitForFrame((next) => next.includes("SUCCEEDED"));
-  assert.match(rendered.captureCharFrame(), /Edit started/);
+  assert.match(rendered.captureCharFrame(), /Tool · file change · unconfirmed/);
   assert.doesNotMatch(rendered.captureCharFrame(), /Assistant preview/);
   // The Harness identity and effective model live in the details panel now (#194
   // story 35), read from the durable `harness` view — not the old model-only header

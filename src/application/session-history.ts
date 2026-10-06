@@ -1,3 +1,4 @@
+import { readToolCallEvent } from "../run/store/store.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -39,15 +40,14 @@ interface Fact {
   readonly source: "stored" | "preview";
   readonly value: SessionHistoryValue;
 }
-interface LiveMessage {
+interface LivePreview {
   readonly turnId: string;
   readonly session: string;
-  readonly messageId: string;
-  readonly content: string;
+  readonly value: SessionHistoryValue;
   readonly order: number;
 }
 interface RunHistory {
-  readonly messages: Map<string, LiveMessage>;
+  readonly previews: Map<string, LivePreview>;
   readonly orders: Map<string, Map<string, number>>;
   readonly pending: Set<string>;
   readonly evicted: Set<string>;
@@ -66,6 +66,7 @@ interface Observer {
   serial: number;
 }
 const payloadSchema = z.object({
+  callId: z.string().optional(),
   messageId: z.string().optional(),
   content: z.string().optional(),
   parentActivity: z.string().optional(),
@@ -109,6 +110,9 @@ function payload(
     return undefined;
   }
 }
+function toolKey(turnId: string, callId: string): string {
+  return JSON.stringify([turnId, "tool", callId]);
+}
 function messageKey(turnId: string, messageId: string): string {
   return JSON.stringify([turnId, "message", messageId]);
 }
@@ -117,6 +121,8 @@ function eventKey(
   index: number,
 ): string {
   const data = payload(event);
+  if (event.kind === "tool-call" && data?.callId !== undefined)
+    return toolKey(event.turnId, data.callId);
   if (event.kind === "assistant-content" && data?.messageId !== undefined)
     return messageKey(event.turnId, data.messageId);
   if (event.kind === "steer" && data?.steerId !== undefined)
@@ -140,7 +146,7 @@ export function createSessionHistory(deps: {
     let run = runs.get(runId);
     if (run === undefined) {
       run = {
-        messages: new Map(),
+        previews: new Map(),
         orders: new Map(),
         pending: new Set(),
         evicted: new Set(),
@@ -165,9 +171,15 @@ export function createSessionHistory(deps: {
     const read = deps.read(runId);
     let latest = -1;
     if (read.found)
-      for (const event of read.records.events)
-        if (event.turnId === turnId)
-          latest = Math.max(latest, payload(event)?.historyOrder ?? -1);
+      for (const [index, event] of read.records.events.entries())
+        if (event.turnId === turnId) {
+          const persisted = payload(event)?.historyOrder;
+          if (eventKey(event, index) === key && persisted !== undefined) {
+            orders.set(key, persisted);
+            return persisted;
+          }
+          latest = Math.max(latest, persisted ?? -1);
+        }
     for (const value of orders.values()) latest = Math.max(latest, value);
     const next = latest + 1;
     orders.set(key, next);
@@ -274,6 +286,26 @@ export function createSessionHistory(deps: {
                   ? "completed"
                   : "dropped",
           };
+        if (event.kind === "tool-call") {
+          const tool = readToolCallEvent(event);
+          if (tool !== undefined) {
+            const observation = {
+              tool: tool.tool,
+              input: tool.input,
+              outcome: tool.outcome,
+              ...(tool.count === undefined ? {} : { count: tool.count }),
+            };
+            value = {
+              kind: "tool",
+              ...observation,
+              outcome:
+                observation.outcome.kind === "running" &&
+                turn.resultKind !== undefined
+                  ? { kind: "unconfirmed" }
+                  : observation.outcome,
+            };
+          }
+        }
         if (event.kind === "tool-activity" && data.tool !== undefined)
           value = {
             kind: "activity",
@@ -301,13 +333,15 @@ export function createSessionHistory(deps: {
         const existing = facts.get(key);
         const order = existing?.order ?? data.historyOrder ?? index;
         facts.set(key, { key, turn, order, source: "stored", value });
-        run.messages.delete(key);
-        run.pending.delete(key);
+        if (value.kind !== "tool" || value.outcome.kind !== "running") {
+          run.previews.delete(key);
+          run.pending.delete(key);
+        }
       }
-      for (const [key, message] of run.messages) {
+      for (const [key, message] of run.previews) {
         if (message.turnId !== turn.turnId) continue;
         if (turn.resultKind !== undefined) {
-          run.messages.delete(key);
+          run.previews.delete(key);
           run.pending.delete(key);
           continue;
         }
@@ -316,11 +350,7 @@ export function createSessionHistory(deps: {
           turn,
           order: message.order,
           source: "preview",
-          value: {
-            kind: "message",
-            role: "assistant",
-            content: message.content,
-          },
+          value: message.value,
         });
       }
       if (turn.resultKind !== undefined) {
@@ -356,16 +386,16 @@ export function createSessionHistory(deps: {
         });
       }
     }
-    return [...facts.values()].sort(
-      (a, b) => a.turn.sequence - b.turn.sequence || a.order - b.order,
-    );
+    return [...facts.values()]
+      .filter((fact) => !run.evicted.has(fact.key))
+      .sort((a, b) => a.turn.sequence - b.turn.sequence || a.order - b.order);
   }
   function evict(runId: string, session: string, facts: readonly Fact[]): void {
     const run = state(runId);
     for (const fact of facts.slice(0, -200)) {
       run.earlier.add(session);
       run.evicted.add(fact.key);
-      run.messages.delete(fact.key);
+      run.previews.delete(fact.key);
       run.pending.delete(fact.key);
     }
   }
@@ -453,28 +483,33 @@ export function createSessionHistory(deps: {
       run.cancel = undefined;
     }
   }
-  function observe(
+  function observePreview(
     runId: string,
-    message: NonNullable<LiveObservation["message"]>,
+    preview: Omit<LivePreview, "order">,
+    key: string,
   ): void {
     const read = deps.read(runId);
     if (!read.found) return;
     const turn = read.records.turns.find(
       (turn) =>
-        turn.turnId === message.turnId && turn.session === message.session,
+        turn.turnId === preview.turnId && turn.session === preview.session,
     );
     if (turn === undefined || turn.resultKind !== undefined) return;
-    const key = messageKey(message.turnId, message.messageId);
     if (
-      read.records.events.some((event, index) => eventKey(event, index) === key)
+      read.records.events.some((event, index) => {
+        if (eventKey(event, index) !== key) return false;
+        if (event.kind !== "tool-call") return true;
+        const tool = readToolCallEvent(event);
+        return tool !== undefined && tool.outcome.kind !== "running";
+      })
     )
       return;
     const run = state(runId);
     if (run.evicted.has(key)) return;
-    const order = appearance(runId, message.turnId, key);
+    const order = appearance(runId, preview.turnId, key);
     // Ignore a preview for an item already discarded from the shared window.
-    if (!run.messages.has(key) && ordersFor(run, message.turnId).has(key)) {
-      const facts = ordered(runId, read.records, message.session);
+    if (!run.previews.has(key) && ordersFor(run, preview.turnId).has(key)) {
+      const facts = ordered(runId, read.records, preview.session);
       const older = facts.length >= 200 && facts.at(-200);
       if (
         older &&
@@ -483,14 +518,14 @@ export function createSessionHistory(deps: {
       )
         return;
     }
-    run.messages.set(key, { ...message, order });
+    run.previews.set(key, { ...preview, order });
     run.pending.add(key);
-    const current = ordered(runId, read.records, message.session);
-    evict(runId, message.session, current);
+    const current = ordered(runId, read.records, preview.session);
+    evict(runId, preview.session, current);
 
     // Allocate identities in first-appearance order even before the coalesced publication.
     for (const observer of observers)
-      if (observer.runId === runId && observer.session === message.session)
+      if (observer.runId === runId && observer.session === preview.session)
         snapshot(observer);
     if (
       !stopped &&
@@ -559,7 +594,45 @@ export function createSessionHistory(deps: {
         close: () => updates.close(),
       };
     },
-    observe,
+    observe(
+      runId: string,
+      message: NonNullable<LiveObservation["message"]>,
+    ): void {
+      observePreview(
+        runId,
+        {
+          turnId: message.turnId,
+          session: message.session,
+          value: {
+            kind: "message",
+            role: "assistant",
+            content: message.content,
+          },
+        },
+        messageKey(message.turnId, message.messageId),
+      );
+    },
+    observeTool(
+      runId: string,
+      tool: NonNullable<LiveObservation["tool"]>,
+    ): void {
+      const call = tool.call;
+      observePreview(
+        runId,
+        {
+          turnId: tool.turnId,
+          session: tool.session,
+          value: {
+            kind: "tool",
+            tool: call.tool,
+            input: call.input,
+            outcome: call.outcome,
+            ...(call.count === undefined ? {} : { count: call.count }),
+          },
+        },
+        toolKey(tool.turnId, call.callId),
+      );
+    },
     publish,
     append(
       runId: string,
@@ -571,6 +644,7 @@ export function createSessionHistory(deps: {
           "steer",
           "agent-call",
           "tool-activity",
+          "tool-call",
           "request-raised",
           "request-answered",
           "request-expired",

@@ -379,13 +379,26 @@ type AnswerSource = "human" | "client-policy";
 // only coalesced, replaceable entries.
 // ---------------------------------------------------------------------------
 
-/** A tool's lifecycle within a Turn. */
-interface ToolActivity {
-  readonly tool: string;
-  readonly phase: "started" | "completed";
-  readonly summary: string;
-  /** Parent activity identity for subagent work, when the Harness reports it. */
-  readonly parentActivity?: string;
+/** One observed call. Native correlation stays private; identity is scoped to a Turn. */
+export interface ToolCall {
+  readonly callId: string;
+  readonly parentCallId?: string;
+  readonly tool:
+    | "read"
+    | "search"
+    | "command"
+    | "file-change"
+    | "web"
+    | "mcp"
+    | "subagent"
+    | "other";
+  readonly input: string;
+  readonly count?: { readonly value: number; readonly unit: string };
+  readonly outcome:
+    | { readonly kind: "running" }
+    | { readonly kind: "completed" }
+    | { readonly kind: "failed"; readonly error?: string }
+    | { readonly kind: "declined"; readonly reason?: string };
 }
 
 /** Semantic Session facts observed during native initialization. The native id
@@ -496,7 +509,13 @@ export type TurnEvent =
       readonly content: string;
       readonly parentActivity?: string;
     }
-  | { readonly kind: "tool-activity"; readonly activity: ToolActivity }
+  | { readonly kind: "tool-call"; readonly call: ToolCall }
+  | {
+      readonly kind: "tool-preview";
+      readonly call: ToolCall & {
+        readonly outcome: { readonly kind: "running" };
+      };
+    }
   | { readonly kind: "request-raised"; readonly request: HarnessRequest }
   | {
       readonly kind: "request-answered";
@@ -535,7 +554,8 @@ export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "agent-call",
   "elicitation-declined",
   "assistant-content",
-  "tool-activity",
+  "tool-call",
+  "tool-preview",
   "request-raised",
   "request-answered",
   "request-expired",

@@ -588,6 +588,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const liveOverlay = createLiveOverlay((runId) => runs.get(runId), {
     reported: reportedModelChange,
     message: (runId, message) => history.observe(runId, message),
+    tool: (runId, tool) => history.observeTool(runId, tool),
     ended: (runId) => {
       for (const pending of [...(pendingModelChanges.get(runId) ?? [])])
         pending.settle(undefined);

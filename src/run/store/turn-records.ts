@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
+import type { ToolCall } from "../../harness/harness.js";
 import { harnessSessions, turnEvents, turns } from "./run-schema.js";
 import type {
   AdmitTurnRequest,
@@ -62,6 +63,43 @@ const harnessSessionRow = z.object({
 });
 // Only qualified settled messages and delivered Steers are conversation rows.
 // Unknown or unqualified metadata remains absent.
+const toolCall = z.object({
+  callId: z.string().min(1),
+  parentCallId: z.string().optional(),
+  tool: z.enum([
+    "read",
+    "search",
+    "command",
+    "file-change",
+    "web",
+    "mcp",
+    "subagent",
+    "other",
+  ]),
+  input: z.string(),
+  count: z
+    .object({ value: z.number().nonnegative(), unit: z.string() })
+    .optional(),
+  outcome: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("running") }),
+    z.object({ kind: z.literal("completed") }),
+    z.object({ kind: z.literal("failed"), error: z.string().optional() }),
+    z.object({ kind: z.literal("declined"), reason: z.string().optional() }),
+  ]),
+  historyOrder: z.number().int().nonnegative().optional(),
+});
+/** Tolerant persisted ingress. Legacy activity is never promoted to identified outcomes. */
+export function readToolCallEvent(
+  event: Pick<TurnEventRecord, "kind" | "payload">,
+): (ToolCall & { readonly historyOrder?: number }) | undefined {
+  if (event.kind !== "tool-call") return undefined;
+  try {
+    const parsed = toolCall.safeParse(JSON.parse(event.payload));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const assistantMessage = z.object({
   messageId: z.string().min(1),
   historyOrder: z.number().int().nonnegative().optional(),
@@ -179,7 +217,38 @@ export function appendTurnEvent(
 ): void {
   let payload = request.payload;
   let transcriptSeq: number | undefined;
-  if (request.kind === "assistant-content") {
+  if (request.kind === "tool-call") {
+    const call = toolCall.parse(JSON.parse(payload));
+    const previous = db
+      .select({ payload: turnEvents.payload })
+      .from(turnEvents)
+      .where(
+        and(
+          eq(turnEvents.turn_id, request.turnId),
+          eq(turnEvents.kind, "tool-call"),
+          sql`json_extract(${turnEvents.payload}, '$.callId') = ${call.callId}`,
+        ),
+      )
+      .all()
+      .flatMap((row) => {
+        const parsed = readToolCallEvent({
+          kind: "tool-call",
+          payload: row.payload,
+        });
+        return parsed === undefined ? [] : [parsed];
+      });
+    if (
+      previous.some((row) => row.outcome.kind !== "running") ||
+      (call.outcome.kind === "running" && previous.length > 0)
+    )
+      return;
+    payload = JSON.stringify({
+      ...call,
+      ...(previous[0]?.historyOrder === undefined
+        ? {}
+        : { historyOrder: previous[0].historyOrder }),
+    });
+  } else if (request.kind === "assistant-content") {
     const message = assistantMessage.safeParse(JSON.parse(payload));
     if (message.success && message.data.parentActivity === undefined) {
       // The same native message can be repeated. Its first settled fact wins.

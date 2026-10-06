@@ -5,6 +5,7 @@ import type {
   ContextObservation,
   UsageObservation,
   TurnEvent,
+  ToolCall,
 } from "../harness.js";
 import { JsonlLineReader } from "../jsonl.js";
 
@@ -378,17 +379,8 @@ const mcpItemSchema = z.looseObject({
   server: z.string().min(1),
   tool: z.string().min(1),
   status: z.enum(["inProgress", "completed", "failed"]),
+  arguments: z.unknown().optional(),
 });
-const collabItemSchema = z.looseObject({
-  status: z.enum(["inProgress", "completed", "failed", "interrupted"]),
-});
-const dynamicToolItemSchema = z.looseObject({
-  tool: z.string().min(1),
-  status: z.enum(["inProgress", "completed", "failed"]),
-});
-const webSearchItemSchema = z.looseObject({ query: z.string() });
-const imageViewItemSchema = z.looseObject({ path: z.string() });
-const imageGenerationItemSchema = z.looseObject({ status: z.string() });
 const errorNotificationSchema = correlatedParamsSchema.extend({
   error: z.looseObject({ message: z.string().min(1) }),
   willRetry: z.boolean(),
@@ -801,7 +793,6 @@ function normalizeItemContent(
         : {}),
     };
   }
-  const phase = started ? "started" : "completed";
   switch (type) {
     case "commandExecution": {
       const command = parseResult(
@@ -809,9 +800,16 @@ function normalizeItemContent(
         commandItemSchema,
         "commandExecution item",
       );
+      // A schema enum alone does not qualify an observed refusal (#414).
+      if (command.status === "declined") return { itemId: item.id };
       return {
         itemId: item.id,
-        event: toolActivity("command", phase, command.command),
+        event: toolCallEvent(
+          item.id,
+          "command",
+          command.status,
+          command.command,
+        ),
       };
     }
     case "fileChange": {
@@ -820,72 +818,31 @@ function normalizeItemContent(
         fileChangeItemSchema,
         "fileChange item",
       );
+      const input = fileChangeApprovalInput(fileChange.changes);
+      if (fileChange.status === "failed" || fileChange.status === "declined")
+        return { itemId: item.id, approvalInput: input };
       return {
         itemId: item.id,
-        event: toolActivity(
-          "file-change",
-          phase,
-          changeSummary(fileChange.changes.length),
-        ),
-        approvalInput: fileChangeApprovalInput(fileChange.changes),
+        event: toolCallEvent(item.id, "file-change", fileChange.status, input),
+        approvalInput: input,
       };
     }
     case "mcpToolCall": {
       const call = parseResult(item, mcpItemSchema, "mcpToolCall item");
+      if (call.status === "failed") return { itemId: item.id };
+      if (
+        call.server === "secant" &&
+        ["step_done", "stage_done"].includes(call.tool)
+      )
+        return { itemId: item.id };
       return {
         itemId: item.id,
-        event: toolActivity(
-          `mcp:${call.server}/${call.tool}`,
-          phase,
+        event: toolCallEvent(
+          item.id,
+          "mcp",
           call.status,
+          `${call.server}/${call.tool} · ${JSON.stringify(call.arguments) ?? ""}`,
         ),
-      };
-    }
-    case "collabAgentToolCall": {
-      const call = parseResult(
-        item,
-        collabItemSchema,
-        "collabAgentToolCall item",
-      );
-      return {
-        itemId: item.id,
-        event: toolActivity("subagent", phase, call.status),
-      };
-    }
-    case "dynamicToolCall": {
-      const call = parseResult(
-        item,
-        dynamicToolItemSchema,
-        "dynamicToolCall item",
-      );
-      return {
-        itemId: item.id,
-        event: toolActivity("other", phase, `${call.tool} · ${call.status}`),
-      };
-    }
-    case "webSearch": {
-      const search = parseResult(item, webSearchItemSchema, "webSearch item");
-      return {
-        itemId: item.id,
-        event: toolActivity("web-search", phase, search.query),
-      };
-    }
-    case "imageView": {
-      const image = parseResult(item, imageViewItemSchema, "imageView item");
-      return {
-        itemId: item.id,
-        event: toolActivity("image-view", phase, image.path),
-      };
-    }
-    case "imageGeneration": {
-      const image = parseResult(
-        item,
-        imageGenerationItemSchema,
-        "imageGeneration item",
-      );
-      return {
-        itemId: item.id,
-        event: toolActivity("image-generation", phase, image.status),
       };
     }
     default:
@@ -906,19 +863,21 @@ function fileChangeApprovalInput(
     .join("; ");
 }
 
-function toolActivity(
-  tool: string,
-  phase: "started" | "completed",
-  summary: string | undefined,
+function toolCallEvent(
+  callId: string,
+  tool: ToolCall["tool"],
+  status: "inProgress" | "completed" | "failed",
+  input: string,
 ): TurnEvent {
   return {
-    kind: "tool-activity",
-    activity: { tool, phase, summary: summary ?? `${tool} ${phase}` },
+    kind: "tool-call",
+    call: {
+      callId,
+      tool,
+      input,
+      outcome: { kind: status === "inProgress" ? "running" : status },
+    },
   };
-}
-
-function changeSummary(changes: number): string {
-  return `${changes} file change${changes === 1 ? "" : "s"}`;
 }
 
 function parseResult<T>(

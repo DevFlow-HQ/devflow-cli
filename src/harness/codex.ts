@@ -11,7 +11,7 @@ import {
 } from "./permission-bridge.js";
 import { redactSecrets, redactText } from "./secrets.js";
 import { reportContainment } from "./containment.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -91,7 +91,7 @@ import { settleCleanup, startPhase, type PhaseSpan } from "./phases.js";
 export type { CodexRecordingObserver } from "./codex/qualification.js";
 
 const HARNESS_NAME = "codex";
-const PROBE_REVISION = "codex-probe-4";
+const PROBE_REVISION = "codex-probe-5";
 const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 const DEFAULT_LAUNCH_TIMEOUT_MS = 15_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
@@ -2130,7 +2130,21 @@ class CodexTurn implements HarnessTurn {
             this.lastObservation =
               "Codex completed an authoritative agent message";
           }
-          this.emit(notification.event);
+          if (notification.event.kind === "tool-call") {
+            const key = JSON.stringify([
+              notification.turnId,
+              notification.itemId,
+            ]);
+            let callId = this.toolIds.get(key);
+            if (callId === undefined) {
+              callId = randomUUID();
+              this.toolIds.set(key, callId);
+            }
+            this.emit({
+              ...notification.event,
+              call: { ...notification.event.call, callId },
+            });
+          } else this.emit(notification.event);
         }
         return;
       case "error":
@@ -2580,6 +2594,8 @@ class CodexTurn implements HarnessTurn {
       true,
     );
   }
+
+  private readonly toolIds = new Map<string, string>();
 
   private emit(event: TurnEvent): void {
     if (event.kind === "activity")

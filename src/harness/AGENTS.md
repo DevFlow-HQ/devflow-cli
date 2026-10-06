@@ -87,7 +87,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   A resume the native side does not acknowledge is a `recovery`-phase failure that marks the Session `unusable`; recovery never silently starts a fresh
   conversation. Codex app-server replacement failures leave Sessions detached; only an unacknowledged thread resume makes its Session unusable.
   Each Adapter's resume mechanics are in [harness-adapters](../../docs/agents/harness-adapters.md).
-- Context reports replace facts without calculation (#418): Claude keeps per-model capacity; Codex keeps total/last usage distinct. Unknown frames add no activity.
+- Context reports replace facts without calculation (#418): Claude keeps model capacity; Codex keeps total/last usage distinct. Tool ids are Turn-local opaque values (#414).
 
 ## Tests
 
@@ -95,7 +95,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, native Steer, and leftover re-delivery, and
   Claude replay covers native and pending Steer. Other control groups stay capability-specific.
   Structured clarifications, after-acceptance checkpoint, load-with-replay, and caller-contract violations remain fake-only. The fake performs load-with-replay:
-  resumed Turn re-emits the Session's transcript history (`assistant-content`, `tool-activity`), drops a scripted entry that repeats a replayed one, then
+  resumed Turn re-emits the Session's transcript history (`assistant-content`, `tool-call`), drops a scripted entry that repeats a replayed one, then
   emits `REPLAY_BARRIER` (an `activity`) before any live event — history is historical by position, inside the closed vocabulary.
 - Native Adapter and replayer conformance that launches real children runs only in standalone runtime conformance (#198); scripted Process failure
   cases through the Claude Code Seam run in the semantic suite (#332). The layer rules are in [testing](../../docs/agents/testing.md).

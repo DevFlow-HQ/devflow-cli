@@ -20,6 +20,7 @@ import type {
   RecoveryCoordinate,
   SessionFacts,
   UsageObservation,
+  ToolCall,
 } from "../harness.js";
 
 // --- Schemas -----------------------------------------------------------------
@@ -72,6 +73,7 @@ const ContentBlock = z.looseObject({
   name: lenientString,
   id: lenientString,
   tool_use_id: lenientString,
+  is_error: z.boolean().optional().catch(undefined),
   input: z.unknown(),
   content: z.unknown(),
 });
@@ -87,6 +89,7 @@ const MessageFrame = z.looseObject({
     usage: UsageCounters.optional().catch(undefined),
   }),
   parent_tool_use_id: z.string().nullable().optional().catch(undefined),
+  tool_use_result: z.unknown().optional(),
 });
 export type MessageFrame = z.infer<typeof MessageFrame>;
 const AssistantFrame = MessageFrame.extend({ type: z.literal("assistant") });
@@ -517,4 +520,85 @@ function stringField(
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+// Qualified tool fields: tests/harness/tool-facts-provenance.md.
+const toolInput = z.object({
+  file_path: lenientString,
+  pattern: lenientString,
+});
+const toolResult = z.object({
+  file: z
+    .object({
+      numLines: z.number().int().nonnegative().optional().catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
+  numFiles: z.number().int().nonnegative().optional().catch(undefined),
+});
+export function observedToolStart(
+  block: ContentBlock,
+  callId: string,
+): ToolCall {
+  const input = toolInput.safeParse(block.input);
+  const fields = input.success ? input.data : undefined;
+  const name = block.name ?? "other";
+  const tool: ToolCall["tool"] =
+    name === "Read"
+      ? "read"
+      : name === "Glob"
+        ? "search"
+        : name === "Bash"
+          ? "command"
+          : ["Edit", "Write"].includes(name)
+            ? "file-change"
+            : name.startsWith("mcp__")
+              ? "mcp"
+              : "other";
+  const main =
+    tool === "read" || tool === "file-change"
+      ? fields?.file_path
+      : tool === "search"
+        ? fields?.pattern
+        : undefined;
+  return {
+    callId,
+    tool,
+    input: main ?? `${name} · ${JSON.stringify(block.input) ?? ""}`,
+    outcome: { kind: "running" },
+  };
+}
+export function observedToolResult(
+  frame: MessageFrame,
+  block: ContentBlock,
+  start: ToolCall,
+): ToolCall {
+  const structured = toolResult.safeParse(frame.tool_use_result);
+  const value = structured.success
+    ? start.tool === "read"
+      ? structured.data.file?.numLines
+      : start.tool === "search"
+        ? structured.data.numFiles
+        : undefined
+    : undefined;
+  const content = typeof block.content === "string" ? block.content : undefined;
+  const outcome: ToolCall["outcome"] =
+    block.is_error === true
+      ? frame.tool_use_result === "User rejected tool use"
+        ? {
+            kind: "declined",
+            ...(content === undefined ? {} : { reason: content }),
+          }
+        : {
+            kind: "failed",
+            ...(content === undefined ? {} : { error: content }),
+          }
+      : { kind: "completed" };
+  return {
+    ...start,
+    outcome,
+    ...(value === undefined
+      ? {}
+      : { count: { value, unit: start.tool === "read" ? "lines" : "files" } }),
+  };
 }

@@ -13,7 +13,7 @@ decision says otherwise; closing one needs its own decision.
 | Per-Session history: identified streaming messages and in-flight rows as they change | none; `run show` and `run read --transcript` read stored rows only                                                | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
 | Change the Model choice of a Run live in another process                             | `run model` refuses `run-live-elsewhere`; changes reach the next Turn of an open Run owned here or not owned live | [#339](https://github.com/secantdev/secant/issues/339)                                           |
 | A waiting Steer before it is delivered                                               | none; only a delivered Steer appears in `run read --transcript`                                                   | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
-| Tool, Thought, Turn-diff, and Agent-call rows                                        | none; the transcript carries human input, delivered Steers, and settled assistant messages                        | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
+| Identified Tool, Thought, Turn-diff, and Agent-call rows                             | none; the transcript carries human input, delivered Steers, and settled assistant messages                        | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
 | Reported context, per-model capacity, and distinct total/last usage                  | none; live-only metadata outside conversation history; `run show --json` unchanged                                | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
 
 Typed **Slash commands** and the Ctrl+P palette are TUI presentation, not a gap: each App command maps to an Operation headless has or to a gap
@@ -35,3 +35,7 @@ and the 200-row cutoff. Missing rows fall back by prior content order, nearest f
 paused. Dividers contribute to row height, and the badge counts rows with any content below the viewport. Wheel or Alt+Up/Down scroll lines,
 PageUp/Down half a viewport, Alt+Home oldest, and Alt+End latest. Native prompt editing and modal/details focus keep their keys. These are TUI
 reading controls; headless keeps its stored page/export contracts ([#413](https://github.com/secantdev/secant/issues/413)).
+
+Identified tool input, reported counts, and completed/failed/declined/unconfirmed outcomes belong to per-Session history (#414).
+`run show --json` retains its generic `tool-activity` timeline mapping for new starts and observed settlements, and reads legacy rows unchanged.
+The transcript still excludes tools. Turn success, Interrupt, loss, and Request answers never create a missing tool result.

@@ -200,6 +200,8 @@ test("m10-home-and-preferences: palette is scoped, dismisses once and restores n
   t.mockInput.pressArrow("down");
   t.mockInput.pressEnter();
   await t.waitForFrame((f) => f.includes("Find an installed Bundle"));
+  const searchFocus = t.renderer.currentFocusedRenderable;
+  assert.ok(searchFocus);
   t.mockInput.pressKey("p", { ctrl: true });
   await t.waitForFrame((f) => f.includes("App commands"));
   const frame = t.captureCharFrame();
@@ -209,6 +211,7 @@ test("m10-home-and-preferences: palette is scoped, dismisses once and restores n
   t.mockInput.pressArrow("down");
   await t.renderOnce();
   await escape(t);
+  await until(() => t.renderer.currentFocusedRenderable === searchFocus);
   await type(t, "qq");
   assert.match(t.captureCharFrame(), /qq/);
 });

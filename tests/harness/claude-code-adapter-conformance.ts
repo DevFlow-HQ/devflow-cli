@@ -1374,8 +1374,8 @@ test("one stream-json Turn yields normalized events and an authoritative complet
       "model",
       "activity",
       "assistant-content",
-      "tool-activity",
-      "tool-activity",
+      "tool-call",
+      "tool-call",
       "context",
       "usage",
     ],
@@ -1402,16 +1402,16 @@ test("one stream-json Turn yields normalized events and an authoritative complet
       : undefined,
     "toolu_parent",
   );
-  const tools = events.filter((event) => event.kind === "tool-activity");
+  const tools = events.filter((event) => event.kind === "tool-call");
   assert.deepEqual(
     tools.map((event) =>
-      event.kind === "tool-activity"
-        ? [event.activity.phase, event.activity.parentActivity]
+      event.kind === "tool-call"
+        ? [event.call.outcome.kind, event.call.parentCallId]
         : [],
     ),
     [
-      ["started", "toolu_parent"],
-      ["completed", "toolu_parent"],
+      ["running", undefined],
+      ["completed", undefined],
     ],
   );
   assert.equal(
@@ -1818,7 +1818,7 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
   assert.equal(profile.harness, "claude-code");
   assert.equal(profile.executableVersion, VERSION);
   // Revision 5 adds the Session Agent-call channel (#371).
-  assert.equal(profile.adapterRevision, "claude-code-5");
+  assert.equal(profile.adapterRevision, "claude-code-6");
   assert.equal(
     profile.platform,
     process.platform === "win32"

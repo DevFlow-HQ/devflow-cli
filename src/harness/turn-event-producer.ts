@@ -11,6 +11,14 @@ export class TurnEventProducer {
     string,
     Extract<TurnEvent, { kind: "message-preview" }>
   >();
+  private readonly toolPreviews = new Map<
+    string,
+    Extract<TurnEvent, { kind: "tool-preview" }>
+  >();
+  private readonly calls = new Map<
+    string,
+    Extract<TurnEvent, { kind: "tool-call" }>
+  >();
   private closed = false;
   get sealed(): boolean {
     return this.closed;
@@ -22,6 +30,28 @@ export class TurnEventProducer {
   }
   emit(event: TurnEvent): void {
     if (this.closed) return;
+    if (event.kind === "tool-call" || event.kind === "tool-preview") {
+      const previous = this.calls.get(event.call.callId);
+      if (previous !== undefined && previous.call.outcome.kind !== "running")
+        return;
+      if (event.kind === "tool-preview") {
+        const preview = this.toolPreviews.get(event.call.callId);
+        if (preview === undefined) this.events.push(event);
+        else this.events[this.events.indexOf(preview)] = event;
+        this.toolPreviews.set(event.call.callId, event);
+        for (const listener of this.listeners) listener(event);
+        return;
+      }
+      if (event.call.outcome.kind === "running" && previous !== undefined)
+        return;
+      this.calls.set(event.call.callId, event);
+      if (event.call.outcome.kind !== "running") {
+        const preview = this.toolPreviews.get(event.call.callId);
+        if (preview !== undefined)
+          this.events.splice(this.events.indexOf(preview), 1);
+        this.toolPreviews.delete(event.call.callId);
+      }
+    }
     this.events.push(event);
     for (const listener of this.listeners) listener(event);
   }

@@ -8433,3 +8433,110 @@ for (const width of [40, 100]) {
     });
   }
 }
+
+test("m10-session-history: tool rows expose color-independent outcomes, input and counts through the Renderer Port", async () => {
+  const run = runOf({
+    sessions: [{ session: "s", name: "Conversation", availability: "open" }],
+  });
+  const { t, control, renderer } = await mountWorkbench(run, 100, 44);
+  const row = (
+    id: string,
+    value: SessionHistoryRow["value"],
+  ): SessionHistoryRow => ({
+    id,
+    position: id,
+    source: "stored",
+    turn: "turn",
+    turnStartedAt: "2026-10-06T00:00:00Z",
+    value,
+  });
+  const values: SessionHistoryRow["value"][] = [
+    {
+      kind: "tool",
+      tool: "read",
+      input: "file.ts",
+      count: { value: 0, unit: "lines" },
+      outcome: { kind: "running" },
+    },
+    {
+      kind: "tool",
+      tool: "search",
+      input: "needle",
+      count: { value: 2, unit: "matches" },
+      outcome: { kind: "completed" },
+    },
+    {
+      kind: "tool",
+      tool: "command",
+      input: "run command",
+      outcome: { kind: "failed", error: "Observed error" },
+    },
+    {
+      kind: "tool",
+      tool: "file-change",
+      input: "changed.ts",
+      outcome: { kind: "declined", reason: "Observed refusal" },
+    },
+    {
+      kind: "tool",
+      tool: "mcp",
+      input: "external/tool",
+      outcome: { kind: "unconfirmed" },
+    },
+  ];
+  const page = (
+    rows: readonly SessionHistoryRow[],
+  ): SessionHistorySnapshot => ({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+    result: {
+      found: true,
+      history: {
+        rows,
+        hasEarlier: false,
+        transcriptPage: {
+          type: "transcript-page",
+          runId: run.runId,
+          session: "s",
+        },
+        transcriptExport: {
+          type: "transcript-export",
+          runId: run.runId,
+          session: "s",
+        },
+      },
+    },
+  });
+  const rows = values.map((value, i) => row(`opaque-${i}`, value));
+  control.setHistory(page(rows));
+  await t.renderOnce();
+  const frame = t.captureCharFrame();
+  for (const label of [
+    "read · running · 0 lines",
+    "search · completed · 2 matches",
+    "command · failed",
+    "file change · declined",
+    "mcp · unconfirmed",
+    "file.ts",
+    "needle",
+    "Observed error",
+    "Observed refusal",
+  ])
+    assert.ok(frame.includes(label), label);
+  const long = row("opaque-long", {
+    kind: "tool",
+    tool: "other",
+    input: "START " + "界".repeat(60) + " END",
+    outcome: { kind: "unconfirmed" },
+  });
+  control.setHistory(page([...rows, long]));
+  t.resize(40, 14);
+  renderer.resize(40, 14);
+  await t.renderOnce();
+  await press(t, renderer, "end", { alt: true });
+  assert.match(t.captureCharFrame(), /END/);
+  assert.doesNotMatch(t.captureCharFrame(), /START.*END/);
+  await press(t, renderer, "home", { alt: true });
+  assert.match(t.captureCharFrame(), /read/);
+});

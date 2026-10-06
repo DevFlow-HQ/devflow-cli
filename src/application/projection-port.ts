@@ -1252,7 +1252,29 @@ export interface SessionHistoryRow {
   readonly step?: string;
   readonly value: SessionHistoryValue;
 }
+/** Complete tool value with Application-derived Turn liveness. No correlation ids cross the Port. */
+interface SessionToolValue {
+  readonly kind: "tool";
+  readonly tool:
+    | "read"
+    | "search"
+    | "command"
+    | "file-change"
+    | "web"
+    | "mcp"
+    | "subagent"
+    | "other";
+  readonly input: string;
+  readonly count?: { readonly value: number; readonly unit: string };
+  readonly outcome:
+    | { readonly kind: "running" }
+    | { readonly kind: "unconfirmed" }
+    | { readonly kind: "completed" }
+    | { readonly kind: "failed"; readonly error?: string }
+    | { readonly kind: "declined"; readonly reason?: string };
+}
 export type SessionHistoryValue =
+  | SessionToolValue
   | {
       readonly kind: "message";
       readonly role: "user" | "assistant";

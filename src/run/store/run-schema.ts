@@ -182,7 +182,7 @@ export const turns = sqliteTable("turn", {
 });
 
 // One normalized durable Turn event (#116), append-only. `kind` is a Crucible Turn
-// event kind (`assistant-content`, `tool-activity`, `session`, `model`, …) and
+// event kind (`assistant-content`, `tool-call`, `session`, `model`, …) and
 // `payload` its JSON detail. Ephemeral Harness Requests are not stored here.
 export const turnEvents = sqliteTable("turn_event", {
   seq: integer("seq").primaryKey(),

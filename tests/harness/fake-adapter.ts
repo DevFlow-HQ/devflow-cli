@@ -168,7 +168,7 @@ export const REPLAY_BARRIER: TurnEvent = {
  *  availability are live facts of the Turn that produced them, not history. */
 const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
   "assistant-content",
-  "tool-activity",
+  "tool-call",
 ]);
 
 /** Build a factory for the fake Adapter from a script. It spawns nothing, so a
@@ -812,14 +812,30 @@ class FakeTurn {
     if (this.settled) throw new Error("emit after result: terminal ordering");
     if (event.kind === "assistant-content")
       this.removePreviews(event.messageId);
+    if (event.kind === "tool-call" && event.call.outcome.kind !== "running") {
+      for (let index = this.buffer.length - 1; index >= 0; index--) {
+        const retained = this.buffer[index];
+        if (
+          retained?.kind === "tool-preview" &&
+          retained.call.callId === event.call.callId
+        )
+          this.buffer.splice(index, 1);
+      }
+    }
     const preview =
-      event.kind === "message-preview"
+      event.kind === "tool-preview"
         ? this.buffer.findIndex(
             (retained) =>
-              retained.kind === "message-preview" &&
-              retained.messageId === event.messageId,
+              retained.kind === "tool-preview" &&
+              retained.call.callId === event.call.callId,
           )
-        : -1;
+        : event.kind === "message-preview"
+          ? this.buffer.findIndex(
+              (retained) =>
+                retained.kind === "message-preview" &&
+                retained.messageId === event.messageId,
+            )
+          : -1;
     if (preview < 0) this.buffer.push(event);
     else this.buffer[preview] = event;
     if (options.record && HISTORY_KINDS.has(event.kind)) {

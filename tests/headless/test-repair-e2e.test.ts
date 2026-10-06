@@ -189,11 +189,12 @@ function codexScript(): FakeScript {
             observation: { known: true, model: "gpt-6.1-sol", effort: "high" },
           },
           {
-            kind: "tool-activity",
-            activity: {
+            kind: "tool-call",
+            call: {
+              callId: "scripted-call",
               tool: "command",
-              phase: "completed",
-              summary: "wrote the repair",
+              input: "wrote the repair",
+              outcome: { kind: "completed" },
             },
           },
         ],

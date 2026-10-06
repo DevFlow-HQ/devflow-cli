@@ -52,6 +52,7 @@ export interface LiveOverlayChannel {
 interface ModelChangeListener {
   reported(runId: string, change: ModelChange): void;
   ended(runId: string): void;
+  tool(runId: string, tool: NonNullable<LiveObservation["tool"]>): void;
   message(
     runId: string,
     message: NonNullable<LiveObservation["message"]>,
@@ -172,6 +173,8 @@ export function createLiveOverlay(
         push(runId);
       },
       observe(observation: LiveObservation): void {
+        if (observation.tool !== undefined)
+          modelChanges.tool(runId, observation.tool);
         const tracking = trackingFor(runId);
         if (tracking === undefined) return;
         const live = tracking.live;

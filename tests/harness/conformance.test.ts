@@ -1,3 +1,6 @@
+import assert from "node:assert/strict";
+import { turnRequest } from "./scripted-claude.js";
+import type { ToolCall } from "../../src/harness/harness.js";
 // Runs the shared conformance suite against the deterministic fake Adapter. The
 // same suite runs against the Claude Code Adapter over the replayer from #112
 // on; running both keeps the fake honest to the Interface.
@@ -234,11 +237,12 @@ const scenarios: ConformanceScenarios = {
         events: [
           { kind: "assistant-content", content: "hello" },
           {
-            kind: "tool-activity",
-            activity: {
-              tool: "Read",
-              phase: "completed",
-              summary: "read a file",
+            kind: "tool-call",
+            call: {
+              callId: "scripted-call",
+              tool: "read",
+              input: "read a file",
+              outcome: { kind: "completed" },
             },
           },
         ],
@@ -353,8 +357,13 @@ const scenarios: ConformanceScenarios = {
   loadWithReplay: () => {
     const said: TurnEvent = { kind: "assistant-content", content: "earlier" };
     const read: TurnEvent = {
-      kind: "tool-activity",
-      activity: { tool: "Read", phase: "completed", summary: "read a file" },
+      kind: "tool-call",
+      call: {
+        callId: "scripted-call",
+        tool: "read",
+        input: "read a file",
+        outcome: { kind: "completed" },
+      },
     };
     const progress: TurnEvent = {
       kind: "assistant-content",
@@ -679,3 +688,85 @@ runTurnProducerTraceCases(
   },
   test,
 );
+
+test("m10-observed-harness-facts: fake retains all eight kinds, interleaved same-name calls, parent relations and independent outcomes before result", async (t) => {
+  const kinds: readonly ToolCall["tool"][] = [
+    "read",
+    "search",
+    "command",
+    "file-change",
+    "web",
+    "mcp",
+    "subagent",
+    "other",
+  ];
+  const starts: TurnEvent[] = kinds.map((tool, index): TurnEvent => ({
+    kind: "tool-call",
+    call: {
+      callId: `call-${index}`,
+      tool,
+      input: `input-${index}`,
+      ...(index === 0 ? {} : { parentCallId: "call-0" }),
+      outcome: { kind: "running" },
+    },
+  }));
+  const ends: TurnEvent[] = kinds
+    .map((tool, index): TurnEvent => ({
+      kind: "tool-call",
+      call: {
+        callId: `call-${index}`,
+        tool,
+        input: `input-${index}`,
+        ...(index === 0 ? {} : { parentCallId: "call-0" }),
+        count: { value: index, unit: "items" },
+        outcome:
+          index === 2
+            ? { kind: "failed", error: "Observed error" }
+            : index === 3
+              ? { kind: "declined", reason: "Observed refusal" }
+              : { kind: "completed" },
+      },
+    }))
+    .reverse();
+  const adapter = createFake(
+    fake({
+      events: [
+        ...starts,
+        {
+          kind: "tool-call",
+          call: {
+            callId: "repeated",
+            tool: "read",
+            input: "another file",
+            outcome: { kind: "running" },
+          },
+        },
+        ...ends,
+      ],
+      result: COMPLETED_OPEN,
+    }),
+  )();
+  const prepared = await adapter.prepare({ workspace: process.cwd() });
+  assert.ok(prepared.ok);
+  t.after(() => prepared.harness.close());
+  const turn = prepared.harness.startTurn(turnRequest("identified tools"));
+  const events: TurnEvent[] = [];
+  turn.subscribe((event) => events.push(event));
+  assert.equal((await turn.result()).kind, "completed");
+  assert.deepEqual(events, [
+    ...starts,
+    {
+      kind: "tool-call",
+      call: {
+        callId: "repeated",
+        tool: "read",
+        input: "another file",
+        outcome: { kind: "running" },
+      },
+    },
+    ...ends,
+  ]);
+  const count = events.length;
+  await prepared.harness.close();
+  assert.equal(events.length, count);
+});
