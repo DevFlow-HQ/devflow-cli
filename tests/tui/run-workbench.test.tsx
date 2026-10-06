@@ -8540,3 +8540,170 @@ test("m10-session-history: tool rows expose color-independent outcomes, input an
   await press(t, renderer, "home", { alt: true });
   assert.match(t.captureCharFrame(), /read/);
 });
+
+test("m10-session-history: Thought collapse, keyboard expansion, final replacement and resize preserve full content", async () => {
+  const run = runOf({
+    sessions: [
+      { session: "conversation", name: "Conversation", availability: "open" },
+    ],
+  });
+  const wb = await mountWorkbench(run, 100, 26);
+  const page = (
+    source: "stored" | "preview",
+    content: string,
+    incomplete?: true,
+  ): SessionHistorySnapshot => ({
+    family: "session-history",
+    runId: run.runId,
+    session: "conversation",
+    result: {
+      found: true,
+      history: {
+        rows: [
+          {
+            id: "opaque-thought",
+            position: "opaque-position",
+            source,
+            turnStartedAt: "2026-10-06T00:00:00Z",
+            turn: "opaque-turn",
+            value: {
+              kind: "thought",
+              content,
+              ...(incomplete ? { incomplete } : {}),
+            },
+          },
+        ],
+        hasEarlier: false,
+        transcriptPage: {
+          type: "transcript-page",
+          runId: run.runId,
+          session: "conversation",
+        },
+        transcriptExport: {
+          type: "transcript-export",
+          runId: run.runId,
+          session: "conversation",
+        },
+      },
+    },
+  });
+  wb.control.setHistory(
+    page("preview", "\n  Summary label\nFull body only after expansion"),
+  );
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Thought.*Thinking.*Summary label/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Full body only/);
+  await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /Full body only after expansion/);
+  wb.control.setHistory(
+    page(
+      "stored",
+      "\nSummary label\nAuthoritative replacement at the end",
+      true,
+    ),
+  );
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Thought.*incomplete/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Thinking|Full body only/);
+  assert.match(wb.t.captureCharFrame(), /Authoritative replacement/);
+  wb.t.resize(40, 26);
+  wb.renderer.resize(40, 26);
+  await wb.t.renderOnce();
+  noOverflow(wb.t.captureCharFrame(), 40);
+  assert.match(wb.t.captureCharFrame(), /Authoritative replacement/);
+  await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Authoritative replacement/);
+  assert.match(wb.t.captureCharFrame(), /Summary/);
+  const heading = wb.t
+    .captureCharFrame()
+    .split("\n")
+    .findIndex((line) => line.includes("▸ Thought"));
+  assert.ok(heading >= 0);
+  await wb.t.mockMouse.click(10, heading);
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Authoritative replacement/);
+  wb.t.resize(100, 26);
+  wb.renderer.resize(100, 26);
+  wb.control.setHistory(
+    page("stored", "Thinking through options\nA complete summary body"),
+  );
+  await wb.t.renderOnce();
+  assert.match(
+    wb.t.captureCharFrame(),
+    /Thought.*complete.*Thinking through options/,
+  );
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Thinking \|/);
+});
+
+for (const visible of [false, true]) {
+  test(`m10-session-history: Ctrl+O disarms Interrupt before the next Escape with a Thought ${visible ? "visible" : "absent"}`, async () => {
+    let interrupted = 0;
+    const actions = okActions({
+      interrupt: () => {
+        interrupted++;
+        return () => ({ kind: "ok" });
+      },
+    });
+    const run = liveTurnRunOf({
+      timeline: events(4),
+      sessions: [
+        { session: "conversation", name: "Conversation", availability: "open" },
+      ],
+    });
+    const { t, renderer, control } = await mountWorkbench(
+      run,
+      100,
+      40,
+      actions,
+    );
+    if (visible) {
+      control.setHistory({
+        family: "session-history",
+        runId: run.runId,
+        session: "conversation",
+        result: {
+          found: true,
+          history: {
+            rows: [
+              {
+                id: "thought",
+                position: "position",
+                source: "preview",
+                turnStartedAt: "2026-10-06T00:00:00Z",
+                turn: "opaque",
+                value: {
+                  kind: "thought",
+                  content: "Summary label\nExpanded body",
+                },
+              },
+            ],
+            hasEarlier: false,
+            transcriptPage: {
+              type: "transcript-page",
+              runId: run.runId,
+              session: "conversation",
+            },
+            transcriptExport: {
+              type: "transcript-export",
+              runId: run.runId,
+              session: "conversation",
+            },
+          },
+        },
+      });
+      await t.renderOnce();
+      assert.match(t.captureCharFrame(), /Summary label/);
+      assert.doesNotMatch(t.captureCharFrame(), /Expanded body/);
+    }
+    await press(t, renderer, "escape");
+    assert.match(t.captureCharFrame(), /Press esc again/);
+    await press(t, renderer, "o", { ctrl: true });
+    assert.doesNotMatch(t.captureCharFrame(), /Press esc again/);
+    if (visible) assert.match(t.captureCharFrame(), /Expanded body/);
+    await press(t, renderer, "escape");
+    assert.equal(interrupted, 0);
+    assert.match(t.captureCharFrame(), /Press esc again/);
+    await press(t, renderer, "escape");
+    assert.equal(interrupted, 1);
+  });
+}

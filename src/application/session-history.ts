@@ -68,6 +68,8 @@ interface Observer {
 const payloadSchema = z.object({
   callId: z.string().optional(),
   messageId: z.string().optional(),
+  summaryId: z.string().min(1).optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
   content: z.string().optional(),
   parentActivity: z.string().optional(),
   incomplete: z.literal(true).optional(),
@@ -116,6 +118,9 @@ function toolKey(turnId: string, callId: string): string {
 function messageKey(turnId: string, messageId: string): string {
   return JSON.stringify([turnId, "message", messageId]);
 }
+function thoughtKey(turnId: string, summaryId: string): string {
+  return JSON.stringify([turnId, "thought", summaryId]);
+}
 function eventKey(
   event: Pick<TurnEventRecord, "turnId" | "kind" | "payload">,
   index: number,
@@ -125,6 +130,8 @@ function eventKey(
     return toolKey(event.turnId, data.callId);
   if (event.kind === "assistant-content" && data?.messageId !== undefined)
     return messageKey(event.turnId, data.messageId);
+  if (event.kind === "thought" && data?.summaryId !== undefined)
+    return thoughtKey(event.turnId, data.summaryId);
   if (event.kind === "steer" && data?.steerId !== undefined)
     return JSON.stringify([event.turnId, "steer", data.steerId]);
   const call = readAgentCallEvent({ ...event, at: "" });
@@ -245,6 +252,20 @@ export function createSessionHistory(deps: {
             content: data.content ?? "",
             ...(data.incomplete === undefined ? {} : { incomplete: true }),
           };
+        if (event.kind === "thought" && data.summaryId !== undefined) {
+          const key = thoughtKey(event.turnId, data.summaryId);
+          run.previews.delete(key);
+          run.pending.delete(key);
+          if (data.content?.trim())
+            value = {
+              kind: "thought",
+              content: data.content,
+              ...(data.incomplete === undefined ? {} : { incomplete: true }),
+              ...(data.durationMs === undefined
+                ? {}
+                : { durationMs: data.durationMs }),
+            };
+        }
         if (
           event.kind === "steer" &&
           data.steerId !== undefined &&
@@ -612,6 +633,21 @@ export function createSessionHistory(deps: {
         messageKey(message.turnId, message.messageId),
       );
     },
+    observeThought(
+      runId: string,
+      thought: NonNullable<LiveObservation["thought"]>,
+    ): void {
+      if (!thought.content.trim()) return;
+      observePreview(
+        runId,
+        {
+          turnId: thought.turnId,
+          session: thought.session,
+          value: { kind: "thought", content: thought.content },
+        },
+        thoughtKey(thought.turnId, thought.summaryId),
+      );
+    },
     observeTool(
       runId: string,
       tool: NonNullable<LiveObservation["tool"]>,
@@ -641,6 +677,7 @@ export function createSessionHistory(deps: {
       if (
         ![
           "assistant-content",
+          "thought",
           "steer",
           "agent-call",
           "tool-activity",

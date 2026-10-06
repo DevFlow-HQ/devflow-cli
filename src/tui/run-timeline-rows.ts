@@ -21,6 +21,9 @@ export interface TimelineRow {
   readonly sessionName?: string;
   readonly iterationEnd?: true;
   readonly oneLine?: boolean;
+  readonly thought?: Extract<SessionHistoryValue, { kind: "thought" }> & {
+    readonly live: boolean;
+  };
   /** Live rows have none: they carry no Step or Session of their own. */
   readonly dividers?: readonly Rule[];
 }
@@ -232,6 +235,9 @@ function historyTimelineRows(
       sessionName: name,
       text: historyLabel(row.value, row.source === "preview"),
       ...(row.value.kind === "agent-call" ? { oneLine: true } : {}),
+      ...(row.value.kind === "thought"
+        ? { thought: { ...row.value, live: row.source === "preview" } }
+        : {}),
       dividers,
     };
   });
@@ -254,6 +260,15 @@ function attachDividers(rows: readonly TimelineRow[]): TimelineRow[] {
 
 function historyLabel(value: SessionHistoryValue, preview: boolean): string {
   switch (value.kind) {
+    case "thought": {
+      const label = screenReason(
+        value.content
+          .split(/\r?\n/)
+          .find((line) => line.trim())
+          ?.trim() ?? "",
+      );
+      return `Thought · ${preview ? "Thinking" : value.incomplete ? "incomplete" : "complete"}${value.durationMs === undefined ? "" : ` · ${value.durationMs} ms`} · ${label}`;
+    }
     case "message":
       return `${value.role === "user" ? "You" : "Assistant"}${preview ? " · streaming" : value.incomplete ? " · incomplete" : ""}\n${value.content}`;
     case "entry-prompt":

@@ -1425,3 +1425,66 @@ test("m10-interruption-and-transcript: fake identified messages reach stored con
     2,
   );
 });
+
+for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
+  test(`m10-interruption-and-transcript: unfinished Thoughts settle once as incomplete at ${name}, outside the transcript`, async (t) => {
+    const f = fixture(t);
+    const assets = promptAssets(f.workspace, "Discuss");
+    const prepared = await preparedHarness(profile(), [
+      {
+        events: [
+          { kind: "thought-preview", summaryId: "first", content: "First" },
+          { kind: "message-preview", messageId: "same-id", content: "Answer" },
+          { kind: "thought-preview", summaryId: "second", content: "Second" },
+          {
+            kind: "thought",
+            summaryId: "second",
+            content: "Final second",
+            durationMs: 0,
+          },
+          {
+            kind: "thought-preview",
+            summaryId: "first",
+            content: "First complete preview",
+          },
+        ],
+        result: RESULT_CASES[name].result,
+      },
+    ]);
+    t.after(() => prepared.close());
+    await executeRouting([agentStep()], {
+      owner: f.owner,
+      platform: HOST,
+      resolveAsset: assets.resolveAsset,
+      now: () => AT,
+      process: executionProcess,
+      harness: {
+        inputRules: [],
+        prepared,
+        inputTypes: {},
+        assetKinds: { "prompt.md": "prompt" },
+      },
+    });
+    const summaries = f.owner
+      .turnEvents()
+      .filter((event) => event.kind === "thought")
+      .map((event) => JSON.parse(event.payload));
+    assert.deepEqual(summaries, [
+      { summaryId: "second", content: "Final second", durationMs: 0 },
+      {
+        summaryId: "first",
+        content: "First complete preview",
+        incomplete: true,
+      },
+    ]);
+    assert.deepEqual(
+      f.owner.transcript().map((entry) => entry.content),
+      ["Discuss", "Answer"],
+    );
+    assert.equal(
+      f.owner.turnEvents().some((event) => event.kind === "thought-preview"),
+      false,
+    );
+    assert.equal(f.owner.turns()[0]?.resultKind, name);
+  });
+}

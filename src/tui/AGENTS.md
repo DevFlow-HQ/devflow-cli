@@ -28,6 +28,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Keys yield to modal/details focus; OpenTUI wheel events bubble with the same guards. The Renderer Adapter maps `meta` to the Port's `alt`.
   Passive changes stay paused. Up starts at the actual anchor, including blank space below short pages; only latest or deliberate Down resumes following.
   A removed anchor chooses the nearest prior survivor, ties later, at offset zero; a short or empty page stays paused. Dividers count toward their content row.
+- Thought expansion (#417) keys on Projection row ids and survives final/page replacement. Ctrl+O toggles the first visible Thought; clicking toggles that row.
+  Spinner ticks replace only displayed headings, never re-wrap bodies. Requests, dialogs, confirmations and readers retain key ownership.
 - The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
   `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.

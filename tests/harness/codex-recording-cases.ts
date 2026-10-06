@@ -6,6 +6,8 @@ export const CODEX_RECORDING_INPUT = {
     "Call secant.step_done with reason 'recorded completion', then recording_external.needs_approval, then recording_external.ask_form, then recording_external.ask_url, in that exact order. If a request is declined, continue with the next tool. Do not call other tools. Finally reply: recorded channel.",
   agentCallsLegacy:
     "Call recording_external.needs_approval once. If declined, reply: recorded legacy decline. Do not call other tools.",
+  thoughtSummary:
+    "Without tools, find the smallest positive integer n for which n is divisible by 7 and its decimal digits sum to 23. Explain the result briefly.",
   completion: "Reply with exactly: recorded completion.",
   secondCompletion: "Reply with exactly: recorded second completion.",
   approval:

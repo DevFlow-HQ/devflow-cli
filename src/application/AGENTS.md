@@ -89,8 +89,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Tracked Operation admission, outcome, and replay carry their `runId`; pre-Run Operations omit it (#331). Application reports its own committed rests
   (cancel, Gate stop, prepare refusal, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
-- `session-history` (#412, #414) bounds messages/tools and other stored/live rows together at 200, issuing subscription ids/positions. Previews share a 50 ms budget.
-  Reconcile pages and cancel stale previews before publication; unmatched tools become unconfirmed. Appends retain first `historyOrder`; the last observer cancels the timer.
+- `session-history` (#412, #414, #417) bounds messages/tools/Thoughts together at 200 with separate kind namespaces and a shared 50 ms preview budget.
+  Reconcile before publication; empty finals hide Thought bodies and unmatched tools stay unconfirmed. First `historyOrder` persists; last observer cancels the timer.
   Transcript Resources retain separate entry ids across reads/prepend, excluded from headless; pages still hold 20 entries.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and
   independently exposes the latest Agent-step Attempt's normalized name/executable/version as `run.harness` plus its sibling `effectiveModel` (#125, #147).

@@ -516,6 +516,21 @@ export type TurnEvent =
         readonly outcome: { readonly kind: "running" };
       };
     }
+  | {
+      /** Provider-written user-facing summary, never private reasoning. */
+      readonly kind: "thought";
+      readonly summaryId: string;
+      readonly content: string;
+      readonly incomplete?: true;
+      /** Only a qualified, reported reasoning duration. */
+      readonly durationMs?: number;
+    }
+  | {
+      /** Complete replaceable text for one qualified summary. */
+      readonly kind: "thought-preview";
+      readonly summaryId: string;
+      readonly content: string;
+    }
   | { readonly kind: "request-raised"; readonly request: HarnessRequest }
   | {
       readonly kind: "request-answered";
@@ -560,6 +575,8 @@ export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "request-answered",
   "request-expired",
   "message-preview",
+  "thought",
+  "thought-preview",
   "context",
   "usage",
   "activity",

@@ -1372,6 +1372,8 @@ class CodexTurn implements HarnessTurn {
   private rerouted = false;
   /** Whether this Turn sent its `thread/read`. */
   private effectiveValuesRead = false;
+  private summaryQualified = false;
+  private readonly summaryParts = new Map<string, Map<number, string>>();
   /** Codex refused the first `thread/read`; the Turn's next item reads again. */
   private rereadPending = false;
   private finalContent: string | undefined;
@@ -2100,11 +2102,32 @@ class CodexTurn implements HarnessTurn {
         return;
       case "model-rerouted":
         this.rerouted = true;
+        if (notification.toModel !== "gpt-6.1-sol")
+          this.summaryQualified = false;
         this.observeModel(
           notification.toModel,
           this.model.known ? this.model.effort : undefined,
         );
         return;
+      case "thought-delta": {
+        if (!this.summaryQualified) return;
+        this.deliverSteersInHistory();
+        let parts = this.summaryParts.get(notification.summaryId);
+        if (parts === undefined) {
+          parts = new Map();
+          this.summaryParts.set(notification.summaryId, parts);
+        }
+        parts.set(
+          notification.summaryIndex,
+          (parts.get(notification.summaryIndex) ?? "") + notification.delta,
+        );
+        const content = [...parts]
+          .sort(([a], [b]) => a - b)
+          .map(([, text]) => text)
+          .join("\n\n");
+        this.producer.emitThoughtPreview(content, notification.summaryId);
+        return;
+      }
       case "preview":
         this.lastObservation = "Codex emitted assistant preview content";
         this.deliverSteersInHistory();
@@ -2129,6 +2152,10 @@ class CodexTurn implements HarnessTurn {
             this.finalContent = notification.event.content;
             this.lastObservation =
               "Codex completed an authoritative agent message";
+          }
+          if (notification.event.kind === "thought") {
+            this.summaryParts.delete(notification.event.summaryId);
+            if (!this.summaryQualified) return;
           }
           if (notification.event.kind === "tool-call") {
             const key = JSON.stringify([
@@ -2314,6 +2341,8 @@ class CodexTurn implements HarnessTurn {
         const current = this.model;
         const model =
           this.rerouted && current.known ? current.model : read.model;
+        if (this.settled) return;
+        this.summaryQualified = read.summaryQualified && model === read.model;
         if (model === undefined) return;
         this.observeModel(model, read.effort);
       },

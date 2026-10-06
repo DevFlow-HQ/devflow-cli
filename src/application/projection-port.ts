@@ -1276,6 +1276,12 @@ interface SessionToolValue {
 export type SessionHistoryValue =
   | SessionToolValue
   | {
+      readonly kind: "thought";
+      readonly content: string;
+      readonly incomplete?: true;
+      readonly durationMs?: number;
+    }
+  | {
       readonly kind: "message";
       readonly role: "user" | "assistant";
       readonly content: string;

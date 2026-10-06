@@ -39,3 +39,10 @@ reading controls; headless keeps its stored page/export contracts ([#413](https:
 Identified tool input, reported counts, and completed/failed/declined/unconfirmed outcomes belong to per-Session history (#414).
 `run show --json` retains its generic `tool-activity` timeline mapping for new starts and observed settlements, and reads legacy rows unchanged.
 The transcript still excludes tools. Turn success, Interrupt, loss, and Request answers never create a missing tool result.
+Qualified Thought summaries (#417) grow in the TUI's Session history and persist
+once at settlement, including known incomplete text. They have no transcript
+position, so both headless transcript pages and exports exclude them. The frozen
+`run show --json` shape is unchanged. Native qualification currently covers only
+OpenAI `gpt-6.1-sol` via Codex; other provider/model pairs, Claude summaries and
+native reasoning duration remain evidence gaps. See
+[Thought qualification](../tests/harness/message-facts-provenance.md#thought-qualification-2026-10-06).

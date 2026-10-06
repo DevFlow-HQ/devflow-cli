@@ -5540,3 +5540,175 @@ test("m10-observed-harness-facts: authentic Codex delta identity retains text wh
     await prepared.close();
   }
 });
+
+for (const setting of ["inherited", "configured", "unconfigured"] as const) {
+  const configured = setting === "configured";
+  test(`m10-observed-harness-facts: authentic Codex Thought ${setting} settings keep one summary and preserve native requests`, async () => {
+    const name =
+      setting === "inherited"
+        ? "thought-summary"
+        : `thought-summary-${setting}`;
+    const installed = installCodexReplayer(name);
+    const prepared = await prepareCodex(installed.path);
+    try {
+      const events: TurnEvent[] = [];
+      const turn = prepared.startTurn({
+        ...turnRequest(),
+        session: "thought-summary",
+        correlationKey: { opaque: "record-thought-summary" },
+        input: { text: CODEX_RECORDING_INPUT.thoughtSummary },
+      });
+      turn.subscribe((event) => events.push(event));
+      assert.equal((await turn.result()).kind, "completed");
+      const summaries = events.filter((event) => event.kind === "thought");
+      if (configured) {
+        assert.deepEqual(summaries, [
+          {
+            kind: "thought",
+            summaryId: "rs_04715c5c346775eb016ac519973a3087d084df304bdff63f11",
+            content: "**Determining minimal three-digit number**",
+          },
+        ]);
+        assert.deepEqual(
+          events.filter((event) => event.kind === "thought-preview"),
+          [
+            {
+              kind: "thought-preview",
+              summaryId: summaries[0]!.summaryId,
+              content: "**Determining minimal three-digit number**",
+            },
+          ],
+        );
+        const replayed: TurnEvent[] = [];
+        turn.subscribe((event) => replayed.push(event));
+        assert.equal(
+          replayed.some((event) => event.kind === "thought-preview"),
+          false,
+        );
+      } else assert.deepEqual(summaries, []);
+      const count = events.length;
+      await prepared.close();
+      assert.equal(events.length, count, "nothing arrives after result");
+      const requests = installed
+        .invocations()
+        .flatMap((invocation) =>
+          invocation.stdinLines.map((line) => JSON.parse(line)),
+        )
+        .filter((value) =>
+          ["thread/start", "turn/start"].includes(value.method),
+        );
+      for (const request of requests) {
+        assert.equal("summary" in request.params, false);
+        assert.equal("effort" in request.params, false);
+        assert.equal("model" in request.params, false);
+        assert.doesNotMatch(
+          JSON.stringify(request.params),
+          /model_reasoning_summary|thinking/,
+        );
+      }
+    } finally {
+      await prepared.close();
+    }
+  });
+}
+
+// The unchanged authentic recording qualifies fields. These local mutations only
+// establish semantic races and absence; they are never new native provenance.
+for (const variant of [
+  "unfinished",
+  "empty-final",
+  "foreign-provider",
+  "unqualified-model",
+  "late-preview",
+] as const) {
+  test(`m10-observed-harness-facts: Codex Thought ${variant} keeps settlement/private-field rules`, async () => {
+    const installed = installCodexReplayer("thought-summary-configured");
+    const path = join(installed.identityPath, "..", "fixture", "case.json");
+    const recording = JSON.parse(readFileSync(path, "utf8"));
+    const summaryId = "rs_04715c5c346775eb016ac519973a3087d084df304bdff63f11";
+    recording.traffic = recording.traffic.flatMap(
+      (entry: { direction: string; line?: string }) => {
+        if (entry.direction !== "stdout" || entry.line === undefined)
+          return [entry];
+        const value = JSON.parse(entry.line);
+        const item = value.params?.item;
+        const thread = value.result?.thread;
+        if (thread !== undefined && variant === "foreign-provider")
+          thread.modelProvider = "unqualified";
+        if (thread !== undefined && variant === "unqualified-model")
+          thread.model = "unqualified";
+        if (value.method === "item/completed" && item?.type === "reasoning") {
+          if (variant === "unfinished") return [];
+          if (variant === "empty-final") item.summary = [];
+          item.content = ["PRIVATE REASONING MUST NOT CROSS"];
+          item.encryptedContent = "PRIVATE ENCRYPTED PAYLOAD";
+          item.reasoningDurationMs = 1000;
+          if (variant === "late-preview")
+            return [
+              { ...entry, line: JSON.stringify(value) + "\n" },
+              {
+                ...entry,
+                line:
+                  JSON.stringify({
+                    method: "item/reasoning/summaryTextDelta",
+                    params: {
+                      threadId: value.params.threadId,
+                      turnId: value.params.turnId,
+                      itemId: summaryId,
+                      summaryIndex: 0,
+                      delta: "Late duplicate",
+                    },
+                  }) + "\n",
+              },
+            ];
+        }
+        return [{ ...entry, line: JSON.stringify(value) + "\n" }];
+      },
+    );
+    writeFileSync(path, JSON.stringify(recording));
+    const prepared = await prepareCodex(installed.path);
+    try {
+      const events: TurnEvent[] = [];
+      const turn = prepared.startTurn({
+        ...turnRequest(),
+        session: "thought-summary",
+        correlationKey: { opaque: "record-thought-summary" },
+        input: { text: CODEX_RECORDING_INPUT.thoughtSummary },
+      });
+      turn.subscribe((event) => events.push(event));
+      assert.equal((await turn.result()).kind, "completed");
+      const thoughts = events.filter((event) => event.kind === "thought");
+      if (variant === "foreign-provider" || variant === "unqualified-model") {
+        assert.deepEqual(thoughts, []);
+        assert.equal(
+          events.some((event) => event.kind === "thought-preview"),
+          false,
+        );
+      } else {
+        assert.deepEqual(thoughts, [
+          {
+            kind: "thought",
+            summaryId,
+            content:
+              variant === "empty-final"
+                ? ""
+                : "**Determining minimal three-digit number**",
+            ...(variant === "unfinished" ? { incomplete: true } : {}),
+          },
+        ]);
+      }
+      assert.doesNotMatch(
+        JSON.stringify(events),
+        /PRIVATE|Late duplicate|reasoningDurationMs/,
+      );
+      const replayed: TurnEvent[] = [];
+      turn.subscribe((event) => replayed.push(event));
+      assert.equal(
+        replayed.some((event) => event.kind === "thought-preview"),
+        false,
+      );
+    } finally {
+      await prepared.close();
+    }
+  });
+}

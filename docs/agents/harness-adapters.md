@@ -1,7 +1,7 @@
 # Harness Adapter Internals
 
 Read before changing native Adapter internals. [Harness notes](../../src/harness/AGENTS.md) own shared Interface, terminal, recovery and test invariants.
-Message identities and terminal partials follow [native qualification provenance](../../tests/harness/message-facts-provenance.md) (#411).
+Message/Thought identities and terminal partials follow [native qualification provenance](../../tests/harness/message-facts-provenance.md) (#411).
 Tools follow [tool provenance](../../tests/harness/tool-facts-provenance.md) (#414); preparation follows `preparation-owner.ts` and ADR 0022 (#407).
 
 ## Claude Code Adapter
@@ -74,7 +74,7 @@ Tools follow [tool provenance](../../tests/harness/tool-facts-provenance.md) (#4
   Replacement failures (`recovery-identity` or `recovery-app-server`, no possible effects) leave Sessions detached for retry; a refused resume fences only
   that Session. An incompletely reaped generation is retained for cleanup and refuses replacement until it is reaped, preventing duplicate app-servers.
   Sessions resend their thread config on resume. Turns bind after replacement; retired generations cannot dispatch into newer Turns.
-- Fresh and resumed Turns preserve admission-before-content and matching terminal authority; completed items supersede delta previews.
+- Fresh/resumed Turns keep admission-before-content and terminal authority; completed items replace previews. Summary qualification follows the linked provenance (#417).
 - Effective values (#345): `turn/start` carries the Model choice; first acceptance sends one bounded `thread/read` (a refusal re-sent at the next item)
   as the observation, and a matching `model/rerouted` replaces the model. A failed or late read leaves values unknown, never holding the Turn.
 - Codex client RPC and reverse-request ids have separate private maps. Approvals expose exact actions. A native resolution or terminal confirms an answer

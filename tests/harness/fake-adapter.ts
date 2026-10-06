@@ -169,6 +169,7 @@ export const REPLAY_BARRIER: TurnEvent = {
 const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
   "assistant-content",
   "tool-call",
+  "thought",
 ]);
 
 /** Build a factory for the fake Adapter from a script. It spawns nothing, so a
@@ -766,11 +767,19 @@ class FakeTurn {
     if (this.settled) return;
     this.terminal = true;
     const previews = this.buffer.filter(
-      (event) => event.kind === "message-preview",
+      (event) =>
+        event.kind === "message-preview" || event.kind === "thought-preview",
     );
     this.removePreviews();
     for (const event of previews)
-      if (event.kind === "message-preview")
+      if (event.kind === "thought-preview")
+        this.emit({
+          kind: "thought",
+          summaryId: event.summaryId,
+          content: event.content,
+          incomplete: true,
+        });
+      else if (event.kind === "message-preview")
         this.emit({
           kind: "assistant-content",
           messageId: event.messageId,
@@ -810,6 +819,8 @@ class FakeTurn {
     options: { readonly record: boolean } = { record: true },
   ): void {
     if (this.settled) throw new Error("emit after result: terminal ordering");
+    if (event.kind === "thought") this.removeThoughtPreviews(event.summaryId);
+    if (event.kind === "thought-preview" && !event.content.trim()) return;
     if (event.kind === "assistant-content")
       this.removePreviews(event.messageId);
     if (event.kind === "tool-call" && event.call.outcome.kind !== "running") {
@@ -836,7 +847,16 @@ class FakeTurn {
                 retained.messageId === event.messageId,
             )
           : -1;
-    if (preview < 0) this.buffer.push(event);
+    const thoughtPreview =
+      event.kind === "thought-preview"
+        ? this.buffer.findIndex(
+            (retained) =>
+              retained.kind === "thought-preview" &&
+              retained.summaryId === event.summaryId,
+          )
+        : -1;
+    if (thoughtPreview >= 0) this.buffer[thoughtPreview] = event;
+    else if (preview < 0) this.buffer.push(event);
     else this.buffer[preview] = event;
     if (options.record && HISTORY_KINDS.has(event.kind)) {
       this.history.push(event);
@@ -844,7 +864,18 @@ class FakeTurn {
     for (const listener of this.listeners) listener(event);
   }
 
+  private removeThoughtPreviews(summaryId?: string): void {
+    for (let index = this.buffer.length - 1; index >= 0; index--) {
+      const event = this.buffer[index];
+      if (
+        event?.kind === "thought-preview" &&
+        (summaryId === undefined || event.summaryId === summaryId)
+      )
+        this.buffer.splice(index, 1);
+    }
+  }
   private removePreviews(messageId?: string): void {
+    if (messageId === undefined) this.removeThoughtPreviews();
     for (let index = this.buffer.length - 1; index >= 0; index -= 1) {
       const event = this.buffer[index];
       if (

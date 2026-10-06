@@ -53,6 +53,10 @@ interface ModelChangeListener {
   reported(runId: string, change: ModelChange): void;
   ended(runId: string): void;
   tool(runId: string, tool: NonNullable<LiveObservation["tool"]>): void;
+  thought(
+    runId: string,
+    thought: NonNullable<LiveObservation["thought"]>,
+  ): void;
   message(
     runId: string,
     message: NonNullable<LiveObservation["message"]>,
@@ -181,6 +185,8 @@ export function createLiveOverlay(
         live.active = true;
         if (observation.message !== undefined)
           modelChanges.message(runId, observation.message);
+        if (observation.thought !== undefined)
+          modelChanges.thought(runId, observation.thought);
         if (observation.context !== undefined)
           live.context = observation.context;
         if (observation.usage !== undefined) live.usage = observation.usage;

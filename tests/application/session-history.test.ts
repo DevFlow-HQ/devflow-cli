@@ -1069,3 +1069,278 @@ test("m10-session-history: terminal removal of memory-only previews never resurr
   );
   await run.finish();
 });
+
+test("m10-session-history: Thought preview/final reconciliation keeps first position without chunk writes or transcript content", async (t) => {
+  const timer = clock();
+  const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
+  t.after(run.finish);
+  admit(run.owner);
+  const opened = run.port.openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => opened.close());
+  const before = run.owner.turnEvents();
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "private-summary",
+      content: "First line\nGrowing body",
+    },
+  });
+  assert.deepEqual(run.owner.turnEvents(), before);
+  timer.flush();
+  const reader = opened.updates[Symbol.asyncIterator]();
+  const preview = await reader.next();
+  assert.ok(preview.value?.kind === "history-preview");
+  const row = preview.value.row;
+  assert.deepEqual(row.value, {
+    kind: "thought",
+    content: "First line\nGrowing body",
+  });
+  assert.ok(!row.id.includes("private-summary"));
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "tool-call",
+    payload: JSON.stringify({
+      callId: "tool",
+      tool: "read",
+      input: "file",
+      outcome: { kind: "running" },
+    }),
+    at: new Date(),
+  });
+  await reader.next();
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "private-summary",
+      content: "Stale queued body",
+    },
+  });
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "thought",
+    payload: JSON.stringify({
+      summaryId: "private-summary",
+      content: "First line\nAuthoritative full body",
+      durationMs: 1200,
+    }),
+    at: new Date(),
+  });
+  const final = await reader.next();
+  assert.ok(final.value?.kind === "durable");
+  assert.ok(final.value.snapshot.result.found);
+  const settled = final.value.snapshot.result.history.rows[1]!;
+  assert.equal(settled.id, row.id);
+  assert.equal(settled.position, row.position);
+  assert.equal(settled.source, "stored");
+  assert.deepEqual(settled.value, {
+    kind: "thought",
+    content: "First line\nAuthoritative full body",
+    durationMs: 1200,
+  });
+  assert.equal(final.value.snapshot.result.history.rows[2]?.value.kind, "tool");
+  timer.flush();
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "private-summary",
+      content: "Late stale body",
+    },
+  });
+  timer.flush();
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "thought",
+    payload: JSON.stringify({
+      summaryId: "private-summary",
+      content: "Duplicate",
+    }),
+    at: new Date(),
+  });
+  assert.equal(
+    run.owner.turnEvents().filter((event) => event.kind === "thought").length,
+    1,
+  );
+  const transcript = run.port.readTranscript(
+    final.value.snapshot.result.history.transcriptExport,
+  );
+  assert.ok(transcript.found);
+  assert.deepEqual(
+    transcript.entries.map((entry) => entry.content),
+    ["Input"],
+  );
+  await run.finish();
+  const reopened = run.reopen().openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => reopened.close());
+  assert.ok(reopened.snapshot.result.found);
+  assert.deepEqual(
+    reopened.snapshot.result.history.rows[1]?.value,
+    settled.value,
+  );
+});
+
+test("m10-session-history: mixed Thought/message/tool rows share the exact 200/201 window and discard late previews", async (t) => {
+  const timer = clock();
+  const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
+  t.after(run.finish);
+  admit(run.owner);
+  const open = () =>
+    run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+  const opened = open();
+  t.after(() => opened.close());
+  for (let index = 0; index < 199; index++) {
+    if (index % 3 === 0)
+      run.channel.observe({
+        thought: {
+          turnId: "turn",
+          session: "s",
+          summaryId: `item-${index}`,
+          content: `Thought ${index}`,
+        },
+      });
+    else if (index % 3 === 1)
+      run.channel.observe({
+        message: {
+          turnId: "turn",
+          session: "s",
+          messageId: `item-${index}`,
+          content: `Message ${index}`,
+        },
+      });
+    else
+      run.owner.appendTurnEvent({
+        turnId: "turn",
+        kind: "tool-call",
+        payload: JSON.stringify({
+          callId: `item-${index}`,
+          tool: "read",
+          input: String(index),
+          outcome: { kind: "running" },
+        }),
+        at: new Date(),
+      });
+  }
+  const exact = open();
+  t.after(() => exact.close());
+  assert.ok(exact.snapshot.result.found);
+  assert.equal(exact.snapshot.result.history.rows.length, 200);
+  assert.equal(exact.snapshot.result.history.hasEarlier, false);
+  assert.equal(exact.snapshot.result.history.rows[0]?.value.kind, "message");
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "new",
+      content: "Newest",
+    },
+  });
+  const over = open();
+  t.after(() => over.close());
+  assert.ok(over.snapshot.result.found);
+  assert.equal(over.snapshot.result.history.rows.length, 200);
+  assert.equal(over.snapshot.result.history.hasEarlier, true);
+  assert.deepEqual(over.snapshot.result.history.rows[0]?.value, {
+    kind: "thought",
+    content: "Thought 0",
+  });
+  run.channel.observe({
+    message: {
+      turnId: "turn",
+      session: "s",
+      messageId: "new",
+      content: "Distinct kind with same native id",
+    },
+  });
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "item-0",
+      content: "Evicted must not reappear",
+    },
+  });
+  timer.flush();
+  const latest = open();
+  t.after(() => latest.close());
+  assert.ok(latest.snapshot.result.found);
+  assert.equal(latest.snapshot.result.history.rows.length, 200);
+  assert.ok(
+    !JSON.stringify(latest.snapshot).includes("Evicted must not reappear"),
+  );
+  assert.deepEqual(
+    latest.snapshot.result.history.rows.slice(-2).map((row) => row.value),
+    [
+      { kind: "thought", content: "Newest" },
+      {
+        kind: "message",
+        role: "assistant",
+        content: "Distinct kind with same native id",
+      },
+    ],
+  );
+  await run.finish();
+});
+
+test("m10-session-history: empty Thought replacements suppress bodies and never revive their preview", async (t) => {
+  const timer = clock();
+  const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
+  t.after(run.finish);
+  admit(run.owner);
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "empty",
+      content: "   \n",
+    },
+  });
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "cleared",
+      content: "Preview",
+    },
+  });
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "thought",
+    payload: JSON.stringify({ summaryId: "cleared", content: "" }),
+    at: new Date(),
+  });
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "cleared",
+      content: "Late body",
+    },
+  });
+  timer.flush();
+  const opened = run.port.openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => opened.close());
+  assert.ok(opened.snapshot.result.found);
+  assert.deepEqual(
+    opened.snapshot.result.history.rows.map((row) => row.value),
+    [{ kind: "message", role: "user", content: "Input" }],
+  );
+  await run.finish();
+});

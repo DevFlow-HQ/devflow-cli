@@ -441,3 +441,34 @@ for (const [name, path] of [
     });
   }
 }
+
+for (const [field, wrongType] of [
+  ["delta", "integer"],
+  ["summaryIndex", "string"],
+  ["itemId", "integer"],
+] as const) {
+  test(`m10-observed-harness-facts: summary qualification refuses incompatible ${field}`, async () => {
+    await rejects((schema) => {
+      object(
+        at(
+          schema,
+          "definitions",
+          "v2",
+          "ReasoningSummaryTextDeltaNotification",
+          "properties",
+          field,
+        ),
+      ).type = wrongType;
+    });
+  });
+}
+test("m10-observed-harness-facts: summary qualification refuses a non-array completed summary", async () => {
+  await rejects((schema) => {
+    const reasoning = array(
+      at(schema, "definitions", "v2", "ThreadItem", "oneOf"),
+    ).find((variant) =>
+      array(at(variant, "properties", "type", "enum")).includes("reasoning"),
+    );
+    object(at(reasoning, "properties", "summary")).type = "string";
+  });
+});

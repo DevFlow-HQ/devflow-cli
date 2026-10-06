@@ -78,6 +78,7 @@ const generatedSchema = z.looseObject({
       ItemStartedNotification: shapeSchema,
       ItemCompletedNotification: shapeSchema,
       AgentMessageDeltaNotification: shapeSchema,
+      ReasoningSummaryTextDeltaNotification: shapeSchema,
       CommandExecutionOutputDeltaNotification: shapeSchema,
       FileChangeOutputDeltaNotification: shapeSchema,
       FileChangePatchUpdatedNotification: shapeSchema,
@@ -114,6 +115,7 @@ const SERVER_NOTIFICATIONS: TRequiredVariants = {
   "item/started": ["method", "params"],
   "item/completed": ["method", "params"],
   "item/agentMessage/delta": ["method", "params"],
+  "item/reasoning/summaryTextDelta": ["method", "params"],
   "item/commandExecution/outputDelta": ["method", "params"],
   "item/fileChange/outputDelta": ["method", "params"],
   "item/fileChange/patchUpdated": ["method", "params"],
@@ -170,6 +172,8 @@ const SERVER_NOTIFICATION_PARAM_REFS: Readonly<Record<string, string>> = {
   "item/started": "#/definitions/v2/ItemStartedNotification",
   "item/completed": "#/definitions/v2/ItemCompletedNotification",
   "item/agentMessage/delta": "#/definitions/v2/AgentMessageDeltaNotification",
+  "item/reasoning/summaryTextDelta":
+    "#/definitions/v2/ReasoningSummaryTextDeltaNotification",
   "item/commandExecution/outputDelta":
     "#/definitions/v2/CommandExecutionOutputDeltaNotification",
   "item/fileChange/outputDelta":
@@ -203,7 +207,7 @@ const THREAD_ITEM_FIELD_TYPES: Readonly<
 > = {
   userMessage: { id: "string", content: "array" },
   agentMessage: { id: "string", text: "string" },
-  reasoning: { id: "string" },
+  reasoning: { id: "string", summary: "array" },
   commandExecution: { id: "string", command: "string" },
   fileChange: { id: "string", changes: "array" },
   mcpToolCall: { id: "string", server: "string", tool: "string" },
@@ -627,6 +631,36 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "AgentMessageDeltaNotification",
     "properties",
     "delta",
+    "type",
+  ),
+  fact(
+    "summary delta",
+    "string",
+    "definitions",
+    "v2",
+    "ReasoningSummaryTextDeltaNotification",
+    "properties",
+    "delta",
+    "type",
+  ),
+  fact(
+    "summary index",
+    "integer",
+    "definitions",
+    "v2",
+    "ReasoningSummaryTextDeltaNotification",
+    "properties",
+    "summaryIndex",
+    "type",
+  ),
+  fact(
+    "summary item",
+    "string",
+    "definitions",
+    "v2",
+    "ReasoningSummaryTextDeltaNotification",
+    "properties",
+    "itemId",
     "type",
   ),
   fact(
@@ -1078,6 +1112,11 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       definitions.v2.AgentMessageDeltaNotification,
       ["delta", "itemId", "threadId", "turnId"],
       "agent-message delta",
+    ),
+    validateShape(
+      definitions.v2.ReasoningSummaryTextDeltaNotification,
+      ["delta", "itemId", "summaryIndex", "threadId", "turnId"],
+      "reasoning-summary delta",
     ),
     validateShape(
       definitions.v2.CommandExecutionOutputDeltaNotification,

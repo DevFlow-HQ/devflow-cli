@@ -54,6 +54,9 @@ const REAL_CASES = new Set([
   "codex-qualification",
   "codex-qualification-unconfigured",
   "completion",
+  "thought-summary",
+  "thought-summary-configured",
+  "thought-summary-unconfigured",
   "two-turns",
   "approval",
   "steer",
@@ -110,6 +113,12 @@ const workspace = recorderTempDir(`secant-codex-${caseName}-`);
 if (caseName === "authentication") {
   process.env.CODEX_HOME = recorderTempDir(
     "secant-codex-unauthenticated-home-",
+  );
+} else if (caseName === "thought-summary-unconfigured") {
+  process.env.CODEX_HOME = isolatedCodexHome('model = "gpt-6.1-sol"\n');
+} else if (caseName === "thought-summary-configured") {
+  process.env.CODEX_HOME = isolatedCodexHome(
+    'model = "gpt-6.1-sol"\nmodel_reasoning_summary = "concise"\n',
   );
 } else if (qualificationCase || channelCase) {
   process.env.CODEX_HOME = isolatedCodexHome(
@@ -233,6 +242,15 @@ async function driveCase(
   trigger: TStopHookTrigger,
 ): Promise<boolean> {
   switch (name) {
+    case "thought-summary-unconfigured":
+    case "thought-summary-configured":
+    case "thought-summary":
+      await expectResult(
+        startTurn,
+        turnRequest("thought-summary", CODEX_RECORDING_INPUT.thoughtSummary),
+        "completed",
+      );
+      return true;
     case "completion":
       await expectResult(
         startTurn,

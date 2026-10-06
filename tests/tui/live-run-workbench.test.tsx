@@ -151,6 +151,11 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
               content: "Streaming the repair",
             },
             {
+              kind: "thought-preview",
+              summaryId: "qualified-summary",
+              content: "Summary label\nRetained summary body",
+            },
+            {
               kind: "tool-call",
               call: {
                 callId: "scripted-call",
@@ -287,6 +292,15 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   assert.match(frame, /BLOCKED · ephemeral Harness Request/);
   assert.match(frame, /Assistant · streaming[\s\S]*Streaming the repair/);
   assert.match(frame, /Tool · file change · running/);
+  assert.match(frame, /Thought.*Thinking.*Summary label/);
+  assert.doesNotMatch(frame, /Retained summary body/);
+  fakeRenderer.key("o", { ctrl: true });
+  await rendered.renderOnce();
+  assert.doesNotMatch(
+    rendered.captureCharFrame(),
+    /Retained summary body/,
+    "approval owns the key",
+  );
   assert.match(frame, /Context · used 12500 tokens, capacity 200000 tokens/);
   assert.match(frame, /Usage · estimated 25 tokens/);
   assert.match(frame, /Tool: Edit/); // the exact tool
@@ -302,6 +316,11 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   fakeRenderer.key("return");
   await rendered.waitForFrame((next) => next.includes("SUCCEEDED"));
   assert.match(rendered.captureCharFrame(), /Tool · file change · unconfirmed/);
+  assert.match(rendered.captureCharFrame(), /Thought.*incomplete/);
+  assert.doesNotMatch(rendered.captureCharFrame(), /Thinking/);
+  fakeRenderer.key("o", { ctrl: true });
+  await rendered.renderOnce();
+  assert.match(rendered.captureCharFrame(), /Retained summary body/);
   assert.doesNotMatch(rendered.captureCharFrame(), /Assistant preview/);
   // The Harness identity and effective model live in the details panel now (#194
   // story 35), read from the durable `harness` view — not the old model-only header

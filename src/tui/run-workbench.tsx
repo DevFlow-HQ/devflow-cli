@@ -1351,6 +1351,51 @@ export function RunWorkbench(props: {
     if (current === undefined) return [];
     return buildTimelineRows(current, histories());
   });
+  const [expandedThoughts, setExpandedThoughts] = createSignal<
+    ReadonlySet<string>
+  >(new Set());
+  const [thoughtFrame, setThoughtFrame] = createSignal(0);
+  const liveThoughtShown = createMemo(() =>
+    timelineRows().some((row) => row.thought?.live),
+  );
+  createEffect(() => {
+    if (!liveThoughtShown() || props.reducedMotion) return;
+    const timer = setInterval(
+      () => setThoughtFrame((frame) => (frame + 1) % 4),
+      120,
+    );
+    timer.unref();
+    onCleanup(() => clearInterval(timer));
+  });
+  const thoughtMark = () =>
+    props.reducedMotion ? "[.]" : ["|", "/", "-", "\\"][thoughtFrame()];
+  createEffect(() => {
+    const retained = new Set(timelineRows().map((row) => row.key));
+    setExpandedThoughts((previous) => {
+      const next = new Set([...previous].filter((key) => retained.has(key)));
+      return next.size === previous.size ? previous : next;
+    });
+  });
+  const rowText = (row: TimelineRow, index: number): string => {
+    const prefix = `  ${index === 0 ? "Beginning of Run history · " : ""}`;
+    if (row.thought === undefined)
+      return row.oneLine
+        ? clip(prefix + row.text, innerW())
+        : prefix + row.text;
+    const expanded = expandedThoughts().has(row.key);
+    const thoughtPrefix = "  ";
+    const label = row.thought.live
+      ? row.text.replace(
+          "Thought · Thinking",
+          `Thought · Thinking ${props.reducedMotion ? "[.]" : "|"}`,
+        )
+      : row.text;
+    const header = clip(
+      `${thoughtPrefix}${expanded ? "▾" : "▸"} ${label}`,
+      innerW(),
+    );
+    return expanded ? `${header}\n${row.thought.content}` : header;
+  };
   // Each row wraps at the interior width (#288), so the reducer windows display
   // lines while holding its anchor and badge in rows. The beginning marker always
   // leads the first row: it shows exactly when that row's first line is in view.
@@ -1359,14 +1404,14 @@ export function RunWorkbench(props: {
   const timelineWrapped = createMemo(() =>
     wrapRows(
       timelineRows().map((row, index) => ({
-        rules: row.dividers ?? [],
-        text:
-          row.oneLine === true
-            ? clip(
-                `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
-                innerW(),
-              )
-            : `  ${index === 0 ? "Beginning of Run history · " : ""}${row.text}`,
+        rules:
+          index === 0 && row.thought !== undefined
+            ? [
+                ...(row.dividers ?? []),
+                { glyph: "─", title: "Beginning of Run history" },
+              ]
+            : (row.dividers ?? []),
+        text: rowText(row, index),
       })),
       innerW(),
       TIMELINE_HANG,
@@ -1395,11 +1440,69 @@ export function RunWorkbench(props: {
       viewportH(),
     );
   const beginningVisible = () => win().top === 0;
+  const liveThoughtHeaders = createMemo(() => {
+    const lines = timelineWrapped().lines;
+    const headers = new Set<number>();
+    let top = 0;
+    for (const [index, row] of timelineRows().entries()) {
+      if (row.thought?.live) {
+        const header = rowText(row, index).split("\n")[0]!;
+        const at = lines.indexOf(header, top);
+        if (at >= top && at < top + timelineWrapped().heights[index]!)
+          headers.add(at);
+      }
+      top += timelineWrapped().heights[index]!;
+    }
+    return headers;
+  });
   const visibleLines = () => {
     const w = win();
-    return timelineWrapped().lines.slice(w.top, w.top + w.visible);
+    return timelineWrapped()
+      .lines.slice(w.top, w.top + w.visible)
+      .map((line, index) =>
+        liveThoughtHeaders().has(w.top + index) && !props.reducedMotion
+          ? line.replace("Thinking |", `Thinking ${thoughtMark()}`)
+          : line,
+      );
   };
 
+  const thoughtAtLine = (line: number): TimelineRow | undefined => {
+    let top = 0;
+    for (const [index, height] of timelineWrapped().heights.entries()) {
+      if (line >= top && line < top + height) return timelineRows()[index];
+      top += height;
+    }
+    return undefined;
+  };
+  const toggleThought = (row: TimelineRow | undefined): void => {
+    if (
+      row?.thought === undefined ||
+      dialog.stack.length > 0 ||
+      modalControl() ||
+      confirmation() !== undefined ||
+      inspection.inspecting() ||
+      transcript.reader()
+    )
+      return;
+    setExpandedThoughts((previous) => {
+      const next = new Set(previous);
+      if (next.has(row.key)) next.delete(row.key);
+      else next.add(row.key);
+      return next;
+    });
+  };
+  const firstVisibleThought = () => {
+    const window = win();
+    for (let line = window.top; line < window.top + window.visible; line++) {
+      const row = thoughtAtLine(line);
+      if (row?.thought !== undefined) return row;
+    }
+    return undefined;
+  };
+  const clickTimelineLine = (index: number): void => {
+    const row = thoughtAtLine(win().top + index);
+    toggleThought(row);
+  };
   const scrollBy = (action: TimelineAction) =>
     setScroll((prev) =>
       scrollHistory(
@@ -1627,6 +1730,10 @@ export function RunWorkbench(props: {
       return;
     }
     if (interruptArmed()) setInterruptConfirmation(undefined);
+    if (name === "o" && key.ctrl && focus() === "timeline") {
+      toggleThought(firstVisibleThought());
+      return;
+    }
     // Steer opens on `s` while an available steer Offer is present and the timeline
     // holds focus (#148), mirroring the interrupt arm's gating so it never shadows the
     // Details/checkpoint Esc regions. An unavailable Harness shows the reason but `s`
@@ -1867,6 +1974,8 @@ export function RunWorkbench(props: {
               win={win}
               beginningVisible={beginningVisible}
               visibleLines={visibleLines}
+              onTimelineLine={clickTimelineLine}
+              thoughtAvailable={() => firstVisibleThought() !== undefined}
               metadataLines={metadataLines}
               blockedBasis={blockedBasis}
               focus={focus}
@@ -2002,6 +2111,8 @@ function Workbench(props: {
   win: Accessor<ReturnType<typeof timelineWindow>>;
   beginningVisible: Accessor<boolean>;
   visibleLines: Accessor<readonly string[]>;
+  onTimelineLine: (index: number) => void;
+  thoughtAvailable: Accessor<boolean>;
   metadataLines: Accessor<readonly string[]>;
   blockedBasis: Accessor<string | undefined>;
   focus: Accessor<Focus>;
@@ -2087,7 +2198,7 @@ function Workbench(props: {
     const model = props.modelChoiceOffered() ? "m model · " : "";
     return props.focus() === "details"
       ? `${model}↑/↓ select · enter open · tab timeline · esc back · q quit`
-      : `${model}Alt+↑/↓ scroll · ^G/d details · Alt+End latest · esc back · q quit`;
+      : `${model}${props.thoughtAvailable() ? "^O toggle first visible Thought · " : ""}Alt+↑/↓ scroll · ^G/d details · Alt+End latest · esc back · q quit`;
   };
 
   const displayState = () =>
@@ -2322,8 +2433,13 @@ function Workbench(props: {
           }
         >
           <For each={props.visibleLines()}>
-            {(line) => (
-              <text fg={theme.text} flexShrink={0} wrapMode="none">
+            {(line, index) => (
+              <text
+                fg={theme.text}
+                flexShrink={0}
+                wrapMode="none"
+                onMouseDown={() => props.onTimelineLine(index())}
+              >
                 {line}
               </text>
             )}

@@ -129,6 +129,12 @@ export interface LiveObservation {
     readonly messageId: string;
     readonly content: string;
   };
+  readonly thought?: {
+    readonly turnId: string;
+    readonly session: string;
+    readonly summaryId: string;
+    readonly content: string;
+  };
   readonly context?: Extract<
     TurnEvent,
     { readonly kind: "context" }
@@ -946,6 +952,16 @@ function notifyChannel(
         },
       });
       return;
+    case "thought-preview":
+      channel.observe({
+        thought: {
+          turnId,
+          session,
+          summaryId: event.summaryId,
+          content: event.content,
+        },
+      });
+      return;
     case "context":
       channel.observe({ context: event.observation });
       return;
@@ -1247,6 +1263,20 @@ function recordTurnEvent(
         ...(event.parentActivity === undefined
           ? {}
           : { parentActivity: event.parentActivity }),
+      }),
+      at: new Date(),
+    });
+  } else if (event.kind === "thought") {
+    owner.appendTurnEvent({
+      turnId,
+      kind: "thought",
+      payload: JSON.stringify({
+        summaryId: event.summaryId,
+        content: event.content,
+        ...(event.incomplete === undefined ? {} : { incomplete: true }),
+        ...(event.durationMs === undefined
+          ? {}
+          : { durationMs: event.durationMs }),
       }),
       at: new Date(),
     });

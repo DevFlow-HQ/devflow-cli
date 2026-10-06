@@ -107,6 +107,13 @@ const assistantMessage = z.object({
   incomplete: z.literal(true).optional(),
   parentActivity: z.string().optional(),
 });
+const thoughtSummary = z.object({
+  summaryId: z.string().min(1),
+  content: z.string(),
+  historyOrder: z.number().int().nonnegative().optional(),
+  incomplete: z.literal(true).optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
+});
 const deliveredSteer = z.object({
   steerId: z.string().min(1),
   historyOrder: z.number().int().nonnegative().optional(),
@@ -217,7 +224,22 @@ export function appendTurnEvent(
 ): void {
   let payload = request.payload;
   let transcriptSeq: number | undefined;
-  if (request.kind === "tool-call") {
+  if (request.kind === "thought") {
+    const thought = thoughtSummary.parse(JSON.parse(payload));
+    const duplicate = db
+      .select({ seq: turnEvents.seq })
+      .from(turnEvents)
+      .where(
+        and(
+          eq(turnEvents.turn_id, request.turnId),
+          eq(turnEvents.kind, "thought"),
+          sql`json_extract(${turnEvents.payload}, '$.summaryId') = ${thought.summaryId}`,
+        ),
+      )
+      .get();
+    if (duplicate !== undefined) return;
+    payload = JSON.stringify(thought);
+  } else if (request.kind === "tool-call") {
     const call = toolCall.parse(JSON.parse(payload));
     const previous = db
       .select({ payload: turnEvents.payload })

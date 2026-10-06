@@ -290,6 +290,7 @@ const threadReadResultSchema = z.looseObject({
     id: z.string().min(1),
     model: z.string().min(1).nullish(),
     reasoningEffort: z.string().min(1).nullish(),
+    modelProvider: z.string().catch("").optional(),
   }),
 });
 
@@ -298,7 +299,11 @@ const threadReadResultSchema = z.looseObject({
 export function parseThreadReadResult(
   value: unknown,
   threadId: string,
-): { readonly model?: string; readonly effort?: string } {
+): {
+  readonly model?: string;
+  readonly effort?: string;
+  readonly summaryQualified: boolean;
+} {
   const { thread } = parseResult(value, threadReadResultSchema, "thread/read");
   if (thread.id !== threadId) {
     throw new CodexProtocolError(
@@ -306,6 +311,9 @@ export function parseThreadReadResult(
     );
   }
   return {
+    // Native positive qualification currently covers this provider/model pair only.
+    summaryQualified:
+      thread.modelProvider === "openai" && thread.model === "gpt-6.1-sol",
     ...(thread.model != null ? { model: thread.model } : {}),
     ...(thread.reasoningEffort != null
       ? { effort: thread.reasoningEffort }
@@ -464,7 +472,22 @@ function usageSummary(
     .join(", ");
 }
 
+const summaryDeltaSchema = z.looseObject({
+  threadId: z.string().min(1),
+  turnId: z.string().min(1),
+  itemId: z.string().min(1),
+  summaryIndex: z.number().int().nonnegative(),
+  delta: z.string(),
+});
 export type CodexRuntimeNotification =
+  | {
+      readonly kind: "thought-delta";
+      readonly threadId: string;
+      readonly turnId: string;
+      readonly summaryId: string;
+      readonly summaryIndex: number;
+      readonly delta: string;
+    }
   | {
       readonly kind: "turn-started";
       readonly threadId: string;
@@ -654,6 +677,19 @@ export function parseRuntimeNotification(
           : {}),
       };
     }
+    case "item/reasoning/summaryTextDelta": {
+      const parsed = summaryDeltaSchema.safeParse(message.params);
+      if (!parsed.success) return undefined;
+      const params = parsed.data;
+      return {
+        kind: "thought-delta",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        summaryId: params.itemId,
+        summaryIndex: params.summaryIndex,
+        delta: params.delta,
+      };
+    }
     case "item/agentMessage/delta": {
       const params = parseResult(message.params, agentDeltaSchema, method);
       return {
@@ -757,7 +793,24 @@ function normalizeItemContent(
   readonly approvalInput?: string;
 } {
   const type = item.type;
-  if (type === "reasoning") return { itemId: item.id };
+  if (type === "reasoning") {
+    // summary is provider-written display text. Never read content/encrypted data.
+    const parsed = z
+      .looseObject({ summary: z.array(z.string()) })
+      .safeParse(item);
+    return {
+      itemId: item.id,
+      ...(!started && parsed.success
+        ? {
+            event: {
+              kind: "thought" as const,
+              summaryId: item.id,
+              content: parsed.data.summary.join("\n\n"),
+            },
+          }
+        : {}),
+    };
+  }
   if (type === "userMessage") {
     const message = parseResult(
       item,

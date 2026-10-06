@@ -589,6 +589,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     reported: reportedModelChange,
     message: (runId, message) => history.observe(runId, message),
     tool: (runId, tool) => history.observeTool(runId, tool),
+    thought: (runId, thought) => history.observeThought(runId, thought),
     ended: (runId) => {
       for (const pending of [...(pendingModelChanges.get(runId) ?? [])])
         pending.settle(undefined);

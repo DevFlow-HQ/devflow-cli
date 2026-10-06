@@ -19,6 +19,11 @@ export class TurnEventProducer {
     string,
     Extract<TurnEvent, { kind: "tool-call" }>
   >();
+  private readonly thoughts = new Map<
+    string,
+    Extract<TurnEvent, { kind: "thought-preview" }>
+  >();
+  private readonly settledThoughts = new Set<string>();
   private closed = false;
   get sealed(): boolean {
     return this.closed;
@@ -52,6 +57,13 @@ export class TurnEventProducer {
         this.toolPreviews.delete(event.call.callId);
       }
     }
+    if (event.kind === "thought") {
+      if (this.settledThoughts.has(event.summaryId)) return;
+      this.settledThoughts.add(event.summaryId);
+      const observed = this.thoughts.has(event.summaryId);
+      this.clearThoughtPreview(event.summaryId);
+      if (!observed && !event.content.trim()) return;
+    }
     this.events.push(event);
     for (const listener of this.listeners) listener(event);
   }
@@ -76,17 +88,49 @@ export class TurnEventProducer {
       this.previews.delete(id);
     }
   }
+  emitThoughtPreview(content: string, summaryId: string): void {
+    if (this.closed || this.settledThoughts.has(summaryId) || !content.trim())
+      return;
+    const previous = this.thoughts.get(summaryId);
+    const event: Extract<TurnEvent, { kind: "thought-preview" }> = {
+      kind: "thought-preview",
+      summaryId,
+      content,
+    };
+    this.thoughts.set(summaryId, event);
+    if (previous === undefined) this.events.push(event);
+    else this.events[this.events.indexOf(previous)] = event;
+    for (const listener of this.listeners) listener(event);
+  }
+  private clearThoughtPreview(summaryId: string): void {
+    const previous = this.thoughts.get(summaryId);
+    if (previous === undefined) return;
+    this.events.splice(this.events.indexOf(previous), 1);
+    this.thoughts.delete(summaryId);
+  }
   settlePreview(): void {
     if (this.closed) return;
-    const pending = [...this.previews.values()];
+    const pending = this.events.filter(
+      (event) =>
+        event.kind === "message-preview" || event.kind === "thought-preview",
+    );
     this.clearPreview();
-    for (const event of pending)
-      this.emit({
-        kind: "assistant-content",
-        messageId: event.messageId,
-        content: event.content,
-        incomplete: true,
-      });
+    for (const event of pending) {
+      if (event.kind === "thought-preview") {
+        this.emit({
+          kind: "thought",
+          summaryId: event.summaryId,
+          content: event.content,
+          incomplete: true,
+        });
+      } else if (event.kind === "message-preview")
+        this.emit({
+          kind: "assistant-content",
+          messageId: event.messageId,
+          content: event.content,
+          incomplete: true,
+        });
+    }
   }
   seal(): void {
     this.closed = true;
