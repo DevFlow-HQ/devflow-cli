@@ -54,6 +54,9 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **matt-front-refusal**: the built-in the startup ensure installed, refused headlessly with `interactive-step-needs-tui` and its remediation.
 - **launch-preparation-headless** (#189): a not-ready draft (missing input, untrusted digest) `run launch` prints every finding in text and JSON,
   exits one, and creates no Run.
+- **m10-previous-release-conversation** (#411): an authentic transcript-bearing predecessor home relocates before the copied binary migrates it.
+  Two binary reopens retain authoritative empty/divergent messages and exact page/export envelopes; later Turns append normally. Store reads retain
+  outcomes, gates, artifact bytes and released ownership. Orphan Turn/Session and injected rollback copies fail without losing rows or journal, then recover.
 - **workspace-materialization** (#88): a `home: workspace` text Artifact is materialized to its declared path; a middle Step modifies that copy; the
   next Step's byte-for-byte verify rests the Run `halted` with the conflict `run show` names; restoring the file and `run resume` continues it.
 - **durable-human-gate** (#85): a Repeat group blocks at its Review checkpoint under one invocation; a second invocation answers `--continue` and the

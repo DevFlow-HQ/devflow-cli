@@ -57,7 +57,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   the registrations, so it runs before any Run is acquired and never fails the open.
 - D7 has two halves. The closed-set columns the Store itself branches on — `attempt_log.outcome`, `gate_answer.answer`, and `pending_gate.shape` — are validated with `z.enum`
   at their read ingress (not cast), so a drifted value is rejected there rather than trusted by the resume cursor, the grant count, or the pending-gate derivation. The six
-  M3 columns — turn `origin`, `kind`, `result_kind`, `turn_event.kind`, `harness_session.availability`, and `transcript_entry.role` — are returned raw.
+  M3 columns — turn `origin`, `kind`, `result_kind`, `turn_event.kind`, `harness_session.availability`, and retained message `role` — are returned raw.
   The shared `openAgentAttemptTurn`/`waitingAgentTurn` derivation (#355) compares `kind` and `result_kind` by equality, so unknown or legacy values
   never establish an Agent wait. Projection narrows the other values tolerantly; the Store never rejects these rows over an unknown member.
 - A Human Gate answer (#85) is a bound Artifact recorded through `recordGateAnswer` — a publication-shaped write (stage a commit, then one transaction moves the
@@ -80,7 +80,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   A typed result, never a throw (#305): `working-area-unavailable`, or `output-receipt-directory-unavailable` for a squatted root, a root that does not
   resolve to itself (an agent-planted link, refused before emptying through it), or a failed removal/creation.
 - Harness Turn records (#116): `admitTurn` writes the `turn` row **before** the stdin frame is sent (the durable admission the Adapter awaits) — it upserts the named Session
-  `open` and the rendered input as a `user` transcript entry in one transaction, and a fenced owner refuses it, proving the Turn `not-started` so no stdin is sent.
+  `open` and a first conversation row referencing the exact Turn input in one transaction. A fenced owner refuses it, proving `not-started` before stdin.
 - `settleTurn` is immutable: it no-ops once the `turn` row's `result_kind` is set, so a second settle rewrites neither the result nor the Session availability. `turn_event`s
   append only. The Attempt's `effective_model` is set through `publishAttempt` (the `attempt` row is written after the Turn settles), never through `settleTurn`.
 - Turn `kind` (#126): `admitTurn` records the Secant Step kind that produced the Turn — `agent` or `interactive-agent` — in the nullable `turn.kind` column, Secant-owned
@@ -94,13 +94,13 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   row; the read-side `HarnessEvidenceRecord` union is what still admits a legacy model-only row written before identity existed. `harnessEvidence()` reads both
   facts from the one latest Agent-evidence row, so a model-less resumed Attempt clears the projected model rather than inheriting an older value. Which Attempts
   carry evidence is [execution's](../execution/AGENTS.md).
-- Transcript ordering (#124): `transcript_entry.seq` is an `INTEGER PRIMARY KEY`, i.e. an alias for the database-wide rowid, so it is monotonic across the whole `run.db`, not
-  per Session; a page filters it by Session key and pages upward by `seq` (`before`). The rowid alias is exactly why a page cursor stays stable — appending later rows never
-  renumbers earlier ones — so an opaque `before` cursor keeps naming the same boundary.
+- Conversation ordering (#411): nullable unique `turn_event.transcript_seq` keeps old transcript positions and allocates later ones under the owner fence.
+  Pages filter by Session and exclusive `before`; later appends never renumber retained rows. Legacy rows have no fabricated new metadata.
+  Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
 - Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session — two Sessions' Turns
-  interleave in one numbering, and it is not a per-Session sequence.
-- `turn_event.payload` is opaque JSON, never a raw protocol frame: the Store neither validates nor interprets it, and the Projection reads it tolerantly (an unrecognized event
-  kind projects nothing). Only Secant-shaped normalized events are ever written.
+  interleave in one numbering.
+- `turn_event.payload` is Secant-shaped JSON, never a raw protocol frame. The Store validates conversation message and delivered-Steer metadata at ingress;
+  other event evidence stays opaque and the Projection reads it tolerantly. An unrecognized event kind projects nothing.
 - There are no foreign keys and no `foreign_keys` pragma anywhere in either schema (only `busy_timeout` is set), so referential integrity rests entirely on the write
   transactions that keep related rows consistent; nothing the database enforces stands behind them.
 - Run delete drops the registration and reclaims the directory as one lifecycle unit; with no foreign keys there is nothing to cascade — the directory holds the whole Run.

@@ -189,16 +189,8 @@ export const turnEvents = sqliteTable("turn_event", {
   turn_id: text("turn_id").notNull(),
   kind: text("kind").notNull(),
   payload: text("payload").notNull(),
-  at: text("at").notNull(),
-});
-
-// One readable Session transcript entry (#116): the exact Turn input (`user`) and
-// the authoritative assistant content (`assistant`), append-only.
-export const transcriptEntries = sqliteTable("transcript_entry", {
-  seq: integer("seq").primaryKey(),
-  session_key: text("session_key").notNull(),
-  turn_id: text("turn_id").notNull(),
-  role: text("role").notNull(),
-  content: text("content").notNull(),
+  // Conversation position, allocated under the owner fence. Legacy positions
+  // survive migration so retained cursors keep their meaning.
+  transcript_seq: integer("transcript_seq").unique(),
   at: text("at").notNull(),
 });

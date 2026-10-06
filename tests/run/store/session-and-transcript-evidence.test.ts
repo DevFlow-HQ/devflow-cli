@@ -76,7 +76,7 @@ test("a Turn is admitted, events append, and the result settles immutably (#116)
   owner.appendTurnEvent({
     turnId: "turn-1",
     kind: "assistant-content",
-    payload: JSON.stringify({ content: "hello" }),
+    payload: JSON.stringify({ messageId: "hello-message", content: "hello" }),
     at: AT,
   });
   owner.appendTurnEvent({
@@ -93,7 +93,6 @@ test("a Turn is admitted, events append, and the result settles immutably (#116)
     resultKind: "completed",
     resultDetail: JSON.stringify({ finalContent: "hello" }),
     availability: "open",
-    assistantContent: "hello",
     at: AT,
   });
   assert.ok(settled.ok);
@@ -167,7 +166,7 @@ test("a fenced owner refuses every Turn-side write and the authored pending gate
     stale.appendTurnEvent({
       turnId: "turn-1",
       kind: "assistant-content",
-      payload: JSON.stringify({ content: "hello" }),
+      payload: JSON.stringify({ messageId: "hello-message", content: "hello" }),
       at: AT,
     }),
     fenced,
@@ -179,7 +178,6 @@ test("a fenced owner refuses every Turn-side write and the authored pending gate
       resultKind: "completed",
       resultDetail: JSON.stringify({ kind: "completed" }),
       availability: "open",
-      assistantContent: "hello",
       at: AT,
     }),
     fenced,
@@ -246,7 +244,6 @@ test("settling a Turn records the detached and unusable Session availabilities w
       resultDetail: JSON.stringify({ kind: "completed" }),
       availability: "detached",
       availabilityDetail: "native-s-a",
-      assistantContent: "done",
       at: later,
     }).ok,
   );
@@ -647,4 +644,101 @@ test("current Turn reads only the first unsettled semantic target", (t) => {
   assert.deepEqual(owner.currentTurn(), { turnId: "second-live" });
   settle("second-live");
   assert.equal(owner.currentTurn(), undefined);
+});
+
+test("m10-interruption-and-transcript: each settled message and delivered Steer is one canonical row with exact metadata", (t) => {
+  const group = openRunGroup(makeTempDir("secant-messages-"), WORKSPACE);
+  t.after(() => group.close());
+  const owner = group.acquireRun(create(group, "messages").runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  owner.admitTurn({
+    turnId: "entry",
+    attemptId: "0.0:discuss",
+    session: "s",
+    origin: "managed",
+    kind: "interactive-agent",
+    input: "Entry prompt",
+    recoveryCoordinate: "native",
+    harness: "claude-code",
+    at: AT,
+  });
+  const append = (kind: string, payload: unknown) =>
+    owner.appendTurnEvent({
+      turnId: "entry",
+      kind,
+      payload: JSON.stringify(payload),
+      at: AT,
+    });
+  append("assistant-content", { messageId: "first", content: "First message" });
+  append("assistant-content", {
+    messageId: "first",
+    content: "Duplicate must not replace it",
+  });
+  append("assistant-content", { messageId: "second", content: "" });
+  append("assistant-content", {
+    content: "Unqualified identity is not conversation",
+  });
+  for (const delivery of ["within-turn", "after-boundary", "re-delivered"]) {
+    append("steer", {
+      steerId: delivery,
+      text: `Steer ${delivery}`,
+      sentAt: AT.toISOString(),
+      settlement: { kind: "delivered", delivery },
+    });
+  }
+  append("steer", {
+    steerId: "dropped",
+    text: "Do not show",
+    sentAt: AT.toISOString(),
+    settlement: { kind: "dropped", reason: "interrupt" },
+  });
+  append("assistant-content", {
+    messageId: "partial",
+    content: "Known partial",
+    incomplete: true,
+  });
+  owner.settleTurn({
+    turnId: "entry",
+    session: "s",
+    resultKind: "interrupted",
+    resultDetail: "{}",
+    availability: "open",
+    at: AT,
+  });
+  const transcript = owner.transcript();
+  assert.deepEqual(
+    transcript.map((e) => [
+      e.role,
+      e.content,
+      e.kind,
+      e.turn,
+      e.steer,
+      e.incomplete,
+    ]),
+    [
+      ["user", "Entry prompt", "entry-prompt", "entry", undefined, undefined],
+      ["assistant", "First message", "message", "entry", undefined, undefined],
+      ["assistant", "", "message", "entry", undefined, undefined],
+      ...["within-turn", "after-boundary", "re-delivered"].map((delivery) => [
+        "user",
+        `Steer ${delivery}`,
+        "steer",
+        "entry",
+        { id: delivery, delivery },
+        undefined,
+      ]),
+      ["assistant", "Known partial", "message", "entry", undefined, true],
+    ],
+  );
+  assert.equal(
+    owner.turnEvents().filter((e) => e.kind === "steer").length,
+    4,
+    "all delivery states remain history facts",
+  );
+  assert.equal(
+    owner.turnEvents().filter((e) => e.kind === "assistant-content").length,
+    4,
+    "settlement adds no final copy",
+  );
 });

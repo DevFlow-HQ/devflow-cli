@@ -120,7 +120,12 @@ const FAILED: TurnResult = {
 };
 
 function turn(content: string, result: TurnResult): FakeTurnScript {
-  return { events: [{ kind: "assistant-content", content }], result };
+  return {
+    events: [
+      { kind: "assistant-content", messageId: `message-${content}`, content },
+    ],
+    result,
+  };
 }
 
 const BUNDLE_ID = "dev.secant.step-session-timeline";
@@ -389,16 +394,21 @@ test("[step-session-timeline] every Step-scoped event names its Step, each Step'
   assert.ok(spec?.transcriptPage && spec.transcriptExport);
   const page = wired.projectionPort.readTranscript(spec.transcriptPage);
   assert.ok(page.found && page.type === "transcript-page");
-  // The failed first write-spec Turn records its input but no assistant content.
+  // Identified settled messages remain readable even when their Turn later fails.
   assert.deepEqual(
     page.entries.map((entry) => `${entry.step} ${entry.role}`),
     [
       "grill user",
       "grill assistant",
       "write-spec user",
+      "write-spec assistant",
       "write-spec user",
       "write-spec assistant",
     ],
+  );
+  assert.deepEqual(
+    page.entries.filter((e) => e.role === "assistant").map((e) => e.content),
+    ["grilled", "spec draft", "spec written"],
   );
   const exported = wired.projectionPort.readTranscript(spec.transcriptExport);
   assert.ok(exported.found && exported.type === "transcript-export");

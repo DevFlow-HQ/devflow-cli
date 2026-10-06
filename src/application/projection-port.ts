@@ -1114,6 +1114,15 @@ interface RunHarnessView {
 /** One readable transcript entry (#116): the exact Turn input (`user`) or the
  *  authoritative assistant content (`assistant`) of a Session. */
 export interface RunTranscriptEntryView {
+  /** Retained Resource identity, independent of live subscription identities. */
+  readonly id: string;
+  readonly kind?: "message" | "steer" | "entry-prompt";
+  readonly turn?: string;
+  readonly steer?: {
+    readonly id: string;
+    readonly delivery: "within-turn" | "after-boundary" | "re-delivered";
+  };
+  readonly incomplete?: true;
   readonly session: string;
   readonly role: "user" | "assistant";
   readonly content: string;

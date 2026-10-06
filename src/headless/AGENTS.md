@@ -60,6 +60,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `run read --transcript` (#124) selects the Session from `<run-id>/<session>` then `--session`; with neither it takes the sole Session that has a recorded
   transcript. It refuses `run-session-not-found` when the named Session has no transcript, when the Run has none at all, or when more than one Session exists
   and none was named (`readTranscript`). `run show` never inlines transcript entries; the Session's page/export References are the only read path.
+- Transcript JSON explicitly maps `session`, `role`, `content`, optional `step`, and only optional `kind`, `turn`, `steer`, `incomplete` (#411).
+  Delivered Steers alone are conversation entries. Retained Resource entry identity never enters JSON; `{ page, export }` and read envelopes stay frozen.
 - `render.ts` ignores an unknown action-offer kind on purpose: each offer kind is rendered by its own filtered loop, so an offer kind the client does not
   recognise falls through every loop and prints nothing rather than erroring — the client never enumerates a closed set of offers.
 - `render.ts` is the wording the TUI mirrors: `src/tui/bundle-format.ts` copies its Bundle status words, so a wording change here lands in both or the two

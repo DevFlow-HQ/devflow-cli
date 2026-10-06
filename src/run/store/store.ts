@@ -415,8 +415,8 @@ export interface AppendTurnEventRequest {
 }
 
 /** Settle a Turn authoritatively (#116). Immutable: a settle after a settled
- *  result is a no-op. Updates the `turn` row, the Session availability, and (when
- *  present) appends the authoritative assistant content as a transcript entry. */
+ *  result is a no-op. Updates only the Turn result and Session availability.
+ *  Settled assistant messages already reside in canonical Turn events. */
 export interface SettleTurnRequest {
   readonly turnId: string;
   readonly session: string;
@@ -424,7 +424,6 @@ export interface SettleTurnRequest {
   readonly resultDetail: string; // JSON
   readonly availability: string; // open/detached/unusable
   readonly availabilityDetail?: string;
-  readonly assistantContent?: string;
   readonly at: Date;
 }
 
@@ -467,21 +466,22 @@ export interface HarnessSessionRecord {
   readonly availabilityDetail?: string;
 }
 
-/** One readable transcript entry (exact Turn input or authoritative assistant
- *  content), read back in append order. */
+/** One retained conversation row, read from canonical Turn records in order.
+ *  Legacy metadata remains absent. The position stays private to the Store. */
 export interface TranscriptEntryRecord {
+  readonly seq: number;
+  readonly kind?: "message" | "steer" | "entry-prompt";
+  readonly turn?: string;
+  readonly steer?: {
+    readonly id: string;
+    readonly delivery: "within-turn" | "after-boundary" | "re-delivered";
+  };
+  readonly incomplete?: true;
   readonly session: string;
   readonly turnId: string;
   readonly role: string;
   readonly content: string;
   readonly at: string; // ISO 8601
-}
-
-/** A transcript entry tagged with its store sequence — the stable, monotonic
- *  append order the Store pages on. The sequence is Store-internal: it never
- *  crosses the Projection Port (the Application wraps it in an opaque cursor). */
-export interface SequencedTranscriptEntry extends TranscriptEntryRecord {
-  readonly seq: number;
 }
 
 /** A bounded, ordered request for one Session's transcript, newest-first paging.
@@ -498,7 +498,7 @@ export interface TranscriptPageRequest {
 /** One bounded transcript page, oldest-first. `hasOlder` is true when retained
  *  entries older than this page's oldest exist, so the caller can page upward. */
 export interface TranscriptPage {
-  readonly entries: readonly SequencedTranscriptEntry[];
+  readonly entries: readonly TranscriptEntryRecord[];
   readonly hasOlder: boolean;
 }
 

@@ -1705,7 +1705,6 @@ test("model-choice-bounded-eligibility", async (t) => {
           resultKind: "completed",
           resultDetail: "{}",
           availability: "open",
-          assistantContent: "unrelated transcript",
           at: new Date(),
         }).ok,
       );

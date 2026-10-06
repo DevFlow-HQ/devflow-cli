@@ -1,0 +1,39 @@
+{
+  "sourceCommit": "48f2f26638f9b1a936c60ea6bf12976d5bbfa006",
+  "workspace": "/fixture/conversation",
+  "reproduction": "cp tests/fixtures/previous-release-conversation/seed.txt .fixture-seed.ts; FIXTURE_HOME=<empty-home> bun .fixture-seed.ts",
+  "redactions": [],
+  "databases": [
+    {
+      "path": "catalog.db",
+      "sha256": "7818ac04817acc72dfd6be64bd8dd7ce2acad0e3f7c1fc48da55f0cfd9fb3b3c",
+      "journal": ["chubby_vanisher", "high_norrin_radd"]
+    },
+    {
+      "path": "runs/conversation--681c0672f3ad5727/coordination.db",
+      "sha256": "1d9963ceac9af9ea5e723fca9877109fa29ad95c76dd374b53e55a5487b937c5",
+      "journal": ["yellow_forge", "white_alex_power"]
+    },
+    {
+      "path": "runs/conversation--681c0672f3ad5727/2d155326-c7f6-4bdb-a27d-bffc1ca96c39/run.db",
+      "sha256": "5c9917b98e606e60812715e7bad798f592f682e5a55c288564dd03aa49955777",
+      "journal": [
+        "hesitant_silverclaw",
+        "mighty_vivisector",
+        "cooing_squadron_supreme",
+        "ambiguous_the_hand",
+        "easy_iceman",
+        "curvy_piledriver",
+        "sudden_black_tom",
+        "ancient_rocket_racer",
+        "superb_lily_hollister",
+        "gate_suggestions",
+        "stage_ended",
+        "turn_model_choice",
+        "run_model_choice",
+        "agent_ended"
+      ]
+    }
+  ],
+  "mutations": "No database or canonical Artifact mutation. Unused Git sample hooks removed. Empty messages and divergent assistant-event/result/transcript evidence were created through the predecessor public Store Interface."
+}

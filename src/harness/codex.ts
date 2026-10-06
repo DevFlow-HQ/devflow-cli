@@ -2108,7 +2108,7 @@ class CodexTurn implements HarnessTurn {
       case "preview":
         this.lastObservation = "Codex emitted assistant preview content";
         this.deliverSteersInHistory();
-        this.producer.emitPreview(notification.delta);
+        this.producer.emitPreview(notification.delta, notification.messageId);
         return;
       case "item-event":
         this.rereadEffectiveValues();
@@ -2125,7 +2125,7 @@ class CodexTurn implements HarnessTurn {
         }
         if (notification.event !== undefined) {
           if (notification.event.kind === "assistant-content") {
-            this.producer.clearPreview();
+            this.producer.clearPreview(notification.event.messageId);
             this.finalContent = notification.event.content;
             this.lastObservation =
               "Codex completed an authoritative agent message";
@@ -2639,7 +2639,7 @@ class CodexTurn implements HarnessTurn {
     if (result.kind === "completed" || result.kind === "failed")
       this.interruptPhase?.abandoned();
     this.resolveTarget(undefined);
-    this.producer.clearPreview();
+    this.producer.settlePreview();
     for (const [clientId, pending] of this.steers) {
       if (!pending.accepted) continue;
       // Codex delivers a Steer by writing it into history (ADR 0035); only a

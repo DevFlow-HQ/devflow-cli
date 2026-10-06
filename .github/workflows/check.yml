@@ -124,10 +124,21 @@ jobs:
           tests/harness/preparation-ownership.test.ts
           tests/composition/preparation-lifetime.test.ts
           tests/composition/wiring.test.ts
+      - name: m10-previous-release-conversation
+        run: bun run test -- tests/run/store/conversation-migration.test.ts
+      - name: m10-interruption-and-transcript
+        run: >-
+          bun run test --
+          tests/run/store/session-and-transcript-evidence.test.ts
+          tests/run/execution/agent.test.ts
+          tests/application/transcript-resource.test.ts
+          tests/application/observer-lag.test.ts
+          tests/headless/run.test.ts
       - name: m10-observed-harness-facts
         run: >-
           bun run test --
           tests/harness/observed-facts.test.ts
+          tests/harness/message-facts.test.ts
           tests/harness/conformance.test.ts
           tests/harness/preparation-ownership.test.ts
           tests/application/observed-facts.test.ts

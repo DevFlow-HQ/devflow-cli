@@ -1663,7 +1663,7 @@ test("[step-session-dividers] the transcript marks its conversation and each Ste
     role: "user" | "assistant",
     content: string,
     step: string,
-  ) => ({ session: "spec", role, content, step });
+  ) => ({ id: `${role}:${content}`, session: "spec", role, content, step });
   // The newest page holds write-spec; the older page reaches the Session's start.
   control.setTranscript("", {
     found: true,
@@ -1717,6 +1717,7 @@ test("[step-session-dividers] paging older across a Step boundary keeps the firs
   );
   const entries = (step: string, ...ids: string[]) =>
     ids.map((id) => ({
+      id,
       session: "s",
       role: "user" as const,
       content: `${id} text`,
@@ -1898,7 +1899,12 @@ function transcriptRun() {
 
 /** Transcript entries for Session `s` with the given role and contents. */
 function txEntries(role: "user" | "assistant", ...contents: string[]) {
-  return contents.map((content) => ({ session: "s", role, content }));
+  return contents.map((content) => ({
+    id: `${role}:${content}`,
+    session: "s",
+    role,
+    content,
+  }));
 }
 
 test("the Session transcript opens the newest page and restores timeline focus (#124)", async () => {
@@ -1911,8 +1917,18 @@ test("the Session transcript opens the newest page and restores timeline focus (
     found: true,
     type: "transcript-page",
     entries: [
-      { session: "s", role: "user", content: "Fix the failing test" },
-      { session: "s", role: "assistant", content: "Working on it" },
+      {
+        id: "user-1",
+        session: "s",
+        role: "user",
+        content: "Fix the failing test",
+      },
+      {
+        id: "assistant-1",
+        session: "s",
+        role: "assistant",
+        content: "Working on it",
+      },
     ],
   });
 
@@ -2025,7 +2041,7 @@ test("a large transcript entry scrolls without truncation (#124)", async () => {
   control.setTranscript("", {
     found: true,
     type: "transcript-page",
-    entries: [{ session: "s", role: "assistant", content: big }],
+    entries: [{ id: "big", session: "s", role: "assistant", content: big }],
   });
 
   await press(t, renderer, "t");
@@ -2046,7 +2062,7 @@ test("the transcript inspection wraps long lines at the view width and rewraps o
   control.setTranscript("", {
     found: true,
     type: "transcript-page",
-    entries: [{ session: "s", role: "user", content: long }],
+    entries: [{ id: "long", session: "s", role: "user", content: long }],
   });
 
   await press(t, renderer, "t");

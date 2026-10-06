@@ -1,6 +1,7 @@
 # Harness Adapter Internals
 
 Read before changing native Adapter internals. [Harness notes](../../src/harness/AGENTS.md) own shared Interface, terminal, recovery and test invariants.
+Message identities and terminal partials follow [native qualification provenance](../../tests/harness/message-facts-provenance.md) (#411).
 Initial preparation uses `preparation-owner.ts` (#407), following [ADR 0022's retention, handoff and deadline contract](../adr/0022-own-a-truthful-deep-harness-seam.md).
 
 ## Claude Code Adapter
@@ -19,9 +20,8 @@ Initial preparation uses `preparation-owner.ts` (#407), following [ADR 0022's re
   Only the fields dispatch iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
   `unknown-result`); every other field degrades to absent (`.catch(undefined)`), unknown fields pass through, and a known type whose
   parse fails or an unknown type is ignored, never protocol corruption. `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
-- `OwnedProcess.writeStdin` resolves only after both the write callback has fired without error and the stream has drained (it waits for the `drain` event
-  when `write` returned `false`); an error rejects. The Turn's bytes are accepted before the write promise settles, which is what the durable-admission
-  ordering rests on.
+- `OwnedProcess.writeStdin` resolves after its error-free write callback and, when `write` returned `false`, the `drain` event. Errors reject.
+  Bytes are accepted before the promise settles; durable admission relies on this ordering.
 - `jsonl.ts` is the one private hand-rolled NDJSON splitter both native Adapters use (M3 D15, M4 D1): it splits on `\n`, strips a trailing `\r`, preserves
   the terminated raw line for recording, and distinguishes a final unterminated remainder. Claude JSON-parses only a line that trims to something starting
   with `{`; its recorded protocol-corruption fixture pins such a remainder as `truncated JSON frame`, while Codex rejects any nonblank remainder.

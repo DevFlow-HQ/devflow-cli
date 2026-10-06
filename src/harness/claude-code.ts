@@ -2250,15 +2250,24 @@ class ClaudeCodeTurn implements HarnessTurn {
         observation: usageObservation(frame.message, "message"),
       });
     const parentActivity = frame.parent_tool_use_id ?? undefined;
-    for (const block of contentBlocks(frame)) {
+    const blocks = contentBlocks(frame);
+    let emittedText = false;
+    for (const block of blocks) {
       const blockType = block.type;
       if (blockType === "text") {
-        const content = block.text;
-        if (content !== undefined) {
-          this.producer.clearPreview();
+        const content = blocks
+          .filter((b) => b.type === "text")
+          .flatMap((b) => (b.text === undefined ? [] : [b.text]))
+          .join("");
+        if (block.text !== undefined && !emittedText) {
+          emittedText = true;
+          this.producer.clearPreview(frame.message.id);
           this.lastObservation = `assistant content: ${truncate(content)}`;
           this.producer.emit({
             kind: "assistant-content",
+            ...(frame.message.id === undefined
+              ? {}
+              : { messageId: frame.message.id }),
             content,
             ...(parentActivity !== undefined ? { parentActivity } : {}),
           });
@@ -2302,6 +2311,8 @@ class ClaudeCodeTurn implements HarnessTurn {
     }
   }
 
+  private streamedMessageId: string | undefined;
+
   private acceptStreamEvent(frame: StreamEventFrame): void {
     const event = frame.event;
     if (
@@ -2318,10 +2329,17 @@ class ClaudeCodeTurn implements HarnessTurn {
         kind: "usage",
         observation: usageObservation(event, "message"),
       });
+    if (event.type === "message_start" && frame.parent_tool_use_id == null) {
+      this.streamedMessageId = event.message?.id;
+    }
     const delta = frame.event.delta;
     if (delta === undefined || delta.type !== "text_delta") return;
     const text = delta.text;
-    if (text !== undefined) this.producer.emitPreview(text);
+    if (text !== undefined)
+      this.producer.emitPreview(
+        text,
+        frame.parent_tool_use_id == null ? this.streamedMessageId : undefined,
+      );
   }
 
   /** A Steer's lifecycle: `started` is model exposure, `cancelled` the drop an
@@ -2554,7 +2572,7 @@ class ClaudeCodeTurn implements HarnessTurn {
     if (failure === undefined) this.initPhase?.abandoned();
     else this.initPhase?.failed(failure);
     this.initPhase = undefined;
-    this.producer.clearPreview();
+    this.producer.settlePreview();
     // Terminal ordering: drop every Steer still pending, then expire every
     // outstanding prompt (their events publish here), before the producer
     // closes and the one result settles.

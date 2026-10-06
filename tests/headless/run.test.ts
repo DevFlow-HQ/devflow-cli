@@ -620,6 +620,147 @@ test("one multi-page transcript reads through both clients, no real Harness (#12
   assert.equal(complete.entries.length, total);
 });
 
+test("m10-interruption-and-transcript: headless maps exact stored metadata and excludes Resource identity", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  assert.equal(
+    await runHeadless(
+      h.clients,
+      ["run", "launch", id, "--trust", digest],
+      h.io,
+    ),
+    0,
+  );
+  const runId = h.stdout().match(/^Run (\S+)/m)?.[1];
+  assert.ok(runId && h.runGroup);
+  const owner = h.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  const at = new Date("2026-10-06T00:00:00.000Z");
+  owner.admitTurn({
+    turnId: "message-turn",
+    attemptId: "0.0:agent",
+    session: "s",
+    origin: "managed",
+    kind: "interactive-agent",
+    input: "Entry",
+    recoveryCoordinate: "native",
+    harness: "claude-code",
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "message-turn",
+    kind: "assistant-content",
+    payload: JSON.stringify({ messageId: "first", content: "First" }),
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "message-turn",
+    kind: "steer",
+    payload: JSON.stringify({
+      steerId: "steer-id",
+      text: "Direction",
+      sentAt: at.toISOString(),
+      settlement: { kind: "delivered", delivery: "after-boundary" },
+    }),
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "message-turn",
+    kind: "assistant-content",
+    payload: JSON.stringify({
+      messageId: "partial",
+      content: "Partial",
+      incomplete: true,
+    }),
+    at,
+  });
+  owner.settleTurn({
+    turnId: "message-turn",
+    session: "s",
+    resultKind: "interrupted",
+    resultDetail: "{}",
+    availability: "open",
+    at,
+  });
+  owner.close();
+  h.reset();
+  assert.equal(
+    await runHeadless(
+      h.clients,
+      ["run", "read", runId, "--transcript", "--json"],
+      h.io,
+    ),
+    0,
+  );
+  const read = JSON.parse(h.stdout());
+  const entries = [
+    {
+      session: "s",
+      role: "user",
+      content: "Entry",
+      step: "agent",
+      kind: "entry-prompt",
+      turn: "message-turn",
+    },
+    {
+      session: "s",
+      role: "assistant",
+      content: "First",
+      step: "agent",
+      kind: "message",
+      turn: "message-turn",
+    },
+    {
+      session: "s",
+      role: "user",
+      content: "Direction",
+      step: "agent",
+      kind: "steer",
+      turn: "message-turn",
+      steer: { id: "steer-id", delivery: "after-boundary" },
+    },
+    {
+      session: "s",
+      role: "assistant",
+      content: "Partial",
+      step: "agent",
+      kind: "message",
+      turn: "message-turn",
+      incomplete: true,
+    },
+  ];
+  assert.deepEqual(read, {
+    page: { found: true, type: "transcript-page", entries },
+    export: { found: true, type: "transcript-export", entries },
+  });
+  // The new fields belong only to transcript reads. run show carries its existing
+  // durable timeline/session shape and never inlines conversation rows.
+  h.reset();
+  assert.equal(
+    await runHeadless(h.clients, ["run", "show", runId, "--json"], h.io),
+    0,
+  );
+  const shown = JSON.parse(h.stdout());
+  assert.deepEqual(Object.keys(shown.result.run).sort(), [
+    "actionOffers",
+    "bundle",
+    "launchedAt",
+    "liveness",
+    "outputs",
+    "position",
+    "progress",
+    "runId",
+    "sessions",
+    "state",
+    "timeline",
+    "turnPosition",
+    "workspacePath",
+  ]);
+  assert.equal("transcript" in shown.result.run, false);
+  assert.equal("entries" in shown.result.run, false);
+});
+
 // --- Repeat groups (#84, ADR 0020) -----------------------------------------
 
 test("run launch on a blocking Repeat group names the Run and blocked, and exits 2 at the checkpoint", async (t) => {

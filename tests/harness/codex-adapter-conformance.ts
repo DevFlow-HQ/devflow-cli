@@ -3532,7 +3532,13 @@ test("[codex-recorded-conformance] completion replays exact client traffic", asy
   assert.ok(events.some((event) => event.kind === "preview"));
   assert.deepEqual(
     events.filter((event) => event.kind === "assistant-content"),
-    [{ kind: "assistant-content", content: "recorded completion." }],
+    [
+      {
+        kind: "assistant-content",
+        messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+        content: "recorded completion.",
+      },
+    ],
   );
   const replayed: TurnEvent[] = [];
   turn.subscribe((event) => replayed.push(event));
@@ -5466,5 +5472,83 @@ test("Codex descendant startup does not hold Turn acceptance past the effective-
           server.close((error) => (error ? reject(error) : resolve())),
         );
     }
+  }
+});
+
+test("m10-observed-harness-facts: authentic Codex completed items identify each message before terminal settlement", async () => {
+  const installed = installCodexReplayer("two-turns");
+  const prepared = await prepareCodex(installed.path);
+  try {
+    const cases = [
+      {
+        text: CODEX_RECORDING_INPUT.completion,
+        modelChoice: CODEX_RECORDING_MODEL_CHOICE.first,
+        id: "msg_032693b4cf0c7756016ac158079ba487d092335d80826798fb",
+        content: "recorded completion",
+      },
+      {
+        text: CODEX_RECORDING_INPUT.secondCompletion,
+        modelChoice: CODEX_RECORDING_MODEL_CHOICE.second,
+        id: "msg_032693b4cf0c7756016ac15809c53c87d0ae4fb1799d9eeb7c",
+        content: "recorded second completion",
+      },
+    ];
+    for (const c of cases) {
+      const turn = prepared.startTurn({
+        ...turnRequest(undefined, { text: c.text }),
+        modelChoice: c.modelChoice,
+      });
+      const events = observeEvents(turn);
+      const settled = await turn.result();
+      assert.equal(settled.kind, "completed", JSON.stringify(settled));
+      assert.deepEqual(
+        events.filter((e) => e.kind === "assistant-content"),
+        [{ kind: "assistant-content", messageId: c.id, content: c.content }],
+      );
+      const count = events.length;
+      await Promise.resolve();
+      assert.equal(events.length, count);
+    }
+  } finally {
+    await prepared.close();
+  }
+});
+
+test("m10-observed-harness-facts: authentic Codex delta identity retains text when its final item is withheld", async () => {
+  const installed = installCodexReplayer("completion");
+  const path = join(installed.identityPath, "..", "fixture", "case.json");
+  const original = JSON.parse(readFileSync(path, "utf8"));
+  // Synthetic semantic omission only. Every remaining wire frame is unchanged
+  // authentic codex-cli 0.160.0 traffic; no native field is fabricated.
+  original.traffic = original.traffic.filter(
+    (entry: { direction: string; line: string }) =>
+      !(
+        entry.direction === "stdout" &&
+        entry.line.includes('"method":"item/completed"') &&
+        entry.line.includes('"type":"agentMessage"')
+      ),
+  );
+  writeFileSync(path, JSON.stringify(original));
+  const prepared = await prepareCodex(installed.path);
+  try {
+    const turn = prepared.startTurn({
+      ...turnRequest(undefined, { text: CODEX_RECORDING_INPUT.completion }),
+    });
+    const events = observeEvents(turn);
+    const settled = await turn.result();
+    assert.equal(settled.kind, "completed", JSON.stringify(settled));
+    assert.deepEqual(
+      events.filter((e) => e.kind === "assistant-content"),
+      [
+        {
+          kind: "assistant-content",
+          messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+          content: "recorded completion.",
+          incomplete: true,
+        },
+      ],
+    );
+  } finally {
+    await prepared.close();
   }
 });

@@ -712,7 +712,11 @@ export function registerCodexReplayerConformance(
         { kind: "preview", text: "recorded" },
         { kind: "preview", text: "recorded completion" },
         { kind: "preview", text: "recorded completion." },
-        { kind: "assistant-content", content: "recorded completion." },
+        {
+          kind: "assistant-content",
+          messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+          content: "recorded completion.",
+        },
       ],
       previews: [
         "record",
@@ -720,7 +724,11 @@ export function registerCodexReplayerConformance(
         "recorded completion",
         "recorded completion.",
       ],
-      content: { kind: "assistant-content", content: "recorded completion." },
+      content: {
+        kind: "assistant-content",
+        messageId: "msg_0214542d048c1195016ac157d3445887d080ed80b75390354f",
+        content: "recorded completion.",
+      },
     },
     register,
   );

@@ -352,6 +352,7 @@ const turnStartedSchema = z.looseObject({
 });
 const turnCompletedSchema = turnStartedSchema;
 const agentDeltaSchema = correlatedParamsSchema.extend({
+  itemId: z.string().optional(),
   delta: z.string(),
 });
 const itemLifecycleSchema = correlatedParamsSchema.extend({
@@ -486,6 +487,7 @@ export type CodexRuntimeNotification =
     }
   | {
       readonly kind: "preview";
+      readonly messageId?: string;
       readonly threadId: string;
       readonly turnId: string;
       readonly delta: string;
@@ -664,6 +666,7 @@ export function parseRuntimeNotification(
       const params = parseResult(message.params, agentDeltaSchema, method);
       return {
         kind: "preview",
+        ...(params.itemId === undefined ? {} : { messageId: params.itemId }),
         threadId: params.threadId,
         turnId: params.turnId,
         delta: params.delta,
@@ -791,6 +794,7 @@ function normalizeItemContent(
         ? {
             event: {
               kind: "assistant-content",
+              messageId: item.id,
               content: message.text,
             } as const,
           }

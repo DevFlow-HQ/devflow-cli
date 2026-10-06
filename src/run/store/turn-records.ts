@@ -1,17 +1,23 @@
-import { and, asc, count, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  isNotNull,
+  isNull,
+  lt,
+  max,
+  ne,
+  sql,
+} from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
-import {
-  harnessSessions,
-  transcriptEntries,
-  turnEvents,
-  turns,
-} from "./run-schema.js";
+import { harnessSessions, turnEvents, turns } from "./run-schema.js";
 import type {
   AdmitTurnRequest,
   AppendTurnEventRequest,
   HarnessSessionRecord,
-  SequencedTranscriptEntry,
   SettleTurnRequest,
   TranscriptEntryRecord,
   TranscriptPage,
@@ -20,8 +26,8 @@ import type {
   TurnRecord,
 } from "./store.js";
 
-// The Turn, Session, Turn-event and transcript records of one Run (#116): the four
-// Turn-side `run.db` tables and every read and write against them. A private
+// The Turn and Session records plus their canonical conversation/history rows.
+// Transcript pages and exports read those rows without another conversation copy. A private
 // submodule of the Run Store (A32). Nothing here consults the fence: every function
 // is a plain write or read against the handle it is given. The `RunOwner` members
 // that call in here keep their names and keep the fencing re-check; the one other
@@ -54,14 +60,45 @@ const harnessSessionRow = z.object({
   availability: z.string(),
   availability_detail: z.string().nullable(),
 });
-const transcriptRow = z.object({
-  session_key: z.string(),
-  turn_id: z.string(),
-  role: z.string(),
+// Only qualified settled messages and delivered Steers are conversation rows.
+// Unknown or unqualified metadata remains absent.
+const assistantMessage = z.object({
+  messageId: z.string().min(1),
   content: z.string(),
-  at: z.string(),
+  incomplete: z.literal(true).optional(),
+  parentActivity: z.string().optional(),
 });
-const sequencedTranscriptRow = transcriptRow.extend({ seq: z.number() });
+const deliveredSteer = z.object({
+  steerId: z.string().min(1),
+  text: z.string(),
+  sentAt: z.string(),
+  settlement: z.object({
+    kind: z.literal("delivered"),
+    delivery: z.enum(["within-turn", "after-boundary", "re-delivered"]),
+  }),
+});
+const messagePayload = z.object({
+  role: z.string(),
+  content: z.string().optional(),
+  kind: z.enum(["message", "steer", "entry-prompt"]).optional(),
+  turn: z.string().optional(),
+  steer: z
+    .object({
+      id: z.string(),
+      delivery: z.enum(["within-turn", "after-boundary", "re-delivered"]),
+    })
+    .optional(),
+  incomplete: z.literal(true).optional(),
+});
+
+function nextConversationPosition(db: SQLiteBunDatabase): number {
+  return (
+    (db
+      .select({ value: max(turnEvents.transcript_seq) })
+      .from(turnEvents)
+      .get()?.value ?? 0) + 1
+  );
+}
 
 // Admit a Turn (#116): the `turn` row is written before the stdin frame is sent
 // (the durable admission the Adapter awaits), the named Session is upserted `open`,
@@ -113,12 +150,21 @@ export function admitTurn(
       settled_at: null,
     })
     .run();
-  db.insert(transcriptEntries)
+  // Content remains on the admitted Turn. Its first row refers to that input,
+  // rather than storing another transcript copy.
+  db.insert(turnEvents)
     .values({
-      session_key: request.session,
       turn_id: request.turnId,
-      role: "user",
-      content: request.input,
+      kind: "turn-input",
+      payload: JSON.stringify({
+        role: "user",
+        kind:
+          request.origin === "managed" && request.kind === "interactive-agent"
+            ? "entry-prompt"
+            : "message",
+        turn: request.turnId,
+      }),
+      transcript_seq: nextConversationPosition(db),
       at,
     })
     .run();
@@ -129,19 +175,75 @@ export function appendTurnEvent(
   db: SQLiteBunDatabase,
   request: AppendTurnEventRequest,
 ): void {
+  let payload = request.payload;
+  let transcriptSeq: number | undefined;
+  if (request.kind === "assistant-content") {
+    const message = assistantMessage.safeParse(JSON.parse(payload));
+    if (message.success && message.data.parentActivity === undefined) {
+      // The same native message can be repeated. Its first settled fact wins.
+      const duplicate = db
+        .select({ seq: turnEvents.seq })
+        .from(turnEvents)
+        .where(
+          and(
+            eq(turnEvents.turn_id, request.turnId),
+            eq(turnEvents.kind, "assistant-content"),
+            sql`json_extract(${turnEvents.payload}, '$.messageId') = ${message.data.messageId}`,
+          ),
+        )
+        .get();
+      if (duplicate !== undefined) return;
+      payload = JSON.stringify({
+        ...message.data,
+        role: "assistant",
+        kind: "message",
+        turn: request.turnId,
+      });
+      transcriptSeq = nextConversationPosition(db);
+    }
+  } else if (request.kind === "steer") {
+    const steer = deliveredSteer.safeParse(JSON.parse(payload));
+    if (steer.success) {
+      const duplicate = db
+        .select({ seq: turnEvents.seq })
+        .from(turnEvents)
+        .where(
+          and(
+            eq(turnEvents.turn_id, request.turnId),
+            eq(turnEvents.kind, "steer"),
+            isNotNull(turnEvents.transcript_seq),
+            sql`json_extract(${turnEvents.payload}, '$.steerId') = ${steer.data.steerId}`,
+          ),
+        )
+        .get();
+      if (duplicate !== undefined) return;
+      payload = JSON.stringify({
+        ...steer.data,
+        role: "user",
+        content: steer.data.text,
+        kind: "steer",
+        turn: request.turnId,
+        steer: {
+          id: steer.data.steerId,
+          delivery: steer.data.settlement.delivery,
+        },
+      });
+      transcriptSeq = nextConversationPosition(db);
+    }
+  }
   db.insert(turnEvents)
     .values({
       turn_id: request.turnId,
       kind: request.kind,
-      payload: request.payload,
+      payload,
+      transcript_seq: transcriptSeq ?? null,
       at: request.at.toISOString(),
     })
     .run();
 }
 
-// Settle a Turn (#116): immutable once settled, so the update only fires while the
-// result is still null. Records the Session availability and, when present, appends
-// the authoritative assistant content as an `assistant` transcript entry.
+// Settle a Turn: immutable once settled, so the update fires only while the
+// result is null. Messages already reside in canonical events; no final copy.
 export function settleTurn(
   db: SQLiteBunDatabase,
   request: SettleTurnRequest,
@@ -171,17 +273,6 @@ export function settleTurn(
     })
     .where(eq(harnessSessions.session_key, request.session))
     .run();
-  if (request.assistantContent !== undefined) {
-    db.insert(transcriptEntries)
-      .values({
-        session_key: request.session,
-        turn_id: request.turnId,
-        role: "assistant",
-        content: request.assistantContent,
-        at,
-      })
-      .run();
-  }
 }
 
 // An owner death mid-Turn leaves the Turn admitted without a settled result:
@@ -310,6 +401,12 @@ export function readTurnEvents(
       at: turnEvents.at,
     })
     .from(turnEvents)
+    .where(
+      and(
+        ne(turnEvents.kind, "turn-input"),
+        ne(turnEvents.kind, "legacy-message"),
+      ),
+    )
     .orderBy(asc(turnEvents.seq))
     .all()
     .map((row): TurnEventRecord => {
@@ -347,77 +444,78 @@ export function readHarnessSessions(
     });
 }
 
+// Read the same canonical rows for export and bounded pages. Legacy rows carry
+// their exact content; only a newly admitted input dereferences the Turn input.
+const conversationColumns = {
+  seq: turnEvents.transcript_seq,
+  session: turns.session_key,
+  turnId: turnEvents.turn_id,
+  payload: turnEvents.payload,
+  input: turns.input,
+  at: turnEvents.at,
+};
+function transcriptRecord(row: unknown): TranscriptEntryRecord {
+  const parsed = z
+    .object({
+      seq: z.number(),
+      session: z.string(),
+      turnId: z.string(),
+      payload: z.string(),
+      input: z.string(),
+      at: z.string(),
+    })
+    .parse(row);
+  const { content, ...metadata } = messagePayload.parse(
+    JSON.parse(parsed.payload),
+  );
+  return {
+    seq: parsed.seq,
+    session: parsed.session,
+    turnId: parsed.turnId,
+    at: parsed.at,
+    ...metadata,
+    content: content ?? parsed.input,
+  };
+}
 export function readTranscript(
   db: SQLiteBunDatabase,
 ): readonly TranscriptEntryRecord[] {
   return db
-    .select({
-      session_key: transcriptEntries.session_key,
-      turn_id: transcriptEntries.turn_id,
-      role: transcriptEntries.role,
-      content: transcriptEntries.content,
-      at: transcriptEntries.at,
-    })
-    .from(transcriptEntries)
-    .orderBy(asc(transcriptEntries.seq))
+    .select(conversationColumns)
+    .from(turnEvents)
+    .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id))
+    .where(isNotNull(turnEvents.transcript_seq))
+    .orderBy(asc(turnEvents.transcript_seq))
     .all()
-    .map((row): TranscriptEntryRecord => {
-      const parsed = transcriptRow.parse(row);
-      return {
-        session: parsed.session_key,
-        turnId: parsed.turn_id,
-        role: parsed.role,
-        content: parsed.content,
-        at: parsed.at,
-      };
-    });
+    .map(transcriptRecord);
 }
 
 export function readTranscriptPage(
   db: SQLiteBunDatabase,
   request: TranscriptPageRequest,
 ): TranscriptPage {
-  // Read only the newest `limit` retained entries below the cursor (one extra
-  // to detect older history), so a page read never touches the whole
-  // transcript. `seq` is the monotonic append order; `before` pages upward.
-  // A page must hold at least one entry to carry a cursor forward, so a
-  // non-positive limit is clamped at this ingress Seam — otherwise `limit: 0`
-  // reads one row and reports `hasOlder` over an empty page (A11).
   const limit = Math.max(1, request.limit);
-  const where =
-    request.before === undefined
-      ? eq(transcriptEntries.session_key, request.session)
-      : and(
-          eq(transcriptEntries.session_key, request.session),
-          lt(transcriptEntries.seq, request.before),
-        );
   const rows = db
-    .select({
-      seq: transcriptEntries.seq,
-      session_key: transcriptEntries.session_key,
-      turn_id: transcriptEntries.turn_id,
-      role: transcriptEntries.role,
-      content: transcriptEntries.content,
-      at: transcriptEntries.at,
-    })
-    .from(transcriptEntries)
-    .where(where)
-    .orderBy(desc(transcriptEntries.seq))
+    .select(conversationColumns)
+    .from(turnEvents)
+    .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id))
+    .where(
+      and(
+        eq(turns.session_key, request.session),
+        isNotNull(turnEvents.transcript_seq),
+        ...(request.before === undefined
+          ? []
+          : [lt(turnEvents.transcript_seq, request.before)]),
+      ),
+    )
+    .orderBy(desc(turnEvents.transcript_seq))
     .limit(limit + 1)
     .all();
   const hasOlder = rows.length > limit;
-  const page = hasOlder ? rows.slice(0, limit) : rows;
-  // Rows come newest-first for the bound; reverse so a page reads oldest-first.
-  const entries = page.reverse().map((row): SequencedTranscriptEntry => {
-    const parsed = sequencedTranscriptRow.parse(row);
-    return {
-      seq: parsed.seq,
-      session: parsed.session_key,
-      turnId: parsed.turn_id,
-      role: parsed.role,
-      content: parsed.content,
-      at: parsed.at,
-    };
-  });
-  return { entries, hasOlder };
+  return {
+    entries: (hasOlder ? rows.slice(0, limit) : rows)
+      .reverse()
+      .map(transcriptRecord),
+    hasOlder,
+  };
 }

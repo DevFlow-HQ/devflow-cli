@@ -41,7 +41,7 @@ export function readTranscriptResource(
     const entries = owner
       .transcript()
       .filter((entry) => entry.session === reference.session)
-      .map((entry) => transcriptView(entry, steps));
+      .map((entry) => transcriptView(entry, steps, reference.runId));
     return { found: true, type: "transcript-export", entries };
   }
 
@@ -63,7 +63,9 @@ export function readTranscriptResource(
   return {
     found: true,
     type: "transcript-page",
-    entries: page.entries.map((entry) => transcriptView(entry, steps)),
+    entries: page.entries.map((entry) =>
+      transcriptView(entry, steps, reference.runId),
+    ),
     // The next older page starts before this page's oldest entry; only emit a
     // cursor when older retained entries actually exist.
     ...(page.hasOlder && page.entries[0] !== undefined

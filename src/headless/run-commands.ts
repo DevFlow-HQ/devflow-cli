@@ -20,6 +20,8 @@ import type {
   RunSnapshot,
   RunStateName,
   RunView,
+  RunTranscriptEntryView,
+  TranscriptRead,
 } from "../application/projection-port.js";
 import type { CommandExecutor, HeadlessIO, SettleAction } from "./headless.js";
 import { renderRun, renderRunList } from "./render.js";
@@ -1033,7 +1035,9 @@ function readTranscript(
   }
 
   if (json) {
-    io.out(`${JSON.stringify({ page, export: complete }, null, 2)}\n`);
+    io.out(
+      `${JSON.stringify({ page: transcriptJson(page), export: complete === undefined ? undefined : transcriptJson(complete) }, null, 2)}\n`,
+    );
     return 0;
   }
   io.out(`Transcript page (${pageRef.session}):\n`);
@@ -1046,6 +1050,24 @@ function readTranscript(
     io.out(renderTranscriptEntries(complete.entries));
   }
   return 0;
+}
+
+/** Map the frozen headless fields explicitly, excluding retained entry identity. */
+function transcriptJson(read: TranscriptRead) {
+  if (!read.found) return read;
+  return { ...read, entries: read.entries.map(transcriptEntryJson) };
+}
+function transcriptEntryJson(entry: RunTranscriptEntryView) {
+  return {
+    session: entry.session,
+    role: entry.role,
+    content: entry.content,
+    ...(entry.step === undefined ? {} : { step: entry.step }),
+    ...(entry.kind === undefined ? {} : { kind: entry.kind }),
+    ...(entry.turn === undefined ? {} : { turn: entry.turn }),
+    ...(entry.steer === undefined ? {} : { steer: entry.steer }),
+    ...(entry.incomplete === undefined ? {} : { incomplete: entry.incomplete }),
+  };
 }
 
 /** Render transcript entries as plain text, one labelled block per entry. */

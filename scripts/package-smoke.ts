@@ -42,6 +42,7 @@ import { installCodexReplayerAt } from "../tests/harness/codex-replayer-install.
 import { seedTestRepairWorkspace } from "../tests/helpers/testRepairWorkspace.js";
 import { readArchiveEntries } from "../tests/helpers/zip.js";
 import { runNamedScenario, withCleanup } from "./package-smoke/scenario.js";
+import { conversationConsumer } from "./package-smoke/conversation.js";
 import { settingsConsumer } from "./package-smoke/settings.js";
 import { posixExitedRootAcceptance } from "./package-smoke/posix-exited-root.js";
 
@@ -430,6 +431,10 @@ await withCleanup(
     await runNamedScenario(
       "relocated-pre-drizzle-home",
       relocatedPreDrizzleHomeScenario,
+    );
+
+    await runNamedScenario("m10-previous-release-conversation", async () =>
+      conversationConsumer(binary, smokeRoot, workspaceEnv),
     );
 
     async function workspaceCatalogScenario(): Promise<string> {

@@ -82,6 +82,7 @@ export type ContentBlock = z.infer<typeof ContentBlock>;
 const MessageFrame = z.looseObject({
   type: z.string(),
   message: z.looseObject({
+    id: lenientString,
     content: z.array(z.unknown()),
     usage: UsageCounters.optional().catch(undefined),
   }),
@@ -94,10 +95,14 @@ const UserFrame = MessageFrame.extend({ type: z.literal("user") });
 /** `stream_event`: a partial-message event; only `text_delta` carries a preview. */
 const StreamEventFrame = z.looseObject({
   type: z.literal("stream_event"),
+  parent_tool_use_id: z.string().nullable().optional().catch(undefined),
   event: z.looseObject({
     type: lenientString,
     message: z
-      .looseObject({ usage: UsageCounters.optional().catch(undefined) })
+      .looseObject({
+        id: lenientString,
+        usage: UsageCounters.optional().catch(undefined),
+      })
       .optional()
       .catch(undefined),
     usage: UsageCounters.optional().catch(undefined),

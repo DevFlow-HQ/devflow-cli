@@ -222,3 +222,45 @@ test("a reopened Run still resolves transcript references (#124)", (t) => {
     second.entries.map((e) => e.content),
   );
 });
+
+test("m10-interruption-and-transcript: retained entry identity survives repeat reads, prepend, reopen and later append", (t) => {
+  const { app, runGroup } = fixture(t);
+  const runId = seedRun(runGroup, 43);
+  const refs = pageRef(app, runId);
+  const page = app.projectionPort.readTranscript(refs.page);
+  assert.ok(page.found && page.type === "transcript-page" && page.older);
+  const older = app.projectionPort.readTranscript({
+    ...refs.page,
+    older: page.older,
+  });
+  assert.ok(older.found);
+  const exported = app.projectionPort.readTranscript(refs.export);
+  assert.ok(exported.found);
+  assert.equal(new Set(exported.entries.map((e) => e.id)).size, 43);
+  assert.ok(exported.entries.every((e) => e.id.length > 20 && e.id !== e.turn));
+  const retainedIds = new Map(exported.entries.map((e) => [e.content, e.id]));
+  for (const e of [...older.entries, ...page.entries])
+    assert.equal(e.id, retainedIds.get(e.content));
+  const owner = runGroup.acquireRun(runId);
+  assert.ok(owner);
+  owner.admitTurn({
+    turnId: "later",
+    attemptId: "0.0:write",
+    session: "s",
+    origin: "human",
+    kind: "agent",
+    input: "later",
+    recoveryCoordinate: "native",
+    harness: "claude-code",
+    at: AT,
+  });
+  owner.close();
+  assert.deepEqual(
+    app.projectionPort.readTranscript({ ...refs.page, older: page.older }),
+    older,
+  );
+  const reread = app.projectionPort.readTranscript(refs.export);
+  assert.ok(reread.found);
+  for (const e of reread.entries.slice(0, 43))
+    assert.equal(e.id, retainedIds.get(e.content));
+});

@@ -1,0 +1,34 @@
+import { openRunGroup } from "./src/run/store/store.ts";
+import { createProcessAdapter } from "./src/process/process.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { buildBundle } from "./src/bundle/bundle.ts";
+import { openCatalog } from "./src/catalog/catalog.ts";
+const home = process.env.FIXTURE_HOME;
+const folder = `${home}-bundle`;
+mkdirSync(folder, {recursive:true});
+writeFileSync(join(folder,"prompt.md"),"Discuss the fixture");
+writeFileSync(join(folder,"manifest.json"),JSON.stringify({formatVersion:1,bundle:{id:"dev.secant.conversation-fixture",version:"1.0.0",name:"Conversation fixture",description:"Frozen predecessor conversation"},platforms:["linux","macos","windows"],inputs:{},assets:[{path:"prompt.md",kind:"prompt"}],routing:[{id:"discuss",kind:"interactive-agent",prompt:{asset:"prompt.md"},session:"shared"}]}));
+const built = await buildBundle(folder, []);
+if (!built.ok) throw new Error(JSON.stringify(built));
+const catalog = openCatalog(home);
+catalog.installBundle({identity:{id:"dev.secant.conversation-fixture",version:"1.0.0"},digest:built.built.digest,bytes:built.built.bytes,origin:{kind:"local-build",folder},installedAt:new Date("2026-10-06T00:00:00.000Z")});
+catalog.close();
+const at = new Date("2026-10-06T00:00:00.000Z");
+const group = openRunGroup(home, "/fixture/conversation", { process: createProcessAdapter() });
+const created = group.createRun({ operationId: "fixture-create", bundleSnapshotDigest: built.built.digest, launch: {}, selectedHarness: "claude-code", at });
+const owner = group.acquireRun(created.runId);
+for (let n = 0; n < 12; n++) {
+  const turnId = `turn-${n}`;
+  const session = n === 11 ? "other" : "shared";
+  owner.admitTurn({ turnId, attemptId: `0.${n}:discuss`, session, origin: "human", kind: "interactive-agent", input: n === 0 ? "" : `input ${n}`, recoveryCoordinate: `fixture-${session}`, harness: "claude-code", at });
+  owner.appendTurnEvent({ turnId, kind: "assistant-content", payload: JSON.stringify({ content: `event ${n}` }), at });
+  owner.settleTurn({ turnId, session, resultKind: "completed", resultDetail: JSON.stringify({ finalContent: `event ${n}` }), availability: "detached", availabilityDetail: `fixture-${session}`, assistantContent: n === 0 ? "" : `transcript ${n}`, at });
+}
+owner.publishAttempt({ attemptId: "0.0:done", outcome: "succeeded", required: [{ name: "proof", type: "text" }], outputs: [{ name: "proof", type: "text", content: "retained artifact" }], at });
+owner.recordGateAnswer({ operationId: "fixture-answer", gateAttemptId: "0.0:gate", answer: "continue", iterationsAtGrant: 2, artifactName: "human-gate-answer", at });
+owner.recordPendingGate({ attemptId: "0.1:gate", stepId: "gate", shape: "approve-reject", message: "Keep this gate", at });
+const expected = { runId: created.runId, transcript: owner.transcript(), turns: owner.turns(), events: owner.turnEvents(), attempts: owner.attemptLog(), gates: owner.gateAnswers(), pendingGate: owner.pendingGate(), sessions: owner.harnessSessions() };
+owner.close();
+group.close();
+writeFileSync(join(home, "expected.json"), JSON.stringify(expected, null, 2) + "\n");

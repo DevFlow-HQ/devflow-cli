@@ -489,6 +489,10 @@ export type TurnEvent =
     }
   | {
       readonly kind: "assistant-content";
+      /** Opaque identity of a qualified settled message, stable within its Turn. */
+      readonly messageId?: string;
+      /** Present only when the retained text is known partial. */
+      readonly incomplete?: true;
       readonly content: string;
       readonly parentActivity?: string;
     }

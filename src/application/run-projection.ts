@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { modelChoiceOffer } from "./model-choice.js";
 import type { ApplicationHarnessQualification } from "./harness-registry.js";
 import { deriveRun, type IterationMark } from "./run-progress.js";
@@ -945,9 +946,26 @@ export function turnSteps(
 export function transcriptView(
   record: TranscriptEntryRecord,
   steps: ReadonlyMap<string, string>,
+  runId: string,
 ): RunTranscriptEntryView {
   const step = steps.get(record.turnId);
   return {
+    id: createHash("sha256")
+      .update(
+        JSON.stringify([
+          "transcript-resource",
+          runId,
+          record.session,
+          record.seq,
+        ]),
+      )
+      .digest("base64url"),
+    ...(record.kind === undefined ? {} : { kind: record.kind }),
+    ...(record.turn === undefined ? {} : { turn: record.turn }),
+    ...(record.steer === undefined ? {} : { steer: record.steer }),
+    ...(record.incomplete === undefined
+      ? {}
+      : { incomplete: record.incomplete }),
     session: record.session,
     role: record.role === "assistant" ? "assistant" : "user",
     content: record.content,

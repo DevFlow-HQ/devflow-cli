@@ -91,7 +91,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
 - Steer and Agent-call `appendTurnEvent` writes push a durable snapshot immediately (#356, #372). Other Turn writes push no snapshot until an intercepted write;
   activity reaches open clients through the separate live overlay. The Projection validates Steer payloads and exposes full text separately from capped timeline detail.
-  Decided, not yet built: ADR 0039 publishes each stored Turn row to the per-Session history family during the Turn, keeping the three admitted writes.
+  Transcript Resources retain opaque entry ids across reads and prepend (#411), independent of live history. Headless excludes them; pages retain 20 entries.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and
   independently exposes the latest Agent-step Attempt's normalized name/executable/version as `run.harness` plus its sibling `effectiveModel` (#125, #147).
   Resume may replace only the observed fields; Command-only Runs omit both selection and observations.

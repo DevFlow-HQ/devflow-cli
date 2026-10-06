@@ -1217,7 +1217,18 @@ function recordTurnEvent(
     owner.appendTurnEvent({
       turnId,
       kind: "assistant-content",
-      payload: JSON.stringify({ content: event.content }),
+      payload: JSON.stringify({
+        content: event.content,
+        ...(event.messageId === undefined
+          ? {}
+          : { messageId: event.messageId }),
+        ...(event.incomplete === undefined
+          ? {}
+          : { incomplete: event.incomplete }),
+        ...(event.parentActivity === undefined
+          ? {}
+          : { parentActivity: event.parentActivity }),
+      }),
       at: new Date(),
     });
   } else if (event.kind === "tool-activity") {
@@ -1304,9 +1315,6 @@ function settleTurnResult(
     availability: availability.state,
     ...(availability.detail !== undefined
       ? { availabilityDetail: availability.detail }
-      : {}),
-    ...(result.kind === "completed" && result.detail.finalContent !== undefined
-      ? { assistantContent: result.detail.finalContent }
       : {}),
     at: new Date(),
   });

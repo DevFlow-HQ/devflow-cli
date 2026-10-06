@@ -1384,3 +1384,44 @@ test("m10-commands-and-input-rules: a compatible Harness receives a reserved sub
   assert.equal(f.owner.turns().length, 1);
   assert.equal(f.owner.turns()[0]?.input, " /MODEL\nwork");
 });
+
+test("m10-interruption-and-transcript: fake identified messages reach stored conversation without the final aggregate", async (t) => {
+  const f = fixture(t);
+  const assets = promptAssets(f.workspace, "Discuss");
+  const prepared = await preparedHarness(profile(), [
+    {
+      events: [
+        { kind: "assistant-content", messageId: "first", content: "First" },
+        { kind: "assistant-content", messageId: "second", content: "Second" },
+      ],
+      result: RESULT_CASES.completed.result,
+    },
+  ]);
+  t.after(() => prepared.close());
+  const report = await executeRouting([agentStep()], {
+    owner: f.owner,
+    platform: HOST,
+    resolveAsset: assets.resolveAsset,
+    now: () => AT,
+    process: executionProcess,
+    harness: {
+      inputRules: [],
+      prepared,
+      inputTypes: {},
+      assetKinds: { "prompt.md": "prompt" },
+    },
+  });
+  assert.equal(report.outcome, "succeeded");
+  assert.deepEqual(
+    f.owner.transcript().map((e) => e.content),
+    ["Discuss", "First", "Second"],
+  );
+  assert.equal(
+    f.owner.transcript().filter((e) => e.role === "assistant").length,
+    2,
+  );
+  assert.equal(
+    f.owner.turnEvents().filter((e) => e.kind === "assistant-content").length,
+    2,
+  );
+});

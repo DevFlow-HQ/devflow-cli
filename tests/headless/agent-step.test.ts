@@ -855,9 +855,14 @@ test("run show prints each event's Step; run show --json and run read --transcri
         "role",
         "content",
         "step",
+        "kind",
+        "turn",
       ]);
       assert.equal(entry.session, "s");
       assert.equal(entry.step, "fix");
+      assert.equal(entry.kind, "message");
+      assert.equal(typeof entry.turn, "string");
+      assert.equal("id" in entry, false);
     }
   }
 });

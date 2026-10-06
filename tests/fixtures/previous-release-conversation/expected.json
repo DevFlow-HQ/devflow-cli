@@ -1,0 +1,442 @@
+{
+  "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+  "transcript": [
+    {
+      "session": "shared",
+      "turnId": "turn-0",
+      "role": "user",
+      "content": "",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-0",
+      "role": "assistant",
+      "content": "",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-1",
+      "role": "user",
+      "content": "input 1",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-1",
+      "role": "assistant",
+      "content": "transcript 1",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-2",
+      "role": "user",
+      "content": "input 2",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-2",
+      "role": "assistant",
+      "content": "transcript 2",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-3",
+      "role": "user",
+      "content": "input 3",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-3",
+      "role": "assistant",
+      "content": "transcript 3",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-4",
+      "role": "user",
+      "content": "input 4",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-4",
+      "role": "assistant",
+      "content": "transcript 4",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-5",
+      "role": "user",
+      "content": "input 5",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-5",
+      "role": "assistant",
+      "content": "transcript 5",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-6",
+      "role": "user",
+      "content": "input 6",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-6",
+      "role": "assistant",
+      "content": "transcript 6",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-7",
+      "role": "user",
+      "content": "input 7",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-7",
+      "role": "assistant",
+      "content": "transcript 7",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-8",
+      "role": "user",
+      "content": "input 8",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-8",
+      "role": "assistant",
+      "content": "transcript 8",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-9",
+      "role": "user",
+      "content": "input 9",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-9",
+      "role": "assistant",
+      "content": "transcript 9",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-10",
+      "role": "user",
+      "content": "input 10",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-10",
+      "role": "assistant",
+      "content": "transcript 10",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "other",
+      "turnId": "turn-11",
+      "role": "user",
+      "content": "input 11",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "other",
+      "turnId": "turn-11",
+      "role": "assistant",
+      "content": "transcript 11",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "turns": [
+    {
+      "turnId": "turn-0",
+      "attemptId": "0.0:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 0,
+      "input": "",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 0\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "attemptId": "0.1:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 1,
+      "input": "input 1",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 1\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "attemptId": "0.2:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 2,
+      "input": "input 2",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 2\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-3",
+      "attemptId": "0.3:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 3,
+      "input": "input 3",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 3\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-4",
+      "attemptId": "0.4:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 4,
+      "input": "input 4",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 4\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-5",
+      "attemptId": "0.5:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 5,
+      "input": "input 5",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 5\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-6",
+      "attemptId": "0.6:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 6,
+      "input": "input 6",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 6\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-7",
+      "attemptId": "0.7:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 7,
+      "input": "input 7",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 7\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-8",
+      "attemptId": "0.8:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 8,
+      "input": "input 8",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 8\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-9",
+      "attemptId": "0.9:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 9,
+      "input": "input 9",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 9\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-10",
+      "attemptId": "0.10:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 10,
+      "input": "input 10",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 10\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-11",
+      "attemptId": "0.11:discuss",
+      "session": "other",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 11,
+      "input": "input 11",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 11\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "events": [
+    {
+      "turnId": "turn-0",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 0\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 1\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 2\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-3",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 3\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-4",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 4\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-5",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 5\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-6",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 6\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-7",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 7\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-8",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 8\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-9",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 9\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-10",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 10\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-11",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 11\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "attempts": [
+    {
+      "attemptId": "0.0:done",
+      "outcome": "succeeded",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "gates": [
+    {
+      "answerId": "7d021362-28a1-47fc-96b4-cf35d0e0f2a7",
+      "operationId": "fixture-answer",
+      "gateAttemptId": "0.0:gate",
+      "answer": "continue",
+      "iterationsAtGrant": 2,
+      "versionId": "cf68b00af793ee1daa70cbad624a312e1952130a",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "pendingGate": {
+    "attemptId": "0.1:gate",
+    "stepId": "gate",
+    "shape": "approve-reject",
+    "message": "Keep this gate",
+    "raisedAt": "2026-10-06T00:00:00.000Z"
+  },
+  "sessions": [
+    {
+      "session": "shared",
+      "availability": "detached",
+      "availabilityDetail": "fixture-shared"
+    },
+    {
+      "session": "other",
+      "availability": "detached",
+      "availabilityDetail": "fixture-other"
+    }
+  ]
+}
