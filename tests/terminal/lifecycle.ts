@@ -18,7 +18,7 @@ import {
 // The real-terminal lifecycle suite (#56). It runs the compiled shell under a
 // throwaway pseudo-terminal driven by `Bun.Terminal` (ConPTY on Windows) and
 // proves exactly one class: a terminal left broken after exit. For each exit
-// path — the quit binding, Ctrl+C, and SIGHUP where the platform supports it —
+// path — the Home Quit App command, Ctrl+C, and SIGHUP where supported —
 // it asserts the exit code, that the single teardown ran exactly once, and that
 // the terminal modes were restored. It is NOT a presentation test: it never
 // checks what the shell drew, only that it handed the terminal back intact.
@@ -319,11 +319,13 @@ async function main(): Promise<void> {
   const binary = resolveBinary();
   console.log(`Real-terminal lifecycle suite against ${binary}`);
 
-  // The quit binding and Ctrl+C are keypresses (OpenTUI's raw mode disables
+  // Home Quit and Ctrl+C are keypresses (OpenTUI's raw mode disables
   // ISIG, so \x03 reaches the app as a key, not SIGINT); SIGHUP is a real OS
   // signal to the child. All three drive the one teardown site to a clean exit.
   const drives: [string, Drive][] = [
-    ["quit binding (q)", (proc) => proc.terminal.write("q")],
+    // Home arrives with search focused and no selected command (#409). Type
+    // the command name, explicitly select the result, then execute it.
+    ["Home Quit App command", (proc) => proc.terminal.write("Quit\x1b[B\r")],
     ["Ctrl+C", (proc) => proc.terminal.write("\x03")],
   ];
   // SIGHUP has no portable equivalent under ConPTY, so it is POSIX-only.
