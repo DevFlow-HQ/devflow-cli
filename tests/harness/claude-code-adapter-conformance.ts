@@ -719,7 +719,7 @@ function assertScrubbed(value: unknown, cause: unknown, token: string): void {
   assert.match(cause.message, /redacted-bearer-token/);
 }
 
-test("a known frame with an unrecognised extra field, or with a required field of the wrong type, is generic activity and never protocol corruption", async () => {
+test("a known frame with an unrecognised extra field, or with a required field of the wrong type, is ignored when malformed and never protocol corruption", async () => {
   const scripted = scriptedProcess({
     frames: [
       scriptedInit,
@@ -749,8 +749,12 @@ test("a known frame with an unrecognised extra field, or with a required field o
   const activity = events.flatMap((event) =>
     event.kind === "activity" ? [event.description] : [],
   );
-  assert.ok(activity.includes("Claude Code activity: assistant"));
-  assert.ok(activity.includes("Claude Code activity: stream_event"));
+  assert.equal(
+    activity.length,
+    1,
+    "only the existing Session description is activity",
+  );
+  assert.doesNotMatch(activity.join("\n"), /Claude Code activity/);
 });
 
 test("CRLF-delimited Claude Code frames preserve a UTF-8 scalar split across chunks", async () => {
@@ -1361,8 +1365,7 @@ test("one stream-json Turn yields normalized events and an authoritative complet
     effort: "high",
   });
   assert.deepEqual(result.detail.usage, {
-    estimate: true,
-    summary: "input 10, output 2 tokens; cost estimate USD 0.001",
+    summary: "exchange: input 10, output 2 tokens; cost estimate USD 0.001",
   });
   assert.deepEqual(
     events.map((event) => event.kind),
@@ -1375,7 +1378,7 @@ test("one stream-json Turn yields normalized events and an authoritative complet
       "assistant-content",
       "tool-activity",
       "tool-activity",
-      "activity",
+      "context",
       "usage",
     ],
   );

@@ -121,6 +121,17 @@ jobs:
           tests/harness/preparation-ownership.test.ts
           tests/composition/preparation-lifetime.test.ts
           tests/composition/wiring.test.ts
+      - name: m10-observed-harness-facts
+        run: >-
+          bun run test --
+          tests/harness/observed-facts.test.ts
+          tests/harness/conformance.test.ts
+          tests/harness/preparation-ownership.test.ts
+          tests/application/observed-facts.test.ts
+          tests/application/harness-request-overlay.test.ts
+          tests/headless/run.test.ts
+          tests/tui/run-workbench.test.tsx
+          tests/tui/live-run-workbench.test.tsx
       - name: Test
         run: bun run test
       - name: Build

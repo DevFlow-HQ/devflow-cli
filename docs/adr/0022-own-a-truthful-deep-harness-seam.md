@@ -25,8 +25,9 @@ may have started but no terminal truth survived qualified, safe, read-only recov
 interruption is unknown and the last authoritative observation. The Step kind, above this Seam, decides the Attempt outcome and retry policy.
 
 The event stream preserves every user-meaningful assistant, tool, command, file-edit, subagent, request, retry, failure, model, session, and recovery
-fact; unknown but displayable work becomes generic activity. Context-window pressure is prominent when reported by the Harness, while usage,
-cost, and rate facts are optional and estimates stay labelled. Raw protocol frames, private reasoning, telemetry, and ordinary stderr remain private.
+fact. Known unfamiliar tool work is `other`; unknown methods and accounting notices add no activity. Context and usage carry only reported facts,
+with their meanings distinct and cost estimates labelled. Raw protocol frames, private reasoning, telemetry, and ordinary stderr remain private.
+(Edited 2026-10-06 to apply [ADR 0038](./0038-carry-observed-tool-and-summary-facts-through-the-harness-seam.md) in #418.)
 (Edited 2026-09-29: [ADR 0036](./0036-the-run-workbench-mirrors-the-agent.md) settles that a provider-written reasoning summary is not private
 reasoning and may cross the Seam; the raw chain of thought stays private.)
 (Edited 2026-09-29: [ADR 0038](./0038-carry-observed-tool-and-summary-facts-through-the-harness-seam.md) defines identified typed tool observations,

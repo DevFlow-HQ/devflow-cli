@@ -32,7 +32,7 @@ export interface LiveOverlayState {
   sessionCommands?: readonly string[];
   activity?: string;
   preview?: string;
-  context?: { readonly usedTokens: number; readonly limitTokens: number };
+  context?: RunLiveOverlay["context"];
   usage?: string;
   active: boolean;
 }
@@ -157,6 +157,9 @@ export function createLiveOverlay(
         if (tracking === undefined) return;
         tracking.live.answer = answer;
         if (answer !== undefined) {
+          // Reports belong to this Turn, never to the preceding Turn or Session.
+          tracking.live.context = undefined;
+          tracking.live.usage = undefined;
           tracking.live.active = true;
           tracking.live.phase = "working";
         } else {
@@ -165,8 +168,8 @@ export function createLiveOverlay(
             tracking.live.outstanding.clear();
             tracking.live.generation += 1;
           }
-          push(runId);
         }
+        push(runId);
       },
       observe(observation: LiveObservation): void {
         const tracking = trackingFor(runId);

@@ -299,7 +299,6 @@ test("an Agent Run records its completed Turn's usage and the Run Harness's Clea
             effectiveModel: { known: true, model: "claude-opus-5" },
             session: { state: "open" },
             usage: {
-              estimate: true,
               summary: "input 12, output 34 tokens; cost estimate USD 0.5",
             },
           },
@@ -363,7 +362,6 @@ test("an Agent Run records its completed Turn's usage and the Run Harness's Clea
         runId,
         harness: "claude-code",
         session: "s",
-        estimate: true,
         summary: "input 12, output 34 tokens; cost estimate USD 0.5",
       },
     ],
@@ -414,7 +412,7 @@ test("an interactive Step's Turn usage and its driver's CleanupReport reach the 
             finalContent: "acknowledged",
             effectiveModel: { known: true, model: "claude-opus-5" },
             session: { state: "detached", coordinate: { opaque: "coord-s" } },
-            usage: { estimate: true, summary: "input 1, output 2 tokens" },
+            usage: { summary: "input 1, output 2 tokens" },
           },
         },
       },
@@ -490,7 +488,6 @@ test("an interactive Step's Turn usage and its driver's CleanupReport reach the 
     runId,
     harness: "claude-code",
     session: "s",
-    estimate: true,
     summary: "input 1, output 2 tokens",
   });
   // Ending the Step closes the driver that served the Turn: its report follows.
@@ -634,7 +631,7 @@ test("a reopened interactive Step prepares, records usage, and closes its Harnes
             finalContent: "acknowledged",
             effectiveModel: { known: true, model: "claude-opus-5" },
             session: { state: "detached", coordinate: { opaque: "coord-s" } },
-            usage: { estimate: true, summary: "input 1, output 2 tokens" },
+            usage: { summary: "input 1, output 2 tokens" },
           },
         },
       },

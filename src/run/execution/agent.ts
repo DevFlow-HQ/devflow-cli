@@ -120,10 +120,10 @@ export type LiveModelChangeFn = (
 export interface LiveObservation {
   readonly activity?: string;
   readonly preview?: string;
-  readonly context?: {
-    readonly usedTokens: number;
-    readonly limitTokens: number;
-  };
+  readonly context?: Extract<
+    TurnEvent,
+    { readonly kind: "context" }
+  >["observation"];
   readonly usage?: string;
 }
 

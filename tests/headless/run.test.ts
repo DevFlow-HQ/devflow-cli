@@ -35,6 +35,7 @@ import {
   type RepeatBundleOptions,
 } from "../helpers/commandBundle.js";
 import { openHeadlessHarness } from "../helpers/headlessHarness.js";
+import { openLiveRun } from "../helpers/liveRun.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
 const executionProcess = createFakeBundleProcess();
@@ -1554,3 +1555,34 @@ for (const url of ["https://example.com/setup", undefined]) {
     );
   });
 }
+
+test("m10-observed-harness-facts: run show JSON is byte-identical across live accounting reports", async (t) => {
+  const live = await openLiveRun(t);
+  t.after(live.finish);
+  const h = harness(t);
+  const clients = {
+    projectionPort: live.port,
+    bundleManagement: h.clients.bundleManagement,
+  };
+  assert.equal(
+    await runHeadless(clients, ["run", "show", live.runId, "--json"], h.io),
+    0,
+  );
+  const before = h.stdout();
+  h.reset();
+  live.channel.observe({
+    context: { usedTokens: 9000, limitTokens: 2, percentage: 150 },
+    usage: "total input 124304, last input 25435",
+  });
+  assert.equal(
+    await runHeadless(clients, ["run", "show", live.runId, "--json"], h.io),
+    0,
+  );
+  assert.equal(h.stdout(), before);
+  assert.doesNotMatch(
+    h.stdout(),
+    /usedTokens|limitTokens|percentage|total input|last input/,
+  );
+  assert.deepEqual(live.owner.turnEvents(), []);
+  await live.finish();
+});

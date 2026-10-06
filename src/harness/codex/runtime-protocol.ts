@@ -1,7 +1,11 @@
 import { realpathSync } from "node:fs";
 import { z } from "zod";
 import type { OwnedProcess } from "../../process/process.js";
-import type { TurnEvent } from "../harness.js";
+import type {
+  ContextObservation,
+  UsageObservation,
+  TurnEvent,
+} from "../harness.js";
 import { JsonlLineReader } from "../jsonl.js";
 
 const rpcIdSchema = z.union([z.string(), z.number()]);
@@ -424,6 +428,49 @@ const requestResolvedSchema = z.looseObject({
   threadId: z.string().min(1),
 });
 
+// Authentic codex-cli 0.160.0 / codex-probe-3 test-repair traffic qualifies
+// these meanings. Total/last usage is never context occupancy. Optional facts
+// degrade independently; malformed accounting cannot fail a Turn.
+const reportedNumber = z.number().optional().catch(undefined);
+const usageCountersSchema = z.looseObject({
+  totalTokens: reportedNumber,
+  inputTokens: reportedNumber,
+  cachedInputTokens: reportedNumber,
+  cacheWriteInputTokens: reportedNumber,
+  outputTokens: reportedNumber,
+  reasoningOutputTokens: reportedNumber,
+});
+const tokenUsageSchema = z.looseObject({
+  threadId: z.string(),
+  turnId: z.string(),
+  tokenUsage: z
+    .looseObject({
+      total: usageCountersSchema.optional().catch(undefined),
+      last: usageCountersSchema.optional().catch(undefined),
+      modelContextWindow: reportedNumber,
+    })
+    .optional()
+    .catch(undefined),
+});
+
+function usageSummary(
+  counters: z.infer<typeof usageCountersSchema> | undefined,
+): string {
+  if (counters === undefined) return "";
+  return [
+    ["total", counters.totalTokens],
+    ["input", counters.inputTokens],
+    ["cache read", counters.cachedInputTokens],
+    ["cache write", counters.cacheWriteInputTokens],
+    ["output", counters.outputTokens],
+    ["reasoning output", counters.reasoningOutputTokens],
+  ]
+    .flatMap(([meaning, value]) =>
+      value === undefined ? [] : [`${meaning} ${value} tokens`],
+    )
+    .join(", ");
+}
+
 export type CodexRuntimeNotification =
   | {
       readonly kind: "turn-started";
@@ -461,7 +508,13 @@ export type CodexRuntimeNotification =
       readonly message: string;
       readonly willRetry: boolean;
     }
-  | { readonly kind: "activity"; readonly description: string }
+  | {
+      readonly kind: "observations";
+      readonly threadId: string;
+      readonly turnId: string;
+      readonly context: ContextObservation;
+      readonly usage: UsageObservation;
+    }
   | {
       readonly kind: "elicitation";
       readonly nativeRequestId: string | number;
@@ -565,6 +618,28 @@ export function parseRuntimeNotification(
     return { kind: "unsupported-server-request", method };
   }
   switch (method) {
+    case "thread/tokenUsage/updated": {
+      const parsed = tokenUsageSchema.safeParse(message.params);
+      if (!parsed.success) return undefined;
+      const { threadId, turnId, tokenUsage } = parsed.data;
+      const limitTokens = tokenUsage?.modelContextWindow;
+      const total = usageSummary(tokenUsage?.total);
+      const last = usageSummary(tokenUsage?.last);
+      return {
+        kind: "observations",
+        threadId,
+        turnId,
+        context: limitTokens === undefined ? {} : { limitTokens },
+        usage: {
+          summary: [
+            total === "" ? "" : `total: ${total}`,
+            last === "" ? "" : `last: ${last}`,
+          ]
+            .filter(Boolean)
+            .join("; "),
+        },
+      };
+    }
     case "turn/started": {
       const params = parseResult(message.params, turnStartedSchema, method);
       return {
@@ -636,10 +711,7 @@ export function parseRuntimeNotification(
       };
     }
     default:
-      return {
-        kind: "activity",
-        description: `Codex activity: ${method}`,
-      };
+      return undefined;
   }
 }
 
@@ -784,7 +856,7 @@ function normalizeItemContent(
       );
       return {
         itemId: item.id,
-        event: toolActivity(`dynamic:${call.tool}`, phase, call.status),
+        event: toolActivity("other", phase, `${call.tool} · ${call.status}`),
       };
     }
     case "webSearch": {
@@ -813,13 +885,7 @@ function normalizeItemContent(
       };
     }
     default:
-      return {
-        itemId: item.id,
-        event: {
-          kind: "activity",
-          description: `Codex ${type} ${phase}`,
-        },
-      };
+      return { itemId: item.id };
   }
 }
 

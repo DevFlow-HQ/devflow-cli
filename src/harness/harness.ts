@@ -403,15 +403,22 @@ export interface SessionFacts {
   readonly commands: readonly string[];
 }
 
-/** Context-window pressure, prominent when observed or honestly calculable. */
-interface ContextObservation {
-  readonly usedTokens: number;
-  readonly limitTokens: number;
+/** Independent reported context facts. Empty reports clear earlier values; no
+ * counters are added into occupancy and no percentage or capacity is inferred. */
+export interface ContextObservation {
+  readonly usedTokens?: number;
+  readonly limitTokens?: number;
+  readonly percentage?: number;
+  /** Claude reports capacity per model, including models other than the Turn's. */
+  readonly modelWindows?: readonly {
+    readonly model: string;
+    readonly limitTokens: number;
+  }[];
 }
 
-/** Usage, cost, and rate facts. Always labelled as an estimate. */
+/** Reported usage with its native meaning; only cost is labelled an estimate.
+ * An empty summary clears an earlier report. Rate/account notices are excluded. */
 export interface UsageObservation {
-  readonly estimate: true;
   readonly summary: string;
 }
 

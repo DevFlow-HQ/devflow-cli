@@ -74,7 +74,11 @@ import {
   type TimelineAction,
   type TimelineScroll,
 } from "./run-timeline.js";
-import { buildTimelineRows, type TimelineRow } from "./run-timeline-rows.js";
+import {
+  buildTimelineRows,
+  reportedMetadata,
+  type TimelineRow,
+} from "./run-timeline-rows.js";
 import { wrap, wrapRows } from "./wrap.js";
 import { createModelChoiceControl } from "./run-model-choice.js";
 import { WorkingScanner } from "./working-scanner.js";
@@ -800,6 +804,12 @@ export function RunWorkbench(props: {
     if (current === undefined || current.state === "blocked") return undefined;
     return restingProse(current);
   };
+  const metadataLines = () =>
+    run()?.progress.some(
+      (step) => step.kind === "agent" || step.kind === "interactive-agent",
+    )
+      ? reportedMetadata(live())
+      : [];
   const headerRows = () =>
     (compactHeader() ? 1 : 2) + (restingProseLine() !== undefined ? 1 : 0);
   const hasGateLine = () =>
@@ -853,6 +863,7 @@ export function RunWorkbench(props: {
     1 /*progress*/ +
     actionLines() +
     1 /*timeline label*/ +
+    metadataLines().length +
     bottomHeight();
   // The details panel needs both room across (its width breakpoint) and room
   // down: its own rows plus at least one timeline row. On a short terminal it stays
@@ -1590,6 +1601,7 @@ export function RunWorkbench(props: {
               win={win}
               beginningVisible={beginningVisible}
               visibleLines={visibleLines}
+              metadataLines={metadataLines}
               blockedBasis={blockedBasis}
               focus={focus}
               transcriptAvailable={() => transcriptTarget() !== undefined}
@@ -1725,6 +1737,7 @@ function Workbench(props: {
   win: Accessor<ReturnType<typeof timelineWindow>>;
   beginningVisible: Accessor<boolean>;
   visibleLines: Accessor<readonly string[]>;
+  metadataLines: Accessor<readonly string[]>;
   blockedBasis: Accessor<string | undefined>;
   focus: Accessor<Focus>;
   transcriptAvailable: Accessor<boolean>;
@@ -2054,6 +2067,14 @@ function Workbench(props: {
           </For>
         </Show>
       </box>
+
+      <For each={props.metadataLines()}>
+        {(line) => (
+          <text fg={theme.textMuted} flexShrink={0} wrapMode="none">
+            {clip(line, w())}
+          </text>
+        )}
+      </For>
 
       <Show when={props.detailsShown()}>
         <DetailsPanel

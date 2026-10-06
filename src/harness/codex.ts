@@ -2006,10 +2006,6 @@ class CodexTurn implements HarnessTurn {
 
   accept(notification: RuntimeNotification): void {
     if (this.settled || this.producer.sealed || !this.admittedToRuntime) return;
-    if (notification.kind === "activity") {
-      this.emit({ kind: "activity", description: notification.description });
-      return;
-    }
     if (notification.kind === "unsupported-server-request") {
       this.protocolFailure(
         `Codex raised unsupported server request '${notification.method}'.`,
@@ -2098,6 +2094,10 @@ class CodexTurn implements HarnessTurn {
       return;
     }
     switch (notification.kind) {
+      case "observations":
+        this.emit({ kind: "context", observation: notification.context });
+        this.emit({ kind: "usage", observation: notification.usage });
+        return;
       case "model-rerouted":
         this.rerouted = true;
         this.observeModel(

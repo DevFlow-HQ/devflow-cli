@@ -28,7 +28,7 @@ import {
   encodeUserMessage,
   encodeElicitationDecline,
   type ElicitationFrame,
-  genericActivity,
+  contextObservation,
   isAbortedResult,
   isAuthenticationResult,
   parseFrame,
@@ -1969,7 +1969,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   /** Dispatch one parsed frame. A known type whose schema failed arrives as
-   *  `other` and is generic activity, never corruption (frames.ts). */
+   *  `other` and is ignored, never corruption (frames.ts). */
   acceptFrame(parsed: ParsedFrame): void {
     if (this.settled || this.producer.sealed) return;
     if (parsed.kind === "elicitation") {
@@ -1994,8 +1994,6 @@ class ClaudeCodeTurn implements HarnessTurn {
         this.acceptStatus(parsed.frame);
         return;
       }
-      if (parsed.kind !== "result")
-        this.producer.emit(genericActivity(parsed.type));
       return;
     }
     switch (parsed.kind) {
@@ -2020,7 +2018,7 @@ class ClaudeCodeTurn implements HarnessTurn {
       case "telemetry":
         return;
       case "other":
-        this.producer.emit(genericActivity(parsed.type));
+        return;
     }
   }
 
@@ -2246,6 +2244,11 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   private acceptAssistant(frame: MessageFrame): void {
+    if ("usage" in frame.message)
+      this.producer.emit({
+        kind: "usage",
+        observation: usageObservation(frame.message, "message"),
+      });
     const parentActivity = frame.parent_tool_use_id ?? undefined;
     for (const block of contentBlocks(frame)) {
       const blockType = block.type;
@@ -2269,9 +2272,9 @@ class ClaudeCodeTurn implements HarnessTurn {
       this.producer.emit({
         kind: "tool-activity",
         activity: {
-          tool,
+          tool: displayTool(tool),
           phase: "started",
-          summary: summarize(block.input),
+          summary: displayToolSummary(tool, block.input),
           ...(parentActivity !== undefined ? { parentActivity } : {}),
         },
       });
@@ -2287,9 +2290,12 @@ class ClaudeCodeTurn implements HarnessTurn {
       this.producer.emit({
         kind: "tool-activity",
         activity: {
-          tool: tool ?? "unknown tool",
+          tool: tool === undefined ? "other" : displayTool(tool),
           phase: "completed",
-          summary: summarize(block.content),
+          summary:
+            tool === undefined
+              ? summarize(block.content)
+              : displayToolSummary(tool, block.content),
           ...(parentActivity !== undefined ? { parentActivity } : {}),
         },
       });
@@ -2297,6 +2303,21 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   private acceptStreamEvent(frame: StreamEventFrame): void {
+    const event = frame.event;
+    if (
+      event.type === "message_start" &&
+      event.message !== undefined &&
+      "usage" in event.message
+    )
+      this.producer.emit({
+        kind: "usage",
+        observation: usageObservation(event.message, "message"),
+      });
+    if (event.type === "message_delta" && "usage" in event)
+      this.producer.emit({
+        kind: "usage",
+        observation: usageObservation(event, "message"),
+      });
     const delta = frame.event.delta;
     if (delta === undefined || delta.type !== "text_delta") return;
     const text = delta.text;
@@ -2338,7 +2359,6 @@ class ClaudeCodeTurn implements HarnessTurn {
       });
       return;
     }
-    this.producer.emit(genericActivity(frame.type));
   }
 
   private delivered(pending: PendingSteer): SteerSettlement {
@@ -2392,9 +2412,14 @@ class ClaudeCodeTurn implements HarnessTurn {
       });
       return;
     }
-    const usage = usageObservation(frame);
-    if (usage !== undefined)
-      this.producer.emit({ kind: "usage", observation: usage });
+    const reportedUsage = usageObservation(frame);
+    this.producer.emit({
+      kind: "context",
+      observation: contextObservation(frame),
+    });
+    this.producer.emit({ kind: "usage", observation: reportedUsage });
+    const usage =
+      reportedUsage.summary.length === 0 ? undefined : reportedUsage;
     for (const uuid of frame.user_message_uuids) {
       const pending = this.steers.get(uuid);
       if (pending !== undefined) {
@@ -2575,6 +2600,35 @@ function describeSessionFacts(facts: SessionFacts): string {
       ? "no MCP servers"
       : facts.mcp.map((server) => `${server.name}=${server.status}`).join(", ");
   return `Claude Code ${version}; tools: ${tools}; MCP: ${mcp}`;
+}
+
+// A tool_use is known work even when its tool name is unfamiliar. Unknown
+// protocol frames never reach this classifier. Native MCP tool names stay useful.
+const DISPLAY_TOOLS: ReadonlySet<string> = new Set([
+  "Read",
+  "Edit",
+  "Write",
+  "Bash",
+  "Glob",
+  "Grep",
+  "WebFetch",
+  "WebSearch",
+  "Task",
+  "Agent",
+  "Skill",
+  "TodoWrite",
+  "ToolSearch",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "NotebookEdit",
+]);
+function displayTool(tool: string): string {
+  return DISPLAY_TOOLS.has(tool) || tool.startsWith("mcp__") ? tool : "other";
+}
+function displayToolSummary(tool: string, value: unknown): string {
+  const summary = summarize(value);
+  return displayTool(tool) === "other" ? `${tool} · ${summary}` : summary;
 }
 
 function summarize(value: unknown): string {

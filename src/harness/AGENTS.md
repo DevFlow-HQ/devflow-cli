@@ -87,11 +87,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   A resume the native side does not acknowledge is a `recovery`-phase failure that marks the Session `unusable`; recovery never silently starts a fresh
   conversation. Codex app-server replacement failures leave Sessions detached; only an unacknowledged thread resume makes its Session unusable.
   Each Adapter's resume mechanics are in [harness-adapters](../../docs/agents/harness-adapters.md).
+- Context reports replace facts without calculation (#418): Claude keeps per-model capacity; Codex keeps total/last usage distinct. Unknown frames add no activity.
 
 ## Tests
 
-- The `tests/harness` domain owns the deterministic fake Adapter, shared conformance, and native replayers. Recorded and residual synthetic cases live in
-  `tests/harness/fixtures/<harness>/<case>/` with a `recording.json` sidecar and opt-in recorder.
+- `tests/harness` owns the fake, shared conformance and native replayers; fixtures retain `recording.json` provenance and opt-in recorders.
 - Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, native Steer, and leftover re-delivery, and
   Claude replay covers native and pending Steer. Other control groups stay capability-specific.
   Structured clarifications, after-acceptance checkpoint, load-with-replay, and caller-contract violations remain fake-only. The fake performs load-with-replay:

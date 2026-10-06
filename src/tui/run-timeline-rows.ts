@@ -29,7 +29,7 @@ export function sessionDivider(name: string): Rule {
 }
 
 /** Join authoritative history with replaceable live Turn rows. Durable tool rows
- * remain the ordered history; current activity, preview, context, and usage are
+ * remain the ordered history; current activity and preview are
  * stable-key tail rows that replace in place as the overlay changes. */
 export function buildTimelineRows(
   run: RunView,
@@ -228,18 +228,6 @@ function liveTimelineRows(
       text: `? Harness Request · ${request.tool} · ${oneLine(request.input)}`,
     });
   }
-  if (overlay?.context !== undefined) {
-    rows.push({
-      key: "live:context",
-      text: `◫ Context · ${overlay.context.usedTokens} / ${overlay.context.limitTokens} tokens`,
-    });
-  }
-  if (overlay?.usage !== undefined) {
-    rows.push({
-      key: "live:usage",
-      text: `∑ Usage · ${oneLine(overlay.usage)}`,
-    });
-  }
   return rows;
 }
 
@@ -252,4 +240,27 @@ function screenReason(reason: string): string {
   return stripAnsi(reason)
     .replace(/[\r\n\t]/g, " ")
     .replace(/[\p{Cc}\p{Cf}]/gu, "");
+}
+
+/** Fixed metadata slots live outside history: reports cannot add conversation
+ * rows, change its activity count, or resize its viewport. Empty facts stay blank. */
+export function reportedMetadata(
+  overlay: RunLiveOverlay | undefined,
+): readonly string[] {
+  const context = overlay?.context;
+  const parts: string[] = [];
+  if (context?.usedTokens !== undefined)
+    parts.push(`used ${context.usedTokens} tokens`);
+  if (context?.limitTokens !== undefined)
+    parts.push(`capacity ${context.limitTokens} tokens`);
+  if (context?.percentage !== undefined)
+    parts.push(`reported ${context.percentage}%`);
+  for (const window of context?.modelWindows ?? [])
+    parts.push(
+      `${oneLine(window.model)} capacity ${window.limitTokens} tokens`,
+    );
+  return [
+    parts.length === 0 ? "" : `Context · ${parts.join(", ")}`,
+    overlay?.usage ? `Usage · ${oneLine(overlay.usage)}` : "",
+  ];
 }

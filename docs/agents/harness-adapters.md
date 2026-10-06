@@ -15,10 +15,10 @@ Initial preparation uses `preparation-owner.ts` (#407), following [ADR 0022's re
   below launch crosses `redactSecrets` (close observations, stdin-write and stdout-read errors, captured stderr), so redaction happens at the Seam.
 - The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `status`, `assistant`, `user`,
   `stream_event`, `result`, `control_response`, `command_lifecycle`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the only
-  raw-field accessors. Elicitation requests are declined; `control_cancel_request` withdraws only the exact pending elicitation (#371). Other requests remain activity.
+  raw-field accessors. Elicitation requests are declined; `control_cancel_request` withdraws only the exact pending elicitation (#371). Unrecognized frames add no activity.
   Only the fields dispatch iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
   `unknown-result`); every other field degrades to absent (`.catch(undefined)`), unknown fields pass through, and a known type whose
-  parse fails or an unknown type is generic activity — never protocol corruption. `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
+  parse fails or an unknown type is ignored, never protocol corruption. `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
 - `OwnedProcess.writeStdin` resolves only after both the write callback has fired without error and the stream has drained (it waits for the `drain` event
   when `write` returned `false`); an error rejects. The Turn's bytes are accepted before the write promise settles, which is what the durable-admission
   ordering rests on.

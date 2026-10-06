@@ -1168,16 +1168,25 @@ test("supported Codex item lifecycles use semantic Harness events", async () => 
       "mcp:docs/read",
       "subagent",
       "web-search",
-      "dynamic:custom",
+      "other",
       "image-view",
       "image-generation",
     ]),
   );
-  assert.ok(
+  assert.equal(
     events.some(
       (event) =>
         event.kind === "activity" &&
-        event.description === "Codex futureDisplayItem completed",
+        event.description.includes("futureDisplayItem"),
+    ),
+    false,
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.kind === "tool-activity" &&
+        event.activity.tool === "other" &&
+        event.activity.summary.includes("custom"),
     ),
   );
   await prepared.close();
@@ -3745,7 +3754,7 @@ test("[codex-recorded-conformance] synthetic incompatible init fails closed", as
   );
 });
 
-test("[codex-recorded-conformance] Test Repair applies its recorded Workspace patch", async () => {
+test("m10-observed-harness-facts: [codex-recorded-conformance] Test Repair applies its recorded Workspace patch", async () => {
   const workspace = makeTempDir("secant-codex-recorded-repair-");
   seedTestRepairWorkspace(workspace);
   const preparedResult = await createCodexAdapter({
@@ -3754,15 +3763,15 @@ test("[codex-recorded-conformance] Test Repair applies its recorded Workspace pa
   }).prepare({ workspace });
   assert.equal(preparedResult.ok, true);
   if (!preparedResult.ok) throw new Error("unreachable");
-  const result = await preparedResult.harness
-    .startTurn({
-      ...turnRequest(),
-      session: "test-repair",
-      correlationKey: { opaque: "record-test-repair" },
-      input: { text: codexTestRepairPrompt(workspace) },
-      modelChoice: CODEX_TEST_REPAIR_MODEL_CHOICE,
-    })
-    .result();
+  const turn = preparedResult.harness.startTurn({
+    ...turnRequest(),
+    session: "test-repair",
+    correlationKey: { opaque: "record-test-repair" },
+    input: { text: codexTestRepairPrompt(workspace) },
+    modelChoice: CODEX_TEST_REPAIR_MODEL_CHOICE,
+  });
+  const events = observeEvents(turn);
+  const result = await turn.result();
   assert.equal(result.kind, "completed", JSON.stringify(result));
   // Codex refused the first thread/read while the fresh thread's rollout was
   // empty; the read sent again at the Turn's next item answered (#345). It
@@ -3773,11 +3782,32 @@ test("[codex-recorded-conformance] Test Repair applies its recorded Workspace pa
     model: CODEX_TEST_REPAIR_MODEL_CHOICE.model,
     effort: CODEX_TEST_REPAIR_MODEL_CHOICE.effort,
   });
+  assert.deepEqual(events.filter((event) => event.kind === "context").at(-1), {
+    kind: "context",
+    observation: { limitTokens: 258400 },
+  });
+  assert.equal(events.filter((event) => event.kind === "usage").length, 5);
+  const activities = events.filter((event) => event.kind === "activity");
+  assert.equal(
+    activities.length,
+    1,
+    "the recorded thread/read failure keeps its semantic diagnostic",
+  );
+  assert.match(
+    activities[0]?.description ?? "",
+    /Codex did not report this Turn's effective model and effort yet/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(events),
+    /Codex activity:|Codex futureDisplayItem/,
+  );
+  const countAtResult = events.length;
   execFileSync(process.execPath, ["test", "sum.test.mjs"], {
     cwd: workspace,
     stdio: "pipe",
   });
   await preparedResult.harness.close();
+  assert.equal(events.length, countAtResult);
 });
 
 function recordedSleepRequest(session: "interrupt" | "resume"): TurnRequest {

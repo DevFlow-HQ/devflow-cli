@@ -160,7 +160,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
             },
             {
               kind: "usage",
-              observation: { estimate: true, summary: "estimated 25 tokens" },
+              observation: { summary: "estimated 25 tokens" },
             },
           ],
           requests: [
@@ -281,7 +281,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   assert.match(frame, /BLOCKED · ephemeral Harness Request/);
   assert.match(frame, /Assistant preview · Streaming the repair/);
   assert.match(frame, /Activity · delegating to subagent/);
-  assert.match(frame, /Context · 12500 \/ 200000 tokens/);
+  assert.match(frame, /Context · used 12500 tokens, capacity 200000 tokens/);
   assert.match(frame, /Usage · estimated 25 tokens/);
   assert.match(frame, /Tool: Edit/); // the exact tool
   assert.match(frame, /\[ Allow \]/); // both offered decisions

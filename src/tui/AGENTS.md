@@ -68,6 +68,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `createProcessStdinRelease` does destroy it, and OpenTUI takes stdin next. Ctrl+C at the wait exits 130. Its `bun:ffi` import is allowlisted per file,
   allowlisted in `tests/architecture/check-vendor-provenance.ts`.
 
+- Agent-bearing Runs reserve two metadata lines outside the timeline (#418). Context/usage replacement cannot change history rows,
+  viewport height, or the activity badge; empty reports leave blank slots. Metadata uses reported meanings and clips to the available width.
+
 ## Tests
 
 - Workbench resize evidence resizes both `testRender` and the injected Renderer Port: changing only the Port leaves the captured terminal at its original width.

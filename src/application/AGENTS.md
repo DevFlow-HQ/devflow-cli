@@ -105,11 +105,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `app-release`. Equal bytes a user imported first keep their own origin and trust (#227).
 - `OperationLedger.submit/open` owns receipts and their subscriptions; settlers return applied metadata, never mutate ledger entries (#393).
   Run authorization, Trust ordering, owners and abort stay in `createApplication`. The shared `SubscriptionLifecycle` ends observation before Run cleanup.
+- `bindAnswer` clears context/usage for every new Turn; reports replace optional fields, including empty reports (#418). Accounting stays live-only.
 
 ## Tests
 
-- A test reads a Run the Application holds through the Projection, never `runGroup.acquireRun`: acquiring bumps the fencing epoch even in-process, so a
-  `blocked` Run's held owner then refuses the next Turn's admission as fenced (#353).
+- Read a held Run through its Projection. `runGroup.acquireRun` bumps the fencing epoch and refuses that Run's next Turn as fenced (#353).
 
 ## Read next
 

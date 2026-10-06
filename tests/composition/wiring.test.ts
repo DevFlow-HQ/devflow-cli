@@ -945,7 +945,6 @@ for (const kind of ["agent", "interactive-agent"] as const) {
                     coordinate: { opaque: "fake-session" },
                   },
                   usage: {
-                    estimate: true,
                     summary: "input 1, output 2 tokens",
                   },
                 },
@@ -1486,7 +1485,6 @@ test("two overlapping Runs sharing one Session attribute every Harness and child
         {
           event: "harness-usage",
           session: "s",
-          estimate: true,
           summary: usageSummary(run),
         },
         { event: "harness-phase-start", phase: "cleanup" },

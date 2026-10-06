@@ -31,7 +31,7 @@ type Recorder = Pick<OperationalLog, "record">;
 //   on failure the failure fields;
 // - `harness-cleanup`: harness, status (clean, unclean), each Session's key and
 //   availability state, and on failure the failure fields;
-// - `harness-usage`: harness, Session key, the estimate label, and the summary.
+// - `harness-usage`: harness, Session key, the reported usage summary.
 // The failure fields are `failurePhase` (the failure's own `FailurePhase`, distinct
 // from the native `phase`), category, possibleEffects, nativeCode, and cause.
 
@@ -141,7 +141,6 @@ function recordingPrepared(
             event: "harness-usage",
             harness,
             session: request.session,
-            estimate: usage.estimate,
             summary: usage.summary,
           });
         },

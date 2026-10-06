@@ -1057,7 +1057,7 @@ test("reopened durable Turn rows label kind by words, colour removed, legacy neu
   assert.doesNotMatch(frame, /shared/);
 });
 
-test("context and usage appear only when the live overlay reports them", async () => {
+test("m10-observed-harness-facts: context and usage appear only when reported, without calculated percentages", async () => {
   const { t, control } = await mountWorkbench(
     runOf({
       progress: [{ id: "repair", kind: "agent", status: "running" }],
@@ -1084,7 +1084,7 @@ test("context and usage appear only when the live overlay reports them", async (
   });
   await t.renderOnce();
   const observed = t.captureCharFrame();
-  assert.match(observed, /Context · 12500 \/ 200000 tokens/);
+  assert.match(observed, /Context · used 12500 tokens, capacity 200000 tokens/);
   assert.match(observed, /Usage · estimated \$0\.04/);
 });
 
@@ -4130,15 +4130,14 @@ test("the interactive input reads without colour and fits a narrow terminal (#12
   noOverflow(frame, 48);
 });
 
-test("the corrected INTERACTIVE_HEIGHT reclaims one timeline row at a fixed height (A33) — fails at HEAD", async () => {
-  // At width 100 / height 24 the interactive input now reserves 3 rows (was 4), so the
-  // timeline viewport is 15 rows. events(15) fills it exactly: the oldest event (e0) sits
-  // at the top and the newest (e14) at the live edge, with no overflow. At HEAD the input
-  // over-reserved a row, so the viewport was 14 and e0 fell off the top.
+test("the corrected INTERACTIVE_HEIGHT reclaims one timeline row at a fixed height (A33) with reported metadata (#418)", async () => {
+  // #418 reserves two metadata slots, so height 26 retains the predecessor's
+  // 15-row viewport. An input that reserves 4 instead of 3 rows still evicts e0.
+  // Keep both oldest/newest assertions to detect the original A33 defect.
   const wb = await mountWorkbench(
     interactiveRunOf({ timeline: events(15) }),
     100,
-    24,
+    26,
   );
   const frame = wb.t.captureCharFrame();
   assert.match(frame, / e0 /); // the reclaimed row: the oldest event is visible
@@ -4146,14 +4145,13 @@ test("the corrected INTERACTIVE_HEIGHT reclaims one timeline row at a fixed heig
   noOverflow(frame, 100);
 });
 
-test("the corrected CHECKPOINT_HEIGHT reclaims one timeline row at a fixed height (A33) — fails at HEAD", async () => {
-  // At width 100 / height 24 the Review checkpoint now reserves 7 rows (was 8), so the
-  // timeline viewport is 10 rows. events(10) fills it exactly: the oldest event (e0) is
-  // visible with no overflow. At HEAD the checkpoint over-reserved a row and e0 fell off.
+test("the corrected CHECKPOINT_HEIGHT reclaims one timeline row at a fixed height (A33) with reported metadata (#418)", async () => {
+  // The same two metadata slots leave 10 history rows at height 26. A checkpoint
+  // that reserves 8 instead of 7 rows still evicts e0, preserving A33 coverage.
   const wb = await mountWorkbench(
     blockedRunOf({ timeline: events(10) }),
     100,
-    24,
+    26,
   );
   const frame = wb.t.captureCharFrame();
   assert.match(frame, / e0 /); // the reclaimed row: the oldest event is visible
@@ -6761,5 +6759,97 @@ for (const inspection of INSPECTIONS) {
     assert.match(wb.t.captureCharFrame(), inspection.footer);
     await press(wb.t, wb.renderer, "c", { ctrl: true });
     assert.deepEqual(wb.exits, [undefined]);
+  });
+}
+
+test("m10-observed-harness-facts: metadata replacement leaves paused history and its activity badge alone", async () => {
+  const { t, control, renderer } = await mountWorkbench(
+    runOf({
+      timeline: events(40),
+      progress: [{ id: "repair", kind: "agent", status: "running" }],
+    }),
+    100,
+    18,
+  );
+  const overlay: RunLiveOverlay = {
+    runId: "run-1",
+    generation: 1,
+    phase: "working",
+    outstanding: [],
+    offers: [],
+  };
+  control.setLive(overlay);
+  await t.renderOnce();
+  await press(t, renderer, "up");
+  const history = () =>
+    t
+      .captureCharFrame()
+      .split("\n")
+      .filter((line) => / e\d|Timeline/.test(line));
+  const before = history();
+  control.setLive({
+    ...overlay,
+    context: { limitTokens: 200000 },
+    usage: "last output 0 tokens",
+  });
+  await t.renderOnce();
+  assert.deepEqual(history(), before);
+  assert.match(t.captureCharFrame(), /Context · capacity 200000 tokens/);
+  assert.match(t.captureCharFrame(), /Usage · last output 0 tokens/);
+  control.setLive({
+    ...overlay,
+    context: { usedTokens: 9000, limitTokens: 2, percentage: 150 },
+    usage: "input 7 tokens",
+  });
+  await t.renderOnce();
+  assert.deepEqual(history(), before);
+  assert.match(
+    t.captureCharFrame(),
+    /used 9000 tokens, capacity 2 tokens, reported 150%/,
+  );
+  assert.doesNotMatch(t.captureCharFrame(), /undefined|450000%/);
+  control.setLive({ ...overlay, context: {}, usage: "" });
+  await t.renderOnce();
+  assert.deepEqual(history(), before);
+  assert.doesNotMatch(t.captureCharFrame(), /Context ·|Usage ·/);
+});
+
+for (const [width, height] of [
+  [40, 12],
+  [80, 18],
+  [120, 24],
+] as const) {
+  test(`m10-observed-harness-facts: metadata remains bounded and leaves keyboard controls visible at ${width}x${height}`, async () => {
+    const { t, control, renderer } = await mountWorkbench(
+      runOf({
+        timeline: events(30),
+        progress: [{ id: "repair", kind: "agent", status: "running" }],
+      }),
+      width,
+      height,
+    );
+    control.setLive({
+      runId: "run-1",
+      generation: 1,
+      phase: "working",
+      outstanding: [],
+      offers: [],
+      context: { limitTokens: 258400 },
+      usage: "last output 0 tokens",
+    });
+    await t.renderOnce();
+    assert.match(t.captureCharFrame(), /Context · capacity 258400 tokens/);
+    assert.match(t.captureCharFrame(), /Usage · last output 0 tokens/);
+    assert.match(t.captureCharFrame(), /↑\/↓ scroll/);
+    await press(t, renderer, "up");
+    assert.match(t.captureCharFrame(), /Jump to latest/);
+    renderer.resize(width + 2, height);
+    await t.renderOnce();
+    await press(t, renderer, "end");
+    assert.doesNotMatch(
+      t.captureCharFrame(),
+      /Jump to latest|Thinking|duration|%/,
+    );
+    assert.match(t.captureCharFrame(), /e29/);
   });
 }

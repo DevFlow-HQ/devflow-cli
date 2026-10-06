@@ -6,8 +6,8 @@
 // state; it never touches a raw field.
 //
 // Parsing is deliberately lenient, exactly as the hand-rolled readers were: an
-// unknown frame type, or a known type whose parse fails, is reported as generic
-// activity and is never protocol corruption. Only the fields dispatch iterates
+// unknown frame type, or a known type whose parse fails, is ignored and is never
+// protocol corruption. Only the fields dispatch iterates
 // over are structurally required (a message's content array, a stream event's
 // object); every other field falls back to "absent" when its type is not the
 // expected one (`.catch(undefined)`), so a new or reshaped field in a future
@@ -16,9 +16,9 @@
 
 import { z } from "zod";
 import type {
+  ContextObservation,
   RecoveryCoordinate,
   SessionFacts,
-  TurnEvent,
   UsageObservation,
 } from "../harness.js";
 
@@ -52,6 +52,17 @@ const InitFrame = z.looseObject({
 });
 export type InitFrame = z.infer<typeof InitFrame>;
 
+// Qualified by Claude Code 2.1.273 plain/test-repair recording.json and bytes, including
+// message_start, assistant message usage, message_delta, and exchange results.
+// Each field validates independently, so malformed/missing siblings stay absent.
+const reportedNumber = z.number().optional().catch(undefined);
+const UsageCounters = z.looseObject({
+  input_tokens: reportedNumber,
+  output_tokens: reportedNumber,
+  cache_read_input_tokens: reportedNumber,
+  cache_creation_input_tokens: reportedNumber,
+});
+const ModelWindow = z.looseObject({ contextWindow: reportedNumber });
 /** One block of an `assistant` or `user` message. Every field is lenient: a
  *  block whose fields are not the expected type is simply a block without them,
  *  and dispatch skips it the way the untyped reader did. */
@@ -70,7 +81,10 @@ export type ContentBlock = z.infer<typeof ContentBlock>;
  *  block array. The array is the one structural requirement. */
 const MessageFrame = z.looseObject({
   type: z.string(),
-  message: z.looseObject({ content: z.array(z.unknown()) }),
+  message: z.looseObject({
+    content: z.array(z.unknown()),
+    usage: UsageCounters.optional().catch(undefined),
+  }),
   parent_tool_use_id: z.string().nullable().optional().catch(undefined),
 });
 export type MessageFrame = z.infer<typeof MessageFrame>;
@@ -81,6 +95,12 @@ const UserFrame = MessageFrame.extend({ type: z.literal("user") });
 const StreamEventFrame = z.looseObject({
   type: z.literal("stream_event"),
   event: z.looseObject({
+    type: lenientString,
+    message: z
+      .looseObject({ usage: UsageCounters.optional().catch(undefined) })
+      .optional()
+      .catch(undefined),
+    usage: UsageCounters.optional().catch(undefined),
     delta: z
       .looseObject({ type: lenientString, text: lenientString })
       .optional()
@@ -98,6 +118,12 @@ export type StreamEventFrame = z.infer<typeof StreamEventFrame>;
 const ResultFrame = z.looseObject({
   type: z.literal("result"),
   subtype: lenientString,
+  usage: UsageCounters.optional().catch(undefined),
+  total_cost_usd: reportedNumber,
+  modelUsage: z
+    .record(z.string(), ModelWindow.optional().catch(undefined))
+    .optional()
+    .catch(undefined),
   is_error: z.boolean().optional().catch(undefined),
   result: lenientString,
   terminal_reason: lenientString,
@@ -111,7 +137,7 @@ export type ResultFrame = z.infer<typeof ResultFrame>;
 
 /** `control_response`: Claude Code's answer to a stdin `control_request` (#346).
  *  The echoed `request_id` is the one structural field, since a response that
- *  names no request cannot be correlated; such a frame is generic activity. */
+ *  names no request cannot be correlated; such a frame is ignored. */
 const ControlResponseFrame = z.looseObject({
   type: z.literal("control_response"),
   response: z.looseObject({
@@ -173,9 +199,8 @@ export type StatusFrame = z.infer<typeof StatusFrame>;
 
 const TelemetryFrame = z.looseObject({ type: z.literal("telemetry") });
 
-/** A frame the Adapter dispatches on. `type` is the raw frame type (for the
- *  generic-activity description); a known type whose schema failed, and any
- *  unknown type, arrive as `other`. */
+/** A frame the Adapter dispatches on. A known type whose schema failed,
+ * or an unknown type, arrives as `other` and is ignored. */
 export type ParsedFrame =
   | {
       readonly kind: "elicitation";
@@ -403,22 +428,39 @@ function sessionCommands(names: readonly string[]): string[] {
   return [...new Set(words)];
 }
 
+export function contextObservation(frame: ResultFrame): ContextObservation {
+  const modelWindows = Object.entries(frame.modelUsage ?? {}).flatMap(
+    ([model, usage]) =>
+      usage?.contextWindow === undefined
+        ? []
+        : [{ model, limitTokens: usage.contextWindow }],
+  );
+  return modelWindows.length === 0 ? {} : { modelWindows };
+}
+
 export function usageObservation(
-  frame: Record<string, unknown>,
-): UsageObservation | undefined {
+  frame: Pick<ResultFrame, "usage" | "total_cost_usd">,
+  scope: "message" | "exchange" = "exchange",
+): UsageObservation {
   const parts: string[] = [];
-  if (isRecord(frame.usage)) {
-    const input = numberField(frame.usage, "input_tokens");
-    const output = numberField(frame.usage, "output_tokens");
-    if (input !== undefined) parts.push(`input ${input}`);
-    if (output !== undefined) parts.push(`output ${output} tokens`);
-  }
-  const cost = numberField(frame, "total_cost_usd");
-  if (cost !== undefined) parts.push(`cost estimate USD ${cost}`);
-  if (parts.length === 0) return undefined;
+  const usage = frame.usage;
+  if (usage?.input_tokens !== undefined)
+    parts.push(`input ${usage.input_tokens}`);
+  if (usage?.output_tokens !== undefined)
+    parts.push(`output ${usage.output_tokens} tokens`);
+  if (usage?.cache_read_input_tokens !== undefined)
+    parts.push(`cache read ${usage.cache_read_input_tokens} tokens`);
+  if (usage?.cache_creation_input_tokens !== undefined)
+    parts.push(`cache creation ${usage.cache_creation_input_tokens} tokens`);
+  const counters = parts.length === 0 ? "" : `${scope}: ${parts.join(", ")}`;
+  const cost = frame.total_cost_usd;
   return {
-    estimate: true,
-    summary: parts.join(", ").replace(", cost", "; cost"),
+    summary: [
+      counters,
+      ...(cost === undefined ? [] : [`cost estimate USD ${cost}`]),
+    ]
+      .filter(Boolean)
+      .join("; "),
   };
 }
 
@@ -431,13 +473,6 @@ export function isAbortedResult(frame: ResultFrame): boolean {
     frame.terminal_reason === "aborted_streaming" ||
     frame.terminal_reason === "aborted_tools"
   );
-}
-
-export function genericActivity(type: string | undefined): TurnEvent {
-  return {
-    kind: "activity",
-    description: `Claude Code activity: ${type ?? "unknown"}`,
-  };
 }
 
 /** Claude Code reports a not-logged-in run as its stdout result (research:
@@ -477,14 +512,4 @@ function stringField(
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-function numberField(
-  value: Record<string, unknown>,
-  field: string,
-): number | undefined {
-  const found = value[field];
-  return typeof found === "number" && Number.isFinite(found)
-    ? found
-    : undefined;
 }

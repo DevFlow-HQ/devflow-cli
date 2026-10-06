@@ -1573,7 +1573,7 @@ export interface RunOutstandingRequest {
  *  never-durable view an open `run` Projection receives as `live` updates beside
  *  its durable snapshot. It carries the Turn phase, every outstanding approval
  *  request with its answer Offer, the current activity and coalesced preview text,
- *  the latest context and usage observations, and a monotonic `generation` that
+ *  the latest reported context and usage observations, and a monotonic `generation` that
  *  bumps on every change — a client answers a request against the generation it
  *  saw, and a later generation makes that answer stale. Blocked status while a
  *  request is outstanding reads "ephemeral Harness Request". */
@@ -1585,9 +1585,15 @@ export interface RunLiveOverlay {
   readonly offers: readonly AnswerHarnessRequestOffer[];
   readonly activity?: string;
   readonly preview?: string;
+  /** Independent reported measurements and capacities, replaced on each report. No calculated occupancy. */
   readonly context?: {
-    readonly usedTokens: number;
-    readonly limitTokens: number;
+    readonly usedTokens?: number;
+    readonly limitTokens?: number;
+    readonly percentage?: number;
+    readonly modelWindows?: readonly {
+      readonly model: string;
+      readonly limitTokens: number;
+    }[];
   };
   readonly usage?: string;
 }
