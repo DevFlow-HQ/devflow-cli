@@ -60,8 +60,9 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
 - Ctrl+P takes the Workbench Port path before inspection, requests and gates; normal screens keep the keymap path. Action owners supply the catalog.
   A new request or gate target closes discovery and restores an unconfirmed appearance. Deliberate reopening over that target remains available.
   Native fields stay blurred while a dialog is on the stack. Dialog refocus never steals focus from a replacement dialog.
-- After shell shortcuts, the inspection overlay owns every key but Ctrl+C: Esc closes it, and its footer's `q` comes back as
-  `quit` for the Workbench's guarded Exit (#392). Keep Running leaves the overlay and its scroll as they were.
+- After shell shortcuts, output inspection and the details-opened Session reader own every key but Ctrl+C. Esc returns to the selected
+  details resource; `q` enters guarded Exit (#392). Keep Running preserves the content, scroll and focus. Ctrl+G opens focused resources even
+  below the inline panel breakpoints; the bare `t` shortcut is retired (#421).
 - The interim `m` Model-choice picker uses the dialog stack and the `change-model-choice` Offer, including below the details hide size. A Request or
   Human Gate closes it. Reach comes from the Offer while requested and from the Operation receipt once applied; a live change remains pending until observed.
 - The Workbench bottom region is a modal stack (#121): an outstanding approval Harness Request or a free-text Human Gate owns Esc and every printable key, so
@@ -108,12 +109,11 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   a `live` overlay at phase `settling` records the durable `settledCountAtSettling`; the next `durable` update whose settled-Turn count passes it drops the
   live overlay and preview and shows the authoritative snapshot alone. A `preview` update only refreshes the streaming text.
 
-## Tests
-
-- Interactive and steer input text rides `testRender`'s mock input (the field's real key source) while the dispatcher's command keys ride the fake Renderer Port.
-
 ## Read next
 
-- `run-inspection.tsx` holds the Workbench's reference-inspection overlay — its state, key loop, and view — split out of `run-workbench.tsx` (A26).
+- `run-inspection.tsx` owns bounded artifact/output inspection; `run-transcript.tsx` owns the details-opened retained Session reader (#421).
+  Its Resource entry id anchors an offset relative to the role header; leading dividers have negative offsets, so newly attached dividers preserve content.
+  Resize clamps only within the entry; read notices stay outside content. Only this reader pages older: `p` preserves position, including failed retries.
+  Up at the top also loads older. Export (`e`) reads the complete Reference only on demand and queues text to the terminal clipboard, naming refusal.
   `run-workbench-views.tsx` holds the Workbench's four pure presentational leaves; state, focus, modal precedence, and the key dispatcher stay in
   `run-workbench.tsx` (A12).

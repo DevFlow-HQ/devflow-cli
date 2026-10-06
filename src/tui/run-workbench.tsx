@@ -44,6 +44,11 @@ import {
   InspectionView,
   type Openable,
 } from "./run-inspection.js";
+import {
+  createTranscriptReader,
+  TranscriptReaderView,
+  type TranscriptTarget,
+} from "./run-transcript.js";
 import { followSettlement } from "./run-control-effects.js";
 import type { TProjectionStreamHealth } from "./follow.js";
 import {
@@ -311,7 +316,11 @@ export function RunWorkbench(props: {
   const [scroll, setScroll] = createSignal<TimelineScroll>(AT_LIVE);
   const [focus, setFocus] = createSignal<Focus>("timeline");
   const [detailsOpen, setDetailsOpen] = createSignal(false);
+  const [detailsFull, setDetailsFull] = createSignal(false);
   const [selected, setSelected] = createSignal(0);
+  const [selectedResource, setSelectedResource] = createSignal<
+    Openable | TranscriptTarget
+  >();
   const [control, setControl] = createSignal<"continue" | "stop">("continue");
   const [answerOutcome, setAnswerOutcome] =
     createSignal<Accessor<AnswerOutcome>>();
@@ -729,7 +738,7 @@ export function RunWorkbench(props: {
 
   // One transcript openable per Session that has a recorded transcript (#124),
   // each opening that Session's newest page through its `page` Resource Reference.
-  const transcriptTargets = createMemo<readonly Openable[]>(() => {
+  const transcriptTargets = createMemo<readonly TranscriptTarget[]>(() => {
     const sessions = run()?.sessions ?? [];
     const withTranscript = sessions.filter(
       (s) => s.transcriptPage !== undefined,
@@ -740,22 +749,22 @@ export function RunWorkbench(props: {
       label: `Session transcript · ${s.name}`,
       transcript: s.transcriptPage!,
       sessionName: s.name,
+      ...(s.transcriptExport === undefined
+        ? {}
+        : { exportReference: s.transcriptExport }),
     }));
   });
-  // The `t` shortcut and transcript-available hint follow the first Session.
-  const transcriptTarget = createMemo<Openable | undefined>(
-    () => transcriptTargets()[0],
-  );
-
   // The evidence the details panel offers, in a stable order: bound outputs,
   // then a blocked checkpoint's latest Verdict, a halt diagnostic, and transcript.
-  const openables = createMemo<readonly Openable[]>(() => {
+  const openables = createMemo<readonly (Openable | TranscriptTarget)[]>(() => {
     const current = run();
     if (current === undefined) return [];
-    const list: Openable[] = current.outputs.map((output) => ({
-      label: `${output.name} (${output.type})`,
-      reference: output.reference,
-    }));
+    const list: (Openable | TranscriptTarget)[] = current.outputs.map(
+      (output) => ({
+        label: `${output.name} (${output.type})`,
+        reference: output.reference,
+      }),
+    );
     if (current.checkpoint !== undefined) {
       const verdict = current.checkpoint.latestVerdict;
       list.push({
@@ -782,10 +791,14 @@ export function RunWorkbench(props: {
 
   const interiorH = () => Math.max(1, dims().height - 2);
   const innerW = () => Math.max(1, dims().width - 2);
-  // The reference-inspection overlay (A26): its state, key loop, and view live in
-  // run-inspection; the Workbench selects which evidence to open and hands it here.
+  // Output inspection and retained transcript reading have distinct lifetimes.
+  // Only the details-opened transcript reader can request older pages.
   const inspection = createInspection({
     readResource: view.readResource,
+    interiorH,
+    width: innerW,
+  });
+  const transcript = createTranscriptReader({
     readTranscript: view.readTranscript,
     interiorH,
     width: innerW,
@@ -955,6 +968,11 @@ export function RunWorkbench(props: {
     dims().width >= DETAILS_MIN_WIDTH &&
     interiorH() - chrome() - detailsHeight() >= 1;
   const detailsShown = () => detailsOpen() && detailsAvailable();
+  const focusedDetails = () =>
+    detailsOpen() &&
+    focus() === "details" &&
+    (detailsFull() || detailsAvailable());
+  const compactDetails = () => focusedDetails() && !detailsAvailable();
   const viewportH = () =>
     Math.max(
       1,
@@ -962,8 +980,42 @@ export function RunWorkbench(props: {
     );
   // The selection can point past the end after a durable update drops outputs; a
   // clamped read keeps the highlight and any open on a real row.
-  const selectedRef = () =>
-    Math.min(selected(), Math.max(0, openables().length - 1));
+  const selectedRef = () => {
+    const held = selectedResource();
+    const index =
+      held === undefined
+        ? -1
+        : openables().findIndex((target) => {
+            if ("transcript" in held || "transcript" in target) {
+              return (
+                "transcript" in held &&
+                "transcript" in target &&
+                held.transcript.runId === target.transcript.runId &&
+                held.transcript.session === target.transcript.session
+              );
+            }
+            const left = held.reference;
+            const right = target.reference;
+            if (left === undefined || right === undefined)
+              return held === target;
+            if (left.runId !== right.runId) return false;
+            if (left.type === "diagnostic" || right.type === "diagnostic") {
+              return (
+                left.type === "diagnostic" &&
+                right.type === "diagnostic" &&
+                left.diagnosticId === right.diagnosticId
+              );
+            }
+            return (
+              left.type === right.type &&
+              left.artifactName === right.artifactName &&
+              left.versionId === right.versionId
+            );
+          });
+    return index < 0
+      ? Math.min(selected(), Math.max(0, openables().length - 1))
+      : index;
+  };
 
   // The panel's rows, built from the Run view plus the moved-in facts, offers, and
   // armed confirm. The container reserves exactly these rows (its height) and hands
@@ -992,12 +1044,11 @@ export function RunWorkbench(props: {
   };
   const detailsHeight = () => detailsRows().length;
 
-  // If the panel becomes unavailable (a resize below either breakpoint) while it
-  // held focus, hand focus back to the timeline so the footer and marker stay
-  // honest about what the keys do.
+  // Ctrl+G keeps focused resources reachable below the panel breakpoints. The
+  // legacy inline panel returns to the timeline when it no longer fits.
   createEffect(() => {
     if (!detailsShown()) {
-      if (focus() === "details") setFocus("timeline");
+      if (!detailsFull() && focus() === "details") setFocus("timeline");
       // Cancel/delete confirm in the panel (#194 story 37); if it closes mid-arm,
       // drop the confirm so no invisible destructive action stays armed.
       const armed = pending();
@@ -1312,12 +1363,19 @@ export function RunWorkbench(props: {
   const moveSelection = (delta: number) => {
     const count = openables().length;
     if (count === 0) return;
-    setSelected((index) => Math.max(0, Math.min(index + delta, count - 1)));
+    const index = Math.max(0, Math.min(selectedRef() + delta, count - 1));
+    setSelected(index);
+    setSelectedResource(openables()[index]);
   };
 
   const openSelected = () => {
     const target = openables()[selectedRef()];
-    if (target !== undefined) inspection.open(target);
+    if (target !== undefined) {
+      setSelectedResource(target);
+      setDetailsFull(true);
+      if ("transcript" in target) transcript.open(target);
+      else inspection.open(target);
+    }
   };
 
   // Drive the interactive controls' command keys (#122). Text entry, editing, cursor
@@ -1379,10 +1437,11 @@ export function RunWorkbench(props: {
       exit(); // Ctrl+C always quits, even from a text control
       return;
     }
-    // Inspection overlay owns its own key loop while open (A26): it consumes the
-    // key (scroll or Escape-to-close), or hands back its footer's `q` (#392) for
-    // the same guarded Exit the Workbench's own `q` takes.
-    const inspected = inspection.handleKey(name);
+    // Details readers consume keys before Run controls and text editing. Quit
+    // uses the same guarded Exit, preserving the reader on Keep Running.
+    const transcriptKey = transcript.handleKey(name);
+    const inspected =
+      transcriptKey === "ignored" ? inspection.handleKey(name) : transcriptKey;
     if (inspected === "quit") {
       exit();
       return;
@@ -1409,11 +1468,6 @@ export function RunWorkbench(props: {
     const steerTyping = focus() === "steer" && steerActive();
     if (name === "q" && !typing && !steerTyping) {
       exit(); // quit — never reached inside a text-entry control above
-      return;
-    }
-    if (name === "t" && !typing && !steerTyping) {
-      const target = transcriptTarget();
-      if (target !== undefined) inspection.open(target);
       return;
     }
     if (name === "r" && freshness().kind === "disconnected") {
@@ -1457,6 +1511,12 @@ export function RunWorkbench(props: {
       } else if (name === "escape") {
         setConfirmation(undefined);
       }
+      return;
+    }
+    if (name === "g" && key.ctrl) {
+      setDetailsFull(true);
+      setDetailsOpen(true);
+      setFocus("details");
       return;
     }
     // While the interactive input holds focus it owns every remaining key as text or
@@ -1567,6 +1627,7 @@ export function RunWorkbench(props: {
           if (detailsAvailable()) {
             setDetailsOpen(true);
             setSelected(0);
+            setSelectedResource(undefined);
             setFocus("details");
           }
           return;
@@ -1577,7 +1638,7 @@ export function RunWorkbench(props: {
           return;
       }
     }
-    if (focus() === "details" && detailsShown()) {
+    if (focusedDetails()) {
       switch (name) {
         case "up":
           moveSelection(-1);
@@ -1609,6 +1670,7 @@ export function RunWorkbench(props: {
         if (!detailsAvailable()) return; // hidden below a width/height breakpoint
         setDetailsOpen(true);
         setSelected(0);
+        setSelectedResource(undefined);
         setFocus("details");
         return;
       case "tab":
@@ -1635,6 +1697,20 @@ export function RunWorkbench(props: {
       backgroundColor={theme.background}
     >
       <Switch>
+        <Match when={transcript.reader()}>
+          {(current) => (
+            <TranscriptReaderView
+              title={current().target.label}
+              problem={current().problem}
+              interiorH={interiorH}
+              visible={transcript.visible}
+              location={transcript.location}
+              notice={transcript.notice}
+              width={innerW}
+              theme={theme}
+            />
+          )}
+        </Match>
         <Match when={inspection.inspecting()}>
           {(current) => (
             <InspectionView
@@ -1645,6 +1721,33 @@ export function RunWorkbench(props: {
               theme={theme}
             />
           )}
+        </Match>
+        <Match when={compactDetails()}>
+          <box flexDirection="column" flexGrow={1} overflow="hidden">
+            <text fg={theme.text} flexShrink={0}>
+              Details · Resources
+            </text>
+            <box flexDirection="column" flexGrow={1} overflow="hidden">
+              <For
+                each={openables().slice(
+                  selectedRef(),
+                  selectedRef() + Math.max(1, interiorH() - 2),
+                )}
+              >
+                {(target) => (
+                  <text fg={theme.text} flexShrink={0}>
+                    {clip(
+                      `${target === openables()[selectedRef()] ? "› " : "  "}${target.label}`,
+                      innerW(),
+                    )}
+                  </text>
+                )}
+              </For>
+            </box>
+            <text fg={theme.textMuted} flexShrink={0}>
+              {clip("↑/↓ select · enter open · esc back · q quit", innerW())}
+            </text>
+          </box>
         </Match>
         <Match when={notFound()}>
           {(problem) => (
@@ -1678,7 +1781,6 @@ export function RunWorkbench(props: {
               metadataLines={metadataLines}
               blockedBasis={blockedBasis}
               focus={focus}
-              transcriptAvailable={() => transcriptTarget() !== undefined}
               checkpointActive={checkpointActive}
               offer={answerOffer}
               evidence={evidenceLabels}
@@ -1814,7 +1916,6 @@ function Workbench(props: {
   metadataLines: Accessor<readonly string[]>;
   blockedBasis: Accessor<string | undefined>;
   focus: Accessor<Focus>;
-  transcriptAvailable: Accessor<boolean>;
   checkpointActive: Accessor<boolean>;
   offer: Accessor<AnswerHumanGateOffer | undefined>;
   evidence: Accessor<readonly string[]>;
@@ -1895,10 +1996,9 @@ function Workbench(props: {
       return "View freshness · not Run state · catching up · controls unavailable · esc back · q quit";
     }
     const model = props.modelChoiceOffered() ? "m model · " : "";
-    const transcript = props.transcriptAvailable() ? " · t transcript" : "";
     return props.focus() === "details"
-      ? `${model}↑/↓ select · enter open${transcript} · tab timeline · esc back · q quit`
-      : `${model}↑/↓ scroll · d details${transcript} · end latest · esc back · q quit`;
+      ? `${model}↑/↓ select · enter open · tab timeline · esc back · q quit`
+      : `${model}↑/↓ scroll · ^G/d details · end latest · esc back · q quit`;
   };
 
   const displayState = () =>

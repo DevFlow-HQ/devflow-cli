@@ -118,6 +118,17 @@ jobs:
           tests/tui/screens.test.tsx
           tests/tui/home-preferences.test.tsx
           tests/tui/run-workbench.test.tsx
+      - name: m10-full-transcript-prepend
+        run: >-
+          bun run test --
+          tests/tui/run-workbench.test.tsx
+          tests/application/transcript-resource.test.ts
+          tests/headless/run.test.ts
+      - name: m10-workbench-interaction
+        run: >-
+          bun run test --
+          tests/tui/run-workbench.test.tsx
+          tests/tui/live-run-workbench.test.tsx
       - name: m10-initial-preparation-ownership
         run: >-
           bun run test --

@@ -27,6 +27,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   display-line count: it scrolls display lines (a page is half the viewport, OpenCode's), but a paused anchor is a `row` plus a line `offset`, so it keeps
   naming the same first-visible row while rows land and across a resize that rewraps them, and the new-activity count is rows with a line below the viewport.
   Neither invariant exists in the scrollbox.
+- The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
   `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.
 - Agent completion reasons (#372) are sanitized and clipped to one display line. The agent-ended row omits the timestamp to leave room on narrow screens.

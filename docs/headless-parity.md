@@ -25,3 +25,7 @@ Harness. Execution checks substituted prompts before Turn admission, failing an 
 explanation remains M11's presentation work. Headless still has no compose or typed Slash commands.
 
 Saved theme and dark/light Preferences have headless parity through `settings show` and `settings set` ([ADR 0037](./adr/0037-own-saved-presentation-preferences-in-catalog-and-apply-themes-independently.md)). The TUI Home launcher and app-wide Ctrl+P Themes picker preview all 25 palettes in Dark and Light. Escape restores the active pair on picker entry; a failed save keeps the confirmed appearance and offers retry. Preview and active appearance belong to the TUI; settings changes saved values for a later launch and leaves headless output plain.
+
+The full retained Session transcript opens from focused Details (`Ctrl+G`, then Enter). Its reader alone loads older pages and exports the complete
+conversation to the terminal clipboard on demand. `run read <run-id> --transcript [--session <name>]` retains its stored page/export envelopes;
+presentation entry identities remain excluded from JSON. The Workbench never pages older history ([#421](https://github.com/secantdev/secant/issues/421)).

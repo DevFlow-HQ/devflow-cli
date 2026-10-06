@@ -26,6 +26,7 @@ import type {
   SteerTurnOffer,
 } from "../application/projection-port.js";
 import { clip } from "./clip.js";
+import type { TranscriptTarget } from "./run-transcript.js";
 import type { Openable } from "./run-inspection.js";
 import type { Theme } from "./vendor/theme.js";
 import { WorkingScanner } from "./working-scanner.js";
@@ -459,7 +460,7 @@ export function buildDetailsRows(params: {
   readonly position: string;
   readonly compact: boolean;
   readonly focused: boolean;
-  readonly openables: readonly Openable[];
+  readonly openables: readonly (Openable | TranscriptTarget)[];
   readonly selected: number;
   /** Set when the resting resume offer arms an indeterminate-Command-Attempt
    *  acknowledgement (#194 story 39); surfaced as recovery evidence too. */
