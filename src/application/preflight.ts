@@ -277,7 +277,10 @@ function observedHarnessCheck(
 // pins a Snapshot (ADR 0021); a failing re-check means corrupted installed bytes.
 // The Problem carries no routing vocabulary — the findings inform it, unprinted.
 function checkComposition(request: PreflightRequest): Problem | undefined {
-  return request.composition.some((finding) => finding.severity === "error")
+  return request.composition.some(
+    (finding) =>
+      finding.severity === "error" && finding.code !== "harness-input-reserved",
+  )
     ? bundleSnapshotCorrupt(request.digest)
     : undefined;
 }
@@ -366,6 +369,27 @@ function checkHarness(
           executableEnvironmentVariable:
             discovery.executableEnvironmentVariable,
         }),
+      ],
+    };
+  }
+  const inputFindings = request.composition.filter(
+    (finding) => finding.code === "harness-input-reserved",
+  );
+  if (inputFindings.length > 0) {
+    return {
+      problems: [
+        {
+          code: "harness-input-reserved",
+          correction: "harness",
+          explanation: `The Bundle's authored prompts violate ${selected.registration.choice.name}'s input rules.`,
+          remediation:
+            "Choose another compatible Harness, or correct the Bundle prompts and build a new version.",
+          possibleEffects: "none",
+          fieldViolations: inputFindings.map((finding) => ({
+            field: finding.target,
+            explanation: finding.explanation,
+          })),
+        },
       ],
     };
   }

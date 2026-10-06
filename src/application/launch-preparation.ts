@@ -135,7 +135,10 @@ export function createLaunchPreparation(
       findings.push(bundleBytesMissing({ digest: entry.digest }));
       return { findings };
     }
-    const inspected = inspectBundle(bytes, deps.budgets, true);
+    const inputRules =
+      deps.harnessRegistry.find((entry) => entry.choice.id === input.harness)
+        ?.inputRules ?? [];
+    const inspected = inspectBundle(bytes, deps.budgets, inputRules, true);
     if (!inspected.ok) {
       findings.push(
         ("engineUnsupported" in inspected
@@ -151,7 +154,9 @@ export function createLaunchPreparation(
     // remaining checks accumulate atop (a corrupt routing cannot be assessed).
     if (
       inspected.inspection.composition.some(
-        (finding) => finding.severity === "error",
+        (finding) =>
+          finding.severity === "error" &&
+          finding.code !== "harness-input-reserved",
       )
     ) {
       findings.push(bundleSnapshotCorrupt(entry.digest));

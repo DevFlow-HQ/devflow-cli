@@ -776,7 +776,7 @@ test("a legacy run-assets directory is swept once at open", (t) => {
 });
 
 test("both roots ensure the Shipped Bundles at startup, and a later startup changes nothing", (t) => {
-  const built = buildBundle(proofBundle);
+  const built = buildBundle(proofBundle, []);
   assert.ok(built.ok);
   const shippedBundleDir = makeTempDir("secant-wire-shipped-");
   writeFileSync(join(shippedBundleDir, "proof.wfb"), built.built.bytes);
@@ -1548,3 +1548,109 @@ test("two overlapping Runs sharing one Session attribute every Harness and child
     ],
   );
 });
+
+for (const harness of ["claude-code", "codex"] as const) {
+  for (const kind of ["agent", "interactive-agent"] as const) {
+    test(`m10-commands-and-input-rules: production ${harness} ${kind} admission uses its static rules`, async (t) => {
+      const workspacePath = realpathSync.native(
+        makeTempDir("secant-input-rule-workspace-"),
+      );
+      const adapter = createFake({
+        profile: profile(),
+        turns: harness === "codex" ? [{ result: completed }] : [],
+      })();
+      const wired = wireApplication({
+        secantHome: makeTempDir("secant-input-rule-home-"),
+        launchCwd: workspacePath,
+        supportsInteractiveTurns: true,
+        harnessAdapter: adapter,
+        codexHarnessAdapter: adapter,
+        process: createFakeBundleProcess(),
+        discoverClaudeCode: () => ({
+          kind: "found",
+          attempt: { source: "path", name: "claude", description: "scripted" },
+        }),
+        discoverCodex: () => ({
+          kind: "found",
+          attempt: { source: "path", name: "codex", description: "scripted" },
+        }),
+      });
+      t.after(async () => {
+        await wired.shutdown();
+        wired.runGroup.close();
+        wired.catalog.close();
+      });
+      const folder = makeTempDir("secant-input-rule-bundle-");
+      const id = "dev.secant.input-rule-test";
+      writeFileSync(join(folder, "p.md"), "{{artifact:task}}");
+      writeFileSync(
+        join(folder, "manifest.json"),
+        JSON.stringify({
+          formatVersion: 1,
+          bundle: {
+            id,
+            version: "1.0.0",
+            name: "Input rules",
+            description: "Ordinary authored Bundle.",
+          },
+          platforms: ["windows", "macos", "linux"],
+          inputs: { task: { type: "text", description: "Task" } },
+          assets: [{ path: "p.md", kind: "prompt" }],
+          routing: [
+            {
+              id: "work",
+              kind,
+              session: "s",
+              ...(kind === "interactive-agent" ? { entryTurn: true } : {}),
+              requires: ["task"],
+              prompt: { asset: "p.md" },
+            },
+          ],
+        }),
+      );
+      const built = wired.bundleManagement.build(folder, { noInstall: false });
+      assert.ok(built.ok, JSON.stringify(built));
+      const port = wired.projectionPort;
+      assert.ok(
+        port.submit({
+          operationId: "approve",
+          operation: "approve-workspace",
+          input: { path: workspacePath },
+        }).admitted,
+      );
+      const launch = port.submit({
+        operationId: "launch",
+        operation: "launch-run",
+        input: {
+          bundle: { id },
+          harness,
+          requestedModel: "fake",
+          launchInputs: { task: " \t/MODEL\nwork" },
+          trustDigest: built.report.digest,
+        },
+      });
+      assert.ok(launch.admitted && launch.runId, JSON.stringify(launch));
+      await awaitSettled(port, "launch");
+      const run = await awaitRunRest(port, launch.runId);
+      assert.equal(
+        run.state,
+        kind === "interactive-agent"
+          ? "blocked"
+          : harness === "claude-code"
+            ? "failed"
+            : "succeeded",
+      );
+      assert.equal(
+        run.timeline.filter((event) => event.event === "turn-started").length,
+        harness === "codex" ? 1 : 0,
+      );
+      if (harness === "codex") {
+        const reference = run.sessions?.[0]?.transcriptPage;
+        assert.ok(reference);
+        const transcript = port.readTranscript(reference);
+        assert.ok(transcript.found && transcript.type === "transcript-page");
+        assert.equal(transcript.entries[0]?.content, " \t/MODEL\nwork");
+      }
+    });
+  }
+}

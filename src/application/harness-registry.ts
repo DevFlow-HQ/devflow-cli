@@ -80,3 +80,10 @@ export interface RunHarnessPreparationFailure {
   readonly diagnostics?: string;
   readonly cause?: HarnessFailure["cause"];
 }
+
+/** The supported portfolio's static rules for authored and received Bundles. */
+export function mergeHarnessInputRules(
+  ruleLists: readonly (readonly HarnessInputRule[])[],
+): readonly HarnessInputRule[] {
+  return ruleLists.flat();
+}

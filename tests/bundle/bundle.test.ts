@@ -68,7 +68,7 @@ function readZipEntry(bytes: Uint8Array, name: string): Buffer {
 }
 
 test("building the Proof Bundle yields its identity and a sha-256 digest", () => {
-  const outcome = buildBundle(proofBundle);
+  const outcome = buildBundle(proofBundle, []);
   assert.ok(outcome.ok, JSON.stringify(outcome));
   assert.deepEqual(outcome.built.identity, {
     id: "dev.secant.test-repair",
@@ -78,7 +78,7 @@ test("building the Proof Bundle yields its identity and a sha-256 digest", () =>
 });
 
 test("the packaged manifest gets the derived engine range and canonical platforms", () => {
-  const outcome = buildBundle(proofBundle);
+  const outcome = buildBundle(proofBundle, []);
   assert.ok(outcome.ok);
   const manifest = JSON.parse(
     readZipEntry(outcome.built.bytes, "manifest.json").toString("utf8"),
@@ -89,8 +89,8 @@ test("the packaged manifest gets the derived engine range and canonical platform
 
 test("building the same folder twice is byte-identical and leaves it unchanged", () => {
   const before = readFileSync(join(proofBundle, "manifest.json"));
-  const first = buildBundle(proofBundle);
-  const second = buildBundle(proofBundle);
+  const first = buildBundle(proofBundle, []);
+  const second = buildBundle(proofBundle, []);
   assert.ok(first.ok && second.ok);
   assert.equal(Buffer.compare(first.built.bytes, second.built.bytes), 0);
   assert.equal(first.built.digest, second.built.digest);
@@ -103,7 +103,7 @@ test("building the same folder twice is byte-identical and leaves it unchanged",
 test("warning-only composition retains both Step findings without changing Bundle bytes", () => {
   const folder = freshSessionBundleFolder();
   const authored = readFileSync(join(folder, "manifest.json"));
-  const first = buildBundle(folder);
+  const first = buildBundle(folder, []);
   assert.ok(first.ok, JSON.stringify(first));
   assert.deepEqual(first.built.findings, freshSessionBuildFindings);
   // Captured before warnings crossed the build Interface (#391).
@@ -112,13 +112,13 @@ test("warning-only composition retains both Step findings without changing Bundl
     "5ac73b8c73d729e2171db9a0f3460c5f3954c895a4d03f46bb0202b8922cf673",
   );
 
-  const second = buildBundle(folder);
+  const second = buildBundle(folder, []);
   assert.ok(second.ok, JSON.stringify(second));
   assert.deepEqual(second.built.findings, freshSessionBuildFindings);
   assert.deepEqual(second.built.bytes, first.built.bytes);
   assert.equal(second.built.digest, first.built.digest);
   assert.deepEqual(readFileSync(join(folder, "manifest.json")), authored);
-  assert.deepEqual(readBundle(first.built.bytes, DEFAULT_BUDGETS), {
+  assert.deepEqual(readBundle(first.built.bytes, DEFAULT_BUDGETS, []), {
     ok: true,
     read: { identity: first.built.identity, digest: first.built.digest },
   });
@@ -128,7 +128,7 @@ test("an omitted platforms becomes the build host; an authored subset is preserv
   const host = { win32: "windows", darwin: "macos", linux: "linux" }[
     process.platform as "win32" | "darwin" | "linux"
   ];
-  const omitted = buildBundle(authoringFolder(base()));
+  const omitted = buildBundle(authoringFolder(base()), []);
   assert.ok(omitted.ok);
   const inserted = JSON.parse(
     readZipEntry(omitted.built.bytes, "manifest.json").toString("utf8"),
@@ -137,6 +137,7 @@ test("an omitted platforms becomes the build host; an authored subset is preserv
 
   const authored = buildBundle(
     authoringFolder({ ...base(), platforms: ["linux", "macos"] }),
+    [],
   );
   assert.ok(authored.ok);
   const kept = JSON.parse(
@@ -356,7 +357,7 @@ const rejections: ReadonlyArray<{
 
 for (const rejection of rejections) {
   test(`rejects ${rejection.title} with a distinct Problem`, () => {
-    const outcome = buildBundle(rejection.folder());
+    const outcome = buildBundle(rejection.folder(), []);
     assert.ok(!outcome.ok, `expected ${rejection.code}`);
     assert.ok("finding" in outcome, `expected a validation finding`);
     assert.equal(outcome.finding.code, rejection.code);
@@ -389,6 +390,7 @@ test("a shape-valid but non-composing folder fails the build with its findings",
       },
       { "p.md": "do the work" },
     ),
+    [],
   );
   assert.ok(!outcome.ok);
   assert.ok("composition" in outcome, "expected composition findings");
@@ -422,6 +424,7 @@ test("a human-controlled Repeat around one interactive Step builds (#217)", () =
       },
       { "p.md": "implement one ticket" },
     ),
+    [],
   );
   assert.ok(outcome.ok, JSON.stringify(outcome));
 });
@@ -429,7 +432,7 @@ test("a human-controlled Repeat around one interactive Step builds (#217)", () =
 // --- constrained reader and install validation (readBundle) -----------------
 
 function proofBytes(): Uint8Array {
-  const outcome = buildBundle(proofBundle);
+  const outcome = buildBundle(proofBundle, []);
   assert.ok(outcome.ok, JSON.stringify(outcome));
   return outcome.built.bytes;
 }
@@ -470,9 +473,9 @@ function corruptSingleEntry(
 }
 
 test("readBundle accepts real Proof Bundle bytes with its identity and digest", () => {
-  const built = buildBundle(proofBundle);
+  const built = buildBundle(proofBundle, []);
   assert.ok(built.ok);
-  const outcome = readBundle(built.built.bytes, DEFAULT_BUDGETS);
+  const outcome = readBundle(built.built.bytes, DEFAULT_BUDGETS, []);
   assert.ok(outcome.ok, JSON.stringify(outcome));
   assert.deepEqual(outcome.read.identity, built.built.identity);
   assert.equal(outcome.read.digest, built.built.digest);
@@ -495,13 +498,14 @@ for (const alias of [
         },
         { "resources/x.txt": "original" },
       ),
+      [],
     );
     assert.ok(built.ok, JSON.stringify(built));
     const bytes = repack(built.built.bytes, (entries) => [
       ...entries,
       { path: alias, data: Buffer.from("alias") },
     ]);
-    const outcome = readBundle(bytes, DEFAULT_BUDGETS);
+    const outcome = readBundle(bytes, DEFAULT_BUDGETS, []);
     assert.ok(!outcome.ok && "finding" in outcome, JSON.stringify(outcome));
     assert.equal(
       outcome.finding.code,
@@ -655,6 +659,7 @@ for (const rejection of archiveRejections) {
     const result = readBundle(
       rejection.bytes(),
       rejection.budgets ?? DEFAULT_BUDGETS,
+      [],
     );
     assert.ok(!result.ok && "finding" in result, "expected a rejection");
     assert.equal(result.finding.code, rejection.code);
@@ -663,7 +668,7 @@ for (const rejection of archiveRejections) {
 
 test("readBundle rejects an archive with no manifest.json", () => {
   const bytes = writeZip([{ path: "note.txt", data: Buffer.from("x") }]);
-  const outcome = readBundle(bytes, DEFAULT_BUDGETS);
+  const outcome = readBundle(bytes, DEFAULT_BUDGETS, []);
   assert.ok(!outcome.ok && "finding" in outcome);
   assert.equal(outcome.finding.code, "manifest-missing");
 });
@@ -681,7 +686,7 @@ test("readBundle rejects an understated engine range", () => {
         : entry,
     ),
   );
-  const outcome = readBundle(bytes, DEFAULT_BUDGETS);
+  const outcome = readBundle(bytes, DEFAULT_BUDGETS, []);
   assert.ok(!outcome.ok && "finding" in outcome);
   assert.equal(outcome.finding.code, "engine-understated");
 });
@@ -702,7 +707,7 @@ test("readBundle accepts a prerelease engine floor at or above the required vers
         : entry,
     ),
   );
-  const outcome = readBundle(bytes, DEFAULT_BUDGETS);
+  const outcome = readBundle(bytes, DEFAULT_BUDGETS, []);
   assert.ok(outcome.ok, JSON.stringify(outcome));
 });
 
@@ -719,7 +724,7 @@ test("readBundle rejects a decompression bomb that understates its expanded size
   const central = 30 + nameLen + compSize;
   buffer.writeUInt32LE(10, 22); // local uncompressed size
   buffer.writeUInt32LE(10, central + 24); // central uncompressed size
-  const result = readBundle(buffer, DEFAULT_BUDGETS);
+  const result = readBundle(buffer, DEFAULT_BUDGETS, []);
   assert.ok(
     !result.ok && "finding" in result,
     "expected the bomb to be rejected",
@@ -753,7 +758,7 @@ for (const { input, safe } of [
       ...base(),
       assets: [{ path: input, kind: "resource" }],
     });
-    const manifest = buildBundle(folder);
+    const manifest = buildBundle(folder, []);
     const manifestRejected =
       !manifest.ok &&
       "finding" in manifest &&
@@ -764,6 +769,7 @@ for (const { input, safe } of [
     const archive = readBundle(
       writeZip([{ path: input, data: Buffer.from("x") }]),
       DEFAULT_BUDGETS,
+      [],
     );
     const archiveRejected =
       !archive.ok &&
@@ -785,9 +791,10 @@ for (const path of ["resources", "resources/", "resources/./", "resources//"]) {
         },
         { "resources/x.txt": "original", "resources/nested/y.txt": "nested" },
       ),
+      [],
     );
     assert.ok(built.ok, JSON.stringify(built));
-    const read = readBundle(built.built.bytes, DEFAULT_BUDGETS);
+    const read = readBundle(built.built.bytes, DEFAULT_BUDGETS, []);
     assert.ok(read.ok, JSON.stringify(read));
     assert.equal(read.read.digest, built.built.digest);
     assert.deepEqual(
@@ -809,7 +816,7 @@ for (const path of ["resources", "resources/", "resources/./", "resources//"]) {
         return { ...entry, data: Buffer.from(JSON.stringify(manifest)) };
       }),
     );
-    assert.ok(readBundle(imported, DEFAULT_BUDGETS).ok);
+    assert.ok(readBundle(imported, DEFAULT_BUDGETS, []).ok);
     assert.deepEqual(
       readBundleAssets(imported, DEFAULT_BUDGETS),
       readBundleAssets(built.built.bytes, DEFAULT_BUDGETS),
@@ -823,7 +830,7 @@ test("build and import share canonical asset-tree overlap and coverage checks", 
     assets: [{ path: "resources/", kind: "resource" }],
   };
   const files = { "resources/x.txt": "original" };
-  const built = buildBundle(authoringFolder(manifest, files));
+  const built = buildBundle(authoringFolder(manifest, files), []);
   assert.ok(built.ok);
   const overlapping = {
     ...manifest,
@@ -832,7 +839,7 @@ test("build and import share canonical asset-tree overlap and coverage checks", 
       { path: "resources/./x.txt", kind: "resource" },
     ],
   };
-  const overlapBuild = buildBundle(authoringFolder(overlapping, files));
+  const overlapBuild = buildBundle(authoringFolder(overlapping, files), []);
   assert.ok(!overlapBuild.ok && "finding" in overlapBuild);
   assert.equal(overlapBuild.finding.code, "overlapping-asset-trees");
   const overlapBytes = repack(built.built.bytes, (entries) =>
@@ -843,13 +850,14 @@ test("build and import share canonical asset-tree overlap and coverage checks", 
       return { ...entry, data: Buffer.from(JSON.stringify(packaged)) };
     }),
   );
-  const overlapRead = readBundle(overlapBytes, DEFAULT_BUDGETS);
+  const overlapRead = readBundle(overlapBytes, DEFAULT_BUDGETS, []);
   assert.ok(!overlapRead.ok && "finding" in overlapRead);
   assert.equal(overlapRead.finding.code, "overlapping-asset-trees");
   assert.equal(readBundleAssets(overlapBytes, DEFAULT_BUDGETS), undefined);
 
   const strayBuild = buildBundle(
     authoringFolder(manifest, { ...files, "resources-other/x.txt": "stray" }),
+    [],
   );
   assert.ok(!strayBuild.ok && "finding" in strayBuild);
   assert.equal(strayBuild.finding.code, "unclaimed-entry");
@@ -857,7 +865,7 @@ test("build and import share canonical asset-tree overlap and coverage checks", 
     ...entries,
     { path: "resources-other/x.txt", data: Buffer.from("stray") },
   ]);
-  const strayRead = readBundle(strayBytes, DEFAULT_BUDGETS);
+  const strayRead = readBundle(strayBytes, DEFAULT_BUDGETS, []);
   assert.ok(!strayRead.ok && "finding" in strayRead);
   assert.deepEqual(strayRead.finding, strayBuild.finding);
 
@@ -868,7 +876,7 @@ test("build and import share canonical asset-tree overlap and coverage checks", 
         : { ...entry, path: "./resources//x.txt/." },
     ),
   );
-  assert.ok(readBundle(canonicalBytes, DEFAULT_BUDGETS).ok);
+  assert.ok(readBundle(canonicalBytes, DEFAULT_BUDGETS, []).ok);
   assert.deepEqual(readBundleAssets(canonicalBytes, DEFAULT_BUDGETS), [
     { path: "resources/x.txt", data: Buffer.from("original") },
   ]);
@@ -887,11 +895,12 @@ for (const workingDirectory of [".", "", "./", ".//."]) {
           },
         ],
       }),
+      [],
     );
     assert.ok(built.ok, JSON.stringify(built));
-    const inspection = inspectBundle(built.built.bytes, DEFAULT_BUDGETS);
+    const inspection = inspectBundle(built.built.bytes, DEFAULT_BUDGETS, []);
     assert.ok(inspection.ok, JSON.stringify(inspection));
-    assert.ok(readBundle(built.built.bytes, DEFAULT_BUDGETS).ok);
+    assert.ok(readBundle(built.built.bytes, DEFAULT_BUDGETS, []).ok);
   });
 }
 
@@ -914,6 +923,7 @@ for (const alias of ["x.txt\\.", "X.txt"]) {
         },
         { "resources/x.txt": "original", [`resources/${alias}`]: "alias" },
       ),
+      [],
     );
     assert.ok(!outcome.ok && "finding" in outcome, JSON.stringify(outcome));
     assert.equal(
@@ -966,7 +976,7 @@ test("readBundle refuses a shape-valid archive that does not compose with the bu
       data: Buffer.from(JSON.stringify(nonComposingPackagedManifest())),
     },
   ]);
-  const outcome = readBundle(bytes, DEFAULT_BUDGETS);
+  const outcome = readBundle(bytes, DEFAULT_BUDGETS, []);
   assert.ok(!outcome.ok);
   assert.ok("composition" in outcome, "expected composition findings");
   assert.deepEqual(
@@ -995,7 +1005,7 @@ test("readBundleAssets returns declared entries and rejects an unclaimed entry",
     ...entries,
     { path: "stray.txt", data: Buffer.from("not declared") },
   ]);
-  const outcome = readBundle(withStray, DEFAULT_BUDGETS);
+  const outcome = readBundle(withStray, DEFAULT_BUDGETS, []);
   assert.ok(!outcome.ok && "finding" in outcome, JSON.stringify(outcome));
   assert.equal(outcome.finding.code, "unclaimed-entry");
   assert.equal(outcome.finding.path, "stray.txt");
@@ -1005,6 +1015,7 @@ test("readBundleAssets returns declared entries and rejects an unclaimed entry",
     const inspection = inspectBundle(
       withStray,
       DEFAULT_BUDGETS,
+      [],
       includeComposition,
     );
     assert.ok(!inspection.ok && "finding" in inspection);
@@ -1029,8 +1040,8 @@ test("Bundle reads retain the declared engine before rejecting unknown fields", 
     }),
   );
   for (const outcome of [
-    readBundle(bytes, DEFAULT_BUDGETS),
-    inspectBundle(bytes, DEFAULT_BUDGETS),
+    readBundle(bytes, DEFAULT_BUDGETS, []),
+    inspectBundle(bytes, DEFAULT_BUDGETS, []),
   ]) {
     assert.ok(
       !outcome.ok && "engineUnsupported" in outcome,
@@ -1064,8 +1075,8 @@ for (const engine of [
       }),
     );
     for (const outcome of [
-      readBundle(bytes, DEFAULT_BUDGETS),
-      inspectBundle(bytes, DEFAULT_BUDGETS),
+      readBundle(bytes, DEFAULT_BUDGETS, []),
+      inspectBundle(bytes, DEFAULT_BUDGETS, []),
     ]) {
       assert.ok(!outcome.ok && "finding" in outcome);
       assert.equal("engineUnsupported" in outcome, false);
@@ -1112,9 +1123,10 @@ test("Agent-completion fields build, round-trip, and derive the 0.2.0 floor", ()
       authoringFolder(completionManifest({ agentCompletion }), {
         "p.md": "Work.",
       }),
+      [],
     );
     assert.ok(outcome.ok, JSON.stringify(outcome));
-    const read = readBundle(outcome.built.bytes, DEFAULT_BUDGETS);
+    const read = readBundle(outcome.built.bytes, DEFAULT_BUDGETS, []);
     assert.ok(read.ok, JSON.stringify(read));
     assert.equal(
       JSON.parse(readZipEntry(outcome.built.bytes, "manifest.json").toString())
@@ -1149,9 +1161,10 @@ test("Agent completion preserves author sentences and normalizes an optional hum
         ),
         { "p.md": "Work." },
       ),
+      [],
     );
     assert.ok(built.ok, JSON.stringify(built));
-    const inspected = inspectBundle(built.built.bytes, DEFAULT_BUDGETS);
+    const inspected = inspectBundle(built.built.bytes, DEFAULT_BUDGETS, []);
     assert.ok(inspected.ok);
     assert.equal(inspected.inspection.engine, ">=0.2.0");
     const node = inspected.inspection.manifest.routing[0];
@@ -1168,7 +1181,7 @@ test("Agent completion preserves author sentences and normalizes an optional hum
       node.repeat.steps[0].stageDoneWhen,
       "Call stage_done with a reason when no work remains.",
     );
-    assert.ok(readBundle(built.built.bytes, DEFAULT_BUDGETS).ok);
+    assert.ok(readBundle(built.built.bytes, DEFAULT_BUDGETS, []).ok);
   }
 });
 
@@ -1177,6 +1190,7 @@ test("malformed Agent-completion fields are refused by authored and packaged val
     authoringFolder(completionManifest({ agentCompletion: true }), {
       "p.md": "Work.",
     }),
+    [],
   );
   assert.ok(valid.ok);
   const cases: readonly {
@@ -1210,6 +1224,7 @@ test("malformed Agent-completion fields are refused by authored and packaged val
     );
     const authored = buildBundle(
       authoringFolder(manifest, { "p.md": "Work." }),
+      [],
     );
     assert.ok(
       !authored.ok && "finding" in authored,
@@ -1231,7 +1246,7 @@ test("malformed Agent-completion fields are refused by authored and packaged val
           : entry,
       ),
     );
-    const packaged = readBundle(received, DEFAULT_BUDGETS);
+    const packaged = readBundle(received, DEFAULT_BUDGETS, []);
     assert.ok(
       !packaged.ok && "finding" in packaged,
       JSON.stringify({ fields, checkpoint, packaged }),
@@ -1244,6 +1259,7 @@ test("Agent-completion semantic errors reach Workflow composition through the Bu
     authoringFolder(completionManifest({ agentCompletion: true }), {
       "p.md": "Work.",
     }),
+    [],
   );
   assert.ok(valid.ok);
   for (const [fields, checkpoint, code] of [
@@ -1274,7 +1290,10 @@ test("Agent-completion semantic errors reach Workflow composition through the Bu
     ],
   ] as const) {
     const manifest = completionManifest(fields, checkpoint);
-    const build = buildBundle(authoringFolder(manifest, { "p.md": "Work." }));
+    const build = buildBundle(
+      authoringFolder(manifest, { "p.md": "Work." }),
+      [],
+    );
     assert.ok(!build.ok && "composition" in build, JSON.stringify(build));
     assert.equal(
       build.composition.some((finding) => finding.code === code),
@@ -1296,7 +1315,7 @@ test("Agent-completion semantic errors reach Workflow composition through the Bu
           : entry,
       ),
     );
-    const read = readBundle(received, DEFAULT_BUDGETS);
+    const read = readBundle(received, DEFAULT_BUDGETS, []);
     assert.ok(!read.ok && "composition" in read, JSON.stringify(read));
     assert.equal(
       read.composition.some((finding) => finding.code === code),
@@ -1310,6 +1329,7 @@ test("a declared opt-out still independently raises the required engine on recei
     authoringFolder(completionManifest({ agentCompletion: false }), {
       "p.md": "Work.",
     }),
+    [],
   );
   assert.ok(built.ok);
   const understated = repack(built.built.bytes, (entries) =>
@@ -1324,7 +1344,61 @@ test("a declared opt-out still independently raises the required engine on recei
         : entry,
     ),
   );
-  const read = readBundle(understated, DEFAULT_BUDGETS);
+  const read = readBundle(understated, DEFAULT_BUDGETS, []);
   assert.ok(!read.ok && "finding" in read);
   assert.equal(read.finding.code, "engine-understated");
+});
+
+test("m10-commands-and-input-rules: build and received prompts obey supplied rules", () => {
+  const rules = [
+    { kind: "reserved-leading-words", words: ["/clear"] },
+  ] as const;
+  for (const prompt of ["/clear", " \t/CLEAR\nwork", "\u2003/clear more"]) {
+    const folder = authoringFolder(
+      {
+        ...base(),
+        assets: [{ path: "p.md", kind: "prompt" }],
+        routing: [
+          {
+            id: "work",
+            kind: "agent",
+            session: "s",
+            prompt: { asset: "p.md" },
+          },
+        ],
+      },
+      { "p.md": prompt },
+    );
+    const refused = buildBundle(folder, rules);
+    assert.ok(!refused.ok && "composition" in refused, JSON.stringify(refused));
+    assert.deepEqual(
+      refused.composition.map((f) => f.code),
+      ["harness-input-reserved"],
+    );
+    const compatible = buildBundle(folder, []);
+    assert.ok(compatible.ok, JSON.stringify(compatible));
+    const received = readBundle(compatible.built.bytes, DEFAULT_BUDGETS, rules);
+    assert.ok(
+      !received.ok && "composition" in received,
+      JSON.stringify(received),
+    );
+    assert.deepEqual(received.composition, refused.composition);
+  }
+  for (const prompt of [
+    "/clearer",
+    "/clear/path",
+    "Discuss /clear",
+    "/compact",
+  ]) {
+    const folder = authoringFolder(
+      { ...base(), assets: [{ path: "p.md", kind: "prompt" }] },
+      { "p.md": prompt },
+    );
+    assert.ok(buildBundle(folder, rules).ok);
+  }
+  const unused = authoringFolder(
+    { ...base(), assets: [{ path: "p.md", kind: "prompt" }] },
+    { "p.md": "/clear" },
+  );
+  assert.equal(buildBundle(unused, rules).ok, false);
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { supportedBundleInputRules } from "../src/composition/main.js";
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin";
 import pkg from "../package.json" with { type: "json" };
 import { buildShippedBundles } from "./shipped-bundles.js";
@@ -58,7 +59,10 @@ if (import.meta.main) {
   const keys = buildAll
     ? Object.keys(TARGETS)
     : [hostTargetKey(process.platform, process.arch)];
-  for (const bundle of buildShippedBundles(SHIPPED_BUNDLE_DIR)) {
+  for (const bundle of buildShippedBundles(
+    SHIPPED_BUNDLE_DIR,
+    supportedBundleInputRules(),
+  )) {
     console.log(`Built ${bundle.file} (${bundle.digest}).`);
   }
   for (const key of keys) {

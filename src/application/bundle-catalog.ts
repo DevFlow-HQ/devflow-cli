@@ -155,7 +155,7 @@ function inspectEntry(
       }),
     };
   }
-  const outcome = inspectBundle(bytes, deps.budgets, includeComposition);
+  const outcome = inspectBundle(bytes, deps.budgets, [], includeComposition);
   if (!outcome.ok) {
     const unsupported =
       "engineUnsupported" in outcome

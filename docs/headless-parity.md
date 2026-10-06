@@ -18,3 +18,8 @@ decision says otherwise; closing one needs its own decision.
 
 Typed **Slash commands** and the Ctrl+P palette are TUI presentation, not a gap: each App command maps to an Operation headless has or to a gap
 above ([ADR 0040](./adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md)).
+
+Bundle prompt rules apply to both clients. Build and install refuse authored prompts against all supported Harness rules, including Shipped Bundles.
+Launch Preparation and headless launch report a selected-Harness finding with `harness` as its correction; installed Bundles remain usable on a compatible
+Harness. Execution checks substituted prompts before Turn admission, failing an Agent Attempt or blocking an Interactive Entry. The missing resting
+explanation remains M11's presentation work. Headless still has no compose or typed Slash commands.

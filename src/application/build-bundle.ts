@@ -13,7 +13,10 @@ import type {
   Catalog,
   CatalogEntry,
 } from "../catalog/catalog.js";
-import type { CompositionFinding } from "../workflow/workflow.js";
+import type {
+  HarnessInputRule,
+  CompositionFinding,
+} from "../workflow/workflow.js";
 import type {
   BundleBuildOptions,
   BundleManagement,
@@ -30,6 +33,7 @@ import type { Problem } from "./projection-port.js";
 // and an imported Bundle are indistinguishable once installed.
 
 export interface BundleManagementDependencies {
+  readonly inputRules: readonly HarnessInputRule[];
   readonly catalog: Catalog;
   readonly budgets: Budgets;
   readonly engineVersion: string;
@@ -48,7 +52,7 @@ export function installBytes(
   origin: BundleOrigin,
   extra: Partial<BundleReport> = {},
 ): BundleResult {
-  const outcome = readBundle(bytes, deps.budgets);
+  const outcome = readBundle(bytes, deps.budgets, deps.inputRules);
   if (!outcome.ok)
     return {
       ok: false,
@@ -75,7 +79,7 @@ export function createBundleManagement(
         return { ok: false, problem: outputRequired() };
       }
 
-      const built = buildBundle(folder);
+      const built = buildBundle(folder, deps.inputRules);
       if (!built.ok) {
         return {
           ok: false,

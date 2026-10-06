@@ -298,6 +298,7 @@ for (const [kind, scenario] of Object.entries(RESULT_CASES)) {
         now: () => AT,
         process: executionProcess,
         harness: {
+          inputRules: [],
           prepared: counted,
           inputTypes: {},
           assetKinds: { "prompt.md": "prompt" },
@@ -387,6 +388,7 @@ for (const [name, scenario] of Object.entries(ENTRY_CASES)) {
           now: () => AT,
           process: executionProcess,
           harness: {
+            inputRules: [],
             prepared: counted,
             inputTypes: {},
             assetKinds: { "prompt.md": "prompt" },
@@ -438,6 +440,7 @@ test("a Turn resumed into an open Agent Attempt takes the next id in order, and 
       process: executionProcess,
       harness: {
         prepared,
+        inputRules: [],
         inputTypes: {},
         assetKinds: { "prompt.md": "prompt" },
       },
@@ -584,6 +587,7 @@ function walkAgent(
     process: executionProcess,
     harness: {
       prepared,
+      inputRules: [],
       inputTypes: {},
       assetKinds: { "prompt.md": "prompt" },
     },
@@ -832,6 +836,7 @@ test("a Turn joining an Attempt that holds a pre-change `#turn` row takes the ne
     process: executionProcess,
     harness: {
       prepared,
+      inputRules: [],
       inputTypes: {},
       assetKinds: { "prompt.md": "prompt" },
     },
@@ -901,7 +906,12 @@ for (const delivery of ["skill", "file"] as const) {
         resolveAsset: assets.resolveAsset,
         now: () => AT,
         process: executionProcess,
-        harness: { prepared: counted, inputTypes, assetKinds },
+        harness: {
+          inputRules: [],
+          prepared: counted,
+          inputTypes,
+          assetKinds,
+        },
       },
     );
 
@@ -939,6 +949,7 @@ test("plain-path delivery keeps the rendered prompt byte-identical", async (t) =
       process: executionProcess,
       harness: {
         prepared,
+        inputRules: [],
         inputTypes: { report: "file" },
         assetKinds: { "prompt.md": "prompt", skill: "skill" },
       },
@@ -1007,6 +1018,7 @@ function executeWith(
     now: () => AT,
     process: executionProcess,
     harness: {
+      inputRules: [],
       prepared: harness,
       inputTypes: {},
       assetKinds: { "prompt.md": "prompt" },
@@ -1243,4 +1255,132 @@ test("a receipt root conflict in a usable working area fails each Attempt before
   const evidence = f.owner.harnessEvidence();
   assert.equal(evidence?.identity?.harness, "fake");
   assert.equal(evidence?.effectiveModel, undefined);
+});
+
+test("m10-commands-and-input-rules: substituted reserved Agent prompts fail with no Turn or output", async (t) => {
+  const f = fixture(t, { task: "\u2003/MODEL\nunsafe" });
+  const assets = promptAssets(f.workspace, "{{artifact:task}}");
+  const prepared = await preparedHarness(profile(), []);
+  t.after(() => prepared.close());
+  const report = await executeRouting(
+    [
+      agentStep({
+        requires: ["task"],
+        retry: 2,
+        produces: [{ name: "summary", type: "text" }],
+      }),
+    ],
+    {
+      owner: f.owner,
+      platform: HOST,
+      process: executionProcess,
+      resolveAsset: assets.resolveAsset,
+      harness: {
+        prepared,
+        inputRules: [{ kind: "reserved-leading-words", words: ["/model"] }],
+        inputTypes: { task: "text" },
+        assetKinds: { "prompt.md": "prompt" },
+      },
+    },
+  );
+  assert.equal(report.outcome, "failed");
+  assert.equal(f.state(), "failed");
+  assert.deepEqual(
+    f.owner.attemptLog().map((a) => a.outcome),
+    ["failed", "failed", "failed"],
+  );
+  assert.equal(f.owner.currentVersion("summary"), undefined);
+  assert.deepEqual(f.owner.turns(), []);
+  assert.deepEqual(f.owner.harnessSessions(), []);
+});
+
+for (const kind of ["agent", "interactive-agent"] as const) {
+  for (const source of ["asset", "artifact"] as const) {
+    test(`m10-commands-and-input-rules: ${kind} ${source} prompt refuses before admission`, async (t) => {
+      const f = fixture(t, { task: "\u2003/MODEL\nunsafe" });
+      const assets = promptAssets(f.workspace, "{{artifact:task}}");
+      if (source === "artifact") bindEarlier(f.owner, "\u2003/MODEL\nunsafe");
+      const prepared = await preparedHarness(profile(), []);
+      t.after(() => prepared.close());
+      const report = await executeRouting(
+        [
+          agentStep({
+            kind,
+            entryTurn: true,
+            requires: source === "asset" ? ["task"] : ["spec-ref"],
+            prompt:
+              source === "asset"
+                ? { asset: "prompt.md" }
+                : { artifact: "spec-ref" },
+          }),
+        ],
+        {
+          owner: f.owner,
+          platform: HOST,
+          process: executionProcess,
+          resolveAsset: assets.resolveAsset,
+          harness: {
+            prepared,
+            inputRules: [{ kind: "reserved-leading-words", words: ["/model"] }],
+            inputTypes: { task: "text" },
+            assetKinds: { "prompt.md": "prompt" },
+          },
+        },
+      );
+      assert.equal(report.outcome, kind === "agent" ? "failed" : "blocked");
+      assert.equal(f.state(), kind === "agent" ? "failed" : "blocked");
+      assert.equal(
+        f.owner.attemptLog().filter((a) => a.attemptId !== "earlier").length,
+        kind === "agent" ? 1 : 0,
+      );
+      assert.deepEqual(f.owner.turns(), []);
+      assert.deepEqual(f.owner.harnessSessions(), []);
+      if (kind === "interactive-agent") {
+        // Rewalking an unadmitted Entry stays blocked without fabricating a Turn.
+        const again = await executeRouting(
+          [agentStep({ kind, entryTurn: true, requires: ["task"] })],
+          {
+            owner: f.owner,
+            platform: HOST,
+            process: executionProcess,
+            resolveAsset: assets.resolveAsset,
+            harness: {
+              prepared,
+              inputRules: [
+                { kind: "reserved-leading-words", words: ["/model"] },
+              ],
+              inputTypes: { task: "text" },
+              assetKinds: { "prompt.md": "prompt" },
+            },
+          },
+        );
+        assert.equal(again.outcome, "blocked");
+        assert.deepEqual(f.owner.turns(), []);
+      }
+    });
+  }
+}
+
+test("m10-commands-and-input-rules: a compatible Harness receives a reserved substituted word unchanged", async (t) => {
+  const f = fixture(t, { task: " /MODEL\nwork" });
+  const assets = promptAssets(f.workspace, "{{artifact:task}}");
+  const prepared = await preparedHarness(profile(), [
+    { result: RESULT_CASES.completed.result },
+  ]);
+  t.after(() => prepared.close());
+  const report = await executeRouting([agentStep({ requires: ["task"] })], {
+    owner: f.owner,
+    platform: HOST,
+    process: executionProcess,
+    resolveAsset: assets.resolveAsset,
+    harness: {
+      prepared,
+      inputRules: [],
+      inputTypes: { task: "text" },
+      assetKinds: { "prompt.md": "prompt" },
+    },
+  });
+  assert.equal(report.outcome, "succeeded");
+  assert.equal(f.owner.turns().length, 1);
+  assert.equal(f.owner.turns()[0]?.input, " /MODEL\nwork");
 });

@@ -75,11 +75,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Keep empty Run observer Sets: live fan-out retains their identity. Later opens remain supported; shutdown memoizes in-flight cleanup only.
 - `harness-catalog` caches one qualification promise/result per semantic Harness id for the Application lifetime (#188). List calls discovery only; focus initially
   reports `not-checked`, then publishes one durable normalized result. Qualification diagnostics are process-held Resources addressed by semantic id and checked time.
-- `launch-preparation` and `submitLaunch` share one create-time evaluator (`LaunchPreparation.evaluate`, `launch-preparation.ts`) so both admit under identical rules (#189):
-  `submitLaunch` takes its first finding; the Projection collects all in launch order, each with a `correction` target. Composition-corruption is a single hard-stop `bundle`
-  finding like missing/invalid bytes. The Model-choice check is assessment-only — the Projection qualifies the selected Harness (`harnessCatalog.qualify`, which spawns)
-  whenever the draft is otherwise ready and needs one; a direct `submitLaunch` skips it, so a model outside the Harness's list surfaces at the first Turn as
-  a `not-started` `model-unavailable` Turn, not as a pre-create refusal.
+- `launch-preparation` and `submitLaunch` share `LaunchPreparation.evaluate` in `launch-preparation.ts` (#189), admitting under identical rules.
+  `submitLaunch` takes the first finding; the Projection collects all in launch order with correction targets. Corrupt composition is a hard-stop `bundle` finding.
+  A `harness-input-reserved` finding instead targets `harness` (#410), leaving installed bytes usable by another compatible Harness.
+  Model-choice checking is assessment-only: `harnessCatalog.qualify` prepares the selected Harness when the draft is otherwise ready and needs one.
+  Direct `submitLaunch` skips qualification, so an unsupported model surfaces at the first Turn as `not-started`/`model-unavailable`, rather than before creation.
 - The observer (`observer.ts`, #319) has a no-op default and never sees the logger. Application guards it once at resolution (#330): an observer
   never throws into its caller or changes a Projection, qualification, or Operation outcome. The private `OperationLedger.submit` owns receipt identity,
   scheduling and records, reporting admission before even inline settlement. Replays compare both kind and fingerprint before fresh authorization;

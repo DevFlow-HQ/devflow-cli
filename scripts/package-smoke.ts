@@ -29,7 +29,8 @@ import {
   assertLocked,
   readLock,
 } from "./shipped-bundles.js";
-import { writeZip } from "../src/bundle/bundle.js";
+import { openCatalog } from "../src/catalog/catalog.js";
+import { buildBundle, writeZip } from "../src/bundle/bundle.js";
 import {
   catalogMigrations,
   coordinationMigrations,
@@ -714,6 +715,151 @@ await withCleanup(
           );
         }
       }
+    });
+
+    await runNamedScenario("m10-commands-and-input-rules", async () => {
+      const folder = join(smokeRoot, "input-rule-bundle");
+      await mkdir(folder);
+      const id = "dev.secant.input-rule-smoke";
+      const manifest = {
+        formatVersion: 1,
+        bundle: {
+          id,
+          version: "1.0.0",
+          name: "Input rules",
+          description: "Ordinary Bundle input-rule acceptance.",
+        },
+        platforms: ["windows", "macos", "linux"],
+        inputs: {},
+        assets: [{ path: "p.md", kind: "prompt" }],
+        routing: [
+          {
+            id: "review",
+            kind: "human-gate",
+            shape: "approve-reject",
+            message: "Continue?",
+          },
+          {
+            id: "work",
+            kind: "agent",
+            session: "s",
+            prompt: { asset: "p.md" },
+          },
+        ],
+      };
+      await writeFile(join(folder, "manifest.json"), JSON.stringify(manifest));
+      const beforeFiles = readdirSync(join(secantHome, "bundles")).sort();
+      let older;
+      for (const prompt of ["\u2003/CLEAR\nwork", " \t/model work"]) {
+        await writeFile(join(folder, "p.md"), prompt);
+        const output = join(smokeRoot, "refused-input.wfb");
+        assertRefuses(binary, [
+          {
+            args: [
+              "bundle",
+              "build",
+              folder,
+              "--no-install",
+              "--output",
+              output,
+            ],
+            match: "harness-input-reserved",
+            cwd: smokeRoot,
+            env: workspaceEnv,
+            detail: "did not refuse authored reserved input",
+          },
+        ]);
+        if (existsSync(output))
+          throw new Error("Refused build wrote output bytes.");
+        // An ordinary build from before the static rule was introduced.
+        older = buildBundle(folder, []);
+        if (!older.ok) throw new Error(JSON.stringify(older));
+        const file = join(smokeRoot, "older-input.wfb");
+        await writeFile(file, older.built.bytes);
+        assertRefuses(binary, [
+          {
+            args: ["bundle", "install", file],
+            match: "harness-input-reserved",
+            cwd: smokeRoot,
+            env: workspaceEnv,
+            detail: "did not refuse archived reserved input",
+          },
+        ]);
+        if (
+          JSON.stringify(readdirSync(join(secantHome, "bundles")).sort()) !==
+          JSON.stringify(beforeFiles)
+        )
+          throw new Error("Refused import wrote managed Bundle files.");
+      }
+      if (older === undefined || !older.ok)
+        throw new Error("No older Bundle was built.");
+      const catalog = openCatalog(secantHome);
+      try {
+        catalog.installBundle({
+          identity: older.built.identity,
+          digest: older.built.digest,
+          bytes: older.built.bytes,
+          origin: { kind: "local-build", folder },
+          installedAt: new Date(),
+        });
+      } finally {
+        catalog.close();
+      }
+      assertRefuses(binary, [
+        {
+          args: [
+            "run",
+            "launch",
+            id,
+            "--harness",
+            "claude-code",
+            "--model",
+            "sonnet",
+            "--trust",
+            older.built.digest,
+          ],
+          match: "harness-input-reserved",
+          cwd: workspaceDirectory,
+          env: workspaceEnv,
+          detail: "did not refuse selected-Harness prompt rules",
+        },
+      ]);
+      const replayer = installCodexReplayerAt(
+        join(smokeRoot, "input-rules-codex"),
+        "test-repair",
+        false,
+        { earlierInvocations: ["codex-qualification"] },
+      );
+      const env: NodeJS.ProcessEnv = {
+        ...workspaceEnv,
+        PATH: `${replayer.path}${delimiter}${workspaceEnv.PATH ?? ""}`,
+      };
+      delete env.SECANT_CODEX;
+      const compatible = JSON.parse(
+        run(
+          binary,
+          [
+            "run",
+            "launch",
+            id,
+            "--harness",
+            "codex",
+            "--model",
+            "gpt-5.5",
+            "--trust",
+            older.built.digest,
+            "--json",
+          ],
+          { cwd: workspaceDirectory, env, expect: 2 },
+        ),
+      );
+      if (
+        compatible.result?.run?.state !== "blocked" ||
+        compatible.result?.run?.selectedHarness !== "codex"
+      )
+        throw new Error(
+          `Compatible Harness failed to launch: ${JSON.stringify(compatible)}`,
+        );
     });
 
     async function twoHarnessProofBundleScenario(): Promise<void> {

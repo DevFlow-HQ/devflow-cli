@@ -20,6 +20,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   fails fast if an Agent result lacks identity; Command/Gate and synthetic interactive Attempts publish neither (#147).
 - An Agent Step's declared `text` outputs come only from Output receipts (#215): after a `completed` Turn each receipt must be a regular UTF-8 file of at most
   64 KiB, non-empty once trimmed, or the Attempt fails (retryable) and moves no binding. Assistant prose is never read as an output or as Routing control.
+- Bundle prompts are matched after artifact-slot substitution and before Turn admission (#410), using the selected registration's rules.
+  A reserved Agent prompt fails through ordinary Attempt retries with no Turn; a reserved Entry leaves the Run blocked. Human text keeps Application admission.
 - Receipt paths reach the Agent only as appended prompt text — one `receiptInstruction` line per declared output after the rendered prompt — never as an env var
   or Harness option. A prompt-renderer or `produces` change that drops those lines fails every Agent Step that declares an output.
 - Execution never hands the working area to the Harness; composition's prepare does (#214). Here it only fills the `{{run:working-area}}` prompt slot

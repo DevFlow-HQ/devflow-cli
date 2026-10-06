@@ -2,6 +2,8 @@ import { lstatSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import {
   agentCompletionCalls,
+  matchHarnessInputRule,
+  type HarnessInputRule,
   promptSlotPattern,
   WORKING_AREA_SLOT,
   type AgentStep,
@@ -162,6 +164,7 @@ export interface RequestChannel {
  *  each declared asset (so only a `skill` in `uses` appends a `SKILL.md` line). */
 export interface HarnessExecutionDeps {
   readonly prepared: PreparedHarness;
+  readonly inputRules: readonly HarnessInputRule[];
   readonly inputTypes: Readonly<Record<string, ArtifactType>>;
   readonly assetKinds: Readonly<Record<string, AssetKind>>;
 }
@@ -965,6 +968,26 @@ function renderAgentPrompt(
   const filled = base.replace(promptSlotPattern(), (_match, name: string) =>
     resolvePromptSlot(name, context, harness),
   );
+  const reserved = matchHarnessInputRule({
+    text: filled,
+    rules: harness.inputRules,
+  });
+  if (reserved !== undefined) {
+    return {
+      ok: false,
+      result: {
+        kind: "not-started",
+        detail: {
+          failure: {
+            phase: "turn",
+            category: "harness-input-reserved",
+            possibleEffects: "none",
+            diagnostics: `The rendered prompt starts with "${reserved}", reserved by the selected Harness.`,
+          },
+        },
+      },
+    };
+  }
   const skillLines: string[] = [];
   for (const use of step.uses ?? []) {
     if (!("asset" in use)) continue;

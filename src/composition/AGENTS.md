@@ -6,6 +6,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 
 - Application receives only normalized Harness registrations and never an Adapter object. `HarnessRegistry` is imported only inside composition, where it
   resolves the selected Harness id to the private Adapter before Run execution.
+- The registry's static rule table serves runtime registrations and `supportedBundleInputRules` for Shipped-Bundle builds (#410), with Application
+  owning aggregation. Each Run's `HarnessExecutionDeps` takes the selected entry's rules, independent of its prepared profile or transport.
 - Composition alone constructs the real Process (`createProcessAdapter`): the invocation's instance serves Preflight, the Run group's default,
   discovery, and qualification; tests replace it through the wiring overrides, never by a second construction site.
 - One Run scope per Run (#333, ADR 0031): `runScope` in `wiring.ts` binds a Process observer and the Harness phase, usage, and cleanup records to

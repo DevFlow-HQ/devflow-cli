@@ -1,3 +1,4 @@
+import type { HarnessInputRule } from "../src/workflow/workflow.js";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,10 +64,11 @@ export function assertLocked(
  *  directory is replaced), failing unless the built set equals `lock`. */
 export function buildShippedBundles(
   outDir: string,
+  inputRules: readonly HarnessInputRule[],
   lock: readonly LockedBundle[] = readLock(),
 ): ShippedBundle[] {
   const shipped = SHIPPED_BUNDLE_FOLDERS.map((folder) => {
-    const outcome = buildBundle(join(projectRoot, folder));
+    const outcome = buildBundle(join(projectRoot, folder), inputRules);
     if (!outcome.ok) {
       throw new Error(
         `Shipped Bundle ${folder} failed to build: ${JSON.stringify(outcome)}`,

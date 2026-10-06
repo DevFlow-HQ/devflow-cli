@@ -1,3 +1,4 @@
+export { supportedBundleInputRules } from "./harness-registry.js";
 import { constants } from "node:os";
 import type { HeadlessClients } from "../headless/headless.js";
 import { runSecantInvocation } from "./operational-log.js";

@@ -15,6 +15,7 @@ import {
   type AssetDecl,
   type AuthoredManifest,
   type CompositionFinding,
+  type HarnessInputRule,
   type Platform,
 } from "../workflow/workflow.js";
 import {
@@ -93,7 +94,10 @@ export type ReadOutcome =
 const V1 = "0.1.0";
 
 /** Build `.wfb` bytes from an authoring folder. Never modifies the folder. */
-export function buildBundle(folder: string): BuildOutcome {
+export function buildBundle(
+  folder: string,
+  inputRules: readonly HarnessInputRule[],
+): BuildOutcome {
   const manifestPath = join(folder, MANIFEST_ENTRY);
   let manifestText: string;
   try {
@@ -123,6 +127,7 @@ export function buildBundle(folder: string): BuildOutcome {
   const composition = checkComposition(
     manifest,
     readTextAssets(folder, manifest),
+    inputRules,
   );
   if (composition.some((finding) => finding.severity === "error")) {
     return { ok: false, composition };
@@ -191,7 +196,11 @@ function finding(code: string, message: string, path?: string): BuildOutcome {
  * Composition check the build runs, over the archived prompt and schema text,
  * with the same finding codes.
  */
-export function readBundle(bytes: Uint8Array, budgets: Budgets): ReadOutcome {
+export function readBundle(
+  bytes: Uint8Array,
+  budgets: Budgets,
+  inputRules: readonly HarnessInputRule[],
+): ReadOutcome {
   const archive = readZip(bytes, budgets);
   if (!archive.ok) return archive;
 
@@ -213,7 +222,11 @@ export function readBundle(bytes: Uint8Array, budgets: Budgets): ReadOutcome {
     );
   }
 
-  const composition = composeArchive(archive.entries, parsed.manifest);
+  const composition = composeArchive(
+    archive.entries,
+    parsed.manifest,
+    inputRules,
+  );
   if (composition.some((finding) => finding.severity === "error")) {
     return { ok: false, composition };
   }
@@ -291,6 +304,7 @@ export type InspectOutcome =
 export function inspectBundle(
   bytes: Uint8Array,
   budgets: Budgets,
+  inputRules: readonly HarnessInputRule[],
   includeComposition = true,
 ): InspectOutcome {
   const archive = readZip(bytes, budgets);
@@ -302,7 +316,7 @@ export function inspectBundle(
   // The list view (summaryOf) never reads composition; opting out skips decoding
   // every prompt/schema asset and re-running the check for a plain `bundle list`.
   const composition = includeComposition
-    ? composeArchive(archive.entries, parsed.manifest)
+    ? composeArchive(archive.entries, parsed.manifest, inputRules)
     : [];
   const digest = createHash("sha256").update(bytes).digest("hex");
   return {
@@ -366,8 +380,13 @@ function parsePackagedArchive(
 function composeArchive(
   entries: readonly ZipEntry[],
   manifest: AuthoredManifest,
+  inputRules: readonly HarnessInputRule[],
 ): readonly CompositionFinding[] {
-  return checkComposition(manifest, decodeArchiveTextAssets(entries, manifest));
+  return checkComposition(
+    manifest,
+    decodeArchiveTextAssets(entries, manifest),
+    inputRules,
+  );
 }
 
 // Decode the archived prompt and schema asset bytes for the Composition check,

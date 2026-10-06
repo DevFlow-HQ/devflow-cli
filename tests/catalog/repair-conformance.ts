@@ -62,7 +62,7 @@ type TDamagedInstall = {
 };
 
 function installDamaged(damage: "missing" | "truncated"): TDamagedInstall {
-  const built = buildBundle(MATT_FRONT_SPEC);
+  const built = buildBundle(MATT_FRONT_SPEC, []);
   assert.ok(built.ok, "the Matt front Bundle did not build");
   const { bytes, digest, identity } = built.built;
   // The Bundle Module's reading of the archive is the independent declaration of

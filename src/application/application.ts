@@ -1,3 +1,5 @@
+import { mergeHarnessInputRules } from "./harness-registry.js";
+export { mergeHarnessInputRules } from "./harness-registry.js";
 import { z } from "zod";
 import {
   DEFAULT_BUDGETS,
@@ -1792,7 +1794,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (bytes === undefined) {
       return { problem: bundleBytesMissing({ digest }) };
     }
-    const inspected = inspectBundle(bytes, budgets, true);
+    const inspected = inspectBundle(bytes, budgets, [], true);
     if (!inspected.ok) {
       return {
         problem:
@@ -4015,6 +4017,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }
 
   const bundleManagementDeps: BundleManagementDependencies = {
+    inputRules: mergeHarnessInputRules(
+      (deps.harnessRegistry ?? []).map((entry) => entry.inputRules),
+    ),
     catalog,
     budgets: bundleCatalog.budgets,
     engineVersion,

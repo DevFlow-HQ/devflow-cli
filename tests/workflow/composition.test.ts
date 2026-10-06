@@ -77,7 +77,7 @@ const okText = new Map<string, string | null>([
 ]);
 
 function run(m: AuthoredManifest, text: TextAssets = okText) {
-  return checkComposition(m, text);
+  return checkComposition(m, text, []);
 }
 
 test("a fully-bound manifest composes with no findings", () => {
@@ -832,7 +832,7 @@ test("composition checks each supported platform's selected Command executable",
       },
     ],
   });
-  assert.deepEqual(checkComposition(authored, new Map()), [
+  assert.deepEqual(checkComposition(authored, new Map(), []), [
     {
       code: "command-invocation-unresolved",
       severity: "error",
@@ -842,7 +842,7 @@ test("composition checks each supported platform's selected Command executable",
     },
   ]);
   assert.deepEqual(
-    checkComposition({ ...authored, platforms: ["windows"] }, new Map()),
+    checkComposition({ ...authored, platforms: ["windows"] }, new Map(), []),
     [],
   );
   assert.deepEqual(
@@ -862,6 +862,7 @@ test("composition checks each supported platform's selected Command executable",
         ],
       }),
       new Map(),
+      [],
     ),
     [
       {

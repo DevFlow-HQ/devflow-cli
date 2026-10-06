@@ -10,6 +10,7 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
+import type { ApplicationHarnessRegistration } from "../../src/application/application.js";
 import { createApplication } from "../helpers/application.js";
 import type { BundleManagement } from "../../src/application/bundle-management.js";
 import {
@@ -37,6 +38,7 @@ const proofBundle = join(
 async function harness(
   t: TestContext,
   budgets: Budgets = DEFAULT_BUDGETS,
+  harnessRegistry: readonly ApplicationHarnessRegistration[] = [],
 ): Promise<{
   readonly home: string;
   readonly catalog: ReturnType<typeof openCatalog>;
@@ -54,12 +56,13 @@ async function harness(
     catalog,
     launchWorkspacePath,
     bundleBudgets: budgets,
+    harnessRegistry,
   });
   return { home, catalog, bundle: bundleManagement };
 }
 
 function proofBytes(): Uint8Array {
-  const built = buildBundle(proofBundle);
+  const built = buildBundle(proofBundle, []);
   assert.ok(built.ok);
   return built.built.bytes;
 }
@@ -185,6 +188,7 @@ for (const { path, code } of [
         },
         { "resources/x.txt": "original", "resources/nested/y.txt": "nested" },
       ),
+      [],
     );
     assert.ok(built.ok, JSON.stringify(built));
     const malformed = writeZip([
@@ -294,7 +298,7 @@ test("the Command-only gate Bundle still installs under the Composition check", 
   const again = h.bundle.install(
     writeArchive(
       (() => {
-        const built = buildBundle(commandGate);
+        const built = buildBundle(commandGate, []);
         assert.ok(built.ok);
         return built.built.bytes;
       })(),
@@ -302,4 +306,72 @@ test("the Command-only gate Bundle still installs under the Composition check", 
   );
   assert.ok(again.ok, JSON.stringify(again));
   assert.equal(again.report.installed?.status, "already-installed");
+});
+
+test("m10-commands-and-input-rules: merged rules refuse builds and imports before output or Catalog writes", async (t) => {
+  const registration = (
+    id: "claude-code" | "codex",
+    words: readonly string[],
+  ): ApplicationHarnessRegistration => ({
+    choice: { id, name: id, availability: "available" },
+    servedCapabilities: ["agent-turn"],
+    inputRules: [{ kind: "reserved-leading-words", words }],
+    discover: () => {
+      throw new Error("Bundle ingestion never discovers a Harness");
+    },
+    qualify: async () => {
+      throw new Error("Bundle ingestion never qualifies a Harness");
+    },
+  });
+  const h = await harness(t, DEFAULT_BUDGETS, [
+    registration("codex", []),
+    registration("claude-code", ["/clear", "/model"]),
+  ]);
+  for (const prompt of [" \t/CLEAR\nwork", "\u2003/model work"]) {
+    const folder = authoringFolder(
+      {
+        formatVersion: 1,
+        bundle: {
+          id: "io.example.reserved",
+          version: "1.0.0",
+          name: "Reserved",
+          description: "Input rule test.",
+        },
+        inputs: {},
+        assets: [{ path: "p.md", kind: "prompt" }],
+        routing: [
+          {
+            id: "work",
+            kind: "agent",
+            session: "s",
+            prompt: { asset: "p.md" },
+          },
+        ],
+      },
+      { "p.md": prompt },
+    );
+    const output = join(makeTempDir("secant-rule-output-"), "refused.wfb");
+    for (const noInstall of [false, true]) {
+      const refused = h.bundle.build(folder, { noInstall, output });
+      assert.ok(!refused.ok);
+      assert.equal(refused.problem.code, "composition-check-failed");
+      assert.match(
+        refused.problem.fieldViolations?.[0]?.explanation ?? "",
+        /harness-input-reserved/,
+      );
+      assert.equal(existsSync(output), false);
+    }
+    const older = buildBundle(folder, []);
+    assert.ok(older.ok);
+    const imported = h.bundle.install(writeArchive(older.built.bytes));
+    assert.ok(!imported.ok);
+    assert.equal(imported.problem.code, "composition-check-failed");
+    assert.match(
+      imported.problem.fieldViolations?.[0]?.explanation ?? "",
+      /harness-input-reserved/,
+    );
+    assert.equal(h.catalog.countInstalledBundles(), 0);
+    const store = join(h.home, "bundles");
+    assert.deepEqual(existsSync(store) ? readdirSync(store) : [], []);
+  }
 });

@@ -1,5 +1,7 @@
 import {
   agentCompletionCalls,
+  matchHarnessInputRule,
+  type HarnessInputRule,
   inHumanRepeat,
   type ArtifactType,
   type AssetKind,
@@ -64,6 +66,7 @@ const COMMAND_KINDS: readonly AssetKind[] = ["script", "resource"];
 export function checkComposition(
   manifest: AuthoredManifest,
   textAssets: TextAssets,
+  inputRules: readonly HarnessInputRule[],
 ): readonly CompositionFinding[] {
   const findings: CompositionFinding[] = [];
   const error = (code: string, target: string, explanation: string): void => {
@@ -75,6 +78,20 @@ export function checkComposition(
   const assetKinds = new Map<string, AssetKind>(
     manifest.assets.map((asset) => [asset.path, asset.kind]),
   );
+
+  for (const asset of manifest.assets) {
+    if (asset.kind !== "prompt") continue;
+    const text = textAssets.get(asset.path);
+    if (typeof text !== "string") continue;
+    const reserved = matchHarnessInputRule({ text, rules: inputRules });
+    if (reserved !== undefined) {
+      error(
+        "harness-input-reserved",
+        asset.path,
+        `Prompt "${asset.path}" starts with "${reserved}", reserved by a supported Harness.`,
+      );
+    }
+  }
 
   // Every Step id is Bundle-unique (#9). Findings target ids, so a collision is
   // caught here — otherwise an author cannot tell which Step a finding points at.

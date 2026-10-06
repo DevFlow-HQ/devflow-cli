@@ -558,7 +558,7 @@ export function deriveRunFacts(
   const bytes = deps.catalog.readManagedBytes(digest);
   if (bytes === undefined)
     return { problem: bundleBytesMissing({ digest: digest }) };
-  const outcome = inspectBundle(bytes, deps.budgets, false);
+  const outcome = inspectBundle(bytes, deps.budgets, [], false);
   if (!outcome.ok) {
     return {
       problem: bundleBytesCorrupt({ digest: digest }, outcome.finding.code),

@@ -426,7 +426,7 @@ test("a Snapshot failing the Composition re-check is refused as corrupted, no Ru
   // install those bytes directly. This is the corrupted-pinned-Snapshot case the
   // launch-time re-check exists for (a build never emits such bytes).
   const cmd = writeCommandBundle();
-  const built = buildBundle(cmd.folder);
+  const built = buildBundle(cmd.folder, []);
   assert.ok(built.ok, JSON.stringify(built));
   const entries = readArchiveEntries(built.built.bytes);
   const manifestEntry = entries.find((e) => e.path === "manifest.json");
@@ -739,7 +739,7 @@ test("a headless launch refuses an interactive-agent Bundle with interactive-ste
 
 function engineBundle(engine: string, future = false) {
   const cmd = writeCommandBundle();
-  const built = buildBundle(cmd.folder);
+  const built = buildBundle(cmd.folder, []);
   assert.ok(built.ok);
   const bytes = writeZip(
     readArchiveEntries(built.built.bytes).map((entry) => {

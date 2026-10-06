@@ -1,3 +1,5 @@
+import { mergeHarnessInputRules } from "../application/application.js";
+import type { HarnessInputRule } from "../workflow/workflow.js";
 import type {
   ApplicationHarnessQualification,
   ApplicationHarnessRegistration,
@@ -38,6 +40,16 @@ export interface HarnessRegistryOverrides {
   readonly discoverCodex?: () => HarnessDiscovery;
 }
 
+const inputRules = {
+  "claude-code": CLAUDE_CODE_INPUT_RULES,
+  codex: CODEX_INPUT_RULES,
+} satisfies Record<SelectedHarnessId, readonly HarnessInputRule[]>;
+
+/** Build tooling uses the same registered portfolio as runtime ingestion. */
+export function supportedBundleInputRules(): readonly HarnessInputRule[] {
+  return mergeHarnessInputRules(Object.values(inputRules));
+}
+
 interface THarnessRegistryEntry {
   readonly application: ApplicationHarnessRegistration;
   readonly adapter: HarnessAdapter;
@@ -69,7 +81,7 @@ export class HarnessRegistry {
           availability: "available",
         },
         servedCapabilities: Object.keys(CLAUDE_CODE_SERVED_CAPABILITIES),
-        inputRules: CLAUDE_CODE_INPUT_RULES,
+        inputRules: inputRules["claude-code"],
         discover: () => {
           const discovery =
             overrides.discoverClaudeCode === undefined
@@ -92,7 +104,7 @@ export class HarnessRegistry {
       application: {
         choice: { id: "codex", name: "Codex", availability: "available" },
         servedCapabilities: Object.keys(CODEX_SERVED_CAPABILITIES),
-        inputRules: CODEX_INPUT_RULES,
+        inputRules: inputRules.codex,
         discover: () => {
           const discovery =
             overrides.discoverCodex === undefined
@@ -118,6 +130,10 @@ export class HarnessRegistry {
 
   applicationRegistrations(): readonly ApplicationHarnessRegistration[] {
     return Array.from(this.entries.values()).map((entry) => entry.application);
+  }
+
+  inputRules(selectedHarness: SelectedHarnessId): readonly HarnessInputRule[] {
+    return this.entry(selectedHarness).application.inputRules;
   }
 
   choice(selectedHarness: SelectedHarnessId): HarnessChoice {

@@ -793,7 +793,7 @@ test("bundle list and inspect show a trusted Bundle once a grant is recorded", a
 
 test("bundle list and inspect name a built-in's Secant release and app-release trust", async (t) => {
   const h = await harness(t);
-  const built = buildBundle(proofBundle);
+  const built = buildBundle(proofBundle, []);
   assert.ok(built.ok);
   const file = join(makeTempDir("secant-headless-shipped-"), "proof.wfb");
   writeFileSync(file, built.built.bytes);

@@ -22,6 +22,9 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
   OS), installed, re-installed as already installed at the equal digest, and listed.
 - **malformed-bundle-import** (#383): ordinary ZIP bytes with an aliased asset path or an undeclared file are refused by `bundle install`,
   naming the finding, leaving no Catalog entry, managed archive, or partial asset tree on any OS.
+- **m10-commands-and-input-rules** (#410): ordinary authored and received Bundles with whitespace/case/newline reserved leading words are refused
+  before output or managed-byte writes. An older installed Bundle reports a selected-Claude input-rule refusal and launches through compatible Codex
+  to its ordinary Human Gate. Shipped bytes still pass the ordinary supported-rule build and startup install scenarios below.
 - **two-harness-proof-bundle** (#149): the installed Test Repair Proof Bundle run headlessly through the recorded Claude Code and Codex replayers in
   two fresh Workspaces differing only in `--harness`; each enters one repair iteration, passes its Verdict, and the authored approve-commit gate keeps
   Git unchanged until a separate `run answer --continue` succeeds and commits. Different effective models prove both Adapters were driven. Each launch

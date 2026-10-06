@@ -439,6 +439,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
     const preparedHarness = heldHarnesses.get(step)!;
     observeSteer?.(preparedHarness.profile.steer);
     const harness: HarnessExecutionDeps = {
+      inputRules: harnessRegistry.inputRules(selectedHarness),
       prepared: preparedHarness,
       inputTypes: facts.inputTypes,
       assetKinds: facts.assetKinds,
@@ -621,7 +622,7 @@ function harnessFacts(
       `composition: the pinned Bundle (digest ${digest}) has no stored bytes at execution.`,
     );
   }
-  const inspected = inspectBundle(bytes, DEFAULT_BUDGETS, false);
+  const inspected = inspectBundle(bytes, DEFAULT_BUDGETS, [], false);
   if (!inspected.ok) {
     throw new Error(
       `composition: the pinned Bundle (digest ${digest}) no longer inspects: ${inspected.finding.code}.`,

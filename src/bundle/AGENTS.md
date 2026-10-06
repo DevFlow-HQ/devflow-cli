@@ -17,6 +17,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   received archive is refused with the build-time finding codes; launch (`launch-preparation.ts`) and resume (`application.ts`) re-run it over the pinned stored bytes. The
   digest makes a built and an imported archive indistinguishable once stored. A lenient engine-envelope read precedes the strict packaged parse:
   if that parse fails, a valid `>=x.y.z` range crosses as `engineUnsupported` alongside the findings. Application compares versions; Bundle never does.
+- `buildBundle`, `readBundle`, and `inspectBundle` require an explicit input-rule list (#410). Application supplies merged supported rules for
+  build/install and selected-Harness rules for launch. Catalog inspection and resume pass no rules; a reserved authored prompt is a Harness correction,
+  not corrupt Bundle bytes. Every declared prompt asset is checked, including one the Routing does not reference.
 - The Catalog's digest-named asset tree (`<home>/bundles/<digest>/`) is a derived, read-only cache of the managed bytes, never an identity or a second
   source of truth: `readBundleAssets` hands the Catalog the manifest-declared entries (never `manifest.json` or an unclaimed entry), and a missing or
   corrupt tree is re-derived from the bytes. Nothing keys on the tree; the digest over the bytes stays the only content identity.

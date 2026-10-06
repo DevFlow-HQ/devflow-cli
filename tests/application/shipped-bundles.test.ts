@@ -4,7 +4,10 @@ import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { createApplication } from "../helpers/application.js";
-import type { Application } from "../../src/application/application.js";
+import type {
+  Application,
+  ApplicationHarnessRegistration,
+} from "../../src/application/application.js";
 import { buildBundle } from "../../src/bundle/bundle.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -37,7 +40,7 @@ function shippedFile(version: string, description = "A built-in."): string {
       ],
     }),
   );
-  const built = buildBundle(folder);
+  const built = buildBundle(folder, []);
   assert.ok(built.ok, JSON.stringify(built));
   const file = join(makeTempDir("secant-shipped-dir-"), `${ID}-${version}.wfb`);
   writeFileSync(file, built.built.bytes);
@@ -232,4 +235,43 @@ test("a built-in left ungranted by a crash after its install earns app-release t
       ?.operationId,
     "app-release",
   );
+});
+
+test("m10-commands-and-input-rules: Shipped install uses the supported rules before Catalog or trust writes", (t) => {
+  const catalog = home(t);
+  const registration: ApplicationHarnessRegistration = {
+    choice: {
+      id: "claude-code",
+      name: "Claude Code",
+      availability: "available",
+    },
+    inputRules: [{ kind: "reserved-leading-words", words: ["#"] }],
+    servedCapabilities: [],
+    discover: () => {
+      throw new Error("Shipped ingestion never discovers a Harness");
+    },
+    qualify: async () => {
+      throw new Error("Shipped ingestion never qualifies a Harness");
+    },
+  };
+  const application = createApplication({
+    catalog,
+    launchWorkspacePath: realpathSync.native(
+      makeTempDir("secant-shipped-rules-ws-"),
+    ),
+    harnessRegistry: [registration],
+  });
+  const older = buildBundle(
+    join(import.meta.dirname, "..", "..", "bundles", "matt-front-spec"),
+    [],
+  );
+  assert.ok(older.ok);
+  const file = join(makeTempDir("secant-shipped-rules-bytes-"), "older.wfb");
+  writeFileSync(file, older.built.bytes);
+  const notices = application.ensureShippedBundles([file]);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]?.code, "shipped-bundle-not-installed");
+  assert.equal(notices[0]?.details?.cause, "composition-check-failed");
+  assert.equal(catalog.countInstalledBundles(), 0);
+  assert.equal(catalog.getTrustGrant(older.built.digest, 1), undefined);
 });

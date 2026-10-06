@@ -1,5 +1,6 @@
+import { supportedBundleInputRules } from "../../src/composition/main.js";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import {
@@ -29,7 +30,7 @@ function filesUnder(folder: string): string[] {
 
 test("the allow-list builds to exactly the locked identity, version and digest", () => {
   const out = makeTempDir("secant-shipped-");
-  const shipped = buildShippedBundles(out);
+  const shipped = buildShippedBundles(out, supportedBundleInputRules());
 
   assert.deepEqual(
     shipped.map(({ id, version, digest }) => ({ id, version, digest })),
@@ -47,7 +48,10 @@ test("the allow-list builds to exactly the locked identity, version and digest",
 test("the Matt Bundle carries every authored file, all eight skill folders, and nothing else", () => {
   assert.deepEqual(SHIPPED_BUNDLE_FOLDERS, ["bundles/matt-front-spec"]);
   const folder = join(repoRoot, "bundles", "matt-front-spec");
-  const [matt] = buildShippedBundles(makeTempDir("secant-shipped-"));
+  const [matt] = buildShippedBundles(
+    makeTempDir("secant-shipped-"),
+    supportedBundleInputRules(),
+  );
   assert.ok(matt);
 
   const entries = readArchiveEntries(readFileSync(matt.file));
@@ -88,9 +92,11 @@ test("a digest that differs from the lock fails the build with the version-bump 
   assert.ok(locked);
   assert.throws(
     () =>
-      buildShippedBundles(makeTempDir("secant-shipped-"), [
-        { ...locked, digest: "0".repeat(64) },
-      ]),
+      buildShippedBundles(
+        makeTempDir("secant-shipped-"),
+        supportedBundleInputRules(),
+        [{ ...locked, digest: "0".repeat(64) }],
+      ),
     /bump the manifest version and update bundles\/builtin\.lock\.json/,
   );
 });
@@ -98,10 +104,14 @@ test("a digest that differs from the lock fails the build with the version-bump 
 test("a lock entry with no allow-listed folder fails the build", () => {
   assert.throws(
     () =>
-      buildShippedBundles(makeTempDir("secant-shipped-"), [
-        ...readLock(),
-        { id: "dev.secant.gone", version: "1.0.0", digest: "0".repeat(64) },
-      ]),
+      buildShippedBundles(
+        makeTempDir("secant-shipped-"),
+        supportedBundleInputRules(),
+        [
+          ...readLock(),
+          { id: "dev.secant.gone", version: "1.0.0", digest: "0".repeat(64) },
+        ],
+      ),
     /dev\.secant\.gone@1\.0\.0 is locked but not built/,
   );
 });
@@ -120,7 +130,10 @@ test("Matt 2.8.0 preserves every 2.7.0 skill byte and the spec prompt (#374)", (
     sha256(previous),
     "9d9d2633fcb29275413909cda762421004e61b250cc034dbe6829ebbab516dfc",
   );
-  const [matt] = buildShippedBundles(makeTempDir("secant-matt-unchanged-"));
+  const [matt] = buildShippedBundles(
+    makeTempDir("secant-matt-unchanged-"),
+    supportedBundleInputRules(),
+  );
   assert.ok(matt);
   assert.equal(matt.version, "2.8.0");
   const preserved = (file: { path: string }) =>
@@ -136,4 +149,19 @@ test("Matt 2.8.0 preserves every 2.7.0 skill byte and the spec prompt (#374)", (
       .data.toString("utf8"),
   );
   assert.equal(manifest.requires.engine, ">=0.2.0");
+});
+
+test("m10-commands-and-input-rules: Shipped builds refuse newly reserved prompt words before output writes", () => {
+  const out = makeTempDir("secant-shipped-input-rules-");
+  const sentinel = join(out, "keep.wfb");
+  writeFileSync(sentinel, "previous shipped output");
+  const hypotheticalRules = [
+    { kind: "reserved-leading-words", words: ["#"] },
+  ] as const;
+  assert.throws(
+    () => buildShippedBundles(out, hypotheticalRules),
+    /harness-input-reserved/,
+  );
+  assert.deepEqual(readdirSync(out), ["keep.wfb"]);
+  assert.equal(readFileSync(sentinel, "utf8"), "previous shipped output");
 });

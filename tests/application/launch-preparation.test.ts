@@ -102,6 +102,7 @@ function registeredHarness(params: {
   unavailableReason?: string;
   servedCapabilities?: readonly string[];
   qualify?: () => Promise<ApplicationHarnessQualification>;
+  inputRules?: ApplicationHarnessRegistration["inputRules"];
 }): ApplicationHarnessRegistration {
   return {
     choice: {
@@ -110,7 +111,7 @@ function registeredHarness(params: {
       availability: params.availability ?? "available",
       unavailableReason: params.unavailableReason,
     },
-    inputRules: [],
+    inputRules: params.inputRules ?? [],
     servedCapabilities: params.servedCapabilities ?? [
       "agent-turn",
       "interactive-turns",
@@ -213,10 +214,13 @@ function installCommand(
   return { id: cmd.id, digest: entry.digest };
 }
 
-function installAgent(f: Fixture): { id: string; digest: string } {
+function installAgent(
+  f: Fixture,
+  prompt = "Do the work.\n",
+): { id: string; digest: string } {
   const folder = makeTempDir("secant-lp-agent-");
   mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "work.md"), "Do the work.\n");
+  writeFileSync(join(folder, "prompts", "work.md"), prompt);
   const manifest = {
     formatVersion: 1,
     bundle: {
@@ -375,7 +379,7 @@ test("a corrupted pinned Snapshot is a single not-ready bundle finding", async (
   approve(f);
   // Install shape-valid bytes that no longer compose (a Step requires nothing binds).
   const cmd = writeCommandBundle();
-  const built = buildBundle(cmd.folder);
+  const built = buildBundle(cmd.folder, []);
   assert.ok(built.ok);
   const entries = readArchiveEntries(built.built.bytes);
   const manifestEntry = entries.find((e) => e.path === "manifest.json");
@@ -932,4 +936,56 @@ test("a draft assessed ready then launched after its input file is gone is refus
   assert.equal(admission.problem.code, "launch-input-invalid");
   assert.equal(admission.problem.correction, "inputs");
   assert.deepEqual(f.runGroup.listRuns(), []);
+});
+
+test("m10-commands-and-input-rules: installed prompts offer Harness correction and a compatible alternative", async (t) => {
+  const claude = registeredHarness({
+    id: "claude-code",
+    name: "Claude Code",
+    inputRules: [{ kind: "reserved-leading-words", words: ["/model"] }],
+  });
+  const codex = registeredHarness({
+    id: "codex",
+    name: "Codex",
+    qualify: async () => listed(["fake-model"]),
+  });
+  const f = fixture(t, [claude, codex]);
+  approve(f);
+  // Seed through ordinary ingestion before an upgrade introduced the rule.
+  const legacy = createApplication({
+    catalog: f.catalog,
+    process: fixtureProcess(f.workspace, "pass"),
+    launchWorkspacePath: f.workspace,
+  });
+  const { id, digest } = installAgent({ ...f, app: legacy }, " \t/MODEL\nwork");
+  const draft = {
+    bundle: { id },
+    harness: "claude-code",
+    launchInputs: {},
+    trustDigest: digest,
+    requestedModel: "fake-model",
+  };
+  const refused = await assess(f, draft);
+  assert.equal(refused.status, "not-ready");
+  assert.deepEqual(codes(refused), ["harness-input-reserved"]);
+  assert.deepEqual(corrections(refused), ["harness"]);
+  assert.equal(refused.actionOffers.length, 0);
+  const submitted = f.app.projectionPort.submit({
+    operationId: "reserved-launch",
+    operation: "launch-run",
+    input: { ...draft, requestedModel: "fake-model" },
+  });
+  assert.equal(submitted.admitted, false);
+  if (submitted.admitted) throw new Error("unreachable");
+  assert.equal(submitted.problem.code, "harness-input-reserved");
+  assert.equal(submitted.problem.correction, "harness");
+  assertNoSideEffects(f, digest);
+  const compatible = await assess(f, { ...draft, harness: "codex" });
+  assert.equal(compatible.status, "ready", JSON.stringify(compatible));
+  assert.deepEqual(compatible.findings, []);
+  assert.ok(
+    compatible.actionOffers.some((offer) => offer.action === "launch-run"),
+  );
+  assert.equal(f.catalog.countInstalledBundles(), 1);
+  assertNoSideEffects(f, digest);
 });
