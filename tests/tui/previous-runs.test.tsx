@@ -1,3 +1,4 @@
+import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { testRender } from "@opentui/solid";
@@ -341,6 +342,7 @@ async function mountHome(options: MountOptions = {}) {
   const t = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={approvedWorkspace(options.ownedLiveRuns)}
         bundles={noBundles()}
         harnesses={inertHarnessCatalogView()}
@@ -367,6 +369,7 @@ async function mountHome(options: MountOptions = {}) {
 async function openList(options: MountOptions = {}) {
   const mounted = await mountHome(options);
   await mounted.t.waitForFrame((f) => f.includes("Secant"));
+  mounted.t.mockInput.pressArrow("down"); // select Start a Run
   mounted.t.mockInput.pressArrow("down"); // Start a Run (0) → Workflow Bundles (1)
   mounted.t.mockInput.pressArrow("down"); // → Previous Runs (2)
   mounted.t.mockInput.pressEnter();

@@ -23,9 +23,11 @@ import { useTheme } from "./theme-context.js";
 function Dialog(
   props: ParentProps<{
     onClose: () => void;
+    dimensions?: () => { width: number; height: number };
   }>,
 ) {
-  const dimensions = useTerminalDimensions();
+  const terminalDimensions = useTerminalDimensions();
+  const dimensions = () => props.dimensions?.() ?? terminalDimensions();
   const { theme } = useTheme();
   const renderer = useRenderer();
 
@@ -75,6 +77,7 @@ function init() {
       element: () => JSX.Element;
       onClose?: () => void;
       onKey?: (key: RendererKeyEvent) => void;
+      dimensions?: () => { width: number; height: number };
     }[],
   });
 
@@ -83,7 +86,7 @@ function init() {
   let focus: Renderable | null;
   function refocus() {
     setTimeout(() => {
-      if (!focus) return;
+      if (store.stack.length > 0 || !focus) return;
       if (focus.isDestroyed) return;
       function find(item: Renderable): boolean {
         for (const child of item.getChildren()) {
@@ -124,13 +127,14 @@ function init() {
       element: () => JSX.Element,
       onClose?: () => void,
       onKey?: (key: RendererKeyEvent) => void,
+      dimensions?: () => { width: number; height: number },
     ) {
       if (store.stack.length === 0) {
         focus = renderer.currentFocusedRenderable;
         focus?.blur();
       }
       for (const item of store.stack) item.onClose?.();
-      setStore("stack", [{ element, onClose, onKey }]);
+      setStore("stack", [{ element, onClose, onKey, dimensions }]);
     },
     get stack() {
       return store.stack;
@@ -149,7 +153,10 @@ export function DialogProvider(props: ParentProps) {
       {props.children}
       <box position="absolute" zIndex={3000}>
         <Show when={value.stack.length}>
-          <Dialog onClose={() => value.clear()}>
+          <Dialog
+            onClose={() => value.clear()}
+            dimensions={value.stack.at(-1)?.dimensions}
+          >
             {value.stack.at(-1)!.element()}
           </Dialog>
         </Show>

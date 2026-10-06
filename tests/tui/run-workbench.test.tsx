@@ -1,3 +1,6 @@
+import { PALETTES } from "./palette-expectations.js";
+import type { PreferencesView } from "../../src/tui/tui.js";
+import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import {
   launchAgentCompletionRun,
@@ -473,11 +476,13 @@ async function mountApp(
   actions?: RunActionsView,
   reducedMotion = false,
   ownedLiveRuns = 0,
+  preferences: PreferencesView = inertPreferencesView(),
 ) {
   const exits: unknown[] = [];
   const t = await testRender(
     () => (
       <App
+        preferences={preferences}
         view={approvedWorkspace(ownedLiveRuns)}
         bundles={oneBundle()}
         harnesses={inertHarnessCatalogView()}
@@ -494,7 +499,8 @@ async function mountApp(
     { width, height },
   );
   await t.waitForFrame((f) => f.includes("Secant"));
-  t.mockInput.pressEnter(); // Home: Start a Run is the first, default entry
+  t.mockInput.pressArrow("down"); // explicitly select Start a Run
+  t.mockInput.pressEnter(); // Home: Start a Run
   await t.waitForFrame((f) => f.includes("esc back")); // chooser
   t.mockInput.pressEnter(); // trusted + no inputs → Review
   await t.waitForFrame((f) => f.includes("Review"));
@@ -509,6 +515,7 @@ async function mountWorkbench(
   actions?: RunActionsView,
   reducedMotion = false,
   ownedLiveRuns?: number,
+  preferences?: PreferencesView,
 ) {
   const control = makeRunView(snapshotOf(run));
   const renderer = makeFakeRenderer(width, height);
@@ -521,6 +528,7 @@ async function mountWorkbench(
     actions,
     reducedMotion,
     ownedLiveRuns,
+    preferences,
   );
   await t.waitForFrame((f) => f.includes("Timeline"));
   return { t, control, renderer, exits };
@@ -6853,3 +6861,259 @@ for (const [width, height] of [
     assert.match(t.captureCharFrame(), /e29/);
   });
 }
+function previewPreferences(): PreferencesView {
+  return {
+    snapshot: () => ({
+      family: "preferences",
+      preferences: { theme: "everforest", appearance: "dark" },
+      supportedThemes: PALETTES.map((p) => p.name),
+      actionOffers: [{ action: "change-preferences" }],
+    }),
+    save: () => () => ({ kind: "applied" }),
+  };
+}
+async function openAppThemes(wb: Awaited<ReturnType<typeof mountWorkbench>>) {
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  await type(wb.t, "Themes");
+  await press(wb.t, wb.renderer, "down");
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /Themes ·/);
+}
+const hexRgb = (hex: string) =>
+  [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+
+test("m10-home-and-preferences: all 25×2 previews recolor the mounted Workbench through Port keys", async () => {
+  const wb = await mountWorkbench(
+    runOf(),
+    100,
+    40,
+    undefined,
+    true,
+    0,
+    previewPreferences(),
+  );
+  const header = () => {
+    const span = wb.t
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes("Alpha"));
+    assert.ok(span, wb.t.captureCharFrame());
+    return [span.fg.r, span.fg.g, span.fg.b].map((v) => Math.round(v * 255));
+  };
+  const initial = header();
+  for (const palette of PALETTES) {
+    await openAppThemes(wb);
+    await type(wb.t, palette.name);
+    assert.deepEqual(
+      header(),
+      hexRgb(palette.dark).map((v) => Math.round((v * 105) / 255)),
+      palette.name + " dark",
+    );
+    await press(wb.t, wb.renderer, "tab");
+    assert.deepEqual(
+      header(),
+      hexRgb(palette.light).map((v) => Math.round((v * 105) / 255)),
+      palette.name + " light",
+    );
+    await press(wb.t, wb.renderer, "escape");
+    assert.deepEqual(header(), initial);
+  }
+  wb.t.resize(40, 16);
+  wb.renderer.resize(40, 16);
+  await wb.t.renderOnce();
+  await openAppThemes(wb);
+  await type(wb.t, "zenburn");
+  await press(wb.t, wb.renderer, "return");
+  noOverflow(wb.t.captureCharFrame(), 40);
+  wb.t.resize(140, 32);
+  wb.renderer.resize(140, 32);
+  await wb.t.renderOnce();
+  assert.deepEqual(
+    header(),
+    hexRgb(PALETTES.find((p) => p.name === "zenburn")!.dark),
+  );
+});
+
+for (const discovery of ["palette", "themes"] as const) {
+  for (const interaction of ["request", "gate"] as const) {
+    test(`m10-home-and-preferences: new ${interaction} preempts ${discovery}, deliberate palette reopens and owns keys`, async () => {
+      const wb = await mountWorkbench(
+        runOf({ state: "running", actionOffers: [INTERRUPT_OFFER] }),
+        100,
+        40,
+        okActions(),
+        true,
+        0,
+        previewPreferences(),
+      );
+      if (discovery === "themes") {
+        await openAppThemes(wb);
+        await type(wb.t, "nord");
+      } else await press(wb.t, wb.renderer, "p", { ctrl: true });
+      if (interaction === "request") wb.control.setLive(requestOverlay());
+      else wb.control.setRun(freeTextRunOf());
+      await wb.t.renderOnce();
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /Themes · .+ · nord|App commands/,
+      );
+      assert.match(
+        wb.t.captureCharFrame(),
+        interaction === "request"
+          ? /Harness Request/
+          : /What is the ticket number/,
+      );
+      await press(wb.t, wb.renderer, "p", { ctrl: true });
+      assert.match(wb.t.captureCharFrame(), /App commands/);
+      await type(wb.t, "Quit");
+      await press(wb.t, wb.renderer, "return"); // nothing selected; no answer or Quit
+      assert.deepEqual(wb.control.requests, []);
+      assert.deepEqual(wb.control.texts, []);
+      assert.deepEqual(wb.exits, []);
+      await press(wb.t, wb.renderer, "escape");
+      assert.doesNotMatch(wb.t.captureCharFrame(), /App commands/);
+      if (interaction === "request") {
+        await press(wb.t, wb.renderer, "return");
+        assert.deepEqual(wb.control.requests, [
+          { requestId: "req-1", generation: 3, decision: "allow" },
+        ]);
+      } else {
+        await type(wb.t, "409");
+        await press(wb.t, wb.renderer, "return");
+        assert.deepEqual(wb.control.texts, [
+          { gate: FREE_TEXT_GATE, text: "409" },
+        ]);
+      }
+    });
+  }
+}
+
+test("m10-home-and-preferences: palette End Step follows the key's confirmation and current Offer", async () => {
+  const wb = await mountWorkbench(interactiveRunOf());
+  await type(wb.t, "keep draft");
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  const palette = wb.t.captureCharFrame();
+  assert.match(palette, /End Step \(ctrl\+e\)/);
+  assert.doesNotMatch(
+    palette,
+    /Start a Run|Workflow Bundles|Previous Runs|Harnesses/,
+  );
+  await type(wb.t, "End Step");
+  await press(wb.t, wb.renderer, "down");
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /End this interactive Step/);
+  assert.deepEqual(wb.control.ends, []);
+  assert.deepEqual(wb.control.sends, []);
+  await press(wb.t, wb.renderer, "escape");
+  assert.match(wb.t.captureCharFrame(), /> keep draft/);
+  await type(wb.t, "!");
+  assert.match(wb.t.captureCharFrame(), /> keep draft!/);
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  await type(wb.t, "End Step");
+  await press(wb.t, wb.renderer, "down");
+  wb.control.setRun(interactiveRunOf({ actionOffers: [SEND_OFFER] }));
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.ends, []);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /End this interactive Step/);
+});
+
+test("m10-home-and-preferences: palette guarded Quit keeps inspection and its focus on dismissal", async () => {
+  const wb = await mountInspectable(1);
+  await INSPECTIONS[0].open(wb);
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  await type(wb.t, "Quit");
+  await press(wb.t, wb.renderer, "down");
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /Halt 1 live Run and quit/);
+  wb.t.mockInput.pressEnter();
+  await wb.t.renderOnce();
+  assert.deepEqual(wb.exits, []);
+  assert.match(wb.t.captureCharFrame(), /esc close · q quit/);
+});
+
+for (const command of ["Model", "Effort"] as const) {
+  test(`m10-home-and-preferences: ${command} in the palette opens the working choice picker over a Gate`, async () => {
+    const wb = await mountWorkbench(
+      freeTextRunOf({ actionOffers: [FREE_TEXT_OFFER, MODEL_OFFER] }),
+    );
+    await type(wb.t, "keep answer");
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    const frame = wb.t.captureCharFrame();
+    for (const name of ["Model", "Effort", "Themes", "Quit"])
+      assert.match(frame, new RegExp(name));
+    assert.doesNotMatch(frame, /End Step|Continue \(ctrl/);
+    await type(wb.t, command);
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+    assert.match(
+      wb.t.captureCharFrame(),
+      command === "Model" ? /Choose a model/ : /Choose effort/,
+    );
+    assert.deepEqual(wb.control.texts, []);
+    // Escape from effort first returns to model; the next closes the picker.
+    if (command === "Effort") await press(wb.t, wb.renderer, "escape");
+    await press(wb.t, wb.renderer, "escape");
+    await type(wb.t, "!");
+    assert.match(wb.t.captureCharFrame(), /keep answer!/);
+  });
+}
+
+test("m10-home-and-preferences: Workbench picker size and resize come from the Renderer Port", async () => {
+  const wb = await mountWorkbench(
+    runOf(),
+    100,
+    40,
+    undefined,
+    true,
+    0,
+    previewPreferences(),
+  );
+  // Change only the Port to prove the source of geometry. The physical canvas
+  // stays large so it also catches drawing below the Port's advertised boundary.
+  wb.renderer.resize(40, 16);
+  await wb.t.renderOnce();
+  await openAppThemes(wb);
+  const narrow = wb.t.captureCharFrame();
+  assert.match(narrow, /Themes · Dark/);
+  assert.ok(
+    narrow
+      .split("\n")
+      .slice(16)
+      .every((line) => !/Preview theme|tab Dark/.test(line)),
+  );
+  wb.renderer.resize(100, 40);
+  await wb.t.renderOnce();
+  const wide = wb.t.captureCharFrame();
+  assert.ok(
+    wide.split("\n").filter((line) => line.includes("Preview theme")).length >
+      narrow.split("\n").filter((line) => line.includes("Preview theme"))
+        .length,
+  );
+  await type(wb.t, "zenburn");
+  await press(wb.t, wb.renderer, "return");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Themes · Dark/);
+});
+
+test("m10-home-and-preferences: palette and keys share refusal cleanup when arming End Step", async () => {
+  const wb = await mountWorkbench(interactiveRunOf());
+  await type(wb.t, "draft");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setInteractiveOutcome({
+    kind: "refused",
+    problem: {
+      code: "stale-send",
+      explanation: "stale send",
+      remediation: "Try again",
+      possibleEffects: "none",
+    },
+  });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /stale send/);
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  await type(wb.t, "End Step");
+  await press(wb.t, wb.renderer, "down");
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /End this interactive Step/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /stale send/);
+  assert.deepEqual(wb.control.ends, []);
+});

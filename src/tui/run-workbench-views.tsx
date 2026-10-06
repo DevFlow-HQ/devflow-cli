@@ -1,3 +1,4 @@
+import { useDialog } from "./vendor/dialog.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
   createEffect,
@@ -85,7 +86,9 @@ export function InteractiveInput(props: {
   const w = () => props.width();
   // Blur the field while an answer is in flight or a confirming keypress is armed, so
   // the submit/`y` never types (D9). The region can still read as focused (its label).
+  const dialog = useDialog();
   const fieldFocused = () =>
+    dialog.stack.length === 0 &&
     props.focused() &&
     !props.pending() &&
     !props.endArmed() &&
@@ -252,7 +255,9 @@ export function SteerInput(props: {
 }) {
   const { theme } = props;
   const w = () => props.width();
-  const fieldFocused = () => props.focused() && !props.pending();
+  const dialog = useDialog();
+  const fieldFocused = () =>
+    dialog.stack.length === 0 && props.focused() && !props.pending();
   const hint = () =>
     props.pending()
       ? "  … steering…"

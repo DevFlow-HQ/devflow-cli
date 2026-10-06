@@ -1,3 +1,4 @@
+import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { TextAttributes } from "@opentui/core";
@@ -258,6 +259,7 @@ async function mount(options: TMountOptions = {}) {
   const t = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={workspace()}
         bundles={emptyBundles()}
         harnesses={catalog.view}
@@ -274,6 +276,7 @@ async function mount(options: TMountOptions = {}) {
     { width, height },
   );
   await t.waitForFrame((frame) => frame.includes("Harnesses"));
+  t.mockInput.pressArrow("down");
   assert.deepEqual(catalog.focused, []);
   t.mockInput.pressArrow("down");
   t.mockInput.pressArrow("down");
@@ -482,10 +485,14 @@ test("Harness keymap exposes focus without colour and restores Home", async () =
   t.mockInput.pressEscape();
   await until(() => /^ Secant\s*$/m.test(t.captureCharFrame()));
   assert.deepEqual(closed, [{ id: "codex" }]);
-  assert.match(t.captureCharFrame(), /› Harnesses/);
+  assert.doesNotMatch(t.captureCharFrame(), /› Harnesses/);
   assert.match(t.captureCharFrame(), /Codex qualified/);
 
   // Selection does not survive the Home round-trip.
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
   t.mockInput.pressEnter();
   await t.waitForFrame((frame) => frame.includes("› Find a Harness"));
   assert.doesNotMatch(t.captureCharFrame(), /│ › /);
@@ -501,6 +508,10 @@ test("reopening Harnesses preserves held model search for a non-selected row", a
   await until(() => /^ Secant\s*$/m.test(t.captureCharFrame()));
   assert.deepEqual(closed, [{ id: "codex" }, { id: "claude-code" }]);
 
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
+  t.mockInput.pressArrow("down");
   t.mockInput.pressEnter();
   await t.waitForFrame((frame) => frame.includes("2 discovered"));
   await t.waitForFrame((frame) => frame.includes("2 models observed"));

@@ -1,5 +1,7 @@
 import { createSignal } from "solid-js";
 import type {
+  PreferencesView,
+  RunWorkbenchView,
   HarnessCatalogView,
   LaunchPreparationView,
   RunActionsView,
@@ -128,5 +130,58 @@ export function inertRunActionsView(): RunActionsView {
     remove: () => () => refusal,
     interrupt: () => () => refusal,
     changeModelChoice: () => () => refusal,
+  };
+}
+
+export function inertPreferencesView(): PreferencesView {
+  return {
+    snapshot: () => ({
+      family: "preferences",
+      preferences: { theme: "everforest", appearance: "dark" },
+      supportedThemes: ["everforest"],
+      actionOffers: [{ action: "change-preferences" }],
+    }),
+    save: () => () => ({ kind: "applied" }),
+  };
+}
+
+export function inertRunWorkbenchView(): RunWorkbenchView {
+  return {
+    openRun() {
+      throw new Error("run workbench not used in this test");
+    },
+    readResource() {
+      throw new Error("run workbench not used in this test");
+    },
+    readTranscript() {
+      throw new Error("run workbench not used in this test");
+    },
+    answer() {
+      throw new Error("run workbench not used in this test");
+    },
+    sendInteractiveTurn() {
+      throw new Error("run workbench not used in this test");
+    },
+    sendFollowUpTurn() {
+      throw new Error("run workbench not used in this test");
+    },
+    endInteractiveStep() {
+      throw new Error("run workbench not used in this test");
+    },
+    continueRepeat() {
+      throw new Error("run workbench not used in this test");
+    },
+    endStage() {
+      throw new Error("run workbench not used in this test");
+    },
+    steer() {
+      throw new Error("run workbench not used in this test");
+    },
+    answerText() {
+      throw new Error("run workbench not used in this test");
+    },
+    answerRequest() {
+      throw new Error("run workbench not used in this test");
+    },
   };
 }

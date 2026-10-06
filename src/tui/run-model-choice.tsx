@@ -22,6 +22,7 @@ export function createModelChoiceControl(props: {
   dialog: ReturnType<typeof useDialog>;
   submit: RunActionsView["changeModelChoice"];
 }) {
+  let overInteraction = false;
   const [showing, setShowing] = createSignal(false);
   const [draft, setDraft] = createSignal<ModelChoiceDraft>({
     kind: "model-needed",
@@ -38,7 +39,10 @@ export function createModelChoiceControl(props: {
     if (showing()) props.dialog.clear();
   };
   createEffect(() => {
-    if (showing() && (props.modal() || props.offer()?.available !== true))
+    if (
+      showing() &&
+      ((props.modal() && !overInteraction) || props.offer()?.available !== true)
+    )
       close();
   });
   onCleanup(close);
@@ -73,9 +77,18 @@ export function createModelChoiceControl(props: {
         : [change.effortReset.explanation]),
     ];
   };
-  const open = () => {
+  const open = (
+    stage: "model" | "effort" = "model",
+    allowInteraction = false,
+  ) => {
     const offer = props.offer();
-    if (offer?.available !== true || props.modal() || pending()) return;
+    if (
+      offer?.available !== true ||
+      (props.modal() && !allowInteraction) ||
+      pending()
+    )
+      return;
+    overInteraction = allowInteraction;
     setDraft(
       offer.currentChoice === undefined
         ? { kind: "model-needed" }
@@ -117,7 +130,7 @@ export function createModelChoiceControl(props: {
               3,
               props.dims().height - Math.floor(props.dims().height / 4) - 2,
             )}
-            initialStage="model"
+            initialStage={stage}
             onChoice={(choice, reason) => {
               setDraft({ kind: "chosen", choice });
               setReset(reason);
@@ -129,7 +142,7 @@ export function createModelChoiceControl(props: {
               if (
                 currentOffer?.available !== true ||
                 chosen.kind !== "chosen" ||
-                props.modal()
+                (props.modal() && !overInteraction)
               ) {
                 close();
                 return;
@@ -158,8 +171,9 @@ export function createModelChoiceControl(props: {
         }
         picker?.key(key.name ?? "");
       },
+      props.dims,
     );
     setShowing(true);
   };
-  return { open, pending, messages };
+  return { open, close, pending, messages };
 }

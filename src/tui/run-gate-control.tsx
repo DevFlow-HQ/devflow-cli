@@ -1,3 +1,4 @@
+import { useDialog } from "./vendor/dialog.js";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, createSignal, Show, type Accessor } from "solid-js";
 import type {
@@ -196,6 +197,7 @@ export function FreeTextGateControl(props: {
   theme: Theme;
 }) {
   const { theme } = props;
+  const dialog = useDialog();
   const w = () => props.width();
   const status = () => {
     if (props.pending()) return "… submitting your answer";
@@ -243,7 +245,7 @@ export function FreeTextGateControl(props: {
         <input
           value={props.text()}
           onInput={props.onInput}
-          focused={!props.pending()}
+          focused={!props.pending() && dialog.stack.length === 0}
           width={Math.max(1, w() - 4)}
         />
       </box>

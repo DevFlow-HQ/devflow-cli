@@ -1,3 +1,4 @@
+import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readdirSync, realpathSync as realpath } from "node:fs";
@@ -8,6 +9,7 @@ import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import { App } from "../../src/tui/tui.js";
 import {
+  inertRunWorkbenchView,
   inertHarnessCatalogView,
   inertLaunchPreparationView,
   inertRunActionsView,
@@ -18,7 +20,6 @@ import type {
   BundleCatalogView,
   RunLaunchView,
   RunListView,
-  RunWorkbenchView,
   WorkspaceView,
 } from "../../src/tui/tui.js";
 import { makeFakeRenderer, until } from "./renderer-fixture.js";
@@ -100,46 +101,6 @@ function noLaunch(): RunLaunchView {
 
 /** The Workspace/approval screens never open the Run Workbench; stubs satisfy
  *  the two App props the Workbench needs (#91). */
-function noRunView(): RunWorkbenchView {
-  return {
-    openRun() {
-      throw new Error("run workbench not used in this test");
-    },
-    readResource() {
-      throw new Error("run workbench not used in this test");
-    },
-    readTranscript() {
-      throw new Error("run workbench not used in this test");
-    },
-    answer() {
-      throw new Error("run workbench not used in this test");
-    },
-    sendInteractiveTurn() {
-      throw new Error("run workbench not used in this test");
-    },
-    sendFollowUpTurn() {
-      throw new Error("run workbench not used in this test");
-    },
-    endInteractiveStep() {
-      throw new Error("run workbench not used in this test");
-    },
-    continueRepeat() {
-      throw new Error("run workbench not used in this test");
-    },
-    endStage() {
-      throw new Error("run workbench not used in this test");
-    },
-    steer() {
-      throw new Error("run workbench not used in this test");
-    },
-    answerText() {
-      throw new Error("run workbench not used in this test");
-    },
-    answerRequest() {
-      throw new Error("run workbench not used in this test");
-    },
-  };
-}
 
 async function mount(width = 60, height = 16) {
   const view = fakeView();
@@ -147,12 +108,13 @@ async function mount(width = 60, height = 16) {
   const t = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={view}
         bundles={emptyBundles()}
         harnesses={inertHarnessCatalogView()}
         preparation={inertLaunchPreparationView()}
         launch={noLaunch()}
-        run={noRunView()}
+        run={inertRunWorkbenchView()}
         runList={inertRunListView()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
@@ -191,12 +153,13 @@ async function mountApproved(
   const t = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={view}
         bundles={emptyBundles()}
         harnesses={inertHarnessCatalogView()}
         preparation={inertLaunchPreparationView()}
         launch={noLaunch()}
-        run={noRunView()}
+        run={inertRunWorkbenchView()}
         runList={unopenedRunList()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
@@ -229,12 +192,12 @@ test("Approve opens Home with the Workspace path and the quit binding", async ()
   const { t, view, exits } = await mount();
   await t.waitForFrame((f) => f.includes(PATH));
   t.mockInput.pressEnter(); // default active option is Approve
-  await t.waitForFrame((f) => f.includes("quit"));
+  await t.waitForFrame((f) => f.includes("Search commands"));
   assert.equal(view.approvedOnce(), true);
   const frame = t.captureCharFrame();
   assert.match(frame, /Secant/);
   assert.ok(frame.includes(PATH), "Home shows the Workspace path");
-  assert.match(frame, /quit/);
+  assert.match(frame, /Quit \(ctrl\+c\)/);
   // Home must not show the approval dialog once approved.
   assert.doesNotMatch(frame, /Approve this workspace/);
   // Approving clears the approval dialog programmatically; that clear must not be
@@ -272,20 +235,20 @@ test("Home shows a failed Shipped Bundle ensure's cause and remedy and stays usa
   assert.match(frame, /Notice: Secant could not install its built-in Bundle/);
   assert.match(frame, /Point SECANT_HOME at a fresh home\./);
   assert.match(frame, /Start a Run/);
-  t.mockInput.pressKey("q");
+  t.mockInput.pressKey("c", { ctrl: true });
   await t.waitFor(() => exits.length === 1);
 });
 
-test("q quits immediately with no live Runs", async () => {
+test("Ctrl+C quits immediately with no live Runs", async () => {
   const { t, exits } = await mountApproved(0);
-  t.mockInput.pressKey("q");
+  t.mockInput.pressKey("c", { ctrl: true });
   await t.waitFor(() => exits.length === 1);
   assert.deepEqual(exits, [undefined]);
 });
 
-test("q with two live Runs asks once with the count, then quits on confirmation", async () => {
+test("Ctrl+C with two live Runs asks once with the count, then quits on confirmation", async () => {
   const { t, exits } = await mountApproved(2);
-  t.mockInput.pressKey("q");
+  t.mockInput.pressKey("c", { ctrl: true });
   await t.waitForFrame((frame) => frame.includes("Halt 2 live Runs and quit?"));
   assert.equal(exits.length, 0);
   assert.equal(
@@ -300,7 +263,7 @@ test("q with two live Runs asks once with the count, then quits on confirmation"
 
 test("the quit confirmation defaults to keeping live Runs and stays on Home", async () => {
   const { t, exits } = await mountApproved(2);
-  t.mockInput.pressKey("q");
+  t.mockInput.pressKey("c", { ctrl: true });
   await t.waitForFrame((frame) => frame.includes("Halt 2 live Runs and quit?"));
   t.mockInput.pressEnter();
   await t.waitForFrame(
@@ -311,20 +274,30 @@ test("the quit confirmation defaults to keeping live Runs and stays on Home", as
   assert.match(t.captureCharFrame(), /Workflow Bundles/);
 });
 
-test("Home orders its four entries, defaults to Start a Run, and omits unheld Harness qualification", async () => {
-  const { t } = await mountApproved(2);
+test("m10-home-and-preferences: Home orders six commands and arrives with search focused and no selection", async () => {
+  const { t, exits } = await mountApproved(2);
   const frame = t.captureCharFrame();
-  const start = frame.indexOf("Start a Run");
-  const bundles = frame.indexOf("Workflow Bundles");
-  const runs = frame.indexOf("Previous Runs");
-  const harnesses = frame.indexOf("Harnesses");
-
+  const names = [
+    "Start a Run",
+    "Workflow Bundles",
+    "Previous Runs",
+    "Harnesses",
+    "Themes",
+    "Quit",
+  ];
+  const positions = names.map((name) => frame.indexOf(name));
   assert.ok(
-    start >= 0 && start < bundles && bundles < runs && runs < harnesses,
+    positions.every(
+      (pos, index) => pos >= 0 && (index === 0 || pos > positions[index - 1]!),
+    ),
   );
-  assert.match(frame, /› Start a Run/);
+  assert.doesNotMatch(frame, /› Start a Run/);
   assert.match(frame, /0 installed Bundles · 2 previous Runs/);
   assert.doesNotMatch(frame, /qualified/);
+  t.mockInput.pressEnter();
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /Search commands/);
+  assert.deepEqual(exits, []);
 });
 
 test("Home shows the Workspace summary's total without opening Previous Runs history", async () => {
@@ -346,11 +319,11 @@ test("Home says previous Runs are unavailable rather than a false zero", async (
   );
 });
 
-test("q reads the summary's current owned-live count, not the count at mount", async () => {
+test("Ctrl+C reads the summary's current owned-live count, not the count at mount", async () => {
   const { t, exits, setSummary } = await mountApproved(0);
   setSummary(runSummary(2));
   await t.renderOnce();
-  t.mockInput.pressKey("q");
+  t.mockInput.pressKey("c", { ctrl: true });
   await t.waitForFrame((frame) => frame.includes("Halt 2 live Runs and quit?"));
   assert.deepEqual(exits, []);
 });
@@ -359,7 +332,7 @@ for (const size of [
   { width: 70, height: 18 },
   { width: 40, height: 16 },
 ]) {
-  test(`q with an unreadable owned-live count asks once and keeps running by default (${size.width}x${size.height})`, async () => {
+  test(`Ctrl+C with an unreadable owned-live count asks once and keeps running by default (${size.width}x${size.height})`, async () => {
     const { t, exits } = await mountApproved(
       {
         previousRuns: { state: "known", count: 3 },
@@ -368,7 +341,7 @@ for (const size of [
       [],
       size,
     );
-    t.mockInput.pressKey("q");
+    t.mockInput.pressKey("c", { ctrl: true });
     await t.waitForFrame((frame) => frame.includes("Halt live Runs and quit?"));
     const frame = t.captureCharFrame();
     assert.equal(frame.match(/Halt live Runs and quit\?/g)?.length, 1);
@@ -382,10 +355,10 @@ for (const size of [
     t.mockInput.pressEnter(); // the default, Keep Running
     await t.waitForFrame((f) => !f.includes("Halt live Runs and quit?"));
     assert.deepEqual(exits, []);
-    assert.match(t.captureCharFrame(), /› Start a Run/);
+    assert.doesNotMatch(t.captureCharFrame(), /› Start a Run/);
 
     // Quit stays available: one more q, then Halt and Quit.
-    t.mockInput.pressKey("q");
+    t.mockInput.pressKey("c", { ctrl: true });
     await t.waitForFrame((f) => f.includes("Halt live Runs and quit?"));
     t.mockInput.pressArrow("right");
     t.mockInput.pressEnter();
@@ -499,12 +472,13 @@ test("authoritative-run-summary: Home and the guarded quit follow a real Applica
   const rendered = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={{ snapshot, approve() {} }}
         bundles={emptyBundles()}
         harnesses={inertHarnessCatalogView()}
         preparation={inertLaunchPreparationView()}
         launch={noLaunch()}
-        run={noRunView()}
+        run={inertRunWorkbenchView()}
         runList={unopenedRunList()}
         actions={inertRunActionsView()}
         renderer={makeFakeRenderer().port}
@@ -524,7 +498,7 @@ test("authoritative-run-summary: Home and the guarded quit follow a real Applica
   });
   assert.ok(launched.admitted, JSON.stringify(launched));
   await rendered.waitForFrame((f) => f.includes("· 3 previous Runs"));
-  rendered.mockInput.pressKey("q");
+  rendered.mockInput.pressKey("c", { ctrl: true });
   await rendered.waitForFrame((f) => f.includes("Halt 1 live Run and quit?"));
   rendered.mockInput.pressEnter(); // the default, Keep Running
   await rendered.waitForFrame((f) => !f.includes("Halt 1 live Run and quit?"));
@@ -536,7 +510,7 @@ test("authoritative-run-summary: Home and the guarded quit follow a real Applica
     const owned = snapshot().runSummary.ownedLiveRuns;
     return owned.state === "known" && owned.count === 0;
   });
-  rendered.mockInput.pressKey("q");
+  rendered.mockInput.pressKey("c", { ctrl: true });
   await rendered.waitFor(() => exits.length === 1);
   assert.deepEqual(exits, [undefined]);
 });

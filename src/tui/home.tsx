@@ -1,8 +1,9 @@
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import { For, Show, type Accessor } from "solid-js";
+import { For, Show } from "solid-js";
 import type { RunSummary } from "../application/projection-port.js";
-import { useBindings } from "./keymap.js";
+import { useAppCommands } from "./app-commands.js";
+import { CommandSearch, createCommandSearch } from "./command-search.js";
 import { useHarnessCatalogView } from "./harness-view.js";
 import { isQualified } from "./harness-format.js";
 import { useExit } from "./vendor/exit.js";
@@ -10,16 +11,9 @@ import { useDialog } from "./vendor/dialog.js";
 import { useTheme } from "./vendor/theme-context.js";
 import { useWorkspaceView } from "./workspace-view.js";
 
-// Rebuilt against OpenCode's Home route at commit 1ead9e3d7f. Secant's Home is
-// deliberately minimal: the Workspace path and the commands that have a real
-// behaviour behind them. No control is shown without a command (ADR 0018 "no
-// dead UI"): every menu entry dispatches a real action. Start a Run (#90) sits
-// beside Workflow Bundles (#57), so the menu is a small selectable list — up/down
-// move, Enter opens the active entry.
-
+// Rebuilt against OpenCode Home at 1ead9e3d7f. Home owns navigation;
+// shell commands share discovery through Secant's catalog (ADR 0040).
 export function Home(props: {
-  selected: Accessor<number>;
-  setSelected: (index: number) => void;
   onStartRun: () => void;
   onOpenBundles: () => void;
   onOpenPreviousRuns: () => void;
@@ -31,38 +25,55 @@ export function Home(props: {
   const exit = useExit();
   const dialog = useDialog();
   const dimensions = useTerminalDimensions();
+  const catalog = useAppCommands();
   const approved = () => view.snapshot().approval.state === "approved";
 
-  // Start a Run is the first and default entry so the primary task is one keypress
-  // away (#191); Workflow Bundles, Previous Runs, and Harnesses sit beside it.
-  const entries = () => [
-    { label: "Start a Run", open: () => props.onStartRun() },
-    { label: "Workflow Bundles", open: () => props.onOpenBundles() },
-    { label: "Previous Runs", open: () => props.onOpenPreviousRuns() },
-    { label: "Harnesses", open: () => props.onOpenHarnesses() },
-  ];
-  const move = (delta: number) =>
-    props.setSelected(
-      Math.max(0, Math.min(props.selected() + delta, entries().length - 1)),
-    );
-
-  // Bindings are live only once the Workspace is approved and Home is the
-  // interactive surface; while the approval dialog is up they must not fire.
-  useBindings(() => ({
-    enabled: approved() && dialog.stack.length === 0,
-    bindings: [
-      { key: "up", desc: "Previous", group: "Home", cmd: () => move(-1) },
-      { key: "down", desc: "Next", group: "Home", cmd: () => move(1) },
-      {
-        key: "return",
-        desc: "Open",
-        group: "Home",
-        cmd: () => entries()[props.selected()]?.open(),
-      },
-      { key: "q", desc: "Quit", group: "Home", cmd: () => exit() },
-      { key: "ctrl+c", desc: "Quit", group: "Home", cmd: () => exit() },
-    ],
-  }));
+  catalog.register(() =>
+    approved()
+      ? [
+          {
+            id: "start-run",
+            name: "Start a Run",
+            description: "Launch a Workflow Bundle",
+            run: props.onStartRun,
+          },
+          {
+            id: "bundles",
+            name: "Workflow Bundles",
+            description: "Inspect installed Workflows and versions",
+            run: props.onOpenBundles,
+          },
+          {
+            id: "previous-runs",
+            name: "Previous Runs",
+            description: "Inspect and reopen Run history",
+            run: props.onOpenPreviousRuns,
+          },
+          {
+            id: "harnesses",
+            name: "Harnesses",
+            description: "Inspect discovery and model capabilities",
+            run: props.onOpenHarnesses,
+          },
+        ]
+      : [],
+  );
+  const search = createCommandSearch({
+    entries: () => {
+      const entries = catalog.entries();
+      const order = [
+        "start-run",
+        "bundles",
+        "previous-runs",
+        "harnesses",
+        "themes",
+        "quit",
+      ];
+      return order.flatMap((id) => entries.filter((entry) => entry.id === id));
+    },
+    escape() {},
+    quit: () => exit(),
+  });
 
   return (
     <box
@@ -70,17 +81,18 @@ export function Home(props: {
       height={dimensions().height}
       flexDirection="column"
       padding={1}
-      gap={1}
       overflow="hidden"
       backgroundColor={theme.background}
     >
       <text attributes={TextAttributes.BOLD} fg={theme.text} flexShrink={0}>
         Secant
       </text>
-      <box flexDirection="column" flexShrink={0}>
-        <text fg={theme.textMuted}>Workspace</text>
-        <text fg={theme.text}>{view.snapshot().path}</text>
-      </box>
+      <Show when={dimensions().height >= 12}>
+        <box flexDirection="column" flexShrink={0}>
+          <text fg={theme.textMuted}>Workspace</text>
+          <text fg={theme.text}>{view.snapshot().path}</text>
+        </box>
+      </Show>
       {/* A failed Shipped Bundle ensure is a notice, never a block (ADR 0029). */}
       <For each={view.snapshot().startupNotices}>
         {(notice) => (
@@ -91,34 +103,28 @@ export function Home(props: {
         )}
       </For>
       <Show when={approved()}>
-        <text fg={theme.textMuted} flexShrink={0}>
-          {homeSummary({
-            bundleCount: view.snapshot().installedBundleCount,
-            previousRuns: view.snapshot().runSummary.previousRuns,
-            qualifiedHarness: harnesses().harnesses.find((harness) =>
-              isQualified(harness.qualification),
-            )?.name,
-          })}
-        </text>
-        <box flexDirection="column" flexShrink={0}>
-          <text fg={theme.textMuted}>Menu</text>
-          <For each={entries()}>
-            {(entry, index) => (
-              <text
-                fg={theme.text}
-                attributes={
-                  index() === props.selected() ? TextAttributes.BOLD : 0
-                }
-                flexShrink={0}
-              >
-                {`${index() === props.selected() ? "› " : "  "}${entry.label}`}
-              </text>
-            )}
-          </For>
-        </box>
-        <box flexDirection="row" gap={1} flexShrink={0}>
-          <text fg={theme.textMuted}>↑/↓ move · enter open · q quit</text>
-        </box>
+        <Show when={dimensions().height >= 12}>
+          <text fg={theme.textMuted} flexShrink={0}>
+            {homeSummary({
+              bundleCount: view.snapshot().installedBundleCount,
+              previousRuns: view.snapshot().runSummary.previousRuns,
+              qualifiedHarness: harnesses().harnesses.find((harness) =>
+                isQualified(harness.qualification),
+              )?.name,
+            })}
+          </text>
+        </Show>
+        <CommandSearch
+          search={search}
+          enabled={approved() && dialog.stack.length === 0}
+          portDriven={false}
+          width={Math.max(1, dimensions().width - 2)}
+          rows={Math.max(
+            1,
+            dimensions().height - (dimensions().height >= 12 ? 10 : 6),
+          )}
+          hint="↑/↓ select · enter run · esc search/clear · ctrl+p commands · ctrl+c quit"
+        />
       </Show>
     </box>
   );

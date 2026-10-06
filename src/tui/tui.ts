@@ -5,6 +5,10 @@
 // so Start-a-Run renderer tests can drive their live Port adapters across the
 // Module boundary, which the boundary suite requires to go through this entrypoint.
 
+export {
+  createLivePreferencesView,
+  type PreferencesView,
+} from "./preferences-view.js";
 export { App } from "./app.js";
 export { mountTui } from "./mount.js";
 export type { WorkspaceView } from "./workspace-view.js";

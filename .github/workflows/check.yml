@@ -115,6 +115,9 @@ jobs:
           tests/application/preferences.test.ts
           tests/headless/settings.test.ts
           tests/architecture/preferences-palettes.test.ts
+          tests/tui/screens.test.tsx
+          tests/tui/home-preferences.test.tsx
+          tests/tui/run-workbench.test.tsx
       - name: m10-initial-preparation-ownership
         run: >-
           bun run test --

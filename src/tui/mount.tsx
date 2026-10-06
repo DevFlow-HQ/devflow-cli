@@ -1,6 +1,7 @@
 import type { CliRenderer } from "@opentui/core";
 import { render } from "@opentui/solid";
 import type { ProjectionPort } from "../application/projection-port.js";
+import { createLivePreferencesView } from "./preferences-view.js";
 import { App } from "./app.js";
 import { createLiveBundleCatalogView } from "./bundle-view.js";
 import { createLiveHarnessCatalogView } from "./harness-view.js";
@@ -36,6 +37,7 @@ export function mountTui(
   return render(
     () => (
       <App
+        preferences={createLivePreferencesView(options.projectionPort)}
         view={createLiveWorkspaceView(options.projectionPort)}
         bundles={createLiveBundleCatalogView(options.projectionPort)}
         harnesses={createLiveHarnessCatalogView(options.projectionPort)}

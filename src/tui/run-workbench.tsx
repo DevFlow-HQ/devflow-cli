@@ -5,6 +5,7 @@ import {
   createSignal,
   For,
   onCleanup,
+  on,
   Show,
   Switch,
   Match,
@@ -31,6 +32,7 @@ import type {
   SendInteractiveTurnOffer,
 } from "../application/projection-port.js";
 import type { RendererKeyEvent, RendererPort } from "./renderer/renderer.js";
+import { useAppCommands, type AppCommand } from "./app-commands.js";
 import { clip } from "./clip.js";
 import {
   useRunActionsView,
@@ -832,12 +834,93 @@ export function RunWorkbench(props: {
               : 1;
   const modelChoice = createModelChoiceControl({
     run,
-    offer: () => (modelChoiceModal() ? undefined : offers().modelChoice),
+    offer: () => offers().modelChoice,
     modal: modelChoiceModal,
     dims,
     dialog,
     submit: actions.changeModelChoice,
   });
+  const armInteractiveAction = (
+    kind: "end-step" | "continue" | "end-stage",
+  ) => {
+    const current = interactiveOffers();
+    const armed: TConfirmation | undefined =
+      kind === "end-step" && current.end
+        ? { kind, offer: structuredClone(current.end) }
+        : kind === "continue" && current.continue
+          ? { kind, offer: structuredClone(current.continue) }
+          : kind === "end-stage" && current.endStage
+            ? { kind, offer: structuredClone(current.endStage) }
+            : undefined;
+    if (armed === undefined) return;
+    setInteractiveRefusal(undefined);
+    setConfirmation(armed);
+  };
+  const commands = useAppCommands();
+  commands.register(() => {
+    const entries: AppCommand[] = [];
+    if (offers().modelChoice?.available === true && !modelChoice.pending()) {
+      entries.push({
+        id: "model",
+        name: "Model",
+        description: "Change the Run model and effort",
+        slash: "model",
+        run: () => modelChoice.open("model", true),
+      });
+      entries.push({
+        id: "effort",
+        name: "Effort",
+        description: "Change effort with the Model choice",
+        slash: "effort",
+        run: () => modelChoice.open("effort", true),
+      });
+    }
+    if (!modelChoiceModal() && !actionInFlight()) {
+      const current = interactiveOffers();
+      if (current.end)
+        entries.push({
+          id: "end-step",
+          name: "End Step",
+          description: "Confirm ending the interactive Step",
+          slash: "end-step",
+          keyHint: "ctrl+e",
+          run: () => armInteractiveAction("end-step"),
+        });
+      if (current.continue)
+        entries.push({
+          id: "continue",
+          name: "Continue",
+          description: "Confirm another Repeat iteration",
+          slash: "continue",
+          keyHint: "ctrl+n",
+          run: () => armInteractiveAction("continue"),
+        });
+      if (current.endStage)
+        entries.push({
+          id: "end-stage",
+          name: "End Stage",
+          description: "Confirm ending the stage",
+          slash: "end-stage",
+          run: () => armInteractiveAction("end-stage"),
+        });
+    }
+    return entries;
+  });
+  createEffect(
+    on(
+      () => {
+        const request = requestControl.active()?.request.requestId;
+        const gate = gateControl.active()?.gate ?? run()?.checkpoint?.gate;
+        return JSON.stringify([request, gate?.stepId, gate?.attemptId]);
+      },
+      (target, previous) => {
+        if (target !== previous && (modalControl() || checkpointActive())) {
+          commands.preempt();
+          modelChoice.close();
+        }
+      },
+    ),
+  );
   const modelChoiceOffer = () =>
     modelChoiceModal() || modelChoice.pending()
       ? undefined
@@ -1262,28 +1345,11 @@ export function RunWorkbench(props: {
       // override to unbind it is the research's optional step, deferred (tui/AGENTS.md).
       // In a human-controlled Repeat the same key arms End Stage (#218) instead:
       // the two Offers never coexist.
-      const { end, endStage } = interactiveOffers();
-      if (end !== undefined) {
-        setInteractiveRefusal(undefined);
-        setConfirmation({ kind: "end-step", offer: structuredClone(end) });
-      } else if (endStage !== undefined) {
-        setInteractiveRefusal(undefined);
-        setConfirmation({
-          kind: "end-stage",
-          offer: structuredClone(endStage),
-        });
-      }
+      armInteractiveAction(interactiveOffers().end ? "end-step" : "end-stage");
       return;
     }
     if (name === "n" && key.ctrl) {
-      const continueOffer = interactiveOffers().continue;
-      if (continueOffer !== undefined) {
-        setInteractiveRefusal(undefined);
-        setConfirmation({
-          kind: "continue",
-          offer: structuredClone(continueOffer),
-        });
-      }
+      armInteractiveAction("continue");
       return;
     }
     // Enter sends a Turn at a boundary and steers the live one (#294).
@@ -1301,6 +1367,14 @@ export function RunWorkbench(props: {
       return;
     }
     const name = key.name ?? "";
+    if (name === "p" && key.ctrl) {
+      commands.openPalette();
+      return;
+    }
+    if (name === "r" && key.ctrl) {
+      commands.retry();
+      return;
+    }
     if (name === "c" && key.ctrl) {
       exit(); // Ctrl+C always quits, even from a text control
       return;

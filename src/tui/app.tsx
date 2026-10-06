@@ -20,6 +20,9 @@ import {
   HarnessCatalogViewProvider,
   type HarnessCatalogView,
 } from "./harness-view.js";
+import { AppCommandsProvider } from "./app-commands.js";
+import { ShellCommands } from "./shell-commands.js";
+import type { PreferencesView } from "./preferences-view.js";
 import { Home } from "./home.js";
 import { HarnessCatalog } from "./harness-catalog.js";
 import { createTuiKeymap, KeymapProvider, useBindings } from "./keymap.js";
@@ -74,14 +77,17 @@ type Screen =
       readonly from: "start-run" | "previous-runs";
     };
 
-function Route(props: { renderer: RendererPort; reducedMotion: boolean }) {
+function Route(props: {
+  renderer: RendererPort;
+  reducedMotion: boolean;
+  preferences: PreferencesView;
+}) {
   const view = useWorkspaceView();
   const dialog = useDialog();
   const exit = useExit();
   const approved = () => view.snapshot().approval.state === "approved";
 
   const [screen, setScreen] = createSignal<Screen>({ name: "home" });
-  const [homeSelected, setHomeSelected] = createSignal(0);
   // The Previous Runs list's selected row, kept here so Escape from a Run restores
   // it.
   const [runSelected, setRunSelected] = createSignal(0);
@@ -124,80 +130,85 @@ function Route(props: { renderer: RendererPort; reducedMotion: boolean }) {
   });
 
   return (
-    <Switch
-      fallback={
-        <Home
-          selected={homeSelected}
-          setSelected={setHomeSelected}
-          onStartRun={() => setScreen({ name: "start-run" })}
-          onOpenBundles={() => setScreen({ name: "bundle-catalog" })}
-          onOpenPreviousRuns={() => setScreen({ name: "previous-runs" })}
-          onOpenHarnesses={() => setScreen({ name: "harness-catalog" })}
-        />
-      }
-    >
-      <Match when={screen().name === "start-run"}>
-        <StartRun
-          onLeave={() => setScreen({ name: "home" })}
-          onStarted={(runId, bundleName) =>
-            setScreen({
-              name: "run-workbench",
-              runId,
-              knownBundleName: bundleName,
-              from: "start-run",
-            })
-          }
-        />
-      </Match>
-      <Match when={watching()}>
-        {(active) => {
-          // Escape restores the originating screen. Deletion always returns to
-          // Previous Runs, where the durable list can explain the missing subject.
-          const back = () =>
-            setScreen(
-              active().from === "previous-runs"
-                ? { name: "previous-runs" }
-                : { name: "home" },
+    <>
+      <ShellCommands
+        preferences={props.preferences}
+        renderer={props.renderer}
+        portDriven={screen().name === "run-workbench"}
+      />
+      <Switch
+        fallback={
+          <Home
+            onStartRun={() => setScreen({ name: "start-run" })}
+            onOpenBundles={() => setScreen({ name: "bundle-catalog" })}
+            onOpenPreviousRuns={() => setScreen({ name: "previous-runs" })}
+            onOpenHarnesses={() => setScreen({ name: "harness-catalog" })}
+          />
+        }
+      >
+        <Match when={screen().name === "start-run"}>
+          <StartRun
+            onLeave={() => setScreen({ name: "home" })}
+            onStarted={(runId, bundleName) =>
+              setScreen({
+                name: "run-workbench",
+                runId,
+                knownBundleName: bundleName,
+                from: "start-run",
+              })
+            }
+          />
+        </Match>
+        <Match when={watching()}>
+          {(active) => {
+            // Escape restores the originating screen. Deletion always returns to
+            // Previous Runs, where the durable list can explain the missing subject.
+            const back = () =>
+              setScreen(
+                active().from === "previous-runs"
+                  ? { name: "previous-runs" }
+                  : { name: "home" },
+              );
+            return (
+              <RunWorkbench
+                runId={active().runId}
+                knownBundleName={active().knownBundleName}
+                renderer={props.renderer}
+                reducedMotion={props.reducedMotion}
+                onLeave={back}
+                onDeleted={(name) => {
+                  setDeletedRunNotice(`${name} was deleted`);
+                  setScreen({ name: "previous-runs" });
+                }}
+              />
             );
-          return (
-            <RunWorkbench
-              runId={active().runId}
-              knownBundleName={active().knownBundleName}
-              renderer={props.renderer}
-              reducedMotion={props.reducedMotion}
-              onLeave={back}
-              onDeleted={(name) => {
-                setDeletedRunNotice(`${name} was deleted`);
-                setScreen({ name: "previous-runs" });
-              }}
-            />
-          );
-        }}
-      </Match>
-      <Match when={screen().name === "previous-runs"}>
-        <PreviousRuns
-          selected={runSelected}
-          setSelected={setRunSelected}
-          notice={deletedRunNotice}
-          onDismissNotice={() => setDeletedRunNotice(undefined)}
-          onOpen={(runId, bundleName) =>
-            setScreen({
-              name: "run-workbench",
-              runId,
-              knownBundleName: bundleName,
-              from: "previous-runs",
-            })
-          }
-          onBack={() => setScreen({ name: "home" })}
-        />
-      </Match>
-      <Match when={screen().name === "bundle-catalog"}>
-        <BundleCatalog onBack={() => setScreen({ name: "home" })} />
-      </Match>
-      <Match when={screen().name === "harness-catalog"}>
-        <HarnessCatalog onBack={() => setScreen({ name: "home" })} />
-      </Match>
-    </Switch>
+          }}
+        </Match>
+        <Match when={screen().name === "previous-runs"}>
+          <PreviousRuns
+            selected={runSelected}
+            setSelected={setRunSelected}
+            notice={deletedRunNotice}
+            onDismissNotice={() => setDeletedRunNotice(undefined)}
+            onOpen={(runId, bundleName) =>
+              setScreen({
+                name: "run-workbench",
+                runId,
+                knownBundleName: bundleName,
+                from: "previous-runs",
+              })
+            }
+            onBack={() => setScreen({ name: "home" })}
+          />
+        </Match>
+        <Match when={screen().name === "bundle-catalog"}>
+          <BundleCatalog onBack={() => setScreen({ name: "home" })} />
+        </Match>
+        <Match when={screen().name === "harness-catalog"}>
+          <HarnessCatalog onBack={() => setScreen({ name: "home" })} />
+        </Match>
+      </Switch>
+    </>
   );
 }
 
@@ -328,6 +339,7 @@ function GuardedExitProvider(props: ParentProps<{ exit: Exit }>) {
 }
 
 export function App(props: {
+  preferences: PreferencesView;
   view: WorkspaceView;
   bundles: BundleCatalogView;
   harnesses: HarnessCatalogView;
@@ -348,7 +360,7 @@ export function App(props: {
   const keymap = createTuiKeymap();
   return (
     <ExitProvider exit={props.exit}>
-      <ThemeProvider>
+      <ThemeProvider initial={props.preferences.snapshot().preferences}>
         <KeymapProvider keymap={keymap}>
           <WorkspaceViewProvider view={props.view}>
             <BundleCatalogViewProvider view={props.bundles}>
@@ -358,20 +370,23 @@ export function App(props: {
                     <RunWorkbenchViewProvider view={props.run}>
                       <RunListViewProvider view={props.runList}>
                         <RunActionsViewProvider view={props.actions}>
-                          <DialogProvider>
-                            <GuardedExitProvider exit={props.exit}>
-                              <ErrorBoundary
-                                fallback={(error) => (
-                                  <Fallback error={error} exit={props.exit} />
-                                )}
-                              >
-                                <Route
-                                  renderer={props.renderer}
-                                  reducedMotion={props.reducedMotion}
-                                />
-                              </ErrorBoundary>
-                            </GuardedExitProvider>
-                          </DialogProvider>
+                          <AppCommandsProvider>
+                            <DialogProvider>
+                              <GuardedExitProvider exit={props.exit}>
+                                <ErrorBoundary
+                                  fallback={(error) => (
+                                    <Fallback error={error} exit={props.exit} />
+                                  )}
+                                >
+                                  <Route
+                                    renderer={props.renderer}
+                                    preferences={props.preferences}
+                                    reducedMotion={props.reducedMotion}
+                                  />
+                                </ErrorBoundary>
+                              </GuardedExitProvider>
+                            </DialogProvider>
+                          </AppCommandsProvider>
                         </RunActionsViewProvider>
                       </RunListViewProvider>
                     </RunWorkbenchViewProvider>

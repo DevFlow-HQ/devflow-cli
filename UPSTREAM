@@ -540,3 +540,21 @@ Dropped as OpenCode-branded (the "three extra" drops):
   lucent-orng  (lucent-orng.json)
 
 33 upstream themes - 8 dropped = 25 vendored.
+
+
+2026-10-06, #409: Home commands and active appearance
+    Studied the local OpenCode checkout at 228e9095ba3988a02664c3816cb51f98584e86c2:
+    packages/tui/src/routes/home.tsx, context/theme.tsx,
+    component/dialog-theme-list.tsx and component/command-palette.tsx.
+    Rebuilt src/tui/home.tsx, command-search.tsx, app-commands.tsx,
+    shell-commands.tsx and vendor/theme-context.tsx.
+    Taken: searchable choices, selection preview, capture of entry appearance,
+    cancellation restoration, and command dismissal before execution.
+    Changed: Secant owns one catalog independently of the keymap registry;
+    Home has six fixed-order commands and no arrival selection; the Application
+    Preferences Port owns saved values; local apply precedes save, with explicit
+    failure and fresh-id retry. Port-driven Workbench discovery yields to new
+    request/gate targets and permits deliberate reopening over them.
+    vendor/dialog.tsx: Workbench dialogs follow Renderer Port geometry;
+    a delayed focus restore yields to a replacement dialog.
+    The 25 palette bytes and shipped attribution notices remain unchanged.

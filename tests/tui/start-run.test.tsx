@@ -1,3 +1,4 @@
+import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { testRender } from "@opentui/solid";
@@ -802,6 +803,7 @@ async function mountFlow(
   const t = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={approvedWorkspace()}
         bundles={bundlesView}
         harnesses={harnessesView}
@@ -818,7 +820,8 @@ async function mountFlow(
     { width, height, kittyKeyboard },
   );
   await t.waitForFrame((f) => f.includes("Secant"));
-  // Start a Run is the first and default Home entry (#191), so Enter opens it.
+  // Home starts without a selection; explicitly select Start a Run.
+  t.mockInput.pressArrow("down");
   t.mockInput.pressEnter();
   // "esc back" is in every chooser footer but not Home's, so it marks arrival.
   await t.waitForFrame((f) => f.includes("esc back"));
@@ -2148,7 +2151,7 @@ test("Escape steps back one screen at a time", async () => {
   assert.match(t.captureCharFrame(), /enter continue/); // back on the chooser
   t.mockInput.pressEscape(); // choose → home
   await until(() => t.captureCharFrame().includes("Workspace"));
-  assert.match(t.captureCharFrame(), /enter open/); // Home footer
+  assert.match(t.captureCharFrame(), /enter run/); // Home footer
 });
 
 // --- layout ----------------------------------------------------------------

@@ -1,3 +1,4 @@
+import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -235,6 +236,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   const rendered = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={workspaceView(workspaceProjection.snapshot)}
         bundles={catalogView(listProjection.snapshot, focusProjection.snapshot)}
         harnesses={createLiveHarnessCatalogView(wired.projectionPort)}
@@ -251,7 +253,8 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
     { width: 120, height: 32 },
   );
   await rendered.waitForFrame((frame) => frame.includes("Secant"));
-  rendered.mockInput.pressEnter(); // Start a Run is the first, default entry
+  rendered.mockInput.pressArrow("down");
+  rendered.mockInput.pressEnter(); // explicitly select Start a Run
   await rendered.waitForFrame((frame) => frame.includes("acknowledge"));
   rendered.mockInput.pressKey("a");
   await rendered.waitForFrame((frame) => frame.includes("Trust acknowledged"));
@@ -376,6 +379,7 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
   const rendered = await testRender(
     () => (
       <App
+        preferences={inertPreferencesView()}
         view={workspaceView(workspaceProjection.snapshot)}
         bundles={catalogView(listProjection.snapshot, focusProjection.snapshot)}
         harnesses={createLiveHarnessCatalogView(wired.projectionPort)}
@@ -392,6 +396,7 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
     { width: 120, height: 36 },
   );
   await rendered.waitForFrame((frame) => frame.includes("Secant"));
+  rendered.mockInput.pressArrow("down");
   rendered.mockInput.pressEnter();
   await rendered.waitForFrame((frame) => frame.includes("acknowledge"));
   rendered.mockInput.pressKey("a");

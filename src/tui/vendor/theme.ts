@@ -32,7 +32,8 @@ import zenburn from "./themes/zenburn.js";
 // OpenCode-branded themes dropped, recorded in UPSTREAM and ADR 0018); and
 // OpenCode's runtime theme-management surface (plugin/custom themes,
 // subscription, `allThemes`/`isTheme`/`addTheme`/…) is dropped because Secant
-// ships a fixed default with no picker. The kept pure computation — the Theme
+// owns the active appearance through the Preferences-backed picker. The kept
+// pure computation — the Theme
 // type, the resolver, and ANSI-to-RGBA — is unchanged; the never-called
 // `selectedForeground`, `terminalMode`, `generateSystem`, `tint`, and
 // syntax-style generators are dropped too (audit A12 and #127 A37), since no

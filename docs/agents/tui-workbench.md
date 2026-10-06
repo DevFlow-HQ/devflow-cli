@@ -57,11 +57,13 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
 
 - A dialog with `onKey` takes every key from the Workbench's Renderer Port before screen dispatch (#351). The dialog primitive disables its
   Escape/Ctrl+C keymap layer for that entry, so the shared picker's Escape can step from effort to model. Other dialogs keep their own keymap.
-- Below the dialog stack, the inspection overlay takes every key but Ctrl+C, ahead of all other controls: Esc closes it, and its footer's `q` comes back as
+- Ctrl+P takes the Workbench Port path before inspection, requests and gates; normal screens keep the keymap path. Action owners supply the catalog.
+  A new request or gate target closes discovery and restores an unconfirmed appearance. Deliberate reopening over that target remains available.
+  Native fields stay blurred while a dialog is on the stack. Dialog refocus never steals focus from a replacement dialog.
+- After shell shortcuts, the inspection overlay owns every key but Ctrl+C: Esc closes it, and its footer's `q` comes back as
   `quit` for the Workbench's guarded Exit (#392). Keep Running leaves the overlay and its scroll as they were.
 - The interim `m` Model-choice picker uses the dialog stack and the `change-model-choice` Offer, including below the details hide size. A Request or
   Human Gate closes it. Reach comes from the Offer while requested and from the Operation receipt once applied; a live change remains pending until observed.
-
 - The Workbench bottom region is a modal stack (#121): an outstanding approval Harness Request or a free-text Human Gate owns Esc and every printable key, so
   while either is up the Run Actions rail (r/c/x) and the two-press Esc interrupt are suppressed (`modalControl()` gates `anyActionOffer`/`actionLines` and the
   interrupt disarm). `interrupt-turn`/`steer-turn` offers stay present through an `awaiting-approval` Turn (run-projection derives them from liveness, not
