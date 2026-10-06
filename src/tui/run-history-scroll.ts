@@ -1,9 +1,4 @@
-import {
-  scrollTimeline,
-  timelineWindow,
-  type TimelineAction,
-  type TimelineScroll,
-} from "./run-timeline.js";
+import { timelineWindow, type TimelineAction } from "./run-timeline.js";
 
 export type HistoryScroll =
   | { readonly mode: "live" }
@@ -97,16 +92,26 @@ export function scrollHistory(
   if (action === "latest") return { mode: "live" };
   if (action === "top")
     return { mode: "paused", id: rows.keys[0], offset: 0, prior: rows.keys };
-  const pinned: TimelineScroll =
-    scroll.mode === "live"
-      ? scroll
-      : { mode: "paused", ...anchor(scroll, rows) };
-  const next = scrollTimeline(pinned, action, rows.heights, viewport);
-  if (next.mode === "live") return next;
+  // A paused short page may start below the live top, with blank space below.
+  // Move from that actual displayed line; the ordinal inspection reducer clamps
+  // to a full last page and would retarget it or resume following on an Up.
+  const window = historyWindow(scroll, rows, viewport);
+  const page = Math.max(1, Math.floor(Math.max(1, viewport) / 2));
+  const delta = { up: -1, down: 1, pageUp: -page, pageDown: page }[action];
+  const top = Math.max(0, window.top + delta);
+  const total = rows.heights.reduce((sum, height) => sum + height, 0);
+  if (delta > 0 && top >= Math.max(0, total - Math.max(1, viewport)))
+    return { mode: "live" };
+  let row = 0;
+  let offset = top;
+  while (row + 1 < rows.keys.length && offset >= (rows.heights[row] ?? 1)) {
+    offset -= rows.heights[row] ?? 1;
+    row++;
+  }
   return {
     mode: "paused",
-    id: rows.keys[next.row],
-    offset: next.offset,
+    id: rows.keys[row],
+    offset: Math.min(offset, Math.max(0, (rows.heights[row] ?? 1) - 1)),
     prior: rows.keys,
   };
 }

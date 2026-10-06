@@ -24,6 +24,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   crosses `loading` and `catching-up` before `current`. Workbench Operation controls read only current offers, while timeline live-edge remains a separate scroll fact.
 - Workbench history (#412) consumes keyed complete Session pages and complete preview values. `mapArray` retains subscriptions by semantic Session;
   ordinary Run updates never reopen them. `run-history-scroll.ts` stores opaque row ids and displayed-line offsets, and uses ordinals only for layout.
+  Alt+Up/Down scroll lines, PageUp/Down half a viewport, minimum one, Alt+Home oldest and Alt+End latest; native arrows/Home/End edit the prompt.
+  Keys yield to modal/details focus; OpenTUI wheel events bubble with the same guards. The Renderer Adapter maps `meta` to the Port's `alt`.
+  Passive changes stay paused. Up starts at the actual anchor, including blank space below short pages; only latest or deliberate Down resumes following.
   A removed anchor chooses the nearest prior survivor, ties later, at offset zero; a short or empty page stays paused. Dividers count toward their content row.
 - The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
@@ -88,7 +91,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   reference resolution the Workbench uses, plus its Step-interaction writes; `run-list-view.tsx` — the Previous Runs read seam that pages older rows by cursor
   and appends them, the only seam that re-opens its Projection to grow a page); other writes go through a per-screen submit seam (`run-actions-view.tsx` —
   resume/cancel/delete/interrupt/Model-choice changes, mirroring `run-launch-view.tsx`). The Renderer Port (`renderer/renderer.ts`) carries lifecycle plus the Workbench's
-  `size`/`onKey`/`onResize`, and declares its key value (`{ name?, ctrl? }`, A16) so the Workbench needs no cast.
+  `size`/`onKey`/`onResize`, and declares its key value (`{ name?, ctrl?, alt? }`, A16) so the Workbench needs no cast.
 - `catalog-navigation.tsx` (A4) owns both catalogs' search pane, pane focus, selection (empty on arrival from Home), bindings, and row/empty
   shells, on the vendored `vendor/panels.tsx` and bounded `vendor/scroll.ts` primitives (see `UPSTREAM`); filters, focus, and inspectors stay
   per screen. Its `CatalogRow` also draws Start a Run's Bundle and Harness choice rows, always `focused` there (#286).

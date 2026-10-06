@@ -29,3 +29,9 @@ Saved theme and dark/light Preferences have headless parity through `settings sh
 The full retained Session transcript opens from focused Details (`Ctrl+G`, then Enter). Its reader alone loads older pages and exports the complete
 conversation to the terminal clipboard on demand. `run read <run-id> --transcript [--session <name>]` retains its stored page/export envelopes;
 presentation entry identities remain excluded from JSON. The Workbench never pages older history ([#421](https://github.com/secantdev/secant/issues/421)).
+
+The paused Workbench viewport holds an opaque history row id and its displayed-line offset across complete-page replacement, preview settlement,
+and the 200-row cutoff. Missing rows fall back by prior content order, nearest first and later on ties, at offset zero; empty and short pages stay
+paused. Dividers contribute to row height, and the badge counts rows with any content below the viewport. Wheel or Alt+Up/Down scroll lines,
+PageUp/Down half a viewport, Alt+Home oldest, and Alt+End latest. Native prompt editing and modal/details focus keep their keys. These are TUI
+reading controls; headless keeps its stored page/export contracts ([#413](https://github.com/secantdev/secant/issues/413)).

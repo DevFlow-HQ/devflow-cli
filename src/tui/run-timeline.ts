@@ -1,14 +1,7 @@
-// The Run Workbench timeline's scroll model as a pure reducer over row heights —
-// deliberately NOT OpenTUI's `<scrollbox>`. Upstream OpenCode
-// (routes/session/index.tsx @ 1ead9e3d7f) follows the live edge with the
-// scrollbox's `stickyScroll`/`stickyStart="bottom"` and has no new-activity
-// counter or prepend anchor; those are net-new here (#91 AC3). The window scrolls
-// display lines, because a row wraps to as many lines as its width needs (#288),
-// but the anchor is held as a row and a line offset inside it: the timeline is
-// append-only (durable rows land at the end as each publication commits), so a
-// held row keeps naming the same row as newer ones arrive, and it survives a
-// resize that rewraps every row. The new-activity count is in rows too, since it
-// counts activities, not lines.
+// Ordinal display-line layout/navigation for retained inspection content.
+// The Workbench history owner uses opaque row ids in run-history-scroll.ts:
+// insertions, replacement and top eviction invalidate append-only ordinals.
+// Badges count content rows, including a partly visible final row.
 
 /** A display line named by its row and its line offset inside that row. */
 interface TimelineAnchor {

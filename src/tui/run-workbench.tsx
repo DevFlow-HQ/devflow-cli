@@ -112,11 +112,9 @@ import { useTheme } from "./vendor/theme-context.js";
 // confirm first since they are irreversible. The Renderer Port stays
 // lifecycle-only elsewhere (see tui/AGENTS.md).
 //
-// The scroll/follow/anchor/new-activity mechanics are hand-rolled over the event
-// array rather than OpenTUI's `<scrollbox>` (which OpenCode's session timeline
-// uses at 1ead9e3d7f) because the new-activity count and the append anchor are
-// net-new (they don't exist upstream) and need event-index control the
-// scrollbox's pixel offset does not give.
+// History scrolling owns opaque row identity, displayed-line offsets and row
+// badges. OpenTUI draws the window; Application supplies complete retained pages.
+// The ordinal reducer remains the independent inspection layout helper.
 
 const HEADER_COMPACT_WIDTH = 80;
 const DETAILS_MIN_WIDTH = 60;
@@ -1579,6 +1577,22 @@ export function RunWorkbench(props: {
       setFocus("details");
       return;
     }
+    // Modified navigation and page keys work beside native prompt editing.
+    // Requests, dialogs, confirmations and focused details have already claimed
+    // their input; a checkpoint keeps its own controls too.
+    if (!focusedDetails() && focus() !== "checkpoint" && !key.ctrl) {
+      const action =
+        (key.alt && ["up", "down", "home", "end"].includes(name)) ||
+        name === "pageup" ||
+        name === "pagedown"
+          ? SCROLL_KEYS[name]
+          : undefined;
+      if (action !== undefined) {
+        if (interruptArmed()) setInterruptConfirmation(undefined);
+        scrollBy(action);
+        return;
+      }
+    }
     // While the interactive input holds focus it owns every remaining key as text or
     // an interactive control, ahead of the bare-letter Run Actions below (#122).
     if (typing) {
@@ -1753,6 +1767,21 @@ export function RunWorkbench(props: {
       height={dims().height}
       flexDirection="column"
       padding={1}
+      onMouseScroll={(event) => {
+        if (
+          dialog.stack.length > 0 ||
+          modalControl() ||
+          confirmation() !== undefined ||
+          interruptArmed() ||
+          focusedDetails() ||
+          focus() === "checkpoint" ||
+          transcript.reader() !== undefined ||
+          inspection.inspecting() !== undefined
+        )
+          return;
+        const direction = event.scroll?.direction;
+        if (direction === "up" || direction === "down") scrollBy(direction);
+      }}
       overflow="hidden"
       backgroundColor={theme.background}
     >
@@ -2041,7 +2070,7 @@ function Workbench(props: {
           ? ` · ${activity.newActivity} · Jump to latest`
           : `  ▼ ${activity.newActivity} ${activity.newActivity === 1 ? "new activity" : "new activities"} · Jump to latest`
         : "";
-    return `${marker}Timeline${badge}`;
+    return `${marker}Timeline${badge || (activity.atLive ? "" : " · Paused")}`;
   };
 
   const footer = () => {
@@ -2058,7 +2087,7 @@ function Workbench(props: {
     const model = props.modelChoiceOffered() ? "m model · " : "";
     return props.focus() === "details"
       ? `${model}↑/↓ select · enter open · tab timeline · esc back · q quit`
-      : `${model}↑/↓ scroll · ^G/d details · end latest · esc back · q quit`;
+      : `${model}Alt+↑/↓ scroll · ^G/d details · Alt+End latest · esc back · q quit`;
   };
 
   const displayState = () =>

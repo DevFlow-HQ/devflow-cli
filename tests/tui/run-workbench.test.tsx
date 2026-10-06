@@ -662,7 +662,7 @@ async function press(
   t: { renderOnce: () => Promise<void> },
   renderer: FakeRenderer,
   name: string,
-  mods: { ctrl?: boolean } = {},
+  mods: { ctrl?: boolean; alt?: boolean } = {},
 ) {
   renderer.key(name, mods);
   await t.renderOnce();
@@ -7922,3 +7922,514 @@ for (const settledAt of ["2026-10-06T00:00:03Z", "2026-10-06T00:00:00Z"])
     assert.ok(message >= 0 && turn > message && workflow > turn, frame);
     assert.equal(frame.match(/Step · repair/g)?.length, 1);
   });
+
+function historyRow(
+  id: string,
+  content: string,
+  source: "stored" | "preview" = "stored",
+): SessionHistoryRow {
+  return {
+    id,
+    position: id,
+    source,
+    turnStartedAt: "2026-10-06T00:00:00Z",
+    turn: "opaque-turn",
+    value: { kind: "message", role: "assistant", content },
+  };
+}
+function historyPage(
+  rows: readonly SessionHistoryRow[],
+  hasEarlier = false,
+): SessionHistorySnapshot {
+  return {
+    family: "session-history",
+    runId: "run-1",
+    session: "conversation",
+    result: {
+      found: true,
+      history: {
+        rows,
+        hasEarlier,
+        transcriptPage: {
+          type: "transcript-page",
+          runId: "run-1",
+          session: "conversation",
+        },
+        transcriptExport: {
+          type: "transcript-export",
+          runId: "run-1",
+          session: "conversation",
+        },
+      },
+    },
+  };
+}
+function firstHistoryLine(frame: string): string {
+  const lines = frame.split("\n");
+  return (
+    lines[lines.findIndex((line) => line.includes("Timeline")) + 1] ?? ""
+  ).trim();
+}
+function historyBadge(frame: string): number {
+  const label =
+    frame.split("\n").find((line) => line.includes("Timeline")) ?? "";
+  return Number(label.match(/(?:▼ | · )(\d+)/)?.[1] ?? 0);
+}
+async function mountHistory(width: number, height = 14, input = false) {
+  return mountWorkbench(
+    (input ? interactiveRunOf : runOf)({
+      sessions: [
+        { session: "conversation", name: "Conversation", availability: "open" },
+      ],
+    }),
+    width,
+    height,
+  );
+}
+async function seekHistoryLine(
+  wb: Awaited<ReturnType<typeof mountWorkbench>>,
+  expected: string,
+) {
+  await press(wb.t, wb.renderer, "home", { alt: true });
+  for (
+    let line = 0;
+    line < 80 && firstHistoryLine(wb.t.captureCharFrame()) !== expected;
+    line++
+  )
+    await press(wb.t, wb.renderer, "down", { alt: true });
+  assert.equal(firstHistoryLine(wb.t.captureCharFrame()), expected);
+}
+
+for (const width of [40, 100]) {
+  test(`m10-paused-history-identity H2: nonzero wrapped offset survives insertion, removal, preview update/settlement, replacement and append at ${width}`, async () => {
+    const wb = await mountHistory(width);
+    const anchorLine = "ACTIVITY_ANCHOR".padEnd(width - 6, "A");
+    const nextLine = "OFFSET_NEXT".padEnd(width - 6, "B");
+    const anchor = historyRow(
+      "anchor",
+      `${"P".repeat(width - 2)} ${anchorLine} ${nextLine}\nANCHOR_LAST`,
+      "preview",
+    );
+    const initial = Array.from({ length: 30 }, (_, i) =>
+      i === 5 ? anchor : historyRow(`row-${i}`, `ROW_${i}`),
+    );
+    wb.control.setHistory(historyPage(initial));
+    await wb.t.renderOnce();
+    await seekHistoryLine(wb, anchorLine); // offset 2: role header, P line, anchor line
+    const badge = historyBadge(wb.t.captureCharFrame());
+    assert.equal(badge, 22); // narrow bottom cuts ROW_8; wide bottom fully shows ROW_7
+
+    const unchanged = async (rows: readonly SessionHistoryRow[]) => {
+      wb.control.setHistory(historyPage(rows));
+      await wb.t.renderOnce();
+      assert.equal(firstHistoryLine(wb.t.captureCharFrame()), anchorLine);
+      assert.equal(historyBadge(wb.t.captureCharFrame()), badge);
+      assert.doesNotMatch(wb.t.captureCharFrame(), /PREVIEW_INSERTED/);
+    };
+    const inserted = historyRow("inserted", "PREVIEW_INSERTED", "preview");
+    await unchanged([inserted, ...initial]);
+    await unchanged([
+      historyRow("inserted", "PREVIEW_UPDATED", "preview"),
+      ...initial,
+    ]);
+    await unchanged(initial.slice(1)); // remove before the surviving anchor
+    await unchanged(
+      initial.map((row) =>
+        row.id === "anchor"
+          ? {
+              ...anchor,
+              value: {
+                kind: "message",
+                role: "assistant",
+                content: `${"P".repeat(width - 2)} ${anchorLine} ${nextLine}\nPREVIEW_UPDATED_LAST`,
+              },
+            }
+          : row,
+      ),
+    );
+    const settled: SessionHistoryRow = { ...anchor, source: "stored" };
+    await unchanged(
+      initial.map((row) => (row.id === "anchor" ? settled : { ...row })),
+    );
+    const appended = [
+      ...initial.map((row) => (row.id === "anchor" ? settled : { ...row })),
+      historyRow("appended", "APPENDED"),
+    ];
+    wb.control.setHistory(historyPage(appended));
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), anchorLine);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), badge + 1);
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), nextLine); // unchanged offset, not just row
+    await press(wb.t, wb.renderer, "end", { alt: true });
+    assert.match(wb.t.captureCharFrame(), /APPENDED/);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+    wb.control.setHistory(
+      historyPage([...appended, historyRow("live", "LIVE_APPEND")]),
+    );
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /LIVE_APPEND/);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+  });
+}
+
+function activityRow(id: string, description = id): SessionHistoryRow {
+  return { ...historyRow(id, ""), value: { kind: "activity", description } };
+}
+
+for (const width of [40, 100]) {
+  for (const fallback of [
+    "tie-later",
+    "nearest-earlier",
+    "no-survivor",
+  ] as const) {
+    test(`m10-paused-history-identity: ${fallback} uses prior order, offset zero and exact badge at ${width}`, async () => {
+      const wb = await mountHistory(width);
+      const initial = Array.from({ length: 20 }, (_, i) =>
+        i === 5
+          ? historyRow(
+              "old-5",
+              "OFFSET_ONE\nANCHOR_OFFSET_TWO\nANCHOR_END",
+              "preview",
+            )
+          : activityRow(`old-${i}`, `OLD_${i}`),
+      );
+      wb.control.setHistory(historyPage(initial));
+      await wb.t.renderOnce();
+      await seekHistoryLine(wb, "ANCHOR_OFFSET_TWO"); // nonzero offset 2
+      const added = Array.from({ length: 15 }, (_, i) =>
+        activityRow(`new-${i}`, `NEW_${i}`),
+      );
+      const replacement =
+        fallback === "tie-later"
+          ? [added[0]!, initial[7]!, initial[3]!, ...added.slice(1)]
+          : fallback === "nearest-earlier"
+            ? [added[0]!, initial[8]!, initial[4]!, ...added.slice(1)]
+            : added;
+      wb.control.setHistory(historyPage(replacement));
+      await wb.t.renderOnce();
+      assert.equal(
+        firstHistoryLine(wb.t.captureCharFrame()),
+        fallback === "tie-later"
+          ? "↳ OLD_7"
+          : fallback === "nearest-earlier"
+            ? "↳ OLD_4"
+            : "═".repeat(width === 40 ? 4 : 34) +
+              " Conversation · Conversation " +
+              "═".repeat(width === 40 ? 5 : 35),
+      );
+      // The first current row carries the Session/beginning dividers, never an activity.
+      if (fallback !== "no-survivor") {
+        assert.equal(
+          historyBadge(wb.t.captureCharFrame()),
+          width === 40
+            ? fallback === "tie-later"
+              ? 8
+              : 7
+            : fallback === "tie-later"
+              ? 9
+              : 8,
+        );
+        await press(wb.t, wb.renderer, "down", { alt: true });
+        assert.equal(
+          firstHistoryLine(wb.t.captureCharFrame()),
+          fallback === "tie-later" ? "↳ OLD_3" : "↳ NEW_1",
+        );
+      } else {
+        assert.equal(
+          historyBadge(wb.t.captureCharFrame()),
+          width === 40 ? 8 : 9,
+        );
+        await press(wb.t, wb.renderer, "down", { alt: true });
+        assert.match(firstHistoryLine(wb.t.captureCharFrame()), /NEW_0/);
+      }
+    });
+  }
+
+  test(`m10-paused-history-identity: empty-to-returning and short pages remain paused; resize and shrink clamp only the row offset at ${width}`, async () => {
+    const wb = await mountHistory(width);
+    const anchor = historyRow(
+      "anchor",
+      "START\nOFFSET_ONE\nOFFSET_TWO\nOFFSET_THREE",
+    );
+    const initial = [
+      activityRow("before", "BEFORE"),
+      anchor,
+      ...Array.from({ length: 20 }, (_, i) => activityRow(`tail-${i}`)),
+    ];
+    wb.control.setHistory(historyPage(initial));
+    await wb.t.renderOnce();
+    await seekHistoryLine(wb, "OFFSET_THREE"); // offset 4
+    wb.control.setHistory(historyPage([initial[0]!, anchor]));
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "OFFSET_THREE");
+    assert.match(wb.t.captureCharFrame(), /Timeline · Paused/);
+    const shortLines = timelineLines(wb.t.captureCharFrame())
+      .slice(0, 4)
+      .map((line) => line.trim());
+    assert.deepEqual(shortLines, ["OFFSET_THREE", "", "", ""]);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+    await press(wb.t, wb.renderer, "up", { alt: true });
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "OFFSET_TWO");
+    wb.t.resize(width === 40 ? 100 : 40, 24);
+    wb.renderer.resize(width === 40 ? 100 : 40, 24);
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "OFFSET_TWO");
+    wb.control.setHistory(
+      historyPage([initial[0]!, historyRow("anchor", "SHRUNK_LAST")]),
+    );
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "SHRUNK_LAST"); // offset clamps from 3 to 1
+    wb.control.setHistory(
+      historyPage([
+        ...initial.slice(0, 1),
+        historyRow("anchor", "SHRUNK_LAST"),
+        activityRow("append", "APPENDED_WHILE_PAUSED"),
+      ]),
+    );
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "SHRUNK_LAST");
+    wb.control.setHistory(historyPage([]));
+    await wb.t.renderOnce();
+    assert.match(
+      firstHistoryLine(wb.t.captureCharFrame()),
+      /Beginning of Run history/,
+    );
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+    assert.match(wb.t.captureCharFrame(), /Timeline · Paused/);
+    wb.control.setHistory(
+      historyPage([
+        activityRow("return", "RETURNED"),
+        activityRow("after-return", "AFTER_RETURN"),
+      ]),
+    );
+    await wb.t.renderOnce();
+    assert.match(firstHistoryLine(wb.t.captureCharFrame()), /Conversation/); // earliest row, offset zero
+    const returned = firstHistoryLine(wb.t.captureCharFrame());
+    wb.control.setHistory(
+      historyPage(
+        Array.from({ length: 30 }, (_, i) =>
+          i === 0
+            ? activityRow("return", "RETURNED")
+            : activityRow(`returned-${i}`),
+        ),
+      ),
+    );
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), returned);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 14); // returning content never silently attached
+  });
+}
+
+for (const width of [40, 100]) {
+  test(`m10-paused-history-identity: 200/201-row eviction preserves an offset then falls forward from an evicted anchor at ${width}`, async () => {
+    const wb = await mountHistory(width);
+    const initial = Array.from({ length: 200 }, (_, i) =>
+      i === 5
+        ? historyRow("row-5", "ANCHOR_FIRST\nEVICTION_OFFSET\nANCHOR_LAST")
+        : activityRow(`row-${i}`, `ROW_${i}`),
+    );
+    wb.control.setHistory(historyPage(initial));
+    await wb.t.renderOnce();
+    await seekHistoryLine(wb, "EVICTION_OFFSET"); // offset 2
+    assert.equal(
+      historyBadge(wb.t.captureCharFrame()),
+      width === 40 ? 188 : 189,
+    );
+    const retained = [...initial.slice(1), activityRow("row-200", "ROW_200")];
+    wb.control.setHistory(historyPage(retained, true));
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "EVICTION_OFFSET");
+    assert.equal(
+      historyBadge(wb.t.captureCharFrame()),
+      width === 40 ? 189 : 190,
+    );
+    await press(wb.t, wb.renderer, "home", { alt: true });
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.match(firstHistoryLine(wb.t.captureCharFrame()), /ROW_1/); // offset 2, below attached rules
+    wb.control.setHistory(
+      historyPage(
+        [...retained.slice(1), activityRow("row-201", "ROW_201")],
+        true,
+      ),
+    );
+    await wb.t.renderOnce();
+    assert.match(
+      firstHistoryLine(wb.t.captureCharFrame()),
+      /Earlier conversation is not shown/,
+    ); // fallback row-2, offset zero
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 197);
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.match(firstHistoryLine(wb.t.captureCharFrame()), /Conversation/);
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.match(firstHistoryLine(wb.t.captureCharFrame()), /ROW_2/);
+  });
+
+  test(`m10-paused-history-identity: wheel, Alt, page navigation and explicit latest beside native prompt editing at ${width}`, async () => {
+    const wb = await mountHistory(width, 20, true);
+    const rows = Array.from({ length: 30 }, (_, i) =>
+      historyRow(`row-${i}`, `ROW_${i}`),
+    );
+    wb.control.setHistory(historyPage(rows));
+    await wb.t.renderOnce();
+    await seekHistoryLine(wb, "ROW_5");
+    const first = firstHistoryLine(wb.t.captureCharFrame());
+    await type(wb.t, "draft");
+    for (const name of ["up", "down", "home", "end"]) {
+      await press(wb.t, wb.renderer, name); // dispatcher lets native field own these
+      assert.equal(firstHistoryLine(wb.t.captureCharFrame()), first);
+    }
+    wb.t.mockInput.pressKey("HOME");
+    await type(wb.t, "A");
+    wb.t.mockInput.pressKey("END");
+    wb.t.mockInput.pressArrow("left");
+    await type(wb.t, "B");
+    assert.match(wb.t.captureCharFrame(), /AdrafBt/);
+    await press(wb.t, wb.renderer, "up", { alt: true });
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "Assistant");
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
+    const frame = wb.t.captureCharFrame();
+    const y =
+      frame.split("\n").findIndex((line) => line.includes("Timeline")) + 1;
+    await wb.t.mockMouse.scroll(5, y, "up");
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "Assistant");
+    await wb.t.mockMouse.scroll(5, y, "down");
+    await wb.t.renderOnce();
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
+    // viewport 10 at 40 columns, 9 at 100; half pages move 5 and 4 displayed lines.
+    await press(wb.t, wb.renderer, "pagedown");
+    assert.equal(
+      firstHistoryLine(wb.t.captureCharFrame()),
+      width === 40 ? "Assistant" : "ROW_7",
+    );
+    await press(wb.t, wb.renderer, "pageup");
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
+    assert.match(wb.t.captureCharFrame(), /AdrafBt/);
+    await press(wb.t, wb.renderer, "end", { alt: true });
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+    await press(wb.t, wb.renderer, "up", { alt: true });
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 1); // partly visible final row
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0); // deliberate downward reattachment
+    wb.control.setHistory(
+      historyPage([...rows, historyRow("latest", "FOLLOWED_APPEND")]),
+    );
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /FOLLOWED_APPEND/);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+  });
+}
+
+test("m10-paused-history-identity: one-line viewport pages move at least one displayed line", async () => {
+  const wb = await mountHistory(100, 8);
+  wb.control.setHistory(
+    historyPage(
+      Array.from({ length: 20 }, (_, i) => historyRow(`row-${i}`, `ROW_${i}`)),
+    ),
+  );
+  await wb.t.renderOnce();
+  await seekHistoryLine(wb, "ROW_5");
+  await press(wb.t, wb.renderer, "pageup");
+  assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "Assistant");
+  await press(wb.t, wb.renderer, "pagedown");
+  assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
+});
+
+for (const width of [40, 100]) {
+  test(`m10-paused-history-identity: rewrap keeps a surviving row's nonzero offset and clamps to its last line at ${width}`, async () => {
+    const wb = await mountHistory(width);
+    const content = `${"P".repeat(width - 2)} ${"REWRAP_OFFSET".padEnd(width - 6, "X")} ${"Z".repeat(width - 6)}`;
+    const initial = [
+      activityRow("before", "BEFORE"),
+      historyRow("anchor", content),
+      ...Array.from({ length: 20 }, (_, i) => activityRow(`after-${i}`)),
+    ];
+    wb.control.setHistory(historyPage(initial));
+    await wb.t.renderOnce();
+    await seekHistoryLine(wb, "REWRAP_OFFSET".padEnd(width - 6, "X")); // offset 2
+    wb.t.resize(width === 40 ? 100 : 40, 14);
+    wb.renderer.resize(width === 40 ? 100 : 40, 14);
+    await wb.t.renderOnce();
+    assert.equal(
+      firstHistoryLine(wb.t.captureCharFrame()),
+      width === 40 ? "Z".repeat(34) : "P".repeat(34),
+    );
+    // The offset stays 2 despite reflow: at wide width it is the last content line.
+    await press(wb.t, wb.renderer, "up", { alt: true });
+    assert.equal(
+      firstHistoryLine(wb.t.captureCharFrame()),
+      width === 40
+        ? `${"P".repeat(38)} ${"REWRAP_OFFSET".padEnd(34, "X")}`
+        : "P".repeat(38),
+    );
+    noOverflow(wb.t.captureCharFrame(), width === 40 ? 100 : 40);
+  });
+}
+
+for (const width of [40, 100]) {
+  for (const owner of [
+    "dialog",
+    "request",
+    "gate",
+    "checkpoint",
+    "confirmation",
+    "details",
+  ] as const) {
+    test(`m10-paused-history-identity: ${owner} owns navigation before history at ${width}`, async () => {
+      const wb = await mountHistory(width, 30, true);
+      const rows = Array.from({ length: 30 }, (_, i) =>
+        historyRow(`row-${i}`, `ROW_${i}`),
+      );
+      wb.control.setHistory(historyPage(rows));
+      await wb.t.renderOnce();
+      await seekHistoryLine(wb, "ROW_5");
+      const badge = historyBadge(wb.t.captureCharFrame());
+      const sessions = [
+        {
+          session: "conversation",
+          name: "Conversation",
+          availability: "open" as const,
+        },
+      ];
+      if (owner === "dialog")
+        await press(wb.t, wb.renderer, "p", { ctrl: true });
+      else if (owner === "request") wb.control.setLive(requestOverlay());
+      else if (owner === "gate") wb.control.setRun(freeTextRunOf({ sessions }));
+      else if (owner === "checkpoint")
+        wb.control.setRun(blockedRunOf({ sessions }));
+      else if (owner === "confirmation")
+        await press(wb.t, wb.renderer, "e", { ctrl: true });
+      else await press(wb.t, wb.renderer, "g", { ctrl: true });
+      await wb.t.renderOnce();
+      for (const key of ["end", "home", "up", "down"])
+        await press(wb.t, wb.renderer, key, { alt: true });
+      await press(wb.t, wb.renderer, "pagedown");
+      await wb.t.mockMouse.scroll(5, 6, "down");
+      await wb.t.renderOnce();
+      assert.deepEqual(wb.control.ends, []);
+      assert.deepEqual(wb.control.sends, []);
+      assert.deepEqual(wb.control.texts, []);
+      if (owner === "dialog") {
+        wb.t.mockInput.pressEscape();
+        await wb.t.waitForFrame((frame) => !frame.includes("Commands"));
+      } else if (owner === "confirmation")
+        await press(wb.t, wb.renderer, "escape");
+      else if (owner === "details") await press(wb.t, wb.renderer, "d");
+      else {
+        wb.control.setLive(undefined);
+        wb.control.setRun(interactiveRunOf({ sessions }));
+        await wb.t.renderOnce();
+      }
+      assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
+      assert.equal(historyBadge(wb.t.captureCharFrame()), badge);
+      if (owner === "confirmation")
+        assert.doesNotMatch(
+          wb.t.captureCharFrame(),
+          /End this interactive Step/,
+        );
+    });
+  }
+}

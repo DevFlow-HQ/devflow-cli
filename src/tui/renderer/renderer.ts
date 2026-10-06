@@ -2,6 +2,7 @@ import {
   CliRenderEvents,
   createCliRenderer,
   type CliRenderer,
+  type KeyEvent,
 } from "@opentui/core";
 
 // The legacy-conhost startup notice is a renderer-module terminal concern (it
@@ -23,14 +24,12 @@ export {
 // its keep by making teardown ordering exercisable against a fake with no
 // terminal and no native library.
 
-/** The narrow key value the Port hands its one consumer (the Run Workbench). It
- *  declares only the two fields that drive the Workbench's raw-key pipeline, so no
- *  OpenTUI key type crosses the Port and the consumer needs no cast (A16). The
- *  production Adapter's richer key event (OpenTUI's `ParsedKey`) is assignable to
- *  it; the fields are optional because a Port consumer must not assume more. */
+/** The Workbench's key name and modifiers. The Adapter translates OpenTUI's
+ *  `meta` modifier to Alt without exposing its native event type. */
 export interface RendererKeyEvent {
   readonly name?: string;
   readonly ctrl?: boolean;
+  readonly alt?: boolean;
 }
 
 export interface RendererPort {
@@ -98,8 +97,10 @@ function wrapRenderer(renderer: CliRenderer): RendererPort {
   return {
     size: () => ({ width: renderer.width, height: renderer.height }),
     onKey(handler) {
-      renderer.keyInput.on("keypress", handler);
-      return () => renderer.keyInput.off("keypress", handler);
+      const listener = (key: KeyEvent) =>
+        handler({ name: key.name, ctrl: key.ctrl, alt: key.meta });
+      renderer.keyInput.on("keypress", listener);
+      return () => renderer.keyInput.off("keypress", listener);
     },
     onResize(handler) {
       const listener = (width: number, height: number) =>
@@ -138,7 +139,7 @@ export async function createProductionRenderer(): Promise<{
     exitSignals: [],
     targetFps: 60,
     gatherStats: false,
-    useMouse: false,
+    useMouse: true,
     autoFocus: false,
     openConsoleOnError: false,
   });

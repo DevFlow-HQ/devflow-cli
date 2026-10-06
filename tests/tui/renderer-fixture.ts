@@ -14,7 +14,12 @@ export interface FakeRenderer {
   /** Deliver a key event to every current subscriber. */
   key(
     name: string,
-    mods?: { ctrl?: boolean; shift?: boolean; sequence?: string },
+    mods?: {
+      ctrl?: boolean;
+      alt?: boolean;
+      shift?: boolean;
+      sequence?: string;
+    },
   ): void;
   /** Change the reported size and notify every resize subscriber. */
   resize(width: number, height: number): void;
