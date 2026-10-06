@@ -14,8 +14,9 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createServer, type Socket } from "node:net";
 import {
   CODEX_EXECUTABLE_ENV,
   type CleanupReport,
@@ -5357,5 +5358,83 @@ test("[codex] Turn producer trace parity: seal precedes held native reap and pre
   } finally {
     release();
     await prepared.close();
+  }
+});
+
+test("Codex descendant startup does not hold Turn acceptance past the effective-model read deadline", async () => {
+  const workspace = makeTempDir("codex-gated-tree-");
+  const worker = join(workspace, "worker.mjs");
+  const report = join(workspace, "tree.json");
+  const server = createServer();
+  let peer: Socket | undefined;
+  let harness: PreparedHarness | undefined;
+  const connected = new Promise<Socket>((resolve) => {
+    server.once("connection", (socket) => {
+      peer = socket;
+      resolve(socket);
+    });
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ host: "127.0.0.1", port: 0 }, resolve);
+    });
+    const address = server.address();
+    assert.ok(address !== null && typeof address !== "string");
+    writeFileSync(
+      worker,
+      `
+      import { connect } from "node:net";
+      const gate = connect({ host: "127.0.0.1", port: ${address.port} });
+      await new Promise((resolve, reject) => {
+        gate.once("error", reject);
+        gate.once("data", resolve);
+      });
+      gate.destroy();
+      process.stdout.write(JSON.stringify({ harnessPid: process.pid, pids: [] }) + "\\n");
+      setInterval(() => {}, 1000);
+    `,
+    );
+    const installed = installSyntheticCodexReplayer();
+    installed.configureTurn({ backgroundTree: { worker, report } });
+    const prepared = await createCodexAdapter({
+      path: installed.path,
+      env: {},
+      controlTimeoutMs: 500,
+    }).prepare({ workspace });
+    assert.ok(prepared.ok);
+    if (!prepared.ok) throw new Error("unreachable");
+    harness = prepared.harness;
+    const turn = harness.startTurn(turnRequest());
+    const unreadModel = new Promise<void>((resolve) => {
+      turn.subscribe((event) => {
+        if (
+          event.kind === "activity" &&
+          event.description.includes("did not report this Turn's effective")
+        )
+          resolve();
+      });
+    });
+    // The descendant is held until the observed read deadline, never a sleep.
+    await Promise.race([Promise.all([unreadModel, connected]), turn.result()]);
+    (await connected).write("release");
+    const result = await turn.result();
+    assert.equal(
+      result.kind,
+      "completed",
+      `tool startup must not consume Turn acceptance: ${JSON.stringify(result)}`,
+    );
+    assert.deepEqual(effectiveModel(result), { known: false });
+    assert.equal(existsSync(report), true);
+  } finally {
+    try {
+      await harness?.close();
+    } finally {
+      peer?.destroy();
+      if (server.listening)
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+    }
   }
 });

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  cpSync,
+  existsSync,
+  readFileSync,
+  watch,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
@@ -60,17 +66,39 @@ async function ready(
   report: string,
   harness: "claude-code" | "codex",
 ): Promise<void> {
-  await new Promise<void>((resolve) =>
-    turn.subscribe((event) => {
-      if (
-        (harness === "claude-code" && event.kind === "session") ||
-        (harness === "codex" && event.kind === "model")
-      )
-        resolve();
-    }),
-  );
-  treeSchema.parse(JSON.parse(readFileSync(report, "utf8")));
+  let watcher: ReturnType<typeof watch> | undefined;
+  const reported = new Promise<void>((resolve) => {
+    const check = () => {
+      if (existsSync(report)) resolve();
+    };
+    watcher = watch(dirname(report), check);
+    check();
+  });
+  let subscription: ReturnType<HarnessTurn["subscribe"]> | undefined;
+  const initialized =
+    harness === "codex"
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          subscription = turn.subscribe((event) => {
+            if (event.kind === "session") resolve();
+          });
+        });
+  try {
+    await Promise.race([
+      Promise.all([reported, initialized]),
+      turn.result().then((result) => {
+        throw new Error(
+          `Harness Turn settled before descendant readiness: ${JSON.stringify(result)}`,
+        );
+      }),
+    ]);
+    treeSchema.parse(JSON.parse(readFileSync(report, "utf8")));
+  } finally {
+    watcher?.close();
+    subscription?.unsubscribe();
+  }
 }
+
 function claudeTree(confirmed: boolean) {
   const directory = makeTempDir("w-harness-");
   cpSync(fixtures, directory, { recursive: true });
@@ -136,11 +164,12 @@ export async function interruptTree(
         "completed",
       );
   const turn = prepared.harness.startTurn(request("one"));
-  await stage("Harness tool descendants ready", () =>
-    ready(turn, report, harness),
-  );
-  const observed = holders(report);
+  const observed: ReturnType<typeof holders> = [];
   try {
+    await stage("Harness tool descendants ready", () =>
+      ready(turn, report, harness),
+    );
+    observed.push(...holders(report));
     assert.ok(observed.every((holder) => holder.alive()));
     await turn.interrupt();
     const result = await stage("native confirmation then whole-tree reap", () =>

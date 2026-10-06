@@ -1,7 +1,7 @@
 // Runtime-only descendant readiness. The worker leaves escaped Git Bash children
 // in the Harness's inherited Windows job, and reports their PIDs before content.
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 export async function backgroundTree(options) {
   if (options === undefined) return;
   const child = spawn(process.execPath, [options.worker, "bash-tree"], {
@@ -22,10 +22,12 @@ export async function backgroundTree(options) {
       output += bytes.toString();
       if (!output.includes("\n")) return;
       const tree = JSON.parse(output.split("\n")[0]);
+      const pending = `${options.report}.pending`;
       writeFileSync(
-        options.report,
+        pending,
         JSON.stringify({ ...tree, runtimePid: process.pid }),
       );
+      renameSync(pending, options.report);
       resolve();
     });
   });

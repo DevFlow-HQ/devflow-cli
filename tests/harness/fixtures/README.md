@@ -72,7 +72,7 @@ Six keys, all required (the structural step enforces their presence):
     (the Run working area); the replay fails if the launch carries none.
   - `exitAfter` — exit right after this Turn's bytes (models lost/corruption).
   - `ignoreSigterm` — swallow SIGTERM so only a force-kill stops the process.
-- `backgroundTree` — a synthetic Turn option naming the Windows descendant worker and its PID-report file. Readiness precedes native content.
+- `backgroundTree` — a synthetic Turn option naming the Windows descendant worker and its PID-report file. The Codex Turn is acknowledged before descendant startup; its PID report is published atomically and precedes native content. Runtime tree tests wait for that report, not optional Model observation.
 - `resume` — a separate `{ exitCode, turns }` played when the launch carries
   `--resume` (a reattached, detached Session).
 - `sessions[]` — optional later fresh Sessions: the Nth `--session-id` launch

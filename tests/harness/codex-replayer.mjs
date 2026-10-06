@@ -416,11 +416,10 @@ for await (const line of lines) {
     continue;
   }
   if (request.method === "turn/start") {
-    if (
-      !resumed &&
-      turnNumber === (scenario.turn?.completedTurnsBeforeBlock ?? 0)
-    )
-      await backgroundTree(scenario.turn?.backgroundTree);
+    const tree =
+      !resumed && turnNumber === (scenario.turn?.completedTurnsBeforeBlock ?? 0)
+        ? scenario.turn?.backgroundTree
+        : undefined;
     activeThreadId = request.params.threadId;
     if (request.params.model !== undefined) {
       configuredModel = request.params.model;
@@ -441,6 +440,16 @@ for await (const line of lines) {
       items: [],
       status: "inProgress",
     };
+    const acknowledge = () =>
+      process.stdout.write(
+        `${JSON.stringify({ id: request.id, result: { turn } })}\n`,
+      );
+    // Acceptance precedes tool startup. A short control deadline must not bound
+    // creating descendants; their report still precedes native Turn content.
+    if (tree !== undefined) {
+      acknowledge();
+      await backgroundTree(tree);
+    }
     if (scenario.turn?.approvals !== undefined) {
       for (const approval of scenario.turn.approvals) {
         if (approval.kind === "file" && approval.changes !== undefined) {
@@ -465,17 +474,13 @@ for await (const line of lines) {
           );
         }
       }
-      process.stdout.write(
-        `${JSON.stringify({ id: request.id, result: { turn } })}\n`,
-      );
+      if (tree === undefined) acknowledge();
       if (scenario.turn.completeWithOutstandingApproval === true) {
         completeActiveTurn();
       }
       continue;
     }
-    process.stdout.write(
-      `${JSON.stringify({ id: request.id, result: { turn } })}\n`,
-    );
+    if (tree === undefined) acknowledge();
     if (
       scenario.turn?.withholdTerminal === true &&
       turnNumber > (scenario.turn.completedTurnsBeforeBlock ?? 0) &&
