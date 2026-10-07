@@ -10,6 +10,7 @@ import {
 } from "./model-choice-picker.js";
 import type { RunActionsView, RunActionOutcome } from "./run-actions-view.js";
 import { useDialog } from "./vendor/dialog.js";
+import { modelChoiceText } from "./run-workbench-views.js";
 
 type AvailableOffer = Extract<ChangeModelChoiceOffer, { available: true }>;
 
@@ -34,6 +35,13 @@ export function createModelChoiceControl(props: {
     outcome: Accessor<RunActionOutcome>;
   }>();
   const pending = () => flight()?.outcome().kind === "pending";
+  /** The requested choice in words while its Operation is still pending. */
+  const requested = () => {
+    const sent = flight();
+    return sent !== undefined && pending()
+      ? modelChoiceText(sent.choice)
+      : undefined;
+  };
   let picker: ModelChoicePickerHandle | undefined;
   const close = () => {
     if (showing()) props.dialog.clear();
@@ -54,7 +62,7 @@ export function createModelChoiceControl(props: {
     const sent = flight();
     if (sent === undefined) return [];
     const outcome = sent.outcome();
-    const choice = `${sent.choice.model}${sent.choice.effort === undefined ? "" : ` · ${sent.choice.effort} effort`}`;
+    const choice = modelChoiceText(sent.choice);
     if (outcome.kind === "pending")
       return [
         `Model choice requested · ${choice} · ${reachWords(sent.offer.reach)}`,
@@ -69,7 +77,7 @@ export function createModelChoiceControl(props: {
       return [
         "Model choice change accepted. Read the Run for its current choice.",
       ];
-    const applied = `${change.choice.model}${change.choice.effort === undefined ? "" : ` · ${change.choice.effort} effort`}`;
+    const applied = modelChoiceText(change.choice);
     return [
       `Model choice ${change.reach === "live-turn" ? "applied to the live Turn" : "changed, applies from the next Turn"} · ${applied}`,
       ...(change.effortReset === undefined
@@ -175,5 +183,5 @@ export function createModelChoiceControl(props: {
     );
     setShowing(true);
   };
-  return { open, close, pending, messages };
+  return { open, close, pending, requested, messages };
 }

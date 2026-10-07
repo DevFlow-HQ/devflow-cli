@@ -30,6 +30,8 @@ export interface RendererKeyEvent {
   readonly name?: string;
   readonly ctrl?: boolean;
   readonly alt?: boolean;
+  /** Distinguishes Shift+Enter, a prompt newline, from Enter. */
+  readonly shift?: boolean;
 }
 
 export interface RendererPort {
@@ -98,7 +100,12 @@ function wrapRenderer(renderer: CliRenderer): RendererPort {
     size: () => ({ width: renderer.width, height: renderer.height }),
     onKey(handler) {
       const listener = (key: KeyEvent) =>
-        handler({ name: key.name, ctrl: key.ctrl, alt: key.meta });
+        handler({
+          name: key.name,
+          ctrl: key.ctrl,
+          alt: key.meta,
+          shift: key.shift,
+        });
       renderer.keyInput.on("keypress", listener);
       return () => renderer.keyInput.off("keypress", listener);
     },

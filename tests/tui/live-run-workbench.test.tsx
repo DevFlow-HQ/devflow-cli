@@ -286,10 +286,9 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   // The approval request replaces the bottom input with the inline decision control
   // naming the exact tool and input and both offered decisions (#121 AC1).
   await rendered.waitForFrame((frame) =>
-    frame.includes("Harness Request · awaiting your approval"),
+    frame.includes("Permission required · awaiting your approval"),
   );
   const frame = rendered.captureCharFrame();
-  assert.match(frame, /BLOCKED · ephemeral Harness Request/);
   assert.match(frame, /Assistant · streaming[\s\S]*Streaming the repair/);
   assert.match(frame, /Tool · file change · running/);
   assert.match(frame, /Thought.*Thinking.*Summary label/);
@@ -314,7 +313,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   // (allow) decision dispatches `answer-harness-request` and the Turn continues to
   // completion — the whole client wiring, not a hand-built Port submit (#121 AC1).
   fakeRenderer.key("return");
-  await rendered.waitForFrame((next) => next.includes("SUCCEEDED"));
+  await rendered.waitForFrame((next) => next.includes("Run succeeded"));
   assert.match(rendered.captureCharFrame(), /Tool · file change · unconfirmed/);
   assert.match(rendered.captureCharFrame(), /Thought.*incomplete/);
   assert.doesNotMatch(rendered.captureCharFrame(), /Thinking/);
@@ -325,7 +324,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   // The Harness identity and effective model live in the details panel now (#194
   // story 35), read from the durable `harness` view — not the old model-only header
   // that hardcoded "Claude Code" (#125). Open the panel to confirm the observed line.
-  fakeRenderer.key("d");
+  fakeRenderer.key("g", { ctrl: true });
   await rendered.waitForFrame((next) => next.includes("Observed Harness"));
   assert.match(
     rendered.captureCharFrame(),
@@ -453,9 +452,7 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
   // The Workbench opens on the grill's Turn boundary with the agent's first answer
   // already shown: the idea went out in the entry Turn, not a second paste.
   await rendered.waitForFrame((frame) => frame.includes(question));
-  await rendered.waitForFrame((frame) =>
-    frame.includes("BLOCKED · interactive Turn"),
-  );
+  await rendered.waitForFrame((frame) => frame.includes("◇ Your move"));
   const [listed] = wired.runGroup.listRuns();
   assert.ok(listed);
   const runProjection = wired.projectionPort.openProjection({

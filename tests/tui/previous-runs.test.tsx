@@ -611,7 +611,7 @@ test("Enter opens the selected Run's Workbench; Escape returns with the row rest
   t.mockInput.pressArrow("down"); // select the second row
   await until(() => selectedLine(t.captureCharFrame()).includes("run-b"));
   t.mockInput.pressEnter(); // → Workbench
-  await t.waitForFrame((f) => f.includes("Timeline"));
+  await t.waitForFrame((f) => /\^G details|ctrl\+g details/.test(f)); // the Workbench
 
   renderer.key("escape"); // Workbench Escape → back to the list
   await until(() => t.captureCharFrame().includes("Previous Runs"));
@@ -635,7 +635,7 @@ test("Escape restores a row from a later page by paging forward on remount", asy
     );
   }
   t.mockInput.pressEnter(); // → Workbench
-  await t.waitForFrame((f) => f.includes("Timeline"));
+  await t.waitForFrame((f) => /\^G details|ctrl\+g details/.test(f)); // the Workbench
 
   renderer.key("escape"); // back to the list, which remounts with only page 1
   await until(() => t.captureCharFrame().includes("f filter"));
@@ -674,8 +674,8 @@ test("delete from the Workbench returns to the list without that Run", async () 
   t.mockInput.pressArrow("down"); // select run-doomed
   await until(() => selectedLine(t.captureCharFrame()).includes("run-doomed"));
   t.mockInput.pressEnter(); // → Workbench
-  await t.waitForFrame((f) => f.includes("Timeline"));
-  renderer.key("d"); // open the details panel where delete now lives (#194)
+  await t.waitForFrame((f) => /\^G details|ctrl\+g details/.test(f)); // the Workbench
+  renderer.key("g", { ctrl: true }); // open the details panel where delete lives (#194)
   await t.waitForFrame((f) => f.includes("x delete")); // the delete control is offered
 
   renderer.key("x"); // arm the delete confirmation
@@ -695,7 +695,7 @@ test("a Run deleted outside the Workbench returns to Previous Runs with a dismis
     runView: disappearing.view,
   });
   t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Timeline"));
+  await t.waitForFrame((frame) => /\^G details|ctrl\+g details/.test(frame)); // the Workbench
 
   disappearing.deleted();
   await t.waitForFrame((frame) => frame.includes("was deleted"));

@@ -1631,8 +1631,8 @@ test("pending feedback then a transition into the Workbench for the Run id; a tr
   await t.waitForFrame((f) => f.includes("Run run-42"));
   const frame = t.captureCharFrame();
   assert.match(frame, /Run run-42/);
-  assert.match(frame, /SUCCEEDED/); // state in words as well as colour
-  assert.match(frame, /Timeline/); // timeline-first Workbench
+  assert.match(frame, /✓ Run succeeded/); // state in words as well as colour
+  assert.match(frame, /ctrl\+g details/); // the agent-screen Workbench
 });
 
 // --- typed inputs + inline findings ---------------------------------------
@@ -2046,7 +2046,7 @@ test("a Workspace prerequisite failure returns to Bundle selection with the reme
   assert.match(frame, /Run not started/);
   assert.doesNotMatch(frame, /workspace-prerequisite-failed/);
   assert.match(frame, /choose another Bundle/);
-  assert.doesNotMatch(frame, /Timeline/); // never transitioned into the Workbench
+  assert.doesNotMatch(frame, /\^G details|ctrl\+g details/); // never transitioned into the Workbench
 });
 
 test("a corrupted Bundle returns to selection advising reinstalling it", async () => {
@@ -2063,7 +2063,7 @@ test("a corrupted Bundle returns to selection advising reinstalling it", async (
   const frame = t.captureCharFrame();
   assert.match(frame, /corrupted/);
   assert.match(frame, /Reinstall the Bundle/);
-  assert.doesNotMatch(frame, /Timeline/); // never transitioned into the Workbench
+  assert.doesNotMatch(frame, /\^G details|ctrl\+g details/); // never transitioned into the Workbench
 });
 
 test("a Command refusal routes to Bundle selection without exposing its code", async () => {
@@ -2394,7 +2394,7 @@ test("end-to-end over the live seam: a launched Run transitions into its Workben
   await t.waitForFrame((f) => f.includes("Run run-9"));
   const frame = t.captureCharFrame();
   assert.match(frame, /Run run-9/);
-  assert.match(frame, /SUCCEEDED/);
+  assert.match(frame, /✓ Run succeeded/);
 });
 
 for (const [width, height] of [

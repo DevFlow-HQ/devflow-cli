@@ -19,6 +19,9 @@ decision says otherwise; closing one needs its own decision.
 Typed **Slash commands** and the Ctrl+P palette are TUI presentation, not a gap: each App command maps to an Operation headless has or to a gap
 above ([ADR 0040](./adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md)).
 
+The Workbench's headerless layout, its sidebar or prompt meta row, and its one bottom interaction (prompt, request, gate, checkpoint, or finished
+outcome) are TUI presentation, not a gap: `run show` prints the same state, Steps, gate, and Model choice facts ([#419](https://github.com/secantdev/secant/issues/419)).
+
 Bundle prompt rules apply to both clients. Build and install refuse authored prompts against all supported Harness rules, including Shipped Bundles.
 Launch Preparation and headless launch report a selected-Harness finding with `harness` as its correction; installed Bundles remain usable on a compatible
 Harness. Execution checks substituted prompts before Turn admission, failing an Agent Attempt or blocking an Interactive Entry. The missing resting

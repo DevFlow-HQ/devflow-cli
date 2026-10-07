@@ -16,13 +16,12 @@ import { useTheme } from "./vendor/theme-context.js";
 // its self-contained modal key branch, and its view interleave with the rest of the
 // Workbench only through the modal-control gate — the same seam the reference-inspection
 // overlay was split on (run-inspection.tsx). The controller owns everything about
-// answering the gate; the Workbench asks it whether a gate is up (to gate the Actions
-// rail and the Esc interrupt) and hands it keys while it is. Code moved verbatim from
-// run-workbench.tsx.
+// answering the gate; the Workbench's one resolved interaction asks it whether a gate
+// is up and hands it every key while it holds the bottom region.
 
 type Theme = ReturnType<typeof useTheme>["theme"];
 
-/** Rows the free-text Human Gate control occupies while it replaces the footer
+/** Rows the free-text Human Gate control occupies while it holds the bottom region
  *  (#121, spec story 17): the gate message, the declared output name, the text
  *  entry line, and a status/hint line — plus the suggestion row when the gate
  *  authored suggestions (#213). */
@@ -184,7 +183,7 @@ export function createGateControl(deps: {
 /** The free-text Human Gate control (#108, spec story 17): the gate message, the
  *  declared output the answer binds, a native OpenTUI text field (D9 — the field draws
  *  its own caret), and a status/hint line carrying a pending state or a refusal (empty
- *  local or Port). It replaces the footer while the Run rests blocked at the gate. The
+ *  local or Port). It holds the bottom region while the Run rests blocked at the gate. The
  *  field is blurred while the answer is in flight, so no stray key types then. */
 export function FreeTextGateControl(props: {
   gate: Accessor<FreeTextGate>;
@@ -225,7 +224,7 @@ export function FreeTextGateControl(props: {
       backgroundColor={theme.backgroundPanel}
     >
       <text fg={theme.warning} attributes={TextAttributes.BOLD} flexShrink={0}>
-        {clip(`› Human Gate · ${props.gate().message}`, w())}
+        {clip(`◆ Workflow decision · ${props.gate().message}`, w())}
       </text>
       <text fg={theme.textMuted} flexShrink={0}>
         {clip(

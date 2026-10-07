@@ -530,10 +530,31 @@ function wrappingEvents(count: number): RunTimelineEvent[] {
   }));
 }
 
-/** The timeline viewport's lines, from the one under the timeline label. */
+/** The conversation's lines: the headerless Workbench starts its conversation on
+ *  the first row inside its padding when no notice leads it (ADR 0036). */
 function timelineLines(frame: string): string[] {
-  const lines = frame.split("\n");
-  return lines.slice(lines.findIndex((line) => /› Timeline/.test(line)) + 1);
+  return frame.split("\n").slice(1);
+}
+
+/** The conversation column's wrapped text joined back into one string: above
+ *  120 columns the 42-column sidebar shares its rows, so only the column counts. */
+function conversationText(frame: string, width: number): string {
+  const column = width > 120 ? width - 43 : width;
+  return frame
+    .split("\n")
+    .map((line) => line.slice(0, column).trim())
+    .join(" ");
+}
+
+/** The Workbench still holds the screen: Home and Previous Runs never draw
+ *  inside it, and it never names them. */
+function onWorkbench(frame: string): boolean {
+  return !/Start a Run|Previous Runs/.test(frame);
+}
+
+/** Start a Run's Review has handed over to the Workbench. */
+function workbenchShown(frame: string): boolean {
+  return !frame.includes("enter start") && frame.trim() !== "";
 }
 
 // --- blocked-Run fixtures (#92) --------------------------------------------
@@ -654,7 +675,7 @@ async function mountWorkbench(
     ownedLiveRuns,
     preferences,
   );
-  await t.waitForFrame((f) => f.includes("Timeline"));
+  await t.waitForFrame(workbenchShown);
   return { t, control, renderer, exits };
 }
 
@@ -682,14 +703,6 @@ async function type(
   await t.renderOnce();
 }
 
-/** The frame's first `count` non-blank lines: the Workbench header. */
-function headerLines(frame: string, count: number): string[] {
-  return frame
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .slice(0, count);
-}
-
 function noOverflow(frame: string, width: number) {
   for (const line of frame.split("\n")) {
     assert.ok(
@@ -707,32 +720,43 @@ const PROGRESS: RunStepProgress[] = [
 
 // --- rendering (AC1) -------------------------------------------------------
 
-test("header, progress, and timeline render the facts headless run show prints", async () => {
-  const { t } = await mountWorkbench(
-    runOf({
-      runId: "run-77",
-      state: "running",
-      progress: PROGRESS,
-      position: 1,
-      timeline: [
-        { at: "2026-01-01T00:00:00.000Z", event: "run-created" },
-        {
-          at: "2026-01-01T00:01:00.000Z",
-          event: "attempt-settled",
-          detail: "passed",
-        },
-      ],
-    }),
-  );
-  const frame = t.captureCharFrame();
+test("m10-workbench-interaction: the headerless conversation, sidebar, and meta row render the facts headless run show prints", async () => {
+  const facts = runOf({
+    runId: "run-77",
+    state: "running",
+    progress: PROGRESS,
+    position: 1,
+    timeline: [
+      { at: "2026-01-01T00:00:00.000Z", event: "run-created" },
+      {
+        at: "2026-01-01T00:01:00.000Z",
+        event: "attempt-settled",
+        detail: "passed",
+      },
+    ],
+  });
+  // Above 120 columns the sidebar names the Bundle, the state in words, and every
+  // Step by glyph; there is no header (ADR 0036).
+  const wide = await mountWorkbench(facts, 140, 30);
+  const frame = wide.t.captureCharFrame();
   assert.match(frame, /Alpha Flow/); // Bundle name
   assert.doesNotMatch(frame, /run-77/); // an active Run's id lives in the panel
-  assert.match(frame, /RUNNING/); // state in words
-  assert.match(frame, /plan/); // every progress step, always visible
-  assert.match(frame, /build/);
-  assert.match(frame, /ship/);
+  assert.match(frame, /Running/); // state in words
+  assert.match(frame, /✓ plan/); // every Step, always visible beside the conversation
+  assert.match(frame, /▸ … build/);
+  assert.match(frame, /· ship/);
   assert.match(frame, /○ Run created/); // timeline events in plain words
   assert.match(frame, /▸ Step Attempt passed/);
+  assert.equal(timelineLines(frame)[0]!.trim().startsWith("Beginning"), true);
+  wide.t.renderer.destroy();
+
+  // At 120 columns or less the current Step moves into the prompt's meta row.
+  const narrow = await mountWorkbench(facts, 100, 30);
+  const compact = narrow.t.captureCharFrame();
+  assert.match(compact, /Step build/);
+  assert.doesNotMatch(compact, /Alpha Flow|ship/);
+  assert.match(compact, /○ Run created/);
+  assert.match(compact, /The Workflow is running/);
 });
 
 test("workbench-view-freshness: four stream-health tokens replace scroll-live and gate Operations", async () => {
@@ -754,8 +778,11 @@ test("workbench-view-freshness: four stream-health tokens replace scroll-live an
     okActions({ resume: () => pendingResume }),
   );
   const { t, control, renderer } = mounted;
-  assert.match(t.captureCharFrame(), /View current/);
+  // A current view adds no notice; the headerless screen states only departures.
+  assert.doesNotMatch(t.captureCharFrame(), /not Run state/);
   assert.doesNotMatch(t.captureCharFrame(), /\(live\)/);
+  // Resume lives in focused details now (ADR 0036).
+  await press(t, renderer, "g", { ctrl: true });
   renderer.key("r");
   await t.renderOnce();
 
@@ -764,7 +791,7 @@ test("workbench-view-freshness: four stream-health tokens replace scroll-live an
     lastConfirmedAt: "2026-09-22T10:30:00.000Z",
   });
   await t.renderOnce();
-  assert.match(t.captureCharFrame(), /View loading/);
+  assert.match(t.captureCharFrame(), /View loading · not Run state/);
 
   control.setFreshness({
     kind: "catching-up",
@@ -772,7 +799,7 @@ test("workbench-view-freshness: four stream-health tokens replace scroll-live an
     lastConfirmedAt: "2026-09-22T10:30:00.000Z",
   });
   await t.renderOnce();
-  assert.match(t.captureCharFrame(), /View catching up/);
+  assert.match(t.captureCharFrame(), /View catching up · not Run state/);
 
   control.setFreshness({
     kind: "disconnected",
@@ -781,14 +808,17 @@ test("workbench-view-freshness: four stream-health tokens replace scroll-live an
   });
   await t.renderOnce();
   const disconnected = t.captureCharFrame();
-  assert.match(disconnected, /View disconnected/);
+  assert.match(disconnected, /View disconnected · not Run state/);
   assert.match(disconnected, /last confirmed 2026-09-22 10:30:00Z/);
-  assert.match(disconnected, /r Reconnect/);
-  assert.match(disconnected, /View freshness · not Run state/);
+  assert.match(disconnected, /ctrl\+r reconnect/);
   assert.match(disconnected, /Operation pending · resume/);
   assert.doesNotMatch(disconnected, /r resume/);
 
+  // A bare `r` is never a Workbench command beside the prompt; Ctrl+R reconnects.
   renderer.key("r");
+  await t.renderOnce();
+  assert.deepEqual(control.reconnects, []);
+  renderer.key("r", { ctrl: true });
   await t.renderOnce();
   assert.deepEqual(control.reconnects, ["reconnect"]);
 });
@@ -847,7 +877,7 @@ test("the details panel shows the observed Harness, executable, version, and mod
   );
   // The header no longer carries the Harness/model facts (they moved to the panel).
   assert.doesNotMatch(t.captureCharFrame(), /Observed Harness/);
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   const frame = t.captureCharFrame();
   assert.match(frame, /Selected Harness · claude-code/);
   assert.match(
@@ -877,7 +907,7 @@ test("the panel drops the long executable path to stay readable at small widths 
   );
   renderer.resize(70, 30);
   await t.renderOnce();
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   const compact = t.captureCharFrame();
   assert.match(
     compact,
@@ -901,7 +931,7 @@ test("the panel reports no model rather than inventing one, and omits Harness fa
     100,
     30,
   );
-  await press(missing.t, missing.renderer, "d");
+  await press(missing.t, missing.renderer, "g", { ctrl: true });
   assert.match(
     missing.t.captureCharFrame(),
     /Observed Harness · Claude Code · \/usr\/bin\/claude · 1\.2\.3 · model not reported/,
@@ -913,7 +943,7 @@ test("the panel reports no model rather than inventing one, and omits Harness fa
     100,
     30,
   );
-  await press(commandOnly.t, commandOnly.renderer, "d");
+  await press(commandOnly.t, commandOnly.renderer, "g", { ctrl: true });
   const commandOnlyFrame = commandOnly.t.captureCharFrame();
   assert.doesNotMatch(commandOnlyFrame, /Selected Harness/);
   assert.doesNotMatch(commandOnlyFrame, /Observed Harness/);
@@ -941,7 +971,7 @@ test("the details panel toggles and shows identity, position, and resources", as
     }),
   );
   assert.doesNotMatch(t.captureCharFrame(), /Workspace:/); // closed by default
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   const frame = t.captureCharFrame();
   assert.match(frame, /Details/);
   assert.match(frame, /Run run-9/); // the id the active header leaves out
@@ -981,11 +1011,13 @@ test("a blocked Run shows a waiting-for-review note and the checkpoint facts", a
       },
     }),
   );
+  // Without a current answer Offer the checkpoint control waits, but the prompt
+  // still says what the Run waits on, in words (ADR 0036).
   const frame = t.captureCharFrame();
-  assert.match(frame, /BLOCKED/);
+  assert.doesNotMatch(frame, /Continue 3 More Iterations/);
   assert.match(frame, /waiting for review/);
   assert.match(frame, /Review the batch/);
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   assert.match(t.captureCharFrame(), /checkpoint verdict: done = fail/);
 });
 
@@ -1008,8 +1040,8 @@ test("launching transitions to the Workbench before the Run rests, and progress 
   );
   const renderer = makeFakeRenderer(100, 20);
   const { t } = await mountApp(control, renderer, "run-1", 100, 20);
-  await t.waitForFrame((f) => f.includes("Timeline"));
-  assert.match(t.captureCharFrame(), /RUNNING/); // reached the Workbench, still live
+  await t.waitForFrame(workbenchShown);
+  assert.match(t.captureCharFrame(), /The Workflow is running/); // reached the Workbench, still live
   assert.match(t.captureCharFrame(), /no activity yet/); // the Run has not rested
   // A Step runs: durable progress lands and follows the live edge into view.
   control.setRun(
@@ -1023,7 +1055,7 @@ test("launching transitions to the Workbench before the Run rests, and progress 
   await t.renderOnce();
   const frame = t.captureCharFrame();
   assert.match(frame, / e2/); // the newest row appeared while running
-  assert.match(frame, /View current/);
+  assert.doesNotMatch(frame, /not Run state/);
 });
 
 test("the timeline follows the live edge as durable updates append events", async () => {
@@ -1033,7 +1065,7 @@ test("the timeline follows the live edge as durable updates append events", asyn
     16,
   );
   const first = t.captureCharFrame();
-  assert.match(first, /View current/);
+  assert.doesNotMatch(first, /not Run state/);
   assert.match(first, / e5/); // newest visible
   control.setRun(runOf({ timeline: events(9) }));
   await t.renderOnce();
@@ -1075,7 +1107,7 @@ test("[selected-versus-observed-evidence] selected and observed Harness facts st
   await t.renderOnce();
   // Selected and observed facts live in the details panel now (#194 story 35); open
   // it and confirm the two read as visibly distinct lines (AC1), through the live Turn.
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   const streaming = t.captureCharFrame();
   assert.match(streaming, /Selected Harness · codex/);
   assert.match(
@@ -1256,7 +1288,7 @@ test("live rows respect paused timeline following and contribute to the new-acti
     100,
     14,
   );
-  await press(t, renderer, "up");
+  await press(t, renderer, "up", { alt: true });
   const before = t.captureCharFrame();
   const topLine = before.split("\n").find((line) => / e\d/.test(line));
   assert.ok(topLine);
@@ -1270,10 +1302,10 @@ test("live rows respect paused timeline following and contribute to the new-acti
   );
   assert.match(paused, /\d+ new activities · Jump to latest/);
 
-  await press(t, renderer, "end");
+  await press(t, renderer, "end", { alt: true });
   const latest = t.captureCharFrame();
   assert.match(latest, /Assistant · streaming[\s\S]*new streamed content/);
-  assert.match(latest, /View current/);
+  assert.doesNotMatch(latest, /Jump to latest/);
 });
 
 test("gate, request, interactive Turn, and agent Turn have colour-independent labels", async () => {
@@ -1304,8 +1336,13 @@ test("gate, request, interactive Turn, and agent Turn have colour-independent la
       ],
     }),
   );
-  assert.match(gate.t.captureCharFrame(), /BLOCKED · durable Human Gate/);
-  assert.match(gate.t.captureCharFrame(), /Human Gate · Approve the change\?/);
+  // ADR 0036 keeps a Workflow decision, Permission required, and the human's
+  // Turn distinct in words; an authored approve-reject gate keeps its headless
+  // answer path, so the prompt names what the Run waits on.
+  assert.match(
+    gate.t.captureCharFrame(),
+    /◆ Workflow decision · Approve the change\?/,
+  );
 
   const request = await mountWorkbench(
     runOf({
@@ -1336,14 +1373,10 @@ test("gate, request, interactive Turn, and agent Turn have colour-independent la
     ],
   });
   await request.t.renderOnce();
-  assert.match(
-    request.t.captureCharFrame(),
-    /BLOCKED · ephemeral Harness Request/,
-  );
   assert.match(request.t.captureCharFrame(), /Tool: Edit/);
   assert.match(
     request.t.captureCharFrame(),
-    /Harness Request · awaiting your approval/,
+    /△ Permission required · awaiting your approval/,
   );
 
   const interactive = await mountWorkbench(
@@ -1363,8 +1396,11 @@ test("gate, request, interactive Turn, and agent Turn have colour-independent la
   });
   await interactive.t.renderOnce();
   const interactiveFrame = interactive.t.captureCharFrame();
-  assert.match(interactiveFrame, /BLOCKED · interactive Turn/);
-  assert.match(interactiveFrame, /BLOCKED · interactive Turn/);
+  assert.match(interactiveFrame, /Your move/);
+  assert.doesNotMatch(
+    interactiveFrame,
+    /Workflow decision|Permission required/,
+  );
 });
 
 test("scrolling up anchors the first visible row, counts new activity, and jump-to-latest returns to the live edge", async () => {
@@ -1373,12 +1409,12 @@ test("scrolling up anchors the first visible row, counts new activity, and jump-
     100,
     14,
   );
-  await press(t, renderer, "up");
-  await press(t, renderer, "up");
+  await press(t, renderer, "up", { alt: true });
+  await press(t, renderer, "up", { alt: true });
   const scrolled = t.captureCharFrame();
   const topLine = scrolled.split("\n").find((line) => / e\d/.test(line));
   assert.ok(topLine, "a timeline row is visible");
-  assert.match(scrolled, /View current/); // freshness is independent of scrolling
+  assert.doesNotMatch(scrolled, /not Run state/); // freshness is independent of scrolling
 
   // New events append; the first visible row stays anchored and the count grows.
   control.setRun(runOf({ timeline: events(36) }));
@@ -1391,9 +1427,9 @@ test("scrolling up anchors the first visible row, counts new activity, and jump-
   );
   assert.match(anchored, /\d+ new/); // a new-activity badge
 
-  await press(t, renderer, "end"); // jump to the live edge
+  await press(t, renderer, "end", { alt: true }); // jump to the live edge
   const live = t.captureCharFrame();
-  assert.match(live, /View current/);
+  assert.doesNotMatch(live, /not Run state/);
   assert.match(live, / e35/); // the newest event
   assert.doesNotMatch(live, /new activit(?:y|ies) · Jump to latest/);
 });
@@ -1404,14 +1440,14 @@ test("timeline paging is wired: home reaches the oldest event, end returns to th
     100,
     14,
   );
-  assert.match(t.captureCharFrame(), /View current/);
+  assert.doesNotMatch(t.captureCharFrame(), /not Run state/);
   await press(t, renderer, "pageup"); // detaches from the live edge
-  assert.match(t.captureCharFrame(), /View current/);
-  await press(t, renderer, "home"); // jump to the oldest
+  assert.doesNotMatch(t.captureCharFrame(), /not Run state/);
+  await press(t, renderer, "home", { alt: true }); // jump to the oldest
   assert.match(t.captureCharFrame(), / e0 /);
-  await press(t, renderer, "end"); // back to the live edge
+  await press(t, renderer, "end", { alt: true }); // back to the live edge
   const live = t.captureCharFrame();
-  assert.match(live, /View current/);
+  assert.doesNotMatch(live, /not Run state/);
   assert.match(live, / e29/);
 });
 
@@ -1423,23 +1459,23 @@ test("workbench-timeline-inspection: the bounded window marks its beginning and 
   );
   assert.doesNotMatch(t.captureCharFrame(), /Beginning of Run history/);
 
-  await press(t, renderer, "home");
+  await press(t, renderer, "home", { alt: true });
   const beginning = t.captureCharFrame();
   assert.match(beginning, /Beginning of Run history/);
   assert.match(beginning, / e0 /);
 
-  await press(t, renderer, "down");
+  await press(t, renderer, "down", { alt: true });
   assert.doesNotMatch(t.captureCharFrame(), /Beginning of Run history/);
 
-  await press(t, renderer, "end");
-  await press(t, renderer, "up");
+  await press(t, renderer, "end", { alt: true });
+  await press(t, renderer, "up", { alt: true });
   assert.match(t.captureCharFrame(), /1 new activity · Jump to latest/);
 
   control.setRun(runOf({ timeline: events(32) }));
   await t.renderOnce();
   assert.match(t.captureCharFrame(), /3 new activities · Jump to latest/);
 
-  await press(t, renderer, "end");
+  await press(t, renderer, "end", { alt: true });
   assert.doesNotMatch(t.captureCharFrame(), /new activit(?:y|ies)/);
 
   // A full live window still begins at index zero: the marker is presentation only,
@@ -1452,7 +1488,7 @@ test("workbench-timeline-inspection: the bounded window marks its beginning and 
   assert.doesNotMatch(exactFrame, /new activit(?:y|ies)/);
 
   const narrow = await mountWorkbench(runOf({ timeline: events(30) }), 40, 14);
-  await press(narrow.t, narrow.renderer, "home");
+  await press(narrow.t, narrow.renderer, "home", { alt: true });
   const narrowBeginning = narrow.t.captureCharFrame();
   assert.match(narrowBeginning, /Beginning of Run history/);
   assert.match(narrowBeginning, /\d+ · Jump to latest/);
@@ -1508,10 +1544,10 @@ test("scrolling over wrapped rows steps by line, keeps its anchor under append a
   await t.renderOnce();
   // One line above the live edge hides only the newest row's last line: the badge
   // counts that one row, not lines.
-  await press(t, renderer, "up");
+  await press(t, renderer, "up", { alt: true });
   const scrolled = t.captureCharFrame();
   noOverflow(scrolled, 60);
-  assert.match(scrolled, /Timeline · 1 · Jump to latest/);
+  assert.match(scrolled, /▼ 1 · Jump to latest/);
   const first = timelineLines(scrolled)[0];
 
   // Three two-line rows append: the first visible line holds, and the count rises
@@ -1520,17 +1556,17 @@ test("scrolling over wrapped rows steps by line, keeps its anchor under append a
   await t.renderOnce();
   const appended = t.captureCharFrame();
   assert.equal(timelineLines(appended)[0], first);
-  assert.match(appended, /Timeline · 4 · Jump to latest/);
+  assert.match(appended, /▼ 4 · Jump to latest/);
 
   // From the top, down steps one display line at a time: reach row e1's first
   // line, then one more step shows its continuation line first.
-  await press(t, renderer, "home");
+  await press(t, renderer, "home", { alt: true });
   for (let i = 0; i < 6; i++) {
     if (/ e1 /.test(timelineLines(t.captureCharFrame())[0]!)) break;
-    await press(t, renderer, "down");
+    await press(t, renderer, "down", { alt: true });
   }
   assert.match(timelineLines(t.captureCharFrame())[0]!, / e1 /);
-  await press(t, renderer, "down");
+  await press(t, renderer, "down", { alt: true });
   const continuation = timelineLines(t.captureCharFrame())[0]!;
   assert.match(continuation, /^ {5}\S/);
   assert.doesNotMatch(continuation, / e\d+ /);
@@ -1737,7 +1773,7 @@ test("[step-session-dividers] dividers scroll with their rows: the anchor holds 
     14,
   );
   // One line above the live edge hides only the newest row's last line.
-  await press(t, renderer, "up");
+  await press(t, renderer, "up", { alt: true });
   const scrolled = t.captureCharFrame();
   assert.match(scrolled, /▼ 1 new activity · Jump to latest/);
   const first = timelineLines(scrolled)[0];
@@ -1751,12 +1787,12 @@ test("[step-session-dividers] dividers scroll with their rows: the anchor holds 
   assert.match(appended, /▼ 4 new activities · Jump to latest/);
 
   // From the top, a divider scrolls one line at a time like any row's line.
-  await press(t, renderer, "home");
+  await press(t, renderer, "home", { alt: true });
   const top = timelineLines(t.captureCharFrame());
   assert.deepEqual(dividers(top.slice(0, 1)), ["─ Step · s0"]);
-  await press(t, renderer, "down");
+  await press(t, renderer, "down", { alt: true });
   assert.match(timelineLines(t.captureCharFrame())[0]!, /Step Attempt e0/);
-  await press(t, renderer, "end");
+  await press(t, renderer, "end", { alt: true });
   assert.doesNotMatch(t.captureCharFrame(), /new activit/);
 });
 
@@ -1936,7 +1972,7 @@ test("a streamed preview longer than the viewport wraps in full and scrolls (#28
   assert.doesNotMatch(live, /Assistant preview/);
 
   // Home reaches the row's first line; every word is reachable by scrolling down.
-  await press(t, renderer, "home");
+  await press(t, renderer, "home", { alt: true });
   const seen = new Set<string>();
   for (let i = 0; i < 80; i++) {
     for (const word of timelineLines(t.captureCharFrame())
@@ -1956,10 +1992,10 @@ test("rows that advertise truncation still clip with an ellipsis beside wrapped 
     24,
     14,
   );
-  await press(timeline.t, timeline.renderer, "up");
+  await press(timeline.t, timeline.renderer, "up", { alt: true });
   const frame = timeline.t.captureCharFrame();
   noOverflow(frame, 24);
-  assert.match(frame, /› Timeline · 1 · Jump…/);
+  assert.match(frame, /▼ 1 · Jump/);
   // The rows beneath it wrap: the lorem words are whole, never cut by "…".
   const rows = timelineLines(frame).filter((line) => /lorem|ipsum/.test(line));
   assert.ok(rows.length > 0);
@@ -1982,13 +2018,15 @@ test("an empty timeline shows the no-activity placeholder", async () => {
   assert.match(t.captureCharFrame(), /no activity yet/);
 });
 
-test("pressing d again closes the details panel and returns focus to the timeline", async () => {
+test("Ctrl+G again closes the details panel and returns focus to the prompt", async () => {
   const { t, renderer } = await mountWorkbench(runOf({ timeline: events(4) }));
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   assert.match(t.captureCharFrame(), /› Details/);
-  await press(t, renderer, "d"); // toggle it back off
+  await press(t, renderer, "g", { ctrl: true }); // toggle it back off
   assert.doesNotMatch(t.captureCharFrame(), /Workspace:/);
-  assert.match(t.captureCharFrame(), /› Timeline/);
+  // The prompt holds the keys again: a typed letter reaches its field.
+  await type(t, "x");
+  assert.match(t.captureCharFrame(), /^ > x/m);
 });
 
 test("on a terminal too short for the panel, d does not open a clipped details panel", async () => {
@@ -1998,7 +2036,7 @@ test("on a terminal too short for the panel, d does not open a clipped details p
     100,
     9,
   );
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   const frame = t.captureCharFrame();
   assert.doesNotMatch(frame, /Workspace:/); // panel stayed hidden
   noOverflow(frame, 100);
@@ -2322,7 +2360,7 @@ test("opening a large text output shows bounded content with a truncation marker
   const big = Array.from({ length: 900 }, (_, i) => `line-${i}`).join("\n");
   control.setRead("log", { found: true, type: "text", content: big });
 
-  await press(t, renderer, "d"); // focus details
+  await press(t, renderer, "g", { ctrl: true }); // focus details
   await press(t, renderer, "return"); // open the selected (log) reference
   const opened = t.captureCharFrame();
   assert.match(opened, /log \(text\)/); // inspection title
@@ -2390,7 +2428,7 @@ test("workbench-timeline-inspection: timeline and inspection end truncated conte
       "\n",
     ),
   });
-  await press(inspection.t, inspection.renderer, "d");
+  await press(inspection.t, inspection.renderer, "g", { ctrl: true });
   await press(inspection.t, inspection.renderer, "return");
   await press(inspection.t, inspection.renderer, "end");
   assert.match(inspection.t.captureCharFrame(), /line-499.*… output truncated/);
@@ -2416,7 +2454,7 @@ test("captured output with colour escapes and carriage returns renders without t
   const raw = "[31mred line[0m\r\nplain line\r\n[1mbold line[0m";
   control.setRead("log", { found: true, type: "text", content: raw });
 
-  await press(t, renderer, "d"); // focus details
+  await press(t, renderer, "g", { ctrl: true }); // focus details
   await press(t, renderer, "return"); // open the log reference
   const frame = t.captureCharFrame();
   assert.ok(!frame.includes("["), "no escape sequences survive");
@@ -2456,7 +2494,7 @@ test("a Verdict and a diagnostic open through their references", async () => {
     content: "workspace copy of out.txt went missing",
   });
 
-  await press(t, renderer, "d"); // details focus, first resource (grade) selected
+  await press(t, renderer, "g", { ctrl: true }); // details focus, first resource (grade) selected
   await press(t, renderer, "return");
   assert.match(t.captureCharFrame(), /grade \(verdict\)/);
   assert.match(t.captureCharFrame(), /pass/);
@@ -2531,28 +2569,38 @@ test("a missing reference surfaces its Problem rather than throwing", async () =
     ],
   });
   const { t, renderer } = await mountWorkbench(run, 100, 30);
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   await press(t, renderer, "return");
   assert.match(t.captureCharFrame(), /resource-gone/);
 });
 
 // --- focus + Escape (AC5) --------------------------------------------------
 
-test("focus moves timeline → details → timeline, and Escape leaves the Workbench for Home", async () => {
+test("focus moves prompt → details → prompt, and Escape leaves the Workbench for Home", async () => {
   const { t, renderer } = await mountWorkbench(runOf({ timeline: events(4) }));
-  assert.match(t.captureCharFrame(), /› Timeline/); // focus glyph on the timeline
-  await press(t, renderer, "d"); // open + focus details
+  assert.doesNotMatch(t.captureCharFrame(), /Details/);
+  await press(t, renderer, "g", { ctrl: true }); // open + focus details
   assert.match(t.captureCharFrame(), /› Details/);
-  await press(t, renderer, "tab"); // back to the timeline
-  assert.match(t.captureCharFrame(), /› Timeline/);
+  await press(t, renderer, "tab"); // back to the prompt; the panel stays shown
+  assert.doesNotMatch(t.captureCharFrame(), /› Details/);
+  assert.match(t.captureCharFrame(), /Details · ctrl\+g focus/);
   await press(t, renderer, "escape"); // leaves the Workbench
-  assert.match(t.captureCharFrame(), /Secant/); // back on Home
-  assert.doesNotMatch(t.captureCharFrame(), /Timeline/);
+  assert.match(t.captureCharFrame(), /Start a Run/); // back on Home
+  assert.doesNotMatch(t.captureCharFrame(), /Details/);
 });
 
-test("q and Ctrl+C quit from the Workbench", async () => {
+test("m10-workbench-interaction: q types into the prompt; Ctrl+C clears a draft, then requests guarded Quit", async () => {
   const first = await mountWorkbench(runOf());
+  // No bare letter is a Workbench command beside the always-editable prompt.
   await press(first.t, first.renderer, "q");
+  await type(first.t, "q");
+  assert.equal(first.exits.length, 0);
+  assert.match(first.t.captureCharFrame(), /^ > q/m);
+  // The first Ctrl+C clears the draft and keeps the Workbench; the next quits.
+  await press(first.t, first.renderer, "c", { ctrl: true });
+  assert.equal(first.exits.length, 0);
+  assert.doesNotMatch(first.t.captureCharFrame(), /^ > q/m);
+  await press(first.t, first.renderer, "c", { ctrl: true });
   assert.equal(first.exits.length, 1);
 
   const second = await mountWorkbench(runOf());
@@ -2562,46 +2610,53 @@ test("q and Ctrl+C quit from the Workbench", async () => {
 
 // --- layout (AC6) ----------------------------------------------------------
 
-test("small width compacts the header before hiding the details panel, without overflow", async () => {
+test("m10-workbench-interaction: the sidebar shows at 121 columns, the meta row at 120, and the panel hides below its breakpoint without overflow", async () => {
   const { t, renderer } = await mountWorkbench(
-    runOf({ progress: PROGRESS, timeline: events(6) }),
-    100,
+    runOf({
+      progress: PROGRESS,
+      timeline: events(6),
+      modelChoice: { model: "fake-opus", effort: "high" },
+    }),
+    121,
     30,
   );
-  await press(t, renderer, "d");
   const wide = t.captureCharFrame();
-  assert.match(wide, /Details/);
-  const wideHeader = headerLines(wide, 3);
-  assert.match(wideHeader[0] ?? "", /Alpha Flow — RUNNING/);
-  assert.match(wideHeader[1] ?? "", /^\s*step 1 of 3\s*$/); // wide second line
-  assert.match(wideHeader[2] ?? "", /^\s*Progress:/);
+  // 121 columns: the 42-column sidebar carries the Bundle, Steps, and model.
+  assert.match(wide, /Alpha Flow/);
+  assert.match(wide, /▸ ✓ plan/);
+  assert.match(wide, /fake-opus · high effort/);
+  assert.doesNotMatch(wide, /Step plan/);
+  noOverflow(wide, 121);
 
-  // The header compacts first while the inspection affordance remains available.
-  // A live-state Run's compact line leads with the Bundle name and state, like
-  // the wide first line, and never with its Run id.
+  // 120 columns: no sidebar; the prompt's meta row names Step and Model choice.
+  t.resize(120, 30);
+  renderer.resize(120, 30);
+  await t.renderOnce();
+  const boundary = t.captureCharFrame();
+  assert.doesNotMatch(boundary, /Alpha Flow/);
+  assert.match(boundary, /Step plan · fake-opus · high effort/);
+  noOverflow(boundary, 120);
+
+  await press(t, renderer, "g", { ctrl: true });
+  t.resize(70, 30);
   renderer.resize(70, 30);
   await t.renderOnce();
   const compact = t.captureCharFrame();
   assert.match(compact, /Workspace:/);
-  const compactHeader = headerLines(compact, 2);
-  assert.match(
-    compactHeader[0] ?? "",
-    /^\s*Alpha Flow — RUNNING · View current\s*$/,
-  );
-  assert.match(compactHeader[1] ?? "", /^\s*Progress:/); // one header row
   noOverflow(compact, 70);
 
-  // Below the details breakpoint the panel is hidden too.
+  // Below the details breakpoint the inline panel gives way to the focused list.
+  t.resize(50, 30);
   renderer.resize(50, 30);
   await t.renderOnce();
   const narrow = t.captureCharFrame();
   assert.doesNotMatch(narrow, /Workspace:/);
-  assert.match(headerLines(narrow, 1)[0] ?? "", /Alpha Flow — RUNNING/);
+  assert.match(narrow, /Details · Resources/);
   assert.doesNotMatch(narrow, /run-1/);
   noOverflow(narrow, 50);
 });
 
-test("a live-state Run's header carries no Run id or process at any width; the id shows once the Run rests", async () => {
+test("a live-state Run shows no Run id or process at any width; the id shows once the Run leaves an active state", async () => {
   for (const state of ["running", "blocked"] as const) {
     const { t, control, renderer } = await mountWorkbench(
       runOf({
@@ -2611,21 +2666,29 @@ test("a live-state Run's header carries no Run id or process at any width; the i
         timeline: events(60),
         liveness: { state: "live-here", ownerPid: 4101 },
       }),
+      140,
+      40,
     );
-    // The panel is closed, so the whole frame stands for the header here.
-    for (const width of [100, 70, 50]) {
+    // The panel is closed, so the whole frame stands for the everyday screen.
+    for (const width of [140, 100, 70, 50]) {
       renderer.resize(width, 40);
       await t.renderOnce();
       const frame = t.captureCharFrame();
       assert.doesNotMatch(frame, /run-1/, `${state} at ${width}: no Run id`);
       assert.doesNotMatch(frame, /4101|process/, `${state} at ${width}`);
       assert.doesNotMatch(frame, /live in|not live/, `${state} at ${width}`);
-      assert.match(frame, new RegExp(state.toUpperCase())); // state in words
     }
+    renderer.resize(140, 40);
+    await t.renderOnce();
+    // The sidebar names the state in words.
+    assert.match(
+      t.captureCharFrame(),
+      new RegExp(state[0]!.toUpperCase() + state.slice(1)),
+    );
 
-    // Leaving the live state brings the Run id back, wide and compact. The header
-    // grows by the resting-prose row, and headerRows counts it: the full timeline
-    // still leaves the footer on screen.
+    // Leaving the live state brings the Run id back with the resting prose, and
+    // the bottom region counts that note: the full timeline still leaves the
+    // prompt's keys on screen.
     control.setRun(
       runOf({
         state: "halted",
@@ -2635,55 +2698,51 @@ test("a live-state Run's header carries no Run id or process at any width; the i
       }),
     );
     renderer.resize(100, 40);
-    await t.waitForFrame((f) => f.includes("HALTED"));
+    await t.waitForFrame((f) => f.includes("halted"));
     const resting = t.captureCharFrame();
-    const wide = headerLines(resting, 4);
-    assert.match(wide[0] ?? "", /Alpha Flow — HALTED/);
-    assert.match(wide[1] ?? "", /^\s*Run run-1 · step 2 of 3\s*$/);
-    assert.match(wide[2] ?? "", /Execution stopped outside the Workflow\./);
-    assert.match(wide[3] ?? "", /^\s*Progress:/);
-    assert.match(resting, /esc back · q quit/);
-    renderer.resize(70, 40);
+    assert.match(
+      resting,
+      /⏸ Run run-1 halted · Execution stopped outside the Workflow\./,
+    );
+    assert.match(resting, /\^G details · \^P commands · esc back/);
+    renderer.resize(50, 40);
     await t.renderOnce();
-    const compact = headerLines(t.captureCharFrame(), 1);
-    assert.match(compact[0] ?? "", /Run run-1 — HALTED/);
+    assert.match(t.captureCharFrame(), /⏸ Run run-1 halted/);
   }
 
   for (const state of ["failed", "succeeded", "cancelled"] as const) {
     const { t, renderer } = await mountWorkbench(runOf({ state }));
-    assert.match(headerLines(t.captureCharFrame(), 2)[1] ?? "", /Run run-1/);
+    assert.match(t.captureCharFrame(), /^\s*Run run-1\s*$/m);
     renderer.resize(60, 40);
     await t.renderOnce();
-    const compact = headerLines(t.captureCharFrame(), 1)[0] ?? "";
-    assert.match(compact, /Run run-1/, `${state} compact`);
-    assert.match(compact, new RegExp(state.toUpperCase())); // never colour alone
+    const compact = t.captureCharFrame();
+    assert.match(compact, /^\s*Run run-1\s*$/m, `${state} compact`);
+    assert.match(compact, new RegExp(`Run ${state}`)); // never colour alone
   }
 });
 
-test("a resting Run's long id clips with an ellipsis in the header and the details panel", async () => {
+test("a resting Run's long id clips with an ellipsis in its outcome and the details panel", async () => {
   const runId = `run-${"x".repeat(120)}`;
   const { t, renderer } = await mountWorkbench(
     runOf({ runId, state: "failed" }),
     100,
     30,
   );
-  assert.match(
-    headerLines(t.captureCharFrame(), 2)[1] ?? "",
-    /^\s*Run run-x+…\s*$/,
-  );
-  await press(t, renderer, "d");
+  assert.match(t.captureCharFrame(), /^\s*Run run-x+…\s*$/m);
+  await press(t, renderer, "g", { ctrl: true });
   const panel = t.captureCharFrame();
   noOverflow(panel, 100);
   const clipped = panel
     .split("\n")
     .filter((line) => /^\s*Run run-x+…\s*$/.test(line));
-  assert.equal(clipped.length, 2); // the wide second line and the panel's Run row
+  assert.equal(clipped.length, 2); // the outcome's Run line and the panel's Run row
 
+  await press(t, renderer, "escape"); // focus returns to the outcome
   renderer.resize(50, 30);
   await t.renderOnce();
   const narrow = t.captureCharFrame();
   noOverflow(narrow, 50);
-  assert.match(headerLines(narrow, 1)[0] ?? "", /^\s*Run run-x+…\s*$/);
+  assert.match(narrow, /^\s*Run run-x+…\s*$/m);
 });
 
 test("resize relayouts the timeline without overflow and keeps every state readable without colour", async () => {
@@ -2693,11 +2752,11 @@ test("resize relayouts the timeline without overflow and keeps every state reada
     24,
   );
   noOverflow(t.captureCharFrame(), 90);
-  assert.match(t.captureCharFrame(), /FAILED/); // word, not just colour
+  assert.match(t.captureCharFrame(), /✗ Run failed/); // word, not just colour
   renderer.resize(60, 18);
   await t.renderOnce();
   noOverflow(t.captureCharFrame(), 60);
-  assert.match(t.captureCharFrame(), /FAILED/);
+  assert.match(t.captureCharFrame(), /✗ Run failed/);
 });
 
 test("the details panel carries the Run id and names whether the Run is live here or in another owner process", async () => {
@@ -2705,7 +2764,7 @@ test("the details panel carries the Run id and names whether the Run is live her
     runOf({ liveness: { state: "live-here", ownerPid: 4101 } }),
   );
   assert.doesNotMatch(here.t.captureCharFrame(), /process 4101/); // not the header
-  await press(here.t, here.renderer, "d");
+  await press(here.t, here.renderer, "g", { ctrl: true });
   const hereFrame = here.t.captureCharFrame();
   assert.match(hereFrame, /^\s*Run run-1\s*$/m);
   assert.match(hereFrame, /Live · in this instance \(process 4101\)/);
@@ -2713,7 +2772,7 @@ test("the details panel carries the Run id and names whether the Run is live her
   const elsewhere = await mountWorkbench(
     runOf({ liveness: { state: "live-elsewhere", ownerPid: 5202 } }),
   );
-  await press(elsewhere.t, elsewhere.renderer, "d");
+  await press(elsewhere.t, elsewhere.renderer, "g", { ctrl: true });
   assert.match(
     elsewhere.t.captureCharFrame(),
     /Live · in another instance \(process 5202\)/,
@@ -2735,7 +2794,7 @@ test("the details panel carries the Run id and names whether the Run is live her
       },
     }),
   );
-  await press(rested.t, rested.renderer, "d");
+  await press(rested.t, rested.renderer, "g", { ctrl: true });
   const restedFrame = rested.t.captureCharFrame();
   assert.match(restedFrame, /^\s*Run run-1\s*$/m);
   assert.doesNotMatch(restedFrame, /Live ·|process/);
@@ -2784,12 +2843,12 @@ test("a blocked Run shows the checkpoint interaction in place of the footer, wit
   assert.doesNotMatch(frame, /d details · end latest/); // footer was replaced
 });
 
-test("a non-blocked Run shows no checkpoint control and keeps its footer", async () => {
+test("a non-blocked Run shows no checkpoint control and keeps its prompt", async () => {
   const { t } = await mountWorkbench(runOf({ timeline: events(3) }));
   const frame = t.captureCharFrame();
   assert.doesNotMatch(frame, /Review checkpoint/);
   assert.doesNotMatch(frame, /More Iterations/);
-  assert.match(frame, /d details/); // footer present
+  assert.match(frame, /\^G details · \^P commands/); // the prompt holds the bottom region
 });
 
 test("a checkpoint without a live answer offer shows no controls", async () => {
@@ -2840,7 +2899,7 @@ test("the controls are unavailable while the answer is pending and gone once it 
   await t.renderOnce();
   const frame = t.captureCharFrame();
   assert.doesNotMatch(frame, /Review checkpoint/);
-  assert.match(frame, /d details/); // footer returned
+  assert.match(frame, /\^G details · \^P commands/); // the prompt returned
 });
 
 test("a refused answer surfaces its Problem and re-enables the controls", async () => {
@@ -2950,29 +3009,31 @@ test("Stop leaves the Run failed with its timeline and Artifacts still browsable
   );
   await t.renderOnce();
   const frame = t.captureCharFrame();
-  assert.match(frame, /FAILED/);
+  assert.match(frame, /✗ Run failed/);
   assert.doesNotMatch(frame, /Review checkpoint/);
   assert.match(frame, / e0/); // the timeline is intact
-  await press(t, renderer, "d"); // Artifacts still browsable
+  await press(t, renderer, "g", { ctrl: true }); // Artifacts still browsable
   assert.match(t.captureCharFrame(), /report \(text\)/);
 });
 
-test("focus lands on the checkpoint when it appears, tabs to the timeline, and returns when it leaves", async () => {
+test("focus lands on the checkpoint when it appears, moves to details and back, and the outcome replaces it when it leaves", async () => {
   const { t, control, renderer } = await mountWorkbench(
     blockedRunOf({ timeline: events(4) }),
   );
   assert.match(t.captureCharFrame(), /› Review checkpoint/); // focus on the interaction
-  await press(t, renderer, "tab"); // to the timeline
-  assert.match(t.captureCharFrame(), /› Timeline/);
-  await press(t, renderer, "tab"); // wraps back to the checkpoint
+  await press(t, renderer, "g", { ctrl: true }); // to details
+  assert.match(t.captureCharFrame(), /› Details/);
+  assert.doesNotMatch(t.captureCharFrame(), /› Review checkpoint/);
+  await press(t, renderer, "tab"); // back to the checkpoint
   assert.match(t.captureCharFrame(), /› Review checkpoint/);
-  // When it leaves, focus returns to the timeline.
+  // When it leaves, the finished outcome holds the bottom region.
   control.setAnswerOutcome({ kind: "applied" });
   control.setRun(
     runOf({ state: "failed", timeline: events(4), actionOffers: [] }),
   );
   await t.renderOnce();
-  assert.match(t.captureCharFrame(), /› Timeline/);
+  assert.doesNotMatch(t.captureCharFrame(), /Review checkpoint/);
+  assert.match(t.captureCharFrame(), /✗ Run failed/);
 });
 
 test("the checkpoint interaction fits small widths without overflow and states both consequences without colour", async () => {
@@ -3059,21 +3120,24 @@ function okActions(over: Partial<RunActionsView> = {}): RunActionsView {
   };
 }
 
-test("resume stays on the main rail; delete moves into the details panel (#194 story 37)", async () => {
+test("resume and delete live in focused details, off the everyday screen (ADR 0036)", async () => {
   const { t, renderer } = await mountWorkbench(
     runOf({ state: "halted", actionOffers: [RESUME_OFFER, DELETE_OFFER] }),
     100,
     40,
     okActions(),
   );
-  // The main rail keeps the primary action; delete is not on it (AC3).
-  const rail = t.captureCharFrame();
-  assert.match(rail, /r resume — resume: continue from the Step/);
-  assert.doesNotMatch(rail, /x delete/);
-  assert.doesNotMatch(rail, /c cancel/);
-  // Delete lives in the panel with its consequence.
-  await press(t, renderer, "d");
+  const everyday = t.captureCharFrame();
+  assert.doesNotMatch(everyday, /r resume/);
+  assert.doesNotMatch(everyday, /x delete/);
+  assert.doesNotMatch(everyday, /c cancel/);
+  // A bare `r` beside the prompt types; it never resumes.
+  await press(t, renderer, "r");
+  assert.doesNotMatch(t.captureCharFrame(), /Checking resume/);
+  // Both live in the panel with their consequences.
+  await press(t, renderer, "g", { ctrl: true });
   const panel = t.captureCharFrame();
+  assert.match(panel, /r resume — resume: continue from the Step/);
   assert.match(panel, /x delete — remove the Run/);
   assert.doesNotMatch(panel, /c cancel/); // not offered while resting
 });
@@ -3097,17 +3161,16 @@ test("resume dispatches and the Workbench follows into the running Run", async (
     },
   });
   const { t } = await mountApp(control, renderer, "run-1", 100, 40, actions);
-  await t.waitForFrame((f) => f.includes("Timeline"));
+  await t.waitForFrame(workbenchShown);
+  await press(t, renderer, "g", { ctrl: true });
   assert.match(t.captureCharFrame(), /r resume/);
 
   await press(t, renderer, "r");
   const frame = t.captureCharFrame();
-  assert.match(frame, /RUNNING/); // transitioned into the running Workbench
+  assert.doesNotMatch(frame, /halted/); // transitioned into the running Workbench
   assert.doesNotMatch(frame, /r resume/); // no longer resumable
-  // Cancel now lives in the panel (#194 story 37); it is offered while live.
-  await press(t, renderer, "d"); // dismiss the "Resume applied" receipt
-  await press(t, renderer, "d"); // open the details panel
-  assert.match(t.captureCharFrame(), /c cancel/);
+  // Cancel is offered while live, in the same focused panel.
+  assert.match(frame, /c cancel/);
 });
 
 test("workbench-timeline-inspection: a resume receipt moves from checking to applied and is dismissible", async () => {
@@ -3122,15 +3185,17 @@ test("workbench-timeline-inspection: a resume receipt moves from checking to app
     actions,
   );
 
+  await press(t, renderer, "g", { ctrl: true });
   await press(t, renderer, "r");
   assert.match(t.captureCharFrame(), /Checking resume/);
-  assert.doesNotMatch(t.captureCharFrame(), /d dismiss/);
+  assert.doesNotMatch(t.captureCharFrame(), /dismisses/);
 
   setOutcome({ kind: "ok" });
   await t.renderOnce();
-  assert.match(t.captureCharFrame(), /Resume applied · d dismiss/);
+  assert.match(t.captureCharFrame(), /Resume applied · any key dismisses/);
 
-  await press(t, renderer, "d");
+  // The dismissing key keeps its own recipient: Esc still leaves details.
+  await press(t, renderer, "escape");
   const dismissed = t.captureCharFrame();
   assert.doesNotMatch(dismissed, /Resume applied/);
   assert.doesNotMatch(dismissed, /› Details/);
@@ -3158,6 +3223,7 @@ test("resume takeover asks once with the owner pid before dispatching the offere
     }),
   );
 
+  await press(t, renderer, "g", { ctrl: true }); // resume lives in focused details
   await press(t, renderer, "r");
   assert.equal(received, undefined);
   assert.match(t.captureCharFrame(), /Take over from process 7331/);
@@ -3178,8 +3244,8 @@ test("workbench-interaction-regression: delete stays armed until y confirms and 
     },
   });
   const { t } = await mountApp(control, renderer, "run-1", 100, 40, actions);
-  await t.waitForFrame((f) => f.includes("Timeline"));
-  await press(t, renderer, "d"); // open the panel where delete now lives (#194)
+  await t.waitForFrame(workbenchShown);
+  await press(t, renderer, "g", { ctrl: true }); // open the panel where delete now lives (#194)
   await t.waitForFrame((f) => f.includes("x delete"));
   await press(t, renderer, "x"); // arm the confirmation
   assert.equal(removed, 0); // not dispatched yet
@@ -3188,7 +3254,7 @@ test("workbench-interaction-regression: delete stays armed until y confirms and 
   assert.equal(removed, 1);
   assert.match(t.captureCharFrame(), /Previous Runs/);
   assert.match(t.captureCharFrame(), /Alpha Flow was deleted/);
-  assert.doesNotMatch(t.captureCharFrame(), /Timeline/);
+  assert.doesNotMatch(t.captureCharFrame(), /Details/);
 });
 
 test("Escape backs out of an armed delete without dispatching or leaving", async () => {
@@ -3204,15 +3270,15 @@ test("Escape backs out of an armed delete without dispatching or leaving", async
     },
   });
   const { t } = await mountApp(control, renderer, "run-1", 100, 40, actions);
-  await t.waitForFrame((f) => f.includes("Timeline"));
-  await press(t, renderer, "d"); // open the panel where delete now lives (#194)
+  await t.waitForFrame(workbenchShown);
+  await press(t, renderer, "g", { ctrl: true }); // open the panel where delete now lives (#194)
   await t.waitForFrame((f) => f.includes("x delete"));
   await press(t, renderer, "x"); // arm
   assert.match(t.captureCharFrame(), /Delete is permanent/);
   await press(t, renderer, "escape"); // back out
   assert.equal(removed, 0);
   assert.doesNotMatch(t.captureCharFrame(), /Delete is permanent/);
-  assert.match(t.captureCharFrame(), /Timeline/); // still on the Workbench
+  assert.ok(onWorkbench(t.captureCharFrame())); // still on the Workbench
 });
 
 test("workbench-interaction-regression: cancel stays armed until y confirms", async () => {
@@ -3231,8 +3297,8 @@ test("workbench-interaction-regression: cancel stays armed until y confirms", as
     },
   });
   const { t } = await mountApp(control, renderer, "run-1", 100, 40, actions);
-  await t.waitForFrame((f) => f.includes("Timeline"));
-  await press(t, renderer, "d"); // open the panel where cancel now lives (#194)
+  await t.waitForFrame(workbenchShown);
+  await press(t, renderer, "g", { ctrl: true }); // open the panel where cancel now lives (#194)
   await t.waitForFrame((f) => f.includes("c cancel"));
   await press(t, renderer, "c"); // arm
   assert.equal(cancelled, 0);
@@ -3240,7 +3306,7 @@ test("workbench-interaction-regression: cancel stays armed until y confirms", as
   await press(t, renderer, "y"); // confirm
   assert.equal(cancelled, 1);
   const frame = t.captureCharFrame();
-  assert.match(frame, /CANCELLED/); // transitioned to the cancelled state
+  assert.match(frame, /■ Run cancelled/); // transitioned to the cancelled state
   assert.match(frame, /x delete/); // now offers delete, not cancel
   assert.doesNotMatch(frame, /c cancel/);
 });
@@ -3263,10 +3329,11 @@ test("a refused action surfaces the reason without leaving", async () => {
     40,
     actions,
   );
+  await press(t, renderer, "g", { ctrl: true }); // resume lives in focused details
   await press(t, renderer, "r");
   const frame = t.captureCharFrame();
   assert.match(frame, /live in another process/); // the reason is shown
-  assert.match(frame, /Timeline/); // still on the Workbench
+  assert.ok(onWorkbench(frame)); // still on the Workbench
 });
 
 test("a refused delete surfaces its reason though delete lives only in the panel (#194 story 37)", async () => {
@@ -3286,15 +3353,17 @@ test("a refused delete surfaces its reason though delete lives only in the panel
       }),
     }),
   );
-  // Delete is the only offer, so the main Actions rail is not shown at all — the
-  // refusal must not be gated behind it (the regression this guards).
+  // Delete lives only in the panel; its refusal must not be gated behind it (the
+  // regression this guards), so it stays visible after the panel closes too.
   assert.doesNotMatch(t.captureCharFrame(), /Actions:/);
-  await press(t, renderer, "d"); // open the panel where delete lives
+  await press(t, renderer, "g", { ctrl: true }); // open the panel where delete lives
   await press(t, renderer, "x"); // arm
   await press(t, renderer, "y"); // confirm → refused
   const after = t.captureCharFrame();
   assert.match(after, /The Run store is damaged\./); // the reason stays visible
-  assert.match(after, /Timeline/); // still on the Workbench
+  assert.ok(onWorkbench(after)); // still on the Workbench
+  await press(t, renderer, "g", { ctrl: true }); // close the panel
+  assert.match(t.captureCharFrame(), /The Run store is damaged\./);
 });
 
 // --- recovery evidence, resting prose, and the two resume acknowledgements
@@ -3332,7 +3401,7 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
     actionOffers: [RESUME_UNAVAILABLE_OFFER, DELETE_OFFER],
   });
   const { t, renderer } = await mountWorkbench(run, 100, 40, okActions());
-  // Header: resting prose beside the state word (story 38, AC4).
+  // The prompt's note: the halted Run's id and resting prose (story 38, AC4).
   const header = t.captureCharFrame();
   // Everyday rows carry neither the recorded Session name nor its availability
   // (#289 story 84); the Session divider names the conversation in plain words.
@@ -3341,11 +3410,10 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
   assert.doesNotMatch(everyday, /\b(?:open|detached|unusable)\b/);
   assert.doesNotMatch(everyday, /main-0\.1|session/);
   assert.match(header, /Execution stopped outside the Workflow\./);
-  // Rail: resume is truthfully unavailable, not hidden (story 40); delete is off it.
-  assert.match(header, /resume — unavailable · .*no longer usable/);
-  assert.doesNotMatch(header, /x delete/);
+  // Run lifecycle actions are off the everyday screen (ADR 0036).
+  assert.doesNotMatch(header, /resume —|x delete/);
 
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   const panel = t.captureCharFrame();
   assert.match(panel, /Recovery:/);
   assert.match(
@@ -3358,6 +3426,8 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
   // Nothing invented when absent (story 36, AC2): no conflict line here.
   assert.doesNotMatch(panel, /Materialization conflict/);
   assert.match(panel, /x delete — remove the Run/);
+  // Resume is truthfully unavailable, not hidden (story 40).
+  assert.match(panel, /resume — unavailable · .*no longer usable/);
   noOverflow(panel, 100);
 
   // The relocated delete keeps its confirm-armed behaviour (story 37, AC3).
@@ -3380,6 +3450,7 @@ test("an unavailable resume is not dispatchable — r does nothing (#194 story 4
       },
     }),
   );
+  await press(t, renderer, "g", { ctrl: true }); // resume lives in focused details
   await press(t, renderer, "r");
   assert.equal(dispatched, false);
   assert.match(t.captureCharFrame(), /resume — unavailable/);
@@ -3399,6 +3470,7 @@ test("an indeterminate-Command resume arms an acknowledgement before it dispatch
     }),
   );
   // `r` arms the acknowledgement of repeatable effects and does not dispatch yet.
+  await press(t, renderer, "g", { ctrl: true }); // resume lives in focused details
   await press(t, renderer, "r");
   assert.equal(received, false);
   const armed = t.captureCharFrame();
@@ -3421,7 +3493,7 @@ test("the indeterminate Attempt shows as recovery evidence in the panel (#194 st
     40,
     okActions(),
   );
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   assert.match(
     t.captureCharFrame(),
     /Indeterminate Attempt · the interrupted command may have already run/,
@@ -3674,7 +3746,7 @@ const END_STAGE_OFFER: EndStageOffer = {
     "Secant has not checked the tracker. This ends the stage as complete; use it only after you and the agent verified the tickets are done.",
 };
 
-test("^E arms End Stage beside Continue with a confirm saying the tracker is unchecked; esc declines keeping focus and the draft; y dispatches End Stage only (#218)", async () => {
+test("End Stage has no key: ^E arms nothing beside Continue, and the palette arms a confirm saying the tracker is unchecked; esc declines keeping focus and the draft; y dispatches End Stage only (#218, ADR 0040)", async () => {
   const wb = await mountWorkbench(
     interactiveRunOf({
       actionOffers: [SEND_OFFER, CONTINUE_OFFER, END_STAGE_OFFER],
@@ -3682,10 +3754,19 @@ test("^E arms End Stage beside Continue with a confirm saying the tracker is unc
   );
   assert.match(
     wb.t.captureCharFrame(),
-    /enter send Turn · \^N continue · \^E end stage/,
+    /enter send Turn · \^N continue · \^P commands/,
   );
   await type(wb.t, "draft");
+  // Ctrl+E means End Step only; with no End Step Offer it arms nothing.
   await press(wb.t, wb.renderer, "e", { ctrl: true });
+  assert.doesNotMatch(wb.t.captureCharFrame(), /y end stage|End this/);
+  const armEndStage = async () => {
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    await type(wb.t, "End Stage");
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+  };
+  await armEndStage();
   const armed = wb.t.captureCharFrame();
   assert.match(armed, /y end stage · esc keep — Secant has not checked the/);
   assert.doesNotMatch(armed, /End this interactive Step\?/);
@@ -3696,7 +3777,7 @@ test("^E arms End Stage beside Continue with a confirm saying the tracker is unc
   assert.match(wb.t.captureCharFrame(), /> draft!/);
   assert.equal(wb.control.endStages.length, 0);
   // Confirmed: the arm blurs the field, so y never types, and only End Stage goes.
-  await press(wb.t, wb.renderer, "e", { ctrl: true });
+  await armEndStage();
   await type(wb.t, "y");
   assert.doesNotMatch(wb.t.captureCharFrame(), /> draft!y/);
   await press(wb.t, wb.renderer, "y");
@@ -3749,23 +3830,25 @@ test("a live interactive Turn shows its Interrupt and two Esc presses dispatch i
     },
   });
   const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 40, actions);
-  await type(wb.t, "next");
   const frame = wb.t.captureCharFrame();
-  // The agent holds the Turn, so the label says it is working, never the human's move.
+  // The agent holds the Turn, so the prompt says it is working, never the human's move.
   assert.match(frame, /◆ The agent is working/);
   assert.doesNotMatch(frame, /Your move|Your Turn/);
-  assert.match(frame, /esc esc interrupt/);
+  assert.match(frame, /working · esc esc interrupt/);
+  await type(wb.t, "next");
+  // With a draft the hint still says the agent is working.
+  assert.match(wb.t.captureCharFrame(), /working · esc esc interrupt/);
 
   await press(wb.t, wb.renderer, "escape"); // arm, never leave
   assert.equal(interrupted, undefined);
   const armed = wb.t.captureCharFrame();
   assert.match(armed, /Press esc again to interrupt/);
-  assert.match(armed, /Timeline/);
+  assert.ok(onWorkbench(armed));
   assert.match(armed, /> next/); // the draft survives the arm
 
   await press(wb.t, wb.renderer, "escape"); // dispatch
   assert.deepEqual(interrupted, INTERRUPT_OFFER);
-  assert.match(wb.t.captureCharFrame(), /Timeline/);
+  assert.ok(onWorkbench(wb.t.captureCharFrame()));
   assert.equal(wb.control.sends.length, 0);
 });
 
@@ -3836,14 +3919,13 @@ test("an interrupted interactive Turn returns to the same Step's input, not a ha
     },
   });
   const { t } = await mountApp(control, renderer, "run-1", 100, 40, actions);
-  await t.waitForFrame((f) => f.includes("Timeline"));
+  await t.waitForFrame(workbenchShown);
   await press(t, renderer, "escape");
   await press(t, renderer, "escape");
   const back = t.captureCharFrame();
-  assert.match(back, /BLOCKED · interactive Turn/);
   assert.match(back, /◇ Your move/);
   assert.match(back, /enter send Turn/);
-  assert.doesNotMatch(back, /HALTED|r resume|The agent is working/);
+  assert.doesNotMatch(back, /halted|r resume|The agent is working/);
 });
 
 test("the live interactive Interrupt reads without colour and fits a small terminal (#219)", async () => {
@@ -3902,7 +3984,10 @@ test("a live interactive Turn leads its interrupt hint with a moving scanner bes
     frame,
     /◆ The agent is working — wait for its reply or interrupt it/,
   );
-  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop the live Turn/m);
+  assert.match(
+    frame,
+    /^ {3}[■⬝]{8} working · esc esc interrupt — stop the live Turn/m,
+  );
   // It moves on its own 40 ms clock: a later frame shows the cells changed.
   const first = scannerOf(frame);
   await until(() => {
@@ -3916,10 +4001,10 @@ test("a live interactive Turn leads its interrupt hint with a moving scanner bes
   const armed = wb.t.captureCharFrame();
   assert.match(armed, /⚠ Press esc again to interrupt/);
   assert.equal(scannerOf(armed), undefined);
-  assert.match(armed, /◆ The agent is working/);
+  assert.match(armed, /> next/); // the draft stays beside the armed confirm
 });
 
-test("an Agent-step live Turn leads the rail's interrupt row with the scanner and the word working (#292)", async () => {
+test("an Agent-step live Turn leads the prompt's hint with the scanner and the word working (#292)", async () => {
   const wb = await mountWorkbench(liveTurnRunOf(), 100, 40, okActions());
   const frame = wb.t.captureCharFrame();
   assert.match(
@@ -3932,10 +4017,11 @@ test("an Agent-step live Turn leads the rail's interrupt row with the scanner an
     const next = scannerOf(wb.t.captureCharFrame());
     return next !== undefined && next !== first;
   });
-  // Arming keeps the working row and adds the confirm beneath it.
+  // Arming replaces the hint with the confirm; the prompt still says who works.
   await press(wb.t, wb.renderer, "escape");
   const armed = wb.t.captureCharFrame();
-  assert.match(armed, /working · esc esc interrupt/);
+  assert.equal(scannerOf(armed), undefined);
+  assert.match(armed, /◆ The agent is working/);
   assert.match(armed, /⚠ Press esc again to interrupt/);
 });
 
@@ -3962,7 +4048,7 @@ test("the scanner stops when the Turn ends, leaving the boundary's words (#292)"
   await agent.t.renderOnce();
   frame = agent.t.captureCharFrame();
   assert.doesNotMatch(frame, /[■⬝]|\[⋯\]|working ·/);
-  assert.match(frame, /r resume/);
+  assert.match(frame, /Run run-1 halted/);
 });
 
 test("with reduced motion the scanner is a static [⋯] and the working words stay (#292)", async () => {
@@ -3975,7 +4061,10 @@ test("with reduced motion the scanner is a static [⋯] and the working words st
   );
   let frame = interactive.t.captureCharFrame();
   assert.match(frame, /◆ The agent is working/);
-  assert.match(frame, /^ {3}\[⋯\] esc esc interrupt — stop the live Turn/m);
+  assert.match(
+    frame,
+    /^ {3}\[⋯\] working · esc esc interrupt — stop the live Turn/m,
+  );
   assert.doesNotMatch(frame, /[■⬝]/);
 
   const agent = await mountWorkbench(
@@ -4020,7 +4109,7 @@ test("the scanner and its words fit a small terminal, long history, and a resize
     16,
     okActions(),
   );
-  // At 40 columns the rail's words and the cells do not both fit, so the cells
+  // At 40 columns the hint's words and the cells do not both fit, so the cells
   // yield and the words stay whole: meaning never rides on the scanner.
   let frame = agent.t.captureCharFrame();
   assert.match(frame, /^ {3}working · esc esc interrupt — /m);
@@ -4031,13 +4120,17 @@ test("the scanner and its words fit a small terminal, long history, and a resize
   wb.renderer.resize(40, 16);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
-  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — /m);
+  assert.match(frame, /^ {3}working · esc esc interrupt — /m);
+  assert.doesNotMatch(frame, /[■⬝]/);
   assert.match(frame, /◆ The agent is working/);
   noOverflow(frame, 40);
   wb.renderer.resize(100, 24);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
-  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop the live Turn/m);
+  assert.match(
+    frame,
+    /^ {3}[■⬝]{8} working · esc esc interrupt — stop the live Turn/m,
+  );
   noOverflow(frame, 100);
 });
 
@@ -4088,7 +4181,7 @@ function scannerCells(t: TRendered) {
   );
 }
 
-/** The frame line holding the rail's working row, trailing blanks trimmed. */
+/** The frame line holding the prompt's working row, trailing blanks trimmed. */
 function workingLine(frame: string): string {
   const line = frame
     .split("\n")
@@ -4099,7 +4192,8 @@ function workingLine(frame: string): string {
 
 test("the scanner's lead draws in the running accent, its trail and inactive cells dimmer, its words apart (#292, #308)", async () => {
   const wb = await mountWorkbench(liveTurnRunOf(), 60, 24, okActions());
-  const accent = frameColorOf(wb.t, /— RUNNING ·/);
+  // The prompt bar draws in the agent accent (ADR 0036).
+  const accent = frameColorOf(wb.t, /^> $/);
   // Over half the cycle lights no cell, so wait for a frame whose lead and at
   // least one trail step are lit; a cycle is 2.16 s, inside the budget.
   let cells = scannerCells(wb.t);
@@ -4118,9 +4212,9 @@ test("the scanner's lead draws in the running accent, its trail and inactive cel
   assert.notEqual(colorOf(railSpans(wb.t), /working ·/), accent);
 });
 
-test("with reduced motion the static [⋯] draws in the muted colour, apart from the rail's words (#292, #308)", async () => {
+test("with reduced motion the static [⋯] draws in the muted colour, apart from the hint's words (#292, #308)", async () => {
   const wb = await mountWorkbench(liveTurnRunOf(), 100, 40, okActions(), true);
-  const muted = frameColorOf(wb.t, /^step 1 of 1$/);
+  const muted = frameColorOf(wb.t, /^Step repair/); // the muted meta row
   const spans = railSpans(wb.t);
   assert.equal(colorOf(spans, /^\[⋯\]$/), muted);
   assert.notEqual(colorOf(spans, /working ·/), muted);
@@ -4170,7 +4264,7 @@ test("an applied send clears the draft at Turn admission with no sending state w
   // Admission: the Run push carries the live Turn first, then the send settles applied.
   wb.control.setRun(liveInteractiveRunOf());
   await wb.t.renderOnce();
-  assert.match(wb.t.captureCharFrame(), /◆ The agent is working/);
+  assert.match(wb.t.captureCharFrame(), /> hi there/); // held until admission
   wb.control.setInteractiveOutcome({ kind: "applied" });
   await wb.t.renderOnce();
   let frame = wb.t.captureCharFrame();
@@ -4186,7 +4280,7 @@ test("an applied send clears the draft at Turn admission with no sending state w
   wb.control.setRun(interactiveRunOf());
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
-  assert.match(frame, /◇ Your move/);
+  assert.doesNotMatch(frame, /working/);
   assert.match(frame, /enter send Turn/);
   assert.match(frame, /> next/);
   assert.equal(wb.control.sends.length, 1);
@@ -4240,8 +4334,7 @@ test("a refused send surfaces the refusal and keeps the typed draft (#122, A9, #
   // The refusal re-enables the field with the draft intact (A9), no sending state
   // lingers, and the move stays the human's since no Turn was admitted.
   assert.match(frame, /> hi/);
-  assert.doesNotMatch(frame, /sending/);
-  assert.match(frame, /◇ Your move/);
+  assert.doesNotMatch(frame, /sending|working/);
   await type(wb.t, "!");
   assert.match(wb.t.captureCharFrame(), /> hi!/);
 });
@@ -4272,8 +4365,7 @@ test("a reserved-word refusal keeps the draft and focus through small terminals 
     const frame = wb.t.captureCharFrame();
     assert.match(frame, /✗ \/clear is reserved by Claude Code/);
     assert.match(frame, /> \/clear/);
-    assert.match(frame, /◇ Your move/);
-    assert.doesNotMatch(frame, /sending/);
+    assert.doesNotMatch(frame, /sending|working/);
     noOverflow(frame, width);
   }
   await type(wb.t, "!");
@@ -4290,7 +4382,6 @@ test("the interactive input reads without colour and fits a narrow terminal (#12
   const wb = await mountWorkbench(interactiveRunOf(), 48, 24);
   const frame = wb.t.captureCharFrame();
   // The Step and its controls read from glyphs and words, not colour.
-  assert.match(frame, /BLOCKED · interactive Turn/);
   assert.match(frame, /◇ Your move/);
   assert.match(frame, /enter send Turn · \^E end step/);
   noOverflow(frame, 48);
@@ -4366,7 +4457,7 @@ async function mountWithRequest(overlay: RunLiveOverlay = requestOverlay()) {
 test("an outstanding request renders the tool, input, and both decisions in place of the footer", async () => {
   const { t } = await mountWithRequest();
   const frame = t.captureCharFrame();
-  assert.match(frame, /Harness Request · awaiting your approval/);
+  assert.match(frame, /Permission required · awaiting your approval/);
   assert.match(frame, /Tool: Edit/);
   assert.match(frame, /Input: \{"path":"src\/fix\.ts"\}/);
   assert.match(frame, /\[ Allow \]/);
@@ -4404,8 +4495,7 @@ test("Esc denies the outstanding request", async () => {
 
 test("the request control vanishes when the Turn settles without an answer, and keys reach the timeline again (A8)", async () => {
   const { t, control, renderer } = await mountWithRequest();
-  assert.match(t.captureCharFrame(), /Harness Request · awaiting/);
-  assert.match(t.captureCharFrame(), /ephemeral Harness Request/); // the header basis
+  assert.match(t.captureCharFrame(), /Permission required · awaiting/);
   // The Turn ends (or is interrupted/lost) and the overlay clears — the reducer drops it
   // on a `closed` update or when durable liveness leaves live-here (A8, run-view.test.ts).
   // Here the mounted view is handed the cleared overlay directly.
@@ -4413,10 +4503,9 @@ test("the request control vanishes when the Turn settles without an answer, and 
   await t.renderOnce();
   const frame = t.captureCharFrame();
   assert.doesNotMatch(frame, /awaiting your approval/); // the request control is gone
-  assert.doesNotMatch(frame, /ephemeral Harness Request/); // header no longer claims it
-  assert.match(frame, /d details/); // footer returned
+  assert.match(frame, /esc esc interrupt|\^G details/); // the prompt returned
   // Ordinary keys reach the timeline again — the modal no longer swallows them.
-  await press(t, renderer, "d");
+  await press(t, renderer, "g", { ctrl: true });
   assert.match(t.captureCharFrame(), /› Details/);
 });
 
@@ -4474,7 +4563,7 @@ test("the controls are unavailable while a request answer is pending and dispatc
 test("a free-text gate shows a text input in place of the footer", async () => {
   const { t } = await mountWorkbench(freeTextRunOf());
   const frame = t.captureCharFrame();
-  assert.match(frame, /Human Gate · What is the ticket number\?/);
+  assert.match(frame, /Workflow decision · What is the ticket number\?/);
   assert.match(frame, /Answer published as: ticket/);
   assert.match(frame, /enter submit · esc back/);
   assert.doesNotMatch(frame, /d details · end latest/); // footer replaced
@@ -4550,7 +4639,7 @@ test("the free-text gate control fits small widths without overflow and reads wi
   await t.renderOnce();
   const frame = t.captureCharFrame();
   noOverflow(frame, 40);
-  assert.match(frame, /Human Gate/);
+  assert.match(frame, /Workflow decision/);
   assert.match(frame, /enter submit/);
 });
 
@@ -4570,7 +4659,7 @@ function suggestedRunOf(): RunView {
 test("a suggested gate lists its suggestions beside Other, with Other chosen until the human picks (#213)", async () => {
   const { t } = await mountWorkbench(suggestedRunOf());
   const frame = t.captureCharFrame();
-  assert.match(frame, /Human Gate · Where should the spec live\?/);
+  assert.match(frame, /Workflow decision · Where should the spec live\?/);
   assert.match(frame, /Choose: Local · GitHub · \[Other \(type\)\]/);
   assert.match(frame, /↑↓ choose or type · enter submit/);
 });
@@ -4623,24 +4712,29 @@ test("the suggested gate control fits small widths without overflow (#213)", asy
 
 // AC4: interrupt, steer, resume ------------------------------------
 
-test("Steer renders as unavailable with the exact reason and has no dispatch", async () => {
+test("an unavailable Steer says why at Enter in the Agent-step prompt and has no dispatch (ADR 0036)", async () => {
   const { t, control, renderer } = await mountWorkbench(
     liveTurnRunOf(),
     100,
     40,
     okActions(),
   );
+  assert.match(t.captureCharFrame(), /◆ The agent is working — wait/);
+  assert.doesNotMatch(t.captureCharFrame(), /enter steer/);
+  // A bare `s` is text now; Enter names the Offer's exact reason and keeps it.
+  await press(t, renderer, "s");
+  await type(t, "s");
+  await press(t, renderer, "return");
+  assert.equal(control.steers.length, 0);
   assert.match(
     t.captureCharFrame(),
-    /steer — unavailable · Claude Code has no same-Turn steer/,
+    /✗ steer unavailable · Claude Code has no same-Turn steer/,
   );
-  // No key dispatches steer; the seam is never touched from the Workbench.
-  await press(t, renderer, "s");
-  assert.equal(control.steers.length, 0);
+  assert.match(t.captureCharFrame(), /> s/);
 });
 
-// A live Turn under a Harness that declares native steer (Codex): the Actions rail
-// names the `s` key, `s` opens a compose input, and Enter sends guidance (#148).
+// A live Turn under a Harness that declares native steer (Codex): Enter in the
+// always-editable prompt sends guidance (#148, ADR 0036).
 const AVAILABLE_STEER_OFFER = {
   action: "steer-turn" as const,
   runId: "run-1",
@@ -4658,14 +4752,14 @@ function steerableRunOf(over: Partial<RunView> = {}): RunView {
   });
 }
 
-test("available Steer names the `s` key; `s` opens the compose input and Enter sends the guidance (#148)", async () => {
+test("an available Steer rides the Agent-step prompt: Enter sends the guidance to the live Turn (#148, ADR 0036)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 100, 40, okActions());
-  // The Actions rail advertises the key and the consequence, readable without colour.
-  assert.match(wb.t.captureCharFrame(), /s steer — send same-Turn guidance/);
-
-  // `s` opens the compose input (the footer is replaced with the labelled field).
-  await press(wb.t, wb.renderer, "s");
-  assert.match(wb.t.captureCharFrame(), /Steer — guide the running Turn/);
+  // The prompt says the agent works and that Enter steers, readable without colour.
+  assert.match(
+    wb.t.captureCharFrame(),
+    /◆ The agent is working — a message steers/,
+  );
+  assert.match(wb.t.captureCharFrame(), /enter steer · esc esc interrupt/);
 
   // The guidance rides the native field; Enter sends exactly one steer at the live turnId.
   await type(wb.t, "wrap it up");
@@ -4676,18 +4770,16 @@ test("available Steer names the `s` key; `s` opens the compose input and Enter s
   ]);
 });
 
-test("blank Steer guidance is not sent, and Esc backs out of the compose (#148)", async () => {
+test("blank Steer guidance is not sent, and Esc arms the Interrupt rather than sending (#148)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 100, 40, okActions());
-  await press(wb.t, wb.renderer, "s");
   // Enter with an empty draft authors nothing.
   await press(wb.t, wb.renderer, "return");
   assert.equal(wb.control.steers.length, 0);
-  // Esc leaves the compose; the passive footer returns and no steer was sent.
+  await type(wb.t, "   ");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.steers.length, 0);
   await press(wb.t, wb.renderer, "escape");
-  assert.doesNotMatch(
-    wb.t.captureCharFrame(),
-    /Steer — guide the running Turn/,
-  );
+  assert.match(wb.t.captureCharFrame(), /Press esc again to interrupt/);
   assert.equal(wb.control.steers.length, 0);
 });
 
@@ -4702,7 +4794,6 @@ test("a refused Steer keeps the typed guidance and surfaces the refusal (#148)",
       possibleEffects: "none",
     },
   });
-  await press(wb.t, wb.renderer, "s");
   await type(wb.t, "keep going");
   await press(wb.t, wb.renderer, "return");
   const frame = wb.t.captureCharFrame();
@@ -4711,40 +4802,38 @@ test("a refused Steer keeps the typed guidance and surfaces the refusal (#148)",
   assert.match(frame, /The live Turn rejected the guidance/);
 });
 
-test("reopening Steer after Escaping a still-pending send starts a clean, usable compose (#148)", async () => {
-  // The default steer outcome stays `pending`, so a dispatched steer never settles.
+test("a still-pending Agent-step Steer never freezes the prompt, ignores a second Enter, and keeps newer text (#148, #294)", async () => {
+  // The default steer outcome stays `pending` until the test settles it.
   const wb = await mountWorkbench(steerableRunOf(), 100, 40, okActions());
-  await press(wb.t, wb.renderer, "s");
   await type(wb.t, "first guidance");
-  await press(wb.t, wb.renderer, "return"); // dispatch — now pending ("… steering…")
+  await press(wb.t, wb.renderer, "return");
   assert.deepEqual(wb.control.steers, [
     { runId: "run-1", turnId: "turn-7", text: "first guidance" },
   ]);
-  assert.match(wb.t.captureCharFrame(), /steering/);
-
-  // Escape out while the send is still in flight, then reopen: the reopened compose
-  // must not inherit the abandoned send's pending state (which would blur the field
-  // and swallow keys). Typing lands and Enter dispatches the new guidance.
-  await press(wb.t, wb.renderer, "escape");
-  await press(wb.t, wb.renderer, "s");
-  await type(wb.t, "second guidance");
-  assert.match(wb.t.captureCharFrame(), /> second guidance/);
+  // The field keeps its keys while the Steer settles; Enter in flight is ignored.
+  await type(wb.t, " more");
+  assert.match(wb.t.captureCharFrame(), /> first guidance more/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.steers.length, 1);
+  // Applied: the draft no longer holds the sent text, so the newer text stays.
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /> first guidance more/);
   await press(wb.t, wb.renderer, "return");
   assert.deepEqual(wb.control.steers[1], {
     runId: "run-1",
     turnId: "turn-7",
-    text: "second guidance",
+    text: "first guidance more",
   });
 });
 
-test("the Steer compose stays within a narrow terminal and relays out on resize (#148)", async () => {
+test("the Agent-step prompt stays within a narrow terminal and relays out on resize (#148)", async () => {
   const { t, renderer } = await mountWorkbench(
     steerableRunOf(),
     40,
     24,
     okActions(),
   );
-  await press(t, renderer, "s");
   // A long guidance draft cannot push any line past the width.
   await type(
     t,
@@ -4861,7 +4950,8 @@ test("a Claude Code Steer shows each refusal reason and keeps its draft and focu
       // survives a narrow clip and reads without colour.
       assert.match(frame, refusal.shown, `${refusal.problem.code} @${width}`);
       assert.ok(frame.includes(`> ${refusal.text}`), `draft @${width}`);
-      assert.match(frame, /◆ The agent is working/);
+      // The refusal sits above the working hint, which still offers its keys.
+      assert.match(frame, /enter steer · esc esc interrupt/);
       noOverflow(frame, width);
     }
     // Focus stays in the input: typing extends the kept draft, and Enter steers
@@ -4877,9 +4967,8 @@ test("a Claude Code Steer shows each refusal reason and keeps its draft and focu
   }
 });
 
-test("the Agent-step Steer compose shows a Session-command refusal and keeps the guidance (#359)", async () => {
+test("the Agent-step prompt shows a Session-command Steer refusal and keeps the guidance (#359)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 48, 24, okActions());
-  await press(wb.t, wb.renderer, "s");
   await type(wb.t, "/compact");
   await press(wb.t, wb.renderer, "return");
   assert.deepEqual(wb.control.steers, [
@@ -4892,7 +4981,7 @@ test("the Agent-step Steer compose shows a Session-command refusal and keeps the
   });
   await wb.t.renderOnce();
   const frame = wb.t.captureCharFrame();
-  assert.match(frame, /Steer — guide the running Turn/);
+  assert.match(frame, /enter steer · esc esc interrupt|esc esc int/);
   assert.match(frame, /> \/compact/);
   assert.match(frame, /Send \/compact when the Turn ends/);
   noOverflow(frame, 48);
@@ -4930,7 +5019,7 @@ test("a Steer still settling when its Turn ends holds back the send until it set
   await press(wb.t, wb.renderer, "return");
   wb.control.setRun(interactiveRunOf());
   await wb.t.renderOnce();
-  assert.match(wb.t.captureCharFrame(), /◇ Your move/);
+  assert.match(wb.t.captureCharFrame(), /enter send Turn/);
   await press(wb.t, wb.renderer, "return");
   assert.equal(wb.control.sends.length, 0);
 
@@ -5028,7 +5117,10 @@ test("an unavailable Steer shows its reason at Enter, sends nothing, and keeps t
   const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 40, actions);
   // Unavailable, the hint never names Enter; the reason waits for the attempt.
   let frame = wb.t.captureCharFrame();
-  assert.match(frame, /^ {3}[■⬝]{8} esc esc interrupt — stop the live Turn/m);
+  assert.match(
+    frame,
+    /^ {3}[■⬝]{8} working · esc esc interrupt — stop the live Turn/m,
+  );
   assert.doesNotMatch(frame, /enter steer|unavailable/);
 
   await type(wb.t, "wrap up");
@@ -5036,14 +5128,14 @@ test("an unavailable Steer shows its reason at Enter, sends nothing, and keeps t
   assert.equal(wb.control.steers.length, 0);
   assert.equal(wb.control.sends.length, 0);
   frame = wb.t.captureCharFrame();
-  // The refusal line carries the Offer's reason word for word, in words and a glyph.
+  // The refusal row carries the Offer's reason word for word, in words and a
+  // glyph, above the working hint, which still says the agent works.
   assert.match(
     frame,
     /^ {3}✗ steer unavailable · Claude Code has no same-Turn steer/m,
   );
   assert.match(frame, /> wrap up/);
-  assert.match(frame, /◆ The agent is working/);
-  assert.equal(scannerOf(frame), undefined);
+  assert.match(frame, /working · esc esc interrupt/);
 
   // Esc arms the Interrupt over the reason, and the second Esc dispatches it.
   await press(wb.t, wb.renderer, "escape");
@@ -5064,7 +5156,6 @@ test("the unavailable reason leaves when the Turn ends, and Enter then sends the
   await wb.t.renderOnce();
   const frame = wb.t.captureCharFrame();
   assert.doesNotMatch(frame, /steer unavailable/);
-  assert.match(frame, /◇ Your move/);
   assert.match(frame, /enter send Turn/);
   assert.match(frame, /> wrap up/);
   await press(wb.t, wb.renderer, "return");
@@ -5073,7 +5164,7 @@ test("the unavailable reason leaves when the Turn ends, and Enter then sends the
   ]);
 });
 
-test("a long unavailable reason clips to a small terminal and relays out on resize (#294)", async () => {
+test("a long unavailable reason wraps in full on a small terminal and relays out on resize (#294)", async () => {
   const unsteerable = { ...STEER_OFFER, reason: LONG_STEER_REASON };
   const wb = await mountWorkbench(
     liveInteractiveRunOf({
@@ -5086,19 +5177,27 @@ test("a long unavailable reason clips to a small terminal and relays out on resi
   );
   await type(wb.t, "please wrap up the current change before anything else");
   await press(wb.t, wb.renderer, "return");
+  // The reason wraps rather than clipping, and the bottom region counts every
+  // wrapped row, so the working hint below it stays on screen.
+  const reason = (frame: string) =>
+    frame
+      .split("\n")
+      .map((line) => line.trim())
+      .join(" ");
   let frame = wb.t.captureCharFrame();
-  assert.match(
-    frame,
-    /✗ steer unavailable · This Harness has no same-Turn guidance frame.*…/,
+  assert.ok(
+    reason(frame).includes(`✗ steer unavailable · ${LONG_STEER_REASON}`),
   );
+  assert.doesNotMatch(frame, /This Harness[^\n]*…/);
+  assert.match(frame, /working · esc esc interrupt/);
   noOverflow(frame, 100);
 
-  // Narrow, the reason clips with its ellipsis; the prefix and the draft's field stay.
   wb.renderer.resize(40, 16);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
-  assert.match(frame, /^ {3}✗ steer unavailable · This Harness[^\n]*…/m);
-  assert.match(frame, /◆ The agent is working/);
+  assert.match(frame, /^ {3}✗ steer unavailable · This Harness/m);
+  assert.ok(reason(frame).includes(LONG_STEER_REASON.split(" ").at(-1)!));
+  assert.match(frame, /working · esc esc interrupt/);
   noOverflow(frame, 40);
   wb.renderer.resize(100, 24);
   await wb.t.renderOnce();
@@ -5144,7 +5243,7 @@ test("the Steer cue keeps its words in a small terminal, the scanner yielding fi
   noOverflow(frame, 100);
 });
 
-test("Esc from Details returns focus to the timeline during a live Turn, never arming interrupt (A7) — fails at HEAD", async () => {
+test("Esc from Details returns focus to the prompt during a live Turn, never arming interrupt (A7)", async () => {
   // With a live agent Turn the interrupt Offer stands, so at HEAD the two-press Esc arm
   // sat above the focused-region branches and shadowed Details' own Esc: opening Details
   // and pressing Esc armed (and a second Esc cancelled) the Turn instead of going back.
@@ -5161,15 +5260,15 @@ test("Esc from Details returns focus to the timeline during a live Turn, never a
     40,
     actions,
   );
-  await press(t, renderer, "d"); // open Details; focus moves there
+  await press(t, renderer, "g", { ctrl: true }); // open Details; focus moves there
   const detailsFrame = t.captureCharFrame();
   assert.match(detailsFrame, /› Details/);
   assert.match(detailsFrame, /esc back/); // the footer stays honest about what Esc does
-  await press(t, renderer, "escape"); // A7: back to the timeline, not an interrupt arm
+  await press(t, renderer, "escape"); // A7: back to the prompt, not an interrupt arm
   const afterEsc = t.captureCharFrame();
-  assert.match(afterEsc, /› Timeline/);
+  assert.doesNotMatch(afterEsc, /› Details/);
   assert.doesNotMatch(afterEsc, /Press esc again to interrupt/);
-  // A second Esc — now in timeline focus — only arms; it dispatches no interrupt-turn.
+  // A second Esc — now at the prompt — only arms; it dispatches no interrupt-turn.
   await press(t, renderer, "escape");
   assert.equal(interrupted, 0);
 });
@@ -5194,7 +5293,7 @@ test("workbench-interaction-regression: interrupt requires two Esc presses and k
   assert.match(t.captureCharFrame(), /Press esc again to interrupt/);
   await press(t, renderer, "escape"); // dispatch
   assert.deepEqual(interrupted, INTERRUPT_OFFER);
-  assert.match(t.captureCharFrame(), /Timeline/); // did not leave the Workbench
+  assert.ok(onWorkbench(t.captureCharFrame())); // did not leave the Workbench
 });
 
 test("workbench-interaction-regression: request modal owns Esc before interrupt and steer controls", async () => {
@@ -5292,27 +5391,24 @@ test("an Agent-step Interrupt hands the bottom input to the person, and Enter se
     },
   });
   const { t } = await mountApp(control, renderer, "run-1", 100, 40, actions);
-  await t.waitForFrame((f) => f.includes("Timeline"));
+  await t.waitForFrame(workbenchShown);
   await press(t, renderer, "escape"); // arm
   await press(t, renderer, "escape"); // interrupt
 
   const frame = t.captureCharFrame();
-  assert.match(frame, /BLOCKED · interrupted Agent Turn/);
   // Timeline mechanics: the interrupted Turn stays in history and the Step waits.
   assert.match(frame, /Agent Turn settled · interrupted/);
-  assert.match(frame, /Progress: ⏸ repair/);
-  assert.match(
-    frame,
-    /Reply to the agent — you stopped it, and it is waiting on you/,
-  );
+  assert.match(frame, /Step repair/);
+  assert.match(frame, /◇ You stopped the agent — it is waiting on your reply/);
+  assert.match(frame, /◇ Reply to the agent — it is waiting on you/);
   assert.match(frame, /enter send reply · esc back/);
-  // A follow-up ends no Step and resumes nothing; the Interrupt's receipt and its
-  // `d` (which would type into the focused field) give way to the compose.
-  assert.doesNotMatch(frame, /\^E|end step|r resume|HALTED/);
-  assert.doesNotMatch(frame, /Turn interrupted · d dismiss/);
+  // A follow-up ends no Step and resumes nothing; the Interrupt's receipt gives
+  // way to the prompt's note.
+  assert.doesNotMatch(frame, /\^E|end step|r resume|halted/);
+  assert.doesNotMatch(frame, /Turn interrupted/);
   assert.doesNotMatch(frame, /esc esc interrupt/);
 
-  // `q`, `t`, and `d` type into the focused compose rather than fire commands.
+  // `q`, `t`, and `d` type into the focused prompt rather than fire commands.
   await type(t, "quit the docs, then test");
   await press(t, renderer, "return");
   assert.deepEqual(control.followUps, [
@@ -5322,7 +5418,7 @@ test("an Agent-step Interrupt hands the bottom input to the person, and Enter se
   assert.match(t.captureCharFrame(), /… sending…/);
 
   // Admission applies the send and clears the draft; the follow-up Turn goes live and
-  // the rail's Agent-step controls take over again.
+  // the prompt's working controls take over again.
   control.setInteractiveOutcome({ kind: "applied" });
   control.setRun(
     liveTurnRunOf({
@@ -5343,7 +5439,6 @@ test("an Agent-step Interrupt hands the bottom input to the person, and Enter se
   assert.match(working, /settled · interrupted[\s\S]*Agent Turn started/);
   assert.doesNotMatch(working, /Reply to the agent/);
   assert.match(working, /working · esc esc interrupt/);
-  assert.match(working, /› Timeline/);
 });
 
 test("a refused follow-up keeps its draft, and Enter on a blank compose sends nothing (#354)", async () => {
@@ -5423,8 +5518,8 @@ for (const [width, height] of [
     const wb = await mountWorkbench(waitingRunOf(), width, height);
     const frame = wb.t.captureCharFrame();
     noOverflow(frame, width);
-    // Meaning without colour: the state word, the basis, and who holds the Turn.
-    assert.match(frame, /BLOCKED/);
+    // Meaning without colour: the note and who holds the Turn, in words.
+    assert.match(frame, /You stopped the agent/);
     assert.match(frame, /Reply to the agent/);
     assert.match(frame, /enter send reply/);
     const other = width === 60 ? 140 : 60;
@@ -5454,11 +5549,13 @@ test("resume on a halted Run dispatches resume-run and live rows resume", async 
     },
   });
   const { t } = await mountApp(control, renderer, "run-1", 100, 40, actions);
+  await t.waitForFrame(workbenchShown);
+  await press(t, renderer, "g", { ctrl: true });
   await t.waitForFrame((f) => f.includes("r resume"));
   await press(t, renderer, "r");
   assert.equal(resumed, 1);
   const frame = t.captureCharFrame();
-  assert.match(frame, /RUNNING/);
+  assert.doesNotMatch(frame, /halted/);
   assert.match(frame, /Agent Turn started/); // the resumed Turn's rows appear
 });
 
@@ -5468,13 +5565,13 @@ test("Esc means deny in a request, interrupt-arm during a live Turn, and leave w
   // At rest with no live Turn: Esc leaves the Workbench.
   const rest = await mountWorkbench(runOf({ state: "succeeded" }));
   await press(rest.t, rest.renderer, "escape");
-  assert.match(rest.t.captureCharFrame(), /Secant/); // back on Home
+  assert.match(rest.t.captureCharFrame(), /Start a Run/); // back on Home
 
   // During a live Turn: Esc arms interrupt rather than leaving.
   const live = await mountWorkbench(liveTurnRunOf(), 100, 40, okActions());
   await press(live.t, live.renderer, "escape");
   assert.match(live.t.captureCharFrame(), /Press esc again to interrupt/);
-  assert.match(live.t.captureCharFrame(), /Timeline/); // stayed
+  assert.ok(onWorkbench(live.t.captureCharFrame())); // stayed
 
   // With an outstanding request: Esc denies (does not arm interrupt or leave).
   const req = await mountWithRequest();
@@ -5575,9 +5672,8 @@ for (const [width, height] of [
   });
 }
 
-test("an Agent Interrupt restores a long Steer into the follow-up compose and Enter sends it as the follow-up (#356, #354)", async () => {
+test("an Agent Interrupt restores a long Steer into the follow-up prompt and Enter sends it as the follow-up (#356, #354)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 60, 24, okActions());
-  await press(wb.t, wb.renderer, "s");
   await type(wb.t, "sent guidance");
   await press(wb.t, wb.renderer, "return");
   wb.control.setSteerOutcome({ kind: "applied" });
@@ -5608,7 +5704,6 @@ test("an Agent Interrupt restores a long Steer into the follow-up compose and En
 
 test("a drop seen before the Agent Step rests restores once the follow-up is offered (#354)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 100, 30, okActions());
-  await press(wb.t, wb.renderer, "s");
   await type(wb.t, "guidance in flight");
   await press(wb.t, wb.renderer, "return");
   wb.control.setSteerOutcome({ kind: "applied" });
@@ -5636,7 +5731,6 @@ test("a drop seen before the Agent Step rests restores once the follow-up is off
 
 test("a signal-halted Agent Step parks no compose for Steers its Turn dropped (#354)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 100, 30, okActions());
-  await press(wb.t, wb.renderer, "s");
   await type(wb.t, "guidance that cannot be sent");
   await press(wb.t, wb.renderer, "return");
   wb.control.setSteerOutcome({ kind: "applied" });
@@ -5659,8 +5753,8 @@ test("a signal-halted Agent Step parks no compose for Steers its Turn dropped (#
   await wb.t.renderOnce();
   const frame = wb.t.captureCharFrame();
   assert.doesNotMatch(frame, /draft restored/);
-  assert.doesNotMatch(frame, /Steer — guide/);
-  assert.match(frame, /r resume/);
+  assert.doesNotMatch(frame, /guidance that cannot be sent/);
+  assert.match(frame, /Run run-1 halted/);
 });
 
 test("settlement observed before its receipt restores only after acceptance clears the original draft (#356)", async () => {
@@ -5710,13 +5804,14 @@ test("historic drops and loss drops do not replace the compose on open or repeat
   assert.equal(wb.control.sends[0]?.text, "my current draft");
 });
 
-for (const close of ["offer-ended", "escaped"] as const) {
-  test(`an Agent Steer accepted after compose ${close} restores its text once into the follow-up compose (#356, #354)`, async () => {
+// "armed" presses Esc while the Steer is in flight: the arm, not a compose
+// closing, is the intervening interaction since the prompt is always there.
+for (const close of ["offer-ended", "armed"] as const) {
+  test(`an Agent Steer accepted after its Turn's offer ended (${close}) restores its text once into the follow-up prompt (#356, #354)`, async () => {
     const wb = await mountWorkbench(steerableRunOf(), 100, 30, okActions());
-    await press(wb.t, wb.renderer, "s");
     await type(wb.t, "guidance awaiting receipt");
     await press(wb.t, wb.renderer, "return");
-    if (close === "escaped") await press(wb.t, wb.renderer, "escape");
+    if (close === "armed") await press(wb.t, wb.renderer, "escape");
     const timeline = [
       steerSettlement(
         "late-accepted",
@@ -5788,7 +5883,7 @@ test("declined elicitation history shows the question and setup remediation safe
     140,
     24,
   );
-  const frame = t.captureCharFrame();
+  const frame = conversationText(t.captureCharFrame(), 140);
   assert.match(frame, /Elicitation declined/);
   assert.match(frame, /claude-code\/setup/);
   assert.match(frame, /Finish setup now/);
@@ -5829,16 +5924,16 @@ for (const [width, height] of [
       .split("\n")
       .find((line) => line.includes("The agent has asked"));
     assert.ok(pendingLine?.includes("…"));
-    await press(wb.t, wb.renderer, "home");
+    await press(wb.t, wb.renderer, "home", { alt: true });
     finish();
     const settled = await followRun(wired.projectionPort, runId, (run) =>
       run.state === "succeeded" ? run : undefined,
     );
     wb.control.setRun(settled);
     await wb.t.renderOnce();
-    await press(wb.t, wb.renderer, "home");
+    await press(wb.t, wb.renderer, "home", { alt: true });
     assert.match(wb.t.captureCharFrame(), /Beginning of Run history/);
-    await press(wb.t, wb.renderer, "end");
+    await press(wb.t, wb.renderer, "end", { alt: true });
     const ended = wb.t.captureCharFrame();
     assert.match(ended, /Step ended by the agent/);
     assert.match(ended, /ready red/);
@@ -5856,7 +5951,7 @@ for (const [width, height] of [
     wb.t.resize(newWidth, newHeight);
     wb.renderer.resize(newWidth, newHeight);
     await wb.t.renderOnce();
-    await press(wb.t, wb.renderer, "end");
+    await press(wb.t, wb.renderer, "end", { alt: true });
     assert.match(wb.t.captureCharFrame(), /Step ended by the agent/);
     noOverflow(wb.t.captureCharFrame(), newWidth);
   });
@@ -5982,7 +6077,20 @@ const MODEL_OFFER = {
   },
 } as const;
 
-test("workbench-model-choice: m opens the shared picker and submits the model and effort through Run Actions (#351)", async () => {
+/** Open the shared Model choice picker through the palette's Model or Effort App
+ *  command (ADR 0040), the successor of the retired details `m` key. */
+async function openModelChoice(
+  t: Parameters<typeof type>[0],
+  renderer: FakeRenderer,
+  command: "Model" | "Effort" = "Model",
+) {
+  await press(t, renderer, "p", { ctrl: true });
+  await type(t, command);
+  await press(t, renderer, "down");
+  await press(t, renderer, "return");
+}
+
+test("workbench-model-choice: the palette's Model command opens the shared picker and submits the model and effort through Run Actions (#351, ADR 0040)", async () => {
   const changes: unknown[] = [];
   const { t, renderer } = await mountWorkbench(
     runOf({
@@ -6002,9 +6110,12 @@ test("workbench-model-choice: m opens the shared picker and submits the model an
     }),
   );
   try {
-    await press(t, renderer, "d");
-    assert.match(t.captureCharFrame(), /m change Model choice/);
+    await press(t, renderer, "g", { ctrl: true });
+    assert.match(t.captureCharFrame(), /ctrl\+p Model choice/);
+    // A bare `m` in focused details no longer opens it (ADR 0040).
     await press(t, renderer, "m");
+    assert.doesNotMatch(t.captureCharFrame(), /Choose a model/);
+    await openModelChoice(t, renderer);
     assert.match(t.captureCharFrame(), /1\. Choose a model/);
     assert.match(t.captureCharFrame(), /Fast.*\[current\]/);
     await press(t, renderer, "down");
@@ -6024,9 +6135,17 @@ test("workbench-model-choice: m opens the shared picker and submits the model an
 
 test("workbench-model-choice: absent, unavailable, and stale Offers never open the picker", async () => {
   const wb = await mountWorkbench(runOf());
+  // The palette lists Model only while its Offer is available and current.
+  const paletteOffersModel = async () => {
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    const listed = /Change the Run model/.test(wb.t.captureCharFrame());
+    await press(wb.t, wb.renderer, "escape");
+    return listed;
+  };
   try {
     await press(wb.t, wb.renderer, "m");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model|m model/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+    assert.equal(await paletteOffersModel(), false);
     wb.control.setRun(
       runOf({
         actionOffers: [
@@ -6043,26 +6162,28 @@ test("workbench-model-choice: absent, unavailable, and stale Offers never open t
         ],
       }),
     );
-    await press(wb.t, wb.renderer, "d");
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
     assert.match(
       wb.t.captureCharFrame(),
       /Model choice unavailable · Model choices are being checked/,
     );
     await press(wb.t, wb.renderer, "m");
-    assert.doesNotMatch(
-      wb.t.captureCharFrame(),
-      /Choose a model|m change Model choice/,
-    );
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+    await press(wb.t, wb.renderer, "escape"); // back to the prompt
+    assert.equal(await paletteOffersModel(), false);
     wb.control.setRun(runOf({ actionOffers: [MODEL_OFFER] }));
+    await wb.t.renderOnce();
+    assert.equal(await paletteOffersModel(), true);
     wb.control.setFreshness({
       kind: "catching-up",
       catchUp: "fresh",
       lastConfirmedAt: "2026-10-05T00:00:00Z",
     });
-    await press(wb.t, wb.renderer, "m");
+    await wb.t.renderOnce();
+    assert.equal(await paletteOffersModel(), false);
     assert.doesNotMatch(
       wb.t.captureCharFrame(),
-      /Choose a model|m change Model choice/,
+      /Choose a model|ctrl\+p Model choice/,
     );
   } finally {
     wb.t.renderer.destroy();
@@ -6074,18 +6195,15 @@ for (const [width, height] of [
   [60, 12],
   [140, 44],
 ]) {
-  test(`workbench-model-choice: m stays reachable at ${width}x${height} and resize preserves effort and focus`, async () => {
+  test(`workbench-model-choice: the palette keeps Model reachable at ${width}x${height} and resize preserves effort and focus`, async () => {
     const wb = await mountWorkbench(
       runOf({ actionOffers: [MODEL_OFFER] }),
       width,
       height,
     );
     try {
-      assert.match(wb.t.captureCharFrame(), /m model/);
-      await press(wb.t, wb.renderer, "d");
-      if (width < 60 || height < 15)
-        assert.doesNotMatch(wb.t.captureCharFrame(), /› Details/);
-      await press(wb.t, wb.renderer, "m");
+      assert.match(wb.t.captureCharFrame(), /\^P commands/);
+      await openModelChoice(wb.t, wb.renderer);
       await press(wb.t, wb.renderer, "down");
       await press(wb.t, wb.renderer, "return");
       noOverflow(wb.t.captureCharFrame(), width);
@@ -6102,7 +6220,7 @@ for (const [width, height] of [
       assert.match(wb.t.captureCharFrame(), /› Deep.*\[current\]/);
       await press(wb.t, wb.renderer, "escape");
       assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-      assert.match(wb.t.captureCharFrame(), /Timeline/);
+      assert.ok(onWorkbench(wb.t.captureCharFrame()));
       noOverflow(wb.t.captureCharFrame(), 140);
     } finally {
       wb.t.renderer.destroy();
@@ -6113,7 +6231,7 @@ for (const [width, height] of [
 test("workbench-model-choice: Port Escape steps back even when the real keymap also receives Escape", async () => {
   const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
   try {
-    await press(wb.t, wb.renderer, "m");
+    await openModelChoice(wb.t, wb.renderer);
     await press(wb.t, wb.renderer, "return");
     assert.match(wb.t.captureCharFrame(), /Choose effort/);
     wb.renderer.key("escape");
@@ -6134,7 +6252,7 @@ for (const modal of ["request", "gate", "checkpoint"] as const) {
   test(`workbench-model-choice: a ${modal} closes the picker and owns its keys`, async () => {
     const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
     try {
-      await press(wb.t, wb.renderer, "m");
+      await openModelChoice(wb.t, wb.renderer);
       assert.match(wb.t.captureCharFrame(), /Choose a model/);
       if (modal === "request") wb.control.setLive(requestOverlay());
       else if (modal === "gate")
@@ -6148,10 +6266,13 @@ for (const modal of ["request", "gate", "checkpoint"] as const) {
       await wb.t.renderOnce();
       assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
       if (modal === "checkpoint") {
-        await press(wb.t, wb.renderer, "d");
-        assert.doesNotMatch(wb.t.captureCharFrame(), /m change Model choice/);
+        // Model stays reachable through Ctrl+P over the checkpoint (ADR 0040),
+        // so details name that route rather than a key under the checkpoint.
+        await press(wb.t, wb.renderer, "g", { ctrl: true });
+        assert.match(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
         await press(wb.t, wb.renderer, "tab");
       }
+      // A bare `m` reaches the control that owns the bottom, never the picker.
       await press(wb.t, wb.renderer, "m");
       assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
       if (modal === "request") {
@@ -6194,18 +6315,21 @@ for (const settlement of ["live-turn", "next-turn", "refused"] as const) {
       }),
     );
     try {
-      await press(wb.t, wb.renderer, "m");
+      await openModelChoice(wb.t, wb.renderer);
       assert.match(wb.t.captureCharFrame(), /requested until the Harness/);
       await press(wb.t, wb.renderer, "return");
       await press(wb.t, wb.renderer, "return");
       assert.equal(submissions, 1);
       assert.match(wb.t.captureCharFrame(), /Model choice requested/);
       assert.doesNotMatch(wb.t.captureCharFrame(), /applied to the live Turn/);
-      await press(wb.t, wb.renderer, "d");
+      await press(wb.t, wb.renderer, "g", { ctrl: true });
       assert.match(wb.t.captureCharFrame(), /› Details/);
-      assert.doesNotMatch(wb.t.captureCharFrame(), /m change Model choice/);
-      await press(wb.t, wb.renderer, "m");
+      assert.doesNotMatch(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
+      // While the change is pending the palette offers no second Model command.
+      await press(wb.t, wb.renderer, "escape");
+      await openModelChoice(wb.t, wb.renderer);
       assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+      await press(wb.t, wb.renderer, "escape");
       assert.equal(submissions, 1);
       if (settlement === "refused")
         setOutcome({
@@ -6248,10 +6372,10 @@ test("workbench-model-choice: the dialog holds timeline keys while durable activ
     await press(wb.t, wb.renderer, "pageup");
     const before = wb.t.captureCharFrame().match(/.* e\d+ .*/)?.[0];
     assert.ok(before);
-    await press(wb.t, wb.renderer, "m");
-    await press(wb.t, wb.renderer, "end");
+    await openModelChoice(wb.t, wb.renderer);
+    await press(wb.t, wb.renderer, "end", { alt: true });
     await press(wb.t, wb.renderer, "q");
-    await press(wb.t, wb.renderer, "d");
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
     assert.deepEqual(wb.exits, []);
     assert.match(wb.t.captureCharFrame(), /Choose a model/);
     wb.control.setRun(runOf({ ...base, timeline: events(83) }));
@@ -6260,7 +6384,7 @@ test("workbench-model-choice: the dialog holds timeline keys while durable activ
     const after = wb.t.captureCharFrame();
     assert.ok(after.includes(before));
     assert.match(after, /new activities · Jump to latest/);
-    await press(wb.t, wb.renderer, "end");
+    await press(wb.t, wb.renderer, "end", { alt: true });
     assert.match(wb.t.captureCharFrame(), /e82/);
     assert.doesNotMatch(wb.t.captureCharFrame(), /new activities/);
   } finally {
@@ -6302,7 +6426,7 @@ for (const effort of ["locked", "unavailable"] as const) {
       }),
     );
     try {
-      await press(wb.t, wb.renderer, "m");
+      await openModelChoice(wb.t, wb.renderer);
       await press(wb.t, wb.renderer, "down");
       await press(wb.t, wb.renderer, "return");
       await type(wb.t, "custom-mq");
@@ -6332,7 +6456,8 @@ for (const effort of ["locked", "unavailable"] as const) {
 test("workbench-model-choice: losing the Offer closes the dialog and late Harness refusals render in the timeline", async () => {
   const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
   try {
-    await press(wb.t, wb.renderer, "m");
+    await openModelChoice(wb.t, wb.renderer);
+    assert.match(wb.t.captureCharFrame(), /Choose a model/);
     wb.control.setRun({
       ...runOf(),
       modelChoiceNotice: "The Harness kept alpha because beta was refused.",
@@ -6348,7 +6473,7 @@ test("workbench-model-choice: losing the Offer closes the dialog and late Harnes
   }
 });
 
-test("workbench-confirmation-target-identity: End Step cannot adopt a replacement Step", async () => {
+test("m10-confirmation-target-identity: End Step cannot adopt a replacement Step", async () => {
   const wb = await mountWorkbench(interactiveRunOf());
   await press(wb.t, wb.renderer, "e", { ctrl: true });
   assert.match(wb.t.captureCharFrame(), /End this interactive Step\?/);
@@ -6368,29 +6493,60 @@ test("workbench-confirmation-target-identity: End Step cannot adopt a replacemen
   assert.doesNotMatch(wb.t.captureCharFrame(), /End this interactive Step\?/);
 });
 
+/** Arm a Step ending through its decided route: its key, or the palette's App
+ *  command, which reaches the same arm-then-confirm path (ADR 0040). */
+async function armEnding(
+  wb: Awaited<ReturnType<typeof mountWorkbench>>,
+  route: { readonly key: "e" | "n" } | { readonly command: string },
+) {
+  if ("key" in route) {
+    await press(wb.t, wb.renderer, route.key, { ctrl: true });
+    return;
+  }
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  await type(wb.t, route.command);
+  await press(wb.t, wb.renderer, "down");
+  await press(wb.t, wb.renderer, "return");
+}
+
 // #389 exercises supported client snapshots. It does not measure how often a
 // live Harness produces a replacement, and Step Offers expose no Attempt id.
+// End Step and Continue run through both their key and the palette; End Stage has
+// no key, so only its palette command arms it (ADR 0040).
 for (const ending of [
   {
     offer: END_OFFER,
-    key: "e",
+    route: { key: "e" },
+    prompt: /End this interactive Step\?/,
+    writes: "ends",
+  },
+  {
+    offer: END_OFFER,
+    route: { command: "End Step" },
     prompt: /End this interactive Step\?/,
     writes: "ends",
   },
   {
     offer: CONTINUE_OFFER,
-    key: "n",
+    route: { key: "n" },
+    prompt: /y continue/,
+    writes: "continues",
+  },
+  {
+    offer: CONTINUE_OFFER,
+    route: { command: "Continue" },
     prompt: /y continue/,
     writes: "continues",
   },
   {
     offer: END_STAGE_OFFER,
-    key: "e",
+    route: { command: "End Stage" },
     prompt: /y end stage/,
     writes: "endStages",
   },
 ] as const) {
-  test(`workbench-confirmation-target-identity: ${ending.offer.action} rejects a replaced Run or Step`, async () => {
+  const via = "key" in ending.route ? `ctrl+${ending.route.key}` : "palette";
+  test(`m10-confirmation-target-identity: ${ending.offer.action} via ${via} rejects a replaced Run or Step`, async () => {
     for (const replacement of [
       { ...ending.offer, stepId: "next-step" },
       { ...ending.offer, runId: "run-replacement" },
@@ -6398,7 +6554,7 @@ for (const ending of [
       const wb = await mountWorkbench(
         interactiveRunOf({ actionOffers: [SEND_OFFER, ending.offer] }),
       );
-      await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+      await armEnding(wb, ending.route);
       assert.match(wb.t.captureCharFrame(), ending.prompt);
       wb.control.setRun(
         interactiveRunOf({ actionOffers: [SEND_OFFER, replacement] }),
@@ -6409,13 +6565,13 @@ for (const ending of [
     }
   });
 
-  test(`workbench-confirmation-target-identity: ${ending.offer.action} withdrawal and reappearance require a fresh arm`, async () => {
+  test(`m10-confirmation-target-identity: ${ending.offer.action} via ${via} withdrawal and reappearance require a fresh arm`, async () => {
     const initial = interactiveRunOf({
       actionOffers: [SEND_OFFER, ending.offer],
     });
     const wb = await mountWorkbench(initial);
     await type(wb.t, "kept draft");
-    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    await armEnding(wb, ending.route);
     wb.control.setRun(interactiveRunOf({ actionOffers: [SEND_OFFER] }));
     await wb.t.renderOnce();
     assert.doesNotMatch(wb.t.captureCharFrame(), ending.prompt);
@@ -6425,14 +6581,14 @@ for (const ending of [
     assert.match(wb.t.captureCharFrame(), /> kept draft/);
     await type(wb.t, " editable");
     assert.match(wb.t.captureCharFrame(), /> kept draft editable/);
-    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    await armEnding(wb, ending.route);
     await press(wb.t, wb.renderer, "y");
     assert.deepEqual(wb.control[ending.writes], [
       { runId: "run-1", stepId: "discuss" },
     ]);
   });
 
-  test(`workbench-confirmation-target-identity: ${ending.offer.action} retains intent through updates and resize`, async () => {
+  test(`m10-confirmation-target-identity: ${ending.offer.action} via ${via} retains intent through updates and resize`, async () => {
     const original = {
       ...ending.offer,
       consequence: "ORIGINAL consequence " + "long warning ".repeat(30),
@@ -6443,7 +6599,7 @@ for (const ending of [
       32,
     );
     await type(wb.t, "kept draft");
-    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    await armEnding(wb, ending.route);
     const armed = wb.t.captureCharFrame();
     assert.match(armed, ending.prompt);
     assert.match(armed, /ORIGINAL consequence/);
@@ -6459,16 +6615,21 @@ for (const ending of [
     await wb.t.renderOnce();
     assert.match(wb.t.captureCharFrame(), /ORIGINAL consequence/);
     assert.doesNotMatch(wb.t.captureCharFrame(), /REPLACEMENT wording/);
-    // The captured target and the fixed three-row input survive both widths.
+    // The captured target survives every width, its whole consequence wraps,
+    // and the bottom region counts every wrapped row: the warning ends on the
+    // last interior row, with the draft's field above it.
     for (const width of [48, 100, 160]) {
       wb.renderer.resize(width, 32);
       wb.t.resize(width, 32);
       await wb.t.renderOnce();
       const frame = wb.t.captureCharFrame();
       noOverflow(frame, width);
-      assert.equal(
-        frame.split("\n").findIndex((line) => line.includes("> kept draft")),
-        29,
+      const lines = frame.split("\n");
+      assert.match(lines[30]!, /warning\s*$/);
+      assert.equal(lines[31]!.trim(), "");
+      assert.ok(lines.some((line) => line.includes("> kept draft")));
+      assert.ok(
+        conversationText(frame, width).includes(original.consequence.trim()),
       );
       assert.doesNotMatch(frame, /REPLACEMENT wording/);
     }
@@ -6478,7 +6639,7 @@ for (const ending of [
     assert.doesNotMatch(wb.t.captureCharFrame(), ending.prompt);
     await type(wb.t, " editable");
     assert.match(wb.t.captureCharFrame(), /> kept draft editable/);
-    await press(wb.t, wb.renderer, ending.key, { ctrl: true });
+    await armEnding(wb, ending.route);
     await press(wb.t, wb.renderer, "y");
     assert.deepEqual(wb.control[ending.writes], [
       { runId: "run-1", stepId: "discuss" },
@@ -6497,7 +6658,7 @@ for (const recovery of [
     prompt: /Take over from process 7331/,
   },
 ] as const) {
-  test(`workbench-confirmation-target-identity: resume captures ${recovery.prompt.source} and its consequence`, async () => {
+  test(`m10-confirmation-target-identity: resume captures ${recovery.prompt.source} and its consequence`, async () => {
     const received: ResumeRunOffer[] = [];
     const original: Extract<ResumeRunOffer, { available: true }> =
       recovery.offer;
@@ -6513,6 +6674,7 @@ for (const recovery of [
         },
       }),
     );
+    await press(wb.t, wb.renderer, "g", { ctrl: true }); // resume lives in focused details
     await press(wb.t, wb.renderer, "r");
     assert.match(wb.t.captureCharFrame(), recovery.prompt);
     // A new object for the same normalized target must not reset the arm.
@@ -6552,7 +6714,7 @@ for (const replacement of [
   { ...RESUME_ACK_OFFER, runId: "run-replacement" },
   RESUME_UNAVAILABLE_OFFER,
 ] as const) {
-  test(`workbench-confirmation-target-identity: changed resume evidence clears acknowledgement (${JSON.stringify(replacement)})`, async () => {
+  test(`m10-confirmation-target-identity: changed resume evidence clears acknowledgement (${JSON.stringify(replacement)})`, async () => {
     const received: ResumeRunOffer[] = [];
     const wb = await mountWorkbench(
       runOf({ state: "halted", actionOffers: [RESUME_ACK_OFFER] }),
@@ -6565,7 +6727,9 @@ for (const replacement of [
         },
       }),
     );
+    await press(wb.t, wb.renderer, "g", { ctrl: true }); // resume lives in focused details
     await press(wb.t, wb.renderer, "r");
+    assert.match(wb.t.captureCharFrame(), /y to acknowledge and resume/);
     wb.control.setRun(runOf({ state: "halted", actionOffers: [replacement] }));
     await press(wb.t, wb.renderer, "y");
     assert.deepEqual(received, []);
@@ -6573,7 +6737,7 @@ for (const replacement of [
   });
 }
 
-test("workbench-confirmation-target-identity: takeover owner changes and withdrawal cannot silently resume", async () => {
+test("m10-confirmation-target-identity: takeover owner changes and withdrawal cannot silently resume", async () => {
   const original = { ...RESUME_ACK_OFFER, takeover: { ownerPid: 7331 } };
   for (const replacement of [
     { ...original, takeover: { ownerPid: 8442 } },
@@ -6594,7 +6758,9 @@ test("workbench-confirmation-target-identity: takeover owner changes and withdra
         },
       }),
     );
+    await press(wb.t, wb.renderer, "g", { ctrl: true }); // resume lives in focused details
     await press(wb.t, wb.renderer, "r");
+    assert.match(wb.t.captureCharFrame(), /Take over from process 7331/);
     wb.control.setRun(
       runOf({
         state: "halted",
@@ -6613,7 +6779,7 @@ test("workbench-confirmation-target-identity: takeover owner changes and withdra
 });
 
 for (const interactive of [false, true]) {
-  test(`workbench-confirmation-target-identity: ${interactive ? "input" : "rail"} Interrupt cannot migrate to a replacement Turn`, async () => {
+  test(`m10-confirmation-target-identity: ${interactive ? "input" : "rail"} Interrupt cannot migrate to a replacement Turn`, async () => {
     const received: (typeof INTERRUPT_OFFER)[] = [];
     const liveRun = interactive ? liveInteractiveRunOf : liveTurnRunOf;
     const wb = await mountWorkbench(
@@ -6643,7 +6809,7 @@ for (const interactive of [false, true]) {
     assert.deepEqual(received, [{ ...INTERRUPT_OFFER, turnId: "turn-next" }]);
   });
 
-  test(`workbench-confirmation-target-identity: ${interactive ? "input" : "rail"} Interrupt preserves captured wording and clears on withdrawal`, async () => {
+  test(`m10-confirmation-target-identity: ${interactive ? "input" : "rail"} Interrupt preserves captured wording and clears on withdrawal`, async () => {
     const received: (typeof INTERRUPT_OFFER)[] = [];
     const liveRun = interactive ? liveInteractiveRunOf : liveTurnRunOf;
     const original = {
@@ -6742,23 +6908,26 @@ test("[repeat-command-gate-progress] the Workbench answers the Gate after a pass
   await awaitSettled(app.projectionPort, "launch");
   const runId = launched.runId!;
 
-  const renderer = makeFakeRenderer(100, 40);
+  const renderer = makeFakeRenderer(140, 40);
   const { t } = await mountApp(
     { view: createLiveRunWorkbenchView(app.projectionPort) },
     renderer,
     runId,
-    100,
+    140,
     40,
   );
-  await t.waitForFrame((frame) => frame.includes("Human Gate ·"));
+  await t.waitForFrame((frame) => frame.includes("Workflow decision ·"));
   const frame = t.captureCharFrame();
-  assert.match(frame, /BLOCKED · durable Human Gate/);
-  assert.match(frame, /Human Gate · approve the outside change/);
-  assert.match(frame, /step 4 of 5/);
-  assert.match(
-    frame,
-    /Progress: ✓ baseline · ✓ check · ✓ outside · ⏸ gate · · after/,
-  );
+  assert.match(frame, /Workflow decision · approve the outside change/);
+  // The sidebar lists every Step by glyph, the gate current (ADR 0036).
+  for (const step of [
+    /✓ baseline/,
+    /✓ check/,
+    /✓ outside/,
+    /▸ ⏸ gate/,
+    /· after/,
+  ])
+    assert.match(frame, step);
   assert.deepEqual(runs, { baseline: 1, check: 1, outside: 1 });
 
   await type(t, "ship it");
@@ -6777,7 +6946,7 @@ test("[repeat-command-gate-progress] the Workbench answers the Gate after a pass
     ],
   );
   assert.deepEqual(runs, { baseline: 1, check: 1, outside: 1, after: 1 });
-  await t.waitForFrame((next) => !next.includes("BLOCKED"));
+  await t.waitForFrame((next) => next.includes("Run succeeded"));
 });
 
 // --- inspection quit (#392) -------------------------------------------------
@@ -6847,7 +7016,7 @@ const INSPECTIONS = [
     title: /log \(text\)/,
     footer: /↑\/↓ scroll · esc close · q quit/,
     open: async (wb: Awaited<ReturnType<typeof mountInspectable>>) => {
-      await press(wb.t, wb.renderer, "d"); // details focus, log selected
+      await press(wb.t, wb.renderer, "g", { ctrl: true }); // details focus, log selected
       await press(wb.t, wb.renderer, "return");
     },
     reopen: "return", // Escape leaves the details focus on the log
@@ -6857,7 +7026,7 @@ const INSPECTIONS = [
     title: /Session transcript/,
     footer: /p older · e export · esc close · q quit/,
     open: async (wb: Awaited<ReturnType<typeof mountInspectable>>) => {
-      await press(wb.t, wb.renderer, "d");
+      await press(wb.t, wb.renderer, "g", { ctrl: true });
       await press(wb.t, wb.renderer, "down");
       await press(wb.t, wb.renderer, "return");
     },
@@ -6914,12 +7083,12 @@ for (const inspection of INSPECTIONS) {
     assert.deepEqual(wb.exits, []);
     assert.equal(wb.t.captureCharFrame(), open);
 
-    // Escape closes the overlay only: the Workbench stays, its own footer back.
+    // Escape closes the overlay only: the Workbench stays, its prompt back.
     await press(wb.t, wb.renderer, "escape");
     const closed = wb.t.captureCharFrame();
     assert.doesNotMatch(closed, inspection.footer);
-    assert.match(closed, /Timeline/);
-    assert.match(closed, /esc back · q quit/);
+    assert.ok(onWorkbench(closed));
+    assert.match(closed, /\^G details · \^P commands · esc back/);
     assert.deepEqual(wb.exits, []);
 
     // Ctrl+C keeps its global quit route from inside the overlay.
@@ -6948,12 +7117,12 @@ test("m10-observed-harness-facts: metadata replacement leaves paused history and
   };
   control.setLive(overlay);
   await t.renderOnce();
-  await press(t, renderer, "up");
+  await press(t, renderer, "up", { alt: true });
   const history = () =>
     t
       .captureCharFrame()
       .split("\n")
-      .filter((line) => / e\d|Timeline/.test(line));
+      .filter((line) => / e\d|Jump to latest|Paused/.test(line));
   const before = history();
   control.setLive({
     ...overlay,
@@ -7008,12 +7177,12 @@ for (const [width, height] of [
     await t.renderOnce();
     assert.match(t.captureCharFrame(), /Context · capacity 258400 tokens/);
     assert.match(t.captureCharFrame(), /Usage · last output 0 tokens/);
-    assert.match(t.captureCharFrame(), /↑\/↓ scroll/);
-    await press(t, renderer, "up");
+    assert.match(t.captureCharFrame(), /\^G details/);
+    await press(t, renderer, "up", { alt: true });
     assert.match(t.captureCharFrame(), /Jump to latest/);
     renderer.resize(width + 2, height);
     await t.renderOnce();
-    await press(t, renderer, "end");
+    await press(t, renderer, "end", { alt: true });
     assert.doesNotMatch(
       t.captureCharFrame(),
       /Jump to latest|Thinking|duration|%/,
@@ -7043,9 +7212,10 @@ const hexRgb = (hex: string) =>
   [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
 
 test("m10-home-and-preferences: all 25×2 previews recolor the mounted Workbench through Port keys", async () => {
+  // The sidebar draws the Bundle name in the theme's text role (ADR 0036).
   const wb = await mountWorkbench(
     runOf(),
-    100,
+    140,
     40,
     undefined,
     true,
@@ -7120,7 +7290,7 @@ for (const discovery of ["palette", "themes"] as const) {
       assert.match(
         wb.t.captureCharFrame(),
         interaction === "request"
-          ? /Harness Request/
+          ? /Permission required/
           : /What is the ticket number/,
       );
       await press(wb.t, wb.renderer, "p", { ctrl: true });
@@ -7678,7 +7848,7 @@ for (const kind of ["transcript", "output"] as const) {
       type: "transcript-page",
       entries: txEntries("assistant", "HELD_TRANSCRIPT"),
     });
-    await press(wb.t, wb.renderer, "d");
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
     await press(wb.t, wb.renderer, "return");
     assert.match(
       wb.t.captureCharFrame(),
@@ -7772,7 +7942,7 @@ test("m10-session-history H2: row identity survives preview settlement, insertio
   );
   control.setHistory(page(initial));
   await t.renderOnce();
-  await press(t, renderer, "home");
+  await press(t, renderer, "home", { alt: true });
   for (let step = 0; step < 20; step++) {
     if (
       timelineLines(t.captureCharFrame())
@@ -7780,7 +7950,7 @@ test("m10-session-history H2: row identity survives preview settlement, insertio
         ?.includes("ACTIVITY_ANCHOR")
     )
       break;
-    await press(t, renderer, "down");
+    await press(t, renderer, "down", { alt: true });
   }
   assert.match(
     timelineLines(t.captureCharFrame()).find((line) => line.trim() !== "") ??
@@ -7811,7 +7981,7 @@ test("m10-session-history H2: row identity survives preview settlement, insertio
     firstVisible,
   );
   assert.doesNotMatch(t.captureCharFrame(), /PREVIEW_SETTLED/);
-  await press(t, renderer, "end");
+  await press(t, renderer, "end", { alt: true });
   assert.match(t.captureCharFrame(), /row-29/);
 });
 
@@ -7839,9 +8009,9 @@ test("m10-session-history: a history-only observer loss is visible and reconnect
   await t.renderOnce();
   const frame = t.captureCharFrame();
   assert.match(frame, /View disconnected/);
-  assert.match(frame, /Reconnect/);
+  assert.match(frame, /ctrl\+r reconnect/);
   assert.match(frame, /Last-known content/);
-  await press(t, renderer, "r");
+  await press(t, renderer, "r", { ctrl: true });
   assert.deepEqual(control.reconnects, ["history"]);
   control.setHistoryFreshness({
     kind: "current",
@@ -7849,7 +8019,7 @@ test("m10-session-history: a history-only observer loss is visible and reconnect
     lastConfirmedAt: "2026-09-22T10:30:01.000Z",
   });
   await t.renderOnce();
-  assert.match(t.captureCharFrame(), /View current/);
+  assert.doesNotMatch(t.captureCharFrame(), /not Run state/);
 });
 
 for (const settledAt of ["2026-10-06T00:00:03Z", "2026-10-06T00:00:00Z"])
@@ -7965,15 +8135,14 @@ function historyPage(
   };
 }
 function firstHistoryLine(frame: string): string {
-  const lines = frame.split("\n");
-  return (
-    lines[lines.findIndex((line) => line.includes("Timeline")) + 1] ?? ""
-  ).trim();
+  return timelineLines(frame)[0]?.trim() ?? "";
 }
+/** The new-activity count on the status row under the conversation. */
 function historyBadge(frame: string): number {
   const label =
-    frame.split("\n").find((line) => line.includes("Timeline")) ?? "";
-  return Number(label.match(/(?:▼ | · )(\d+)/)?.[1] ?? 0);
+    frame.split("\n").find((line) => /Jump to latest|Paused ·/.test(line)) ??
+    "";
+  return Number(label.match(/▼ (\d+)/)?.[1] ?? 0);
 }
 async function mountHistory(width: number, height = 14, input = false) {
   return mountWorkbench(
@@ -8017,7 +8186,7 @@ for (const width of [40, 100]) {
     await wb.t.renderOnce();
     await seekHistoryLine(wb, anchorLine); // offset 2: role header, P line, anchor line
     const badge = historyBadge(wb.t.captureCharFrame());
-    assert.equal(badge, 22); // narrow bottom cuts ROW_8; wide bottom fully shows ROW_7
+    assert.equal(badge, 21); // the headerless nine-line viewport shows ROW_8 fully at both widths
 
     const unchanged = async (rows: readonly SessionHistoryRow[]) => {
       wb.control.setHistory(historyPage(rows));
@@ -8120,15 +8289,10 @@ for (const width of [40, 100]) {
       );
       // The first current row carries the Session/beginning dividers, never an activity.
       if (fallback !== "no-survivor") {
+        // The headerless viewport is nine lines at both widths.
         assert.equal(
           historyBadge(wb.t.captureCharFrame()),
-          width === 40
-            ? fallback === "tie-later"
-              ? 8
-              : 7
-            : fallback === "tie-later"
-              ? 9
-              : 8,
+          fallback === "tie-later" ? 7 : 6,
         );
         await press(wb.t, wb.renderer, "down", { alt: true });
         assert.equal(
@@ -8136,10 +8300,7 @@ for (const width of [40, 100]) {
           fallback === "tie-later" ? "↳ OLD_3" : "↳ NEW_1",
         );
       } else {
-        assert.equal(
-          historyBadge(wb.t.captureCharFrame()),
-          width === 40 ? 8 : 9,
-        );
+        assert.equal(historyBadge(wb.t.captureCharFrame()), 7);
         await press(wb.t, wb.renderer, "down", { alt: true });
         assert.match(firstHistoryLine(wb.t.captureCharFrame()), /NEW_0/);
       }
@@ -8163,7 +8324,7 @@ for (const width of [40, 100]) {
     wb.control.setHistory(historyPage([initial[0]!, anchor]));
     await wb.t.renderOnce();
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "OFFSET_THREE");
-    assert.match(wb.t.captureCharFrame(), /Timeline · Paused/);
+    assert.match(wb.t.captureCharFrame(), /Paused · alt\+end latest/);
     const shortLines = timelineLines(wb.t.captureCharFrame())
       .slice(0, 4)
       .map((line) => line.trim());
@@ -8196,7 +8357,7 @@ for (const width of [40, 100]) {
       /Beginning of Run history/,
     );
     assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
-    assert.match(wb.t.captureCharFrame(), /Timeline · Paused/);
+    assert.match(wb.t.captureCharFrame(), /Paused · alt\+end latest/);
     wb.control.setHistory(
       historyPage([
         activityRow("return", "RETURNED"),
@@ -8217,7 +8378,9 @@ for (const width of [40, 100]) {
     );
     await wb.t.renderOnce();
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), returned);
-    assert.equal(historyBadge(wb.t.captureCharFrame()), 14); // returning content never silently attached
+    // Returning content never silently attaches; the resized 19-line viewport (100
+    // or 40 columns, height 24) shows rows up to the badge.
+    assert.equal(historyBadge(wb.t.captureCharFrame()), width === 40 ? 12 : 13);
   });
 }
 
@@ -8232,18 +8395,12 @@ for (const width of [40, 100]) {
     wb.control.setHistory(historyPage(initial));
     await wb.t.renderOnce();
     await seekHistoryLine(wb, "EVICTION_OFFSET"); // offset 2
-    assert.equal(
-      historyBadge(wb.t.captureCharFrame()),
-      width === 40 ? 188 : 189,
-    );
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 187); // nine-line viewport
     const retained = [...initial.slice(1), activityRow("row-200", "ROW_200")];
     wb.control.setHistory(historyPage(retained, true));
     await wb.t.renderOnce();
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "EVICTION_OFFSET");
-    assert.equal(
-      historyBadge(wb.t.captureCharFrame()),
-      width === 40 ? 189 : 190,
-    );
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 188);
     await press(wb.t, wb.renderer, "home", { alt: true });
     await press(wb.t, wb.renderer, "down", { alt: true });
     await press(wb.t, wb.renderer, "down", { alt: true });
@@ -8259,7 +8416,7 @@ for (const width of [40, 100]) {
       firstHistoryLine(wb.t.captureCharFrame()),
       /Earlier conversation is not shown/,
     ); // fallback row-2, offset zero
-    assert.equal(historyBadge(wb.t.captureCharFrame()), 197);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 196); // nine-line viewport
     await press(wb.t, wb.renderer, "down", { alt: true });
     assert.match(firstHistoryLine(wb.t.captureCharFrame()), /Conversation/);
     await press(wb.t, wb.renderer, "down", { alt: true });
@@ -8290,21 +8447,17 @@ for (const width of [40, 100]) {
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "Assistant");
     await press(wb.t, wb.renderer, "down", { alt: true });
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
-    const frame = wb.t.captureCharFrame();
-    const y =
-      frame.split("\n").findIndex((line) => line.includes("Timeline")) + 1;
+    const y = 1; // the conversation's first row, inside the padding
     await wb.t.mockMouse.scroll(5, y, "up");
     await wb.t.renderOnce();
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "Assistant");
     await wb.t.mockMouse.scroll(5, y, "down");
     await wb.t.renderOnce();
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
-    // viewport 10 at 40 columns, 9 at 100; half pages move 5 and 4 displayed lines.
+    // A 12-line viewport at both widths (an Agent-bearing Run's two reserved
+    // metadata slots, #418, sit under it): half pages move 6 displayed lines.
     await press(wb.t, wb.renderer, "pagedown");
-    assert.equal(
-      firstHistoryLine(wb.t.captureCharFrame()),
-      width === 40 ? "Assistant" : "ROW_7",
-    );
+    assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_8");
     await press(wb.t, wb.renderer, "pageup");
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
     assert.match(wb.t.captureCharFrame(), /AdrafBt/);
@@ -8325,6 +8478,9 @@ for (const width of [40, 100]) {
 
 test("m10-paused-history-identity: one-line viewport pages move at least one displayed line", async () => {
   const wb = await mountHistory(100, 8);
+  // Six rows: the status row, the prompt's field and its hint leave one line.
+  wb.t.resize(100, 6);
+  wb.renderer.resize(100, 6);
   wb.control.setHistory(
     historyPage(
       Array.from({ length: 20 }, (_, i) => historyRow(`row-${i}`, `ROW_${i}`)),
@@ -8413,11 +8569,13 @@ for (const width of [40, 100]) {
       assert.deepEqual(wb.control.sends, []);
       assert.deepEqual(wb.control.texts, []);
       if (owner === "dialog") {
-        wb.t.mockInput.pressEscape();
-        await wb.t.waitForFrame((frame) => !frame.includes("Commands"));
+        // The Port-driven palette takes Escape from the Renderer Port.
+        await press(wb.t, wb.renderer, "escape");
+        await wb.t.waitForFrame((frame) => !frame.includes("App commands"));
       } else if (owner === "confirmation")
         await press(wb.t, wb.renderer, "escape");
-      else if (owner === "details") await press(wb.t, wb.renderer, "d");
+      else if (owner === "details")
+        await press(wb.t, wb.renderer, "g", { ctrl: true });
       else {
         wb.control.setLive(undefined);
         wb.control.setRun(interactiveRunOf({ sessions }));
@@ -9011,3 +9169,392 @@ for (const appearance of ["dark", "light"] as const)
     await wb.t.renderOnce();
     noOverflow(wb.t.captureCharFrame(), 32);
   });
+
+// --- m10-workbench-interaction: one bottom interaction (#419, H1) -----------
+
+// Exactly one control holds the bottom region (ADR 0036): the prompt, a Harness
+// Request, a Human Gate, a Review checkpoint, or a finished Run's outcome. Each
+// state below asserts what that one resolved interaction drives — the visible
+// control, the field that takes text, the App commands on offer, the key
+// recipient, and the rows it occupies — at two sizes and through a resize of both
+// the renderer and the Renderer Port. Row accounting is exact: the control's first
+// row sits where the counted rows put it, directly over the bottom padding.
+
+/** The palette's command names, read by opening and closing it over the Port. */
+async function paletteCommands(
+  wb: Awaited<ReturnType<typeof mountWorkbench>>,
+): Promise<string[]> {
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  const frame = wb.t.captureCharFrame();
+  await press(wb.t, wb.renderer, "escape");
+  return [
+    "Model",
+    "Effort",
+    "End Step",
+    "Continue",
+    "End Stage",
+    "Themes",
+    "Quit",
+  ].filter((name) => new RegExp(`\\b${name}\\b`).test(frame));
+}
+
+/** The frame row a control begins on, found by its heading. */
+function rowOf(frame: string, heading: RegExp): number {
+  return frame.split("\n").findIndex((line) => heading.test(line));
+}
+
+for (const [width, height] of [
+  [100, 30],
+  [48, 18],
+] as const) {
+  test(`m10-workbench-interaction: one resolved interaction drives control, field, commands, key recipient and rows at ${width}x${height}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER, END_OFFER, MODEL_OFFER] }),
+      width,
+      height,
+    );
+    const last = height - 2; // the last interior row, over the bottom padding
+    // The interactive Step's Agent-bearing Run reserves two metadata slots
+    // (#418) under the status row, above every bottom control.
+
+    // Prompt: the field, meta row and hint hold three rows; text reaches it.
+    let frame = wb.t.captureCharFrame();
+    assert.equal(rowOf(frame, /^ > /), last - 2);
+    assert.match(frame, /enter send Turn · \^E end step/);
+    // An armed End Step wraps its whole consequence; the counted rows grow with it.
+    await press(wb.t, wb.renderer, "e", { ctrl: true });
+    frame = wb.t.captureCharFrame();
+    // Field, meta row, then the warning's wrapped rows down to the last interior
+    // row: nothing clipped below, no blank row left over.
+    assert.equal(
+      rowOf(frame, /⚠ End this interactive Step/),
+      rowOf(frame, /^ > /) + 2,
+    );
+    assert.match(frame.split("\n")[last]!, /Run\.\s*$/);
+    assert.equal(frame.split("\n")[last + 1]!.trim(), "");
+    await press(wb.t, wb.renderer, "escape");
+    assert.deepEqual(await paletteCommands(wb), [
+      "Model",
+      "Effort",
+      "End Step",
+      "Themes",
+      "Quit",
+    ]);
+    await type(wb.t, "kept");
+    assert.match(wb.t.captureCharFrame(), /^ > kept/m);
+
+    // Harness Request: five rows; it owns printable keys and Enter.
+    wb.control.setLive(requestOverlay());
+    await wb.t.renderOnce();
+    frame = wb.t.captureCharFrame();
+    assert.equal(rowOf(frame, /△ Permission required/), last - 4);
+    assert.doesNotMatch(frame, /^ > /m); // no prompt beneath it
+    assert.deepEqual(await paletteCommands(wb), [
+      "Model",
+      "Effort",
+      "Themes",
+      "Quit",
+    ]);
+    await type(wb.t, "zz");
+    await press(wb.t, wb.renderer, "e", { ctrl: true });
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(wb.control.requests, [
+      { requestId: "req-1", generation: 3, decision: "allow" },
+    ]);
+    assert.deepEqual(wb.control.sends, []);
+    assert.deepEqual(wb.control.ends, []);
+    // The request held the same Step's bottom, so the draft survives it.
+    wb.control.setLive(undefined);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /^ > kept/m);
+
+    // Human Gate: four rows; typed text reaches the gate's own field.
+    wb.control.setRun(
+      freeTextRunOf({ actionOffers: [FREE_TEXT_OFFER, MODEL_OFFER] }),
+    );
+    await wb.t.renderOnce();
+    frame = wb.t.captureCharFrame();
+    assert.equal(rowOf(frame, /◆ Workflow decision/), last - 3);
+    await type(wb.t, "351");
+    assert.match(wb.t.captureCharFrame(), /^ {3}> 351/m);
+    assert.deepEqual(await paletteCommands(wb), [
+      "Model",
+      "Effort",
+      "Themes",
+      "Quit",
+    ]);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.texts[0]?.text, "351");
+    assert.deepEqual(wb.control.sends, []);
+    // Authored suggestions add the choice row: five rows.
+    wb.control.setRun(suggestedRunOf());
+    await wb.t.renderOnce();
+    assert.equal(
+      rowOf(wb.t.captureCharFrame(), /◆ Workflow decision/),
+      last - 4,
+    );
+
+    // Review checkpoint: seven rows; Enter answers it, never the prompt.
+    wb.control.setRun(
+      blockedRunOf({ actionOffers: [ANSWER_OFFER, MODEL_OFFER] }),
+    );
+    await wb.t.renderOnce();
+    frame = wb.t.captureCharFrame();
+    assert.equal(rowOf(frame, /Review checkpoint ·/), last - 6);
+    await type(wb.t, "x");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.answers[0]?.answer, "continue");
+    assert.deepEqual(wb.control.sends, []);
+
+    // Finished: the outcome's three rows; only Themes and Quit remain.
+    wb.control.setRun(runOf({ state: "succeeded", actionOffers: [] }));
+    await wb.t.renderOnce();
+    frame = wb.t.captureCharFrame();
+    assert.equal(rowOf(frame, /✓ Run succeeded/), last - 2);
+    assert.deepEqual(await paletteCommands(wb), ["Themes", "Quit"]);
+
+    // The gate and checkpoint were other Steps: a fresh input target, so the
+    // departed Step's draft never moves into them or back (decision 29). A new
+    // draft keeps exact rows through a resize of both the renderer and the Port.
+    wb.control.setRun(interactiveRunOf());
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /kept/);
+    await type(wb.t, "fresh");
+    const other = width === 100 ? 48 : 100;
+    wb.t.resize(other, height);
+    wb.renderer.resize(other, height);
+    await wb.t.renderOnce();
+    frame = wb.t.captureCharFrame();
+    noOverflow(frame, other);
+    assert.equal(rowOf(frame, /^ > fresh/), last - 2);
+  });
+}
+
+test("m10-workbench-interaction: a request preempts the prompt and picker, owns Escape and printable keys, and a deliberately reopened palette dismisses back to it", async () => {
+  let interrupted = 0;
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf({
+      actionOffers: [
+        INTERRUPT_OFFER,
+        AVAILABLE_STEER_OFFER,
+        CANCEL_OFFER,
+        MODEL_OFFER,
+      ],
+    }),
+    100,
+    30,
+    okActions({
+      interrupt: () => {
+        interrupted += 1;
+        return () => ({ kind: "ok" });
+      },
+    }),
+  );
+  await type(wb.t, "draft");
+  await openModelChoice(wb.t, wb.renderer);
+  assert.match(wb.t.captureCharFrame(), /Choose a model/);
+
+  // The request arrives: the picker closes, and the request owns every key.
+  wb.control.setLive(requestOverlay());
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+  for (const key of ["q", "s", "y", "x"]) await press(wb.t, wb.renderer, key);
+  await type(wb.t, "typed");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /draftt|typed/);
+
+  // Deliberate Ctrl+P reopens the permitted commands over it; Escape dismisses
+  // the palette alone and returns the keys to the request.
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /Change the Run model/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /End Step|End Stage/);
+  await press(wb.t, wb.renderer, "escape");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /App commands/);
+  assert.deepEqual(wb.control.requests, []);
+  assert.match(wb.t.captureCharFrame(), /Permission required/);
+
+  // The request's Escape denies once; it never arms or dispatches the Interrupt,
+  // and nothing was sent or steered underneath.
+  await press(wb.t, wb.renderer, "escape");
+  assert.deepEqual(wb.control.requests, [
+    { requestId: "req-1", generation: 3, decision: "deny" },
+  ]);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Press esc again/);
+  assert.equal(interrupted, 0);
+  assert.deepEqual(wb.control.steers, []);
+  assert.deepEqual(wb.control.sends, []);
+
+  // Once it clears, the prompt has its draft and the two-press Interrupt back,
+  // and an Escape that closes a dialog over the prompt arms nothing.
+  wb.control.setLive(undefined);
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /^ > draft/m);
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  await press(wb.t, wb.renderer, "escape");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Press esc again/);
+  await press(wb.t, wb.renderer, "escape");
+  assert.match(wb.t.captureCharFrame(), /Press esc again/);
+  await press(wb.t, wb.renderer, "escape");
+  assert.equal(interrupted, 1);
+});
+
+test("m10-workbench-interaction: Shift+Enter and Ctrl+J add native newlines, the field grows by its lines, and Enter sends the whole draft", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 60, 24);
+  await type(wb.t, "first");
+  // The dispatcher leaves Shift+Enter to the field: no send.
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends.length, 1);
+  wb.control.setInteractiveOutcome({
+    kind: "refused",
+    problem: {
+      code: "stale",
+      explanation: "not now",
+      remediation: "retry",
+      possibleEffects: "none",
+    },
+  });
+  await wb.t.renderOnce();
+  wb.renderer.key("return", { shift: true });
+  // The kitty keyboard sequence a terminal sends for Shift+Enter.
+  wb.t.mockInput.pressKey("\x1b[13;2u");
+  await type(wb.t, "second");
+  wb.t.mockInput.pressKey("j", { ctrl: true });
+  await type(wb.t, "third");
+  assert.equal(wb.control.sends.length, 1);
+  const frame = wb.t.captureCharFrame();
+  const top = rowOf(frame, /^ > first/);
+  assert.match(frame.split("\n")[top + 1]!, /^ {3}second/);
+  assert.match(frame.split("\n")[top + 2]!, /^ {3}third/);
+  // Three field rows, the meta row, the refusal and the hint fill the bottom.
+  assert.equal(top, 24 - 2 - 5);
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends[1], {
+    runId: "run-1",
+    stepId: "discuss",
+    text: "first\nsecond\nthird",
+  });
+});
+
+test("m10-workbench-interaction: Ctrl+C clears a nonempty draft even while details hold focus, then requests guarded Quit", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 100, 30);
+  await type(wb.t, "keep me?");
+  await press(wb.t, wb.renderer, "g", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /› Details/);
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  assert.deepEqual(wb.exits, []);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /keep me\?/);
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  assert.equal(wb.exits.length, 1);
+});
+
+test("m10-workbench-interaction: an interrupted interactive Turn leaves an explicit waiting note until a later Turn settles (story 75)", async () => {
+  const interrupted = interactiveRunOf({
+    timeline: [
+      { at: "T1", event: "turn-started", turnKind: "interactive-agent" },
+      {
+        at: "T2",
+        event: "turn-settled",
+        detail: "interrupted",
+        turnKind: "interactive-agent",
+      },
+    ],
+  });
+  const wb = await mountWorkbench(interrupted, 60, 24);
+  assert.match(
+    wb.t.captureCharFrame(),
+    /◇ You stopped the agent — it is waiting on/,
+  );
+  wb.control.setRun(
+    interactiveRunOf({
+      timeline: [
+        ...interrupted.timeline,
+        {
+          at: "T3",
+          event: "turn-settled",
+          detail: "completed",
+          turnKind: "interactive-agent",
+        },
+      ],
+    }),
+  );
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /You stopped the agent/);
+});
+
+test("m10-workbench-interaction: an Esc pair that straddles its Turn's end never leaves the Workbench", async () => {
+  let interrupted = 0;
+  const wb = await mountWorkbench(
+    liveInteractiveRunOf(),
+    100,
+    30,
+    okActions({
+      interrupt: () => {
+        interrupted += 1;
+        return () => ({ kind: "ok" });
+      },
+    }),
+  );
+  await press(wb.t, wb.renderer, "escape"); // arm
+  wb.control.setRun(interactiveRunOf()); // the Turn ends under the arm
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Press esc again/);
+  await press(wb.t, wb.renderer, "escape"); // the second half: consumed
+  assert.ok(onWorkbench(wb.t.captureCharFrame()));
+  assert.equal(interrupted, 0);
+  await press(wb.t, wb.renderer, "escape"); // a deliberate Esc at the boundary
+  assert.match(wb.t.captureCharFrame(), /Start a Run/);
+});
+
+test("m10-confirmation-target-identity: a request preempting an armed cancel clears it, so a later y dispatches nothing", async () => {
+  let cancelled = 0;
+  const wb = await mountWorkbench(
+    runOf({ state: "running", actionOffers: [CANCEL_OFFER] }),
+    100,
+    40,
+    okActions({
+      cancel: () => {
+        cancelled += 1;
+        return () => ({ kind: "ok" });
+      },
+    }),
+  );
+  await press(wb.t, wb.renderer, "g", { ctrl: true });
+  await press(wb.t, wb.renderer, "c");
+  assert.match(wb.t.captureCharFrame(), /Cancel ends the Run/);
+  wb.control.setLive(requestOverlay());
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Cancel ends the Run/);
+  wb.control.setLive(undefined);
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "y");
+  assert.equal(cancelled, 0);
+});
+
+test("m10-workbench-interaction: the sidebar names a requested Model choice until its receipt settles", async () => {
+  const [outcome, setOutcome] = createSignal<RunActionOutcome>({
+    kind: "pending",
+  });
+  const wb = await mountWorkbench(
+    runOf({
+      selectedHarness: "codex",
+      modelChoice: MODEL_OFFER.currentChoice,
+      actionOffers: [MODEL_OFFER],
+    }),
+    140,
+    40,
+    okActions({ changeModelChoice: () => outcome }),
+  );
+  await openModelChoice(wb.t, wb.renderer);
+  await press(wb.t, wb.renderer, "down");
+  await press(wb.t, wb.renderer, "return");
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /→ requested deep · medium effort/);
+  setOutcome({
+    kind: "ok",
+    modelChoiceChange: {
+      choice: { model: "deep", effort: "medium" },
+      reach: "next-turn",
+    },
+  });
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /→ requested/);
+});

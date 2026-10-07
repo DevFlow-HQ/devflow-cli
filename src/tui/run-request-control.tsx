@@ -17,13 +17,12 @@ import { useTheme } from "./vendor/theme-context.js";
 // state, its self-contained modal key branch, and its view interleave with the rest of
 // the Workbench only through the modal-control gate — the same seam the
 // reference-inspection overlay was split on (run-inspection.tsx). The controller owns
-// everything about answering the outstanding request; the Workbench asks it whether a
-// request is live (to gate the Actions rail and the Esc interrupt) and hands it keys
-// while it is up. Code moved verbatim from run-workbench.tsx.
+// everything about answering the outstanding request; the Workbench's one resolved
+// interaction asks it whether a request is live and hands it every key while it is.
 
 type Theme = ReturnType<typeof useTheme>["theme"];
 
-/** Rows the approval Harness Request control occupies while it replaces the footer
+/** Rows the approval Harness Request control occupies while it holds the bottom region
  *  (#121, spec story 13/14): a heading, the exact tool, the exact input, the
  *  allow/deny decisions, and a status/hint line that also carries a stale refusal. */
 export const REQUEST_HEIGHT = 5;
@@ -140,8 +139,8 @@ export function createRequestControl(deps: {
 
 /** The approval Harness Request control (#117, spec story 13/14): the exact tool
  *  and input Claude Code asked to run, the exact decisions it offered, and a
- *  status/hint line carrying a pending state or a stale-offer refusal. It replaces
- *  the footer while a request is outstanding; every line is plain text so both
+ *  status/hint line carrying a pending state or a stale-offer refusal. It holds the
+ *  bottom region while a request is outstanding; every line is plain text so both
  *  decisions read with colour removed. */
 export function HarnessRequestControl(props: {
   request: Accessor<RunOutstandingRequest>;
@@ -177,7 +176,7 @@ export function HarnessRequestControl(props: {
       backgroundColor={theme.backgroundPanel}
     >
       <text fg={theme.warning} attributes={TextAttributes.BOLD} flexShrink={0}>
-        {clip("› Harness Request · awaiting your approval", w())}
+        {clip("△ Permission required · awaiting your approval", w())}
       </text>
       <text fg={theme.text} flexShrink={0}>
         {clip(`  Tool: ${props.request().tool}`, w())}

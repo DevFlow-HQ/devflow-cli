@@ -1,10 +1,8 @@
-import { useDialog } from "./vendor/dialog.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
   createEffect,
   createSignal,
   untrack,
-  createMemo,
   For,
   Match,
   Show,
@@ -15,15 +13,13 @@ import type {
   AnswerHumanGateOffer,
   CancelRunOffer,
   ChangeModelChoiceOffer,
-  ContinueRepeatOffer,
-  EndStageOffer,
   DeleteRunOffer,
-  InterruptTurnOffer,
   Problem,
+  ResumeRunOffer,
   RunCheckpointView,
   RunStateName,
+  RunStepStatus,
   RunView,
-  SteerTurnOffer,
 } from "../application/projection-port.js";
 import { clip } from "./clip.js";
 import type { TranscriptTarget } from "./run-transcript.js";
@@ -31,53 +27,62 @@ import type { Openable } from "./run-inspection.js";
 import type { Theme } from "./vendor/theme.js";
 import { WorkingScanner } from "./working-scanner.js";
 
-// Pure presentational leaves for the Run Workbench. State, effects, focus, and the
-// interleaved key dispatcher stay in run-workbench.tsx; these views receive only
-// Accessors and callbacks from that owner.
+// Pure presentational leaves for the Run Workbench. State, effects, focus, the one
+// resolved bottom interaction, and the key dispatcher stay in run-workbench.tsx;
+// these views receive only Accessors, models, and callbacks from that owner.
 
-/** What the interactive input's refusal line shows: an Application refusal, or the
- *  live Turn's unavailable Steer Offer at Enter (#294), whose reason is the Harness
- *  profile's evidence word for word. The presentation adds only the prefix. */
-export type InteractiveRefusal =
-  | { readonly kind: "refused"; readonly problem: Problem }
+/** What the prompt's hint rows show (ADR 0036): the working scanner beside its
+ *  words while a Turn works, or plain lines the owner has already wrapped to the
+ *  width — key hints, an armed confirmation, or the sending state. */
+export type PromptHint =
   | {
-      readonly kind: "unavailable-steer";
-      readonly offer: Extract<SteerTurnOffer, { available: false }>;
+      readonly kind: "working";
+      readonly label: string;
+      readonly detail: string;
+    }
+  | {
+      readonly kind: "lines";
+      readonly lines: readonly string[];
+      readonly tone: "muted" | "warning";
     };
 
-/** The interactive-agent human input (#122), which is also an Agent Step's
- *  follow-up compose after an Interrupt (#354, "Reply to the agent", with no Step
- *  ending): a label saying who holds the Turn, a
- *  native OpenTUI text field (D9 — the field draws its own caret), and a hint/status
- *  line — the live Turn's Interrupt (and Enter to Steer it, when offered, #294), the
- *  Enter/End Step controls at a boundary, or the End Step confirm. The label reads the live Turn from its interrupt Offer (#290): the
- *  agent is working while one is offered, else it is the human's move. While it works,
- *  the working scanner leads the Interrupt hint (#292); the label above already says
- *  so in words, and the armed confirm replaces the whole line. Every line is
- *  plain text so who holds the Turn reads without colour (AC2). The field is blurred
- *  while an answer is in flight (until the send is admitted) and while the End Step
- *  confirm is armed, so a confirming `y` never types into it (D9 freeze). */
-export function InteractiveInput(props: {
-  /** An Agent Step's follow-up compose (#354): its Enter sends the reply. */
-  followUp: Accessor<boolean>;
-  restored: Accessor<boolean>;
+/** Everything the ordinary prompt draws, resolved by the Workbench from its one
+ *  bottom interaction. `promptHeight` counts exactly the rows `PromptControl` draws. */
+export interface PromptModel {
+  /** A note above the field, such as the Interrupt's "waiting on you". */
+  readonly note?: string;
+  /** Whose move it is, shown while the draft is empty. */
+  readonly placeholder: string;
+  readonly fieldRows: number;
+  /** Step, Session, and Model choice at 120 columns or less. */
+  readonly meta?: string;
+  /** A refused send or Steer, wrapped; it sits above the hint, so the working
+   *  state and its keys stay visible beside it. */
+  readonly refusal: readonly string[];
+  readonly hint: PromptHint;
+}
+
+export function promptHeight(model: PromptModel): number {
+  return (
+    (model.note === undefined ? 0 : 1) +
+    model.fieldRows +
+    (model.meta === undefined ? 0 : 1) +
+    model.refusal.length +
+    (model.hint.kind === "working" ? 1 : model.hint.lines.length)
+  );
+}
+
+/** The always-editable prompt (ADR 0036): an optional note, a native OpenTUI
+ *  textarea that owns text, cursor motion, word deletion, paste, and newlines
+ *  (Shift+Enter, Ctrl+J), the narrow meta row, and the hint rows. The Workbench's
+ *  Port dispatcher claims Enter and the command keys first; the field is blurred
+ *  while a dialog, a confirmation, focused details, or a pending send holds the
+ *  keys, so a confirming `y` never types. Every line is plain words, so whose move
+ *  it is reads without colour. */
+export function PromptControl(props: {
+  model: Accessor<PromptModel>;
   draft: Accessor<string>;
   onInput: (value: string) => void;
-  /** The live Turn's interrupt Offer: present exactly while the agent holds the Turn. */
-  interrupt: Accessor<InterruptTurnOffer | undefined>;
-  /** Whether Enter steers the live Turn: its Steer Offer is available (#294). */
-  steerOffered: Accessor<boolean>;
-  interruptArmed: Accessor<boolean>;
-  endOffered: Accessor<boolean>;
-  sendOffered: Accessor<boolean>;
-  endArmed: Accessor<boolean>;
-  endConsequence: Accessor<string | undefined>;
-  continueOffer: Accessor<ContinueRepeatOffer | undefined>;
-  continueArmed: Accessor<boolean>;
-  endStageOffer: Accessor<EndStageOffer | undefined>;
-  endStageArmed: Accessor<boolean>;
-  pending: Accessor<boolean>;
-  refusal: Accessor<InteractiveRefusal | undefined>;
   focused: Accessor<boolean>;
   width: Accessor<number>;
   reducedMotion: boolean;
@@ -85,225 +90,152 @@ export function InteractiveInput(props: {
 }) {
   const { theme } = props;
   const w = () => props.width();
-  // Blur the field while an answer is in flight or a confirming keypress is armed, so
-  // the submit/`y` never types (D9). The region can still read as focused (its label).
-  const dialog = useDialog();
-  const fieldFocused = () =>
-    dialog.stack.length === 0 &&
-    props.focused() &&
-    !props.pending() &&
-    !props.endArmed() &&
-    !props.continueArmed() &&
-    !props.endStageArmed();
-  // A plain hint line, or the unarmed live-Turn Interrupt the scanner leads (#292).
-  const hint = createMemo(
-    ():
-      | { readonly text: string }
-      | { readonly interrupt: InterruptTurnOffer } => {
-      const text = (line: string) => ({ text: line });
-      if (props.endArmed())
-        return text(
-          `  ⚠ End this interactive Step? Press y to confirm · esc to keep — ${props.endConsequence() ?? ""}`,
-        );
-      // The confirm leads with its keys so a narrow clip keeps them (#217).
-      const continueOffer = props.continueOffer();
-      if (props.continueArmed() && continueOffer !== undefined)
-        return text(`  ⚠ y continue · esc keep — ${continueOffer.consequence}`);
-      // End Stage's confirm (#218) names that the tracker was not checked right after
-      // its keys, so the warning survives a narrow clip.
-      const endStageOffer = props.endStageOffer();
-      if (props.endStageArmed() && endStageOffer !== undefined)
-        return text(
-          `  ⚠ y end stage · esc keep — ${endStageOffer.consequence}`,
-        );
-      // Pending lasts only until Secant admits the Turn (#290), never the whole Turn.
-      if (props.pending()) return text("  … sending…");
-      // The live Turn's Interrupt (#219) leads with its key so a narrow clip keeps it.
-      const interrupt = props.interrupt();
-      if (interrupt !== undefined)
-        return props.interruptArmed()
-          ? text(
-              `  ⚠ Press esc again to interrupt · any other key cancels — ${interrupt.consequence}`,
-            )
-          : { interrupt };
-      if (props.sendOffered() && props.followUp())
-        return text("  enter send reply · esc back");
-      if (props.sendOffered())
-        return text(
-          continueOffer !== undefined
-            ? endStageOffer !== undefined
-              ? "  enter send Turn · ^N continue · ^E end stage · esc back"
-              : "  enter send Turn · ^N continue · esc back"
-            : "  enter send Turn · ^E end step · esc back",
-        );
-      return text(
-        props.restored()
-          ? "  draft restored · esc back · tab for Run actions"
-          : "  esc back",
-      );
-    },
-  );
-  const hintText = () => {
-    const line = hint();
-    return "text" in line ? line.text : undefined;
+  const hint = () => props.model().hint;
+  const working = () => {
+    const current = hint();
+    return current.kind === "working" ? current : undefined;
   };
-  const workingInterrupt = () => {
-    const line = hint();
-    return "interrupt" in line ? line.interrupt : undefined;
+  const lines = () => {
+    const current = hint();
+    return current.kind === "lines" ? current : undefined;
   };
+  const tone = (which: "muted" | "warning") =>
+    which === "warning" ? theme.warning : theme.textMuted;
   return (
-    <box flexDirection="column" flexShrink={0}>
-      <text
-        fg={props.focused() ? theme.text : theme.textMuted}
-        attributes={props.focused() ? TextAttributes.BOLD : 0}
-        flexShrink={0}
-      >
-        {clip(
-          props.restored()
-            ? "◇ Steer dropped by interrupt · draft restored"
-            : props.interrupt() !== undefined
-              ? "◆ The agent is working — wait for its reply or interrupt it"
-              : props.followUp()
-                ? "◇ Reply to the agent — you stopped it, and it is waiting on you"
-                : "◇ Your move — the agent is waiting for your next Turn",
-          w(),
-        )}
-      </text>
-      <box flexDirection="row" flexShrink={0}>
-        <text fg={theme.text} flexShrink={0}>
-          {"> "}
-        </text>
-        <Show
-          when={props.restored()}
-          fallback={
-            <input
-              value={props.draft()}
-              onInput={props.onInput}
-              focused={fieldFocused()}
-              width={Math.max(1, w() - 2)}
-            />
-          }
-        >
-          <RestoredDraftInput
-            draft={props.draft}
-            onInput={props.onInput}
-            focused={fieldFocused}
-            width={() => Math.max(1, w() - 2)}
-          />
-        </Show>
-      </box>
-      <Show
-        when={props.refusal()}
-        fallback={
-          <Switch>
-            <Match when={workingInterrupt()}>
-              {(interrupt) => (
-                <WorkingScanner
-                  label={
-                    props.steerOffered()
-                      ? "enter steer · esc esc interrupt"
-                      : "esc esc interrupt"
-                  }
-                  detail={interrupt().consequence}
-                  labelColor={theme.textMuted}
-                  reducedMotion={props.reducedMotion}
-                  width={w()}
-                  accent={theme.accent}
-                  muted={theme.textMuted}
-                />
-              )}
-            </Match>
-            <Match when={hintText()}>
-              {(line) => (
-                <text fg={theme.textMuted} flexShrink={0}>
-                  {clip(line(), w())}
-                </text>
-              )}
-            </Match>
-          </Switch>
-        }
-      >
-        {(refusal) => (
-          <text fg={theme.error} flexShrink={0}>
-            {clip(`  ✗ ${refusalText(refusal())}`, w())}
+    <box
+      flexDirection="column"
+      height={promptHeight(props.model())}
+      flexShrink={0}
+      overflow="hidden"
+    >
+      <Show when={props.model().note}>
+        {(note) => (
+          <text fg={theme.warning} flexShrink={0} wrapMode="none">
+            {clip(note(), w())}
           </text>
         )}
       </Show>
+      <box
+        flexDirection="row"
+        height={props.model().fieldRows}
+        flexShrink={0}
+        overflow="hidden"
+      >
+        <text fg={theme.accent} attributes={TextAttributes.BOLD} flexShrink={0}>
+          {"> "}
+        </text>
+        <PromptField
+          draft={props.draft}
+          onInput={props.onInput}
+          focused={props.focused}
+          placeholder={() => clip(props.model().placeholder, w() - 2)}
+          placeholderColor={theme.textMuted}
+          width={() => Math.max(1, w() - 2)}
+          rows={() => props.model().fieldRows}
+        />
+      </box>
+      <Show when={props.model().meta}>
+        {(meta) => (
+          <text fg={theme.textMuted} flexShrink={0} wrapMode="none">
+            {clip(meta(), w())}
+          </text>
+        )}
+      </Show>
+      <For each={props.model().refusal}>
+        {(line) => (
+          <text fg={theme.error} flexShrink={0} wrapMode="none">
+            {line}
+          </text>
+        )}
+      </For>
+      <Switch>
+        <Match when={working()}>
+          {(current) => (
+            <WorkingScanner
+              label={current().label}
+              detail={current().detail}
+              labelColor={theme.text}
+              reducedMotion={props.reducedMotion}
+              width={w()}
+              accent={theme.accent}
+              muted={theme.textMuted}
+            />
+          )}
+        </Match>
+        <Match when={lines()}>
+          {(current) => (
+            <For each={current().lines}>
+              {(line) => (
+                <text fg={tone(current().tone)} flexShrink={0} wrapMode="none">
+                  {line}
+                </text>
+              )}
+            </For>
+          )}
+        </Match>
+      </Switch>
     </box>
   );
 }
 
-function refusalText(refusal: InteractiveRefusal): string {
-  return refusal.kind === "refused"
-    ? refusal.problem.explanation
-    : `steer unavailable · ${refusal.offer.reason}`;
-}
+/** Rows the finished-Run outcome holds in the bottom region: the outcome in words,
+ *  the Run id, and its keys. */
+export const FINISHED_HEIGHT = 3;
 
-/** The Steer compose input (#148): a label, a native OpenTUI text field (D9 — the
- *  field draws its own caret), and a hint/status line. Same-Turn guidance goes to the
- *  running agent without ending the Turn. Every line is plain text so it reads
- *  distinctly without colour (AC4). The field is blurred while a send is in flight so
- *  a submitting Enter never types into it (D9 freeze). Guidance an Interrupt drops
- *  returns in the follow-up compose instead (#354). */
-export function SteerInput(props: {
-  draft: Accessor<string>;
-  onInput: (value: string) => void;
-  pending: Accessor<boolean>;
-  refusal: Accessor<Problem | undefined>;
-  focused: Accessor<boolean>;
+/** The terminal Run states the finished outcome names. */
+export type FinishedState = "succeeded" | "failed" | "cancelled";
+
+const FINISHED_GLYPH: Record<FinishedState, string> = {
+  succeeded: "✓",
+  failed: "✗",
+  cancelled: "■",
+};
+
+/** A terminal Run's outcome (ADR 0036): it replaces the prompt, names the Run id
+ *  now that the Run has left an active state, and reads by glyph and words. */
+export function FinishedOutcome(props: {
+  run: Accessor<RunView>;
+  state: Accessor<FinishedState>;
   width: Accessor<number>;
   theme: Theme;
 }) {
   const { theme } = props;
   const w = () => props.width();
-  const dialog = useDialog();
-  const fieldFocused = () =>
-    dialog.stack.length === 0 && props.focused() && !props.pending();
-  const hint = () =>
-    props.pending()
-      ? "  … steering…"
-      : "  enter send guidance · esc back — the Turn keeps running";
+  const state = () => props.state();
+  const glyph = () => FINISHED_GLYPH[state()];
+  const colour = () =>
+    state() === "succeeded"
+      ? theme.success
+      : state() === "failed"
+        ? theme.error
+        : theme.textMuted;
   return (
-    <box flexDirection="column" flexShrink={0}>
-      <text
-        fg={props.focused() ? theme.text : theme.textMuted}
-        attributes={props.focused() ? TextAttributes.BOLD : 0}
-        flexShrink={0}
-      >
-        {clip("➤ Steer — guide the running Turn", w())}
-      </text>
-      <box flexDirection="row" flexShrink={0}>
-        <text fg={theme.text} flexShrink={0}>
-          {"> "}
-        </text>
-        <input
-          value={props.draft()}
-          onInput={props.onInput}
-          focused={fieldFocused()}
-          width={Math.max(1, w() - 2)}
-        />
-      </box>
-      <Show
-        when={props.refusal()}
-        fallback={
-          <text fg={theme.textMuted} flexShrink={0}>
-            {clip(hint(), w())}
-          </text>
-        }
-      >
-        {(problem) => (
-          <text fg={theme.error} flexShrink={0}>
-            {clip(`  ✗ ${problem().explanation}`, w())}
-          </text>
+    <box
+      flexDirection="column"
+      height={FINISHED_HEIGHT}
+      flexShrink={0}
+      overflow="hidden"
+      backgroundColor={theme.backgroundPanel}
+    >
+      <text fg={colour()} attributes={TextAttributes.BOLD} flexShrink={0}>
+        {clip(
+          `${glyph()} Run ${state()} — ${restingProse(props.run()) ?? ""}`,
+          w(),
         )}
-      </Show>
+      </text>
+      <text fg={theme.text} flexShrink={0}>
+        {clip(`  Run ${props.run().runId}`, w())}
+      </text>
+      <text fg={theme.textMuted} flexShrink={0}>
+        {clip("  ctrl+g details · esc back · ctrl+c quit", w())}
+      </text>
     </box>
   );
 }
 
 /** The Review checkpoint interaction (#92): the authored message and cadence, the
  *  completed-iteration count, the latest `fail` Verdict, the openable evidence,
- *  and two consequence-stating controls. It replaces the footer while blocked;
+ *  and two consequence-stating controls. It holds the bottom region while blocked;
  *  every line is plain text so both consequences read with colour removed. */
 export function CheckpointInteraction(props: {
   checkpoint: Accessor<RunCheckpointView>;
@@ -332,7 +264,7 @@ export function CheckpointInteraction(props: {
     const refusal = props.refusal();
     if (refusal !== undefined)
       return `refused: ${refusal.explanation} ${refusal.remediation}`;
-    return "←/→ choose · enter confirm · tab timeline · esc back · q quit";
+    return "←/→ choose · enter confirm · ctrl+g details · esc back · ctrl+c quit";
   };
   return (
     <box
@@ -348,13 +280,13 @@ export function CheckpointInteraction(props: {
         flexShrink={0}
       >
         {clip(
-          `${props.focused() ? "› " : "  "}Review checkpoint · every ${cp().interval} iteration(s) · ${cp().completedIterations} completed`,
+          `${props.focused() ? "› " : "  "}Review checkpoint · ${cp().message}`,
           w(),
         )}
       </text>
       <text fg={theme.textMuted} flexShrink={0}>
         {clip(
-          `  latest: ${cp().latestVerdict.name} = ${cp().latestVerdict.value} · evidence: ${evidence()}`,
+          `  every ${cp().interval} iteration(s) · ${cp().completedIterations} completed · latest: ${cp().latestVerdict.name} = ${cp().latestVerdict.value} · evidence: ${evidence()}`,
           w(),
         )}
       </text>
@@ -397,9 +329,9 @@ export function CheckpointInteraction(props: {
 /** Short prose stating why a resting Run rests (#194 story 38), derived purely in
  *  presentation from the Run view's `state` and — for `halted`/`blocked` — the
  *  conflict/checkpoint/gate facts. Exhaustive over `RunStateName` so a new state
- *  must be given prose here to compile. `running` is not a resting state. Both the
- *  header (beside the state word, so colour is never the only signal, AC4) and the
- *  panel's recovery evidence (AC2) render this one string. */
+ *  must be given prose here to compile. `running` is not a resting state. The finished
+ *  outcome or the halted prompt's note (beside the state word, so colour is never the
+ *  only signal, AC4) and the panel's recovery evidence (AC2) render this one string. */
 export function restingProse(run: RunView): string | undefined {
   switch (run.state) {
     case "running":
@@ -466,17 +398,22 @@ export function buildDetailsRows(params: {
    *  acknowledgement (#194 story 39); surfaced as recovery evidence too. */
   readonly resumeAcknowledgement: string | undefined;
   readonly modelChoice: ChangeModelChoiceOffer | undefined;
+  readonly resume: ResumeRunOffer | undefined;
   readonly cancel: CancelRunOffer | undefined;
   readonly remove: DeleteRunOffer | undefined;
-  readonly armed: "cancel" | "delete" | undefined;
+  readonly armed: "takeover" | "acknowledge" | "cancel" | "delete" | undefined;
 }): DetailsRow[] {
   const { run } = params;
   const rows: DetailsRow[] = [];
   const push = (text: string, tone: DetailsTone = "muted", bold = false) =>
     rows.push({ text, tone, bold });
 
-  push(`${params.focused ? "› " : "  "}Details`, "text", params.focused);
-  // The Run id and owner process the everyday header leaves out (#293); the
+  push(
+    `${params.focused ? "› " : "  "}Details${params.focused ? " · ↑/↓ select · enter open · esc back · ctrl+g close" : " · ctrl+g focus"}`,
+    "text",
+    params.focused,
+  );
+  // The Run id and owner process the everyday screen leaves out (#293); the
   // owner shows only while the Run is live, worded as headless `run show` words it.
   push(`  Run ${run.runId}`, "text");
   if (run.liveness.state !== "not-live")
@@ -490,7 +427,7 @@ export function buildDetailsRows(params: {
   push(`  Workspace: ${run.workspacePath}`);
   push(`  Launched: ${run.launchedAt} · ${params.position}`);
 
-  // Harness/model facts, moved out of the header (#194 story 35): durable
+  // Harness/model facts, kept off the everyday screen (#194 story 35): durable
   // selection, then the latest Attempt's observation, then the requested model
   // kept visibly apart from the observed effective model (AC1). The compact form
   // drops the long executable path to stay readable at small widths.
@@ -505,9 +442,7 @@ export function buildDetailsRows(params: {
     );
   }
   if (run.modelChoice !== undefined)
-    push(
-      `  Model choice · ${run.modelChoice.model}${run.modelChoice.effort === undefined ? "" : ` · ${run.modelChoice.effort} effort`}`,
-    );
+    push(`  Model choice · ${modelChoiceText(run.modelChoice)}`);
 
   // Recovery evidence (#194 story 36): each line only when its fact is present.
   const recovery: DetailsRow[] = [];
@@ -556,19 +491,27 @@ export function buildDetailsRows(params: {
       push(`    ${active ? "› " : "  "}${openable.label}`, "text", active);
     });
 
-  // Secondary lifecycle actions, moved off the main rail (#194 story 37): cancel
-  // and delete render here with the consequence each Offer names, and their
-  // confirm-armed prompt (AC3) shows in place while armed.
+  // Run lifecycle actions (ADR 0036): resume, cancel, and delete keep their letter
+  // keys here, where the focused panel owns them, with the consequence each Offer
+  // names; an armed confirm (AC3) shows in place. Model choice is an App command.
   if (
     params.modelChoice !== undefined ||
+    params.resume !== undefined ||
     params.cancel !== undefined ||
     params.remove !== undefined
   ) {
     push("  Actions:", "muted");
+    if (params.resume !== undefined)
+      push(
+        params.resume.available
+          ? `    r resume — ${params.resume.consequence}`
+          : `    resume — unavailable · ${params.resume.reason}`,
+        params.resume.available ? "text" : "muted",
+      );
     if (params.modelChoice !== undefined)
       push(
         params.modelChoice.available
-          ? `    m change Model choice · ${params.modelChoice.reach === "next-turn" ? "applies from the next Turn" : "requested until the Harness reports it"}`
+          ? `    ctrl+p Model choice · ${params.modelChoice.reach === "next-turn" ? "applies from the next Turn" : "requested until the Harness reports it"}`
           : `    Model choice unavailable · ${params.modelChoice.problem.explanation}`,
         "text",
       );
@@ -576,7 +519,17 @@ export function buildDetailsRows(params: {
       push(`    c cancel — ${params.cancel.consequence}`, "text");
     if (params.remove !== undefined)
       push(`    x delete — ${params.remove.consequence}`, "text");
-    if (params.armed === "cancel")
+    if (params.armed === "takeover")
+      push(
+        `    ⚠ Take over from process ${params.resume?.available === true ? (params.resume.takeover?.ownerPid ?? "unknown") : "unknown"}? Press y to confirm · esc to keep`,
+        "warning",
+      );
+    else if (params.armed === "acknowledge")
+      push(
+        "    ⚠ Resuming may repeat this Step's effects. Press y to acknowledge and resume · esc to keep",
+        "warning",
+      );
+    else if (params.armed === "cancel")
       push(
         "    ⚠ Cancel ends the Run (history is kept). Press y to confirm · esc to keep",
         "warning",
@@ -591,6 +544,18 @@ export function buildDetailsRows(params: {
   return rows;
 }
 
+function toneColour(theme: Theme, tone: DetailsTone) {
+  return tone === "text"
+    ? theme.text
+    : tone === "warning"
+      ? theme.warning
+      : tone === "error"
+        ? theme.error
+        : tone === "success"
+          ? theme.success
+          : theme.textMuted;
+}
+
 export function DetailsPanel(props: {
   rows: Accessor<readonly DetailsRow[]>;
   height: number;
@@ -599,16 +564,7 @@ export function DetailsPanel(props: {
 }) {
   const { theme } = props;
   const w = () => props.width();
-  const colour = (tone: DetailsTone) =>
-    tone === "text"
-      ? theme.text
-      : tone === "warning"
-        ? theme.warning
-        : tone === "error"
-          ? theme.error
-          : tone === "success"
-            ? theme.success
-            : theme.textMuted;
+  const colour = (tone: DetailsTone) => toneColour(theme, tone);
   return (
     <box
       flexDirection="column"
@@ -632,13 +588,132 @@ export function DetailsPanel(props: {
   );
 }
 
-/** A restored compose can carry several messages and verbatim line breaks. The
- *  native single-line input strips those breaks, so this one-row editor keeps them. */
-function RestoredDraftInput(props: {
+/** A Model choice in words: the model, then any effort. */
+export function modelChoiceText(choice: {
+  readonly model: string;
+  readonly effort?: string;
+}): string {
+  return `${choice.model}${choice.effort === undefined ? "" : ` · ${choice.effort} effort`}`;
+}
+
+const STEP_GLYPH: Record<RunStepStatus, string> = {
+  pending: "·",
+  running: "…",
+  succeeded: "✓",
+  failed: "✗",
+  blocked: "⏸",
+};
+
+/** Columns the sidebar holds above 120 terminal columns (ADR 0036). */
+export const SIDEBAR_WIDTH = 42;
+
+/** The sidebar's rows: the Bundle and the Run's state in words, the Steps by
+ *  glyph with the current one's Session (its plain name carries any Iteration),
+ *  the Harness and Model choice beside any differing observed model, and the
+ *  Harness's reported context. Ids, processes, and timestamps stay out. */
+export function buildSidebarRows(params: {
+  readonly run: RunView;
+  readonly session: string | undefined;
+  /** A requested Model choice not yet applied or reported. */
+  readonly pendingChoice: string | undefined;
+  readonly metadata: readonly string[];
+}): DetailsRow[] {
+  const { run } = params;
+  const rows: DetailsRow[] = [];
+  const push = (text: string, tone: DetailsTone = "muted", bold = false) =>
+    rows.push({ text, tone, bold });
+  push(run.bundle.name, "text", true);
+  push(
+    run.state[0]!.toUpperCase() + run.state.slice(1),
+    restingTone(run.state),
+  );
+  push("");
+  push("Steps", "text", true);
+  if (run.progress.length === 0) push("  (no steps)");
+  run.progress.forEach((step, index) => {
+    const current = index === run.position;
+    push(
+      `${current ? "▸" : " "} ${STEP_GLYPH[step.status]} ${step.id}`,
+      current ? "text" : "muted",
+      current,
+    );
+    if (current && params.session !== undefined) push(`    ${params.session}`);
+  });
+  if (
+    run.selectedHarness !== undefined ||
+    run.harness !== undefined ||
+    run.modelChoice !== undefined ||
+    params.pendingChoice !== undefined
+  ) {
+    push("");
+    push("Agent", "text", true);
+    const harness = run.harness?.name ?? run.selectedHarness;
+    if (harness !== undefined) push(`  ${harness}`);
+    if (run.modelChoice !== undefined)
+      push(`  ${modelChoiceText(run.modelChoice)}`, "text");
+    if (
+      run.effectiveModel !== undefined &&
+      run.effectiveModel !== run.modelChoice?.model
+    )
+      push(`  observed ${run.effectiveModel}`);
+    if (params.pendingChoice !== undefined)
+      push(`  → requested ${params.pendingChoice}`, "warning");
+  }
+  const reported = params.metadata.filter((line) => line !== "");
+  if (reported.length > 0) {
+    push("");
+    push("Context", "text", true);
+    for (const line of reported) push(`  ${line}`);
+  }
+  push("");
+  push("ctrl+g details · ctrl+p commands");
+  return rows;
+}
+
+export function Sidebar(props: {
+  rows: Accessor<readonly DetailsRow[]>;
+  theme: Theme;
+}) {
+  const { theme } = props;
+  return (
+    <box
+      width={SIDEBAR_WIDTH}
+      flexDirection="column"
+      flexShrink={0}
+      paddingLeft={2}
+      paddingRight={1}
+      overflow="hidden"
+      backgroundColor={theme.backgroundPanel}
+    >
+      <For each={props.rows()}>
+        {(row) => (
+          <text
+            fg={toneColour(theme, row.tone)}
+            attributes={row.bold ? TextAttributes.BOLD : 0}
+            flexShrink={0}
+            wrapMode="none"
+          >
+            {clip(row.text, SIDEBAR_WIDTH - 3)}
+          </text>
+        )}
+      </For>
+    </box>
+  );
+}
+
+/** The prompt's native editor. A textarea keeps verbatim line breaks (an
+ *  `<input>` strips them), so restored Steers and Shift+Enter/Ctrl+J newlines
+ *  survive. It owns its text after mount; the Workbench writes only a changed
+ *  draft back (a clear, a restore), never echoing what the field reported. Enter
+ *  submits rather than inserting a line, since the Port dispatcher sends it. */
+function PromptField(props: {
   draft: Accessor<string>;
   onInput: (value: string) => void;
   focused: Accessor<boolean>;
+  placeholder: Accessor<string>;
+  placeholderColor: Theme["textMuted"];
   width: Accessor<number>;
+  rows: Accessor<number>;
 }) {
   const initial = untrack(props.draft);
   let reported = initial;
@@ -654,10 +729,17 @@ function RestoredDraftInput(props: {
     <textarea
       ref={setBox}
       initialValue={initial}
-      height={1}
+      placeholder={props.placeholder()}
+      placeholderColor={props.placeholderColor}
+      height={props.rows()}
       width={props.width()}
+      wrapMode="none"
       focused={props.focused()}
-      keyBindings={[{ name: "return", action: "submit" }]}
+      keyBindings={[
+        { name: "return", action: "submit" },
+        { name: "return", shift: true, action: "newline" },
+        { name: "j", ctrl: true, action: "newline" },
+      ]}
       onContentChange={() => {
         const value = box()?.plainText;
         if (value === undefined || value === reported) return;

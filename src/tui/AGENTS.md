@@ -82,7 +82,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   dispatch, and small-width/resize relayout without overflow. A lone Escape is held briefly by OpenTUI key disambiguation — poll in real time, not by
   frame count.
 - The working scanner's drawing leaf (`working-scanner.tsx`) is unexported (topology's fenced-package rule, #308); only its plain frame model is.
-  Its colours are asserted in `run-workbench.test.tsx` against the Workbench's own `captureSpans` colours, which couples them to the header's palette.
+  Its colours are asserted in `run-workbench.test.tsx` against the Workbench's own `captureSpans` colours, which couples them to the prompt bar's
+  accent and the meta row's muted role.
 
 ## Read next
 
@@ -93,7 +94,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   reference resolution the Workbench uses, plus its Step-interaction writes; `run-list-view.tsx` — the Previous Runs read seam that pages older rows by cursor
   and appends them, the only seam that re-opens its Projection to grow a page); other writes go through a per-screen submit seam (`run-actions-view.tsx` —
   resume/cancel/delete/interrupt/Model-choice changes, mirroring `run-launch-view.tsx`). The Renderer Port (`renderer/renderer.ts`) carries lifecycle plus the Workbench's
-  `size`/`onKey`/`onResize`, and declares its key value (`{ name?, ctrl?, alt? }`, A16) so the Workbench needs no cast.
+  `size`/`onKey`/`onResize`, and declares its key value (`{ name?, ctrl?, alt?, shift? }`, A16) so the Workbench needs no cast.
 - `catalog-navigation.tsx` (A4) owns both catalogs' search pane, pane focus, selection (empty on arrival from Home), bindings, and row/empty
   shells, on the vendored `vendor/panels.tsx` and bounded `vendor/scroll.ts` primitives (see `UPSTREAM`); filters, focus, and inspectors stay
   per screen. Its `CatalogRow` also draws Start a Run's Bundle and Harness choice rows, always `focused` there (#286).
@@ -105,8 +106,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   (`submitAndSettle`) owns submit-then-follow and reopens a lost pending Operation receipt (A23).
   The Previous Runs seam (`run-list-view.tsx`) reopens an `observer-lagged` page in place, keeping older loaded pages (#306).
 - `submitAndSettle` recovers lag and temporary disconnection, but shutdown/subject loss ends a pending receipt with unknown effects (#310), never a reopen or success.
-- Read [tui-workbench](../../docs/agents/tui-workbench.md) before changing the Run Workbench's key routing, modal stack, steer compose, interactive input,
-  destructive confirms, or details panel.
+- Read [tui-workbench](../../docs/agents/tui-workbench.md) before changing the Run Workbench's layout, bottom interaction, key routing, prompt, drafts,
+  confirmations, dialogs, or details panel.
 - `start-run-views.tsx` holds Start a Run's step components and leaves; the draft signal, step transitions, and refusal routing stay in `start-run.tsx` (A3).
   Each step owns its transient UI state and its own `useBindings`, and `ReviewStep` opens the `launch-preparation` Projection directly (#231 A16).
 - `previous-runs.tsx` is the Previous Runs screen reached from Home.

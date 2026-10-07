@@ -22,7 +22,7 @@ Read the line that matches your task, then the file it names. The canonical gate
 - Before changing the private internals of the Claude Code or Codex Harness Adapter, read `docs/agents/harness-adapters.md`.
 - Before changing live Run control (deferred settlement, interrupt, steer, live model change, cancel, shutdown, takeover, interactive-Step drive, or the
   live overlay), read `docs/agents/run-control.md`.
-- Before changing the Run Workbench's key routing, modal stack, steer compose, interactive input, destructive confirms, or details panel, read
+- Before changing the Run Workbench's layout, bottom interaction, key routing, prompt, drafts, confirmations, dialogs, or details panel, read
   `docs/agents/tui-workbench.md`.
 - Before changing a release-channel consumer scenario (archive, platform package, npm launcher, or installer), the release legal-closure gate, or
   their CI steps, read `docs/agents/release-consumers.md`.
