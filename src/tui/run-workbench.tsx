@@ -1,3 +1,4 @@
+import stripAnsi from "strip-ansi";
 import {
   historyWindow,
   reconcileHistoryScroll,
@@ -1351,7 +1352,7 @@ export function RunWorkbench(props: {
     if (current === undefined) return [];
     return buildTimelineRows(current, histories());
   });
-  const [expandedThoughts, setExpandedThoughts] = createSignal<
+  const [expandedHistory, setExpandedHistory] = createSignal<
     ReadonlySet<string>
   >(new Set());
   const [thoughtFrame, setThoughtFrame] = createSignal(0);
@@ -1371,7 +1372,7 @@ export function RunWorkbench(props: {
     props.reducedMotion ? "[.]" : ["|", "/", "-", "\\"][thoughtFrame()];
   createEffect(() => {
     const retained = new Set(timelineRows().map((row) => row.key));
-    setExpandedThoughts((previous) => {
+    setExpandedHistory((previous) => {
       const next = new Set([...previous].filter((key) => retained.has(key)));
       return next.size === previous.size ? previous : next;
     });
@@ -1379,11 +1380,28 @@ export function RunWorkbench(props: {
   const rowText = (row: TimelineRow, index: number): string => {
     const prefix = `  ${index === 0 ? "Beginning of Run history · " : ""}`;
     if (row.inspection !== undefined) return `  ▸ ${row.text}`;
+    if (row.output !== undefined) {
+      const expanded = expandedHistory().has(row.key);
+      const output = stripAnsi(row.output.text)
+        .replace(/\r(?!\n)/g, "\n")
+        .replace(/\p{Cc}/gu, (character) =>
+          ["\n", "\r", "\t"].includes(character) ? character : "",
+        );
+      const lines =
+        output === "" ? [] : wrapRows([output], innerW(), TIMELINE_HANG).lines;
+      const hidden = expanded ? 0 : Math.max(0, lines.length - 10);
+      const label = row.output.live
+        ? "live"
+        : row.output.incomplete
+          ? "potentially incomplete"
+          : "final";
+      return `${prefix}${row.text}\n  ${expanded ? "▾" : "▸"} Output · ${label}${lines.length === 0 ? " · empty" : ""}${hidden === 0 ? "" : ` · ${hidden} hidden lines`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${lines.length === 0 ? "" : `\n${(expanded ? lines : lines.slice(0, 10)).join("\n")}`}`;
+    }
     if (row.thought === undefined)
       return row.oneLine
         ? clip(prefix + row.text, innerW())
         : prefix + row.text;
-    const expanded = expandedThoughts().has(row.key);
+    const expanded = expandedHistory().has(row.key);
     const thoughtPrefix = "  ";
     const label = row.thought.live
       ? row.text.replace(
@@ -1479,7 +1497,9 @@ export function RunWorkbench(props: {
   const openRowDetail = (row: TimelineRow | undefined): void => {
     if (
       row === undefined ||
-      (row.thought === undefined && row.inspection === undefined) ||
+      (row.thought === undefined &&
+        row.inspection === undefined &&
+        row.output === undefined) ||
       dialog.stack.length > 0 ||
       modalControl() ||
       confirmation() !== undefined ||
@@ -1491,7 +1511,7 @@ export function RunWorkbench(props: {
       inspection.open(row.inspection);
       return;
     }
-    setExpandedThoughts((previous) => {
+    setExpandedHistory((previous) => {
       const next = new Set(previous);
       if (next.has(row.key)) next.delete(row.key);
       else next.add(row.key);
@@ -1502,7 +1522,11 @@ export function RunWorkbench(props: {
     const window = win();
     for (let line = window.top; line < window.top + window.visible; line++) {
       const row = rowAtLine(line);
-      if (row?.thought !== undefined || row?.inspection !== undefined)
+      if (
+        row?.thought !== undefined ||
+        row?.inspection !== undefined ||
+        row?.output !== undefined
+      )
         return row;
     }
     return undefined;

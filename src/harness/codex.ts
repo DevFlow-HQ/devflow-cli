@@ -1,3 +1,4 @@
+import { retainCommandOutput, type ToolCall } from "./harness.js";
 import {
   PreparationOwner,
   type InitialPreparation,
@@ -2131,6 +2132,19 @@ class CodexTurn implements HarnessTurn {
         this.producer.emitThoughtPreview(content, notification.summaryId);
         return;
       }
+      case "command-output": {
+        const key = JSON.stringify([notification.turnId, notification.itemId]);
+        const call = this.commandCalls.get(key);
+        if (call === undefined || call.outcome.kind !== "running") return;
+        const output = retainCommandOutput({
+          text: (call.output?.text ?? "") + notification.delta,
+          ...(call.output?.secantDropped ? { secantDropped: true } : {}),
+        });
+        const next = { ...call, output, outcome: { kind: "running" as const } };
+        this.commandCalls.set(key, next);
+        this.emit({ kind: "tool-preview", call: next });
+        return;
+      }
       case "preview":
         this.lastObservation = "Codex emitted assistant preview content";
         this.deliverSteersInHistory();
@@ -2170,10 +2184,25 @@ class CodexTurn implements HarnessTurn {
               callId = randomUUID();
               this.toolIds.set(key, callId);
             }
-            this.emit({
-              ...notification.event,
-              call: { ...notification.event.call, callId },
-            });
+            const call = { ...notification.event.call, callId };
+            if (call.tool === "command") {
+              if (call.outcome.kind === "running") {
+                if (
+                  !this.commandCalls.has(key) &&
+                  !this.settledCommands.has(key)
+                )
+                  this.commandCalls.set(
+                    key,
+                    call.output === undefined
+                      ? call
+                      : { ...call, output: retainCommandOutput(call.output) },
+                  );
+              } else {
+                this.commandCalls.delete(key);
+                this.settledCommands.add(key);
+              }
+            }
+            this.emit({ ...notification.event, call });
           } else this.emit(notification.event);
         }
         return;
@@ -2627,6 +2656,8 @@ class CodexTurn implements HarnessTurn {
     );
   }
 
+  private readonly commandCalls = new Map<string, ToolCall>();
+  private readonly settledCommands = new Set<string>();
   private readonly toolIds = new Map<string, string>();
 
   private emit(event: TurnEvent): void {

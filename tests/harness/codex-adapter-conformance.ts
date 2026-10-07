@@ -3796,6 +3796,35 @@ test("m10-observed-harness-facts: [codex-recorded-conformance] Test Repair appli
     JSON.stringify(events),
     /Codex activity:|Codex futureDisplayItem/,
   );
+  const commands = events.flatMap((event) =>
+    event.kind === "tool-call" &&
+    event.call.tool === "command" &&
+    event.call.outcome.kind !== "running"
+      ? [event.call]
+      : [],
+  );
+  const pwd = commands.find((call) => call.input === "/bin/bash -lc pwd");
+  assert.equal(pwd?.cwd, workspace);
+  assert.deepEqual(pwd?.output, { text: workspace + "\n" });
+  assert.equal(pwd?.exitCode, 0);
+  const tests = commands.filter(
+    (call) => call.input === "/bin/bash -lc 'node --test sum.test.mjs'",
+  );
+  assert.deepEqual(
+    tests.map((call) => [call.outcome.kind, call.exitCode]),
+    [
+      ["failed", 1],
+      ["completed", 0],
+    ],
+  );
+  assert.match(tests[0]?.output?.text ?? "", /'test failed'/);
+  assert.match(tests[1]?.output?.text ?? "", /ℹ pass 1/);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.kind === "tool-preview" && event.call.output !== undefined,
+    ),
+  );
   const countAtResult = events.length;
   execFileSync(process.execPath, ["test", "sum.test.mjs"], {
     cwd: workspace,

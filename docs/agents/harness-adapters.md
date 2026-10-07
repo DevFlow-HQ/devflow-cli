@@ -74,7 +74,7 @@ Tools and file facts follow [tool provenance](../../tests/harness/tool-facts-pro
   Replacement failures (`recovery-identity` or `recovery-app-server`, no possible effects) leave Sessions detached for retry; a refused resume fences only
   that Session. An incompletely reaped generation is retained for cleanup and refuses replacement until it is reaped, preventing duplicate app-servers.
   Sessions resend their thread config on resume. Turns bind after replacement; retired generations cannot dispatch into newer Turns.
-- Fresh/resumed Turns keep admission-before-content and terminal authority; completed items replace previews. Summary qualification follows the linked provenance (#417).
+- Fresh/resumed Turns keep admission-before-content and terminal authority; finals replace previews. Command/summary assembly follows linked provenance (#415, #417).
 - Effective values (#345): `turn/start` carries the Model choice; first acceptance sends one bounded `thread/read` (a refusal re-sent at the next item)
   as the observation, and a matching `model/rerouted` replaces the model. A failed or late read leaves values unknown, never holding the Turn.
 - Codex client RPC and reverse-request ids have separate private maps. Approvals expose exact actions. A native resolution or terminal confirms an answer

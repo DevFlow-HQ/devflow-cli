@@ -48,6 +48,7 @@ test("the closed vocabulary sets are exactly what the Interface fixes", () => {
       "elicitation-declined",
       "assistant-content",
       "tool-call",
+      "tool-partial",
       "tool-preview",
       "turn-diff-preview",
       "turn-diff",

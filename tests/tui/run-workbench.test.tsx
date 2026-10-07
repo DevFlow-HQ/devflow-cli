@@ -8881,3 +8881,133 @@ test("m10-session-history: per-call structured patches inspect supplied coordina
   assert.match(wb.t.captureCharFrame(), /PER_CALL_LAST/);
   assert.doesNotMatch(wb.t.captureCharFrame(), /omitted|truncated/);
 });
+
+for (const appearance of ["dark", "light"] as const)
+  test(`m10-session-history: ${appearance} command output stays at ten displayed lines until Ctrl+O or click, retaining expansion through final replacement`, async () => {
+    const run = runOf({
+      sessions: [{ session: "s", name: "Conversation", availability: "open" }],
+    });
+    const base = previewPreferences();
+    const preferences: PreferencesView = {
+      ...base,
+      snapshot: () => ({
+        ...base.snapshot(),
+        preferences: { theme: "everforest", appearance },
+      }),
+    };
+    const wb = await mountWorkbench(
+      run,
+      100,
+      44,
+      undefined,
+      true,
+      undefined,
+      preferences,
+    );
+    const page = (
+      source: "stored" | "preview",
+      text: string,
+      outcome: Extract<
+        SessionHistoryRow["value"],
+        { kind: "tool" }
+      >["outcome"] = { kind: "running" },
+    ): SessionHistorySnapshot => ({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+      result: {
+        found: true,
+        history: {
+          rows: [
+            {
+              id: "command",
+              position: "one",
+              source,
+              turn: "turn",
+              turnStartedAt: "2026-10-06T00:00:00Z",
+              value: {
+                kind: "tool",
+                tool: "command",
+                input: "build",
+                cwd: "/workspace",
+                outcome,
+                output: { text, secantDropped: true, incomplete: true },
+                nativeOmission: "Harness cut stdout",
+                ...(source === "stored" ? { exitCode: 2 } : {}),
+              },
+            },
+          ],
+          hasEarlier: false,
+          transcriptPage: {
+            type: "transcript-page",
+            runId: run.runId,
+            session: "s",
+          },
+          transcriptExport: {
+            type: "transcript-export",
+            runId: run.runId,
+            session: "s",
+          },
+        },
+      },
+    });
+    const text = Array.from(
+      { length: 13 },
+      (_, i) => `OUTPUT_${String(i + 1).padStart(2, "0")}`,
+    ).join("\n");
+    wb.control.setHistory(page("preview", text));
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /OUTPUT_10/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /OUTPUT_11/);
+    assert.match(wb.t.captureCharFrame(), /3 hidden lines/);
+    const span = wb.t
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes("OUTPUT_05"));
+    assert.ok(span);
+    assert.deepEqual(
+      [span.fg.r, span.fg.g, span.fg.b].map((v) => Math.round(v * 255)),
+      hexRgb(PALETTES.find((p) => p.name === "everforest")![appearance]),
+    );
+    assert.match(wb.t.captureCharFrame(), /Secant.*earlier output dropped/);
+    assert.match(wb.t.captureCharFrame(), /Harness cut stdout/);
+    await press(wb.t, wb.renderer, "o", { ctrl: true });
+    assert.match(wb.t.captureCharFrame(), /OUTPUT_13/);
+    wb.control.setHistory(
+      page("stored", text.replaceAll("OUTPUT", "FINAL"), {
+        kind: "failed",
+        error: "Reported failure",
+      }),
+    );
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /FINAL_13/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /OUTPUT_13/);
+    assert.match(wb.t.captureCharFrame(), /Reported failure/);
+    assert.match(wb.t.captureCharFrame(), /Exit.*2/);
+    await press(wb.t, wb.renderer, "o", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /FINAL_11/);
+    const heading = wb.t
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("▸ Output"));
+    assert.ok(heading >= 0);
+    await wb.t.mockMouse.click(10, heading);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /FINAL_13/);
+    await press(wb.t, wb.renderer, "o", { ctrl: true });
+    wb.t.resize(40, 44);
+    wb.renderer.resize(40, 44);
+    wb.control.setHistory(
+      page(
+        "preview",
+        Array.from({ length: 6 }, () => "word ".repeat(10)).join("\n"),
+      ),
+    );
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /2 hidden lines/);
+    noOverflow(wb.t.captureCharFrame(), 40);
+    wb.t.resize(32, 12);
+    wb.renderer.resize(32, 12);
+    await wb.t.renderOnce();
+    noOverflow(wb.t.captureCharFrame(), 32);
+  });

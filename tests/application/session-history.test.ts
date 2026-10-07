@@ -1627,3 +1627,375 @@ test("m10-interruption-and-transcript: crash reopening loses memory-only cumulat
   assert.ok(call?.value.kind === "tool");
   assert.equal(call.value.files, undefined);
 });
+
+for (const size of [29_999, 30_000, 30_001])
+  test(`m10-session-history: command ${size} character tails coalesce every affected row with messages and never write chunks`, async (t) => {
+    const timer = clock();
+    const run = await openLiveRun(t, {
+      scheduleHistoryPreview: timer.schedule,
+    });
+    t.after(run.finish);
+    admit(run.owner);
+    const opened = run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+    t.after(() => opened.close());
+    const reader = opened.updates[Symbol.asyncIterator]();
+    const text = "a".repeat(size - 1) + "Z";
+    const before = run.owner.turnEvents();
+    for (const callId of ["one", "two", "one"])
+      run.channel.observe({
+        tool: {
+          turnId: "turn",
+          session: "s",
+          call: {
+            callId,
+            tool: "command",
+            input: "build",
+            cwd: "/workspace",
+            outcome: { kind: "running" },
+            output: { text },
+            nativeOmission: "Harness omitted stdout",
+          },
+        },
+      });
+    run.channel.observe({
+      message: {
+        turnId: "turn",
+        session: "s",
+        messageId: "message",
+        content: "Assistant",
+      },
+    });
+    assert.deepEqual(run.owner.turnEvents(), before);
+    assert.deepEqual(timer.delays, [50]);
+    timer.flush();
+    for (let i = 0; i < 3; i++) {
+      const update = await reader.next();
+      assert.ok(update.value?.kind === "history-preview");
+      if (i < 2) {
+        const value = update.value.row.value;
+        assert.equal(value.kind, "tool");
+        assert.ok(value.kind === "tool");
+        assert.deepEqual(value.output, {
+          text: size > 30_000 ? "a".repeat(29_999) + "Z" : text,
+          ...(size > 30_000 ? { secantDropped: true } : {}),
+        });
+        assert.equal(value.nativeOmission, "Harness omitted stdout");
+      } else assert.equal(update.value.row.value.kind, "message");
+    }
+    const late = run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+    t.after(() => late.close());
+    assert.ok(late.snapshot.result.found);
+    assert.equal(
+      late.snapshot.result.history.rows.filter(
+        (row) => row.value.kind === "tool",
+      ).length,
+      2,
+    );
+    await run.finish();
+  });
+
+for (const final of [
+  "replacement",
+  "empty",
+  "absent",
+  "failed",
+  "declined",
+] as const)
+  test(`m10-session-history: ${final} command output reconciles immediately without stale preview resurrection`, async (t) => {
+    const timer = clock();
+    const run = await openLiveRun(t, {
+      scheduleHistoryPreview: timer.schedule,
+    });
+    t.after(run.finish);
+    admit(run.owner);
+    const opened = run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+    t.after(() => opened.close());
+    const reader = opened.updates[Symbol.asyncIterator]();
+    const call = {
+      callId: "call",
+      tool: "command" as const,
+      input: "build",
+      outcome: { kind: "running" as const },
+    };
+    run.owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-call",
+      payload: JSON.stringify(call),
+      at: new Date(),
+    });
+    const start = await reader.next();
+    assert.ok(
+      start.value?.kind === "durable" && start.value.snapshot.result.found,
+    );
+    const id = start.value.snapshot.result.history.rows[1]!.id;
+    run.channel.observe({
+      tool: {
+        turnId: "turn",
+        session: "s",
+        call: { ...call, output: { text: "preview" } },
+      },
+    });
+    const outcome =
+      final === "failed"
+        ? { kind: "failed", error: "failure reason" }
+        : final === "declined"
+          ? { kind: "declined", reason: "refusal reason" }
+          : { kind: "completed" };
+    run.owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-call",
+      payload: JSON.stringify({
+        ...call,
+        outcome,
+        ...(final === "replacement"
+          ? { output: { text: "FINAL" } }
+          : final === "empty"
+            ? { output: { text: "" } }
+            : {}),
+      }),
+      at: new Date(),
+    });
+    const terminal = await reader.next();
+    assert.ok(
+      terminal.value?.kind === "durable" &&
+        terminal.value.snapshot.result.found,
+    );
+    const row = terminal.value.snapshot.result.history.rows[1]!;
+    assert.equal(row.id, id);
+    assert.equal(row.source, "stored");
+    assert.ok(row.value.kind === "tool");
+    assert.deepEqual(
+      row.value.output,
+      final === "replacement"
+        ? { text: "FINAL" }
+        : final === "empty"
+          ? { text: "" }
+          : { text: "preview", incomplete: true },
+    );
+    assert.deepEqual(row.value.outcome, outcome);
+    timer.flush();
+    run.channel.observe({
+      tool: {
+        turnId: "turn",
+        session: "s",
+        call: { ...call, output: { text: "STALE" } },
+      },
+    });
+    timer.flush();
+    const reopened = run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+    t.after(() => reopened.close());
+    assert.ok(reopened.snapshot.result.found);
+    assert.deepEqual(
+      reopened.snapshot.result.history.rows[1]?.value,
+      row.value,
+    );
+    await run.finish();
+  });
+
+for (const resultKind of ["completed", "interrupted", "lost"])
+  test(`m10-interruption-and-transcript: ${resultKind} retains admitted command partials in the same row and invalidates queued output`, async (t) => {
+    const timer = clock();
+    const run = await openLiveRun(t, {
+      scheduleHistoryPreview: timer.schedule,
+    });
+    t.after(run.finish);
+    admit(run.owner);
+    const opened = run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+    t.after(() => opened.close());
+    const reader = opened.updates[Symbol.asyncIterator]();
+    const call = {
+      callId: "call",
+      tool: "command" as const,
+      input: "build",
+      outcome: { kind: "running" as const },
+    };
+    run.owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-call",
+      payload: JSON.stringify(call),
+      at: new Date(),
+    });
+    const start = await reader.next();
+    assert.ok(
+      start.value?.kind === "durable" && start.value.snapshot.result.found,
+    );
+    const id = start.value.snapshot.result.history.rows[1]!.id;
+    run.channel.observe({
+      tool: {
+        turnId: "turn",
+        session: "s",
+        call: { ...call, output: { text: "queued output" } },
+      },
+    });
+    run.owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-partial",
+      payload: JSON.stringify({
+        ...call,
+        output: { text: "retained partial", incomplete: true },
+      }),
+      at: new Date(),
+    });
+    const partial = await reader.next();
+    assert.ok(partial.value?.kind === "durable");
+    timer.flush();
+    run.owner.settleTurn({
+      turnId: "turn",
+      session: "s",
+      resultKind,
+      resultDetail: "{}",
+      availability: "open",
+      at: new Date(),
+    });
+    const settled = await reader.next();
+    assert.ok(
+      settled.value?.kind === "durable" && settled.value.snapshot.result.found,
+    );
+    const row = settled.value.snapshot.result.history.rows[1]!;
+    assert.equal(row.id, id);
+    assert.equal(row.source, "stored");
+    assert.deepEqual(row.value, {
+      kind: "tool",
+      tool: "command",
+      input: "build",
+      outcome: { kind: "unconfirmed" },
+      output: { text: "retained partial", incomplete: true },
+    });
+    run.channel.observe({
+      tool: {
+        turnId: "turn",
+        session: "s",
+        call: { ...call, output: { text: "late" } },
+      },
+    });
+    timer.flush();
+    const reopened = run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+    t.after(() => reopened.close());
+    assert.ok(reopened.snapshot.result.found);
+    assert.deepEqual(
+      reopened.snapshot.result.history.rows[1]?.value,
+      row.value,
+    );
+    assert.deepEqual(
+      run.owner.transcript().map((entry) => entry.content),
+      ["Input"],
+    );
+    await run.finish();
+  });
+
+test("m10-session-history: command tails, uncapped supplied patches, Turn diffs and messages share one preview budget", async (t) => {
+  const timer = clock();
+  const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
+  t.after(run.finish);
+  admit(run.owner);
+  const opened = run.port.openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => opened.close());
+  const reader = opened.updates[Symbol.asyncIterator]();
+  const before = run.owner.turnEvents();
+  const content = "complete supplied patch".repeat(2000);
+  run.channel.observe({
+    tool: {
+      turnId: "turn",
+      session: "s",
+      call: {
+        callId: "command",
+        tool: "command",
+        input: "build",
+        outcome: { kind: "running" },
+        output: { text: "OLD" + "x".repeat(30_000) },
+      },
+    },
+  });
+  run.channel.observe({
+    tool: {
+      turnId: "turn",
+      session: "s",
+      call: {
+        callId: "file",
+        tool: "file-change",
+        input: "requested.ts",
+        outcome: { kind: "running" },
+        files: [{ path: "observed.ts", patch: { kind: "unified", content } }],
+      },
+    },
+  });
+  run.channel.observe({
+    diff: {
+      turnId: "turn",
+      session: "s",
+      content,
+      files: [{ path: "cumulative.ts" }],
+    },
+  });
+  run.channel.observe({
+    message: {
+      turnId: "turn",
+      session: "s",
+      messageId: "message",
+      content: "Assistant",
+    },
+  });
+  assert.deepEqual(timer.delays, [50]);
+  assert.deepEqual(run.owner.turnEvents(), before);
+  timer.flush();
+  const command = await reader.next();
+  assert.ok(
+    command.value?.kind === "history-preview" &&
+      command.value.row.value.kind === "tool",
+  );
+  assert.deepEqual(command.value.row.value.output, {
+    text: "x".repeat(30_000),
+    secantDropped: true,
+  });
+  const file = await reader.next();
+  assert.ok(
+    file.value?.kind === "history-preview" &&
+      file.value.row.value.kind === "tool",
+  );
+  assert.deepEqual(file.value.row.value.files, [
+    { path: "observed.ts", patch: { kind: "unified", content } },
+  ]);
+  const diff = await reader.next();
+  assert.ok(
+    diff.value?.kind === "history-preview" &&
+      diff.value.row.value.kind === "turn-diff",
+  );
+  assert.equal(diff.value.row.value.content, content);
+  const message = await reader.next();
+  assert.ok(message.value?.kind === "history-preview");
+  assert.deepEqual(message.value.row.value, {
+    kind: "message",
+    role: "assistant",
+    content: "Assistant",
+  });
+  assert.deepEqual(run.owner.turnEvents(), before);
+  await run.finish();
+});

@@ -13,7 +13,11 @@ import {
 } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
-import type { ToolCall, TurnDiff } from "../../harness/harness.js";
+import {
+  retainCommandOutput,
+  type ToolCall,
+  type TurnDiff,
+} from "../../harness/harness.js";
 import { harnessSessions, turnEvents, turns } from "./run-schema.js";
 import type {
   AdmitTurnRequest,
@@ -117,6 +121,17 @@ const toolCall = z.object({
   ]),
   input: z.string(),
   files: z.array(fileChange).optional(),
+  cwd: z.string().optional(),
+  exitCode: z.number().int().optional(),
+  nativeOmission: z.string().optional(),
+  output: z
+    .object({
+      text: z.string(),
+      secantDropped: z.literal(true).optional(),
+      incomplete: z.literal(true).optional(),
+    })
+    .transform(retainCommandOutput)
+    .optional(),
   count: z
     .object({ value: z.number().nonnegative(), unit: z.string() })
     .optional(),
@@ -132,10 +147,16 @@ const toolCall = z.object({
 export function readToolCallEvent(
   event: Pick<TurnEventRecord, "kind" | "payload">,
 ): (ToolCall & { readonly historyOrder?: number }) | undefined {
-  if (event.kind !== "tool-call") return undefined;
+  if (event.kind !== "tool-call" && event.kind !== "tool-partial")
+    return undefined;
   try {
     const parsed = toolCall.safeParse(JSON.parse(event.payload));
-    return parsed.success ? parsed.data : undefined;
+    return parsed.success &&
+      (event.kind !== "tool-partial" ||
+        (parsed.data.outcome.kind === "running" &&
+          parsed.data.output?.incomplete === true))
+      ? parsed.data
+      : undefined;
   } catch {
     return undefined;
   }
@@ -293,36 +314,43 @@ export function appendTurnEvent(
       .get();
     if (duplicate !== undefined) return;
     payload = JSON.stringify(thought);
-  } else if (request.kind === "tool-call") {
+  } else if (request.kind === "tool-call" || request.kind === "tool-partial") {
     const call = toolCall.parse(JSON.parse(payload));
     const previous = db
-      .select({ payload: turnEvents.payload })
+      .select({ payload: turnEvents.payload, kind: turnEvents.kind })
       .from(turnEvents)
       .where(
         and(
           eq(turnEvents.turn_id, request.turnId),
-          eq(turnEvents.kind, "tool-call"),
+          sql`${turnEvents.kind} in ('tool-call', 'tool-partial')`,
           sql`json_extract(${turnEvents.payload}, '$.callId') = ${call.callId}`,
         ),
       )
+      .orderBy(asc(turnEvents.seq))
       .all()
       .flatMap((row) => {
         const parsed = readToolCallEvent({
-          kind: "tool-call",
+          kind: row.kind,
           payload: row.payload,
         });
-        return parsed === undefined ? [] : [parsed];
+        return parsed === undefined ? [] : [{ kind: row.kind, call: parsed }];
       });
     if (
-      previous.some((row) => row.outcome.kind !== "running") ||
-      (call.outcome.kind === "running" && previous.length > 0)
+      previous.some((row) => row.call.outcome.kind !== "running") ||
+      (request.kind === "tool-call" &&
+        call.outcome.kind === "running" &&
+        previous.length > 0) ||
+      (request.kind === "tool-partial" &&
+        (call.outcome.kind !== "running" ||
+          call.output?.incomplete !== true ||
+          previous.some((row) => row.kind === "tool-partial")))
     )
       return;
     payload = JSON.stringify({
       ...call,
-      ...(previous[0]?.historyOrder === undefined
+      ...(previous[0]?.call.historyOrder === undefined
         ? {}
-        : { historyOrder: previous[0].historyOrder }),
+        : { historyOrder: previous[0].call.historyOrder }),
     });
   } else if (request.kind === "assistant-content") {
     const message = assistantMessage.safeParse(JSON.parse(payload));

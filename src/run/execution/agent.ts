@@ -1294,10 +1294,10 @@ function recordTurnEvent(
       }),
       at: new Date(),
     });
-  } else if (event.kind === "tool-call") {
+  } else if (event.kind === "tool-call" || event.kind === "tool-partial") {
     owner.appendTurnEvent({
       turnId,
-      kind: "tool-call",
+      kind: event.kind,
       payload: JSON.stringify(event.call),
       at: new Date(),
     });

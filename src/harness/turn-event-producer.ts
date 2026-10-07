@@ -1,5 +1,7 @@
+import { retainCommandOutput } from "./harness.js";
 import type {
   TurnEvent,
+  ToolCall,
   TurnEventListener,
   TurnSubscription,
 } from "./harness.js";
@@ -52,27 +54,87 @@ export class TurnEventProducer {
       this.diffPreview = undefined;
       this.diffSettled = true;
     }
-    if (event.kind === "tool-call" || event.kind === "tool-preview") {
-      const previous = this.calls.get(event.call.callId);
+    if (
+      event.kind === "tool-call" ||
+      event.kind === "tool-preview" ||
+      event.kind === "tool-partial"
+    ) {
+      let toolEvent: Extract<
+        TurnEvent,
+        { kind: "tool-call" | "tool-preview" | "tool-partial" }
+      > = event;
+      const retained =
+        this.toolPreviews.get(toolEvent.call.callId)?.call ??
+        this.calls.get(toolEvent.call.callId)?.call;
+      const output =
+        toolEvent.call.output ??
+        (toolEvent.call.outcome.kind !== "running" &&
+        retained?.output !== undefined
+          ? { ...retained.output, incomplete: true as const }
+          : undefined);
+      const facts =
+        output === undefined ? {} : { output: retainCommandOutput(output) };
+      if (toolEvent.kind === "tool-call")
+        toolEvent = {
+          kind: "tool-call",
+          call: { ...retained, ...toolEvent.call, ...facts },
+        };
+      else if (toolEvent.kind === "tool-partial")
+        toolEvent = {
+          kind: "tool-partial",
+          call: {
+            ...retained,
+            ...toolEvent.call,
+            output: {
+              ...retainCommandOutput(toolEvent.call.output),
+              incomplete: true,
+            },
+            outcome: { kind: "running" },
+          },
+        };
+      else
+        toolEvent = {
+          kind: "tool-preview",
+          call: {
+            ...retained,
+            ...toolEvent.call,
+            outcome: { kind: "running" },
+            ...facts,
+          },
+        };
+
+      const previous = this.calls.get(toolEvent.call.callId);
       if (previous !== undefined && previous.call.outcome.kind !== "running")
         return;
-      if (event.kind === "tool-preview") {
-        const preview = this.toolPreviews.get(event.call.callId);
-        if (preview === undefined) this.events.push(event);
-        else this.events[this.events.indexOf(preview)] = event;
-        this.toolPreviews.set(event.call.callId, event);
-        for (const listener of this.listeners) listener(event);
+      if (toolEvent.kind === "tool-preview") {
+        const preview = this.toolPreviews.get(toolEvent.call.callId);
+        if (preview === undefined) this.events.push(toolEvent);
+        else this.events[this.events.indexOf(preview)] = toolEvent;
+        this.toolPreviews.set(toolEvent.call.callId, toolEvent);
+        for (const listener of this.listeners) listener(toolEvent);
         return;
       }
-      if (event.call.outcome.kind === "running" && previous !== undefined)
+      if (
+        toolEvent.kind === "tool-call" &&
+        toolEvent.call.outcome.kind === "running" &&
+        previous !== undefined
+      )
         return;
-      this.calls.set(event.call.callId, event);
-      if (event.call.outcome.kind !== "running") {
-        const preview = this.toolPreviews.get(event.call.callId);
+      if (toolEvent.kind === "tool-partial") {
+        const preview = this.toolPreviews.get(toolEvent.call.callId);
         if (preview !== undefined)
           this.events.splice(this.events.indexOf(preview), 1);
-        this.toolPreviews.delete(event.call.callId);
+        this.toolPreviews.delete(toolEvent.call.callId);
+      } else this.calls.set(toolEvent.call.callId, toolEvent);
+      if (toolEvent.call.outcome.kind !== "running") {
+        const preview = this.toolPreviews.get(toolEvent.call.callId);
+        if (preview !== undefined)
+          this.events.splice(this.events.indexOf(preview), 1);
+        this.toolPreviews.delete(toolEvent.call.callId);
       }
+      this.events.push(toolEvent);
+      for (const listener of this.listeners) listener(toolEvent);
+      return;
     }
     if (event.kind === "thought") {
       if (this.settledThoughts.has(event.summaryId)) return;
@@ -131,6 +193,22 @@ export class TurnEventProducer {
       (event) =>
         event.kind === "message-preview" || event.kind === "thought-preview",
     );
+    const tools = new Map<string, { readonly call: ToolCall }>([
+      ...this.calls,
+      ...this.toolPreviews,
+    ]);
+    for (const { call } of tools.values()) {
+      if (call.outcome.kind !== "running" || call.output === undefined)
+        continue;
+      this.emit({
+        kind: "tool-partial",
+        call: {
+          ...call,
+          outcome: { kind: "running" },
+          output: { ...call.output, incomplete: true },
+        },
+      });
+    }
     this.clearPreview();
     if (this.diffPreview !== undefined)
       this.emit({ kind: "turn-diff", diff: this.diffPreview.diff });

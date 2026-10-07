@@ -56,7 +56,14 @@ Turn correlation, repeated replacements, and drain-before-result. The recording 
 its sidecar owns the Workspace/account/home redactions and `bun tests/harness/record-codex.ts test-repair` refresh.
 Synthetic cases verify foreign Turn/thread rejection, malformed optional data, same-path interleaving and large diffs.
 Main inputs preserve command text and affected paths/change kinds. Array length is not a reported result count.
-Command actions, output, cwd, and exit code are not consumed by this slice. #415 owns output evidence and retention.
+#415 also qualifies `cwd`, string/null `aggregatedOutput`, integer/null `exitCode` and correlated
+`item/commandExecution/outputDelta` `threadId`/`turnId`/`itemId`/`delta`. The authentic failed and completed
+node test commands replace their deltas with exact final output; exit codes 0, 1 and 2 stay numeric facts.
+`approval/case.json`, the same executable/protocol versions, qualifies null final output with exit 0.
+Its unchanged item body is asserted through the production Adapter. Null means unavailable, not explicit empty.
+Copied-recording variants test empty/omitted/malformed finals, repeated deltas, late/foreign ids and orderly
+unmatched tails. Those are semantic boundary cases, not fresh wire qualification. Command actions and native
+omission fields stay unconsumed. Claude Bash command/output/cwd/structured-exit fields remain unqualified.
 
 `agent-calls/case.json`, codex-cli 0.160.0 and codex-probe-4, qualifies MCP item `id`, `server`, `tool`, opaque
 `arguments`, and `status`. A focused test reuses unchanged item bodies with only envelope correlation remapped.
@@ -64,7 +71,8 @@ It checks external approval/form/URL tools separately and excludes Secant `step_
 Neither an elicitation answer nor result text determines a tool outcome. MCP failed status and non-null error detail are unqualified. Command refusal and file-change failed/refused statuses also stay absent.
 
 The Adapter's private id map includes native Turn and item ids inside the owning Secant Turn. The shared producer
-keeps the first start and observed terminal fact, replaces previews, and drains before result. Turn terminal truth
+keeps the first start and observed terminal fact, replaces bounded previews, and drains incomplete command
+partials before result. A partial keeps a running outcome; Application derives unconfirmed liveness. Turn terminal truth
 never manufactures a tool result. `interrupt/case.json` contains a command start without a terminal item; standalone
 Interrupt conformance retains that observation without a synthetic settlement.
 

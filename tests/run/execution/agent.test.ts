@@ -1556,3 +1556,73 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
     assert.deepEqual(JSON.parse(call.payload).outcome, { kind: "running" });
   });
 }
+
+for (const name of ["completed", "failed", "interrupted", "lost"] as const)
+  test(`m10-interruption-and-transcript: orderly ${name} stores each unmatched command tail through admitted partial evidence, never chunks`, async (t) => {
+    const f = fixture(t);
+    const assets = promptAssets(f.workspace, "Discuss");
+    const call = {
+      callId: "command",
+      tool: "command" as const,
+      input: "build",
+      outcome: { kind: "running" as const },
+    };
+    const prepared = await preparedHarness(profile(), [
+      {
+        events: [
+          { kind: "tool-call", call },
+          {
+            kind: "tool-preview",
+            call: { ...call, output: { text: "earlier" } },
+          },
+          {
+            kind: "tool-preview",
+            call: {
+              ...call,
+              output: { text: "OLD" + "x".repeat(30_000) },
+              nativeOmission: "reported omission",
+            },
+          },
+        ],
+        result: RESULT_CASES[name].result,
+      },
+    ]);
+    t.after(() => prepared.close());
+    await executeRouting([agentStep()], {
+      owner: f.owner,
+      platform: HOST,
+      resolveAsset: assets.resolveAsset,
+      now: () => AT,
+      process: executionProcess,
+      harness: {
+        inputRules: [],
+        prepared,
+        inputTypes: {},
+        assetKinds: { "prompt.md": "prompt" },
+      },
+    });
+    const facts = f.owner
+      .turnEvents()
+      .filter((event) => event.kind.startsWith("tool-"))
+      .map((event) => [event.kind, JSON.parse(event.payload)]);
+    assert.deepEqual(facts, [
+      ["tool-call", call],
+      [
+        "tool-partial",
+        {
+          ...call,
+          output: {
+            text: "x".repeat(30_000),
+            secantDropped: true,
+            incomplete: true,
+          },
+          nativeOmission: "reported omission",
+        },
+      ],
+    ]);
+    assert.deepEqual(
+      f.owner.transcript().map((entry) => entry.content),
+      ["Discuss"],
+    );
+    assert.equal(f.owner.turns()[0]?.resultKind, name);
+  });

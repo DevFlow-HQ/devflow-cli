@@ -99,8 +99,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
 - Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session — two Sessions' Turns
   interleave in one numbering.
-- `turn_event.payload` is Secant-shaped JSON. Store validates messages, tools with complete file patches, Thoughts, Turn diffs and delivered-Steer metadata.
-  First `historyOrder` survives settlement; duplicate tool terminals, Thoughts and Turn diffs are ignored. Only conversation entries get transcript positions.
+- `turn_event.payload` validates messages/tools with complete patches/Thoughts/Turn diffs/Steers and preserves first `historyOrder`; output keeps 30,000 characters.
+  `tool-partial` retains incomplete running tails. Duplicate starts/partials/terminals/Thoughts/Turn diffs are ignored; only conversation entries get transcript positions.
 - There are no foreign keys and no `foreign_keys` pragma anywhere in either schema (only `busy_timeout` is set), so referential integrity rests entirely on the write
   transactions that keep related rows consistent; nothing the database enforces stands behind them.
 - Run delete drops the registration and reclaims the directory as one lifecycle unit; with no foreign keys there is nothing to cascade — the directory holds the whole Run.

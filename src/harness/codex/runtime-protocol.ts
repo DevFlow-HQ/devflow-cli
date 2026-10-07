@@ -370,6 +370,9 @@ const itemLifecycleSchema = correlatedParamsSchema.extend({
 });
 const commandItemSchema = z.looseObject({
   command: z.string(),
+  cwd: z.string().optional().catch(undefined),
+  aggregatedOutput: z.string().nullish().catch(undefined),
+  exitCode: z.number().int().nullish().catch(undefined),
   status: z.enum(["inProgress", "completed", "failed", "declined"]),
 });
 const fileChangeItemSchema = z.looseObject({
@@ -490,6 +493,13 @@ export type CodexRuntimeNotification =
       readonly threadId: string;
       readonly turnId: string;
       readonly diff: TurnDiff;
+    }
+  | {
+      readonly kind: "command-output";
+      readonly threadId: string;
+      readonly turnId: string;
+      readonly itemId: string;
+      readonly delta: string;
     }
   | {
       readonly kind: "thought-delta";
@@ -724,6 +734,13 @@ export function parseRuntimeNotification(
         delta: params.delta,
       };
     }
+    case "item/commandExecution/outputDelta": {
+      const parsed = correlatedParamsSchema
+        .extend({ itemId: z.string().min(1), delta: z.string() })
+        .safeParse(message.params);
+      if (!parsed.success) return undefined;
+      return { kind: "command-output", ...parsed.data };
+    }
     case "item/agentMessage/delta": {
       const params = parseResult(message.params, agentDeltaSchema, method);
       return {
@@ -896,6 +913,13 @@ function normalizeItemContent(
           "command",
           command.status,
           command.command,
+          {
+            ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
+            ...(command.aggregatedOutput == null
+              ? {}
+              : { output: { text: command.aggregatedOutput } }),
+            ...(command.exitCode == null ? {} : { exitCode: command.exitCode }),
+          },
         ),
       };
     }
@@ -986,6 +1010,7 @@ function toolCallEvent(
   tool: ToolCall["tool"],
   status: "inProgress" | "completed" | "failed",
   input: string,
+  facts: Pick<ToolCall, "cwd" | "output" | "exitCode"> = {},
 ): TurnEvent {
   return {
     kind: "tool-call",
@@ -993,6 +1018,7 @@ function toolCallEvent(
       callId,
       tool,
       input,
+      ...facts,
       outcome: { kind: status === "inProgress" ? "running" : status },
     },
   };

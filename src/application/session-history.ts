@@ -1,3 +1,4 @@
+import { retainCommandOutput } from "../harness/harness.js";
 import { readToolCallEvent, readTurnDiffEvent } from "../run/store/store.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -128,7 +129,10 @@ function eventKey(
   const data = payload(event);
   if (event.kind === "turn-diff")
     return JSON.stringify([event.turnId, "turn-diff"]);
-  if (event.kind === "tool-call" && data?.callId !== undefined)
+  if (
+    (event.kind === "tool-call" || event.kind === "tool-partial") &&
+    data?.callId !== undefined
+  )
     return toolKey(event.turnId, data.callId);
   if (event.kind === "assistant-content" && data?.messageId !== undefined)
     return messageKey(event.turnId, data.messageId);
@@ -318,13 +322,21 @@ export function createSessionHistory(deps: {
               files: diff.files,
             };
         }
-        if (event.kind === "tool-call") {
+        if (event.kind === "tool-call" || event.kind === "tool-partial") {
           const tool = readToolCallEvent(event);
           if (tool !== undefined) {
             const observation = {
               tool: tool.tool,
               input: tool.input,
               outcome: tool.outcome,
+              ...(tool.cwd === undefined ? {} : { cwd: tool.cwd }),
+              ...(tool.output === undefined ? {} : { output: tool.output }),
+              ...(tool.exitCode === undefined
+                ? {}
+                : { exitCode: tool.exitCode }),
+              ...(tool.nativeOmission === undefined
+                ? {}
+                : { nativeOmission: tool.nativeOmission }),
               ...(tool.count === undefined ? {} : { count: tool.count }),
               ...(tool.files === undefined ? {} : { files: tool.files }),
             };
@@ -366,7 +378,11 @@ export function createSessionHistory(deps: {
         const existing = facts.get(key);
         const order = existing?.order ?? data.historyOrder ?? index;
         facts.set(key, { key, turn, order, source: "stored", value });
-        if (value.kind !== "tool" || value.outcome.kind !== "running") {
+        if (
+          event.kind === "tool-partial" ||
+          value.kind !== "tool" ||
+          value.outcome.kind !== "running"
+        ) {
           run.previews.delete(key);
           run.pending.delete(key);
         }
@@ -693,6 +709,14 @@ export function createSessionHistory(deps: {
             tool: call.tool,
             input: call.input,
             outcome: call.outcome,
+            ...(call.cwd === undefined ? {} : { cwd: call.cwd }),
+            ...(call.output === undefined
+              ? {}
+              : { output: retainCommandOutput(call.output) }),
+            ...(call.exitCode === undefined ? {} : { exitCode: call.exitCode }),
+            ...(call.nativeOmission === undefined
+              ? {}
+              : { nativeOmission: call.nativeOmission }),
             ...(call.count === undefined ? {} : { count: call.count }),
             ...(call.files === undefined ? {} : { files: call.files }),
           },
@@ -714,6 +738,7 @@ export function createSessionHistory(deps: {
           "agent-call",
           "tool-activity",
           "tool-call",
+          "tool-partial",
           "request-raised",
           "request-answered",
           "request-expired",
@@ -727,10 +752,23 @@ export function createSessionHistory(deps: {
       const index = read.found ? read.records.events.length : 0;
       const key = eventKey(request, index);
       const historyOrder = appearance(runId, request.turnId, key);
+      const tool = readToolCallEvent(request);
+      const preview = state(runId).previews.get(key)?.value;
+      const output =
+        tool?.output ??
+        (tool !== undefined &&
+        tool.outcome.kind !== "running" &&
+        preview?.kind === "tool" &&
+        preview.output !== undefined
+          ? { ...preview.output, incomplete: true as const }
+          : undefined);
       return {
         ...request,
         payload: JSON.stringify({
           ...JSON.parse(request.payload),
+          ...(output === undefined
+            ? {}
+            : { output: retainCommandOutput(output) }),
           historyOrder,
         }),
       };

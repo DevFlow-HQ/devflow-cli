@@ -183,12 +183,14 @@ async function codexFacts(
                         threadId: z.unknown().optional(),
                         turnId: z.unknown().optional(),
                         item: z.unknown().optional(),
+                        itemId: z.string().optional(),
                       })
                       .optional(),
                   })
                   .parse(value);
                 if (
-                  extra.params?.item !== undefined &&
+                  (extra.params?.item !== undefined ||
+                    extra.params?.itemId !== undefined) &&
                   extra.params.threadId === undefined
                 ) {
                   const correlated = z
@@ -1339,3 +1341,195 @@ test("m10-observed-harness-facts: Codex only qualifies update kinds with explici
       },
     ]);
 });
+
+test("m10-observed-harness-facts: authentic Codex commands retain cwd, final output and structured exits without duplicating deltas", async (t) => {
+  const workspace = makeTempDir("secant-command-facts-");
+  const events = await codexFacts(t, [], workspace);
+  const calls = events.flatMap((event) =>
+    event.kind === "tool-call" && event.call.tool === "command"
+      ? [event.call]
+      : [],
+  );
+  const pwd = calls.find(
+    (call) =>
+      call.input === "/bin/bash -lc pwd" && call.outcome.kind === "completed",
+  );
+  assert.ok(pwd);
+  assert.equal(pwd.cwd, workspace);
+  assert.deepEqual(pwd.output, { text: workspace + "\n" });
+  assert.equal(pwd.exitCode, 0);
+  assert.equal(pwd.nativeOmission, undefined);
+  const tests = calls.filter(
+    (call) =>
+      call.input === "/bin/bash -lc 'node --test sum.test.mjs'" &&
+      call.outcome.kind !== "running",
+  );
+  assert.deepEqual(
+    tests.map((call) => [call.outcome.kind, call.exitCode]),
+    [
+      ["failed", 1],
+      ["completed", 0],
+    ],
+  );
+  assert.equal(tests[0]?.output?.text.split("ℹ tests 1").length, 2);
+  assert.match(tests[0]?.output?.text ?? "", /'test failed'/);
+  assert.match(tests[1]?.output?.text ?? "", /ℹ pass 1/);
+  const failedRead = calls.find((call) => call.exitCode === 2);
+  assert.equal(
+    failedRead?.output?.text,
+    "sed: can't read package.json: No such file or directory\n",
+  );
+  const previews = events.filter((event) => event.kind === "tool-preview");
+  assert.ok(previews.length > 0);
+  assert.ok(previews.every((event) => event.call.output !== undefined));
+});
+
+// Authentic item bodies qualify null output independently. Copied variants below
+// prove field-boundary behavior and semantic races, not additional native shapes.
+function approvalCommand() {
+  const traffic = z
+    .object({ traffic: z.array(z.object({ line: z.string().optional() })) })
+    .parse(
+      JSON.parse(
+        readFileSync(
+          new URL("./fixtures/codex/approval/case.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+    );
+  const schema = z.object({
+    method: z.literal("item/completed"),
+    params: z.object({
+      item: z.looseObject({
+        type: z.literal("commandExecution"),
+        id: z.string(),
+        command: z.string(),
+        cwd: z.string(),
+        aggregatedOutput: z.null(),
+        exitCode: z.literal(0),
+        status: z.literal("completed"),
+      }),
+    }),
+  });
+  for (const entry of traffic.traffic) {
+    if (!entry.line?.startsWith("{")) continue;
+    const parsed = schema.safeParse(JSON.parse(entry.line));
+    if (parsed.success) return parsed.data.params.item;
+  }
+  throw new Error("authentic approval command missing");
+}
+test("m10-observed-harness-facts: authentic Codex null final output stays unavailable with observed zero exit", async (t) => {
+  const item = approvalCommand();
+  const events = await codexFacts(t, [
+    { method: "item/completed", params: { item } },
+  ]);
+  const call = events
+    .flatMap((event) =>
+      event.kind === "tool-call" && event.call.input === item.command
+        ? [event.call]
+        : [],
+    )
+    .at(-1);
+  assert.ok(call);
+  assert.equal(call.output, undefined);
+  assert.equal(call.exitCode, 0);
+});
+for (const final of [
+  "replace",
+  "empty",
+  "null",
+  "absent",
+  "malformed",
+  "unmatched",
+] as const)
+  test(`m10-observed-harness-facts: synthetic Codex ${final} reconciles repeated bounded deltas by identity and drains partials before result`, async (t) => {
+    const recorded = approvalCommand();
+    const item = {
+      ...recorded,
+      id: "synthetic-command",
+      status: "inProgress",
+      aggregatedOutput: null,
+      exitCode: null,
+    };
+    const terminal = {
+      ...item,
+      status: "completed",
+      ...(final === "replace"
+        ? { aggregatedOutput: "FINAL", exitCode: 0 }
+        : final === "empty"
+          ? { aggregatedOutput: "", exitCode: 0 }
+          : final === "malformed"
+            ? { aggregatedOutput: 42, exitCode: "exit 0", cwd: 17 }
+            : {}),
+    };
+    const { aggregatedOutput: _omitted, ...absent } = terminal;
+    const events = await codexFacts(t, [
+      { method: "item/started", params: { item } },
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { itemId: item.id, delta: "OLD" + "a".repeat(29_999) },
+      },
+      { method: "item/started", params: { item } },
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { itemId: "foreign-item", delta: "FOREIGN" },
+      },
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { itemId: item.id, delta: "Z" },
+      },
+      ...(final === "unmatched"
+        ? []
+        : [
+            {
+              method: "item/completed",
+              params: { item: final === "absent" ? absent : terminal },
+            },
+          ]),
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { itemId: item.id, delta: "LATE" },
+      },
+    ]);
+    const calls = events.flatMap((event) =>
+      (event.kind === "tool-call" || event.kind === "tool-partial") &&
+      event.call.input === item.command
+        ? [event]
+        : [],
+    );
+    const last = calls.at(-1);
+    assert.ok(last);
+    const output = last.call.output;
+    assert.deepEqual(
+      output,
+      final === "replace"
+        ? { text: "FINAL" }
+        : final === "empty"
+          ? { text: "" }
+          : {
+              text:
+                final === "unmatched"
+                  ? "a".repeat(29_995) + "ZLATE"
+                  : "a".repeat(29_999) + "Z",
+              secantDropped: true,
+              incomplete: true,
+            },
+    );
+    assert.equal(
+      last.kind,
+      final === "unmatched" ? "tool-partial" : "tool-call",
+    );
+    assert.equal(
+      last.call.outcome.kind,
+      final === "unmatched" ? "running" : "completed",
+    );
+    if (final === "malformed" || final === "unmatched")
+      assert.equal(last.call.exitCode, undefined);
+    assert.ok(
+      events.every(
+        (event) =>
+          event.kind !== "tool-preview" ||
+          (event.call.output?.text.length ?? 0) <= 30_000,
+      ),
+    );
+  });

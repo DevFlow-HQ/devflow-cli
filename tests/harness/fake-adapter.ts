@@ -1,3 +1,7 @@
+import {
+  retainCommandOutput,
+  type ToolCall,
+} from "../../src/harness/harness.js";
 import { ownPreparations } from "./preparation-double.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 // The deterministic fake Harness Adapter. It lives in the `harness` test domain
@@ -169,6 +173,7 @@ export const REPLAY_BARRIER: TurnEvent = {
 const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
   "assistant-content",
   "tool-call",
+  "tool-partial",
   "thought",
 ]);
 
@@ -763,9 +768,20 @@ class FakeTurn {
 
   /** Terminal ordering: expire outstanding requests, close the producer, then
    *  settle the one result. No event is emitted after this. */
+  private readonly toolValues = new Map<string, ToolCall>();
   private settle(result: TurnResult): void {
     if (this.settled) return;
     this.terminal = true;
+    for (const call of this.toolValues.values())
+      if (call.outcome.kind === "running" && call.output !== undefined)
+        this.emit({
+          kind: "tool-partial",
+          call: {
+            ...call,
+            outcome: { kind: "running" },
+            output: { ...call.output, incomplete: true },
+          },
+        });
     const previews = this.buffer.filter(
       (event) =>
         event.kind === "message-preview" ||
@@ -830,11 +846,63 @@ class FakeTurn {
           if (this.buffer[index]?.kind === "turn-diff-preview")
             this.buffer.splice(index, 1);
     }
+    if (
+      event.kind === "tool-call" ||
+      event.kind === "tool-preview" ||
+      event.kind === "tool-partial"
+    ) {
+      const previous = this.toolValues.get(event.call.callId);
+      if (previous !== undefined && previous.outcome.kind !== "running") return;
+      const output =
+        event.call.output ??
+        (event.call.outcome.kind !== "running" && previous?.output !== undefined
+          ? { ...previous.output, incomplete: true as const }
+          : undefined);
+      const facts =
+        output === undefined ? {} : { output: retainCommandOutput(output) };
+      if (event.kind === "tool-call")
+        event = {
+          kind: "tool-call",
+          call: { ...previous, ...event.call, ...facts },
+        };
+      else if (event.kind === "tool-partial")
+        event = {
+          kind: "tool-partial",
+          call: {
+            ...previous,
+            ...event.call,
+            output: {
+              ...retainCommandOutput(event.call.output),
+              incomplete: true,
+            },
+            outcome: { kind: "running" },
+          },
+        };
+      else
+        event = {
+          kind: "tool-preview",
+          call: {
+            ...previous,
+            ...event.call,
+            outcome: { kind: "running" },
+            ...facts,
+          },
+        };
+      if (
+        event.kind === "tool-call" ||
+        event.kind === "tool-preview" ||
+        event.kind === "tool-partial"
+      )
+        this.toolValues.set(event.call.callId, event.call);
+    }
     if (event.kind === "thought") this.removeThoughtPreviews(event.summaryId);
     if (event.kind === "thought-preview" && !event.content.trim()) return;
     if (event.kind === "assistant-content")
       this.removePreviews(event.messageId);
-    if (event.kind === "tool-call" && event.call.outcome.kind !== "running") {
+    if (
+      event.kind === "tool-partial" ||
+      (event.kind === "tool-call" && event.call.outcome.kind !== "running")
+    ) {
       for (let index = this.buffer.length - 1; index >= 0; index--) {
         const retained = this.buffer[index];
         if (

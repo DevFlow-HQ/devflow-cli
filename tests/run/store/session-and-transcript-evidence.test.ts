@@ -944,3 +944,129 @@ test("m10-session-history: validated supplied patches and Turn diffs survive cra
     ["Input", "Input"],
   );
 });
+
+test("m10-interruption-and-transcript: admitted command partials retain bounded output and first appearance on reopen without settling the tool", (t) => {
+  const home = makeTempDir("secant-command-partial-");
+  const group = openRunGroup(home, WORKSPACE);
+  const created = create(group, "command-partial");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  owner.admitTurn({
+    turnId: "turn",
+    attemptId: "0.0:write",
+    session: "s",
+    origin: "managed",
+    kind: "agent",
+    input: "Prompt",
+    recoveryCoordinate: "private",
+    harness: "codex",
+    at: AT,
+  });
+  const call = {
+    callId: "command",
+    tool: "command",
+    input: "build",
+    cwd: WORKSPACE,
+    outcome: { kind: "running" },
+    historyOrder: 2,
+  };
+  owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "tool-call",
+    payload: JSON.stringify(call),
+    at: AT,
+  });
+  const partial = {
+    ...call,
+    historyOrder: 99,
+    output: { text: "OLD" + "x".repeat(30_000), incomplete: true },
+    nativeOmission: "Harness omitted stdout",
+  };
+  for (let i = 0; i < 2; i++)
+    owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-partial",
+      payload: JSON.stringify(partial),
+      at: AT,
+    });
+  const retained = owner
+    .turnEvents()
+    .filter((event) => event.kind === "tool-partial");
+  assert.equal(retained.length, 1);
+  assert.deepEqual(JSON.parse(retained[0]!.payload), {
+    ...call,
+    output: { text: "x".repeat(30_000), incomplete: true, secantDropped: true },
+    nativeOmission: "Harness omitted stdout",
+  });
+  owner.settleTurn({
+    turnId: "turn",
+    session: "s",
+    resultKind: "interrupted",
+    resultDetail: "{}",
+    availability: "open",
+    at: AT,
+  });
+  assert.deepEqual(
+    owner.transcript().map((entry) => entry.content),
+    ["Prompt"],
+  );
+  owner.close();
+  group.close();
+  const reopened = openRunGroup(home, WORKSPACE);
+  t.after(() => reopened.close());
+  const recovered = reopened.acquireRun(created.runId);
+  assert.ok(recovered);
+  t.after(() => recovered.close());
+  assert.deepEqual(
+    recovered.turnEvents().filter((event) => event.kind === "tool-partial"),
+    retained,
+  );
+  assert.equal(recovered.turns()[0]?.resultKind, "interrupted");
+});
+
+for (const size of [29_999, 30_000, 30_001])
+  test(`m10-interruption-and-transcript: stored final command output retains exactly the ${size} character boundary with separate markers`, (t) => {
+    const group = openRunGroup(makeTempDir("secant-final-tail-"), WORKSPACE);
+    t.after(() => group.close());
+    const created = create(group, "final-tail");
+    const owner = group.acquireRun(created.runId);
+    assert.ok(owner);
+    t.after(() => owner.close());
+    owner.admitTurn({
+      turnId: "turn",
+      attemptId: "0.0:write",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      input: "Prompt",
+      recoveryCoordinate: "private",
+      harness: "codex",
+      at: AT,
+    });
+    const call = {
+      callId: "call",
+      tool: "command",
+      input: "build",
+      outcome: { kind: "completed" },
+      output: { text: "a".repeat(size - 1) + "Z" },
+      exitCode: 0,
+      nativeOmission: "reported native omission",
+    };
+    owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-call",
+      payload: JSON.stringify(call),
+      at: AT,
+    });
+    const event = owner
+      .turnEvents()
+      .find((event) => event.kind === "tool-call");
+    assert.ok(event);
+    assert.deepEqual(JSON.parse(event.payload), {
+      ...call,
+      output: {
+        text: size > 30_000 ? "a".repeat(29_999) + "Z" : call.output.text,
+        ...(size > 30_000 ? { secantDropped: true } : {}),
+      },
+    });
+  });

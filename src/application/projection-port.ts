@@ -1284,6 +1284,14 @@ interface SessionToolValue {
     | "subagent"
     | "other";
   readonly input: string;
+  readonly cwd?: string;
+  readonly exitCode?: number;
+  readonly nativeOmission?: string;
+  readonly output?: {
+    readonly text: string;
+    readonly secantDropped?: true;
+    readonly incomplete?: true;
+  };
   readonly count?: { readonly value: number; readonly unit: string };
   readonly files?: readonly SessionFileChange[];
   readonly outcome:

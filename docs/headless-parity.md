@@ -38,7 +38,11 @@ reading controls; headless keeps its stored page/export contracts ([#413](https:
 
 Identified tool input, reported counts, and completed/failed/declined/unconfirmed outcomes belong to per-Session history (#414).
 `run show --json` retains its generic `tool-activity` timeline mapping for new starts and observed settlements, and reads legacy rows unchanged.
-The transcript still excludes tools. Turn success, Interrupt, loss, and Request answers never create a missing tool result.
+The transcript still excludes tools and command output. Bounded command panels (#415) retain the last 30,000 characters,
+with separate Secant/native omission markers and explicit ten-displayed-line expansion. Supplied final output replaces
+previews; empty clears them, absent retains potentially incomplete tails. Orderly Turn endings store those tails through
+an admitted partial event without adding a headless timeline row. Abrupt crashes keep stored starts/settlements only.
+Turn success, Interrupt, loss, and Request answers never create a missing tool result.
 Qualified Thought summaries (#417) grow in the TUI's Session history and persist
 once at settlement, including known incomplete text. They have no transcript
 position, so both headless transcript pages and exports exclude them. The frozen

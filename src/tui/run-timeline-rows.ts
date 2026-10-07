@@ -23,6 +23,9 @@ export interface TimelineRow {
   readonly iterationEnd?: true;
   readonly oneLine?: boolean;
   readonly inspection?: Openable;
+  readonly output?: NonNullable<
+    Extract<SessionHistoryValue, { kind: "tool" }>["output"]
+  > & { readonly live: boolean };
   readonly thought?: Extract<SessionHistoryValue, { kind: "thought" }> & {
     readonly live: boolean;
   };
@@ -238,6 +241,9 @@ function historyTimelineRows(
       text: historyLabel(row.value, row.source === "preview"),
       inspection: fileInspection(row.value),
       ...(row.value.kind === "agent-call" ? { oneLine: true } : {}),
+      ...(row.value.kind === "tool" && row.value.output !== undefined
+        ? { output: { ...row.value.output, live: row.source === "preview" } }
+        : {}),
       ...(row.value.kind === "thought"
         ? { thought: { ...row.value, live: row.source === "preview" } }
         : {}),
@@ -316,7 +322,7 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
           : value.outcome.kind === "declined"
             ? value.outcome.reason
             : undefined;
-      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}\n${value.input}${value.files === undefined ? "" : `\n${fileLabels(value.files)}`}${detail === undefined ? "" : `\n${detail}`}`;
+      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}\n${value.tool === "command" ? "Command · " : ""}${value.input}${value.files === undefined ? "" : `\n${fileLabels(value.files)}`}${value.cwd === undefined ? "" : `\nCwd · ${value.cwd}`}${value.exitCode === undefined ? "" : `\nExit · ${value.exitCode}`}${detail === undefined ? "" : `\n${detail}`}${value.nativeOmission === undefined ? "" : `\nHarness omission · ${value.nativeOmission}`}${value.tool === "command" && value.output === undefined ? "\nOutput unavailable" : ""}`;
     }
     case "request":
       return `? ${value.description}`;

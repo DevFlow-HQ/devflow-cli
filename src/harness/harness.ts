@@ -407,6 +407,23 @@ export interface TurnDiff {
   readonly files: readonly FileChange[];
 }
 
+/** Retained command text, independent of native omissions and display collapse. */
+interface CommandOutput {
+  readonly text: string;
+  readonly secantDropped?: true;
+  readonly incomplete?: true;
+}
+/** The normalized tail budget applies before observations reach any consumer. */
+export function retainCommandOutput(output: CommandOutput): CommandOutput {
+  return output.text.length <= 30_000
+    ? output
+    : {
+        ...output,
+        text: output.text.slice(-30_000),
+        secantDropped: true,
+      };
+}
+
 /** One observed call. Native correlation stays private; identity is scoped to a Turn. */
 export interface ToolCall {
   readonly callId: string;
@@ -421,6 +438,10 @@ export interface ToolCall {
     | "subagent"
     | "other";
   readonly input: string;
+  readonly cwd?: string;
+  readonly output?: CommandOutput;
+  readonly exitCode?: number;
+  readonly nativeOmission?: string;
   readonly count?: { readonly value: number; readonly unit: string };
   readonly files?: readonly FileChange[];
   readonly outcome:
@@ -542,6 +563,13 @@ export type TurnEvent =
   | { readonly kind: "turn-diff"; readonly diff: TurnDiff }
   | { readonly kind: "tool-call"; readonly call: ToolCall }
   | {
+      readonly kind: "tool-partial";
+      readonly call: ToolCall & {
+        readonly outcome: { readonly kind: "running" };
+        readonly output: CommandOutput & { readonly incomplete: true };
+      };
+    }
+  | {
       readonly kind: "tool-preview";
       readonly call: ToolCall & {
         readonly outcome: { readonly kind: "running" };
@@ -601,6 +629,7 @@ export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "elicitation-declined",
   "assistant-content",
   "tool-call",
+  "tool-partial",
   "tool-preview",
   "turn-diff-preview",
   "turn-diff",
