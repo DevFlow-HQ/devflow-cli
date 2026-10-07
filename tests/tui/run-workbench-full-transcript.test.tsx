@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { until } from "./renderer-fixture.js";
 import {
+  resizeWorkbench,
   runOf,
   mountWorkbench,
   press,
@@ -313,8 +314,7 @@ test("the transcript inspection wraps long lines at the view width and rewraps o
   assert.match(t.captureCharFrame(), new RegExp(long));
 
   // Narrow the terminal: the line wraps at a word boundary and nothing is cut.
-  t.resize(40, 24);
-  renderer.resize(40, 24);
+  resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   const narrow = t.captureCharFrame();
   noOverflow(narrow, 40);
@@ -322,8 +322,7 @@ test("the transcript inspection wraps long lines at the view width and rewraps o
   assert.match(narrow, /^ forty columns easily\s*$/m);
 
   // Widen it again: it rewraps back onto one line.
-  t.resize(80, 24);
-  renderer.resize(80, 24);
+  resizeWorkbench(t, renderer, 80, 24);
   await t.renderOnce();
   const wide = t.captureCharFrame();
   noOverflow(wide, 80);
@@ -400,13 +399,11 @@ test("a paused transcript keeps its first visible line across a resize that rewr
   assert.match(firstContent(), /^ C1 lorem/);
 
   // Narrowing rewraps every entry over more lines; C1 still leads the view.
-  t.resize(40, 12);
-  renderer.resize(40, 12);
+  resizeWorkbench(t, renderer, 40, 12);
   await t.renderOnce();
   noOverflow(t.captureCharFrame(), 40);
   assert.match(firstContent(), /^ C1 lorem/);
-  t.resize(100, 12);
-  renderer.resize(100, 12);
+  resizeWorkbench(t, renderer, 100, 12);
   await t.renderOnce();
   assert.match(firstContent(), /^ C1 lorem/);
 });
@@ -488,8 +485,7 @@ for (const width of [40, 100]) {
       assert.doesNotMatch(t.captureCharFrame(), /read-failed|LATER_APPEND/);
       // Entry/offset is worded independently of colour and opaque ids stay private.
       assert.match(t.captureCharFrame(), /Entry 2 · line 3/);
-      t.resize(width === 40 ? 100 : 40, 12);
-      renderer.resize(width === 40 ? 100 : 40, 12);
+      resizeWorkbench(t, renderer, width === 40 ? 100 : 40, 12);
       await t.renderOnce();
       assert.equal(
         first(),
@@ -528,8 +524,7 @@ test("m10-full-transcript-prepend: resize clamps only the offset of a surviving 
   await press(t, renderer, "home");
   for (let i = 0; i < 4; i++) await press(t, renderer, "down");
   assert.match(t.captureCharFrame(), /Entry 1 · line 5/);
-  t.resize(100, 30);
-  renderer.resize(100, 30);
+  resizeWorkbench(t, renderer, 100, 30);
   await t.renderOnce();
   // Wide content is header + two content lines + separator; clamp to that separator.
   assert.equal(t.captureCharFrame().split("\n")[2]!.trim(), "");
@@ -543,8 +538,7 @@ test("m10-full-transcript-prepend: resize clamps only the offset of a surviving 
   await press(t, renderer, "p");
   assert.match(t.captureCharFrame(), /Entry 2 · line 4/);
   assert.doesNotMatch(t.captureCharFrame(), /OLDER|· latest/);
-  t.resize(40, 10);
-  renderer.resize(40, 10);
+  resizeWorkbench(t, renderer, 40, 10);
   await t.renderOnce();
   assert.match(t.captureCharFrame(), /Entry 2 · line 4/); // discarded offset stays discarded
   assert.equal(
@@ -761,8 +755,7 @@ test("m10-workbench-interaction: a five-row transcript keeps content and a visib
   await press(wb.t, wb.renderer, "home");
   await press(wb.t, wb.renderer, "down");
   const first = wb.t.captureCharFrame().split("\n")[2]!.trimEnd();
-  wb.t.resize(40, 5);
-  wb.renderer.resize(40, 5);
+  resizeWorkbench(wb.t, wb.renderer, 40, 5);
   await wb.t.renderOnce();
   assert.equal(wb.t.captureCharFrame().split("\n")[2]!.trimEnd(), first);
   assert.match(wb.t.captureCharFrame(), /esc · q quit/);

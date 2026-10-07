@@ -2,7 +2,7 @@ import { PALETTES } from "./palette-expectations.js";
 import type { PreferencesView } from "../../src/tui/tui.js";
 import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
-import { testRender } from "@opentui/solid";
+import { mountRenderer } from "./renderer-fixture.js";
 import { createSignal } from "solid-js";
 import { App } from "../../src/tui/tui.js";
 import {
@@ -604,7 +604,7 @@ export async function mountApp(
   preferences: PreferencesView = inertPreferencesView(),
 ) {
   const exits: unknown[] = [];
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={preferences}
@@ -1138,4 +1138,15 @@ export async function openTranscriptDetails(
 /** The frame row a control begins on, found by its heading. */
 export function rowOf(frame: string, heading: RegExp): number {
   return frame.split("\n").findIndex((line) => heading.test(line));
+}
+
+/** Resize the captured terminal and the Port that drives Workbench layout. */
+export function resizeWorkbench(
+  t: Pick<Awaited<ReturnType<typeof mountRenderer>>, "resize">,
+  renderer: FakeRenderer,
+  width: number,
+  height: number,
+) {
+  t.resize(width, height);
+  renderer.resize(width, height);
 }

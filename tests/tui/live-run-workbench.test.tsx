@@ -4,7 +4,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { testRender } from "@opentui/solid";
 import { createRoot, createSignal } from "solid-js";
 import type {
   BundleCatalogSnapshot,
@@ -29,7 +28,7 @@ import {
   type RunLaunchView,
   type WorkspaceView,
 } from "../../src/tui/tui.js";
-import { makeFakeRenderer, until } from "./renderer-fixture.js";
+import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
 import { createFake } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
@@ -243,7 +242,7 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
     },
   };
   const fakeRenderer = makeFakeRenderer(120, 32);
-  const rendered = await testRender(
+  const rendered = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}
@@ -403,7 +402,7 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
   });
 
   const fakeRenderer = makeFakeRenderer(120, 36);
-  const rendered = await testRender(
+  const rendered = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}

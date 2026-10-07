@@ -10,6 +10,7 @@ import type {
   WorkspacePathQuery,
 } from "../../src/application/projection-port.js";
 import {
+  resizeWorkbench,
   makeRunView,
   snapshotOf,
   runOf,
@@ -188,8 +189,7 @@ test("a reserved-word refusal keeps the draft and focus through small terminals 
     },
   });
   for (const width of [100, 48, 60, 140]) {
-    wb.renderer.resize(width, 24);
-    wb.t.resize(width, 24);
+    resizeWorkbench(wb.t, wb.renderer, width, 24);
     await wb.t.renderOnce();
     const frame = wb.t.captureCharFrame();
     assert.match(frame, /✗ \/clear is reserved by Claude Code/);
@@ -293,7 +293,7 @@ test("an empty free-text submission is refused locally without dispatching", asy
 test("the free-text gate control fits small widths without overflow and reads without colour", async () => {
   const { t, renderer } = await mountWorkbench(freeTextRunOf(), 100, 30);
   noOverflow(t.captureCharFrame(), 100);
-  renderer.resize(40, 24);
+  resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   const frame = t.captureCharFrame();
   noOverflow(frame, 40);
@@ -347,7 +347,7 @@ test("editing a picked suggestion turns it into a typed Other answer (#213)", as
 test("the suggested gate control fits small widths without overflow (#213)", async () => {
   const { t, renderer } = await mountWorkbench(suggestedRunOf(), 100, 30);
   noOverflow(t.captureCharFrame(), 100);
-  renderer.resize(40, 24);
+  resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   const frame = t.captureCharFrame();
   noOverflow(frame, 40);
@@ -477,7 +477,7 @@ test("the Agent-step prompt stays within a narrow terminal and relays out on res
     "please wrap up the current change and stop before touching anything else",
   );
   noOverflow(t.captureCharFrame(), 40);
-  renderer.resize(80, 24);
+  resizeWorkbench(t, renderer, 80, 24);
   await t.renderOnce();
   noOverflow(t.captureCharFrame(), 80);
 });
@@ -569,8 +569,7 @@ test("a Claude Code Steer shows each refusal reason and keeps its draft and focu
     ]);
     wb.control.setSteerOutcome({ kind: "refused", problem: refusal.problem });
     for (const width of [100, 48, 60, 140]) {
-      wb.renderer.resize(width, 24);
-      wb.t.resize(width, 24);
+      resizeWorkbench(wb.t, wb.renderer, width, 24);
       await wb.t.renderOnce();
       const frame = wb.t.captureCharFrame();
       // The reason leads with what to do, in words and the ✗ glyph, so it
@@ -822,14 +821,14 @@ test("a long unavailable reason wraps in full on a small terminal and relays out
   assert.match(frame, /working · esc esc interrupt/);
   noOverflow(frame, 100);
 
-  wb.renderer.resize(40, 16);
+  resizeWorkbench(wb.t, wb.renderer, 40, 16);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
   assert.match(frame, /^ {3}✗ steer unavailable · This Harness/m);
   assert.ok(reason(frame).includes(LONG_STEER_REASON.split(" ").at(-1)!));
   assert.match(frame, /working · esc esc interrupt/);
   noOverflow(frame, 40);
-  wb.renderer.resize(100, 24);
+  resizeWorkbench(wb.t, wb.renderer, 100, 24);
   await wb.t.renderOnce();
   noOverflow(wb.t.captureCharFrame(), 100);
 });
@@ -857,13 +856,13 @@ test("the Steer cue keeps its words in a small terminal, the scanner yielding fi
     24,
     okActions(),
   );
-  wb.renderer.resize(40, 16);
+  resizeWorkbench(wb.t, wb.renderer, 40, 16);
   await wb.t.renderOnce();
   let frame = wb.t.captureCharFrame();
   assert.match(frame, /^ {3}enter steer · esc esc interrupt/m);
   assert.doesNotMatch(frame, /[■⬝]/);
   noOverflow(frame, 40);
-  wb.renderer.resize(100, 24);
+  resizeWorkbench(wb.t, wb.renderer, 100, 24);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
   assert.match(
@@ -1047,7 +1046,7 @@ for (const [width, height] of [
     assert.match(frame, /Reply to the agent/);
     assert.match(frame, /enter send reply/);
     const other = width === 60 ? 140 : 60;
-    wb.renderer.resize(other, 24);
+    resizeWorkbench(wb.t, wb.renderer, other, 24);
     await wb.t.renderOnce();
     const resized = wb.t.captureCharFrame();
     noOverflow(resized, other);
@@ -1125,7 +1124,7 @@ for (const [width, height] of [
     noOverflow(frame, width);
     // Restore once, preserve the unsent draft, and send the exact full text at a boundary.
     wb.control.setRun(interactiveRunOf({ timeline }));
-    wb.renderer.resize(width === 60 ? 140 : 60, 24);
+    resizeWorkbench(wb.t, wb.renderer, width === 60 ? 140 : 60, 24);
     await wb.t.renderOnce();
     noOverflow(wb.t.captureCharFrame(), width === 60 ? 140 : 60);
     await press(wb.t, wb.renderer, "return");
@@ -1319,28 +1318,25 @@ test("workbench-model-choice: the palette's Model command opens the shared picke
       },
     }),
   );
-  try {
-    await press(t, renderer, "g", { ctrl: true });
-    assert.match(t.captureCharFrame(), /ctrl\+p Model choice/);
-    // A bare `m` in focused details no longer opens it (ADR 0040).
-    await press(t, renderer, "m");
-    assert.doesNotMatch(t.captureCharFrame(), /Choose a model/);
-    await openModelChoice(t, renderer);
-    assert.match(t.captureCharFrame(), /1\. Choose a model/);
-    assert.match(t.captureCharFrame(), /Fast.*\[current\]/);
-    await press(t, renderer, "down");
-    await press(t, renderer, "return");
-    assert.match(t.captureCharFrame(), /2\. Choose effort/);
-    assert.match(t.captureCharFrame(), /deep does not offer high effort/);
-    await press(t, renderer, "return");
-    assert.deepEqual(changes, [
-      { offer: MODEL_OFFER, choice: { model: "deep", effort: "medium" } },
-    ]);
-    assert.doesNotMatch(t.captureCharFrame(), /Choose effort/);
-    assert.match(t.captureCharFrame(), /applies from the next Turn/);
-  } finally {
-    t.renderer.destroy();
-  }
+
+  await press(t, renderer, "g", { ctrl: true });
+  assert.match(t.captureCharFrame(), /ctrl\+p Model choice/);
+  // A bare `m` in focused details no longer opens it (ADR 0040).
+  await press(t, renderer, "m");
+  assert.doesNotMatch(t.captureCharFrame(), /Choose a model/);
+  await openModelChoice(t, renderer);
+  assert.match(t.captureCharFrame(), /1\. Choose a model/);
+  assert.match(t.captureCharFrame(), /Fast.*\[current\]/);
+  await press(t, renderer, "down");
+  await press(t, renderer, "return");
+  assert.match(t.captureCharFrame(), /2\. Choose effort/);
+  assert.match(t.captureCharFrame(), /deep does not offer high effort/);
+  await press(t, renderer, "return");
+  assert.deepEqual(changes, [
+    { offer: MODEL_OFFER, choice: { model: "deep", effort: "medium" } },
+  ]);
+  assert.doesNotMatch(t.captureCharFrame(), /Choose effort/);
+  assert.match(t.captureCharFrame(), /applies from the next Turn/);
 });
 
 test("workbench-model-choice: absent, unavailable, and stale Offers never open the picker", async () => {
@@ -1352,52 +1348,49 @@ test("workbench-model-choice: absent, unavailable, and stale Offers never open t
     await press(wb.t, wb.renderer, "escape");
     return listed;
   };
-  try {
-    await press(wb.t, wb.renderer, "m");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-    assert.equal(await paletteOffersModel(), false);
-    wb.control.setRun(
-      runOf({
-        actionOffers: [
-          {
-            ...MODEL_OFFER,
-            available: false,
-            problem: {
-              code: "model-choice-checking",
-              explanation: "Model choices are being checked.",
-              remediation: "Wait for qualification.",
-              possibleEffects: "none",
-            },
+
+  await press(wb.t, wb.renderer, "m");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+  assert.equal(await paletteOffersModel(), false);
+  wb.control.setRun(
+    runOf({
+      actionOffers: [
+        {
+          ...MODEL_OFFER,
+          available: false,
+          problem: {
+            code: "model-choice-checking",
+            explanation: "Model choices are being checked.",
+            remediation: "Wait for qualification.",
+            possibleEffects: "none",
           },
-        ],
-      }),
-    );
-    await press(wb.t, wb.renderer, "g", { ctrl: true });
-    assert.match(
-      wb.t.captureCharFrame(),
-      /Model choice unavailable · Model choices are being checked/,
-    );
-    await press(wb.t, wb.renderer, "m");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-    await press(wb.t, wb.renderer, "escape"); // back to the prompt
-    assert.equal(await paletteOffersModel(), false);
-    wb.control.setRun(runOf({ actionOffers: [MODEL_OFFER] }));
-    await wb.t.renderOnce();
-    assert.equal(await paletteOffersModel(), true);
-    wb.control.setFreshness({
-      kind: "catching-up",
-      catchUp: "fresh",
-      lastConfirmedAt: "2026-10-05T00:00:00Z",
-    });
-    await wb.t.renderOnce();
-    assert.equal(await paletteOffersModel(), false);
-    assert.doesNotMatch(
-      wb.t.captureCharFrame(),
-      /Choose a model|ctrl\+p Model choice/,
-    );
-  } finally {
-    wb.t.renderer.destroy();
-  }
+        },
+      ],
+    }),
+  );
+  await press(wb.t, wb.renderer, "g", { ctrl: true });
+  assert.match(
+    wb.t.captureCharFrame(),
+    /Model choice unavailable · Model choices are being checked/,
+  );
+  await press(wb.t, wb.renderer, "m");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+  await press(wb.t, wb.renderer, "escape"); // back to the prompt
+  assert.equal(await paletteOffersModel(), false);
+  wb.control.setRun(runOf({ actionOffers: [MODEL_OFFER] }));
+  await wb.t.renderOnce();
+  assert.equal(await paletteOffersModel(), true);
+  wb.control.setFreshness({
+    kind: "catching-up",
+    catchUp: "fresh",
+    lastConfirmedAt: "2026-10-05T00:00:00Z",
+  });
+  await wb.t.renderOnce();
+  assert.equal(await paletteOffersModel(), false);
+  assert.doesNotMatch(
+    wb.t.captureCharFrame(),
+    /Choose a model|ctrl\+p Model choice/,
+  );
 });
 
 for (const route of ["palette", "/model", "/effort"] as const) {
@@ -1412,113 +1405,100 @@ for (const route of ["palette", "/model", "/effort"] as const) {
         width,
         height,
       );
-      try {
-        assert.match(wb.t.captureCharFrame(), /\^P commands/);
-        await openModelChoice(wb.t, wb.renderer, "Model", route);
-        if (route !== "/effort") {
-          await press(wb.t, wb.renderer, "down");
-          await press(wb.t, wb.renderer, "return");
-        }
-        noOverflow(wb.t.captureCharFrame(), width);
-        wb.t.resize(140, 44);
-        wb.renderer.resize(140, 44);
-        await wb.t.renderOnce();
-        const effort = wb.t.captureCharFrame();
-        assert.match(effort, /2\. Choose effort/);
-        assert.match(
-          effort,
-          route === "/effort" ? /Model: Fast/ : /Model: Deep/,
-        );
-        assert.match(
-          effort,
-          route === "/effort" ? /› high \[current\]/ : /› medium \[current\]/,
-        );
-        assert.doesNotMatch(effort, /tab Harness/);
-        await press(wb.t, wb.renderer, "escape");
-        assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
-        assert.match(
-          wb.t.captureCharFrame(),
-          route === "/effort" ? /› Fast.*\[current\]/ : /› Deep.*\[current\]/,
-        );
-        await press(wb.t, wb.renderer, "escape");
-        assert.doesNotMatch(
-          wb.t.captureCharFrame(),
-          /Choose a model|Choose effort/,
-        );
-        assert.ok(onWorkbench(wb.t.captureCharFrame()));
-        noOverflow(wb.t.captureCharFrame(), 140);
-      } finally {
-        wb.t.renderer.destroy();
+
+      assert.match(wb.t.captureCharFrame(), /\^P commands/);
+      await openModelChoice(wb.t, wb.renderer, "Model", route);
+      if (route !== "/effort") {
+        await press(wb.t, wb.renderer, "down");
+        await press(wb.t, wb.renderer, "return");
       }
+      noOverflow(wb.t.captureCharFrame(), width);
+      resizeWorkbench(wb.t, wb.renderer, 140, 44);
+      await wb.t.renderOnce();
+      const effort = wb.t.captureCharFrame();
+      assert.match(effort, /2\. Choose effort/);
+      assert.match(effort, route === "/effort" ? /Model: Fast/ : /Model: Deep/);
+      assert.match(
+        effort,
+        route === "/effort" ? /› high \[current\]/ : /› medium \[current\]/,
+      );
+      assert.doesNotMatch(effort, /tab Harness/);
+      await press(wb.t, wb.renderer, "escape");
+      assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+      assert.match(
+        wb.t.captureCharFrame(),
+        route === "/effort" ? /› Fast.*\[current\]/ : /› Deep.*\[current\]/,
+      );
+      await press(wb.t, wb.renderer, "escape");
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /Choose a model|Choose effort/,
+      );
+      assert.ok(onWorkbench(wb.t.captureCharFrame()));
+      noOverflow(wb.t.captureCharFrame(), 140);
     });
   }
 
   test(`workbench-model-choice: ${route} Port Escape steps back even when the real keymap also receives Escape`, async () => {
     const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
-    try {
-      await openModelChoice(wb.t, wb.renderer, "Model", route);
-      if (route !== "/effort") await press(wb.t, wb.renderer, "return");
-      assert.match(wb.t.captureCharFrame(), /Choose effort/);
-      wb.renderer.key("escape");
-      // Explicit Escape sequence avoids the terminal's lone-Esc disambiguation wait.
-      wb.t.mockInput.pressKey("\x1b[27u");
-      await wb.t.renderOnce();
-      assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
-      assert.doesNotMatch(wb.t.captureCharFrame(), /2\. Choose effort/);
-      await press(wb.t, wb.renderer, "c", { ctrl: true });
-      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-      assert.deepEqual(wb.exits, []);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await openModelChoice(wb.t, wb.renderer, "Model", route);
+    if (route !== "/effort") await press(wb.t, wb.renderer, "return");
+    assert.match(wb.t.captureCharFrame(), /Choose effort/);
+    wb.renderer.key("escape");
+    // Explicit Escape sequence avoids the terminal's lone-Esc disambiguation wait.
+    wb.t.mockInput.pressKey("\x1b[27u");
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /2\. Choose effort/);
+    await press(wb.t, wb.renderer, "c", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+    assert.deepEqual(wb.exits, []);
   });
 
   for (const modal of ["request", "gate", "checkpoint"] as const) {
     test(`workbench-model-choice: ${route} a ${modal} closes the picker and owns its keys`, async () => {
       const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
-      try {
-        await openModelChoice(wb.t, wb.renderer, "Model", route);
-        assert.match(wb.t.captureCharFrame(), /Choose a model|Choose effort/);
-        if (modal === "request") wb.control.setLive(requestOverlay());
-        else if (modal === "gate")
-          wb.control.setRun(
-            freeTextRunOf({ actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER] }),
-          );
-        else
-          wb.control.setRun(
-            blockedRunOf({ actionOffers: [MODEL_OFFER, ANSWER_OFFER] }),
-          );
-        await wb.t.renderOnce();
-        assert.doesNotMatch(
-          wb.t.captureCharFrame(),
-          /Choose a model|Choose effort/,
+
+      await openModelChoice(wb.t, wb.renderer, "Model", route);
+      assert.match(wb.t.captureCharFrame(), /Choose a model|Choose effort/);
+      if (modal === "request") wb.control.setLive(requestOverlay());
+      else if (modal === "gate")
+        wb.control.setRun(
+          freeTextRunOf({ actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER] }),
         );
-        if (modal === "checkpoint") {
-          // Model stays reachable through Ctrl+P over the checkpoint (ADR 0040),
-          // so details name that route rather than a key under the checkpoint.
-          await press(wb.t, wb.renderer, "g", { ctrl: true });
-          assert.match(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
-          await press(wb.t, wb.renderer, "tab");
-        }
-        // A bare `m` reaches the control that owns the bottom, never the picker.
-        await press(wb.t, wb.renderer, "m");
-        assert.doesNotMatch(
-          wb.t.captureCharFrame(),
-          /Choose a model|Choose effort/,
+      else
+        wb.control.setRun(
+          blockedRunOf({ actionOffers: [MODEL_OFFER, ANSWER_OFFER] }),
         );
-        if (modal === "request") {
-          await press(wb.t, wb.renderer, "escape");
-          assert.equal(wb.control.requests[0]?.decision, "deny");
-        } else if (modal === "gate") {
-          await type(wb.t, "351");
-          await press(wb.t, wb.renderer, "return");
-          assert.equal(wb.control.texts[0]?.text, "351");
-        } else {
-          await press(wb.t, wb.renderer, "return");
-          assert.equal(wb.control.answers[0]?.answer, "continue");
-        }
-      } finally {
-        wb.t.renderer.destroy();
+      await wb.t.renderOnce();
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /Choose a model|Choose effort/,
+      );
+      if (modal === "checkpoint") {
+        // Model stays reachable through Ctrl+P over the checkpoint (ADR 0040),
+        // so details name that route rather than a key under the checkpoint.
+        await press(wb.t, wb.renderer, "g", { ctrl: true });
+        assert.match(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
+        await press(wb.t, wb.renderer, "tab");
+      }
+      // A bare `m` reaches the control that owns the bottom, never the picker.
+      await press(wb.t, wb.renderer, "m");
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /Choose a model|Choose effort/,
+      );
+      if (modal === "request") {
+        await press(wb.t, wb.renderer, "escape");
+        assert.equal(wb.control.requests[0]?.decision, "deny");
+      } else if (modal === "gate") {
+        await type(wb.t, "351");
+        await press(wb.t, wb.renderer, "return");
+        assert.equal(wb.control.texts[0]?.text, "351");
+      } else {
+        await press(wb.t, wb.renderer, "return");
+        assert.equal(wb.control.answers[0]?.answer, "continue");
       }
     });
   }
@@ -1546,82 +1526,76 @@ for (const settlement of ["live-turn", "next-turn", "refused"] as const) {
         },
       }),
     );
-    try {
-      await openModelChoice(wb.t, wb.renderer);
-      assert.match(wb.t.captureCharFrame(), /requested until the Harness/);
-      await press(wb.t, wb.renderer, "return");
-      await press(wb.t, wb.renderer, "return");
-      assert.equal(submissions, 1);
-      assert.match(wb.t.captureCharFrame(), /Model choice requested/);
-      assert.doesNotMatch(wb.t.captureCharFrame(), /applied to the live Turn/);
-      await press(wb.t, wb.renderer, "g", { ctrl: true });
-      assert.match(wb.t.captureCharFrame(), /› Details/);
-      assert.doesNotMatch(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
-      // While the change is pending the palette offers no second Model command.
-      await press(wb.t, wb.renderer, "escape");
-      await openModelChoice(wb.t, wb.renderer);
-      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-      await press(wb.t, wb.renderer, "escape");
-      assert.equal(submissions, 1);
-      if (settlement === "refused")
-        setOutcome({
-          kind: "refused",
-          problem: {
-            code: "model-choice-refused",
-            explanation: "That model is blocked by your organisation.",
-            remediation: "Choose an allowed model.",
-            possibleEffects: "none",
-          },
-        });
-      else
-        setOutcome({
-          kind: "ok",
-          modelChoiceChange: { choice: offer.currentChoice, reach: settlement },
-        });
-      await wb.t.renderOnce();
-      const frame = wb.t.captureCharFrame();
-      assert.doesNotMatch(frame, /Model choice requested/);
-      if (settlement === "live-turn")
-        assert.match(frame, /applied to the live Turn/);
-      else if (settlement === "next-turn")
-        assert.match(frame, /applies from the next Turn/);
-      else {
-        assert.match(frame, /Model choice not changed/);
-        assert.match(frame, /Choose an allowed model/);
-      }
-      assert.equal(frame.includes("\x1b"), false);
-      noOverflow(frame, 60);
-    } finally {
-      wb.t.renderer.destroy();
+
+    await openModelChoice(wb.t, wb.renderer);
+    assert.match(wb.t.captureCharFrame(), /requested until the Harness/);
+    await press(wb.t, wb.renderer, "return");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(submissions, 1);
+    assert.match(wb.t.captureCharFrame(), /Model choice requested/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /applied to the live Turn/);
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
+    assert.match(wb.t.captureCharFrame(), /› Details/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
+    // While the change is pending the palette offers no second Model command.
+    await press(wb.t, wb.renderer, "escape");
+    await openModelChoice(wb.t, wb.renderer);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+    await press(wb.t, wb.renderer, "escape");
+    assert.equal(submissions, 1);
+    if (settlement === "refused")
+      setOutcome({
+        kind: "refused",
+        problem: {
+          code: "model-choice-refused",
+          explanation: "That model is blocked by your organisation.",
+          remediation: "Choose an allowed model.",
+          possibleEffects: "none",
+        },
+      });
+    else
+      setOutcome({
+        kind: "ok",
+        modelChoiceChange: { choice: offer.currentChoice, reach: settlement },
+      });
+    await wb.t.renderOnce();
+    const frame = wb.t.captureCharFrame();
+    assert.doesNotMatch(frame, /Model choice requested/);
+    if (settlement === "live-turn")
+      assert.match(frame, /applied to the live Turn/);
+    else if (settlement === "next-turn")
+      assert.match(frame, /applies from the next Turn/);
+    else {
+      assert.match(frame, /Model choice not changed/);
+      assert.match(frame, /Choose an allowed model/);
     }
+    assert.equal(frame.includes("\x1b"), false);
+    noOverflow(frame, 60);
   });
 }
 
 test("workbench-model-choice: the dialog holds timeline keys while durable activity still appends", async () => {
   const base = { actionOffers: [MODEL_OFFER], timeline: events(80) };
   const wb = await mountWorkbench(runOf(base));
-  try {
-    await press(wb.t, wb.renderer, "pageup");
-    const before = wb.t.captureCharFrame().match(/.* e\d+ .*/)?.[0];
-    assert.ok(before);
-    await openModelChoice(wb.t, wb.renderer);
-    await press(wb.t, wb.renderer, "end", { alt: true });
-    await press(wb.t, wb.renderer, "q");
-    await press(wb.t, wb.renderer, "g", { ctrl: true });
-    assert.deepEqual(wb.exits, []);
-    assert.match(wb.t.captureCharFrame(), /Choose a model/);
-    wb.control.setRun(runOf({ ...base, timeline: events(83) }));
-    await wb.t.renderOnce();
-    await press(wb.t, wb.renderer, "escape");
-    const after = wb.t.captureCharFrame();
-    assert.ok(after.includes(before));
-    assert.match(after, /new activities · Jump to latest/);
-    await press(wb.t, wb.renderer, "end", { alt: true });
-    assert.match(wb.t.captureCharFrame(), /e82/);
-    assert.doesNotMatch(wb.t.captureCharFrame(), /new activities/);
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await press(wb.t, wb.renderer, "pageup");
+  const before = wb.t.captureCharFrame().match(/.* e\d+ .*/)?.[0];
+  assert.ok(before);
+  await openModelChoice(wb.t, wb.renderer);
+  await press(wb.t, wb.renderer, "end", { alt: true });
+  await press(wb.t, wb.renderer, "q");
+  await press(wb.t, wb.renderer, "g", { ctrl: true });
+  assert.deepEqual(wb.exits, []);
+  assert.match(wb.t.captureCharFrame(), /Choose a model/);
+  wb.control.setRun(runOf({ ...base, timeline: events(83) }));
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "escape");
+  const after = wb.t.captureCharFrame();
+  assert.ok(after.includes(before));
+  assert.match(after, /new activities · Jump to latest/);
+  await press(wb.t, wb.renderer, "end", { alt: true });
+  assert.match(wb.t.captureCharFrame(), /e82/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /new activities/);
 });
 
 for (const effort of ["locked", "unavailable"] as const) {
@@ -1657,52 +1631,46 @@ for (const effort of ["locked", "unavailable"] as const) {
         },
       }),
     );
-    try {
-      await openModelChoice(wb.t, wb.renderer);
-      await press(wb.t, wb.renderer, "down");
-      await press(wb.t, wb.renderer, "return");
-      await type(wb.t, "custom-mq");
-      assert.match(wb.t.captureCharFrame(), /custom-mq/);
-      assert.deepEqual(wb.exits, []);
-      await press(wb.t, wb.renderer, "return");
-      const frame = wb.t.captureCharFrame();
-      assert.match(frame, /2\. Choose effort/);
-      if (effort === "locked") {
-        assert.match(frame, /Locked by CLAUDE_CODE_EFFORT_LEVEL=high/);
-        assert.match(frame, /high \[current\] \(locked\)/);
-      } else assert.match(frame, /This model has no effort setting/);
-      await press(wb.t, wb.renderer, "return");
-      assert.deepEqual(changes, [
-        {
-          model: "custom-mq",
-          ...(effort === "locked" ? { effort: "high" } : {}),
-        },
-      ]);
-      noOverflow(wb.t.captureCharFrame(), 60);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await openModelChoice(wb.t, wb.renderer);
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+    await type(wb.t, "custom-mq");
+    assert.match(wb.t.captureCharFrame(), /custom-mq/);
+    assert.deepEqual(wb.exits, []);
+    await press(wb.t, wb.renderer, "return");
+    const frame = wb.t.captureCharFrame();
+    assert.match(frame, /2\. Choose effort/);
+    if (effort === "locked") {
+      assert.match(frame, /Locked by CLAUDE_CODE_EFFORT_LEVEL=high/);
+      assert.match(frame, /high \[current\] \(locked\)/);
+    } else assert.match(frame, /This model has no effort setting/);
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(changes, [
+      {
+        model: "custom-mq",
+        ...(effort === "locked" ? { effort: "high" } : {}),
+      },
+    ]);
+    noOverflow(wb.t.captureCharFrame(), 60);
   });
 }
 
 test("workbench-model-choice: losing the Offer closes the dialog and late Harness refusals render in the timeline", async () => {
   const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
-  try {
-    await openModelChoice(wb.t, wb.renderer);
-    assert.match(wb.t.captureCharFrame(), /Choose a model/);
-    wb.control.setRun({
-      ...runOf(),
-      modelChoiceNotice: "The Harness kept alpha because beta was refused.",
-    });
-    await wb.t.renderOnce();
-    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-    assert.match(
-      wb.t.captureCharFrame(),
-      /The Harness kept alpha because beta was refused/,
-    );
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await openModelChoice(wb.t, wb.renderer);
+  assert.match(wb.t.captureCharFrame(), /Choose a model/);
+  wb.control.setRun({
+    ...runOf(),
+    modelChoiceNotice: "The Harness kept alpha because beta was refused.",
+  });
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
+  assert.match(
+    wb.t.captureCharFrame(),
+    /The Harness kept alpha because beta was refused/,
+  );
 });
 
 test("m10-workbench-interaction: Shift+Enter and Ctrl+J add native newlines, the field grows by its lines, and Enter sends the whole draft", async () => {
@@ -1775,8 +1743,7 @@ for (const route of ["turn", "follow-up", "steer"] as const) {
           ...initial,
           windowsCleanupNotice: "An unrelated update.",
         });
-        wb.renderer.resize(width, 24);
-        wb.t.resize(width, 24);
+        resizeWorkbench(wb.t, wb.renderer, width, 24);
         await wb.t.renderOnce();
         const frame = wb.t.captureCharFrame();
         assert.match(frame, /new first/);
@@ -1876,8 +1843,7 @@ for (const target of ["Step", "Attempt"] as const) {
     await wb.t.renderOnce();
     for (const width of [48, 121, 60]) {
       wb.control.setRun({ ...replacement });
-      wb.t.resize(width, 24);
-      wb.renderer.resize(width, 24);
+      resizeWorkbench(wb.t, wb.renderer, width, 24);
       await wb.t.renderOnce();
       const frame = wb.t.captureCharFrame();
       assert.match(frame, /Unsent text from an earlier input saved/);
@@ -2131,17 +2097,14 @@ test("m10-commands-and-input-rules: first-character discovery highlights only pr
   const wb = await mountWorkbench(
     interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER, END_OFFER] }),
   );
-  try {
-    await type(wb.t, "/mo");
-    assert.match(wb.t.captureCharFrame(), /› \/model/);
-    await press(wb.t, wb.renderer, "escape");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /› \/model/);
-    assert.match(wb.t.captureCharFrame(), /> \/mo/);
-    assert.deepEqual(wb.exits, []);
-    assert.deepEqual(wb.control.sends, []);
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await type(wb.t, "/mo");
+  assert.match(wb.t.captureCharFrame(), /› \/model/);
+  await press(wb.t, wb.renderer, "escape");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /› \/model/);
+  assert.match(wb.t.captureCharFrame(), /> \/mo/);
+  assert.deepEqual(wb.exits, []);
+  assert.deepEqual(wb.control.sends, []);
 });
 
 for (const text of [
@@ -2160,19 +2123,16 @@ for (const text of [
     const wb = await mountWorkbench(
       interactiveRunOf({ actionOffers: [SEND_OFFER] }),
     );
-    try {
-      await type(wb.t, text);
-      await press(wb.t, wb.renderer, "return");
-      assert.match(
-        wb.t.captureCharFrame(),
-        /isn't available right now|doesn't accept inline arguments/,
-      );
-      assert.ok(wb.t.captureCharFrame().includes(text));
-      assert.deepEqual(wb.control.sends, []);
-      assert.deepEqual(wb.exits, []);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, text);
+    await press(wb.t, wb.renderer, "return");
+    assert.match(
+      wb.t.captureCharFrame(),
+      /isn't available right now|doesn't accept inline arguments/,
+    );
+    assert.ok(wb.t.captureCharFrame().includes(text));
+    assert.deepEqual(wb.control.sends, []);
+    assert.deepEqual(wb.exits, []);
   });
 }
 
@@ -2186,19 +2146,16 @@ for (const text of [
 ]) {
   test(`m10-commands-and-input-rules: unknown skills, Session words, and paths pass unchanged ${JSON.stringify(text)}`, async () => {
     const wb = await mountWorkbench(interactiveRunOf());
-    try {
-      await type(wb.t, text);
-      assert.doesNotMatch(
-        wb.t.captureCharFrame(),
-        /› \/(?:model|effort|end-step|themes|quit)/,
-      );
-      await press(wb.t, wb.renderer, "return");
-      assert.deepEqual(wb.control.sends, [
-        { runId: "run-1", stepId: "discuss", text },
-      ]);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, text);
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /› \/(?:model|effort|end-step|themes|quit)/,
+    );
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(wb.control.sends, [
+      { runId: "run-1", stepId: "discuss", text },
+    ]);
   });
 }
 
@@ -2206,15 +2163,12 @@ test("m10-commands-and-input-rules: discovery ends at whitespace and never opens
   const wb = await mountWorkbench(
     interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
   );
-  try {
-    await type(wb.t, " /mo");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
-    await press(wb.t, wb.renderer, "c", { ctrl: true });
-    await type(wb.t, "/model ");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await type(wb.t, " /mo");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  await type(wb.t, "/model ");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
 });
 
 for (const command of ["model", "effort"]) {
@@ -2223,19 +2177,16 @@ for (const command of ["model", "effort"]) {
       const wb = await mountWorkbench(
         interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
       );
-      try {
-        await type(wb.t, `/${command}`);
-        await press(wb.t, wb.renderer, key);
-        assert.match(
-          wb.t.captureCharFrame(),
-          command === "model" ? /1\. Choose a model/ : /2\. Choose effort/,
-        );
-        assert.deepEqual(wb.control.sends, []);
-        await press(wb.t, wb.renderer, "c", { ctrl: true });
-        assert.doesNotMatch(wb.t.captureCharFrame(), /> \/(?:model|effort)/);
-      } finally {
-        wb.t.renderer.destroy();
-      }
+
+      await type(wb.t, `/${command}`);
+      await press(wb.t, wb.renderer, key);
+      assert.match(
+        wb.t.captureCharFrame(),
+        command === "model" ? /1\. Choose a model/ : /2\. Choose effort/,
+      );
+      assert.deepEqual(wb.control.sends, []);
+      await press(wb.t, wb.renderer, "c", { ctrl: true });
+      assert.doesNotMatch(wb.t.captureCharFrame(), /> \/(?:model|effort)/);
     });
   }
 }
@@ -2243,16 +2194,13 @@ for (const command of ["model", "effort"]) {
 for (const command of ["themes", "quit", "exit"]) {
   test(`m10-commands-and-input-rules: /${command} invokes the shell owner`, async () => {
     const wb = await mountWorkbench(interactiveRunOf());
-    try {
-      await type(wb.t, `/${command}`);
-      await press(wb.t, wb.renderer, "return");
-      if (command === "themes")
-        assert.match(wb.t.captureCharFrame(), /Themes · Dark/);
-      else assert.equal(wb.exits.length, 1);
-      assert.deepEqual(wb.control.sends, []);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, `/${command}`);
+    await press(wb.t, wb.renderer, "return");
+    if (command === "themes")
+      assert.match(wb.t.captureCharFrame(), /Themes · Dark/);
+    else assert.equal(wb.exits.length, 1);
+    assert.deepEqual(wb.control.sends, []);
   });
 }
 
@@ -2260,49 +2208,43 @@ test("m10-commands-and-input-rules: drawn prefix loses its Offer before Enter an
   const wb = await mountWorkbench(
     interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER, END_OFFER] }),
   );
-  try {
-    await type(wb.t, "/e");
-    assert.match(wb.t.captureCharFrame(), /› \/effort/);
-    wb.control.setRun(
-      interactiveRunOf({ actionOffers: [SEND_OFFER, END_OFFER] }),
-    );
-    await wb.t.renderOnce();
-    assert.doesNotMatch(wb.t.captureCharFrame(), /› \/end-step/);
-    await press(wb.t, wb.renderer, "return");
-    assert.match(wb.t.captureCharFrame(), /isn't available right now/);
-    assert.deepEqual(wb.control.sends, []);
-    assert.deepEqual(wb.control.ends, []);
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await type(wb.t, "/e");
+  assert.match(wb.t.captureCharFrame(), /› \/effort/);
+  wb.control.setRun(
+    interactiveRunOf({ actionOffers: [SEND_OFFER, END_OFFER] }),
+  );
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /› \/end-step/);
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /isn't available right now/);
+  assert.deepEqual(wb.control.sends, []);
+  assert.deepEqual(wb.control.ends, []);
 });
 
 test("m10-commands-and-input-rules: arrows have single ownership through Port and native field, Tab precedes details", async () => {
   const wb = await mountWorkbench(
     interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER, END_OFFER] }),
   );
-  try {
-    await press(wb.t, wb.renderer, "g", { ctrl: true });
-    await press(wb.t, wb.renderer, "tab");
-    await type(wb.t, "/");
-    wb.renderer.key("down");
-    wb.t.mockInput.pressArrow("down");
-    await wb.t.renderOnce();
-    assert.match(wb.t.captureCharFrame(), /› \/effort/);
-    wb.renderer.key("up");
-    wb.t.mockInput.pressArrow("up");
-    await wb.t.renderOnce();
-    assert.match(wb.t.captureCharFrame(), /› \/model/);
-    await type(wb.t, "mo");
-    assert.match(wb.t.captureCharFrame(), /> \/mo/);
-    wb.renderer.key("tab");
-    wb.t.mockInput.pressKey("\t");
-    await wb.t.renderOnce();
-    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
-    assert.deepEqual(wb.control.sends, []);
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await press(wb.t, wb.renderer, "g", { ctrl: true });
+  await press(wb.t, wb.renderer, "tab");
+  await type(wb.t, "/");
+  wb.renderer.key("down");
+  wb.t.mockInput.pressArrow("down");
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /› \/effort/);
+  wb.renderer.key("up");
+  wb.t.mockInput.pressArrow("up");
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /› \/model/);
+  await type(wb.t, "mo");
+  assert.match(wb.t.captureCharFrame(), /> \/mo/);
+  wb.renderer.key("tab");
+  wb.t.mockInput.pressKey("\t");
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+  assert.deepEqual(wb.control.sends, []);
 });
 
 for (const modal of ["request", "gate", "checkpoint"]) {
@@ -2318,38 +2260,34 @@ for (const modal of ["request", "gate", "checkpoint"]) {
         ],
       }),
     );
-    try {
-      await type(wb.t, "/");
-      assert.match(wb.t.captureCharFrame(), /› \/model/);
-      if (modal === "request") wb.control.setLive(requestOverlay());
-      else if (modal === "gate")
-        wb.control.setRun(
-          freeTextRunOf({
-            actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER, END_OFFER],
-          }),
-        );
-      else
-        wb.control.setRun(
-          blockedRunOf({
-            actionOffers: [MODEL_OFFER, ANSWER_OFFER, END_OFFER],
-          }),
-        );
-      await wb.t.renderOnce();
-      assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
-      await press(wb.t, wb.renderer, "p", { ctrl: true });
-      const frame = wb.t.captureCharFrame();
-      for (const name of ["Model", "Effort", "Themes", "Quit"])
-        assert.ok(frame.includes(name));
-      assert.doesNotMatch(frame, /Confirm ending|Confirm another/);
-      await press(wb.t, wb.renderer, "escape");
-      await press(wb.t, wb.renderer, "return");
-      if (modal === "request") assert.equal(wb.control.requests.length, 1);
-      else if (modal === "checkpoint")
-        assert.equal(wb.control.answers.length, 1);
-      assert.deepEqual(wb.control.sends, []);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, "/");
+    assert.match(wb.t.captureCharFrame(), /› \/model/);
+    if (modal === "request") wb.control.setLive(requestOverlay());
+    else if (modal === "gate")
+      wb.control.setRun(
+        freeTextRunOf({
+          actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER, END_OFFER],
+        }),
+      );
+    else
+      wb.control.setRun(
+        blockedRunOf({
+          actionOffers: [MODEL_OFFER, ANSWER_OFFER, END_OFFER],
+        }),
+      );
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    const frame = wb.t.captureCharFrame();
+    for (const name of ["Model", "Effort", "Themes", "Quit"])
+      assert.ok(frame.includes(name));
+    assert.doesNotMatch(frame, /Confirm ending|Confirm another/);
+    await press(wb.t, wb.renderer, "escape");
+    await press(wb.t, wb.renderer, "return");
+    if (modal === "request") assert.equal(wb.control.requests.length, 1);
+    else if (modal === "checkpoint") assert.equal(wb.control.answers.length, 1);
+    assert.deepEqual(wb.control.sends, []);
   });
 }
 
@@ -2374,29 +2312,25 @@ for (const [width, height] of [
       width,
       height,
     );
-    try {
-      await type(wb.t, "/");
-      await press(wb.t, wb.renderer, "down");
-      for (const [w, h] of [
-        [width, height],
-        [160, 40],
-        [48, 12],
-      ]) {
-        wb.t.resize(w, h);
-        wb.renderer.resize(w, h);
-        await wb.t.renderOnce();
-        const frame = wb.t.captureCharFrame();
-        noOverflow(frame, w);
-        assert.match(frame, /> \//);
-        assert.match(frame, /› \/effort/);
-        assert.match(frame, /enter send Turn/);
-        assert.equal(frame.split("\n")[h - 1]?.trim(), "");
-      }
-      await press(wb.t, wb.renderer, "tab");
-      assert.match(wb.t.captureCharFrame(), /2\. Choose effort/);
-    } finally {
-      wb.t.renderer.destroy();
+
+    await type(wb.t, "/");
+    await press(wb.t, wb.renderer, "down");
+    for (const [w, h] of [
+      [width, height],
+      [160, 40],
+      [48, 12],
+    ]) {
+      resizeWorkbench(wb.t, wb.renderer, w, h);
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      noOverflow(frame, w);
+      assert.match(frame, /> \//);
+      assert.match(frame, /› \/effort/);
+      assert.match(frame, /enter send Turn/);
+      assert.equal(frame.split("\n")[h - 1]?.trim(), "");
     }
+    await press(wb.t, wb.renderer, "tab");
+    assert.match(wb.t.captureCharFrame(), /2\. Choose effort/);
   });
 }
 
@@ -2413,45 +2347,42 @@ for (const state of ["working", "agent", "finished"] as const) {
         ],
       }),
     );
-    try {
-      await type(wb.t, "/");
-      assert.match(wb.t.captureCharFrame(), /\/end-step/);
-      if (state === "working")
-        wb.control.setRun(
-          liveInteractiveRunOf({
-            actionOffers: [
-              INTERRUPT_OFFER,
-              AVAILABLE_STEER_OFFER,
-              MODEL_OFFER,
-              END_OFFER,
-            ],
-          }),
-        );
-      else if (state === "agent")
-        wb.control.setRun(runOf({ actionOffers: [MODEL_OFFER] }));
-      else
-        wb.control.setRun(
-          runOf({ state: "succeeded", actionOffers: [MODEL_OFFER] }),
-        );
-      await wb.t.renderOnce();
-      if (state === "agent") await type(wb.t, "/");
-      assert.doesNotMatch(
-        wb.t.captureCharFrame(),
-        /\/end-step|\/continue|\/end-stage/,
+
+    await type(wb.t, "/");
+    assert.match(wb.t.captureCharFrame(), /\/end-step/);
+    if (state === "working")
+      wb.control.setRun(
+        liveInteractiveRunOf({
+          actionOffers: [
+            INTERRUPT_OFFER,
+            AVAILABLE_STEER_OFFER,
+            MODEL_OFFER,
+            END_OFFER,
+          ],
+        }),
       );
-      if (state !== "finished") {
-        for (const name of ["model", "effort", "themes", "quit"])
-          assert.ok(wb.t.captureCharFrame().includes(`/${name}`));
-      }
-      await press(wb.t, wb.renderer, "p", { ctrl: true });
-      const frame = wb.t.captureCharFrame();
-      assert.ok(frame.includes("Themes") && frame.includes("Quit"));
-      assert.doesNotMatch(frame, /Confirm ending|Confirm another/);
-      if (state === "finished")
-        assert.doesNotMatch(frame, /Change the Run model|Change effort/);
-    } finally {
-      wb.t.renderer.destroy();
+    else if (state === "agent")
+      wb.control.setRun(runOf({ actionOffers: [MODEL_OFFER] }));
+    else
+      wb.control.setRun(
+        runOf({ state: "succeeded", actionOffers: [MODEL_OFFER] }),
+      );
+    await wb.t.renderOnce();
+    if (state === "agent") await type(wb.t, "/");
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /\/end-step|\/continue|\/end-stage/,
+    );
+    if (state !== "finished") {
+      for (const name of ["model", "effort", "themes", "quit"])
+        assert.ok(wb.t.captureCharFrame().includes(`/${name}`));
     }
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    const frame = wb.t.captureCharFrame();
+    assert.ok(frame.includes("Themes") && frame.includes("Quit"));
+    assert.doesNotMatch(frame, /Confirm ending|Confirm another/);
+    if (state === "finished")
+      assert.doesNotMatch(frame, /Change the Run model|Change effort/);
   });
 }
 
@@ -2462,16 +2393,13 @@ for (const text of ["/tmp/x", "/compact", "/unknown skill"]) {
         actionOffers: [INTERRUPT_OFFER, AVAILABLE_STEER_OFFER],
       }),
     );
-    try {
-      await type(wb.t, text);
-      await press(wb.t, wb.renderer, "return");
-      assert.deepEqual(wb.control.steers, [
-        { runId: "run-1", turnId: "turn-7", text },
-      ]);
-      assert.deepEqual(wb.control.sends, []);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, text);
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(wb.control.steers, [
+      { runId: "run-1", turnId: "turn-7", text },
+    ]);
+    assert.deepEqual(wb.control.sends, []);
   });
 }
 
@@ -2480,50 +2408,46 @@ for (const command of ["model", "effort"]) {
     const wb = await mountWorkbench(
       interactiveRunOf({ actionOffers: [SEND_OFFER] }),
     );
-    try {
-      for (const actionOffers of [
-        [SEND_OFFER],
-        [
-          SEND_OFFER,
-          {
-            ...MODEL_OFFER,
-            available: false as const,
-            problem: {
-              code: "checking",
-              explanation: "Checking choices",
-              remediation: "Wait",
-              possibleEffects: "none" as const,
-            },
+
+    for (const actionOffers of [
+      [SEND_OFFER],
+      [
+        SEND_OFFER,
+        {
+          ...MODEL_OFFER,
+          available: false as const,
+          problem: {
+            code: "checking",
+            explanation: "Checking choices",
+            remediation: "Wait",
+            possibleEffects: "none" as const,
           },
-        ],
-        [SEND_OFFER, MODEL_OFFER],
-      ]) {
-        wb.control.setRun(interactiveRunOf({ actionOffers }));
-        if (
-          actionOffers.some(
-            (offer) =>
-              offer.action === "change-model-choice" && offer.available,
-          )
+        },
+      ],
+      [SEND_OFFER, MODEL_OFFER],
+    ]) {
+      wb.control.setRun(interactiveRunOf({ actionOffers }));
+      if (
+        actionOffers.some(
+          (offer) => offer.action === "change-model-choice" && offer.available,
         )
-          wb.control.setFreshness({
-            kind: "catching-up",
-            catchUp: "fresh",
-            lastConfirmedAt: "2026-10-05T00:00:00Z",
-          });
-        await wb.t.renderOnce();
-        await press(wb.t, wb.renderer, "c", { ctrl: true });
-        await type(wb.t, `/${command}`);
-        await press(wb.t, wb.renderer, "return");
-        assert.doesNotMatch(
-          wb.t.captureCharFrame(),
-          /Choose a model|Choose effort/,
-        );
-        assert.match(wb.t.captureCharFrame(), /isn't available right now/);
-        assert.match(wb.t.captureCharFrame(), new RegExp(`> /${command}`));
-        assert.deepEqual(wb.control.sends, []);
-      }
-    } finally {
-      wb.t.renderer.destroy();
+      )
+        wb.control.setFreshness({
+          kind: "catching-up",
+          catchUp: "fresh",
+          lastConfirmedAt: "2026-10-05T00:00:00Z",
+        });
+      await wb.t.renderOnce();
+      await press(wb.t, wb.renderer, "c", { ctrl: true });
+      await type(wb.t, `/${command}`);
+      await press(wb.t, wb.renderer, "return");
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /Choose a model|Choose effort/,
+      );
+      assert.match(wb.t.captureCharFrame(), /isn't available right now/);
+      assert.match(wb.t.captureCharFrame(), new RegExp(`> /${command}`));
+      assert.deepEqual(wb.control.sends, []);
     }
   });
 }
@@ -2532,27 +2456,24 @@ test("m10-commands-and-input-rules: pending Turn admission keeps Slash discovery
   const wb = await mountWorkbench(
     interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
   );
-  try {
-    await type(wb.t, "captured text");
-    await press(wb.t, wb.renderer, "return");
-    await type(wb.t, "/model");
-    assert.match(wb.t.captureCharFrame(), /› \/model/);
-    await press(wb.t, wb.renderer, "return");
-    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
-    wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
-    await wb.t.renderOnce();
-    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
-    await press(wb.t, wb.renderer, "c", { ctrl: true });
-    await type(wb.t, " newer text");
-    await press(wb.t, wb.renderer, "return");
-    assert.deepEqual(wb.control.sends, [
-      { runId: "run-1", stepId: "discuss", text: "captured text" },
-      { runId: "run-1", stepId: "discuss", text: "captured text newer text" },
-    ]);
-    assert.deepEqual(wb.exits, []);
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await type(wb.t, "captured text");
+  await press(wb.t, wb.renderer, "return");
+  await type(wb.t, "/model");
+  assert.match(wb.t.captureCharFrame(), /› \/model/);
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+  wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  await type(wb.t, " newer text");
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends, [
+    { runId: "run-1", stepId: "discuss", text: "captured text" },
+    { runId: "run-1", stepId: "discuss", text: "captured text newer text" },
+  ]);
+  assert.deepEqual(wb.exits, []);
 });
 
 test("m10-workspace-mentions: native caret completion replaces only the token, quotes file ranges and retains surrounding text", async () => {
@@ -2563,23 +2484,17 @@ test("m10-workspace-mentions: native caret completion replaces only the token, q
     status: "available",
     candidates: [{ path: "my file.ts", kind: "file" }],
   });
-  try {
-    await type(wb.t, "before @my#L10-20 after");
-    for (let i = 0; i < 6; i++) wb.t.mockInput.pressArrow("left");
-    await until(() => {
-      void wb.t.renderOnce();
-      return wb.t.captureCharFrame().includes("my file.ts");
-    });
-    await press(wb.t, wb.renderer, "tab");
-    await type(wb.t, "!");
-    await press(wb.t, wb.renderer, "return");
-    assert.equal(
-      wb.control.sends[0]?.text,
-      'before @"my file.ts"#L10-20! after',
-    );
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await type(wb.t, "before @my#L10-20 after");
+  for (let i = 0; i < 6; i++) wb.t.mockInput.pressArrow("left");
+  await until(() => {
+    void wb.t.renderOnce();
+    return wb.t.captureCharFrame().includes("my file.ts");
+  });
+  await press(wb.t, wb.renderer, "tab");
+  await type(wb.t, "!");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, 'before @"my file.ts"#L10-20! after');
 });
 
 async function mentionFrame(
@@ -2604,31 +2519,28 @@ for (const prefix of ["", "漢字 👩‍💻 ", "first\nsecond "]) {
         { path: "my folder", kind: "folder" },
       ],
     });
-    try {
-      if (prefix.includes("\n")) {
-        await type(wb.t, "first");
-        wb.t.mockInput.pressKey("j", { ctrl: true });
-        await type(wb.t, "second ");
-      } else if (prefix !== "") {
-        await wb.t.mockInput.pasteBracketedText(prefix);
-        await wb.t.renderOnce();
-      }
-      await type(wb.t, "@my#L10-20 tail");
-      for (let i = 0; i < 5; i++) wb.t.mockInput.pressArrow("left");
-      await mentionFrame(wb, /› @file.ts/);
-      wb.renderer.key("down");
-      wb.t.mockInput.pressArrow("down");
+
+    if (prefix.includes("\n")) {
+      await type(wb.t, "first");
+      wb.t.mockInput.pressKey("j", { ctrl: true });
+      await type(wb.t, "second ");
+    } else if (prefix !== "") {
+      await wb.t.mockInput.pasteBracketedText(prefix);
       await wb.t.renderOnce();
-      assert.match(wb.t.captureCharFrame(), /› @my folder/);
-      await press(wb.t, wb.renderer, "return");
-      assert.equal(wb.control.sends.length, 0);
-      assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
-      await type(wb.t, "!");
-      await press(wb.t, wb.renderer, "return");
-      assert.equal(wb.control.sends[0]?.text, `${prefix}@"my folder/"! tail`);
-    } finally {
-      wb.t.renderer.destroy();
     }
+    await type(wb.t, "@my#L10-20 tail");
+    for (let i = 0; i < 5; i++) wb.t.mockInput.pressArrow("left");
+    await mentionFrame(wb, /› @file.ts/);
+    wb.renderer.key("down");
+    wb.t.mockInput.pressArrow("down");
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /› @my folder/);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends.length, 0);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
+    await type(wb.t, "!");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, `${prefix}@"my folder/"! tail`);
   });
 }
 
@@ -2645,16 +2557,13 @@ for (const text of [
     const wb = await mountWorkbench(
       interactiveRunOf({ actionOffers: [SEND_OFFER] }),
     );
-    try {
-      await type(wb.t, text);
-      if (!text.startsWith("email") && !text.startsWith("word"))
-        await mentionFrame(wb, /No path suggestions/);
-      else assert.doesNotMatch(wb.t.captureCharFrame(), /Searching Workspace/);
-      await press(wb.t, wb.renderer, "return");
-      assert.equal(wb.control.sends[0]?.text, text);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, text);
+    if (!text.startsWith("email") && !text.startsWith("word"))
+      await mentionFrame(wb, /No path suggestions/);
+    else assert.doesNotMatch(wb.t.captureCharFrame(), /Searching Workspace/);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, text);
   });
 }
 
@@ -2671,17 +2580,14 @@ for (const working of [false, true]) {
       status: "unavailable",
       cause: new Error("search failed"),
     });
-    try {
-      await type(wb.t, "please @missing");
-      await mentionFrame(wb, /Path search unavailable/);
-      await press(wb.t, wb.renderer, "return");
-      assert.equal(
-        (working ? wb.control.steers : wb.control.sends)[0]?.text,
-        "please @missing",
-      );
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, "please @missing");
+    await mentionFrame(wb, /Path search unavailable/);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(
+      (working ? wb.control.steers : wb.control.sends)[0]?.text,
+      "please @missing",
+    );
   });
 }
 
@@ -2693,18 +2599,15 @@ for (const text of [" /MoDeL @src", "/continue @src", "/themes @src"]) {
     wb.control.view.searchWorkspacePaths = async () => {
       assert.fail("known command must suppress search");
     };
-    try {
-      await type(wb.t, text);
-      await press(wb.t, wb.renderer, "return");
-      assert.match(wb.t.captureCharFrame(), /doesn't accept inline arguments/);
-      assert.doesNotMatch(
-        wb.t.captureCharFrame(),
-        /Workspace paths|path suggestions/,
-      );
-      assert.equal(wb.control.sends.length, 0);
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, text);
+    await press(wb.t, wb.renderer, "return");
+    assert.match(wb.t.captureCharFrame(), /doesn't accept inline arguments/);
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /Workspace paths|path suggestions/,
+    );
+    assert.equal(wb.control.sends.length, 0);
   });
 }
 
@@ -2716,17 +2619,14 @@ test("m10-workspace-mentions: Escape preserves draft and unknown Slash permits a
     status: "available",
     candidates: [{ path: "src/a.ts", kind: "file" }],
   });
-  try {
-    await type(wb.t, "/unknown @src");
-    await mentionFrame(wb, /› @src\/a.ts/);
-    await press(wb.t, wb.renderer, "escape");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
-    assert.deepEqual(wb.exits, []);
-    await press(wb.t, wb.renderer, "return");
-    assert.equal(wb.control.sends[0]?.text, "/unknown @src");
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await type(wb.t, "/unknown @src");
+  await mentionFrame(wb, /› @src\/a.ts/);
+  await press(wb.t, wb.renderer, "escape");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
+  assert.deepEqual(wb.exits, []);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, "/unknown @src");
 });
 
 for (const change of [
@@ -2747,52 +2647,48 @@ for (const change of [
     }[] = [];
     wb.control.view.searchWorkspacePaths = (input) =>
       new Promise((resolve) => pending.push({ input, resolve }));
-    try {
-      await type(wb.t, "@old");
-      await until(() => pending.length === 1);
-      if (change === "query") await type(wb.t, "new");
-      if (change === "token") await type(wb.t, " @old");
-      if (change === "Workspace")
-        wb.control.setSnapshot(
-          snapshotOf(
-            interactiveRunOf({
-              workspacePath: "/new/workspace",
-              actionOffers: [SEND_OFFER],
-            }),
-          ),
-        );
-      if (change === "caret-leaves") wb.t.mockInput.pressKey("HOME");
-      if (change === "request") wb.control.setLive(requestOverlay());
-      if (change === "gate")
-        wb.control.setSnapshot(snapshotOf(freeTextRunOf()));
-      await wb.t.renderOnce();
-      if (["query", "token", "Workspace"].includes(change))
-        await until(() => pending.length === 2);
-      pending[0]?.resolve({
+
+    await type(wb.t, "@old");
+    await until(() => pending.length === 1);
+    if (change === "query") await type(wb.t, "new");
+    if (change === "token") await type(wb.t, " @old");
+    if (change === "Workspace")
+      wb.control.setSnapshot(
+        snapshotOf(
+          interactiveRunOf({
+            workspacePath: "/new/workspace",
+            actionOffers: [SEND_OFFER],
+          }),
+        ),
+      );
+    if (change === "caret-leaves") wb.t.mockInput.pressKey("HOME");
+    if (change === "request") wb.control.setLive(requestOverlay());
+    if (change === "gate") wb.control.setSnapshot(snapshotOf(freeTextRunOf()));
+    await wb.t.renderOnce();
+    if (["query", "token", "Workspace"].includes(change))
+      await until(() => pending.length === 2);
+    pending[0]?.resolve({
+      status: "available",
+      candidates: [{ path: "obsolete.ts", kind: "file" }],
+    });
+    await wb.t.renderOnce();
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /obsolete.ts/);
+    if (pending[1]) {
+      pending[1].resolve({
         status: "available",
-        candidates: [{ path: "obsolete.ts", kind: "file" }],
+        candidates: [{ path: "current.ts", kind: "file" }],
       });
-      await wb.t.renderOnce();
-      await wb.t.renderOnce();
-      assert.doesNotMatch(wb.t.captureCharFrame(), /obsolete.ts/);
-      if (pending[1]) {
-        pending[1].resolve({
-          status: "available",
-          candidates: [{ path: "current.ts", kind: "file" }],
-        });
-        await mentionFrame(wb, /› @current.ts/);
-        assert.equal(
-          pending[1].input.workspacePath,
-          change === "Workspace" ? "/new/workspace" : "/tmp/ws",
-        );
-      } else
-        assert.doesNotMatch(
-          wb.t.captureCharFrame(),
-          /Searching Workspace|enter\/tab insert/,
-        );
-    } finally {
-      wb.t.renderer.destroy();
-    }
+      await mentionFrame(wb, /› @current.ts/);
+      assert.equal(
+        pending[1].input.workspacePath,
+        change === "Workspace" ? "/new/workspace" : "/tmp/ws",
+      );
+    } else
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /Searching Workspace|enter\/tab insert/,
+      );
   });
 }
 
@@ -2813,24 +2709,20 @@ for (const [width, height] of [
         kind: "file",
       })),
     });
-    try {
-      await type(wb.t, "@path");
-      await mentionFrame(wb, /› @path-0.ts/);
-      for (let i = 0; i < 9; i++) await press(wb.t, wb.renderer, "down");
-      assert.match(wb.t.captureCharFrame(), /› @path-9.ts/);
-      noOverflow(wb.t.captureCharFrame(), width);
-      wb.t.resize(width + 10, height + 3);
-      wb.renderer.resize(width + 10, height + 3);
-      await wb.t.renderOnce();
-      assert.match(wb.t.captureCharFrame(), /› @path-9.ts/);
-      noOverflow(wb.t.captureCharFrame(), width + 10);
-      await press(wb.t, wb.renderer, "tab");
-      await type(wb.t, " done");
-      await press(wb.t, wb.renderer, "return");
-      assert.equal(wb.control.sends[0]?.text, "@path-9.ts done");
-    } finally {
-      wb.t.renderer.destroy();
-    }
+
+    await type(wb.t, "@path");
+    await mentionFrame(wb, /› @path-0.ts/);
+    for (let i = 0; i < 9; i++) await press(wb.t, wb.renderer, "down");
+    assert.match(wb.t.captureCharFrame(), /› @path-9.ts/);
+    noOverflow(wb.t.captureCharFrame(), width);
+    resizeWorkbench(wb.t, wb.renderer, width + 10, height + 3);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /› @path-9.ts/);
+    noOverflow(wb.t.captureCharFrame(), width + 10);
+    await press(wb.t, wb.renderer, "tab");
+    await type(wb.t, " done");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, "@path-9.ts done");
   });
 }
 
@@ -2846,14 +2738,11 @@ test("m10-workspace-mentions: a hash inside a quoted file path is not its textua
       candidates: [{ path: "a#b c.ts", kind: "file" }],
     };
   };
-  try {
-    await type(wb.t, '@"a#b c.ts"#L10-20');
-    await mentionFrame(wb, /› @a#b c.ts/);
-    assert.deepEqual(queries, ["a#b c.ts"]);
-    await press(wb.t, wb.renderer, "tab");
-    await press(wb.t, wb.renderer, "return");
-    assert.equal(wb.control.sends[0]?.text, '@"a#b c.ts"#L10-20');
-  } finally {
-    wb.t.renderer.destroy();
-  }
+
+  await type(wb.t, '@"a#b c.ts"#L10-20');
+  await mentionFrame(wb, /› @a#b c.ts/);
+  assert.deepEqual(queries, ["a#b c.ts"]);
+  await press(wb.t, wb.renderer, "tab");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, '@"a#b c.ts"#L10-20');
 });

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import {
   App,
@@ -20,7 +19,7 @@ import {
   inertRunWorkbenchView,
   runSummary,
 } from "./inert.js";
-import { makeFakeRenderer, until } from "./renderer-fixture.js";
+import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import { createApplication } from "../helpers/application.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -80,7 +79,7 @@ async function mount(
       throw new Error("no Bundle focus in this fixture");
     },
   };
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={

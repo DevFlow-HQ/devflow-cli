@@ -1,7 +1,6 @@
 import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { testRender } from "@opentui/solid";
 import { TextAttributes } from "@opentui/core";
 import { createSignal } from "solid-js";
 import { App, createLiveRunLaunchView } from "../../src/tui/tui.js";
@@ -15,7 +14,7 @@ import type {
   RunWorkbenchView,
   WorkspaceView,
 } from "../../src/tui/tui.js";
-import { makeFakeRenderer, until } from "./renderer-fixture.js";
+import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
 import type {
   BundleCatalogSnapshot,
   BundleFocusSelector,
@@ -67,7 +66,7 @@ import type {
 // tuning (the check settling into the model control or the unavailable block, and
 // Esc back to the list mid-check), meaning without colour (the glyph and the
 // checking words in character frames, the fill and bold in spans), and renderer
-// evidence through `testRender` with the fake Renderer Port.
+// evidence through `mountRenderer` with the fake Renderer Port.
 //
 // #349 renderer evidence: the guided model and effort stages, per-model resets,
 // suggested aliases and native Other input, effort locks and absence, held keys,
@@ -87,7 +86,7 @@ import type {
 // preselection and check (asking for a model when it has none), and Start holds
 // through every fresh check and submits only the current ready Offer), and meaning without colour
 // (the `›` glyph in character frames, bold in spans). Renderer and platform
-// evidence: these run through `testRender` with the fake Renderer Port on all
+// evidence: these run through `mountRenderer` with the fake Renderer Port on all
 // three CI platforms; no renderer or pin changed.
 
 const WORKSPACE = "/tmp/secant-launch-workspace";
@@ -811,7 +810,7 @@ async function mountFlow(
   kittyKeyboard = false,
 ) {
   const exits: unknown[] = [];
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}
@@ -839,7 +838,7 @@ async function mountFlow(
   return { t, exits };
 }
 
-async function chooseGuided(t: Awaited<ReturnType<typeof testRender>>) {
+async function chooseGuided(t: Awaited<ReturnType<typeof mountRenderer>>) {
   t.mockInput.pressEnter();
   await t.waitForFrame((f) => f.includes("2. Choose effort"));
   t.mockInput.pressEnter();

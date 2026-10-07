@@ -1,7 +1,6 @@
 import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { testRender } from "@opentui/solid";
 import { createRoot, createSignal } from "solid-js";
 import stringWidth from "string-width";
 import { App, createLiveRunListView } from "../../src/tui/tui.js";
@@ -19,7 +18,7 @@ import {
   inertLaunchPreparationView,
   runSummary,
 } from "./inert.js";
-import { makeFakeRenderer, until } from "./renderer-fixture.js";
+import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
 import type {
   BundleCatalogSnapshot,
   ProjectionPort,
@@ -354,7 +353,7 @@ async function mountHome(options: MountOptions = {}) {
   const height = options.height ?? 40;
   const renderer = makeFakeRenderer(width, height);
   const exits: unknown[] = [];
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}

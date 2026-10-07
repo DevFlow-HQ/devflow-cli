@@ -207,6 +207,11 @@ jobs:
           tests/application/projection-port.test.ts
           tests/headless/interactive-agent.test.ts
           tests/process/conformance.test.ts
+      - name: m12-renderer-test-lifecycle
+        run: >-
+          bun run test --
+          -t '^m12-renderer-test-lifecycle(:|$)'
+          tests/tui/renderer-lifecycle.test.tsx
       - name: Test
         run: bun run test
       - name: Build

@@ -7,6 +7,7 @@ import type {
   SessionHistoryRow,
 } from "../../src/application/projection-port.js";
 import {
+  resizeWorkbench,
   runOf,
   events,
   onWorkbench,
@@ -74,7 +75,7 @@ test("the panel drops the long executable path to stay readable at small widths 
     100,
     30,
   );
-  renderer.resize(70, 30);
+  resizeWorkbench(t, renderer, 70, 30);
   await t.renderOnce();
   await press(t, renderer, "g", { ctrl: true });
   const compact = t.captureCharFrame();
@@ -353,7 +354,7 @@ test("a halted Run shows the materialization conflict path as a top-level line, 
   // The Workspace path to restore is a top-level line, not only a details-panel
   // row reachable at width ≥ 60 (A13).
   assert.match(t.captureCharFrame(), /restore sub\/out\.txt/);
-  renderer.resize(40, 24);
+  resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   const frame = t.captureCharFrame();
   assert.match(frame, /restore sub\/out\.txt/); // still shown at 40 columns
@@ -380,7 +381,7 @@ test("a selected-Harness preparation Problem is visible without colour and survi
   assert.match(frame, /Log in separately through Codex/);
   // A halted Run carries its resting prose beside the state word (#194 story 38).
   assert.match(frame, /Execution stopped outside the Workflow\./);
-  renderer.resize(40, 24);
+  resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   frame = t.captureCharFrame();
   assert.match(frame, /selected-harness-unavailable/);
@@ -540,8 +541,7 @@ for (const kind of ["transcript", "output"] as const) {
       content: "WRONG_RESOURCE",
     });
     wb.control.setRun({ ...run, outputs: [added, ...run.outputs] });
-    wb.t.resize(40, 12);
-    wb.renderer.resize(40, 12);
+    resizeWorkbench(wb.t, wb.renderer, 40, 12);
     await wb.t.renderOnce();
     await press(wb.t, wb.renderer, "escape");
     assert.match(wb.t.captureCharFrame(), /Details · Resources/);
@@ -551,8 +551,7 @@ for (const kind of ["transcript", "output"] as const) {
       kind === "transcript" ? /HELD_TRANSCRIPT/ : /HELD_OUTPUT/,
     );
     assert.doesNotMatch(wb.t.captureCharFrame(), /WRONG_RESOURCE/);
-    wb.t.resize(100, 40);
-    wb.renderer.resize(100, 40);
+    resizeWorkbench(wb.t, wb.renderer, 100, 40);
     await wb.t.renderOnce();
     await press(wb.t, wb.renderer, "escape");
     assert.match(wb.t.captureCharFrame(), /› Details/);
@@ -661,8 +660,7 @@ test("m10-session-history: tool rows expose color-independent outcomes, input an
     outcome: { kind: "unconfirmed" },
   });
   control.setHistory(page([...rows, long]));
-  t.resize(40, 14);
-  renderer.resize(40, 14);
+  resizeWorkbench(t, renderer, 40, 14);
   await t.renderOnce();
   await press(t, renderer, "end", { alt: true });
   assert.match(t.captureCharFrame(), /END/);
@@ -736,8 +734,7 @@ test("m10-session-history: Thought collapse, keyboard expansion, final replaceme
   assert.match(wb.t.captureCharFrame(), /Thought.*incomplete/);
   assert.doesNotMatch(wb.t.captureCharFrame(), /Thinking|Full body only/);
   assert.match(wb.t.captureCharFrame(), /Authoritative replacement/);
-  wb.t.resize(40, 26);
-  wb.renderer.resize(40, 26);
+  resizeWorkbench(wb.t, wb.renderer, 40, 26);
   await wb.t.renderOnce();
   noOverflow(wb.t.captureCharFrame(), 40);
   assert.match(wb.t.captureCharFrame(), /Authoritative replacement/);
@@ -752,8 +749,7 @@ test("m10-session-history: Thought collapse, keyboard expansion, final replaceme
   await wb.t.mockMouse.click(10, heading);
   await wb.t.renderOnce();
   assert.match(wb.t.captureCharFrame(), /Authoritative replacement/);
-  wb.t.resize(100, 26);
-  wb.renderer.resize(100, 26);
+  resizeWorkbench(wb.t, wb.renderer, 100, 26);
   wb.control.setHistory(
     page("stored", "Thinking through options\nA complete summary body"),
   );
@@ -910,15 +906,13 @@ test("m10-session-history: cumulative diff collapse and keyboard/click inspectio
   );
   assert.deepEqual(wb.exits, []);
   assert.equal(wb.t.captureCharFrame(), beforeQuit);
-  wb.t.resize(40, 12);
-  wb.renderer.resize(40, 12);
+  resizeWorkbench(wb.t, wb.renderer, 40, 12);
   await wb.t.renderOnce();
   noOverflow(wb.t.captureCharFrame(), 40);
   await press(wb.t, wb.renderer, "end");
   assert.match(wb.t.captureCharFrame(), /DIFF_LAST/);
   await press(wb.t, wb.renderer, "escape");
-  wb.t.resize(100, 26);
-  wb.renderer.resize(100, 26);
+  resizeWorkbench(wb.t, wb.renderer, 100, 26);
   await wb.t.renderOnce();
   const heading = wb.t
     .captureCharFrame()
@@ -1125,8 +1119,7 @@ for (const appearance of ["dark", "light"] as const)
     await wb.t.renderOnce();
     assert.match(wb.t.captureCharFrame(), /FINAL_13/);
     await press(wb.t, wb.renderer, "o", { ctrl: true });
-    wb.t.resize(40, 44);
-    wb.renderer.resize(40, 44);
+    resizeWorkbench(wb.t, wb.renderer, 40, 44);
     wb.control.setHistory(
       page(
         "preview",
@@ -1136,8 +1129,7 @@ for (const appearance of ["dark", "light"] as const)
     await wb.t.renderOnce();
     assert.match(wb.t.captureCharFrame(), /2 hidden lines/);
     noOverflow(wb.t.captureCharFrame(), 40);
-    wb.t.resize(32, 12);
-    wb.renderer.resize(32, 12);
+    resizeWorkbench(wb.t, wb.renderer, 32, 12);
     await wb.t.renderOnce();
     noOverflow(wb.t.captureCharFrame(), 32);
   });

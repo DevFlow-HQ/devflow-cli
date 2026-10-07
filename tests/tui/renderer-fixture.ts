@@ -1,3 +1,6 @@
+import { afterEach } from "node:test";
+import { testRender } from "@opentui/solid";
+
 import type {
   RendererKeyEvent,
   RendererPort,
@@ -69,4 +72,22 @@ export async function until(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Condition not met within the time budget.");
+}
+
+const mountedRenderers = new Set<
+  Awaited<ReturnType<typeof testRender>>["renderer"]
+>();
+
+afterEach(() => {
+  for (const renderer of mountedRenderers) {
+    mountedRenderers.delete(renderer);
+    renderer.destroy();
+  }
+});
+
+/** Own each captured renderer before callers await their first frame. */
+export async function mountRenderer(...args: Parameters<typeof testRender>) {
+  const setup = await testRender(...args);
+  mountedRenderers.add(setup.renderer);
+  return setup;
 }

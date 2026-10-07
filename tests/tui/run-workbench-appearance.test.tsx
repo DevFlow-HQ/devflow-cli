@@ -1,13 +1,18 @@
 import { PALETTES } from "./palette-expectations.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { until } from "./renderer-fixture.js";
+import { makeFakeRenderer, until } from "./renderer-fixture.js";
 import {
+  resizeWorkbench,
   runOf,
   events,
   wrappingEvents,
   blockedRunOf,
   mountWorkbench,
+  mountApp,
+  makeRunView,
+  snapshotOf,
+  workbenchShown,
   press,
   type,
   noOverflow,
@@ -71,10 +76,10 @@ test("[selected-versus-observed-evidence] selected and observed Harness facts st
 
   // Below the panel's width breakpoint the panel hides (its facts with it), but the
   // screen still relays out without overflow.
-  renderer.resize(40, 24);
+  resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   noOverflow(t.captureCharFrame(), 40);
-  renderer.resize(110, 24);
+  resizeWorkbench(t, renderer, 110, 24);
   await t.renderOnce();
 
   control.setRun(
@@ -168,8 +173,7 @@ test("m10-workbench-interaction: the sidebar shows at 121 columns, the meta row 
   noOverflow(wide, 121);
 
   // 120 columns: no sidebar; the prompt's meta row names Step and Model choice.
-  t.resize(120, 30);
-  renderer.resize(120, 30);
+  resizeWorkbench(t, renderer, 120, 30);
   await t.renderOnce();
   const boundary = t.captureCharFrame();
   assert.doesNotMatch(boundary, /Alpha Flow/);
@@ -177,16 +181,14 @@ test("m10-workbench-interaction: the sidebar shows at 121 columns, the meta row 
   noOverflow(boundary, 120);
 
   await press(t, renderer, "g", { ctrl: true });
-  t.resize(70, 30);
-  renderer.resize(70, 30);
+  resizeWorkbench(t, renderer, 70, 30);
   await t.renderOnce();
   const compact = t.captureCharFrame();
   assert.match(compact, /Workspace:/);
   noOverflow(compact, 70);
 
   // Below the details breakpoint the inline panel gives way to the focused list.
-  t.resize(50, 30);
-  renderer.resize(50, 30);
+  resizeWorkbench(t, renderer, 50, 30);
   await t.renderOnce();
   const narrow = t.captureCharFrame();
   assert.doesNotMatch(narrow, /Workspace:/);
@@ -210,14 +212,14 @@ test("a live-state Run shows no Run id or process at any width; the id shows onc
     );
     // The panel is closed, so the whole frame stands for the everyday screen.
     for (const width of [140, 100, 70, 50]) {
-      renderer.resize(width, 40);
+      resizeWorkbench(t, renderer, width, 40);
       await t.renderOnce();
       const frame = t.captureCharFrame();
       assert.doesNotMatch(frame, /run-1/, `${state} at ${width}: no Run id`);
       assert.doesNotMatch(frame, /4101|process/, `${state} at ${width}`);
       assert.doesNotMatch(frame, /live in|not live/, `${state} at ${width}`);
     }
-    renderer.resize(140, 40);
+    resizeWorkbench(t, renderer, 140, 40);
     await t.renderOnce();
     // The sidebar names the state in words.
     assert.match(
@@ -236,7 +238,7 @@ test("a live-state Run shows no Run id or process at any width; the id shows onc
         timeline: events(60),
       }),
     );
-    renderer.resize(100, 40);
+    resizeWorkbench(t, renderer, 100, 40);
     await t.waitForFrame((f) => f.includes("halted"));
     const resting = t.captureCharFrame();
     assert.match(
@@ -244,7 +246,7 @@ test("a live-state Run shows no Run id or process at any width; the id shows onc
       /⏸ Run run-1 halted · Execution stopped outside the Workflow\./,
     );
     assert.match(resting, /\^G details · \^P commands · esc back/);
-    renderer.resize(50, 40);
+    resizeWorkbench(t, renderer, 50, 40);
     await t.renderOnce();
     assert.match(t.captureCharFrame(), /⏸ Run run-1 halted/);
   }
@@ -252,7 +254,7 @@ test("a live-state Run shows no Run id or process at any width; the id shows onc
   for (const state of ["failed", "succeeded", "cancelled"] as const) {
     const { t, renderer } = await mountWorkbench(runOf({ state }));
     assert.match(t.captureCharFrame(), /^\s*Run run-1\s*$/m);
-    renderer.resize(60, 40);
+    resizeWorkbench(t, renderer, 60, 40);
     await t.renderOnce();
     const compact = t.captureCharFrame();
     assert.match(compact, /^\s*Run run-1\s*$/m, `${state} compact`);
@@ -277,7 +279,7 @@ test("a resting Run's long id clips with an ellipsis in its outcome and the deta
   assert.equal(clipped.length, 2); // the outcome's Run line and the panel's Run row
 
   await press(t, renderer, "escape"); // focus returns to the outcome
-  renderer.resize(50, 30);
+  resizeWorkbench(t, renderer, 50, 30);
   await t.renderOnce();
   const narrow = t.captureCharFrame();
   noOverflow(narrow, 50);
@@ -292,7 +294,7 @@ test("resize relayouts the timeline without overflow and keeps every state reada
   );
   noOverflow(t.captureCharFrame(), 90);
   assert.match(t.captureCharFrame(), /✗ Run failed/); // word, not just colour
-  renderer.resize(60, 18);
+  resizeWorkbench(t, renderer, 60, 18);
   await t.renderOnce();
   noOverflow(t.captureCharFrame(), 60);
   assert.match(t.captureCharFrame(), /✗ Run failed/);
@@ -372,7 +374,7 @@ test("m10-audit-workbench-test-domains: who holds the Turn reads in words and gl
 
   // Clipped narrow, the working label still names the agent before its ellipsis;
   // its glyph and words differ from the human's move, so colour is never the signal.
-  wb.renderer.resize(40, 16);
+  resizeWorkbench(wb.t, wb.renderer, 40, 16);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
   assert.match(frame, /◆ The agent is working/);
@@ -383,7 +385,7 @@ test("m10-audit-workbench-test-domains: who holds the Turn reads in words and gl
   await wb.t.renderOnce();
   assert.match(wb.t.captureCharFrame(), /◇ Your move/);
   noOverflow(wb.t.captureCharFrame(), 40);
-  wb.renderer.resize(100, 24);
+  resizeWorkbench(wb.t, wb.renderer, 100, 24);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
   assert.match(frame, /◇ Your move — the agent is waiting for your next Turn/);
@@ -539,14 +541,14 @@ test("the scanner and its words fit a small terminal, long history, and a resize
   noOverflow(frame, 40);
 
   const wb = await mountWorkbench(liveInteractiveRunOf(), 100, 24, okActions());
-  wb.renderer.resize(40, 16);
+  resizeWorkbench(wb.t, wb.renderer, 40, 16);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
   assert.match(frame, /^ {3}working · esc esc interrupt — /m);
   assert.doesNotMatch(frame, /[■⬝]/);
   assert.match(frame, /◆ The agent is working/);
   noOverflow(frame, 40);
-  wb.renderer.resize(100, 24);
+  resizeWorkbench(wb.t, wb.renderer, 100, 24);
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
   assert.match(
@@ -654,10 +656,10 @@ test("on a narrow row the detail clips first, then the mark yields so the interr
   const line = () => workingLine(wb.t.captureCharFrame());
   // Exact, not just within width: a one-column overrun would wrap the ellipsis.
   assert.match(line(), /^ {3}[■⬝]{8} working · esc esc interrupt…$/);
-  wb.renderer.resize(40, 16);
+  resizeWorkbench(wb.t, wb.renderer, 40, 16);
   await wb.t.renderOnce();
   assert.equal(line(), "   working · esc esc interrupt — stop …");
-  wb.renderer.resize(41, 16);
+  resizeWorkbench(wb.t, wb.renderer, 41, 16);
   await wb.t.renderOnce();
   assert.match(line(), /^ {3}[■⬝]{8} working · esc esc interrupt…$/);
 
@@ -709,24 +711,20 @@ test("[windows-cleanup-notice] the Workbench shows one informational notice acro
     "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.";
   const run = runOf({ windowsCleanupNotice: notice });
   const { t, control, renderer } = await mountWorkbench(run, 40, 16);
-  try {
-    for (const width of [40, 70, 110, 40]) {
-      t.resize(width, 16);
-      renderer.resize(width, 16);
-      control.setRun({ ...run });
-      await t.renderOnce();
-      const frame = t.captureCharFrame();
-      const text = frame.replace(/\s+/g, " ");
-      assert.equal(text.match(/Info: Secant/g)?.length, 1);
-      assert.match(
-        text,
-        /Secant will use its usual Windows cleanup\. Some tool processes may continue after you stop or close it\./,
-      );
-      assert.doesNotMatch(text, /Warning/);
-      noOverflow(frame, width);
-    }
-  } finally {
-    t.renderer.destroy();
+
+  for (const width of [40, 70, 110, 40]) {
+    resizeWorkbench(t, renderer, width, 16);
+    control.setRun({ ...run });
+    await t.renderOnce();
+    const frame = t.captureCharFrame();
+    const text = frame.replace(/\s+/g, " ");
+    assert.equal(text.match(/Info: Secant/g)?.length, 1);
+    assert.match(
+      text,
+      /Secant will use its usual Windows cleanup\. Some tool processes may continue after you stop or close it\./,
+    );
+    assert.doesNotMatch(text, /Warning/);
+    noOverflow(frame, width);
   }
 });
 
@@ -759,7 +757,7 @@ for (const [width, height] of [
     assert.match(t.captureCharFrame(), /\^G details/);
     await press(t, renderer, "up", { alt: true });
     assert.match(t.captureCharFrame(), /Jump to latest/);
-    renderer.resize(width + 2, height);
+    resizeWorkbench(t, renderer, width + 2, height);
     await t.renderOnce();
     await press(t, renderer, "end", { alt: true });
     assert.doesNotMatch(
@@ -807,15 +805,13 @@ test("m10-home-and-preferences: all 25×2 previews recolor the mounted Workbench
     await press(wb.t, wb.renderer, "escape");
     assert.deepEqual(header(), initial);
   }
-  wb.t.resize(40, 16);
-  wb.renderer.resize(40, 16);
+  resizeWorkbench(wb.t, wb.renderer, 40, 16);
   await wb.t.renderOnce();
   await openAppThemes(wb);
   await type(wb.t, "zenburn");
   await press(wb.t, wb.renderer, "return");
   noOverflow(wb.t.captureCharFrame(), 40);
-  wb.t.resize(140, 32);
-  wb.renderer.resize(140, 32);
+  resizeWorkbench(wb.t, wb.renderer, 140, 32);
   await wb.t.renderOnce();
   assert.deepEqual(
     header(),
@@ -824,8 +820,14 @@ test("m10-home-and-preferences: all 25×2 previews recolor the mounted Workbench
 });
 
 test("m10-home-and-preferences: Workbench picker size and resize come from the Renderer Port", async () => {
-  const wb = await mountWorkbench(
-    runOf(),
+  // Start with independent geometry to prove its source without a partial resize.
+  // The captured canvas has rows below the Port's advertised boundary.
+  const control = makeRunView(snapshotOf(runOf()));
+  const renderer = makeFakeRenderer(40, 16);
+  const { t, exits } = await mountApp(
+    control,
+    renderer,
+    "run-1",
     100,
     40,
     undefined,
@@ -833,10 +835,9 @@ test("m10-home-and-preferences: Workbench picker size and resize come from the R
     0,
     previewPreferences(),
   );
-  // Change only the Port to prove the source of geometry. The physical canvas
-  // stays large so it also catches drawing below the Port's advertised boundary.
-  wb.renderer.resize(40, 16);
-  await wb.t.renderOnce();
+  const wb = { t, exits, control, renderer };
+  await t.waitForFrame(workbenchShown);
+  assert.equal(t.captureSpans().rows, 40);
   await openAppThemes(wb);
   const narrow = wb.t.captureCharFrame();
   assert.match(narrow, /Themes · Dark/);
@@ -846,7 +847,7 @@ test("m10-home-and-preferences: Workbench picker size and resize come from the R
       .slice(16)
       .every((line) => !/Preview theme|tab Dark/.test(line)),
   );
-  wb.renderer.resize(100, 40);
+  resizeWorkbench(wb.t, wb.renderer, 100, 40);
   await wb.t.renderOnce();
   const wide = wb.t.captureCharFrame();
   assert.ok(

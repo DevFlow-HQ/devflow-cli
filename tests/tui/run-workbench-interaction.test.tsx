@@ -30,6 +30,7 @@ import type {
   ResumeRunOffer,
 } from "../../src/application/projection-port.js";
 import {
+  resizeWorkbench,
   makeRunView,
   snapshotOf,
   runOf,
@@ -107,7 +108,6 @@ test("m10-workbench-interaction: the headerless conversation, sidebar, and meta 
   assert.match(frame, /○ Run created/); // timeline events in plain words
   assert.match(frame, /▸ Step Attempt passed/);
   assert.equal(timelineLines(frame)[0]!.trim().startsWith("Beginning"), true);
-  wide.t.renderer.destroy();
 
   // At 120 columns or less the current Step moves into the prompt's meta row.
   const narrow = await mountWorkbench(facts, 100, 30);
@@ -499,7 +499,7 @@ test("the checkpoint interaction fits small widths without overflow and states b
   noOverflow(frame, 100);
   assert.match(frame, /grant one more review interval/); // continue consequence, plain text
   assert.match(frame, /end the Run failed/); // stop consequence, plain text
-  renderer.resize(40, 24);
+  resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   frame = t.captureCharFrame();
   noOverflow(frame, 40);
@@ -1450,7 +1450,7 @@ test("Esc means deny in a request, interrupt-arm during a live Turn, and leave w
 test("the request control fits small widths without overflow and reads without colour", async () => {
   const mounted = await mountWithRequest();
   noOverflow(mounted.t.captureCharFrame(), 100);
-  mounted.renderer.resize(40, 24);
+  resizeWorkbench(mounted.t, mounted.renderer, 40, 24);
   await mounted.t.renderOnce();
   const frame = mounted.t.captureCharFrame();
   noOverflow(frame, 40);
@@ -1514,8 +1514,7 @@ for (const [width, height] of [
     );
     const newWidth = width === 60 ? 140 : 60;
     const newHeight = height === 24 ? 44 : 24;
-    wb.t.resize(newWidth, newHeight);
-    wb.renderer.resize(newWidth, newHeight);
+    resizeWorkbench(wb.t, wb.renderer, newWidth, newHeight);
     await wb.t.renderOnce();
     await press(wb.t, wb.renderer, "end", { alt: true });
     assert.match(wb.t.captureCharFrame(), /Step ended by the agent/);
@@ -1554,8 +1553,7 @@ for (const [width, height] of [
       [newWidth, newHeight],
       [width, height],
     ] as const) {
-      wb.t.resize(w, h);
-      wb.renderer.resize(w, h);
+      resizeWorkbench(wb.t, wb.renderer, w, h);
       // A re-pushed snapshot replaces the stable-key tail row, never repeats it.
       wb.control.setRun({ ...held });
       await wb.t.renderOnce();
@@ -1797,8 +1795,7 @@ for (const ending of [
     // and the bottom region counts every wrapped row: the warning ends on the
     // last interior row, with the draft's field above it.
     for (const width of [48, 100, 160]) {
-      wb.renderer.resize(width, 32);
-      wb.t.resize(width, 32);
+      resizeWorkbench(wb.t, wb.renderer, width, 32);
       await wb.t.renderOnce();
       const frame = wb.t.captureCharFrame();
       noOverflow(frame, width);
@@ -2019,8 +2016,7 @@ for (const interactive of [false, true]) {
     assert.match(wb.t.captureCharFrame(), /ORIGINAL Turn consequence/);
     assert.doesNotMatch(wb.t.captureCharFrame(), /REPLACEMENT Turn wording/);
     for (const width of [48, 100, 160]) {
-      wb.renderer.resize(width, 32);
-      wb.t.resize(width, 32);
+      resizeWorkbench(wb.t, wb.renderer, width, 32);
       await wb.t.renderOnce();
       noOverflow(wb.t.captureCharFrame(), width);
       assert.match(wb.t.captureCharFrame(), /Press esc again to interrupt/);
@@ -2421,8 +2417,7 @@ for (const [width, height] of [
     assert.doesNotMatch(wb.t.captureCharFrame(), /kept/);
     await type(wb.t, "fresh");
     const other = width === 100 ? 48 : 100;
-    wb.t.resize(other, height);
-    wb.renderer.resize(other, height);
+    resizeWorkbench(wb.t, wb.renderer, other, height);
     await wb.t.renderOnce();
     frame = wb.t.captureCharFrame();
     noOverflow(frame, other);

@@ -5,7 +5,6 @@ import { readdirSync, realpathSync as realpath } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Database } from "bun:sqlite";
-import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import { App } from "../../src/tui/tui.js";
 import {
@@ -22,7 +21,7 @@ import type {
   RunListView,
   WorkspaceView,
 } from "../../src/tui/tui.js";
-import { makeFakeRenderer, until } from "./renderer-fixture.js";
+import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
 import { createApplication } from "../../src/application/application.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
@@ -105,7 +104,7 @@ function noLaunch(): RunLaunchView {
 async function mount(width = 60, height = 16) {
   const view = fakeView();
   const exits: unknown[] = [];
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}
@@ -150,7 +149,7 @@ async function mountApproved(
   );
   const view: WorkspaceView = { snapshot, approve() {} };
   const exits: unknown[] = [];
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}
@@ -469,7 +468,7 @@ test("authoritative-run-summary: Home and the guarded quit follow a real Applica
     }
   })();
   const exits: unknown[] = [];
-  const rendered = await testRender(
+  const rendered = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}

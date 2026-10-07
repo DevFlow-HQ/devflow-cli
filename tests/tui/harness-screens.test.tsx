@@ -2,7 +2,6 @@ import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { TextAttributes } from "@opentui/core";
-import { testRender } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
 import type {
   BundleCatalogSnapshot,
@@ -27,7 +26,7 @@ import {
   inertRunListView,
   runSummary,
 } from "./inert.js";
-import { makeFakeRenderer, until } from "./renderer-fixture.js";
+import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
 
 const QUALIFIED_CODEX: HarnessFocus = {
   id: "codex",
@@ -260,7 +259,7 @@ async function mount(options: TMountOptions = {}) {
   const width = options.width ?? 100;
   const height = options.height ?? 36;
   const catalog = options.catalog ?? harnesses();
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}

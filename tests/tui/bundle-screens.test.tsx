@@ -2,7 +2,6 @@ import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { TextAttributes } from "@opentui/core";
-import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import { App } from "../../src/tui/tui.js";
 import {
@@ -18,7 +17,7 @@ import type {
   RunWorkbenchView,
   WorkspaceView,
 } from "../../src/tui/tui.js";
-import { makeFakeRenderer, until } from "./renderer-fixture.js";
+import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
 import type {
   BundleCatalogSnapshot,
   BundleFocusSelector,
@@ -261,7 +260,7 @@ function noRunView(): RunWorkbenchView {
 
 async function mount(rows = ROWS, width = 80, height = 40) {
   const exits: unknown[] = [];
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}
@@ -425,7 +424,7 @@ test("a trusted Bundle uses the shared Trust wording in its inspector", async ()
       return focus;
     },
   };
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}
@@ -516,7 +515,7 @@ test("a list whose managed bytes are gone shows the Problem, not rows (#74 A3)",
       throw new Error("not used");
     },
   };
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}
@@ -577,7 +576,7 @@ test("a focused Bundle whose managed bytes are gone shows its Problem", async ()
       return focus;
     },
   };
-  const t = await testRender(
+  const t = await mountRenderer(
     () => (
       <App
         preferences={inertPreferencesView()}

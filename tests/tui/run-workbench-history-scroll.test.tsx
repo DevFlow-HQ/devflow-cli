@@ -11,6 +11,7 @@ import type {
   SessionHistoryRow,
 } from "../../src/application/projection-port.js";
 import {
+  resizeWorkbench,
   runOf,
   events,
   wrappingEvents,
@@ -429,7 +430,7 @@ test("timeline rows wrap at the width instead of clipping and rewrap on resize (
   };
   const counts: number[] = [];
   for (const width of [100, 60, 40]) {
-    renderer.resize(width, 20);
+    resizeWorkbench(t, renderer, width, 20);
     await t.renderOnce();
     noOverflow(t.captureCharFrame(), width);
     const text = rowLines().join(" ");
@@ -454,7 +455,7 @@ test("scrolling over wrapped rows steps by line, keeps its anchor under append a
     100,
     14,
   );
-  renderer.resize(60, 14);
+  resizeWorkbench(t, renderer, 60, 14);
   await t.renderOnce();
   // One line above the live edge hides only the newest row's last line: the badge
   // counts that one row, not lines.
@@ -486,13 +487,13 @@ test("scrolling over wrapped rows steps by line, keeps its anchor under append a
   assert.doesNotMatch(continuation, / e\d+ /);
 
   // Widening rewraps each row onto one line, and e1 stays the first visible row.
-  renderer.resize(100, 14);
+  resizeWorkbench(t, renderer, 100, 14);
   await t.renderOnce();
   const widened = t.captureCharFrame();
   noOverflow(widened, 100);
   assert.match(timelineLines(widened)[0]!, / e1 /);
   // Narrowing again restores the exact line: the anchor kept its offset in e1.
-  renderer.resize(60, 14);
+  resizeWorkbench(t, renderer, 60, 14);
   await t.renderOnce();
   assert.match(timelineLines(t.captureCharFrame())[0]!, / e1 /);
 });
@@ -641,7 +642,7 @@ test("[step-session-dividers] the timeline marks each Step and Harness Session w
 test("[step-session-dividers] a divider wraps its words behind its glyph on a narrow terminal and rewraps on resize (#289)", async () => {
   const { t, renderer } = await mountWorkbench(dividedRun(), 100, 50);
   for (const width of [30, 22, 100]) {
-    renderer.resize(width, 50);
+    resizeWorkbench(t, renderer, width, 50);
     await t.renderOnce();
     const frame = t.captureCharFrame();
     noOverflow(frame, width);
@@ -660,7 +661,7 @@ test("[step-session-dividers] a divider wraps its words behind its glyph on a na
     }
   }
   // Narrow, the title wraps over lines that each begin with the glyph.
-  renderer.resize(22, 50);
+  resizeWorkbench(t, renderer, 22, 50);
   await t.renderOnce();
   const narrow = timelineLines(t.captureCharFrame()).map((line) => line.trim());
   const at = narrow.indexOf("═ fresh, iteration 1");
@@ -1320,8 +1321,7 @@ for (const width of [40, 100]) {
     assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
     await press(wb.t, wb.renderer, "up", { alt: true });
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "OFFSET_TWO");
-    wb.t.resize(width === 40 ? 100 : 40, 24);
-    wb.renderer.resize(width === 40 ? 100 : 40, 24);
+    resizeWorkbench(wb.t, wb.renderer, width === 40 ? 100 : 40, 24);
     await wb.t.renderOnce();
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "OFFSET_TWO");
     wb.control.setHistory(
@@ -1467,8 +1467,7 @@ for (const width of [40, 100]) {
 test("m10-paused-history-identity: one-line viewport pages move at least one displayed line", async () => {
   const wb = await mountHistory(100, 8);
   // Six rows: the status row, the prompt's field and its hint leave one line.
-  wb.t.resize(100, 6);
-  wb.renderer.resize(100, 6);
+  resizeWorkbench(wb.t, wb.renderer, 100, 6);
   wb.control.setHistory(
     historyPage(
       Array.from({ length: 20 }, (_, i) => historyRow(`row-${i}`, `ROW_${i}`)),
@@ -1494,8 +1493,7 @@ for (const width of [40, 100]) {
     wb.control.setHistory(historyPage(initial));
     await wb.t.renderOnce();
     await seekHistoryLine(wb, "REWRAP_OFFSET".padEnd(width - 6, "X")); // offset 2
-    wb.t.resize(width === 40 ? 100 : 40, 14);
-    wb.renderer.resize(width === 40 ? 100 : 40, 14);
+    resizeWorkbench(wb.t, wb.renderer, width === 40 ? 100 : 40, 14);
     await wb.t.renderOnce();
     assert.equal(
       firstHistoryLine(wb.t.captureCharFrame()),
