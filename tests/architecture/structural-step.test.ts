@@ -7,6 +7,7 @@ import type { DeclarationEmit } from "./check-vendor-provenance.js";
 import { headings, limits } from "./check-guidance-structure.js";
 import { CI_WORKFLOW } from "./check-release-workflow.js";
 import {
+  artifactUploadToEdit,
   CHECK_SCENARIO,
   CHECK_SCENARIO_FILES,
   CHECK_SCENARIO_SOURCES,
@@ -1658,7 +1659,7 @@ test("every catalogued rule has a pinned fixture above", async () => {
   const pinned = new Set(
     [
       ...source.matchAll(
-        /^test\("(?:m12-focused-check-scenarios: )?([a-z]+\/[a-z-]+)"/gm,
+        /^test\("(?:m12-(?:focused-check-scenarios|candidate-retention): )?([a-z]+\/[a-z-]+)"/gm,
       ),
     ].map((match) => match[1]),
   );
@@ -1700,5 +1701,51 @@ test("release/log-upload-trigger", async () => {
     `${WORKFLOW}  release/log-upload-trigger  job smoke does not gate its log upload on failure() && steps.consumer_result.outcome == 'failure' after the blocking result\n` +
       "fix: set the final log-upload step in job smoke to if: failure() && steps.consumer_result.outcome == 'failure'; on a consumer job, keep the preceding always-run aggregation as id: consumer_result without continue-on-error\n" +
       "see: docs/agents/release-workflow.md#operational-log-delivery",
+  );
+});
+
+test("m12-candidate-retention: release/candidate-retention", async () => {
+  assert.equal(
+    await releaseReport("release/candidate-retention", (_workflow, jobs) => {
+      const { inputs } = artifactUploadToEdit({
+        job: jobs.build,
+        artifact: "binaries",
+      });
+      delete inputs["retention-days"];
+    }),
+    `${WORKFLOW}  release/candidate-retention  bulk candidate binaries lacks one upload with explicit retention of 1 day for ordinary push, 30 days for manual dispatch, and 35 days for version-tag push\n` +
+      "fix: set retention-days on the single binaries upload in build to ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}\n" +
+      "see: docs/agents/release-workflow.md#candidate-retention-and-expiry",
+  );
+});
+
+test("m12-candidate-retention: the structural step rejects an induced duration defect", async () => {
+  const workflow = JSON.stringify(validWorkflow());
+  const root = await tree({
+    "src/tui/tui.ts": "export {};",
+    [CI_WORKFLOW]: workflow,
+  });
+  assert.deepEqual(run(root), { exitCode: 0, output: "" });
+  const mutated = workflow.replace("&& 35 ||", "&& 34 ||");
+  assert.notEqual(
+    mutated,
+    workflow,
+    "the induced defect must change the workflow",
+  );
+  await writeFile(join(root, CI_WORKFLOW), mutated);
+  const { exitCode, output } = run(root);
+  assert.equal(exitCode, 1, output);
+  const retentionReports = blocks(output).filter((block) =>
+    block.includes("  release/candidate-retention  "),
+  );
+  assert.equal(retentionReports.length, 1, output);
+  assert.equal(blocks(output).length, 1, output);
+  await writeFile(join(root, CI_WORKFLOW), workflow);
+  assert.deepEqual(run(root), { exitCode: 0, output: "" });
+  assert.equal(
+    retentionReports[0],
+    `${WORKFLOW}  release/candidate-retention  bulk candidate binaries lacks one upload with explicit retention of 1 day for ordinary push, 30 days for manual dispatch, and 35 days for version-tag push\n` +
+      "fix: set retention-days on the single binaries upload in build to ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}\n" +
+      "see: docs/agents/release-workflow.md#candidate-retention-and-expiry",
   );
 });

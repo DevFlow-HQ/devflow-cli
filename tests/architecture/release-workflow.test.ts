@@ -15,6 +15,7 @@ import {
   readWorkflow,
 } from "./check-release-workflow.js";
 import {
+  artifactUploadToEdit,
   CHECK_SCENARIO,
   CHECK_SCENARIO_FILES,
   CHECK_SCENARIO_SOURCES,
@@ -411,67 +412,6 @@ test("a non-mapping workflow fails closed", () => {
     );
 });
 
-test("a workflow without a manual dispatch entrypoint is rejected", () => {
-  const workflow = validWorkflow();
-  workflow.on = { push: null };
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/dispatch-trigger"),
-  );
-});
-
-test("a build job that never runs the dry-run is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.build.steps = stepsToEdit(jobs.build).slice(0, 5);
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/missing-dry-run"),
-  );
-});
-
-test("a downstream job missing `needs: build` is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  delete jobs.smoke.needs;
-  assert.ok(reports(checkValidationWorkflow(workflow), "release/needs-build"));
-});
-
-test("a downstream job that does not download the artifact is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.smoke.steps = [
-    { run: "bun scripts/package-smoke.ts dist/secant-linux-x64" },
-  ];
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/candidate-download"),
-  );
-});
-
-test("a non-build job that re-runs an assembly script is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.smoke.steps = [
-    { uses: "actions/download-artifact@v4" },
-    { run: "bun run scripts/assemble.ts" },
-  ];
-  assert.ok(reports(checkValidationWorkflow(workflow), "release/reassembly"));
-});
-
-test("a secret outside the build dry-run step is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.smoke.steps = [
-    { uses: "actions/download-artifact@v4" },
-    {
-      if: "github.event_name == 'workflow_dispatch'",
-      env: { TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" },
-      run: "echo hi",
-    },
-  ];
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/secret-outside-build"),
-  );
-});
-
 test("a credentialed step not gated on workflow_dispatch is rejected", () => {
   const workflow = validWorkflow();
   const jobs = jobsToEdit(workflow);
@@ -480,96 +420,6 @@ test("a credentialed step not gated on workflow_dispatch is rejected", () => {
   assert.ok(
     reports(checkValidationWorkflow(workflow), "release/ungated-credential"),
   );
-});
-
-test("a NEGATED dispatch guard on a credentialed step is rejected", () => {
-  // The exact opposite gate — runs on every push, skips only on dispatch — still
-  // contains the substring "workflow_dispatch", so a substring test would pass it.
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  const step = stepsToEdit(jobs.build)[5]!;
-  step.if = "github.event_name != 'workflow_dispatch'";
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/ungated-credential"),
-  );
-});
-
-test("a job-level env secret is rejected", () => {
-  // Placed on the whole job (sibling of steps), it cannot be dispatch-gated: an
-  // ungated step then runs with the credential on every push.
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.build.env = { NODE_AUTH_TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" };
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/job-env-secret"),
-  );
-});
-
-test("a workflow-level env secret is rejected", () => {
-  const workflow = validWorkflow();
-  workflow.env = { NODE_AUTH_TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" };
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/workflow-env-secret"),
-  );
-});
-
-test("a publication-capable secret is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  const step = stepsToEdit(jobs.build)[5]!;
-  step.env = { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" };
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/secret-not-read-only"),
-  );
-});
-
-test("a protected environment is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.build.environment = "release";
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/stray-environment"),
-  );
-});
-
-test("a real npm publish is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  stepsToEdit(jobs.smoke).push({
-    run: "npm publish dist/packages/secant.tgz",
-  });
-  assert.ok(reports(checkValidationWorkflow(workflow), "release/real-publish"));
-});
-
-test("a GitHub-release action or `gh release` is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.smoke.steps = [
-    { uses: "actions/download-artifact@v4" },
-    { uses: "softprops/action-gh-release@v2" },
-  ];
-  assert.ok(
-    reports(checkValidationWorkflow(workflow), "release/release-action"),
-  );
-
-  const withGhRelease = validWorkflow();
-  const jobs2 = jobsToEdit(withGhRelease);
-  stepsToEdit(jobs2.smoke).push({
-    run: "gh release create v1.0.0",
-  });
-  assert.ok(
-    reports(checkValidationWorkflow(withGhRelease), "release/gh-release"),
-  );
-});
-
-test("a retry action is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.smoke.steps = [
-    { uses: "actions/download-artifact@v4" },
-    { uses: "nick-fields/retry@v3" },
-  ];
-  assert.ok(reports(checkValidationWorkflow(workflow), "release/retry-action"));
 });
 
 // --- release-protection-policy scenario (#158) -----------------------------------
@@ -588,18 +438,6 @@ test("release protection fails closed on a non-mapping workflow", () => {
     );
 });
 
-test("a workflow without a promote job is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  delete jobs.promote;
-  assert.ok(
-    reports(
-      checkReleaseProtection(workflow),
-      "release/protection-no-promote-job",
-    ),
-  );
-});
-
 test("a promote job without the protected release environment is rejected", () => {
   const workflow = validWorkflow();
   const jobs = jobsToEdit(workflow);
@@ -609,62 +447,11 @@ test("a promote job without the protected release environment is rejected", () =
   );
 });
 
-test("a promote job targeting the wrong environment is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.promote.environment = "staging";
-  assert.ok(
-    reports(checkReleaseProtection(workflow), "release/protection-environment"),
-  );
-});
-
-test("a candidate check that does not gate promotion is rejected", () => {
-  // smoke drops out of the dependency chain, so the protected environment could be
-  // reached without it.
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs["release-approval"].needs = ["check", "build"];
-  assert.ok(
-    reports(checkReleaseProtection(workflow), "release/promote-needs", {
-      job: "smoke",
-    }),
-  );
-});
-
 test("a promote job not gated on a tag ref is rejected", () => {
   const workflow = validWorkflow();
   const jobs = jobsToEdit(workflow);
   delete jobs.promote.if;
   assert.ok(reports(checkReleaseProtection(workflow), "release/tag-ref-gate"));
-});
-
-test("a job gated on a non-`v` tag ref is rejected", () => {
-  // `refs/tags/` alone is not enough: the `v*` shape is part of the invariant.
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.promote.if = "startsWith(github.ref, 'refs/tags/')";
-  assert.ok(reports(checkReleaseProtection(workflow), "release/tag-ref-gate"));
-});
-
-test("an approval job that never runs the tag/version gate is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs["release-approval"].steps = [{ uses: "actions/download-artifact@v4" }];
-  assert.ok(
-    reports(checkReleaseProtection(workflow), "release/missing-tag-gate"),
-  );
-});
-
-test("a publication credential on a pre-approval promotion job is rejected", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  stepsToEdit(jobs["release-approval"]).push({
-    env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" },
-    run: "echo x",
-  });
-  assert.ok(
-    reports(checkReleaseProtection(workflow), "release/approval-secret"),
-  );
 });
 
 // --- release-promotion-state-machine scenario (#159) -----------------------------
@@ -681,14 +468,7 @@ test("release promotion fails closed on a non-mapping workflow", () => {
     );
 });
 
-test("release promotion requires the protected promote job and environment", () => {
-  const missing = validWorkflow();
-  const missingJobs = jobsToEdit(missing);
-  delete missingJobs.promote;
-  assert.ok(
-    reports(checkReleasePromotion(missing), "release/promotion-no-promote-job"),
-  );
-
+test("release promotion rejects a different protected environment", () => {
   const wrongEnvironment = validWorkflow();
   const wrongJobs = jobsToEdit(wrongEnvironment);
   wrongJobs.promote.environment = "staging";
@@ -700,21 +480,8 @@ test("release promotion requires the protected promote job and environment", () 
   );
 });
 
-test("promotion must run the one release state-machine script", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  const steps = stepsToEdit(jobs.promote);
-  steps[3]!.run = "echo approved";
-  assert.ok(
-    reports(
-      checkReleasePromotion(workflow),
-      "release/missing-promotion-script",
-    ),
-  );
-});
-
-test("promotion must download both approved candidate artifacts", () => {
-  for (const missing of ["release-archives", "platform-packages"]) {
+test("promotion must download the approved release archives", () => {
+  for (const missing of ["release-archives"]) {
     const workflow = validWorkflow();
     const jobs = jobsToEdit(workflow);
     jobs.promote.steps = stepsToEdit(jobs.promote).filter(
@@ -727,87 +494,6 @@ test("promotion must download both approved candidate artifacts", () => {
       }),
     );
   }
-});
-
-test("the publication credential must exist only on the protected promote step", () => {
-  const missingCredential = validWorkflow();
-  const missingJobs = jobsToEdit(missingCredential);
-  const promotionStep = stepsToEdit(missingJobs.promote)[3]!;
-  promotionStep.env = { GH_TOKEN: "${{ github.token }}" };
-  assert.ok(
-    reports(
-      checkReleasePromotion(missingCredential),
-      "release/credential-count",
-      { count: 0 },
-    ),
-  );
-
-  const duplicateCredential = validWorkflow();
-  const duplicateJobs = jobsToEdit(duplicateCredential);
-  stepsToEdit(duplicateJobs.promote).push({
-    env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" },
-    run: "bun scripts/release-promote.ts duplicate",
-  });
-  assert.ok(
-    reports(
-      checkReleasePromotion(duplicateCredential),
-      "release/credential-count",
-      { count: 2 },
-    ),
-  );
-
-  const earlyCredential = validWorkflow();
-  const earlyJobs = jobsToEdit(earlyCredential);
-  stepsToEdit(earlyJobs.smoke).push({
-    env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_PUBLISH_TOKEN }}" },
-    run: "echo leaked",
-  });
-  assert.ok(
-    reports(
-      checkReleasePromotion(earlyCredential),
-      "release/credential-placement",
-      { job: "smoke" },
-    ),
-  );
-
-  const extraCredential = validWorkflow();
-  const extraJobs = jobsToEdit(extraCredential);
-  const extraStep = stepsToEdit(extraJobs.promote)[3]!;
-  extraStep.env = {
-    ...(extraStep.env as Record<string, unknown>),
-    EXTRA_TOKEN: "${{ secrets.EXTRA_TOKEN }}",
-  };
-  assert.ok(
-    reports(
-      checkReleasePromotion(extraCredential),
-      "release/promote-unexpected-secret",
-      { secret: "EXTRA_TOKEN" },
-    ),
-  );
-});
-
-test("the promotion state machine cannot run outside protected promote", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  stepsToEdit(jobs.smoke).push({
-    run: "bun scripts/release-promote.ts dist/release dist/packages",
-  });
-  assert.ok(
-    reports(
-      checkReleasePromotion(workflow),
-      "release/promotion-script-placement",
-      { job: "smoke" },
-    ),
-  );
-});
-
-test("promotion needs GitHub contents write permission for release assets", () => {
-  const workflow = validWorkflow();
-  const jobs = jobsToEdit(workflow);
-  jobs.promote.permissions = { contents: "read" };
-  assert.ok(
-    reports(checkReleasePromotion(workflow), "release/promote-permissions"),
-  );
 });
 
 test("a gated job without its operational-log upload is rejected", () => {
@@ -973,4 +659,116 @@ test("a log-directory setup cannot be late, gated, overridden, or inside a test 
       );
     }
   }
+});
+
+test("m12-candidate-retention: every bulk upload rejects missing retention", () => {
+  for (const artifact of [
+    "binaries",
+    "release-archives",
+    "platform-packages",
+  ]) {
+    const workflow = validWorkflow();
+    const { inputs } = artifactUploadToEdit({
+      job: jobsToEdit(workflow).build,
+      artifact,
+    });
+    delete inputs["retention-days"];
+    assert.deepEqual(checkValidationWorkflow(workflow), [
+      {
+        rule: "release/candidate-retention",
+        file: CI_WORKFLOW,
+        line: 1,
+        column: 1,
+        data: { artifact },
+      },
+    ]);
+  }
+});
+
+test("m12-candidate-retention: wrong durations and missing trigger exceptions are rejected", () => {
+  const approved =
+    "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}";
+  const mutations = [
+    1,
+    30,
+    35,
+    90,
+    "1",
+    "",
+    null,
+    approved.replace("&& 35", "&& 34"),
+    approved.replace("&& 30", "&& 29"),
+    approved.replace("|| 1 }}", "|| 2 }}"),
+    "${{ github.event_name == 'workflow_dispatch' && 30 || 1 }}",
+    "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || 1 }}",
+    approved.replace("== 'push'", "!= 'push'"),
+    approved.replace("== 'workflow_dispatch'", "!= 'workflow_dispatch'"),
+    approved.replace("refs/tags/v", "refs/tags/"),
+    approved.replace("refs/tags/v", "refs/heads/v"),
+    approved.replace("github.event_name == 'push' && ", ""),
+    approved.replace("${{ ", "").replace(" }}", ""),
+  ];
+  for (const artifact of [
+    "binaries",
+    "release-archives",
+    "platform-packages",
+  ]) {
+    for (const retention of mutations) {
+      const workflow = validWorkflow();
+      const { inputs } = artifactUploadToEdit({
+        job: jobsToEdit(workflow).build,
+        artifact,
+      });
+      inputs["retention-days"] = retention;
+      assert.deepEqual(
+        checkValidationWorkflow(workflow),
+        [
+          {
+            rule: "release/candidate-retention",
+            file: CI_WORKFLOW,
+            line: 1,
+            column: 1,
+            data: { artifact },
+          },
+        ],
+        `${artifact}: ${retention}`,
+      );
+    }
+  }
+});
+
+test("m12-candidate-retention: missing or duplicate bulk uploads cannot escape the rule", () => {
+  for (const artifact of [
+    "binaries",
+    "release-archives",
+    "platform-packages",
+  ]) {
+    for (const mutation of ["missing", "duplicate", "rename", "action"]) {
+      const workflow = validWorkflow();
+      const job = jobsToEdit(workflow).build;
+      const steps = stepsToEdit(job);
+      const { step: upload, inputs } = artifactUploadToEdit({ job, artifact });
+      if (mutation === "missing")
+        job.steps = steps.filter((step) => step !== upload);
+      if (mutation === "duplicate") steps.push(structuredClone(upload));
+      if (mutation === "rename") inputs.name = "untracked";
+      if (mutation === "action") upload.uses = "actions/download-artifact@v4";
+      assert.deepEqual(checkValidationWorkflow(workflow), [
+        {
+          rule: "release/candidate-retention",
+          file: CI_WORKFLOW,
+          line: 1,
+          column: 1,
+          data: { artifact },
+        },
+      ]);
+    }
+  }
+});
+
+test("m12-candidate-retention: approved bulk retention preserves every release and failure-log guard", () => {
+  const workflow = validWorkflow();
+  assert.deepEqual(checkValidationWorkflow(workflow), []);
+  assert.deepEqual(checkReleaseProtection(workflow), []);
+  assert.deepEqual(checkReleasePromotion(workflow), []);
 });

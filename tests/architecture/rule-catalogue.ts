@@ -480,6 +480,13 @@ export const rules = {
     fix: () =>
       "restore the three-OS check job with its named scenario steps and one complete Test step",
   }),
+  "release/candidate-retention": rule<{ artifact: string }>({
+    see: "docs/agents/release-workflow.md#candidate-retention-and-expiry",
+    problem: ({ artifact }) =>
+      `bulk candidate ${artifact} lacks one upload with explicit retention of 1 day for ordinary push, 30 days for manual dispatch, and 35 days for version-tag push`,
+    fix: ({ artifact }) =>
+      `set retention-days on the single ${artifact} upload in build to \${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}`,
+  }),
   "release/workflow-env-secret": rule<{ secret: string }>({
     see: RELEASE_VALIDATION,
     problem: ({ secret }) =>

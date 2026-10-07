@@ -191,6 +191,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m12-test-interface-ownership",
   "m12-renderer-test-lifecycle",
   "m12-local-test-helpers",
+  "m12-candidate-retention",
 ] as const;
 
 function testFilesIn(script: string): string[] {
@@ -426,6 +427,29 @@ export function checkValidationWorkflow(workflow: unknown): Finding[] {
       script: DRY_RUN_SCRIPT,
       trigger: DISPATCH_GUARD,
     });
+  }
+
+  // Pin the trigger-sensitive expression rather than interpret arbitrary Actions
+  // expressions. This catches missing branches and incorrect event/ref guards.
+  const bulkUploads = stepsOf(buildJob).filter(
+    (step) =>
+      typeof step.uses === "string" &&
+      step.uses.startsWith("actions/upload-artifact"),
+  );
+  for (const artifact of ["binaries", ...CANDIDATE_ARTIFACTS]) {
+    const uploads = bulkUploads.filter(
+      (step) => isRecord(step.with) && step.with.name === artifact,
+    );
+    if (
+      uploads.length !== 1 ||
+      uploads.some(
+        (step) =>
+          !isRecord(step.with) ||
+          step.with["retention-days"] !==
+            "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}",
+      )
+    )
+      add("release/candidate-retention", { artifact });
   }
 
   for (const [name, jobValue] of Object.entries(jobs)) {

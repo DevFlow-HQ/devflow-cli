@@ -220,6 +220,12 @@ jobs:
           tests/tui/run-workbench-interaction.test.tsx
           tests/application/session-history.test.ts
           tests/headless/run.test.ts
+      - name: m12-candidate-retention
+        run: >-
+          bun run test --
+          -t '^m12-candidate-retention(:|$)'
+          tests/architecture/release-workflow.test.ts
+          tests/architecture/structural-step.test.ts
       - name: Test
         run: bun run test
       - name: Build
@@ -260,6 +266,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: binaries
+          retention-days: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}
           path: dist/secant-*
           if-no-files-found: error
       # Assemble the three release archives once from the just-built candidate
@@ -269,6 +276,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-archives
+          retention-days: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}
           path: dist/release
           if-no-files-found: error
       # Pack the three per-platform npm packages from the same candidate bytes the
@@ -284,6 +292,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: platform-packages
+          retention-days: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}
           path: dist/packages
           if-no-files-found: error
       # The M4 release legal-closure gate (#156): with every target cross-compiled,

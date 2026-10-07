@@ -2,6 +2,7 @@
 // checker's synthetic tests and the structural step's pinned reports. Each negative
 // case edits a fresh copy to break exactly one guard.
 
+import assert from "node:assert/strict";
 import { NAMED_CHECK_SCENARIOS } from "./check-release-workflow.js";
 
 export type Jobs = Record<string, Record<string, unknown>>;
@@ -37,6 +38,28 @@ export const jobsToEdit = (workflow: Record<string, unknown>) =>
 /** The steps of one of those jobs, for editing in place. */
 export const stepsToEdit = (job: Record<string, unknown>) =>
   job.steps as Record<string, unknown>[];
+
+function isMapping(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A named fixture upload and its validated, mutable input mapping. */
+export function artifactUploadToEdit({
+  job,
+  artifact,
+}: {
+  job: Record<string, unknown>;
+  artifact: string;
+}) {
+  const step = stepsToEdit(job).find(
+    (step) => isMapping(step.with) && step.with.name === artifact,
+  );
+  assert.ok(
+    step && isMapping(step.with),
+    `fixture upload ${artifact} is missing`,
+  );
+  return { step, inputs: step.with };
+}
 
 function logSetup() {
   return {
@@ -93,6 +116,20 @@ export function validWorkflow(): Record<string, unknown> {
             env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_READONLY_TOKEN }}" },
             run: "bun scripts/npm-dry-run.ts dist/packages",
           },
+          ...[
+            { name: "binaries", path: "dist/secant-*" },
+            { name: "release-archives", path: "dist/release" },
+            { name: "platform-packages", path: "dist/packages" },
+          ].map(({ name, path }) => ({
+            uses: "actions/upload-artifact@v4",
+            with: {
+              name,
+              path,
+              "if-no-files-found": "error",
+              "retention-days":
+                "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 35 || github.event_name == 'workflow_dispatch' && 30 || 1 }}",
+            },
+          })),
         ],
       },
       smoke: {
