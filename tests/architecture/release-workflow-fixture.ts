@@ -2,7 +2,33 @@
 // checker's synthetic tests and the structural step's pinned reports. Each negative
 // case edits a fresh copy to break exactly one guard.
 
+import { NAMED_CHECK_SCENARIOS } from "./check-release-workflow.js";
+
 export type Jobs = Record<string, Record<string, unknown>>;
+
+export const CHECK_SCENARIO = "m12-focused-check-scenarios";
+export const CHECK_SCENARIO_FILES = [
+  "tests/architecture/release-workflow.test.ts",
+  "tests/architecture/structural-step.test.ts",
+] as const;
+
+const SCENARIO_FIXTURES = NAMED_CHECK_SCENARIOS.map((scenario, index) => ({
+  scenario,
+  files:
+    scenario === CHECK_SCENARIO
+      ? CHECK_SCENARIO_FILES
+      : [`tests/scenarios/scenario-${index}.test.ts`],
+}));
+
+export const CHECK_SCENARIO_SOURCES: Readonly<Record<string, string>> =
+  Object.fromEntries(
+    SCENARIO_FIXTURES.flatMap(({ scenario, files }) =>
+      files.map((file) => [
+        file,
+        `test("${scenario}: fixture evidence", () => {});`,
+      ]),
+    ),
+  );
 
 /** The jobs of a workflow built by `validWorkflow`, for editing in place. */
 export const jobsToEdit = (workflow: Record<string, unknown>) =>
@@ -39,11 +65,19 @@ function logUpload(job: string) {
 
 export function validWorkflow(): Record<string, unknown> {
   return {
-    on: { push: null, pull_request: null, workflow_dispatch: null },
+    on: { push: null, workflow_dispatch: null },
     jobs: {
       check: {
         "runs-on": "ubuntu-latest",
-        steps: [logSetup(), { run: "bun run check" }, logUpload("check")],
+        steps: [
+          logSetup(),
+          ...SCENARIO_FIXTURES.map(({ scenario, files }) => ({
+            name: scenario,
+            run: `bun run test -- -t '^${scenario}(:|$)' ${files.join(" ")}`,
+          })),
+          { name: "Test", run: "bun run test" },
+          logUpload("check"),
+        ],
       },
       build: {
         "runs-on": "ubuntu-latest",

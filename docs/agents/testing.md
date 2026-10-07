@@ -59,6 +59,14 @@ change through `setEnvironmentForTest` (`tests/helpers/environment.ts`), never i
 owns its value, so a late cleanup leaves the next test's value in place. Its returned restore ends a change early. A change for a whole file, such as
 `ensureRuntimeOnPath` putting the runtime on PATH, is already isolated by its worker and needs no claim.
 
+## Named Check scenarios
+
+Each named scenario step in the Check job keeps its declared display name and passes `-t '^<scenario>(:|$)'` to the canonical test script. Every listed
+test file must contribute a test named exactly `<scenario>` or starting `<scenario>:`. A test registered by a called imported conformance registrar counts
+as evidence for its entrypoint. The step named `Test` is the one complete semantic-suite run on each operating system. The release-workflow structural
+check rejects a missing, renamed, duplicated, or unknown scenario step, a missing or drifting filter, an empty selection, an irrelevant file entry, a
+missing Check job, or another complete suite run.
+
 Package smoke tests exercise the compiled binary in an isolated location on each of the three operating systems; every scenario is enumerated
 once in [package smoke](./package-smoke.md), the CI acceptance seam for headless work.
 

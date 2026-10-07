@@ -38,6 +38,8 @@ const RELEASE_PROTECTION =
   "docs/agents/release-workflow.md#release-protection-policy";
 const RELEASE_PROMOTION =
   "docs/agents/release-workflow.md#release-promotion-state-machine";
+const CHECK_SCENARIOS = "docs/agents/testing.md#named-check-scenarios";
+const RELEASE_CHECK_TRIGGERS = "docs/agents/release-workflow.md#check-triggers";
 const DECLARE_JOBS = "declare the gate's jobs as a mapping under jobs:";
 const THIRD_PARTY_PROVENANCE =
   "docs/agents/dependencies.md#third-party-provenance";
@@ -416,6 +418,67 @@ export const rules = {
     see: RELEASE_VALIDATION,
     problem: () => "the workflow is not a YAML mapping",
     fix: () => "rewrite the workflow as a mapping with on: and jobs: keys",
+  }),
+  "release/scenario-filter": rule<{ scenario: string; expected: string }>({
+    see: CHECK_SCENARIOS,
+    problem: ({ scenario, expected }) =>
+      `named Check scenario ${scenario} does not use ${expected}, so it can run tests outside its scenario`,
+    fix: ({ scenario, expected }) =>
+      `add ${expected} to the ${scenario} test command`,
+  }),
+  "release/scenario-step": rule<{ scenario: string; count: number }>({
+    see: CHECK_SCENARIOS,
+    problem: ({ scenario, count }) =>
+      count === 0
+        ? `named Check scenario ${scenario} is missing`
+        : `named Check scenario ${scenario} appears ${count} times`,
+    fix: ({ scenario }) =>
+      `keep exactly one step named ${scenario} with its anchored test command`,
+  }),
+  "release/unexpected-test-step": rule<{ step: string }>({
+    see: CHECK_SCENARIOS,
+    problem: ({ step }) =>
+      `Check step ${step} runs the canonical test command but is neither Test nor a declared named scenario`,
+    fix: ({ step }) =>
+      `remove ${step}, or restore its declared scenario display name and anchored filter`,
+  }),
+  "release/scenario-selection-empty": rule<{ scenario: string }>({
+    see: CHECK_SCENARIOS,
+    problem: ({ scenario }) =>
+      `named Check scenario ${scenario} selects no test bearing its anchored scenario name`,
+    fix: ({ scenario }) =>
+      `list at least one test file containing a test named ${scenario} or starting ${scenario}:`,
+  }),
+  "release/scenario-file-empty": rule<{ scenario: string; file: string }>({
+    see: CHECK_SCENARIOS,
+    problem: ({ scenario, file }) =>
+      `named Check scenario ${scenario} lists ${file}, but that file contributes no selected test`,
+    fix: ({ scenario }) =>
+      `remove that file from the step, or name its scenario evidence ${scenario}: <behavior>`,
+  }),
+  "release/full-test-step": rule<{ steps: string[] }>({
+    see: CHECK_SCENARIOS,
+    problem: ({ steps }) =>
+      `the complete semantic-suite runs are ${steps.length === 0 ? "absent" : list(steps, "and")}; exactly one step named Test must run it`,
+    fix: () =>
+      "keep one step named Test whose command is exactly bun run test, and remove every other complete semantic-suite run",
+  }),
+  "release/check-triggers": rule<{
+    triggers: string[];
+    filteredPush: boolean;
+  }>({
+    see: RELEASE_CHECK_TRIGGERS,
+    problem: ({ triggers, filteredPush }) =>
+      `Check triggers are ${triggers.length === 0 ? "absent" : list(triggers, "and")}${filteredPush ? " with a filtered push" : ""}, not unfiltered push and workflow_dispatch only`,
+    fix: () =>
+      "keep unfiltered push: and workflow_dispatch: under on:, and remove pull_request and every other trigger",
+  }),
+  "release/check-job": rule<NoData>({
+    see: CHECK_SCENARIOS,
+    problem: () =>
+      "the workflow has no check job to run named scenarios and the complete semantic suite",
+    fix: () =>
+      "restore the three-OS check job with its named scenario steps and one complete Test step",
   }),
   "release/workflow-env-secret": rule<{ secret: string }>({
     see: RELEASE_VALIDATION,

@@ -2,7 +2,6 @@ name: Check
 
 on:
   push:
-  pull_request:
   # The candidate-validation entrypoint (#157): a manual dispatch runs this whole
   # gate on one commit and adds the authenticated npm dry-run in the build job below
   # (spec #137 stories 85/89, ADR 0027). Validation reuses the gate rather than
@@ -76,29 +75,26 @@ jobs:
       - name: operation-receipt-identity-and-lifetime
         run: >-
           bun run test --
+          -t '^operation-receipt-identity-and-lifetime(:|$)'
           tests/application/operation-receipt.test.ts
-          tests/application/projection-port.test.ts
-          tests/application/operation-settlement.test.ts
-          tests/application/requested-model.test.ts
-          tests/application/observer-lag.test.ts
-          tests/composition/application-log.test.ts
       - name: Codex semantic schema qualification
-        run: bun run test -- tests/harness/codex-semantic-schema.test.ts
+        run: bun run test -- -t '^Codex semantic schema qualification(:|$)' tests/harness/codex-semantic-schema.test.ts
       - name: model-choice-bounded-eligibility
-        run: bun run test -- tests/application/requested-model.test.ts
+        run: bun run test -- -t '^model-choice-bounded-eligibility(:|$)' tests/application/requested-model.test.ts
       - name: Claude fallback cleanup retains owner
-        run: bun run test -- tests/harness/claude-code-cleanup.test.ts
+        run: bun run test -- -t '^Claude fallback cleanup retains owner(:|$)' tests/harness/claude-code-cleanup.test.ts
       - name: retained-step-fault-shutdown
-        run: bun run test -- tests/application/retained-step-shutdown.test.ts
+        run: bun run test -- -t '^retained-step-fault-shutdown(:|$)' tests/application/retained-step-shutdown.test.ts
       - name: authoritative-run-summary
         run: >-
           bun run test --
+          -t '^authoritative-run-summary(:|$)'
           tests/application/run-list.test.ts
           tests/tui/screens.test.tsx
       - name: m10-commands-and-input-rules
         run: >-
           bun run test --
-          tests/workflow/workflow.test.ts
+          -t '^m10-commands-and-input-rules(:|$)'
           tests/bundle/bundle.test.ts
           tests/application/bundle-install.test.ts
           tests/application/shipped-bundles.test.ts
@@ -106,20 +102,19 @@ jobs:
           tests/run/execution/agent.test.ts
           tests/composition/wiring.test.ts
           tests/release/shipped-bundles.test.ts
-          tests/headless/interactive-agent.test.ts
           tests/tui/run-workbench.test.tsx
       - name: m10-workspace-mentions
         run: >-
           bun run test --
+          -t '^m10-workspace-mentions(:|$)'
           tests/application/workspace-paths.test.ts
           tests/tui/run-workbench.test.tsx
           tests/headless/interactive-agent.test.ts
       - name: m10-home-and-preferences
         run: >-
           bun run test --
-          tests/catalog/catalog.test.ts
+          -t '^m10-home-and-preferences(:|$)'
           tests/application/preferences.test.ts
-          tests/headless/settings.test.ts
           tests/architecture/preferences-palettes.test.ts
           tests/tui/screens.test.tsx
           tests/tui/home-preferences.test.tsx
@@ -127,62 +122,62 @@ jobs:
       - name: m10-full-transcript-prepend
         run: >-
           bun run test --
+          -t '^m10-full-transcript-prepend(:|$)'
           tests/tui/run-workbench.test.tsx
-          tests/application/transcript-resource.test.ts
-          tests/headless/run.test.ts
       - name: m10-workbench-interaction
         run: >-
           bun run test --
+          -t '^m10-workbench-interaction(:|$)'
           tests/tui/run-workbench.test.tsx
-          tests/tui/live-run-workbench.test.tsx
       - name: m10-confirmation-target-identity
-        run: bun run test -- tests/tui/run-workbench.test.tsx
+        run: bun run test -- -t '^m10-confirmation-target-identity(:|$)' tests/tui/run-workbench.test.tsx
       - name: m10-initial-preparation-ownership
         run: >-
           bun run test --
+          -t '^m10-initial-preparation-ownership(:|$)'
           tests/harness/preparation-ownership.test.ts
           tests/composition/preparation-lifetime.test.ts
           tests/composition/wiring.test.ts
       - name: m10-previous-release-conversation
-        run: bun run test -- tests/run/store/conversation-migration.test.ts
+        run: bun run test -- -t '^m10-previous-release-conversation(:|$)' tests/run/store/conversation-migration.test.ts
       - name: m10-session-history
         run: >-
           bun run test --
+          -t '^m10-session-history(:|$)'
           tests/application/session-history.test.ts
-          tests/application/observer-lag.test.ts
-          tests/harness/message-facts.test.ts
           tests/tui/run-view.test.ts
           tests/tui/run-workbench.test.tsx
-          tests/tui/live-run-workbench.test.tsx
       - name: m10-paused-history-identity
         run: >-
           bun run test --
+          -t '^m10-paused-history-identity(:|$)'
           tests/tui/run-workbench.test.tsx
-          tests/tui/run-timeline.test.ts
-          tests/tui/run-view.test.ts
-          tests/tui/live-run-workbench.test.tsx
       - name: m10-interruption-and-transcript
         run: >-
           bun run test --
+          -t '^m10-interruption-and-transcript(:|$)'
           tests/application/session-history.test.ts
           tests/harness/message-facts.test.ts
           tests/run/store/session-and-transcript-evidence.test.ts
           tests/run/execution/agent.test.ts
           tests/application/transcript-resource.test.ts
-          tests/application/observer-lag.test.ts
           tests/headless/run.test.ts
       - name: m10-observed-harness-facts
         run: >-
           bun run test --
+          -t '^m10-observed-harness-facts(:|$)'
           tests/harness/observed-facts.test.ts
           tests/harness/message-facts.test.ts
           tests/harness/conformance.test.ts
-          tests/harness/preparation-ownership.test.ts
           tests/application/observed-facts.test.ts
-          tests/application/harness-request-overlay.test.ts
           tests/headless/run.test.ts
           tests/tui/run-workbench.test.tsx
-          tests/tui/live-run-workbench.test.tsx
+      - name: m12-focused-check-scenarios
+        run: >-
+          bun run test --
+          -t '^m12-focused-check-scenarios(:|$)'
+          tests/architecture/release-workflow.test.ts
+          tests/architecture/structural-step.test.ts
       - name: Test
         run: bun run test
       - name: Build

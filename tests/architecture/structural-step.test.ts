@@ -7,6 +7,9 @@ import type { DeclarationEmit } from "./check-vendor-provenance.js";
 import { headings, limits } from "./check-guidance-structure.js";
 import { CI_WORKFLOW } from "./check-release-workflow.js";
 import {
+  CHECK_SCENARIO,
+  CHECK_SCENARIO_FILES,
+  CHECK_SCENARIO_SOURCES,
   jobsToEdit,
   stepsToEdit,
   validWorkflow,
@@ -49,6 +52,7 @@ async function tree(files: Record<string, string>) {
     "THIRD-PARTY-NOTICES.md": "## solid\n\n`solid` pinned at `1.0.0`.\n",
     "AGENTS.md": "# Agent Instructions\n",
     [CI_WORKFLOW]: JSON.stringify(validWorkflow()),
+    ...CHECK_SCENARIO_SOURCES,
     ...guidance,
     ...files,
   });
@@ -923,12 +927,19 @@ const PROTECTION =
   "see: docs/agents/release-workflow.md#release-protection-policy";
 const PROMOTION =
   "see: docs/agents/release-workflow.md#release-promotion-state-machine";
+const CHECK_SCENARIOS = "see: docs/agents/testing.md#named-check-scenarios";
+const CHECK_TRIGGERS = "see: docs/agents/release-workflow.md#check-triggers";
 
 /** The report `rule` printed over a clean source tree and `workflow`. */
-function workflowReport(rule: RuleId, workflow: string) {
+function workflowReport(
+  rule: RuleId,
+  workflow: string,
+  files: Record<string, string> = {},
+) {
   return reportOf(rule, {
     "src/tui/tui.ts": "export {};",
     [CI_WORKFLOW]: workflow,
+    ...files,
   });
 }
 
@@ -941,6 +952,116 @@ function releaseReport(
   edit(workflow, jobsToEdit(workflow));
   return workflowReport(rule, JSON.stringify(workflow));
 }
+
+test("m12-focused-check-scenarios: release/scenario-filter", async () => {
+  assert.equal(
+    await releaseReport("release/scenario-filter", (_workflow, jobs) => {
+      const scenario = stepsToEdit(jobs.check).find(
+        (step) => step.name === CHECK_SCENARIO,
+      )!;
+      scenario.run = `bun run test -- ${CHECK_SCENARIO_FILES.join(" ")}`;
+    }),
+    `${WORKFLOW}  release/scenario-filter  named Check scenario m12-focused-check-scenarios does not use -t '^m12-focused-check-scenarios(:|$)', so it can run tests outside its scenario\n` +
+      "fix: add -t '^m12-focused-check-scenarios(:|$)' to the m12-focused-check-scenarios test command\n" +
+      CHECK_SCENARIOS,
+  );
+});
+
+test("m12-focused-check-scenarios: release/scenario-step", async () => {
+  assert.equal(
+    await releaseReport("release/scenario-step", (_workflow, jobs) => {
+      jobs.check.steps = stepsToEdit(jobs.check).filter(
+        (step) => step.name !== CHECK_SCENARIO,
+      );
+    }),
+    `${WORKFLOW}  release/scenario-step  named Check scenario m12-focused-check-scenarios is missing\n` +
+      "fix: keep exactly one step named m12-focused-check-scenarios with its anchored test command\n" +
+      CHECK_SCENARIOS,
+  );
+});
+
+test("m12-focused-check-scenarios: release/unexpected-test-step", async () => {
+  assert.equal(
+    await releaseReport("release/unexpected-test-step", (_workflow, jobs) => {
+      stepsToEdit(jobs.check).push({ run: "bun run test --" });
+    }),
+    `${WORKFLOW}  release/unexpected-test-step  Check step <unnamed> runs the canonical test command but is neither Test nor a declared named scenario\n` +
+      "fix: remove <unnamed>, or restore its declared scenario display name and anchored filter\n" +
+      CHECK_SCENARIOS,
+  );
+});
+
+test("m12-focused-check-scenarios: release/scenario-selection-empty", async () => {
+  const sources = Object.fromEntries(
+    CHECK_SCENARIO_FILES.map((path) => [
+      path,
+      'test("some-other-scenario: evidence", () => {});',
+    ]),
+  );
+  assert.equal(
+    await workflowReport(
+      "release/scenario-selection-empty",
+      JSON.stringify(validWorkflow()),
+      sources,
+    ),
+    `${WORKFLOW}  release/scenario-selection-empty  named Check scenario m12-focused-check-scenarios selects no test bearing its anchored scenario name\n` +
+      "fix: list at least one test file containing a test named m12-focused-check-scenarios or starting m12-focused-check-scenarios:\n" +
+      CHECK_SCENARIOS,
+  );
+});
+
+test("m12-focused-check-scenarios: release/scenario-file-empty", async () => {
+  const file = CHECK_SCENARIO_FILES[0];
+  assert.equal(
+    await workflowReport(
+      "release/scenario-file-empty",
+      JSON.stringify(validWorkflow()),
+      { [file]: 'test("some-other-scenario: evidence", () => {});' },
+    ),
+    `${WORKFLOW}  release/scenario-file-empty  named Check scenario m12-focused-check-scenarios lists ${file}, but that file contributes no selected test\n` +
+      "fix: remove that file from the step, or name its scenario evidence m12-focused-check-scenarios: <behavior>\n" +
+      CHECK_SCENARIOS,
+  );
+});
+
+test("m12-focused-check-scenarios: release/full-test-step", async () => {
+  assert.equal(
+    await releaseReport("release/full-test-step", (_workflow, jobs) => {
+      jobs.check.steps = stepsToEdit(jobs.check).filter(
+        (step) => step.name !== "Test",
+      );
+    }),
+    `${WORKFLOW}  release/full-test-step  the complete semantic-suite runs are absent; exactly one step named Test must run it\n` +
+      "fix: keep one step named Test whose command is exactly bun run test, and remove every other complete semantic-suite run\n" +
+      CHECK_SCENARIOS,
+  );
+});
+
+test("m12-focused-check-scenarios: release/check-triggers", async () => {
+  assert.equal(
+    await releaseReport("release/check-triggers", (workflow) => {
+      workflow.on = {
+        push: null,
+        pull_request: null,
+        workflow_dispatch: null,
+      };
+    }),
+    `${WORKFLOW}  release/check-triggers  Check triggers are pull_request, push, and workflow_dispatch, not unfiltered push and workflow_dispatch only\n` +
+      "fix: keep unfiltered push: and workflow_dispatch: under on:, and remove pull_request and every other trigger\n" +
+      CHECK_TRIGGERS,
+  );
+});
+
+test("m12-focused-check-scenarios: release/check-job", async () => {
+  assert.equal(
+    await releaseReport("release/check-job", (_workflow, jobs) => {
+      delete jobs.check;
+    }),
+    `${WORKFLOW}  release/check-job  the workflow has no check job to run named scenarios and the complete semantic suite\n` +
+      "fix: restore the three-OS check job with its named scenario steps and one complete Test step\n" +
+      CHECK_SCENARIOS,
+  );
+});
 
 test("release/workflow-not-mapping", async () => {
   assert.equal(
@@ -965,7 +1086,7 @@ test("release/workflow-env-secret", async () => {
 test("release/dispatch-trigger", async () => {
   assert.equal(
     await releaseReport("release/dispatch-trigger", (workflow) => {
-      workflow.on = { push: null, pull_request: null };
+      workflow.on = { push: null };
     }),
     `${WORKFLOW}  release/dispatch-trigger  the workflow has no workflow_dispatch trigger, so candidate validation has no manual entrypoint\n` +
       "fix: add workflow_dispatch under on:\n" +
@@ -1535,9 +1656,11 @@ test("unused/type", () => {
 test("every catalogued rule has a pinned fixture above", async () => {
   const source = await readFile(new URL(import.meta.url), "utf8");
   const pinned = new Set(
-    [...source.matchAll(/^test\("([a-z]+\/[a-z-]+)"/gm)].map(
-      (match) => match[1],
-    ),
+    [
+      ...source.matchAll(
+        /^test\("(?:m12-focused-check-scenarios: )?([a-z]+\/[a-z-]+)"/gm,
+      ),
+    ].map((match) => match[1]),
   );
   const unpinned = (Object.keys(rules) as RuleId[]).filter(
     (rule) => !pinned.has(rule),

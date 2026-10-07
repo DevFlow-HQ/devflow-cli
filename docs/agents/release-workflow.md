@@ -4,13 +4,14 @@ Read this before changing the release CI workflow's shape or its policy checks �
 promotion, or the deterministic checks that guard them. Consumer round-trips (archive, package, launcher, installer) are a separate concern in
 [release-consumers.md](./release-consumers.md).
 
-The whole release path is **one** CI gate ([check.yml](../../.github/workflows/check.yml)), not a family of workflows. A `push`/`pull_request` run is the
-plain gate; a manual dispatch adds the authenticated npm dry-run; a `v*` tag adds the protected promotion. The candidate is assembled once on the Linux
+The whole release path is **one** CI gate ([check.yml](../../.github/workflows/check.yml)), not a family of workflows. A `push` run is the plain gate; a
+manual dispatch adds the authenticated npm dry-run; a `v*` tag push adds the protected promotion. The candidate is assembled once on the Linux
 `build` job. One three-OS `consumer` matrix downloads each artifact once per OS and runs the seven native scenarios as named steps; every scenario uses
-`continue-on-error`, and an always-run aggregation step fails the job if any outcome is not successful. Three deterministic checks prove the shape over
+`continue-on-error`, and an always-run aggregation step fails the job if any outcome is not successful. Four deterministic checks prove the shape over
 the parsed YAML (`Bun.YAML`, no dependency) in
-[tests/architecture/check-release-workflow.ts](../../tests/architecture/check-release-workflow.ts): `checkValidationWorkflow`, `checkReleaseProtection`,
-and `checkReleasePromotion`. They run in the structural step (`bun run structure:check`), the only place their `release/…` violations print, each at
+[tests/architecture/check-release-workflow.ts](../../tests/architecture/check-release-workflow.ts): `checkScenarioSelection`, `checkValidationWorkflow`,
+`checkReleaseProtection`, and `checkReleasePromotion`. They run in the structural step (`bun run structure:check`), the only place their `release/…`
+violations print, each at
 `.github/workflows/check.yml:1:1` with a `fix:` and a `see:` line naming the owning section below. A missing or unparseable workflow fails the step
 as a tool error. Each guard is proven under `bun test` by a synthetic workflow that breaks exactly that guard, so the step and the guards' proofs both run
 on Windows, macOS, and Linux without publishing.
@@ -23,13 +24,19 @@ those runs are durable release evidence — the default-branch gate and the tag'
 The release scripts build the candidate once and download those artifacts everywhere else. After approval they never rebuild or repack: every promoted
 byte must equal the digest recorded for the approved candidate.
 
+## Check triggers
+
+Check runs on every unfiltered `push`, including branch, default-branch, and `v*` tag pushes, and on `workflow_dispatch`. It has no `pull_request`
+trigger. Same-repository pull requests retain the push run on their head commit; fork pull requests receive no CI. This accepted trade-off removes the
+duplicate run for each pushed pull-request commit. Default-branch and release-tag runs remain durable under the workflow's concurrency condition.
+
 ## Candidate Validation
 
 The `candidate-validation` scenario (spec [#137](https://github.com/secantdev/secant/issues/137) stories 85/89,
 [#157](https://github.com/secantdev/secant/issues/157)) is the manual-dispatch mode of the one gate: a `workflow_dispatch` run executes the whole gate on one
 commit — the three-OS canonical check, the cross-build/assemble, and the per-OS consumer job's compiled-binary smoke, every release-channel consumer
 scenario ([release-consumers.md](./release-consumers.md)), and terminal-lifecycle steps, plus the evidence contract and legal closure — against the single candidate the
-`build` job assembles once. It adds the one thing a push/PR run cannot: a separately configured read-only npm identity (`secrets.NPM_READONLY_TOKEN`, no
+`build` job assembles once. It adds the one thing a plain push run cannot: a separately configured read-only npm identity (`secrets.NPM_READONLY_TOKEN`, no
 publication authority) authenticates and publish-dry-runs every platform package first and the launcher last (`scripts/npm-dry-run.ts`), so the npm release
 path is proven end to end with no route to publication. The dry-run is registry-facing and OS-independent, so it folds into the `build` job's final step under
 `if: github.event_name == 'workflow_dispatch'`, gating the credential to that one manual run rather than paying for its own runner.

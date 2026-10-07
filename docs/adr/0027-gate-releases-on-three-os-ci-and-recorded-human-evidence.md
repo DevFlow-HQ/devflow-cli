@@ -1,8 +1,10 @@
 # Gate Releases On Three-OS CI And Recorded Human Evidence
 
-Every push and pull request runs the canonical `bun run check` on Windows x64, macOS arm64, and Linux x64 with one pinned Node version, and a red job
-on any operating system blocks merge. A release is a `v*` tag whose workflow re-runs that gate on all three, then publishes to npm from CI behind a
-`release` GitHub environment with one required human reviewer. Nothing is published from a developer machine. The
+Every branch, default-branch, and release-tag push, plus each manual dispatch, runs the canonical `bun run check` on Windows x64, macOS arm64, and
+Linux x64, and a red job on any operating system blocks merge (amended 2026-10-07). The workflow has no `pull_request` trigger: same-repository pull
+requests retain the push run on their head commit, while fork pull requests receive no CI. This accepted trade-off removes duplicate runs for the same
+commit. A release is a `v*` tag whose workflow re-runs that gate on all three, then publishes to npm from CI behind a `release` GitHub environment with
+one required human reviewer. Nothing is published from a developer machine. The
 [cross-platform gate decision](https://github.com/DevFlow-HQ/devflow-cli/issues/26) fixes this because the repository is public, so the runners
 are free, Windows is the first-priority platform, and the OpenTUI prototype showed that Windows defects appear only on Windows.
 

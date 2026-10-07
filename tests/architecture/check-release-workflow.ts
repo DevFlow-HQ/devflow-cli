@@ -19,9 +19,12 @@
 // job EXCEPT the one protected promotion job, and the protection scenario requires it
 // there. Publication of the bytes themselves — a real publish step and its
 // publication credential — is owned by `checkReleasePromotion` (#159).
+// `checkScenarioSelection` (#469) owns the same workflow's trigger set, anchored
+// named-scenario filters, contributing file lists, and one complete Test step.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, posix } from "node:path";
+import ts from "typescript";
 import type { Finding } from "./rule-catalogue.js";
 
 export const CI_WORKFLOW = ".github/workflows/check.yml";
@@ -81,7 +84,7 @@ const READONLY_SECRET = /READ_?ONLY/i;
 const DISPATCH_GUARD = "workflow_dispatch";
 // The step condition that POSITIVELY gates on a manual dispatch. A substring test
 // would also pass a negated guard (`github.event_name != 'workflow_dispatch'`), which
-// runs on every push/PR and skips only on dispatch — the exact opposite — so match
+// runs on every push and skips only on dispatch — the exact opposite — so match
 // the equality form explicitly.
 const DISPATCH_GATE = /github\.event_name\s*==\s*['"]workflow_dispatch['"]/;
 
@@ -161,10 +164,212 @@ function condition(value: unknown): string {
     : "";
 }
 
+const TEST_FILE = /\btests\/[A-Za-z0-9_./-]+\.test\.tsx?\b/g;
+const TEST_COMMAND = /\bbun\s+run\s+test(?:\s|$)/;
+
+export const NAMED_CHECK_SCENARIOS = [
+  "operation-receipt-identity-and-lifetime",
+  "Codex semantic schema qualification",
+  "model-choice-bounded-eligibility",
+  "Claude fallback cleanup retains owner",
+  "retained-step-fault-shutdown",
+  "authoritative-run-summary",
+  "m10-commands-and-input-rules",
+  "m10-workspace-mentions",
+  "m10-home-and-preferences",
+  "m10-full-transcript-prepend",
+  "m10-workbench-interaction",
+  "m10-confirmation-target-identity",
+  "m10-initial-preparation-ownership",
+  "m10-previous-release-conversation",
+  "m10-session-history",
+  "m10-paused-history-identity",
+  "m10-interruption-and-transcript",
+  "m10-observed-harness-facts",
+  "m12-focused-check-scenarios",
+] as const;
+
+function testFilesIn(script: string): string[] {
+  return [...new Set(script.match(TEST_FILE) ?? [])].filter(
+    (path) => !path.split("/").includes(".."),
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseSource(path: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(
+    path,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+}
+
+function nodeDeclaresScenario(
+  root: ts.Node,
+  scenario: string,
+  testCallees = new Set(["test"]),
+): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (node !== root && ts.isFunctionLike(node)) return;
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const isTest = ts.isIdentifier(callee) && testCallees.has(callee.text);
+      const name = node.arguments[0];
+      const prefix =
+        name && ts.isStringLiteralLike(name)
+          ? name.text
+          : name && ts.isTemplateExpression(name)
+            ? name.head.text
+            : undefined;
+      if (
+        isTest &&
+        prefix !== undefined &&
+        (prefix === scenario || prefix.startsWith(`${scenario}:`))
+      ) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return found;
+}
+
+function exportedRegistrar(
+  source: ts.SourceFile,
+  name: string,
+):
+  | { readonly body: ts.ConciseBody; readonly testParameter?: string }
+  | undefined {
+  for (const statement of source.statements) {
+    const exported =
+      ts.canHaveModifiers(statement) &&
+      ts
+        .getModifiers(statement)
+        ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+    if (!exported) continue;
+    if (
+      ts.isFunctionDeclaration(statement) &&
+      statement.name?.text === name &&
+      statement.body
+    ) {
+      const parameter = statement.parameters[0]?.name;
+      return {
+        body: statement.body,
+        ...(parameter && ts.isIdentifier(parameter)
+          ? { testParameter: parameter.text }
+          : {}),
+      };
+    }
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        ts.isIdentifier(declaration.name) &&
+        declaration.name.text === name &&
+        declaration.initializer &&
+        (ts.isArrowFunction(declaration.initializer) ||
+          ts.isFunctionExpression(declaration.initializer))
+      ) {
+        const parameter = declaration.initializer.parameters[0]?.name;
+        return {
+          body: declaration.initializer.body,
+          ...(parameter && ts.isIdentifier(parameter)
+            ? { testParameter: parameter.text }
+            : {}),
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+function sourceDeclaresScenario(
+  path: string,
+  source: string | undefined,
+  scenario: string,
+  readSource: (path: string) => string | undefined,
+): boolean {
+  if (source === undefined) return false;
+  const parsed = parseSource(path, source);
+  if (nodeDeclaresScenario(parsed, scenario)) return true;
+
+  // A conformance entrypoint may register tests by calling an imported registrar
+  // at top level. Follow only the called export, not the imported module as a whole.
+  const imports = new Map<
+    string,
+    { readonly imported: string; readonly module: string }
+  >();
+  for (const statement of parsed.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      !statement.moduleSpecifier.text.startsWith(".") ||
+      !statement.importClause ||
+      !statement.importClause.namedBindings ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      continue;
+    }
+    for (const element of statement.importClause.namedBindings.elements) {
+      imports.set(element.name.text, {
+        imported: element.propertyName?.text ?? element.name.text,
+        module: statement.moduleSpecifier.text,
+      });
+    }
+  }
+  for (const statement of parsed.statements) {
+    if (
+      !ts.isExpressionStatement(statement) ||
+      !ts.isCallExpression(statement.expression) ||
+      !ts.isIdentifier(statement.expression.expression)
+    ) {
+      continue;
+    }
+    const called = imports.get(statement.expression.expression.text);
+    if (called === undefined) continue;
+    const resolved = posix.normalize(
+      posix.join(posix.dirname(path), called.module),
+    );
+    if (!resolved.startsWith("tests/") || resolved.split("/").includes(".."))
+      continue;
+    const candidates = resolved.endsWith(".js")
+      ? [`${resolved.slice(0, -3)}.ts`, `${resolved.slice(0, -3)}.tsx`]
+      : [resolved, `${resolved}.ts`, `${resolved}.tsx`];
+    for (const candidate of candidates) {
+      const importedSource = readSource(candidate);
+      if (importedSource === undefined) continue;
+      const registrar = exportedRegistrar(
+        parseSource(candidate, importedSource),
+        called.imported,
+      );
+      const testCallees = new Set(["test"]);
+      if (registrar?.testParameter) testCallees.add(registrar.testParameter);
+      if (
+        registrar &&
+        nodeDeclaresScenario(registrar.body, scenario, testCallees)
+      )
+        return true;
+    }
+  }
+  return false;
+}
+
 /** Every release-workflow violation in the real CI workflow under `root`. */
 export function checkReleaseWorkflow(root: string): Finding[] {
   const workflow = readWorkflow(root);
   return [
+    ...checkScenarioSelection(workflow, (path) => {
+      const source = join(root, path);
+      return existsSync(source) ? readFileSync(source, "utf8") : undefined;
+    }),
     ...checkValidationWorkflow(workflow),
     ...checkReleaseProtection(workflow),
     ...checkReleasePromotion(workflow),
@@ -353,6 +558,106 @@ export function checkValidationWorkflow(workflow: unknown): Finding[] {
     }
   }
 
+  return found;
+}
+
+/** The named Check scenarios select only their own tests. */
+export function checkScenarioSelection(
+  workflow: unknown,
+  readSource: (path: string) => string | undefined,
+): Finding[] {
+  const { found, add } = collector();
+  if (!isRecord(workflow)) return found;
+  const triggers = [...triggerNames(workflow.on)].sort();
+  const on = isRecord(workflow.on) ? workflow.on : {};
+  const push = on.push;
+  const pushIsUnfiltered =
+    push === null || (isRecord(push) && Object.keys(push).length === 0);
+  if (
+    triggers.length !== 2 ||
+    triggers[0] !== "push" ||
+    triggers[1] !== "workflow_dispatch" ||
+    !pushIsUnfiltered
+  ) {
+    add("release/check-triggers", {
+      triggers,
+      filteredPush: triggers.includes("push") && !pushIsUnfiltered,
+    });
+  }
+  if (!isRecord(workflow.jobs)) return found;
+  const check = workflow.jobs.check;
+  if (!isRecord(check)) {
+    add("release/check-job", {});
+    return found;
+  }
+
+  const steps = stepsOf(check);
+  const scenarioNames = new Set<string>(NAMED_CHECK_SCENARIOS);
+  for (const step of steps) {
+    if (typeof step.run !== "string" || !TEST_COMMAND.test(step.run)) continue;
+    const name = typeof step.name === "string" ? step.name : "<unnamed>";
+    const canonicalFullRun =
+      name === "Test" && step.run.trim() === "bun run test";
+    if (!canonicalFullRun && !scenarioNames.has(name)) {
+      add("release/unexpected-test-step", { step: name });
+    }
+  }
+
+  const fullRuns = steps.filter(
+    (step) =>
+      typeof step.run === "string" && step.run.trim() === "bun run test",
+  );
+  if (fullRuns.length !== 1 || fullRuns[0]?.name !== "Test") {
+    add("release/full-test-step", {
+      steps: fullRuns.map((step) =>
+        typeof step.name === "string" ? step.name : "<unnamed>",
+      ),
+    });
+  }
+
+  for (const scenario of NAMED_CHECK_SCENARIOS) {
+    const matching = steps.filter((step) => step.name === scenario);
+    if (matching.length !== 1) {
+      add("release/scenario-step", { scenario, count: matching.length });
+      continue;
+    }
+    const step = matching[0]!;
+    const expected = `-t '^${scenario}(:|$)'`;
+    const script = typeof step.run === "string" ? step.run : "";
+    const filterCount = [...script.matchAll(/(?:^|\s)-t(?=\s)/g)].length;
+    const exactFilter = new RegExp(`${escapeRegExp(expected)}(?=\\s|$)`);
+    if (
+      !TEST_COMMAND.test(script) ||
+      filterCount !== 1 ||
+      !exactFilter.test(script)
+    ) {
+      add("release/scenario-filter", {
+        scenario,
+        expected,
+      });
+    }
+    const files = testFilesIn(script);
+    const selections = files.map((path) => ({
+      path,
+      selected: sourceDeclaresScenario(
+        path,
+        readSource(path),
+        scenario,
+        readSource,
+      ),
+    }));
+    for (const selection of selections) {
+      if (!selection.selected) {
+        add("release/scenario-file-empty", {
+          scenario,
+          file: selection.path,
+        });
+      }
+    }
+    if (!selections.some((selection) => selection.selected)) {
+      add("release/scenario-selection-empty", { scenario });
+    }
+  }
   return found;
 }
 

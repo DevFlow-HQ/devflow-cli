@@ -147,11 +147,11 @@ for (const [name, path, members] of [
     ["accept", "decline"],
   ],
 ] satisfies [string, string[], string[]][]) {
-  test(`Codex semantic schema qualification accepts reordered ${name} enum`, async () => {
+  test(`Codex semantic schema qualification: accepts reordered ${name} enum`, async () => {
     await accepts((schema) => array(at(schema, ...path)).reverse());
   });
   for (const member of members) {
-    test(`Codex semantic schema qualification rejects missing ${name} ${member}`, async () => {
+    test(`Codex semantic schema qualification: rejects missing ${name} ${member}`, async () => {
       await rejects((schema) => {
         const values = array(at(schema, ...path));
         values.splice(values.indexOf(member), 1);
@@ -181,7 +181,7 @@ const nullableTypes: [string, string[]][] = [
   ],
 ];
 for (const [name, path] of nullableTypes) {
-  test(`Codex semantic schema qualification accepts reordered ${name} types`, async () => {
+  test(`Codex semantic schema qualification: accepts reordered ${name} types`, async () => {
     await accepts((schema) => array(at(schema, ...path)).reverse());
   });
 }
@@ -219,12 +219,12 @@ const nullableReferences: [string, string[]][] = [
   ],
 ];
 for (const [name, path] of nullableReferences) {
-  test(`Codex semantic schema qualification accepts reordered ${name} references`, async () => {
+  test(`Codex semantic schema qualification: accepts reordered ${name} references`, async () => {
     await accepts((schema) => array(at(schema, ...path)).reverse());
   });
 }
 
-test("Codex semantic schema qualification accepts reordered elicitation variants", async () => {
+test("Codex semantic schema qualification: accepts reordered elicitation variants", async () => {
   await accepts((schema) =>
     array(
       at(schema, "definitions", "McpServerElicitationRequestParams", "oneOf"),
@@ -234,7 +234,7 @@ test("Codex semantic schema qualification accepts reordered elicitation variants
 
 for (const [name, path] of nullableTypes) {
   for (const member of ["value", "null"]) {
-    test(`Codex semantic schema qualification rejects missing ${name} ${member} type`, async () => {
+    test(`Codex semantic schema qualification: rejects missing ${name} ${member} type`, async () => {
       await rejects((schema) => {
         const types = array(at(schema, ...path));
         const index =
@@ -245,7 +245,7 @@ for (const [name, path] of nullableTypes) {
       });
     });
   }
-  test(`Codex semantic schema qualification rejects rewritten ${name} type`, async () => {
+  test(`Codex semantic schema qualification: rejects rewritten ${name} type`, async () => {
     await rejects((schema) => {
       object(at(schema, ...path.slice(0, -1))).type = "string";
     });
@@ -258,7 +258,7 @@ for (const [name, path] of nullableReferences) {
     "missing reference",
     "missing null",
   ]) {
-    test(`Codex semantic schema qualification rejects ${name} ${mutation}`, async () => {
+    test(`Codex semantic schema qualification: rejects ${name} ${mutation}`, async () => {
       await rejects((schema) => {
         const variants = array(at(schema, ...path));
         variants.reverse();
@@ -293,7 +293,7 @@ function elicitation(schema: unknown, mode: string): Record<string, unknown> {
 }
 
 for (const mode of ["form", "url"]) {
-  test(`Codex semantic schema qualification rejects missing elicitation ${mode} variant`, async () => {
+  test(`Codex semantic schema qualification: rejects missing elicitation ${mode} variant`, async () => {
     await rejects((schema) => {
       const variants = array(
         at(schema, "definitions", "McpServerElicitationRequestParams", "oneOf"),
@@ -306,7 +306,7 @@ for (const mode of ["form", "url"]) {
     ? ["message", "mode", "url"]
     : ["message", "mode"]) {
     for (const mutation of ["not required", "missing schema", "changed type"]) {
-      test(`Codex semantic schema qualification rejects elicitation ${mode}.${field} ${mutation}`, async () => {
+      test(`Codex semantic schema qualification: rejects elicitation ${mode}.${field} ${mutation}`, async () => {
         await rejects((schema) => {
           const selected = elicitation(schema, mode);
           if (mutation === "not required") {
@@ -319,7 +319,7 @@ for (const mode of ["form", "url"]) {
       });
     }
   }
-  test(`Codex semantic schema qualification rejects elicitation ${mode} object rewrite`, async () => {
+  test(`Codex semantic schema qualification: rejects elicitation ${mode} object rewrite`, async () => {
     await rejects((schema) => {
       elicitation(schema, mode).type = "array";
     });
@@ -327,7 +327,7 @@ for (const mode of ["form", "url"]) {
 }
 
 for (const field of ["serverName", "threadId"]) {
-  test(`Codex semantic schema qualification rejects non-required elicitation ${field}`, async () => {
+  test(`Codex semantic schema qualification: rejects non-required elicitation ${field}`, async () => {
     await rejects((schema) => {
       const required = array(
         at(
@@ -342,13 +342,13 @@ for (const field of ["serverName", "threadId"]) {
   });
 }
 
-test("Codex semantic schema qualification rejects changed form metadata", async () => {
+test("Codex semantic schema qualification: rejects changed form metadata", async () => {
   await rejects((schema) => {
     object(elicitation(schema, "form").properties)._meta = { type: "string" };
   });
 });
 
-test("Codex semantic schema qualification rejects a changed elicitation response reference", async () => {
+test("Codex semantic schema qualification: rejects a changed elicitation response reference", async () => {
   await rejects((schema) => {
     object(
       at(
@@ -362,7 +362,7 @@ test("Codex semantic schema qualification rejects a changed elicitation response
   });
 });
 
-test("Codex semantic schema qualification rejects a non-required elicitation response action", async () => {
+test("Codex semantic schema qualification: rejects a non-required elicitation response action", async () => {
   await rejects((schema) => {
     object(
       at(schema, "definitions", "McpServerElicitationRequestResponse"),
@@ -370,11 +370,11 @@ test("Codex semantic schema qualification rejects a non-required elicitation res
   });
 });
 
-test("Codex semantic schema qualification accepts the original recorded schema", async () => {
+test("Codex semantic schema qualification: accepts the original recorded schema", async () => {
   await accepts(() => {});
 });
 
-test("Codex semantic schema qualification accepts combined reorderings and additions", async () => {
+test("Codex semantic schema qualification: accepts combined reorderings and additions", async () => {
   await accepts((schema) => {
     for (const path of [
       ["definitions", "v2", "ApprovalsReviewer", "enum"],
@@ -417,7 +417,7 @@ for (const [name, path] of [
     ],
   ],
 ] satisfies [string, string[]][]) {
-  test(`Codex semantic schema qualification accepts reordered ${name} allOf references`, async () => {
+  test(`Codex semantic schema qualification: accepts reordered ${name} allOf references`, async () => {
     await accepts((schema) => {
       const references = array(at(schema, ...path, "allOf"));
       references.push({});
@@ -429,7 +429,7 @@ for (const [name, path] of [
     "changed reference",
     "overriding reference",
   ]) {
-    test(`Codex semantic schema qualification rejects ${name} ${mutation}`, async () => {
+    test(`Codex semantic schema qualification: rejects ${name} ${mutation}`, async () => {
       await rejects((schema) => {
         const property = object(at(schema, ...path));
         const references = array(property.allOf);
