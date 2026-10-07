@@ -1,7 +1,6 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
@@ -157,24 +156,14 @@ function spyAdapter(inner: HarnessAdapter): {
 
 /** Author a single-Agent-step Bundle over the fake approval Turn. */
 function writeAgentBundle(): { folder: string; id: string } {
-  const folder = makeTempDir("secant-reqp-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(
-    join(folder, "prompts", "fix.md"),
-    "Repair the failing test in the workspace.\n",
-  );
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.reqp-agent",
-      version: "1.0.0",
-      name: "Harness Request Policy Agent",
-      description:
-        "A single Agent Step Bundle for the approval-request policy.",
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.reqp-agent",
+    name: "Harness Request Policy Agent",
+    description: "A single Agent Step Bundle for the approval-request policy.",
+    prompt: {
+      path: "prompts/fix.md",
+      text: "Repair the failing test in the workspace.\n",
     },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/fix.md", kind: "prompt" }],
     routing: [
       {
         id: "fix",
@@ -183,12 +172,8 @@ function writeAgentBundle(): { folder: string; id: string } {
         prompt: { asset: "prompts/fix.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  });
+  return { folder, id: "dev.secant.reqp-agent" };
 }
 
 /** Wire against the fake approval-Turn Adapter with a spy, over an injected fake

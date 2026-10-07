@@ -1,8 +1,8 @@
 import { readRun } from "./run-test-helpers.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
@@ -26,7 +26,6 @@ import {
   type FakeScript,
 } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
-import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import {
   awaitRunRest,
   awaitSettled,
@@ -254,44 +253,24 @@ function sequencedAdapter(
 /** A fake Process that resolves any executable and reaches no real child; Git store
  *  operations run through the deterministic fake Git process. */
 function fakeProcess(): ProcessAdapter {
-  const git = createFakeGitProcess();
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: () => ({
-      kind: "exited",
-      status: 0,
-      text: new Uint8Array(),
-    }),
+  return storedProcess({
+    script: {
+      commandHandler: () => ({
+        kind: "exited",
+        status: 0,
+        text: new Uint8Array(),
+      }),
+    },
   });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => git.spawnCommandSync(options),
-  };
 }
 
 /** Author a single-Agent-step Bundle in Session `s`: the Turn the fake drives. */
 function writeAgentBundle(): { folder: string; id: string } {
-  const folder = makeTempDir("secant-interrupt-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.interrupt-e2e",
-      version: "1.0.0",
-      name: "Interrupt E2E",
-      description: "A single Agent Step Bundle for interrupt/resume.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/go.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.interrupt-e2e",
+    name: "Interrupt E2E",
+    description: "A single Agent Step Bundle for interrupt/resume.",
+    prompt: { path: "prompts/go.md", text: "Do the work.\n" },
     routing: [
       {
         id: "work",
@@ -300,12 +279,8 @@ function writeAgentBundle(): { folder: string; id: string } {
         prompt: { asset: "prompts/go.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  });
+  return { folder, id: "dev.secant.interrupt-e2e" };
 }
 
 /** One wiring over `home`/`workspace` whose Harness Adapter prepares `scripts` in
@@ -900,9 +875,7 @@ async function failedInterruptScenario(
     wired.runGroup.close();
     wired.catalog.close();
   });
-  const folder = makeTempDir("secant-interrupt-bundle-");
-  mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "go.md"), "Go.\n");
+
   const agent = (id: string, kind = "agent") => ({
     id,
     kind,
@@ -923,22 +896,13 @@ async function failedInterruptScenario(
           },
         }
       : agent("next");
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: "dev.secant.turn-interrupt",
-        version: "1.0.0",
-        name: "Interrupt",
-        description: "Turn scoping",
-      },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/go.md", kind: "prompt" }],
-      routing: options.next === "human" ? routing : [...routing, next],
-    }),
-  );
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.turn-interrupt",
+    name: "Interrupt",
+    description: "Turn scoping",
+    prompt: { path: "prompts/go.md", text: "Go.\n" },
+    routing: options.next === "human" ? routing : [...routing, next],
+  });
   const built = wired.bundleManagement.build(folder, { noInstall: false });
   assert.ok(built.ok, JSON.stringify(built));
   const entry = wired.catalog
@@ -1168,31 +1132,20 @@ test("an accepted interrupt whose Turn ends lost applies and still rests halted 
 // group's last Step (#216's boundary case, #354).
 test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as the current Step with the follow-up offered (#354)", async (t) => {
   const workspace = makeTempDir("secant-interrupt-ws-");
-  const git = createFakeGitProcess();
-  // Every test run exits non-zero, so the `until` Verdict reads `fail` and loops.
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: () => ({
-      kind: "exited",
-      status: 1,
-      text: new Uint8Array(),
-    }),
-  });
   const record = harnessRecord();
   const overrides = {
     secantHome: makeTempDir("secant-interrupt-home-"),
     launchCwd: workspace,
-    process: {
-      resolveExecutable: (name, options) =>
-        commands.resolveExecutable(name, options),
-      spawnCommand: (options) => commands.spawnCommand(options),
-      spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-      spawnCommandSync: (options) => git.spawnCommandSync(options),
-    },
+    // Every test run fails, so the `until` Verdict loops.
+    process: storedProcess({
+      script: {
+        commandHandler: () => ({
+          kind: "exited",
+          status: 1,
+          text: new Uint8Array(),
+        }),
+      },
+    }),
     get harnessAdapter() {
       return sequencedAdapter(
         [
@@ -1219,48 +1172,37 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
     wired.runGroup.close();
     wired.catalog.close();
   });
-  const folder = makeTempDir("secant-interrupt-bundle-");
-  mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "fix.md"), "Fix the test.\n");
+
   const runTest = (id: string) => ({
     id,
     kind: "command",
     produces: [{ name: "verdict", type: "verdict" }],
     command: { executable: RUNTIME_NAME, arguments: ["test"] },
   });
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: "dev.secant.interrupt-repeat",
-        version: "1.0.0",
-        name: "Interrupt Repeat",
-        description: "An Agent Step opening each Repeat pass.",
-      },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/fix.md", kind: "prompt" }],
-      routing: [
-        runTest("baseline"),
-        {
-          repeat: {
-            until: "verdict",
-            reviewCheckpoint: { interval: 5, message: "Keep repairing?" },
-            steps: [
-              {
-                id: "fix",
-                kind: "agent",
-                session: "s",
-                prompt: { asset: "prompts/fix.md" },
-              },
-              runTest("run-test"),
-            ],
-          },
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.interrupt-repeat",
+    name: "Interrupt Repeat",
+    description: "An Agent Step opening each Repeat pass.",
+    prompt: { path: "prompts/fix.md", text: "Fix the test.\n" },
+    routing: [
+      runTest("baseline"),
+      {
+        repeat: {
+          until: "verdict",
+          reviewCheckpoint: { interval: 5, message: "Keep repairing?" },
+          steps: [
+            {
+              id: "fix",
+              kind: "agent",
+              session: "s",
+              prompt: { asset: "prompts/fix.md" },
+            },
+            runTest("run-test"),
+          ],
         },
-      ],
-    }),
-  );
+      },
+    ],
+  });
   assert.ok(wired.bundleManagement.build(folder, { noInstall: false }).ok);
   const entry = wired.catalog
     .listEntries()

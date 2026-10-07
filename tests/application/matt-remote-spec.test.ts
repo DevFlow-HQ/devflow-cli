@@ -1,11 +1,11 @@
 import { readRun } from "./run-test-helpers.js";
+import { MATT_FOLDER, wireMatt } from "./matt-wiring.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import test, { type TestContext } from "node:test";
-import { fileURLToPath } from "node:url";
-import { wireApplication, type Wiring } from "../../src/composition/main.js";
+import test from "node:test";
+import type { Wiring } from "../../src/composition/main.js";
 import type {
   HarnessAdapter,
   PreparedHarness,
@@ -16,8 +16,7 @@ import {
   createFake,
   type FakeScript,
 } from "../harness/fake-adapter.js";
-import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
-import { makeTempDir } from "../helpers/tempDir.js";
+
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // [matt-remote-spec] The maintained Matt Bundle's spec stage for a remote tracker
@@ -32,8 +31,6 @@ import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 // After the spec, the Run rests at ticket review; the [matt-remote-tickets] cases
 // below cover that stage.
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const MATT_FOLDER = join(repoRoot, "bundles", "matt-front-spec");
 const MATT_ID = "dev.secant.matt-front";
 const RECEIPT_LINE =
   /Write the required output "(spec-ref|tickets-ref)" as UTF-8 text to (.+) before you finish;/;
@@ -121,49 +118,6 @@ function trackerAgent(
       },
     }),
   };
-}
-
-function wire(
-  t: TestContext,
-  harness: HarnessId,
-  adapter: HarnessAdapter,
-): { wired: Wiring; digest: string } {
-  const workspace = makeTempDir("secant-matt-remote-spec-ws-");
-  const found = (name: string) => () => ({
-    kind: "found" as const,
-    attempt: {
-      source: "path" as const,
-      name,
-      description: `PATH name '${name}'`,
-    },
-  });
-  const wired = wireApplication({
-    secantHome: makeTempDir("secant-matt-remote-spec-home-"),
-    launchCwd: workspace,
-    supportsInteractiveTurns: true,
-    process: createFakeBundleProcess(),
-    discoverClaudeCode: found("claude"),
-    discoverCodex: found("codex"),
-    ...(harness === "codex"
-      ? { codexHarnessAdapter: adapter }
-      : { harnessAdapter: adapter }),
-  });
-  t.after(() => {
-    wired.runGroup.close();
-    wired.catalog.close();
-  });
-  const built = wired.bundleManagement.build(MATT_FOLDER, { noInstall: false });
-  assert.ok(built.ok, JSON.stringify(built));
-  const entry = wired.catalog.listEntries().find((e) => e.id === MATT_ID);
-  assert.ok(entry);
-  assert.ok(
-    wired.projectionPort.submit({
-      operationId: "op-approve",
-      operation: "approve-workspace",
-      input: { path: workspace },
-    }).admitted,
-  );
-  return { wired, digest: entry.digest };
 }
 
 async function submitAndSettle(
@@ -263,7 +217,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     ["GitHub", "https://github.com/example/app/issues/7"],
     ["Linear", "LIN-42"],
   ] as const) {
-    test(`[matt-remote-spec] [${harness}] a ${tracker} spec is published through the Harness tools and its reference is kept (#221)`, async (t) => {
+    test(`m12-wiring-test-helpers: [matt-remote-spec] [${harness}] a ${tracker} spec is published through the Harness tools and its reference is kept (#221)`, async (t) => {
       const agent = trackerAgent(harness, [
         { reply: "Q1 - Who toggles it? Recommended: each user." },
         {
@@ -272,7 +226,10 @@ for (const harness of ["claude-code", "codex"] as const) {
         },
         { reply: "Proposed breakdown: 1. Toggle. 2. Persist." },
       ]);
-      const { wired, digest } = wire(t, harness, agent.adapter);
+      const { wired, digest } = wireMatt(t, {
+        harness,
+        adapter: agent.adapter,
+      });
       const { runId, run } = await driveToSpec(wired, digest, harness, tracker);
 
       // The Run moves on to ticket review (#223) and rests there.
@@ -290,14 +247,14 @@ for (const harness of ["claude-code", "codex"] as const) {
     });
   }
 
-  test(`[matt-remote-spec] [${harness}] an unavailable tracker fails the spec Step without switching trackers or retrying (#221)`, async (t) => {
+  test(`m12-wiring-test-helpers: [matt-remote-spec] [${harness}] an unavailable tracker fails the spec Step without switching trackers or retrying (#221)`, async (t) => {
     // The agent finishes its Turn reporting the missing connection and writes no
     // receipt; a completed Turn is not proof of publication.
     const agent = trackerAgent(harness, [
       { reply: "Q1 - Who toggles it? Recommended: each user." },
       { reply: "Linear is not connected to my tools, so I did not publish." },
     ]);
-    const { wired, digest } = wire(t, harness, agent.adapter);
+    const { wired, digest } = wireMatt(t, { harness, adapter: agent.adapter });
     const { run } = await driveToSpec(wired, digest, harness, "Linear");
 
     assert.equal(run.state, "failed");
@@ -363,7 +320,10 @@ for (const harness of ["claude-code", "codex"] as const) {
         { reply: "Published 2 tickets.", receipt: TICKETS },
         { reply: "I chose the first ready ticket." },
       ]);
-      const { wired, digest } = wire(t, harness, agent.adapter);
+      const { wired, digest } = wireMatt(t, {
+        harness,
+        adapter: agent.adapter,
+      });
       const { runId } = await driveToSpec(wired, digest, harness, tracker);
 
       // The review's entry Turn reads the published spec with to-tickets and must
@@ -433,7 +393,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       { reply: "Proposed: 1. Toggle." },
       { reply: "Linear is no longer connected, so I published nothing." },
     ]);
-    const { wired, digest } = wire(t, harness, agent.adapter);
+    const { wired, digest } = wireMatt(t, { harness, adapter: agent.adapter });
     const { runId } = await driveToSpec(wired, digest, harness, "Linear");
     await submitAndSettle(wired, {
       operationId: "op-approve-tickets",
@@ -519,7 +479,10 @@ for (const harness of ["claude-code", "codex"] as const) {
         { reply: "The tests live beside the toggle." },
         { reply: `I read ${tracker} again and chose the next ready ticket.` },
       ]);
-      const { wired, digest } = wire(t, harness, agent.adapter);
+      const { wired, digest } = wireMatt(t, {
+        harness,
+        adapter: agent.adapter,
+      });
       const runId = await driveToImplement(wired, digest, harness, tracker);
 
       // The Entry Turn names the chosen tracker, its published references, and the
@@ -590,7 +553,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       { reply: "Linear is not connected to my tools, so I cannot read it." },
       { reply: "No ticket is ready: every ticket is done. End the stage." },
     ]);
-    const { wired, digest } = wire(t, harness, agent.adapter);
+    const { wired, digest } = wireMatt(t, { harness, adapter: agent.adapter });
     const runId = await driveToImplement(wired, digest, harness, "Linear");
 
     const rests = () => {

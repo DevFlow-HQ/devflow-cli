@@ -1,6 +1,5 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
@@ -124,21 +123,11 @@ function codexScript(fixture: string): FakeScript {
 }
 
 function writeAgentBundle(prompt: string): { folder: string; id: string } {
-  const folder = makeTempDir("secant-codex-headless-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), prompt);
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.codex-headless-e2e",
-      version: "1.0.0",
-      name: "Codex Headless E2E",
-      description:
-        "A single Agent Step Bundle driven headlessly through Codex.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/go.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.codex-headless-e2e",
+    name: "Codex Headless E2E",
+    description: "A single Agent Step Bundle driven headlessly through Codex.",
+    prompt: { path: "prompts/go.md", text: prompt },
     routing: [
       {
         id: "work",
@@ -147,12 +136,8 @@ function writeAgentBundle(prompt: string): { folder: string; id: string } {
         prompt: { asset: "prompts/go.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  });
+  return { folder, id: "dev.secant.codex-headless-e2e" };
 }
 
 function wire(

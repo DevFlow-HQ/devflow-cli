@@ -1,8 +1,7 @@
 import { readRun, findOffer, requireOffer } from "./run-test-helpers.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import type {
@@ -215,27 +214,14 @@ function writeBundle(routing: readonly unknown[]): {
   folder: string;
   id: string;
 } {
-  const folder = makeTempDir("secant-continuation-failure-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.continuation-failure",
-      version: "1.0.0",
-      name: "Continuation Failure",
-      description: "A control followed by a drive that must prepare a Harness.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/go.md", kind: "prompt" }],
-    routing,
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.continuation-failure",
+    name: "Continuation Failure",
+    description: "A control followed by a drive that must prepare a Harness.",
+    prompt: { path: "prompts/go.md", text: "Do the work.\n" },
+    routing: routing,
+  });
+  return { folder, id: "dev.secant.continuation-failure" };
 }
 
 interface Launched {

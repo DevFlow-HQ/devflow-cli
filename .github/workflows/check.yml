@@ -234,6 +234,18 @@ jobs:
           tests/application/run-test-helpers.test.ts
           tests/application/requested-model.test.ts
           tests/run/execution/agent.test.ts
+      - name: m12-wiring-test-helpers
+        run: >-
+          bun run test --
+          -t '^m12-wiring-test-helpers(:|$)'
+          tests/composition/wiring.test.ts
+          tests/composition/application-log.test.ts
+          tests/composition/harness-log.test.ts
+          tests/application/requested-model.test.ts
+          tests/application/matt-local-spec.test.ts
+          tests/application/matt-remote-spec.test.ts
+          tests/application/matt-grill-launch.test.ts
+          tests/application/matt-local-implement.test.ts
       - name: Test
         run: bun run test
       - name: Build

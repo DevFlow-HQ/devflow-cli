@@ -1,3 +1,4 @@
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
@@ -14,7 +15,6 @@ import {
   type FakeScript,
   type FakeTurnRequestRecord,
 } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
@@ -34,25 +34,18 @@ const sharedGit = createFakeGitProcess();
 // (these fixtures declare no git-worktree-root prerequisite, so `rev-parse` is
 // never probed).
 function fakeProcess(): ProcessAdapter {
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: (options) => {
-      const script = options.args[1] ?? "";
-      const status = Number(/process\.exit\((\d+)\)/.exec(script)?.[1] ?? "0");
-      return { kind: "exited", status, text: new Uint8Array() };
+  return storedProcess({
+    git: sharedGit,
+    script: {
+      commandHandler: (options) => {
+        const script = options.args[1] ?? "";
+        const status = Number(
+          /process\.exit\((\d+)\)/.exec(script)?.[1] ?? "0",
+        );
+        return { kind: "exited", status, text: new Uint8Array() };
+      },
     },
   });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => sharedGit.spawnCommandSync(options),
-  };
 }
 
 type LegacyKind = "agent" | "command";

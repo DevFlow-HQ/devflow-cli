@@ -1,5 +1,6 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { withClients } from "../../src/composition/main.js";
@@ -48,20 +49,11 @@ const BUNDLE_ID = "dev.secant.detail-log";
 /** A Bundle whose Routing runs a Command and then an Agent Step, so one Run
  *  reaches every Preflight check, Command and Agent Attempts, and a Turn. */
 function writeBundle(prompt: string, argument: string): string {
-  const folder = makeTempDir("secant-detail-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "work.md"), `${prompt}\n`);
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: BUNDLE_ID,
-      version: "1.0.0",
-      name: "Detail Log",
-      description: "A Bundle the operational-log detail tests launch.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/work.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: BUNDLE_ID,
+    name: "Detail Log",
+    description: "A Bundle the operational-log detail tests launch.",
+    prompt: { path: "prompts/work.md", text: `${prompt}\n` },
     routing: [
       {
         id: "prepare",
@@ -79,8 +71,7 @@ function writeBundle(prompt: string, argument: string): string {
         prompt: { asset: "prompts/work.md" },
       },
     ],
-  };
-  writeFileSync(join(folder, "manifest.json"), JSON.stringify(manifest));
+  });
   return folder;
 }
 

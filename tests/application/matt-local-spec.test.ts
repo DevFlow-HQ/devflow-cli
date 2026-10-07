@@ -1,4 +1,5 @@
 import { readRun } from "./run-test-helpers.js";
+import { MATT_FOLDER, wireMatt } from "./matt-wiring.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
@@ -10,18 +11,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import test, { type TestContext } from "node:test";
-import { fileURLToPath } from "node:url";
+import test from "node:test";
+
 import type { RunView } from "../../src/application/projection-port.js";
-import { wireApplication, type Wiring } from "../../src/composition/main.js";
+import { type Wiring } from "../../src/composition/main.js";
 import type { HarnessAdapter } from "../../src/harness/harness.js";
 import {
   fakeHarnessProfile,
   createFake,
   type FakeScript,
 } from "../harness/fake-adapter.js";
-import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
-import { makeTempDir } from "../helpers/tempDir.js";
+
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // [matt-local-spec] The maintained Matt Bundle publishes its spec to the Local
@@ -37,8 +37,6 @@ import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 // with no file written, End Step approves it, and only then does the publish Turn
 // write one file per ticket in the working area. Secant stores no ticket list.
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const MATT_FOLDER = join(repoRoot, "bundles", "matt-front-spec");
 const MATT_ID = "dev.secant.matt-front";
 const IDEA = "Add a dark-mode toggle that follows me across devices.";
 const RECEIPT_LINE =
@@ -129,49 +127,6 @@ function planningAgent(harness: HarnessId, writeReceipt: boolean) {
     },
   });
   return { adapter, granted, inputs, resumes, receipts };
-}
-
-function wire(
-  t: TestContext,
-  harness: HarnessId,
-  adapter: HarnessAdapter,
-): { wired: Wiring; workspace: string; digest: string } {
-  const workspace = makeTempDir("secant-matt-spec-ws-");
-  const found = (name: string) => () => ({
-    kind: "found" as const,
-    attempt: {
-      source: "path" as const,
-      name,
-      description: `PATH name '${name}'`,
-    },
-  });
-  const wired = wireApplication({
-    secantHome: makeTempDir("secant-matt-spec-home-"),
-    launchCwd: workspace,
-    supportsInteractiveTurns: true,
-    process: createFakeBundleProcess(),
-    discoverClaudeCode: found("claude"),
-    discoverCodex: found("codex"),
-    ...(harness === "codex"
-      ? { codexHarnessAdapter: adapter }
-      : { harnessAdapter: adapter }),
-  });
-  t.after(() => {
-    wired.runGroup.close();
-    wired.catalog.close();
-  });
-  const built = wired.bundleManagement.build(MATT_FOLDER, { noInstall: false });
-  assert.ok(built.ok, JSON.stringify(built));
-  const entry = wired.catalog.listEntries().find((e) => e.id === MATT_ID);
-  assert.ok(entry);
-  assert.ok(
-    wired.projectionPort.submit({
-      operationId: "op-approve",
-      operation: "approve-workspace",
-      input: { path: workspace },
-    }).admitted,
-  );
-  return { wired, workspace, digest: entry.digest };
 }
 
 async function settle(
@@ -275,9 +230,12 @@ function planningFiles(area: string): string[] {
 }
 
 for (const harness of ["claude-code", "codex"] as const) {
-  test(`[matt-local-spec] [${harness}] the spec lands in the Run working area and its reference is retained (#220)`, async (t) => {
+  test(`m12-wiring-test-helpers: [matt-local-spec] [${harness}] the spec lands in the Run working area and its reference is retained (#220)`, async (t) => {
     const agent = planningAgent(harness, true);
-    const { wired, workspace, digest } = wire(t, harness, agent.adapter);
+    const { wired, workspace, digest } = wireMatt(t, {
+      harness,
+      adapter: agent.adapter,
+    });
     const runId = await planToLocal(wired, digest, harness);
 
     // Spec writing followed the tracker choice with no approval Gate between; the
@@ -333,9 +291,12 @@ for (const harness of ["claude-code", "codex"] as const) {
   });
 }
 
-test("[matt-local-spec] a completed spec Turn without a receipt fails the Run without retrying the publication (#220)", async (t) => {
+test("m12-wiring-test-helpers: [matt-local-spec] a completed spec Turn without a receipt fails the Run without retrying the publication (#220)", async (t) => {
   const agent = planningAgent("claude-code", false);
-  const { wired, digest } = wire(t, "claude-code", agent.adapter);
+  const { wired, digest } = wireMatt(t, {
+    harness: "claude-code",
+    adapter: agent.adapter,
+  });
   const runId = await planToLocal(wired, digest, "claude-code");
 
   const run: RunView = readRun(wired.projectionPort, runId);
@@ -355,7 +316,10 @@ test("[matt-local-spec] a completed spec Turn without a receipt fails the Run wi
 for (const harness of ["claude-code", "codex"] as const) {
   test(`[matt-local-tickets] [${harness}] the breakdown is revised across Turns and one ticket file per approved ticket appears only after End Step (#222)`, async (t) => {
     const agent = planningAgent(harness, true);
-    const { wired, workspace, digest } = wire(t, harness, agent.adapter);
+    const { wired, workspace, digest } = wireMatt(t, {
+      harness,
+      adapter: agent.adapter,
+    });
     const runId = await planToLocal(wired, digest, harness);
     // Read from the grant: acquiring an owner here would fence the live claim.
     const area = agent.granted.at(-1)!;

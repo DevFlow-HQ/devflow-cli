@@ -1,39 +1,27 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { makeTempDir } from "./tempDir.js";
+import { writeAgentBundle as authorAgentBundle } from "./agentBundle.js";
 
 export function freshSessionBundleFolder(): string {
-  const folder = makeTempDir("secant-fresh-sessions-");
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: "io.example.fresh-sessions",
-        version: "1.0.0",
-        name: "Fresh Sessions",
-        description: "Two isolated Agent Steps.",
+  const { folder } = authorAgentBundle({
+    id: "io.example.fresh-sessions",
+    name: "Fresh Sessions",
+    description: "Two isolated Agent Steps.",
+    prompt: { path: "p.md", text: "Do the work." },
+    routing: [
+      {
+        id: "first",
+        kind: "agent",
+        session: "fresh",
+        prompt: { asset: "p.md" },
       },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "p.md", kind: "prompt" }],
-      routing: [
-        {
-          id: "first",
-          kind: "agent",
-          session: "fresh",
-          prompt: { asset: "p.md" },
-        },
-        {
-          id: "second",
-          kind: "agent",
-          session: "fresh",
-          prompt: { asset: "p.md" },
-        },
-      ],
-    }),
-  );
-  writeFileSync(join(folder, "p.md"), "Do the work.");
+      {
+        id: "second",
+        kind: "agent",
+        session: "fresh",
+        prompt: { asset: "p.md" },
+      },
+    ],
+  });
+
   return folder;
 }
 

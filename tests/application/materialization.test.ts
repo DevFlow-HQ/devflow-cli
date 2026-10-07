@@ -1,4 +1,5 @@
 import { readRun } from "./run-test-helpers.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
 import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,11 +19,7 @@ import {
 } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import {
-  createFakeGitProcess,
-  openFakeRunGroup as openRunGroup,
-} from "../run/store/fake-git-process.js";
+import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 
 // #88 through the Projection Port: a `home: workspace` conflict is visible in the
 // `run` Projection (state `halted`, a blocked Step, a timeline event naming the
@@ -69,15 +66,10 @@ function fakeCommand(args: readonly string[]): SpawnResult {
   throw new Error(`unexpected fake Command script: ${script}`);
 }
 
-const gitProcess = createFakeGitProcess();
-const executionProcess: ProcessAdapter = createFakeProcess({
-  resolutionHandler: (name) => ({
-    kind: "found",
-    executable: name,
-    prefixArgs: [],
-  }),
-  commandHandler: (options) => fakeCommand(options.args),
-  syncCommandHandler: (options) => gitProcess.spawnCommandSync(options),
+const executionProcess: ProcessAdapter = storedProcess({
+  script: {
+    commandHandler: (options) => fakeCommand(options.args),
+  },
 });
 const runExecution: RunExecution = ({ routing, owner }) =>
   executeRouting(routing, {

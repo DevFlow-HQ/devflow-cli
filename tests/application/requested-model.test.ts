@@ -1,4 +1,6 @@
 import { readRun } from "./run-test-helpers.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -28,7 +30,6 @@ import {
   type FakeScript,
   type FakeTurnRequestRecord,
 } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
@@ -56,25 +57,18 @@ import {
 const sharedGit = createFakeGitProcess();
 
 function fakeProcess(): ProcessAdapter {
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: (options) => {
-      const script = options.args[1] ?? "";
-      const status = Number(/process\.exit\((\d+)\)/.exec(script)?.[1] ?? "0");
-      return { kind: "exited", status, text: new Uint8Array() };
+  return storedProcess({
+    git: sharedGit,
+    script: {
+      commandHandler: (options) => {
+        const script = options.args[1] ?? "";
+        const status = Number(
+          /process\.exit\((\d+)\)/.exec(script)?.[1] ?? "0",
+        );
+        return { kind: "exited", status, text: new Uint8Array() };
+      },
     },
   });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => sharedGit.spawnCommandSync(options),
-  };
 }
 
 /** A single-Turn script that completes; `model` is the observed effective model. */
@@ -159,20 +153,11 @@ function startedTurns(run: RunView) {
 }
 
 function writeAgentBundle(): { folder: string; id: string } {
-  const folder = makeTempDir("secant-model-choice-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.requested-model",
-      version: "1.0.0",
-      name: "Requested Model E2E",
-      description: "A single agent Step for the requested-model carry.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/go.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.requested-model",
+    name: "Requested Model E2E",
+    description: "A single agent Step for the requested-model carry.",
+    prompt: { path: "prompts/go.md", text: "Do the work.\n" },
     routing: [
       {
         id: "work",
@@ -182,12 +167,8 @@ function writeAgentBundle(): { folder: string; id: string } {
         prompt: { asset: "prompts/go.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  });
+  return { folder, id: "dev.secant.requested-model" };
 }
 
 function writeAgentThenInteractiveBundle(): { folder: string; id: string } {
@@ -600,7 +581,7 @@ test("each effective model and effort a Turn observes is recorded as a Turn even
   );
 });
 
-test("[model-choice-durability] resume reuses the stored choice and never preselects again", async (t) => {
+test("m12-wiring-test-helpers: [model-choice-durability] resume reuses the stored choice and never preselects again", async (t) => {
   const home = makeTempDir("secant-model-choice-home-");
   const workspace = makeTempDir("secant-model-choice-ws-");
   const { wired, digest } = wire(
@@ -2289,41 +2270,28 @@ test("[change-model-choice] a legacy partial change uses declared defaults and n
 });
 
 test("[change-model-choice] an idle interactive Run and a fresh Repeat iteration send the changed choice on every later Turn", async (t) => {
-  const folder = makeTempDir("secant-model-repeat-");
-  mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "go.md"), "Discuss the work.");
-  const bundle = { folder, id: "dev.secant.choice-repeat" };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: bundle.id,
-        version: "1.0.0",
-        name: "Choice Repeat",
-        description: "Fresh Sessions",
-      },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/go.md", kind: "prompt" }],
-      routing: [
-        {
-          repeat: {
-            control: "human",
-            steps: [
-              {
-                id: "chat",
-                kind: "interactive-agent",
-                session: "fresh",
-                entryTurn: true,
-                prompt: { asset: "prompts/go.md" },
-              },
-            ],
-          },
+  const bundle = authorAgentBundle({
+    id: "dev.secant.choice-repeat",
+    name: "Choice Repeat",
+    description: "Fresh Sessions",
+    prompt: { path: "prompts/go.md", text: "Discuss the work." },
+    routing: [
+      {
+        repeat: {
+          control: "human",
+          steps: [
+            {
+              id: "chat",
+              kind: "interactive-agent",
+              session: "fresh",
+              entryTurn: true,
+              prompt: { asset: "prompts/go.md" },
+            },
+          ],
         },
-      ],
-    }),
-  );
+      },
+    ],
+  });
   const completed = completedScript("observed");
   const captured = recording({
     ...completed,

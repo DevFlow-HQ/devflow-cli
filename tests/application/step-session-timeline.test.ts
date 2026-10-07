@@ -1,4 +1,5 @@
 import { readRun } from "./run-test-helpers.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,7 +18,6 @@ import {
   type FakeTurnScript,
 } from "../harness/fake-adapter.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -46,26 +46,17 @@ function fakeProcess(): ProcessAdapter {
     status,
     text: new TextEncoder().encode(""),
   });
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: (options) => {
-      const script = options.args[1];
-      if (script === BASELINE) return exited(1);
-      if (script === CHECK) return exited(++checks >= 2 ? 0 : 1);
-      throw new Error(`unexpected fake Command script: ${script}`);
+  return storedProcess({
+    git: sharedGit,
+    script: {
+      commandHandler: (options) => {
+        const script = options.args[1];
+        if (script === BASELINE) return exited(1);
+        if (script === CHECK) return exited(++checks >= 2 ? 0 : 1);
+        throw new Error(`unexpected fake Command script: ${script}`);
+      },
     },
   });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => sharedGit.spawnCommandSync(options),
-  };
 }
 
 const COMPLETED: TurnResult = {

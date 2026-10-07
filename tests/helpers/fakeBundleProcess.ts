@@ -4,8 +4,7 @@ import type {
   SpawnOptions,
   SpawnResult,
 } from "../../src/process/process.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import { createFakeGitProcess } from "../run/store/fake-git-process.js";
+import { storedProcess } from "./wiringDoubles.js";
 import { commandStepOf, RUNTIME_NAME } from "./commandBundle.js";
 
 // The one deterministic Process double for the double-backed headless harness. It
@@ -125,16 +124,16 @@ interface FakeBundleProcessOptions {
 export function createFakeBundleProcess(
   options: FakeBundleProcessOptions = {},
 ): ProcessAdapter {
-  const git = createFakeGitProcess();
   const declared = new Set([RUNTIME_NAME, ...(options.executables ?? [])]);
-  return createFakeProcess({
-    resolutionHandler: (name) =>
-      declared.has(name)
-        ? { kind: "found", executable: name, prefixArgs: [] }
-        : { kind: "not-found" },
-    commandHandler: (spawnOptions) =>
-      options.onCommand?.(spawnOptions) ?? fakeBundleCommand(spawnOptions),
-    syncCommandHandler: (spawnOptions) => git.spawnCommandSync(spawnOptions),
+  return storedProcess({
+    script: {
+      resolutionHandler: (name) =>
+        declared.has(name)
+          ? { kind: "found", executable: name, prefixArgs: [] }
+          : { kind: "not-found" },
+      commandHandler: (spawnOptions) =>
+        options.onCommand?.(spawnOptions) ?? fakeBundleCommand(spawnOptions),
+    },
   });
 }
 

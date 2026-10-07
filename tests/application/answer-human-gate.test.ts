@@ -1,4 +1,5 @@
 import { readRun } from "./run-test-helpers.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import test, { type TestContext } from "node:test";
@@ -28,11 +29,7 @@ import {
 } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import {
-  createFakeGitProcess,
-  openFakeRunGroup as openRunGroup,
-} from "../run/store/fake-git-process.js";
+import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 
 // The `answer-human-gate` Operation on the Projection Port (#85): a `blocked` Run
 // is answered against its exact durable Gate reference. Driven straight through
@@ -78,21 +75,15 @@ function fakeCommand(options: SpawnOptions) {
   return exited(status, logged === undefined ? (written ?? "") : `${logged}\n`);
 }
 
-const executionGit = createFakeGitProcess();
-const executionCommands = createFakeProcess({
-  resolutionHandler: (name) =>
-    name === "secant-no-such-binary-xyz"
-      ? { kind: "not-found" }
-      : { kind: "found", executable: name, prefixArgs: [] },
-  commandHandler: fakeCommand,
+const executionProcess: ProcessAdapter = storedProcess({
+  script: {
+    resolutionHandler: (name) =>
+      name === "secant-no-such-binary-xyz"
+        ? { kind: "not-found" }
+        : { kind: "found", executable: name, prefixArgs: [] },
+    commandHandler: fakeCommand,
+  },
 });
-const executionProcess: ProcessAdapter = {
-  resolveExecutable: (name, options) =>
-    executionCommands.resolveExecutable(name, options),
-  spawnCommand: (options) => executionCommands.spawnCommand(options),
-  spawnOwnedProcess: (options) => executionCommands.spawnOwnedProcess(options),
-  spawnCommandSync: (options) => executionGit.spawnCommandSync(options),
-};
 
 const runExecution: RunExecution = ({ routing, owner }) =>
   executeRouting(routing, {

@@ -1,8 +1,8 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -106,23 +106,14 @@ function planningAgent(kind: "completed" | "failed", file: string) {
 }
 
 function writeBundle(): string {
-  const folder = makeTempDir("secant-working-area-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(
-    join(folder, "prompts", "plan.md"),
-    "Write the spec into {{run:working-area}} and nowhere else.\n",
-  );
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: BUNDLE_ID,
-      version: "1.0.0",
-      name: "Working Area",
-      description: "One planning agent Step writing Local files.",
+  const { folder } = authorAgentBundle({
+    id: BUNDLE_ID,
+    name: "Working Area",
+    description: "One planning agent Step writing Local files.",
+    prompt: {
+      path: "prompts/plan.md",
+      text: "Write the spec into {{run:working-area}} and nowhere else.\n",
     },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/plan.md", kind: "prompt" }],
     routing: [
       {
         id: "plan",
@@ -132,8 +123,7 @@ function writeBundle(): string {
         prompt: { asset: "prompts/plan.md" },
       },
     ],
-  };
-  writeFileSync(join(folder, "manifest.json"), JSON.stringify(manifest));
+  });
   return folder;
 }
 

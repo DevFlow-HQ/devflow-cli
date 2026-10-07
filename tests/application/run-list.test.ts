@@ -1,3 +1,4 @@
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readdirSync, realpathSync as realpath, writeFileSync } from "node:fs";
@@ -18,11 +19,7 @@ import type { ProcessAdapter, SpawnResult } from "../../src/process/process.js";
 import type { RunCounts, RunGroup } from "../../src/run/store/store.js";
 import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import {
-  createFakeGitProcess,
-  openFakeRunGroup as openRunGroup,
-} from "../run/store/fake-git-process.js";
+import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 
 // A fixed clock so Today / Yesterday / Older grouping is deterministic on any CI
 // timezone: rows are seeded relative to this same instant.
@@ -36,23 +33,15 @@ function fakeCommand(): SpawnResult {
   return { kind: "exited", status: 0, text: new Uint8Array() };
 }
 
-const executionProcess: ProcessAdapter = (() => {
-  const git = createFakeGitProcess();
-  const commands = createFakeProcess({
+const executionProcess: ProcessAdapter = storedProcess({
+  script: {
     resolutionHandler: (name) =>
       name === "secant-no-such-binary-xyz"
         ? { kind: "not-found" }
         : { kind: "found", executable: name, prefixArgs: [] },
     commandHandler: fakeCommand,
-  });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => git.spawnCommandSync(options),
-  };
-})();
+  },
+});
 
 /** Calls the Application makes on the Run Store Interface, so a summary case
  *  can assert how much Run Store work one observation performs. */

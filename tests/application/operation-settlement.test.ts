@@ -1,3 +1,4 @@
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import test, { type TestContext } from "node:test";
@@ -12,11 +13,7 @@ import type { RunGroup, RunOwner } from "../../src/run/store/store.js";
 import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import {
-  createFakeGitProcess,
-  openFakeRunGroup as openRunGroup,
-} from "../run/store/fake-git-process.js";
+import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 
 // The Command steps' execution runs through an injected fake Process, so no child
 // is spawned. These tests inject their own `runExecution`, so the fake command is
@@ -26,23 +23,15 @@ function fakeCommand(): SpawnResult {
   return { kind: "exited", status: 0, text: new Uint8Array() };
 }
 
-const executionProcess: ProcessAdapter = (() => {
-  const git = createFakeGitProcess();
-  const commands = createFakeProcess({
+const executionProcess: ProcessAdapter = storedProcess({
+  script: {
     resolutionHandler: (name) =>
       name === "secant-no-such-binary-xyz"
         ? { kind: "not-found" }
         : { kind: "found", executable: name, prefixArgs: [] },
     commandHandler: fakeCommand,
-  });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => git.spawnCommandSync(options),
-  };
-})();
+  },
+});
 
 interface Fixture {
   readonly app: Application;

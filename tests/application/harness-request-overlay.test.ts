@@ -1,6 +1,7 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import { createApplication } from "../helpers/application.js";
@@ -19,11 +20,9 @@ import {
   createFake,
   type FakeScript,
 } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import {
-  createFakeGitProcess,
-  openFakeRunGroup as openRunGroup,
-} from "../run/store/fake-git-process.js";
+
+import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
+
 import { makeTempDir } from "../helpers/tempDir.js";
 import { usageEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 import { hostPlatform, writeCommandBundle } from "../helpers/commandBundle.js";
@@ -124,43 +123,23 @@ function overlayScript(): FakeScript {
 /** A fake Process that resolves any executable and reaches no real child; Git store
  *  operations run through the deterministic fake Git process. */
 function fakeProcess(): ProcessAdapter {
-  const git = createFakeGitProcess();
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: () => ({
-      kind: "exited",
-      status: 0,
-      text: new Uint8Array(),
-    }),
+  return storedProcess({
+    script: {
+      commandHandler: () => ({
+        kind: "exited",
+        status: 0,
+        text: new Uint8Array(),
+      }),
+    },
   });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => git.spawnCommandSync(options),
-  };
 }
 
 function writeAgentBundle(): { folder: string; id: string } {
-  const folder = makeTempDir("secant-ovl-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "fix.md"), "Repair the workspace.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.ovl-e2e",
-      version: "1.0.0",
-      name: "Overlay E2E",
-      description: "A single Agent Step Bundle for the live-overlay slice.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/fix.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.ovl-e2e",
+    name: "Overlay E2E",
+    description: "A single Agent Step Bundle for the live-overlay slice.",
+    prompt: { path: "prompts/fix.md", text: "Repair the workspace.\n" },
     routing: [
       {
         id: "fix",
@@ -169,12 +148,8 @@ function writeAgentBundle(): { folder: string; id: string } {
         prompt: { asset: "prompts/fix.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  });
+  return { folder, id: "dev.secant.ovl-e2e" };
 }
 
 function wire(

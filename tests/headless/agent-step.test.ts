@@ -1,3 +1,4 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
@@ -881,38 +882,27 @@ test("run answer settles a refused Harness preparation after the Gate as a non-s
     wired.runGroup.close();
     wired.catalog.close();
   });
-  const folder = makeTempDir("secant-agent-gate-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: "dev.secant.agent-gate",
-        version: "1.0.0",
-        name: "Agent Gate",
-        description: "An approve-reject gate before an Agent Step.",
+
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.agent-gate",
+    name: "Agent Gate",
+    description: "An approve-reject gate before an Agent Step.",
+    prompt: { path: "prompts/go.md", text: "Do the work.\n" },
+    routing: [
+      {
+        id: "gate",
+        kind: "human-gate",
+        shape: "approve-reject",
+        message: "proceed?",
       },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/go.md", kind: "prompt" }],
-      routing: [
-        {
-          id: "gate",
-          kind: "human-gate",
-          shape: "approve-reject",
-          message: "proceed?",
-        },
-        {
-          id: "work",
-          kind: "agent",
-          session: "s",
-          prompt: { asset: "prompts/go.md" },
-        },
-      ],
-    }),
-  );
+      {
+        id: "work",
+        kind: "agent",
+        session: "s",
+        prompt: { asset: "prompts/go.md" },
+      },
+    ],
+  });
   assert.ok(wired.bundleManagement.build(folder, { noInstall: false }).ok);
   const entry = wired.catalog
     .listEntries()

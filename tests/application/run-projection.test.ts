@@ -1,6 +1,7 @@
+import { storedProcess } from "../helpers/wiringDoubles.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import test, { type TestContext } from "node:test";
 import {
   createApplication,
@@ -24,11 +25,7 @@ import {
 } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import {
-  createFakeGitProcess,
-  openFakeRunGroup as openRunGroup,
-} from "../run/store/fake-git-process.js";
+import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 
 // Run execution runs against an injected FAKE Process (no child spawns). The
 // command handler maps each `-e` script these Bundles use to a SpawnResult:
@@ -67,15 +64,10 @@ function fakeCommand(args: readonly string[]): SpawnResult {
   throw new Error(`unexpected fake Command script: ${script}`);
 }
 
-const gitProcess = createFakeGitProcess();
-const executionProcess: ProcessAdapter = createFakeProcess({
-  resolutionHandler: (name) => ({
-    kind: "found",
-    executable: name,
-    prefixArgs: [],
-  }),
-  commandHandler: (options) => fakeCommand(options.args),
-  syncCommandHandler: (options) => gitProcess.spawnCommandSync(options),
+const executionProcess: ProcessAdapter = storedProcess({
+  script: {
+    commandHandler: (options) => fakeCommand(options.args),
+  },
 });
 const runExecution: RunExecution = ({ routing, owner }) =>
   executeRouting(routing, {
@@ -1181,33 +1173,21 @@ test("an unusable Session at a command Step does not hide resume (#194 story 40 
 /** Author, build, and install a single-agent-Step Bundle; return its digest. The
  *  Harness is resolved at launch, not build, so no Harness wiring is needed here. */
 function installAgentBundle(f: Fixture): string {
-  const folder = makeTempDir("secant-agent-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: "dev.secant.agent-only",
-        version: "1.0.0",
-        name: "Agent Only",
-        description: "A single agent Step for the resume-evidence projection.",
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.agent-only",
+    name: "Agent Only",
+    description: "A single agent Step for the resume-evidence projection.",
+    prompt: { path: "prompts/go.md", text: "Do the work.\n" },
+    routing: [
+      {
+        id: "work",
+        kind: "agent",
+        retry: 0,
+        session: "s",
+        prompt: { asset: "prompts/go.md" },
       },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/go.md", kind: "prompt" }],
-      routing: [
-        {
-          id: "work",
-          kind: "agent",
-          retry: 0,
-          session: "s",
-          prompt: { asset: "prompts/go.md" },
-        },
-      ],
-    }),
-  );
+    ],
+  });
   const built = f.app.bundleManagement.build(folder, { noInstall: false });
   assert.ok(built.ok, JSON.stringify(built));
   const entry = f.catalog
@@ -1277,44 +1257,32 @@ test("a lost required Session makes resume unavailable with its reason (#194 sto
 /** Install `baseline -> repeat until passing { implement (interactive "impl") ->
  *  check }`; return its digest. */
 function installInteractiveRepeatBundle(f: Fixture): string {
-  const folder = makeTempDir("secant-interactive-repeat-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Pick a ticket.\n");
   const verdict = [{ name: "passing", type: "verdict" }];
   const command = { executable: "bash", arguments: ["-c", "exit 1"] };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: "dev.secant.interactive-repeat",
-        version: "1.0.0",
-        name: "Interactive Repeat",
-        description: "An interactive Step inside a Verdict-driven Repeat.",
-      },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/go.md", kind: "prompt" }],
-      routing: [
-        { id: "baseline", kind: "command", produces: verdict, command },
-        {
-          repeat: {
-            until: "passing",
-            reviewCheckpoint: { interval: 5, message: "review" },
-            steps: [
-              {
-                id: "implement",
-                kind: "interactive-agent",
-                session: "impl",
-                prompt: { asset: "prompts/go.md" },
-              },
-              { id: "check", kind: "command", produces: verdict, command },
-            ],
-          },
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.interactive-repeat",
+    name: "Interactive Repeat",
+    description: "An interactive Step inside a Verdict-driven Repeat.",
+    prompt: { path: "prompts/go.md", text: "Pick a ticket.\n" },
+    routing: [
+      { id: "baseline", kind: "command", produces: verdict, command },
+      {
+        repeat: {
+          until: "passing",
+          reviewCheckpoint: { interval: 5, message: "review" },
+          steps: [
+            {
+              id: "implement",
+              kind: "interactive-agent",
+              session: "impl",
+              prompt: { asset: "prompts/go.md" },
+            },
+            { id: "check", kind: "command", produces: verdict, command },
+          ],
         },
-      ],
-    }),
-  );
+      },
+    ],
+  });
   const built = f.app.bundleManagement.build(folder, { noInstall: false });
   assert.ok(built.ok, JSON.stringify(built));
   const entry = f.catalog

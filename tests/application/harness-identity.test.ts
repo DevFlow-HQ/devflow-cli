@@ -1,7 +1,9 @@
 import { readRun } from "./run-test-helpers.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
@@ -13,7 +15,7 @@ import {
   createFake,
   type FakeScript,
 } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
+
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
@@ -33,25 +35,18 @@ const sharedGit = createFakeGitProcess();
 // (none of these Bundles declare a deliberately-missing command or a
 // git-worktree-root prerequisite, so `rev-parse` is never probed).
 function fakeProcess(): ProcessAdapter {
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: (options) => {
-      const script = options.args[1] ?? "";
-      const status = Number(/process\.exit\((\d+)\)/.exec(script)?.[1] ?? "0");
-      return { kind: "exited", status, text: new Uint8Array() };
+  return storedProcess({
+    git: sharedGit,
+    script: {
+      commandHandler: (options) => {
+        const script = options.args[1] ?? "";
+        const status = Number(
+          /process\.exit\((\d+)\)/.exec(script)?.[1] ?? "0",
+        );
+        return { kind: "exited", status, text: new Uint8Array() };
+      },
     },
   });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => sharedGit.spawnCommandSync(options),
-  };
 }
 
 // The normalized Harness identity a Run projects for its latest Agent-step Attempt
@@ -133,20 +128,11 @@ function writeAgentBundle(
   selectedHarness: "claude-code" | "codex";
   expectedPrepareCount: 1;
 } {
-  const folder = makeTempDir("secant-harness-id-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.harness-id",
-      version: "1.0.0",
-      name: "Harness Identity E2E",
-      description: "A single agent Step for the Harness-identity projection.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/go.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.harness-id",
+    name: "Harness Identity E2E",
+    description: "A single agent Step for the Harness-identity projection.",
+    prompt: { path: "prompts/go.md", text: "Do the work.\n" },
     routing: [
       {
         id: "work",
@@ -156,14 +142,10 @@ function writeAgentBundle(
         prompt: { asset: "prompts/go.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
+  });
   return {
     folder,
-    id: manifest.bundle.id,
+    id: "dev.secant.harness-id",
     selectedHarness,
     expectedPrepareCount: 1,
   };
@@ -177,20 +159,11 @@ function writeInteractiveAgentBundle(): {
   expectedPrepareCount: 1;
   supportsInteractiveTurns: true;
 } {
-  const folder = makeTempDir("secant-selected-harness-interactive-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "talk.md"), "Work with me.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.selected-harness-interactive",
-      version: "1.0.0",
-      name: "Selected Harness Interactive",
-      description: "An Interactive-agent Run for selected-Harness admission.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/talk.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.selected-harness-interactive",
+    name: "Selected Harness Interactive",
+    description: "An Interactive-agent Run for selected-Harness admission.",
+    prompt: { path: "prompts/talk.md", text: "Work with me.\n" },
     routing: [
       {
         id: "talk",
@@ -199,14 +172,10 @@ function writeInteractiveAgentBundle(): {
         prompt: { asset: "prompts/talk.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
+  });
   return {
     folder,
-    id: manifest.bundle.id,
+    id: "dev.secant.selected-harness-interactive",
     selectedHarness: "claude-code",
     expectedPrepareCount: 1,
     supportsInteractiveTurns: true,
@@ -221,20 +190,11 @@ function writeNestedAgentBundle(): {
   selectedHarness: "claude-code";
   expectedPrepareCount: 1;
 } {
-  const folder = makeTempDir("secant-selected-harness-nested-agent-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "go.md"), "Do the work.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.selected-harness-nested-agent",
-      version: "1.0.0",
-      name: "Selected Harness Nested Agent",
-      description: "An Agent-bearing Repeat group for Harness selection.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/go.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.selected-harness-nested-agent",
+    name: "Selected Harness Nested Agent",
+    description: "An Agent-bearing Repeat group for Harness selection.",
+    prompt: { path: "prompts/go.md", text: "Do the work.\n" },
     routing: [
       {
         id: "baseline",
@@ -260,14 +220,10 @@ function writeNestedAgentBundle(): {
         },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
+  });
   return {
     folder,
-    id: manifest.bundle.id,
+    id: "dev.secant.selected-harness-nested-agent",
     selectedHarness: "claude-code",
     expectedPrepareCount: 1,
   };

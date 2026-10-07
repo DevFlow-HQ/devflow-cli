@@ -1,6 +1,7 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
@@ -156,20 +157,11 @@ function installAgentBundle(
   f: Fixture,
   step: Partial<AgentStep> = {},
 ): { id: string; digest: string } {
-  const folder = makeTempDir("secant-pf-agent-");
-  mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "work.md"), "Do the work.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.preflight-agent",
-      version: "1.0.0",
-      name: "Preflight Agent",
-      description: "Exercises semantic Harness selection.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/work.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.preflight-agent",
+    name: "Preflight Agent",
+    description: "Exercises semantic Harness selection.",
+    prompt: { path: "prompts/work.md", text: "Do the work.\n" },
     routing: [
       {
         id: "work",
@@ -180,15 +172,11 @@ function installAgentBundle(
         ...step,
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
+  });
   const built = f.app.bundleManagement.build(folder, { noInstall: false });
   assert.ok(built.ok, JSON.stringify(built));
   const entry = f.catalog.listEntries().find((candidate) => {
-    return candidate.id === manifest.bundle.id;
+    return candidate.id === "dev.secant.preflight-agent";
   });
   assert.ok(entry);
   return { id: entry.id, digest: entry.digest };
@@ -696,19 +684,12 @@ test("m12-test-interface-ownership: a headless launch refuses an interactive-age
   // it): the headless client cannot relay human turn-taking, so Preflight refuses
   // it with the TUI remedy — the only kind-based refusal now that every kind
   // dispatches (#122) — before any Harness discovery.
-  const folder = makeTempDir("secant-interactive-bundle-");
-  writeFileSync(join(folder, "grill.md"), "Grill me.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.interactive",
-      version: "1.0.0",
-      name: "Interactive",
-      description: "An interactive-agent Bundle refused headlessly.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "grill.md", kind: "prompt" }],
+
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.interactive",
+    name: "Interactive",
+    description: "An interactive-agent Bundle refused headlessly.",
+    prompt: { path: "grill.md", text: "Grill me.\n" },
     routing: [
       {
         id: "grill",
@@ -717,11 +698,7 @@ test("m12-test-interface-ownership: a headless launch refuses an interactive-age
         prompt: { asset: "grill.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
+  });
   const built = f.app.bundleManagement.build(folder, { noInstall: false });
   assert.ok(built.ok, JSON.stringify(built));
   const entry = f.catalog

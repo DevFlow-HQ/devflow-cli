@@ -1,4 +1,5 @@
 import { readRun } from "./run-test-helpers.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -14,9 +15,9 @@ import type {
   OperationOutcome,
   RunView,
 } from "../../src/application/projection-port.js";
-import type { ProcessAdapter } from "../../src/process/process.js";
+
 import { fakeHarnessProfile, createFake } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
+
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -31,23 +32,6 @@ import { awaitSettled } from "../helpers/settleOperation.js";
 // receipt root the Store cannot prepare fails each Attempt before any Turn (#305).
 
 const sharedGit = createFakeGitProcess();
-
-function fakeProcess(): ProcessAdapter {
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-  });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => sharedGit.spawnCommandSync(options),
-  };
-}
 
 const COMPLETED: TurnResult = {
   kind: "completed",
@@ -200,7 +184,7 @@ async function launch(
   const wired = wireApplication({
     secantHome: makeTempDir("secant-agent-receipt-home-"),
     launchCwd: workspace,
-    process: fakeProcess(),
+    process: storedProcess({ git: sharedGit }),
     harnessAdapter: adapter,
   });
   t.after(() => {

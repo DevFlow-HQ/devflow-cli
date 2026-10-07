@@ -1,6 +1,5 @@
+import { writeAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test from "node:test";
 import { withClients } from "../../src/composition/main.js";
 import {
@@ -12,7 +11,6 @@ import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
-import { makeTempDir } from "../helpers/tempDir.js";
 import { assertBase, home, readLog } from "./log-sink.js";
 
 // The Harness half of the operational log (#322, A15): each Harness's phase facts,
@@ -250,40 +248,7 @@ test("a failed qualification handshake records the double's typed failure", asyn
   );
 });
 
-/** A one-Step Bundle folder: an Agent Step of `kind` in Session `s`. */
-function writeAgentBundle(kind: "agent" | "interactive-agent" = "agent"): {
-  folder: string;
-  id: string;
-} {
-  const folder = makeTempDir("secant-oplog-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "fix.md"), "seeded-prompt-8f2a\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.oplog-agent",
-      version: "1.0.0",
-      name: "Oplog Agent",
-      description: "One Agent Step for the operational log.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/fix.md", kind: "prompt" }],
-    routing: [
-      {
-        id: "fix",
-        kind,
-        session: "s",
-        retry: 0,
-        prompt: { asset: "prompts/fix.md" },
-      },
-    ],
-  };
-  writeFileSync(join(folder, "manifest.json"), JSON.stringify(manifest));
-  return { folder, id: manifest.bundle.id };
-}
-
-test("an Agent Run records its completed Turn's usage and the Run Harness's CleanupReport", async () => {
+test("m12-wiring-test-helpers: an Agent Run records its completed Turn's usage and the Run Harness's CleanupReport", async () => {
   const { folder, overrides } = home();
   const workspace = overrides.launchCwd!;
   let runId = "";
@@ -308,7 +273,21 @@ test("an Agent Run records its completed Turn's usage and the Run Harness's Clea
   };
   const status = await withClients(
     async (clients) => {
-      const bundle = writeAgentBundle();
+      const bundle = writeAgentBundle({
+        id: "dev.secant.oplog-agent",
+        name: "Oplog Agent",
+        description: "One Agent Step for the operational log.",
+        prompt: { path: "prompts/fix.md", text: "seeded-prompt-8f2a\n" },
+        routing: [
+          {
+            id: "fix",
+            kind: "agent",
+            session: "s",
+            retry: 0,
+            prompt: { asset: "prompts/fix.md" },
+          },
+        ],
+      });
       const built = clients.bundleManagement.build(bundle.folder, {
         noInstall: false,
       });
@@ -398,7 +377,7 @@ test("an Agent Run records its completed Turn's usage and the Run Harness's Clea
   assert.doesNotMatch(log.text, /seeded-/);
 });
 
-test("an interactive Step's Turn usage and its driver's CleanupReport reach the log", async () => {
+test("m12-wiring-test-helpers: an interactive Step's Turn usage and its driver's CleanupReport reach the log", async () => {
   const { folder, overrides } = home();
   const workspace = overrides.launchCwd!;
   let runId = "";
@@ -421,7 +400,21 @@ test("an interactive Step's Turn usage and its driver's CleanupReport reach the 
   await withClients(
     async (clients) => {
       const port = clients.projectionPort;
-      const bundle = writeAgentBundle("interactive-agent");
+      const bundle = writeAgentBundle({
+        id: "dev.secant.oplog-agent",
+        name: "Oplog Agent",
+        description: "One Agent Step for the operational log.",
+        prompt: { path: "prompts/fix.md", text: "seeded-prompt-8f2a\n" },
+        routing: [
+          {
+            id: "fix",
+            kind: "interactive-agent",
+            session: "s",
+            retry: 0,
+            prompt: { asset: "prompts/fix.md" },
+          },
+        ],
+      });
       const built = clients.bundleManagement.build(bundle.folder, {
         noInstall: false,
       });
@@ -546,7 +539,21 @@ test("a Claude Code failure crosses the Harness Seam into the log with its redac
   try {
     const status = await withClients(
       async (clients) => {
-        const bundle = writeAgentBundle();
+        const bundle = writeAgentBundle({
+          id: "dev.secant.oplog-agent",
+          name: "Oplog Agent",
+          description: "One Agent Step for the operational log.",
+          prompt: { path: "prompts/fix.md", text: "seeded-prompt-8f2a\n" },
+          routing: [
+            {
+              id: "fix",
+              kind: "agent",
+              session: "s",
+              retry: 0,
+              prompt: { asset: "prompts/fix.md" },
+            },
+          ],
+        });
         const built = clients.bundleManagement.build(bundle.folder, {
           noInstall: false,
         });
@@ -648,7 +655,21 @@ test("a reopened interactive Step prepares, records usage, and closes its Harnes
   await withClients(
     async (clients) => {
       const port = clients.projectionPort;
-      const bundle = writeAgentBundle("interactive-agent");
+      const bundle = writeAgentBundle({
+        id: "dev.secant.oplog-agent",
+        name: "Oplog Agent",
+        description: "One Agent Step for the operational log.",
+        prompt: { path: "prompts/fix.md", text: "seeded-prompt-8f2a\n" },
+        routing: [
+          {
+            id: "fix",
+            kind: "interactive-agent",
+            session: "s",
+            retry: 0,
+            prompt: { asset: "prompts/fix.md" },
+          },
+        ],
+      });
       const built = clients.bundleManagement.build(bundle.folder, {
         noInstall: false,
       });

@@ -1,7 +1,7 @@
 import { readRun } from "./run-test-helpers.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import type {
@@ -19,8 +19,7 @@ import {
   createFake,
   type FakeScript,
 } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import { createFakeGitProcess } from "../run/store/fake-git-process.js";
+
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
@@ -119,48 +118,29 @@ function codexScript(fixture: string, finish: Promise<void>): FakeScript {
 /** A fake Process that resolves any executable and reaches no real child; Git store
  *  operations run through the deterministic fake Git process. */
 function fakeProcess(): ProcessAdapter {
-  const git = createFakeGitProcess();
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-    commandHandler: () => ({
-      kind: "exited",
-      status: 0,
-      text: new Uint8Array(),
-    }),
+  return storedProcess({
+    script: {
+      commandHandler: () => ({
+        kind: "exited",
+        status: 0,
+        text: new Uint8Array(),
+      }),
+    },
   });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => git.spawnCommandSync(options),
-  };
 }
 
 /** Author a single-Agent-step Bundle whose prompt renders to exactly `prompt` — the
  *  recorded fixture replays strictly, so the rendered Turn input must match byte for
  *  byte (readAgentPrompt returns the asset bytes verbatim). */
 function writeAgentBundle(prompt: string): { folder: string; id: string } {
-  const folder = makeTempDir("secant-codex-cli-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
   // No trailing newline: the recorded turn/start input carries none.
-  writeFileSync(join(folder, "prompts", "go.md"), prompt);
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.codex-cli-e2e",
-      version: "1.0.0",
-      name: "Codex Client E2E",
-      description:
-        "A single Agent Step Bundle driven through the Codex replayer.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/go.md", kind: "prompt" }],
+
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.codex-cli-e2e",
+    name: "Codex Client E2E",
+    description:
+      "A single Agent Step Bundle driven through the Codex replayer.",
+    prompt: { path: "prompts/go.md", text: prompt },
     routing: [
       {
         id: "work",
@@ -169,12 +149,8 @@ function writeAgentBundle(prompt: string): { folder: string; id: string } {
         prompt: { asset: "prompts/go.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  });
+  return { folder, id: "dev.secant.codex-cli-e2e" };
 }
 
 /** Wire the Application with the Codex Adapter over the named recorded replayer, and

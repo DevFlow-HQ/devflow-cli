@@ -1,6 +1,5 @@
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import type { TurnResult } from "../../src/harness/harness.js";
@@ -129,23 +128,14 @@ function requestScript(): FakeScript {
  *  scripted request regardless of input — but a prompt asset must exist for
  *  Composition. */
 function writeAgentBundle(): { folder: string; id: string } {
-  const folder = makeTempDir("secant-req-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(
-    join(folder, "prompts", "fix.md"),
-    "Repair the failing test in the workspace.\n",
-  );
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.req-e2e",
-      version: "1.0.0",
-      name: "Harness Request E2E",
-      description: "A single Agent Step Bundle for the approval-request slice.",
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.req-e2e",
+    name: "Harness Request E2E",
+    description: "A single Agent Step Bundle for the approval-request slice.",
+    prompt: {
+      path: "prompts/fix.md",
+      text: "Repair the failing test in the workspace.\n",
     },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/fix.md", kind: "prompt" }],
     routing: [
       {
         id: "fix",
@@ -154,12 +144,8 @@ function writeAgentBundle(): { folder: string; id: string } {
         prompt: { asset: "prompts/fix.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id: manifest.bundle.id };
+  });
+  return { folder, id: "dev.secant.req-e2e" };
 }
 
 /** Wire the Application against the fake Claude Code Harness and an injected fake

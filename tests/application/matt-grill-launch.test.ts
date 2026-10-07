@@ -1,11 +1,12 @@
 import { readRun, findOffer, requireOffer } from "./run-test-helpers.js";
+import { MATT_FOLDER, wireMatt } from "./matt-wiring.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import test, { type TestContext } from "node:test";
-import { fileURLToPath } from "node:url";
-import { wireApplication, type Wiring } from "../../src/composition/main.js";
+import test from "node:test";
+
+import { type Wiring } from "../../src/composition/main.js";
 import type { HarnessAdapter, TurnResult } from "../../src/harness/harness.js";
 import type { RunView } from "../../src/application/projection-port.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
@@ -14,7 +15,7 @@ import {
   createFake,
   type FakeScript,
 } from "../harness/fake-adapter.js";
-import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
+
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
@@ -26,8 +27,6 @@ import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 // Later Turns are the human's verbatim text in the same planning Session; End Step,
 // halt and resume, and an unusable Session keep the Run history truthful.
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const MATT_FOLDER = join(repoRoot, "bundles", "matt-front-spec");
 const MATT_ID = "dev.secant.matt-front";
 const IDEA = "Add a dark-mode toggle that follows me across devices.";
 
@@ -105,56 +104,6 @@ function scriptedAdapter(
     }),
     prepares: () => prepares,
   };
-}
-
-function wire(
-  t: TestContext,
-  harness: HarnessId,
-  adapter: HarnessAdapter,
-  supportsInteractiveTurns = true,
-  historical = false,
-): { wired: Wiring; digest: string } {
-  const workspace = makeTempDir("secant-matt-grill-ws-");
-  const found = (name: string) => () => ({
-    kind: "found" as const,
-    attempt: {
-      source: "path" as const,
-      name,
-      description: `PATH name '${name}'`,
-    },
-  });
-  const wired = wireApplication({
-    secantHome: makeTempDir("secant-matt-grill-home-"),
-    launchCwd: workspace,
-    supportsInteractiveTurns,
-    process: createFakeBundleProcess(),
-    discoverClaudeCode: found("claude"),
-    discoverCodex: found("codex"),
-    ...(harness === "codex"
-      ? { codexHarnessAdapter: adapter }
-      : { harnessAdapter: adapter }),
-  });
-  t.after(() => {
-    wired.runGroup.close();
-    wired.catalog.close();
-  });
-  // The maintained Bundle is built and installed exactly like a user's Bundle.
-  const built = historical
-    ? wired.bundleManagement.install(
-        join(repoRoot, "tests", "application", "fixtures", "matt-2.7.0.wfb"),
-      )
-    : wired.bundleManagement.build(MATT_FOLDER, { noInstall: false });
-  assert.ok(built.ok, JSON.stringify(built));
-  const entry = wired.catalog.listEntries().find((e) => e.id === MATT_ID);
-  assert.ok(entry);
-  assert.ok(
-    wired.projectionPort.submit({
-      operationId: "op-approve",
-      operation: "approve-workspace",
-      input: { path: workspace },
-    }).admitted,
-  );
-  return { wired, digest: entry.digest };
 }
 
 function submitLaunch(
@@ -239,14 +188,14 @@ async function awaitInterruptOffer(wired: Wiring, runId: string) {
 }
 
 for (const harness of ["claude-code", "codex"] as const) {
-  test(`[${harness}] the launch idea reaches the grill's first Turn with the bundled grill-me and grilling paths (#212)`, async (t) => {
+  test(`m12-wiring-test-helpers: [${harness}] the launch idea reaches the grill's first Turn with the bundled grill-me and grilling paths (#212)`, async (t) => {
     const { adapter } = scriptedAdapter(harness, [
       [
         completed("Q1 - Who toggles it? Recommended: each user."),
         completed("Q2 - Where is it stored? Recommended: the profile."),
       ],
     ]);
-    const { wired, digest } = wire(t, harness, adapter);
+    const { wired, digest } = wireMatt(t, { harness, adapter });
     const runId = await launch(wired, digest, harness);
 
     // The entry Turn ran on launch: the Run rests at the grill's Turn boundary with
@@ -337,7 +286,7 @@ for (const harness of ["claude-code", "codex"] as const) {
 
 test("the grill cannot launch without its required idea (#212)", (t) => {
   const { adapter, prepares } = scriptedAdapter("claude-code", [[]]);
-  const { wired, digest } = wire(t, "claude-code", adapter);
+  const { wired, digest } = wireMatt(t, { harness: "claude-code", adapter });
   const admission = submitLaunch(wired, digest, "claude-code", {});
   assert.equal(admission.admitted, false, JSON.stringify(admission));
   if (admission.admitted) throw new Error("unreachable");
@@ -356,7 +305,7 @@ test("an interrupted entry Turn returns the grill to waiting in the same Session
   const { adapter, prepares } = scriptedAdapter("claude-code", [
     [BLOCKS, completed("Where were we? Recommended: the storage question.")],
   ]);
-  const { wired, digest } = wire(t, "claude-code", adapter);
+  const { wired, digest } = wireMatt(t, { harness: "claude-code", adapter });
   const admission = submitLaunch(wired, digest, "claude-code", { idea: IDEA });
   assert.ok(admission.admitted && admission.runId);
   const runId = admission.runId;
@@ -409,7 +358,7 @@ test("an interrupted entry Turn returns the grill to waiting in the same Session
 
 test("shutdown during the entry Turn still halts the grill (#212, #353, ADR 0019)", async (t) => {
   const { adapter } = scriptedAdapter("claude-code", [[BLOCKS]]);
-  const { wired, digest } = wire(t, "claude-code", adapter);
+  const { wired, digest } = wireMatt(t, { harness: "claude-code", adapter });
   const admission = submitLaunch(wired, digest, "claude-code", { idea: IDEA });
   assert.ok(admission.admitted && admission.runId);
   const runId = admission.runId;
@@ -436,7 +385,7 @@ test("an unusable planning Session is reported, never replaced by a fresh conver
     [{ result: UNUSABLE }],
     [completed("a fabricated fresh conversation")],
   ]);
-  const { wired, digest } = wire(t, "claude-code", adapter);
+  const { wired, digest } = wireMatt(t, { harness: "claude-code", adapter });
   const runId = await launch(wired, digest, "claude-code");
 
   // The failed entry Turn is truthful history; the Session reads unusable.
@@ -465,9 +414,13 @@ test("an unusable planning Session is reported, never replaced by a fresh conver
   );
 });
 
-test("the headless client refuses the Matt grill at Preflight with the TUI remediation (#212)", async (t) => {
+test("m12-wiring-test-helpers: the headless client refuses the Matt grill at Preflight with the TUI remediation (#212)", async (t) => {
   const { adapter, prepares } = scriptedAdapter("claude-code", [[]]);
-  const { wired } = wire(t, "claude-code", adapter, false);
+  const { wired } = wireMatt(t, {
+    harness: "claude-code",
+    adapter,
+    supportsInteractiveTurns: false,
+  });
   const out: string[] = [];
   const io: HeadlessIO = {
     out: (text) => out.push(text),
@@ -491,11 +444,15 @@ test("the headless client refuses the Matt grill at Preflight with the TUI remed
   assert.deepEqual(wired.runGroup.listRuns(), []);
 });
 
-test("a Run pinned to Matt 2.7.0 keeps its prompt and human controls after 2.8.0 installs (#374)", async (t) => {
+test("m12-wiring-test-helpers: a Run pinned to Matt 2.7.0 keeps its prompt and human controls after 2.8.0 installs (#374)", async (t) => {
   const { adapter } = scriptedAdapter("claude-code", [
     [completed("Discussing."), completed("Still discussing.")],
   ]);
-  const { wired, digest } = wire(t, "claude-code", adapter, true, true);
+  const { wired, digest } = wireMatt(t, {
+    harness: "claude-code",
+    adapter,
+    bundle: "historical-2.7.0",
+  });
   const runId = await launch(wired, digest, "claude-code");
   const before = readRun(wired.projectionPort, runId);
   assert.equal(before.bundle.version, "2.7.0");

@@ -1,7 +1,7 @@
 import { readRun } from "./run-test-helpers.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
@@ -12,9 +12,7 @@ import type {
   RunGateReference,
   RunView,
 } from "../../src/application/projection-port.js";
-import type { ProcessAdapter } from "../../src/process/process.js";
 import { createFake, type FakeScript } from "../harness/fake-adapter.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -28,23 +26,6 @@ import { awaitSettled } from "../helpers/settleOperation.js";
 // One shared fake Git backs every wiring, so a Run reopened on the same home in a
 // fresh wiring (a new process) reads back the Artifacts the first wiring published.
 const sharedGit = createFakeGitProcess();
-
-function fakeProcess(): ProcessAdapter {
-  const commands = createFakeProcess({
-    resolutionHandler: (name) => ({
-      kind: "found",
-      executable: name,
-      prefixArgs: [],
-    }),
-  });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => sharedGit.spawnCommandSync(options),
-  };
-}
 
 const PROFILE: HarnessProfile = {
   harness: "Claude Code",
@@ -115,23 +96,14 @@ const BUNDLE_ID = "dev.secant.tracker-choice";
 /** gate (free-text, suggestions Local/GitHub, produces `tracker`) → publish (an Agent
  *  Step whose prompt carries the `tracker` slot exactly once). */
 function writeTrackerBundle(): string {
-  const folder = makeTempDir("secant-suggested-gate-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(
-    join(folder, "prompts", "publish.md"),
-    "Publish the spec to the chosen tracker: {{artifact:tracker}}\n",
-  );
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: BUNDLE_ID,
-      version: "1.0.0",
-      name: "Tracker Choice",
-      description: "A suggested free-text gate feeding a later prompt.",
+  const { folder } = authorAgentBundle({
+    id: BUNDLE_ID,
+    name: "Tracker Choice",
+    description: "A suggested free-text gate feeding a later prompt.",
+    prompt: {
+      path: "prompts/publish.md",
+      text: "Publish the spec to the chosen tracker: {{artifact:tracker}}\n",
     },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/publish.md", kind: "prompt" }],
     routing: [
       {
         id: "choose-tracker",
@@ -150,8 +122,7 @@ function writeTrackerBundle(): string {
         prompt: { asset: "prompts/publish.md" },
       },
     ],
-  };
-  writeFileSync(join(folder, "manifest.json"), JSON.stringify(manifest));
+  });
   return folder;
 }
 
@@ -164,7 +135,7 @@ function wire(
   const wired = wireApplication({
     secantHome: home,
     launchCwd: workspace,
-    process: fakeProcess(),
+    process: storedProcess({ git: sharedGit }),
     harnessAdapter: createFake(script)(),
   });
   t.after(() => {

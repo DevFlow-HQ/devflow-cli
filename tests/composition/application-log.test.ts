@@ -1,6 +1,7 @@
+import { writeAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import type { ProjectionPort } from "../../src/application/projection-port.js";
@@ -375,39 +376,6 @@ test("a launched Operation's admission and outcome share its id, and a replay is
   });
 });
 
-/** An Agent Bundle whose prompt carries `prompt`, installed through `build`. */
-function writeAgentBundle(prompt: string): { folder: string; id: string } {
-  const folder = makeTempDir("secant-applog-agent-");
-  mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "work.md"), `${prompt}\n`);
-  const id = "dev.secant.applog-agent";
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id,
-        version: "1.0.0",
-        name: "Log Agent",
-        description: "An Agent Bundle for the operational-log suite.",
-      },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/work.md", kind: "prompt" }],
-      routing: [
-        {
-          id: "work",
-          kind: "agent",
-          session: "s",
-          retry: 0,
-          prompt: { asset: "prompts/work.md" },
-        },
-      ],
-    }),
-  );
-  return { folder, id };
-}
-
 test("an assessment's model check is its own stage, and the qualification it needs nests inside it", async () => {
   const listed: HarnessAdapter = ownPreparations({
     async prepare(options) {
@@ -433,7 +401,21 @@ test("an assessment's model check is its own stage, and the qualification it nee
     },
   });
   const h = wiredHome(listed);
-  const agent = writeAgentBundle("Do the work.");
+  const agent = writeAgentBundle({
+    id: "dev.secant.applog-agent",
+    name: "Log Agent",
+    description: "An Agent Bundle for the operational-log suite.",
+    prompt: { path: "prompts/work.md", text: "Do the work.\n" },
+    routing: [
+      {
+        id: "work",
+        kind: "agent",
+        session: "s",
+        retry: 0,
+        prompt: { asset: "prompts/work.md" },
+      },
+    ],
+  });
   await withClients(async (clients) => {
     const port = clients.projectionPort;
     assert.ok(
@@ -495,7 +477,7 @@ test("an assessment's model check is its own stage, and the qualification it nee
   ]);
 });
 
-test("seeded prompts, typed text, launch inputs, command arguments, and environment values never reach a record", async (t) => {
+test("m12-wiring-test-helpers: seeded prompts, typed text, launch inputs, command arguments, and environment values never reach a record", async (t) => {
   const seeded = {
     prompt: "seeded-prompt-5a91",
     argument: "seeded-argument-77e0",
@@ -514,7 +496,21 @@ test("seeded prompts, typed text, launch inputs, command arguments, and environm
       source: { type: "file", description: "A source file." },
     },
   });
-  const agent = writeAgentBundle(seeded.prompt);
+  const agent = writeAgentBundle({
+    id: "dev.secant.applog-agent",
+    name: "Log Agent",
+    description: "An Agent Bundle for the operational-log suite.",
+    prompt: { path: "prompts/work.md", text: `${seeded.prompt}\n` },
+    routing: [
+      {
+        id: "work",
+        kind: "agent",
+        session: "s",
+        retry: 0,
+        prompt: { asset: "prompts/work.md" },
+      },
+    ],
+  });
   const source = join(makeTempDir("secant-applog-input-"), "source.txt");
   writeFileSync(source, "source\n");
   await withClients(async (clients) => {
@@ -646,7 +642,7 @@ test("seeded prompts, typed text, launch inputs, command arguments, and environm
   }
 });
 
-test("a resume runs Preflight again and settles it before the resumed Operation is admitted", async () => {
+test("m12-wiring-test-helpers: a resume runs Preflight again and settles it before the resumed Operation is admitted", async () => {
   let runId = "";
   const h = wiredHome();
   const clock = frozenClock();

@@ -1,7 +1,7 @@
 import { readRun } from "./run-test-helpers.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
 import test, { type TestContext } from "node:test";
 import {
   createApplication,
@@ -81,32 +81,20 @@ const registration: ApplicationHarnessRegistration = {
 };
 
 function writeInteractiveBundle(): string {
-  const folder = makeTempDir("secant-retained-bundle-");
-  mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "chat.md"), "Talk it through.\n");
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id: "dev.secant.retained",
-        version: "1.0.0",
-        name: "Retained",
-        description: "One interactive Step.",
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.retained",
+    name: "Retained",
+    description: "One interactive Step.",
+    prompt: { path: "prompts/chat.md", text: "Talk it through.\n" },
+    routing: [
+      {
+        id: "chat",
+        kind: "interactive-agent",
+        session: "s",
+        prompt: { asset: "prompts/chat.md" },
       },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "prompts/chat.md", kind: "prompt" }],
-      routing: [
-        {
-          id: "chat",
-          kind: "interactive-agent",
-          session: "s",
-          prompt: { asset: "prompts/chat.md" },
-        },
-      ],
-    }),
-  );
+    ],
+  });
   return folder;
 }
 

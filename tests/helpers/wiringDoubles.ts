@@ -7,7 +7,10 @@ import type {
   HarnessProfile,
 } from "../../src/harness/harness.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
+import {
+  createFakeProcess,
+  type FakeProcessScript,
+} from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 
 // The composition suites' Harness and Process doubles: a Harness that qualifies
@@ -79,35 +82,54 @@ export function qualificationAdapter(
   });
 }
 
-export function wiringProcess(): ProcessAdapter {
-  const git = createFakeGitProcess();
-  const commands = createFakeProcess({
+/** A scripted Process backed by fake artifact Git. Reuse `git` across wirings
+ *  when a test reopens a Store; otherwise each Process owns fresh Git state. */
+export function storedProcess(
+  options: {
+    readonly git?: Pick<ProcessAdapter, "spawnCommandSync">;
+    readonly script?: Omit<
+      FakeProcessScript,
+      "syncCommands" | "syncCommandHandler"
+    >;
+  } = {},
+): ProcessAdapter {
+  const git = options.git ?? createFakeGitProcess();
+  const process = createFakeProcess({
     resolutionHandler: (name) => ({
       kind: "found",
       executable: name,
       prefixArgs: [],
     }),
-    commandHandler: (options) => {
-      const assetPath = options.args[0] === "-e" ? undefined : options.args[0];
-      let text = "";
-      if (assetPath !== undefined) {
-        const script = readFileSync(assetPath, "utf8");
-        text = script.includes("__filename")
-          ? `${assetPath}\n`
-          : `${/console\.log\('([^']*)'\)/.exec(script)?.[1] ?? ""}\n`;
-      }
-      return {
-        kind: "exited",
-        status: 0,
-        text: new TextEncoder().encode(text),
-      };
-    },
+    ...options.script,
   });
   return {
     resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
+      process.resolveExecutable(name, options),
+    spawnCommand: (options) => process.spawnCommand(options),
+    spawnOwnedProcess: (options) => process.spawnOwnedProcess(options),
     spawnCommandSync: (options) => git.spawnCommandSync(options),
   };
+}
+
+export function wiringProcess(): ProcessAdapter {
+  return storedProcess({
+    script: {
+      commandHandler: (options) => {
+        const assetPath =
+          options.args[0] === "-e" ? undefined : options.args[0];
+        let text = "";
+        if (assetPath !== undefined) {
+          const script = readFileSync(assetPath, "utf8");
+          text = script.includes("__filename")
+            ? `${assetPath}\n`
+            : `${/console\.log\('([^']*)'\)/.exec(script)?.[1] ?? ""}\n`;
+        }
+        return {
+          kind: "exited",
+          status: 0,
+          text: new TextEncoder().encode(text),
+        };
+      },
+    },
+  });
 }

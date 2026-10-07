@@ -1,7 +1,8 @@
 import { fakeHarnessProfile } from "../harness/fake-adapter.js";
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
@@ -208,20 +209,11 @@ function installAgent(
   f: Fixture,
   prompt = "Do the work.\n",
 ): { id: string; digest: string } {
-  const folder = makeTempDir("secant-lp-agent-");
-  mkdirSync(join(folder, "prompts"));
-  writeFileSync(join(folder, "prompts", "work.md"), prompt);
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.lp-agent",
-      version: "1.0.0",
-      name: "LP Agent",
-      description: "Agent Bundle for launch-preparation assessment.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/work.md", kind: "prompt" }],
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.lp-agent",
+    name: "LP Agent",
+    description: "Agent Bundle for launch-preparation assessment.",
+    prompt: { path: "prompts/work.md", text: prompt },
     routing: [
       {
         id: "work",
@@ -231,15 +223,11 @@ function installAgent(
         prompt: { asset: "prompts/work.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
+  });
   assert.ok(f.app.bundleManagement.build(folder, { noInstall: false }).ok);
   const entry = f.catalog
     .listEntries()
-    .find((e) => e.id === manifest.bundle.id);
+    .find((e) => e.id === "dev.secant.lp-agent");
   assert.ok(entry);
   return { id: entry.id, digest: entry.digest };
 }
@@ -407,19 +395,12 @@ test("a corrupted pinned Snapshot is a single not-ready bundle finding", async (
 test("a headless interactive-agent Bundle is a not-ready bundle finding", async (t) => {
   const f = fixture(t); // supportsInteractiveTurns defaults to false (headless)
   approve(f);
-  const folder = makeTempDir("secant-lp-interactive-");
-  writeFileSync(join(folder, "grill.md"), "Grill me.\n");
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id: "dev.secant.lp-interactive",
-      version: "1.0.0",
-      name: "LP Interactive",
-      description: "Interactive Bundle refused headlessly.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "grill.md", kind: "prompt" }],
+
+  const { folder } = authorAgentBundle({
+    id: "dev.secant.lp-interactive",
+    name: "LP Interactive",
+    description: "Interactive Bundle refused headlessly.",
+    prompt: { path: "grill.md", text: "Grill me.\n" },
     routing: [
       {
         id: "grill",
@@ -428,15 +409,11 @@ test("a headless interactive-agent Bundle is a not-ready bundle finding", async 
         prompt: { asset: "grill.md" },
       },
     ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
+  });
   assert.ok(f.app.bundleManagement.build(folder, { noInstall: false }).ok);
   const entry = f.catalog
     .listEntries()
-    .find((e) => e.id === manifest.bundle.id)!;
+    .find((e) => e.id === "dev.secant.lp-interactive")!;
 
   const snapshot = await assess(f, {
     bundle: { id: entry.id },

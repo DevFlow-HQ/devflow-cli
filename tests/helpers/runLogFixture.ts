@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+
 import type { TurnResult } from "../../src/harness/harness.js";
 import type { ProjectionPort } from "../../src/application/projection-port.js";
-import { makeTempDir } from "./tempDir.js";
+
+import { writeAgentBundle } from "./agentBundle.js";
 import { awaitSettled } from "./settleOperation.js";
 
 // Shared fixtures for Run lifecycle records and multi-Application ownership wiring.
@@ -30,25 +30,13 @@ export function writeBundle(routing: readonly unknown[]): {
   folder: string;
   id: string;
 } {
-  const folder = makeTempDir("secant-runlog-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "work.md"), `${SEEDED_PROMPT}\n`);
-  const id = "dev.secant.run-lifecycle-log";
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id,
-      version: "1.0.0",
-      name: "Run Lifecycle Log",
-      description: "A Bundle the operational-log lifecycle tests launch.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [{ path: "prompts/work.md", kind: "prompt" }],
+  return writeAgentBundle({
+    id: "dev.secant.run-lifecycle-log",
+    name: "Run Lifecycle Log",
+    description: "A Bundle the operational-log lifecycle tests launch.",
+    prompt: { path: "prompts/work.md", text: `${SEEDED_PROMPT}\n` },
     routing,
-  };
-  writeFileSync(join(folder, "manifest.json"), JSON.stringify(manifest));
-  return { folder, id };
+  });
 }
 
 export const agentStep = (id: string, retry: number) => ({

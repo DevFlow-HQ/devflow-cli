@@ -1,21 +1,21 @@
 import { readRun, findOffer, requireOffer } from "./run-test-helpers.js";
+import { MATT_FOLDER, wireMatt } from "./matt-wiring.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import test, { type TestContext } from "node:test";
-import { fileURLToPath } from "node:url";
-import { wireApplication, type Wiring } from "../../src/composition/main.js";
+import test from "node:test";
+
+import { type Wiring } from "../../src/composition/main.js";
 import type { HarnessAdapter } from "../../src/harness/harness.js";
 import type { RunView } from "../../src/application/projection-port.js";
+
 import {
   fakeHarnessProfile,
   createFake,
   type FakeScript,
   type FakeTurnScript,
 } from "../harness/fake-adapter.js";
-import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
-import { makeTempDir } from "../helpers/tempDir.js";
 import { call } from "../helpers/agentCompletion.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
@@ -31,8 +31,6 @@ import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 // keeps a ticket list, and a no-work, interrupted or lost Turn never moves on to
 // another ticket.
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const MATT_FOLDER = join(repoRoot, "bundles", "matt-front-spec");
 const MATT_ID = "dev.secant.matt-front";
 const IDEA = "Add a dark-mode toggle that follows me across devices.";
 const RECEIPT_LINE =
@@ -164,49 +162,6 @@ function mattAgent(
     },
   });
   return { adapter, granted, turns, implementation };
-}
-
-function wire(
-  t: TestContext,
-  harness: HarnessId,
-  adapter: HarnessAdapter,
-): { wired: Wiring; workspace: string; digest: string } {
-  const workspace = makeTempDir("secant-matt-impl-ws-");
-  const found = (name: string) => () => ({
-    kind: "found" as const,
-    attempt: {
-      source: "path" as const,
-      name,
-      description: `PATH name '${name}'`,
-    },
-  });
-  const wired = wireApplication({
-    secantHome: makeTempDir("secant-matt-impl-home-"),
-    launchCwd: workspace,
-    supportsInteractiveTurns: true,
-    process: createFakeBundleProcess(),
-    discoverClaudeCode: found("claude"),
-    discoverCodex: found("codex"),
-    ...(harness === "codex"
-      ? { codexHarnessAdapter: adapter }
-      : { harnessAdapter: adapter }),
-  });
-  t.after(() => {
-    wired.runGroup.close();
-    wired.catalog.close();
-  });
-  const built = wired.bundleManagement.build(MATT_FOLDER, { noInstall: false });
-  assert.ok(built.ok, JSON.stringify(built));
-  const entry = wired.catalog.listEntries().find((e) => e.id === MATT_ID);
-  assert.ok(entry);
-  assert.ok(
-    wired.projectionPort.submit({
-      operationId: "op-approve",
-      operation: "approve-workspace",
-      input: { path: workspace },
-    }).admitted,
-  );
-  return { wired, workspace, digest: entry.digest };
 }
 
 function submit(
@@ -344,7 +299,7 @@ function durableTurns(wired: Wiring, runId: string) {
 }
 
 for (const harness of ["claude-code", "codex"] as const) {
-  test(`[matt-local-implement] [${harness}] each ticket gets a fresh Session that reads the Local tracker; questions stay in it, and Continue opens the next without closing a ticket (#224)`, async (t) => {
+  test(`m12-wiring-test-helpers: [matt-local-implement] [${harness}] each ticket gets a fresh Session that reads the Local tracker; questions stay in it, and Continue opens the next without closing a ticket (#224)`, async (t) => {
     const agent = mattAgent(harness);
     // The first ticket's agent marks it done in its own file, as the prompt asks.
     agent.implementation.push({
@@ -355,7 +310,10 @@ for (const harness of ["claude-code", "codex"] as const) {
           `# ${TICKETS[0][0]}\n\n**Blocked by:** ${TICKETS[0][1]}\n\n**Status:** done\n`,
         ),
     });
-    const { wired, workspace, digest } = wire(t, harness, agent.adapter);
+    const { wired, workspace, digest } = wireMatt(t, {
+      harness,
+      adapter: agent.adapter,
+    });
     const runId = await publishLocalTickets(wired, digest, harness);
     await awaitSettled(wired.projectionPort, "op-approve-tickets");
     const area = agent.granted.at(-1)!;
@@ -499,7 +457,10 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
     // The agent then finds no ready ticket and says so.
     { script: completed("No ticket is ready: every open ticket is blocked.") },
   );
-  const { wired, digest } = wire(t, "claude-code", agent.adapter);
+  const { wired, digest } = wireMatt(t, {
+    harness: "claude-code",
+    adapter: agent.adapter,
+  });
   const runId = await publishLocalTickets(wired, digest, "claude-code");
   const area = agent.granted.at(-1)!;
 
@@ -578,7 +539,10 @@ test("[matt-local-implement] an Entry Turn that finds no ready ticket rests in i
       "No ticket is ready. Every ticket is done, so end the stage.",
     ),
   });
-  const { wired, digest } = wire(t, "codex", agent.adapter);
+  const { wired, digest } = wireMatt(t, {
+    harness: "codex",
+    adapter: agent.adapter,
+  });
   const runId = await publishLocalTickets(wired, digest, "codex");
   await awaitSettled(wired.projectionPort, "op-approve-tickets");
   const area = agent.granted.at(-1)!;
@@ -646,7 +610,10 @@ for (const harness of ["claude-code", "codex"] as const) {
           );
       },
     });
-    const { wired, workspace, digest } = wire(t, harness, agent.adapter);
+    const { wired, workspace, digest } = wireMatt(t, {
+      harness,
+      adapter: agent.adapter,
+    });
     const admission = wired.projectionPort.submit({
       operationId: "op-launch",
       operation: "launch-run",

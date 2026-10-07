@@ -1,4 +1,5 @@
 import { readRun } from "./run-test-helpers.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { realpathSync, readdirSync, writeFileSync } from "node:fs";
@@ -28,11 +29,7 @@ import {
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
-import {
-  createFakeGitProcess,
-  openFakeRunGroup as openRunGroup,
-} from "../run/store/fake-git-process.js";
+import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 
 // The Command steps' execution runs through an injected fake Process, so a Run
 // spawns no child. A blocking script models a genuinely live child that settles
@@ -62,23 +59,15 @@ function fakeCommand(
   };
 }
 
-const executionProcess: ProcessAdapter = (() => {
-  const git = createFakeGitProcess();
-  const commands = createFakeProcess({
+const executionProcess: ProcessAdapter = storedProcess({
+  script: {
     resolutionHandler: (name) =>
       name === "secant-no-such-binary-xyz"
         ? { kind: "not-found" }
         : { kind: "found", executable: name, prefixArgs: [] },
     commandHandler: fakeCommand,
-  });
-  return {
-    resolveExecutable: (name, options) =>
-      commands.resolveExecutable(name, options),
-    spawnCommand: (options) => commands.spawnCommand(options),
-    spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
-    spawnCommandSync: (options) => git.spawnCommandSync(options),
-  };
-})();
+  },
+});
 
 interface Fixture {
   readonly app: Application;

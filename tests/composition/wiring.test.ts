@@ -1,5 +1,6 @@
 import { readRun } from "../application/run-test-helpers.js";
 
+import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
@@ -510,7 +511,7 @@ test("the wiring hands the Application the engine version, host platform, and la
   assert.equal(bundle.executionSummary.platform, "linux");
 });
 
-test("[execution-store-on-fake-process] wiring injects one Process into Preflight, the Run Store, and execution", async (t) => {
+test("m12-wiring-test-helpers: [execution-store-on-fake-process] wiring injects one Process into Preflight, the Run Store, and execution", async (t) => {
   ensureRuntimeOnPath();
   const workspace = makeTempDir("secant-wire-run-ws-");
   let processConstructions = 0;
@@ -566,7 +567,7 @@ test("[execution-store-on-fake-process] wiring injects one Process into Prefligh
   }
 });
 
-test("the wiring's AssetResolver maps a Bundle's script asset to its file in the Catalog's tree so a Command can run it", async (t) => {
+test("m12-wiring-test-helpers: the wiring's AssetResolver maps a Bundle's script asset to its file in the Catalog's tree so a Command can run it", async (t) => {
   ensureRuntimeOnPath();
   const workspace = makeTempDir("secant-wire-asset-ws-");
   const wired = wireApplication({
@@ -889,32 +890,22 @@ for (const kind of ["agent", "interactive-agent"] as const) {
   test(`throwing every log record preserves an ${kind} Run, its Turn result, and cleanup`, async (t) => {
     const workspace = makeTempDir("secant-throw-run-ws-");
     const bundleId = "dev.secant.observer";
-    const folder = makeTempDir("secant-throw-bundle-");
-    writeFileSync(join(folder, "work.md"), "Do the work.");
-    writeFileSync(
-      join(folder, "manifest.json"),
-      JSON.stringify({
-        formatVersion: 1,
-        bundle: {
-          id: bundleId,
-          version: "1.0.0",
-          name: "Observer",
-          description: "Observer failure regression.",
+
+    const { folder } = authorAgentBundle({
+      id: bundleId,
+      name: "Observer",
+      description: "Observer failure regression.",
+      prompt: { path: "work.md", text: "Do the work." },
+      routing: [
+        {
+          id: "draft",
+          kind,
+          retry: 0,
+          session: "planning",
+          prompt: { asset: "work.md" },
         },
-        platforms: ["windows", "macos", "linux"],
-        inputs: {},
-        assets: [{ path: "work.md", kind: "prompt" }],
-        routing: [
-          {
-            id: "draft",
-            kind,
-            retry: 0,
-            session: "planning",
-            prompt: { asset: "work.md" },
-          },
-        ],
-      }),
-    );
+      ],
+    });
     const wired = wireApplication(
       {
         secantHome: makeTempDir("secant-throw-run-home-"),
@@ -1199,42 +1190,31 @@ const OVERLAP_SESSION_ID = "33333333-3333-4333-8333-333333333333";
 
 /** A Command Step then an Agent Step, both Runs of it sharing Session `s`. */
 function writeOverlapBundle(): { folder: string; id: string } {
-  const folder = makeTempDir("secant-overlap-bundle-");
-  writeFileSync(join(folder, "work.md"), "Do the work.");
   const id = "dev.secant.overlap";
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify({
-      formatVersion: 1,
-      bundle: {
-        id,
-        version: "1.0.0",
-        name: "Overlap",
-        description: "Two overlapping Runs share one Session name.",
+  const { folder } = authorAgentBundle({
+    id: id,
+    name: "Overlap",
+    description: "Two overlapping Runs share one Session name.",
+    prompt: { path: "work.md", text: "Do the work." },
+    routing: [
+      {
+        id: "check",
+        kind: "command",
+        produces: [{ name: "output", type: "text" }],
+        command: {
+          executable: RUNTIME_NAME,
+          arguments: ["-e", "console.log('checked')"],
+        },
       },
-      platforms: ["windows", "macos", "linux"],
-      inputs: {},
-      assets: [{ path: "work.md", kind: "prompt" }],
-      routing: [
-        {
-          id: "check",
-          kind: "command",
-          produces: [{ name: "output", type: "text" }],
-          command: {
-            executable: RUNTIME_NAME,
-            arguments: ["-e", "console.log('checked')"],
-          },
-        },
-        {
-          id: "draft",
-          kind: "agent",
-          retry: 0,
-          session: "s",
-          prompt: { asset: "work.md" },
-        },
-      ],
-    }),
-  );
+      {
+        id: "draft",
+        kind: "agent",
+        retry: 0,
+        session: "s",
+        prompt: { asset: "work.md" },
+      },
+    ],
+  });
   return { folder, id };
 }
 
