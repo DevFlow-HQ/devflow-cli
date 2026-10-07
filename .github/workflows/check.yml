@@ -212,6 +212,14 @@ jobs:
           bun run test --
           -t '^m12-renderer-test-lifecycle(:|$)'
           tests/tui/renderer-lifecycle.test.tsx
+      - name: m12-local-test-helpers
+        run: >-
+          bun run test --
+          -t '^m12-local-test-helpers(:|$)'
+          tests/tui/run-workbench-prompt.test.tsx
+          tests/tui/run-workbench-interaction.test.tsx
+          tests/application/session-history.test.ts
+          tests/headless/run.test.ts
       - name: Test
         run: bun run test
       - name: Build

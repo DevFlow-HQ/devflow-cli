@@ -3,8 +3,28 @@ import { Database } from "bun:sqlite";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
+import type {
+  ProjectionPort,
+  ProjectionSelector,
+} from "../../src/application/projection-port.js";
 import { openLiveRun } from "../helpers/liveRun.js";
+
+function openHistory({
+  t,
+  port,
+  ...selection
+}: Omit<
+  Extract<ProjectionSelector, { family: "session-history" }>,
+  "family"
+> & { t: TestContext; port: ProjectionPort }) {
+  const opened = port.openProjection({
+    family: "session-history",
+    ...selection,
+  });
+  t.after(() => opened.close());
+  return opened;
+}
 
 test("m10-session-history: a known Session opens atomically and catches up current identified messages", async (t) => {
   const { port, runId, owner, channel, finish } = await openLiveRun(t);
@@ -22,12 +42,7 @@ test("m10-session-history: a known Session opens atomically and catches up curre
       at: new Date("2026-10-06T00:00:00Z"),
     }).ok,
   );
-  const opened = port.openProjection({
-    family: "session-history",
-    runId,
-    session: "conversation",
-  });
-  t.after(() => opened.close());
+  const opened = openHistory({ t, port: port, runId, session: "conversation" });
   assert.ok(opened.snapshot.result.found);
   assert.deepEqual(
     opened.snapshot.result.history.rows.map((row) => row.value.kind),
@@ -41,12 +56,7 @@ test("m10-session-history: a known Session opens atomically and catches up curre
       content: "Growing",
     },
   });
-  const late = port.openProjection({
-    family: "session-history",
-    runId,
-    session: "conversation",
-  });
-  t.after(() => late.close());
+  const late = openHistory({ t, port: port, runId, session: "conversation" });
   assert.ok(late.snapshot.result.found);
   const row = late.snapshot.result.history.rows.at(-1)!;
   assert.equal(row.source, "preview");
@@ -127,12 +137,12 @@ test("m10-session-history: previews coalesce every row's complete value once per
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   const reader = opened.updates[Symbol.asyncIterator]();
   const before = run.owner.turnEvents();
   for (const [messageId, content] of [
@@ -187,12 +197,12 @@ test("m10-session-history: previews coalesce every row's complete value once per
     },
   });
   timer.flush();
-  const reopened = run.port.openProjection({
-    family: "session-history",
+  const reopened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => reopened.close());
   assert.ok(reopened.snapshot.result.found);
   assert.deepEqual(reopened.snapshot.result.history.rows[1]?.value, {
     kind: "message",
@@ -206,12 +216,7 @@ test("m10-session-history: the combined 200-row window evicts live-only messages
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
-    runId: run.runId,
-    session: "s",
-  });
-  t.after(() => opened.close());
+  openHistory({ t, port: run.port, runId: run.runId, session: "s" });
   for (let index = 0; index < 200; index++)
     run.channel.observe({
       message: {
@@ -222,12 +227,12 @@ test("m10-session-history: the combined 200-row window evicts live-only messages
       },
     });
   timer.flush();
-  const late = run.port.openProjection({
-    family: "session-history",
+  const late = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => late.close());
   assert.ok(late.snapshot.result.found);
   assert.equal(late.snapshot.result.history.rows.length, 200);
   assert.equal(late.snapshot.result.history.hasEarlier, true);
@@ -254,12 +259,12 @@ test("m10-session-history: the combined 200-row window evicts live-only messages
     },
   });
   timer.flush();
-  const latest = run.port.openProjection({
-    family: "session-history",
+  const latest = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => latest.close());
   assert.ok(latest.snapshot.result.found);
   assert.equal(latest.snapshot.result.history.rows.length, 200);
   assert.equal(latest.snapshot.result.history.hasEarlier, true);
@@ -271,17 +276,17 @@ test("m10-session-history: the combined 200-row window evicts live-only messages
   await run.finish();
 });
 
-test("m10-session-history: first appearance survives late settlement and reopen; ids are scoped to a subscription", async (t) => {
+test("m12-local-test-helpers: first appearance survives late settlement and reopen; ids are scoped to a subscription", async (t) => {
   const timer = clock();
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   run.channel.observe({
     message: {
       turnId: "turn",
@@ -351,12 +356,12 @@ test("m10-session-history: first appearance survives late settlement and reopen;
     at: new Date(),
   });
   await run.finish();
-  const reopened = run.reopen().openProjection({
-    family: "session-history",
+  const reopened = openHistory({
+    t,
+    port: run.reopen(),
     runId: run.runId,
     session: "s",
   });
-  t.after(() => reopened.close());
   assert.ok(reopened.snapshot.result.found);
   assert.deepEqual(
     reopened.snapshot.result.history.rows.map((row) => row.value.kind),
@@ -378,20 +383,20 @@ test("m10-session-history: first appearance survives late settlement and reopen;
 test("m10-session-history: missing Run and Session are typed Problems; a known empty Session is an empty view", async (t) => {
   const run = await openLiveRun(t);
   t.after(run.finish);
-  const missingRun = run.port.openProjection({
-    family: "session-history",
+  const missingRun = openHistory({
+    t,
+    port: run.port,
     runId: "missing",
     session: "s",
   });
-  t.after(() => missingRun.close());
   assert.ok(!missingRun.snapshot.result.found);
   assert.equal(missingRun.snapshot.result.problem.code, "run-not-found");
-  const missingSession = run.port.openProjection({
-    family: "session-history",
+  const missingSession = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "missing",
   });
-  t.after(() => missingSession.close());
   assert.ok(!missingSession.snapshot.result.found);
   assert.equal(
     missingSession.snapshot.result.problem.code,
@@ -409,12 +414,12 @@ test("m10-session-history: missing Run and Session are typed Problems; a known e
   } finally {
     fixture.close();
   }
-  const empty = run.port.openProjection({
-    family: "session-history",
+  const empty = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "empty",
   });
-  t.after(() => empty.close());
   assert.ok(empty.snapshot.result.found);
   assert.deepEqual(empty.snapshot.result.history.rows, []);
   assert.equal(empty.snapshot.result.history.hasEarlier, false);
@@ -425,18 +430,18 @@ test("m10-session-history: a slow history observer closes alone; healthy FIFO pu
   const run = await openLiveRun(t);
   t.after(run.finish);
   admit(run.owner);
-  const slow = run.port.openProjection({
-    family: "session-history",
+  const slow = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => slow.close());
-  const healthy = run.port.openProjection({
-    family: "session-history",
+  const healthy = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => healthy.close());
   const reader = healthy.updates[Symbol.asyncIterator]();
   run.owner.appendTurnEvent({
     turnId: "turn",
@@ -465,12 +470,12 @@ test("m10-session-history: a slow history observer closes alone; healthy FIFO pu
     value: { kind: "closed", reason: "observer-lagged" },
   });
   assert.equal((await lagged.next()).done, true);
-  const reopened = run.port.openProjection({
-    family: "session-history",
+  const reopened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => reopened.close());
   assert.ok(reopened.snapshot.result.found);
   assert.equal(reopened.snapshot.result.history.rows.length, 2);
   await run.finish();
@@ -528,12 +533,12 @@ test("m10-interruption-and-transcript: partials, Steer delivery, Agent-call disp
     availability: "detached",
     at: new Date("2026-10-06T00:00:03Z"),
   });
-  const view = run.port.openProjection({
-    family: "session-history",
+  const view = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => view.close());
   assert.ok(view.snapshot.result.found);
   const rows = view.snapshot.result.history.rows.map((row) => row.value);
   assert.deepEqual(rows, [
@@ -594,12 +599,12 @@ for (const result of ["lost", "not-started"] as const)
       at: new Date("2026-10-06T00:00:03Z"),
     });
     await run.finish();
-    const reopened = run.reopen().openProjection({
-      family: "session-history",
+    const reopened = openHistory({
+      t,
+      port: run.reopen(),
       runId: run.runId,
       session: "s",
     });
-    t.after(() => reopened.close());
     assert.ok(reopened.snapshot.result.found);
     assert.deepEqual(
       reopened.snapshot.result.history.rows.map((row) => row.value),
@@ -614,12 +619,12 @@ test("m10-session-history: interleaved same-name tools settle in their original 
   const run = await openLiveRun(t);
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   const reader = opened.updates[Symbol.asyncIterator]();
   const append = (callId: string, input: string, outcome: object) =>
     run.owner.appendTurnEvent({
@@ -677,12 +682,12 @@ test("m10-session-history: interleaved same-name tools settle in their original 
   });
   assert.doesNotMatch(JSON.stringify(settled.value), /"callId"|"parentCallId"/);
   await run.finish();
-  const reopened = run.reopen().openProjection({
-    family: "session-history",
+  const reopened = openHistory({
+    t,
+    port: run.reopen(),
     runId: run.runId,
     session: "s",
   });
-  t.after(() => reopened.close());
   assert.ok(reopened.snapshot.result.found);
   assert.deepEqual(
     reopened.snapshot.result.history.rows.map((r) => r.value),
@@ -697,12 +702,12 @@ test("m10-session-history: tool previews share the message budget, remain comple
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   const reader = opened.updates[Symbol.asyncIterator]();
   run.owner.appendTurnEvent({
     turnId: "turn",
@@ -747,12 +752,12 @@ test("m10-session-history: tool previews share the message budget, remain comple
     });
   assert.deepEqual(run.owner.turnEvents(), before);
   assert.deepEqual(timer.delays, [50]);
-  const late = run.port.openProjection({
-    family: "session-history",
+  const late = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => late.close());
   assert.ok(late.snapshot.result.found);
   assert.deepEqual(late.snapshot.result.history.rows[1]?.value, {
     kind: "tool",
@@ -861,12 +866,12 @@ for (const resultKind of ["completed", "interrupted", "lost"])
     append("second", "second", { kind: "completed" });
     admit(run.owner, "third", "other");
     append("third", "other Session", { kind: "running" });
-    const page = run.port.openProjection({
-      family: "session-history",
+    const page = openHistory({
+      t,
+      port: run.port,
       runId: run.runId,
       session: "s",
     });
-    t.after(() => page.close());
     assert.ok(page.snapshot.result.found);
     assert.deepEqual(
       page.snapshot.result.history.rows
@@ -898,12 +903,12 @@ for (const resultKind of ["completed", "interrupted", "lost"])
       "tools stay out of stored transcript",
     );
     await run.finish();
-    const reopened = run.reopen().openProjection({
-      family: "session-history",
+    const reopened = openHistory({
+      t,
+      port: run.reopen(),
       runId: run.runId,
       session: "s",
     });
-    t.after(() => reopened.close());
     assert.ok(reopened.snapshot.result.found);
     assert.deepEqual(
       reopened.snapshot.result.history.rows
@@ -943,12 +948,12 @@ test("m10-session-history: one mixed 200/201 bound counts calls once and evicted
         },
       });
   }
-  const page = run.port.openProjection({
-    family: "session-history",
+  const page = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => page.close());
   assert.ok(page.snapshot.result.found);
   assert.equal(page.snapshot.result.history.rows.length, 200);
   assert.equal(page.snapshot.result.history.hasEarlier, false);
@@ -1029,12 +1034,12 @@ test("m10-session-history: terminal removal of memory-only previews never resurr
         content: "Memory-only",
       },
     });
-  const page = run.port.openProjection({
-    family: "session-history",
+  const page = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => page.close());
   assert.ok(page.snapshot.result.found);
   assert.equal(page.snapshot.result.history.rows.length, 200);
   assert.deepEqual(page.snapshot.result.history.rows[0]?.value, {
@@ -1075,12 +1080,12 @@ test("m10-session-history: Thought preview/final reconciliation keeps first posi
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   const before = run.owner.turnEvents();
   run.channel.observe({
     thought: {
@@ -1176,12 +1181,12 @@ test("m10-session-history: Thought preview/final reconciliation keeps first posi
     ["Input"],
   );
   await run.finish();
-  const reopened = run.reopen().openProjection({
-    family: "session-history",
+  const reopened = openHistory({
+    t,
+    port: run.reopen(),
     runId: run.runId,
     session: "s",
   });
-  t.after(() => reopened.close());
   assert.ok(reopened.snapshot.result.found);
   assert.deepEqual(
     reopened.snapshot.result.history.rows[1]?.value,
@@ -1194,14 +1199,7 @@ test("m10-session-history: mixed Thought/message/tool rows share the exact 200/2
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const open = () =>
-    run.port.openProjection({
-      family: "session-history",
-      runId: run.runId,
-      session: "s",
-    });
-  const opened = open();
-  t.after(() => opened.close());
+  openHistory({ t, port: run.port, runId: run.runId, session: "s" });
   for (let index = 0; index < 199; index++) {
     if (index % 3 === 0)
       run.channel.observe({
@@ -1234,8 +1232,12 @@ test("m10-session-history: mixed Thought/message/tool rows share the exact 200/2
         at: new Date(),
       });
   }
-  const exact = open();
-  t.after(() => exact.close());
+  const exact = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
   assert.ok(exact.snapshot.result.found);
   assert.equal(exact.snapshot.result.history.rows.length, 200);
   assert.equal(exact.snapshot.result.history.hasEarlier, false);
@@ -1248,8 +1250,12 @@ test("m10-session-history: mixed Thought/message/tool rows share the exact 200/2
       content: "Newest",
     },
   });
-  const over = open();
-  t.after(() => over.close());
+  const over = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
   assert.ok(over.snapshot.result.found);
   assert.equal(over.snapshot.result.history.rows.length, 200);
   assert.equal(over.snapshot.result.history.hasEarlier, true);
@@ -1274,8 +1280,12 @@ test("m10-session-history: mixed Thought/message/tool rows share the exact 200/2
     },
   });
   timer.flush();
-  const latest = open();
-  t.after(() => latest.close());
+  const latest = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
   assert.ok(latest.snapshot.result.found);
   assert.equal(latest.snapshot.result.history.rows.length, 200);
   assert.ok(
@@ -1331,12 +1341,12 @@ test("m10-session-history: empty Thought replacements suppress bodies and never 
     },
   });
   timer.flush();
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   assert.ok(opened.snapshot.result.found);
   assert.deepEqual(
     opened.snapshot.result.history.rows.map((row) => row.value),
@@ -1350,12 +1360,12 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   const reader = opened.updates[Symbol.asyncIterator]();
   const diff = {
     files: [{ path: "observed.ts" }],
@@ -1424,12 +1434,12 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
     diff: { turnId: "turn", session: "s", files: [], content: "Late stale" },
   });
   timer.flush();
-  const late = run.port.openProjection({
-    family: "session-history",
+  const late = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => late.close());
   assert.ok(late.snapshot.result.found);
   assert.deepEqual(late.snapshot.result.history.rows[1]?.value, {
     kind: "turn-diff",
@@ -1454,12 +1464,12 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
     1,
   );
   await run.finish();
-  const reopened = run.reopen().openProjection({
-    family: "session-history",
+  const reopened = openHistory({
+    t,
+    port: run.reopen(),
     runId: run.runId,
     session: "s",
   });
-  t.after(() => reopened.close());
   assert.ok(reopened.snapshot.result.found);
   assert.deepEqual(reopened.snapshot.result.history.rows[1]?.value, {
     kind: "turn-diff",
@@ -1472,14 +1482,12 @@ test("m10-session-history: cumulative diff shares preview fairness and the exact
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const open = () =>
-    run.port.openProjection({
-      family: "session-history",
-      runId: run.runId,
-      session: "s",
-    });
-  const opened = open();
-  t.after(() => opened.close());
+  const opened = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
   run.channel.observe({
     diff: {
       turnId: "turn",
@@ -1530,16 +1538,24 @@ test("m10-session-history: cumulative diff shares preview fairness and the exact
         at: new Date(),
       });
   }
-  const exact = open();
-  t.after(() => exact.close());
+  const exact = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
   assert.ok(exact.snapshot.result.found);
   assert.equal(exact.snapshot.result.history.rows.length, 200);
   assert.equal(exact.snapshot.result.history.hasEarlier, false);
   run.channel.observe({
     diff: { turnId: "turn", session: "s", content: "Replacement", files: [] },
   });
-  const replacement = open();
-  t.after(() => replacement.close());
+  const replacement = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
   assert.ok(replacement.snapshot.result.found);
   assert.equal(replacement.snapshot.result.history.rows.length, 200);
   assert.equal(
@@ -1565,8 +1581,12 @@ test("m10-session-history: cumulative diff shares preview fairness and the exact
     at: new Date(),
   });
   timer.flush();
-  const over = open();
-  t.after(() => over.close());
+  const over = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
   assert.ok(over.snapshot.result.found);
   assert.equal(over.snapshot.result.history.rows.length, 200);
   assert.equal(over.snapshot.result.history.hasEarlier, true);
@@ -1608,12 +1628,12 @@ test("m10-interruption-and-transcript: crash reopening loses memory-only cumulat
     false,
   );
   await run.finish();
-  const reopened = run.reopen().openProjection({
-    family: "session-history",
+  const reopened = openHistory({
+    t,
+    port: run.reopen(),
     runId: run.runId,
     session: "s",
   });
-  t.after(() => reopened.close());
   assert.ok(reopened.snapshot.result.found);
   assert.equal(
     reopened.snapshot.result.history.rows.some(
@@ -1636,12 +1656,12 @@ for (const size of [29_999, 30_000, 30_001])
     });
     t.after(run.finish);
     admit(run.owner);
-    const opened = run.port.openProjection({
-      family: "session-history",
+    const opened = openHistory({
+      t,
+      port: run.port,
       runId: run.runId,
       session: "s",
     });
-    t.after(() => opened.close());
     const reader = opened.updates[Symbol.asyncIterator]();
     const text = "a".repeat(size - 1) + "Z";
     const before = run.owner.turnEvents();
@@ -1686,12 +1706,12 @@ for (const size of [29_999, 30_000, 30_001])
         assert.equal(value.nativeOmission, "Harness omitted stdout");
       } else assert.equal(update.value.row.value.kind, "message");
     }
-    const late = run.port.openProjection({
-      family: "session-history",
+    const late = openHistory({
+      t,
+      port: run.port,
       runId: run.runId,
       session: "s",
     });
-    t.after(() => late.close());
     assert.ok(late.snapshot.result.found);
     assert.equal(
       late.snapshot.result.history.rows.filter(
@@ -1716,12 +1736,12 @@ for (const final of [
     });
     t.after(run.finish);
     admit(run.owner);
-    const opened = run.port.openProjection({
-      family: "session-history",
+    const opened = openHistory({
+      t,
+      port: run.port,
       runId: run.runId,
       session: "s",
     });
-    t.after(() => opened.close());
     const reader = opened.updates[Symbol.asyncIterator]();
     const call = {
       callId: "call",
@@ -1794,12 +1814,12 @@ for (const final of [
       },
     });
     timer.flush();
-    const reopened = run.port.openProjection({
-      family: "session-history",
+    const reopened = openHistory({
+      t,
+      port: run.port,
       runId: run.runId,
       session: "s",
     });
-    t.after(() => reopened.close());
     assert.ok(reopened.snapshot.result.found);
     assert.deepEqual(
       reopened.snapshot.result.history.rows[1]?.value,
@@ -1816,12 +1836,12 @@ for (const resultKind of ["completed", "interrupted", "lost"])
     });
     t.after(run.finish);
     admit(run.owner);
-    const opened = run.port.openProjection({
-      family: "session-history",
+    const opened = openHistory({
+      t,
+      port: run.port,
       runId: run.runId,
       session: "s",
     });
-    t.after(() => opened.close());
     const reader = opened.updates[Symbol.asyncIterator]();
     const call = {
       callId: "call",
@@ -1889,12 +1909,12 @@ for (const resultKind of ["completed", "interrupted", "lost"])
       },
     });
     timer.flush();
-    const reopened = run.port.openProjection({
-      family: "session-history",
+    const reopened = openHistory({
+      t,
+      port: run.port,
       runId: run.runId,
       session: "s",
     });
-    t.after(() => reopened.close());
     assert.ok(reopened.snapshot.result.found);
     assert.deepEqual(
       reopened.snapshot.result.history.rows[1]?.value,
@@ -1912,12 +1932,12 @@ test("m10-session-history: command tails, uncapped supplied patches, Turn diffs 
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
   admit(run.owner);
-  const opened = run.port.openProjection({
-    family: "session-history",
+  const opened = openHistory({
+    t,
+    port: run.port,
     runId: run.runId,
     session: "s",
   });
-  t.after(() => opened.close());
   const reader = opened.updates[Symbol.asyncIterator]();
   const before = run.owner.turnEvents();
   const content = "complete supplied patch".repeat(2000);

@@ -70,6 +70,7 @@ import {
   AVAILABLE_STEER_OFFER,
   steerableInteractiveRunOf,
   MODEL_OFFER,
+  mountModelChoice,
   openModelChoice,
   mountInspectable,
   INSPECTIONS,
@@ -2587,20 +2588,16 @@ test("m10-confirmation-target-identity: a request preempting an armed cancel cle
   assert.equal(cancelled, 0);
 });
 
-test("m10-workbench-interaction: the sidebar names a requested Model choice until its receipt settles", async () => {
+test("m12-local-test-helpers: the sidebar names a requested Model choice until its receipt settles", async () => {
   const [outcome, setOutcome] = createSignal<RunActionOutcome>({
     kind: "pending",
   });
-  const wb = await mountWorkbench(
-    runOf({
-      selectedHarness: "codex",
-      modelChoice: MODEL_OFFER.currentChoice,
-      actionOffers: [MODEL_OFFER],
-    }),
-    140,
-    40,
-    okActions({ changeModelChoice: () => outcome }),
-  );
+  const wb = await mountModelChoice({
+    offer: MODEL_OFFER,
+    run: { selectedHarness: "codex", modelChoice: MODEL_OFFER.currentChoice },
+    width: 140,
+    actions: okActions({ changeModelChoice: () => outcome }),
+  });
   await openModelChoice(wb.t, wb.renderer);
   await press(wb.t, wb.renderer, "down");
   await press(wb.t, wb.renderer, "return");

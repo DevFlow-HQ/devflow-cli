@@ -13,6 +13,7 @@
 // `registerCodexAdapterConformance` forwards them to the runner.
 
 import assert from "node:assert/strict";
+import { z } from "zod";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -93,19 +94,20 @@ test("Codex Agent calls use an authenticated Session channel and settle before p
     });
     const events = observeEvents(turn);
     await waitForEventCount(turn, events, "model", 1);
-    const native = installed
-      .invocations()
-      .flatMap((i) => i.stdinLines)
-      .map((line) => JSON.parse(line));
+    const native = appServerMessages(installed);
     const start = native.find((frame) => frame.method === "thread/start");
+    assert.ok(start?.params);
+    const config = z.record(z.string(), z.unknown()).parse(start.params.config);
     assert.equal(start.params.approvalsReviewer, "user");
     assert.equal(
-      start.params.config["mcp_servers.secant.default_tools_approval_mode"],
+      config["mcp_servers.secant.default_tools_approval_mode"],
       "approve",
     );
-    const url = start.params.config["mcp_servers.secant.url"];
+    const url = z.string().parse(config["mcp_servers.secant.url"]);
     const headers = {
-      ...start.params.config["mcp_servers.secant.http_headers"],
+      ...z
+        .record(z.string(), z.string())
+        .parse(config["mcp_servers.secant.http_headers"]),
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
     };
@@ -387,11 +389,11 @@ test("Codex tool elicitations offer Allow/Deny and decline other elicitations", 
         },
       ],
     );
-    const replies = installed
-      .invocations()
-      .flatMap((i) => i.stdinLines)
-      .map((line) => JSON.parse(line))
-      .filter((frame) => ["allow", "deny", "form", "link"].includes(frame.id));
+    const replies = appServerMessages(installed).filter(
+      (frame) =>
+        typeof frame.id === "string" &&
+        ["allow", "deny", "form", "link"].includes(frame.id),
+    );
     assert.deepEqual(
       replies.map((r) => r.result),
       [
@@ -562,15 +564,9 @@ test("Codex approval allow and deny map only to native accept and decline", asyn
     decision: "deny",
   });
   assert.equal((await turn.result()).kind, "completed");
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const responses = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .filter(
-      (message) => message.method === undefined && message.result !== undefined,
-    );
+  const responses = appServerMessages(installed).filter(
+    (message) => message.method === undefined && message.result !== undefined,
+  );
   assert.deepEqual(responses.slice(-2), [
     { id: 5, result: { decision: "accept" } },
     { id: "server-file-1", result: { decision: "decline" } },
@@ -659,13 +655,9 @@ test("concurrent answers write exactly one native decision", async () => {
     { outcome: "rejected", reason: "already-settled" },
   ]);
   assert.equal((await turn.result()).kind, "completed");
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const nativeAnswers = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .filter((message) => message.id === "one-answer");
+  const nativeAnswers = appServerMessages(installed).filter(
+    (message) => message.id === "one-answer",
+  );
   assert.deepEqual(nativeAnswers, [
     { id: "one-answer", result: { decision: "accept" } },
   ]);
@@ -1003,14 +995,7 @@ test("close expires an outstanding approval before native interruption", async (
   assert.equal((await turn.result()).kind, "interrupted");
   const expired = events.filter((event) => event.kind === "request-expired");
   assert.equal(expired.length, 1);
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  assert.equal(
-    JSON.parse(appServer.stdinLines.at(-1) ?? "{}").method,
-    "turn/interrupt",
-  );
+  assert.equal(appServerMessages(installed).at(-1)?.method, "turn/interrupt");
 });
 
 test("unsupported mandatory Codex approval shapes fail closed", async () => {
@@ -1055,11 +1040,9 @@ test("request-user-input is declined without ending the Turn", async () => {
   const prepared = await prepareCodex(installed.path);
   const result = await prepared.startTurn(turnRequest()).result();
   assert.equal(result.kind, "completed");
-  const replies = installed
-    .invocations()
-    .flatMap((i) => i.stdinLines)
-    .map((line) => JSON.parse(line))
-    .filter((frame) => frame.id === "request-input");
+  const replies = appServerMessages(installed).filter(
+    (frame) => frame.id === "request-input",
+  );
   assert.deepEqual(replies, [{ id: "request-input", result: { answers: {} } }]);
   assert.equal(prepared.profile.clarifications.available, false);
   await prepared.close();
@@ -1083,7 +1066,7 @@ test("refused durable admission sends no prompt content", async () => {
     .invocations()
     .find((invocation) => invocation.args.join(" ") === "app-server");
   assert.ok(appServer !== undefined);
-  const messages = appServer.stdinLines.map((line) => JSON.parse(line));
+  const messages = appServerMessages(installed);
   assert.ok(messages.some((message) => message.method === "thread/start"));
   assert.ok(messages.every((message) => message.method !== "turn/start"));
   assert.ok(
@@ -1263,13 +1246,9 @@ test("later fresh Turns reuse one private thread and continue RPC ids", async ()
     known: true,
     ...CODEX_RECORDING_MODEL_CHOICE.second,
   });
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const requests = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .filter((message) => message.id !== undefined);
+  const requests = appServerMessages(installed).filter(
+    (message) => message.id !== undefined,
+  );
   assert.deepEqual(
     requests.map((message) => [message.id, message.method]),
     [
@@ -1314,13 +1293,9 @@ test("a second human Turn uses the live Codex thread without a redundant resume"
     .result();
   assert.equal(second.kind, "completed");
 
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const requests = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .filter((message) => message.id !== undefined);
+  const requests = appServerMessages(installed).filter(
+    (message) => message.id !== undefined,
+  );
   assert.deepEqual(
     requests.map((message) => [
       message.id,
@@ -1362,13 +1337,9 @@ test("codex-live-controls steers the exact active native Turn", async () => {
   await prepared.close();
   await turn.result();
 
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const steer = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .find((message) => message.method === "turn/steer");
+  const steer = appServerMessages(installed).find(
+    (message) => message.method === "turn/steer",
+  );
   assert.deepEqual(steer?.params, {
     threadId: "thread-1",
     expectedTurnId: "turn-1",
@@ -1391,13 +1362,9 @@ test("codex-live-controls interrupts only from matching terminal truth", async (
   assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
   assert.equal((await turn.result()).kind, "interrupted");
 
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const interrupt = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .find((message) => message.method === "turn/interrupt");
+  const interrupt = appServerMessages(installed).find(
+    (message) => message.method === "turn/interrupt",
+  );
   assert.deepEqual(interrupt?.params, {
     threadId: "thread-1",
     turnId: "turn-1",
@@ -1978,13 +1945,9 @@ for (const control of ["steer", "interrupt"] as const) {
           const nextEvents = observeEvents(next);
           await answerControlApproval(next, nextEvents);
           assert.equal((await next.result()).kind, "completed");
-          const appServer = installed
-            .invocations()
-            .find((invocation) => invocation.args.join(" ") === "app-server");
-          assert.ok(appServer !== undefined);
           assert.deepEqual(
-            appServer.stdinLines
-              .map((line) => JSON.parse(line).method)
+            appServerMessages(installed)
+              .map((message) => message.method)
               .filter((method) => method !== undefined),
             [
               "initialize",
@@ -2106,16 +2069,7 @@ test("codex-live-controls close interrupts live work before app-server shutdown"
   assert.equal(first.clean, true);
   assert.strictEqual(await prepared.close(), first);
 
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  assert.equal(
-    appServer.stdinLines.at(-1) === undefined
-      ? undefined
-      : JSON.parse(appServer.stdinLines.at(-1)!).method,
-    "turn/interrupt",
-  );
+  assert.equal(appServerMessages(installed).at(-1)?.method, "turn/interrupt");
 });
 
 test("codex-live-controls close stays bounded before a native Turn exists", async () => {
@@ -2995,14 +2949,11 @@ test("codex-exact-thread-recovery acknowledges the same thread before admission 
     .startTurn({
       ...turnRequest({
         admit: () => {
-          const appServer = installed
-            .invocations()
-            .find((invocation) => invocation.args.join(" ") === "app-server");
-          assert.ok(appServer !== undefined);
           methodsAtAdmission.push(
-            ...appServer.stdinLines.map(
-              (line) => JSON.parse(line).method as string,
-            ),
+            ...appServerMessages(installed).map((message) => {
+              assert.ok(message.method !== undefined);
+              return message.method;
+            }),
           );
           return Promise.resolve({ recorded: true });
         },
@@ -3014,17 +2965,16 @@ test("codex-exact-thread-recovery acknowledges the same thread before admission 
 
   assert.equal(second.kind, "completed");
   assert.deepEqual(methodsAtAdmission.slice(-1), ["thread/resume"]);
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const runtimeRequests = appServer.stdinLines
-    .map((line) => JSON.parse(line))
-    .filter((message) =>
+  const runtimeRequests = appServerMessages(installed).filter(
+    (message) =>
+      message.method !== undefined &&
       ["thread/start", "thread/resume", "turn/start"].includes(message.method),
-    );
+  );
   assert.deepEqual(
-    runtimeRequests.map((message) => [message.method, message.params.threadId]),
+    runtimeRequests.map((message) => {
+      assert.ok(message.params);
+      return [message.method, message.params.threadId];
+    }),
     [
       ["thread/start", undefined],
       ["turn/start", "thread-1"],
@@ -3046,14 +2996,10 @@ test("a newly materialized Codex Session resumes from the caller coordinate with
     .result();
 
   assert.equal(result.kind, "completed");
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const runtimeMethods = appServer.stdinLines
-    .map((line) => JSON.parse(line).method)
+  const runtimeMethods = appServerMessages(installed)
+    .map((message) => message.method)
     .filter(
-      (method) => method.startsWith("thread/") || method === "turn/start",
+      (method) => method?.startsWith("thread/") || method === "turn/start",
     );
   assert.deepEqual(runtimeMethods, [
     "thread/resume",
@@ -3071,13 +3017,9 @@ test("a detached Codex Session recovers its private coordinate when resume is om
     (await prepared.startTurn(turnRequest()).result()).kind,
     "completed",
   );
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
   assert.equal(
-    appServer.stdinLines.filter(
-      (line) => JSON.parse(line).method === "thread/resume",
+    appServerMessages(installed).filter(
+      (message) => message.method === "thread/resume",
     ).length,
     1,
   );
@@ -3113,14 +3055,12 @@ test("a mismatched Codex recovery acknowledgement permanently fences the Session
   const third = await prepared.startTurn(turnRequest(recorder)).result();
   assert.deepEqual(third, second);
   assert.equal(admissions, 0);
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
-  const runtimeMethods = appServer.stdinLines
-    .map((line) => JSON.parse(line).method)
-    .filter((method) =>
-      ["thread/start", "thread/resume", "turn/start"].includes(method),
+  const runtimeMethods = appServerMessages(installed)
+    .map((message) => message.method)
+    .filter(
+      (method) =>
+        method !== undefined &&
+        ["thread/start", "thread/resume", "turn/start"].includes(method),
     );
   assert.deepEqual(runtimeMethods, [
     "thread/start",
@@ -3197,13 +3137,9 @@ test("a detached Codex Session cannot be rebound to another recovery coordinate"
   if (failed.kind !== "failed") throw new Error("unreachable");
   assert.equal(failed.detail.failure.phase, "recovery");
   assert.equal(failed.detail.session.state, "unusable");
-  const appServer = installed
-    .invocations()
-    .find((invocation) => invocation.args.join(" ") === "app-server");
-  assert.ok(appServer !== undefined);
   assert.equal(
-    appServer.stdinLines.some(
-      (line) => JSON.parse(line).method === "thread/resume",
+    appServerMessages(installed).some(
+      (message) => message.method === "thread/resume",
     ),
     false,
   );
@@ -3534,10 +3470,7 @@ test("[codex-recorded-conformance] completion replays exact client traffic", asy
   assert.ok(replayed.every((event) => event.kind !== "message-preview"));
   await prepared.close();
   assert.deepEqual(
-    installed
-      .invocations()
-      .find((invocation) => invocation.args.join(" ") === "app-server")
-      ?.stdinLines.map((line) => JSON.parse(line).method),
+    appServerMessages(installed).map((message) => message.method),
     [
       "initialize",
       "initialized",
@@ -4453,15 +4386,8 @@ test("required live response drift fails closed and reaps the child", async () =
   if (result.ok) throw new Error("unreachable");
   assert.equal(result.failure.category, "protocol-incompatible");
   assert.match(result.failure.diagnostics ?? "", /model\/list/);
-  const appServer = installed
-    .invocations()
-    .find(
-      (invocation) =>
-        invocation.args.length === 1 && invocation.args[0] === "app-server",
-    );
-  assert.ok(appServer !== undefined);
   assert.deepEqual(
-    appServer.stdinLines.map((line) => JSON.parse(line).method),
+    appServerMessages(installed).map((message) => message.method),
     ["initialize", "initialized", "account/read", "model/list"],
   );
 });
@@ -4555,15 +4481,8 @@ test("authentication remains Codex-owned with separate-login remediation", async
   );
   assert.doesNotMatch(result.failure.diagnostics ?? "", /recorded@example/);
 
-  const appServer = installed
-    .invocations()
-    .find(
-      (invocation) =>
-        invocation.args.length === 1 && invocation.args[0] === "app-server",
-    );
-  assert.ok(appServer !== undefined);
   assert.deepEqual(
-    appServer.stdinLines.map((line) => JSON.parse(line).method),
+    appServerMessages(installed).map((message) => message.method),
     ["initialize", "initialized", "account/read"],
   );
 });
@@ -5233,14 +5152,21 @@ function steerSettlements(events: readonly TurnEvent[]): unknown[] {
   );
 }
 
-function appServerMessages(
-  installed: InstalledCodexReplayer,
-): { readonly method?: string; readonly params?: unknown }[] {
+const appServerMessage = z.looseObject({
+  method: z.string().optional(),
+  id: z.union([z.string(), z.number()]).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
+  result: z.unknown().optional(),
+});
+
+function appServerMessages(installed: InstalledCodexReplayer) {
   const appServer = installed
     .invocations()
     .find((invocation) => invocation.args.join(" ") === "app-server");
   assert.ok(appServer !== undefined);
-  return appServer.stdinLines.map((line) => JSON.parse(line));
+  return appServer.stdinLines.map((line) =>
+    appServerMessage.parse(JSON.parse(line)),
+  );
 }
 
 function turnStarts(installed: InstalledCodexReplayer): unknown[] {
@@ -5618,15 +5544,13 @@ for (const setting of ["inherited", "configured", "unconfigured"] as const) {
       const count = events.length;
       await prepared.close();
       assert.equal(events.length, count, "nothing arrives after result");
-      const requests = installed
-        .invocations()
-        .flatMap((invocation) =>
-          invocation.stdinLines.map((line) => JSON.parse(line)),
-        )
-        .filter((value) =>
+      const requests = appServerMessages(installed).filter(
+        (value) =>
+          value.method !== undefined &&
           ["thread/start", "turn/start"].includes(value.method),
-        );
+      );
       for (const request of requests) {
+        assert.ok(request.params);
         assert.equal("summary" in request.params, false);
         assert.equal("effort" in request.params, false);
         assert.equal("model" in request.params, false);

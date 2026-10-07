@@ -45,6 +45,7 @@ import {
   AVAILABLE_STEER_OFFER,
   steerableInteractiveRunOf,
   MODEL_OFFER,
+  mountModelChoice,
   openModelChoice,
   rowOf,
 } from "./run-workbench-fixture.js";
@@ -1299,16 +1300,12 @@ for (const close of ["offer-ended", "armed"] as const) {
   });
 }
 
-test("workbench-model-choice: the palette's Model command opens the shared picker and submits the model and effort through Run Actions (#351, ADR 0040)", async () => {
+test("m12-local-test-helpers: the palette's Model command opens the shared picker and submits the model and effort through Run Actions (#351, ADR 0040)", async () => {
   const changes: unknown[] = [];
-  const { t, renderer } = await mountWorkbench(
-    runOf({
-      modelChoice: MODEL_OFFER.currentChoice,
-      actionOffers: [MODEL_OFFER],
-    }),
-    100,
-    40,
-    okActions({
+  const { t, renderer } = await mountModelChoice({
+    offer: MODEL_OFFER,
+    run: { modelChoice: MODEL_OFFER.currentChoice },
+    actions: okActions({
       changeModelChoice: (offer, choice) => {
         changes.push({ offer, choice });
         return () => ({
@@ -1317,7 +1314,7 @@ test("workbench-model-choice: the palette's Model command opens the shared picke
         });
       },
     }),
-  );
+  });
 
   await press(t, renderer, "g", { ctrl: true });
   assert.match(t.captureCharFrame(), /ctrl\+p Model choice/);
@@ -1400,11 +1397,7 @@ for (const route of ["palette", "/model", "/effort"] as const) {
     [140, 44],
   ]) {
     test(`workbench-model-choice: ${route} keeps Model choice reachable at ${width}x${height} and resize preserves effort and focus`, async () => {
-      const wb = await mountWorkbench(
-        runOf({ actionOffers: [MODEL_OFFER] }),
-        width,
-        height,
-      );
+      const wb = await mountModelChoice({ offer: MODEL_OFFER, width, height });
 
       assert.match(wb.t.captureCharFrame(), /\^P commands/);
       await openModelChoice(wb.t, wb.renderer, "Model", route);
@@ -1440,7 +1433,7 @@ for (const route of ["palette", "/model", "/effort"] as const) {
   }
 
   test(`workbench-model-choice: ${route} Port Escape steps back even when the real keymap also receives Escape`, async () => {
-    const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
+    const wb = await mountModelChoice({ offer: MODEL_OFFER });
 
     await openModelChoice(wb.t, wb.renderer, "Model", route);
     if (route !== "/effort") await press(wb.t, wb.renderer, "return");
@@ -1458,7 +1451,7 @@ for (const route of ["palette", "/model", "/effort"] as const) {
 
   for (const modal of ["request", "gate", "checkpoint"] as const) {
     test(`workbench-model-choice: ${route} a ${modal} closes the picker and owns its keys`, async () => {
-      const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
+      const wb = await mountModelChoice({ offer: MODEL_OFFER });
 
       await openModelChoice(wb.t, wb.renderer, "Model", route);
       assert.match(wb.t.captureCharFrame(), /Choose a model|Choose effort/);
@@ -1511,21 +1504,18 @@ for (const settlement of ["live-turn", "next-turn", "refused"] as const) {
       kind: "pending",
     });
     let submissions = 0;
-    const wb = await mountWorkbench(
-      runOf({
-        selectedHarness: "codex",
-        modelChoice: offer.currentChoice,
-        actionOffers: [offer],
-      }),
-      60,
-      24,
-      okActions({
+    const wb = await mountModelChoice({
+      offer: offer,
+      run: { selectedHarness: "codex", modelChoice: offer.currentChoice },
+      width: 60,
+      height: 24,
+      actions: okActions({
         changeModelChoice: () => {
           submissions += 1;
           return outcome;
         },
       }),
-    );
+    });
 
     await openModelChoice(wb.t, wb.renderer);
     assert.match(wb.t.captureCharFrame(), /requested until the Harness/);
@@ -1576,7 +1566,7 @@ for (const settlement of ["live-turn", "next-turn", "refused"] as const) {
 
 test("workbench-model-choice: the dialog holds timeline keys while durable activity still appends", async () => {
   const base = { actionOffers: [MODEL_OFFER], timeline: events(80) };
-  const wb = await mountWorkbench(runOf(base));
+  const wb = await mountModelChoice({ offer: MODEL_OFFER, run: base });
 
   await press(wb.t, wb.renderer, "pageup");
   const before = wb.t.captureCharFrame().match(/.* e\d+ .*/)?.[0];
@@ -1613,15 +1603,12 @@ for (const effort of ["locked", "unavailable"] as const) {
           }
         : {}),
     };
-    const wb = await mountWorkbench(
-      runOf({
-        state: "halted",
-        selectedHarness: "claude-code",
-        actionOffers: [offer],
-      }),
-      60,
-      24,
-      okActions({
+    const wb = await mountModelChoice({
+      offer: offer,
+      run: { state: "halted", selectedHarness: "claude-code" },
+      width: 60,
+      height: 24,
+      actions: okActions({
         changeModelChoice: (_, choice) => {
           changes.push(choice);
           return () => ({
@@ -1630,7 +1617,7 @@ for (const effort of ["locked", "unavailable"] as const) {
           });
         },
       }),
-    );
+    });
 
     await openModelChoice(wb.t, wb.renderer);
     await press(wb.t, wb.renderer, "down");
@@ -1657,7 +1644,7 @@ for (const effort of ["locked", "unavailable"] as const) {
 }
 
 test("workbench-model-choice: losing the Offer closes the dialog and late Harness refusals render in the timeline", async () => {
-  const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
+  const wb = await mountModelChoice({ offer: MODEL_OFFER });
 
   await openModelChoice(wb.t, wb.renderer);
   assert.match(wb.t.captureCharFrame(), /Choose a model/);

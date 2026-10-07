@@ -77,6 +77,25 @@ function harness(t: TestContext, opts: { commandTimeoutMs?: number } = {}) {
   };
 }
 
+async function launchTrusted({
+  h,
+  bundle,
+  expectedExit,
+}: {
+  h: ReturnType<typeof harness>;
+  bundle: { id: string; digest: string };
+  expectedExit: 0 | 1 | 2;
+}) {
+  assert.equal(
+    await h.run(["run", "launch", bundle.id, "--trust", bundle.digest]),
+    expectedExit,
+    h.output(),
+  );
+  const runId = /^Run (\S+)$/m.exec(h.stdout())?.[1];
+  assert.ok(runId, h.output());
+  return runId;
+}
+
 test("run launch on an untrusted digest prints the summary, warning, and digest, and exits non-zero", async (t) => {
   const h = await harness(t);
   const { id, digest } = await h.install();
@@ -91,19 +110,12 @@ test("run launch on an untrusted digest prints the summary, warning, and digest,
   assert.equal(h.stdout(), "");
 });
 
-test("[headless-on-doubles] run launch --trust runs to succeeded, and a second launch needs no trust", async (t) => {
+test("m12-local-test-helpers: [headless-on-doubles] run launch --trust runs to succeeded, and a second launch needs no trust", async (t) => {
   const h = await harness(t);
   const { id, digest } = await h.install();
   h.approve();
 
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    0,
-  );
+  await launchTrusted({ h, bundle: { id, digest }, expectedExit: 0 });
   assert.match(h.stdout(), /^Run /m);
   assert.match(h.stdout(), /^State: succeeded$/m);
 
@@ -407,15 +419,11 @@ test("run show prints identity, state, progress, position, and timeline; --json 
     script: "console.log('shown-output')",
   });
   h.approve();
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    0,
-  );
-  const runId = h.stdout().match(/^Run (\S+)/m)?.[1];
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
   assert.ok(runId);
   h.reset();
 
@@ -469,16 +477,12 @@ test("run launch of a Run that rests failed exits non-zero and shows the failed 
   });
   h.approve();
 
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    1,
-  );
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 1,
+  });
   assert.match(h.stdout(), /^State: failed$/m);
-  const runId = h.stdout().match(/^Run (\S+)/m)?.[1];
   assert.ok(runId);
 
   h.reset();
@@ -499,15 +503,11 @@ test("run read returns a text Artifact's content and a Verdict's value by refere
   const h = await harness(t);
   const { id, digest } = await h.install({ script: "console.log('read-me')" });
   h.approve();
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    0,
-  );
-  const runId = h.stdout().match(/^Run (\S+)/m)?.[1];
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
   assert.ok(runId);
 
   h.reset();
@@ -529,15 +529,11 @@ test("run read of an unknown output exits non-zero", async (t) => {
   const h = await harness(t);
   const { id, digest } = await h.install();
   h.approve();
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    0,
-  );
-  const runId = h.stdout().match(/^Run (\S+)/m)?.[1];
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
   assert.ok(runId);
 
   h.reset();
@@ -552,15 +548,11 @@ test("one multi-page transcript reads through both clients, no real Harness (#12
   const h = await harness(t);
   const { id, digest } = await h.install();
   h.approve();
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    0,
-  );
-  const runId = h.stdout().match(/^Run (\S+)/m)?.[1];
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
   assert.ok(runId);
   assert.ok(h.runGroup);
 
@@ -624,15 +616,11 @@ test("m10-interruption-and-transcript: headless maps exact stored metadata and e
   const h = await harness(t);
   const { id, digest } = await h.install();
   h.approve();
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    0,
-  );
-  const runId = h.stdout().match(/^Run (\S+)/m)?.[1];
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
   assert.ok(runId && h.runGroup);
   const owner = h.runGroup.acquireRun(runId);
   assert.ok(owner);
@@ -793,20 +781,13 @@ test("m10-interruption-and-transcript: headless maps exact stored metadata and e
 
 // --- Repeat groups (#84, ADR 0020) -----------------------------------------
 
-test("run launch on a blocking Repeat group names the Run and blocked, and exits 2 at the checkpoint", async (t) => {
+test("m12-local-test-helpers: run launch on a blocking Repeat group names the Run and blocked, and exits 2 at the checkpoint", async (t) => {
   const h = await harness(t);
   const { id, digest } = await h.installRepeat({ interval: 3 });
   h.approve();
 
   // A Run resting `blocked` at its Human Gate exits 2, distinct from a failure (A36).
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    2,
-  );
+  await launchTrusted({ h, bundle: { id, digest }, expectedExit: 2 });
   assert.match(h.stdout(), /^Run /m);
   assert.match(h.stdout(), /^State: blocked$/m);
 });
@@ -819,8 +800,11 @@ test("run show prints the Review checkpoint facts for a blocked Run", async (t) 
   });
   h.approve();
 
-  await runHeadless(h.clients, ["run", "launch", id, "--trust", digest], h.io);
-  const runId = /^Run (\S+)$/m.exec(h.stdout())![1]!;
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 2,
+  });
   h.reset();
 
   assert.equal(await runHeadless(h.clients, ["run", "show", runId], h.io), 0);
@@ -839,8 +823,11 @@ test("run show --json carries the checkpoint for a blocked Run", async (t) => {
   const { id, digest } = await h.installRepeat({ interval: 2 });
   h.approve();
 
-  await runHeadless(h.clients, ["run", "launch", id, "--trust", digest], h.io);
-  const runId = /^Run (\S+)$/m.exec(h.stdout())![1]!;
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 2,
+  });
   h.reset();
 
   assert.equal(
@@ -875,8 +862,11 @@ async function launchBlocked(
 ): Promise<string> {
   const { id, digest } = await h.installRepeat(opts);
   h.approve();
-  await runHeadless(h.clients, ["run", "launch", id, "--trust", digest], h.io);
-  const runId = /^Run (\S+)$/m.exec(h.stdout())![1]!;
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 2,
+  });
   h.reset();
   return runId;
 }
@@ -983,8 +973,11 @@ test("run answer on a Run that is not blocked is refused, changing nothing", asy
   const h = await harness(t);
   const { id, digest } = await h.install(); // a straight-line Bundle that succeeds
   h.approve();
-  await runHeadless(h.clients, ["run", "launch", id, "--trust", digest], h.io);
-  const runId = /^Run (\S+)$/m.exec(h.stdout())![1]!;
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
   h.reset();
 
   assert.equal(
@@ -1222,8 +1215,11 @@ test("run show offers the resume action only while resting failed or halted (#86
   // A succeeded Run offers no resume.
   const { id, digest } = await h.install();
   h.approve();
-  await runHeadless(h.clients, ["run", "launch", id, "--trust", digest], h.io);
-  const doneId = /^Run (\S+)$/m.exec(h.stdout())![1]!;
+  const doneId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
   h.reset();
   await runHeadless(h.clients, ["run", "show", doneId], h.io);
   assert.match(h.stdout(), /^State: succeeded$/m);
@@ -1288,17 +1284,13 @@ async function launchGate(
 ): Promise<string> {
   const { id, digest } = await h.installGate(opts);
   h.approve();
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    2,
-  );
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 2,
+  });
   const out = h.stdout();
   assert.match(out, /^State: blocked$/m);
-  const runId = /^Run (\S+)$/m.exec(out)![1]!;
   h.reset();
   return runId;
 }
@@ -1313,18 +1305,14 @@ test("a free-text gate rests blocked naming run answer --text, and answering con
   h.approve();
 
   // The Run rests blocked at the gate, exits 2, and names the follow-up command.
-  assert.equal(
-    await runHeadless(
-      h.clients,
-      ["run", "launch", id, "--trust", digest],
-      h.io,
-    ),
-    2,
-  );
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 2,
+  });
   const launch = h.stdout();
   assert.match(launch, /^State: blocked$/m);
   assert.match(launch, /run answer .*--text/);
-  const runId = /^Run (\S+)$/m.exec(launch)![1]!;
   h.reset();
 
   // A later invocation answers with free text; the Run continues in that process

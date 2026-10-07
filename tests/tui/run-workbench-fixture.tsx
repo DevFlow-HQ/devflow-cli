@@ -24,6 +24,7 @@ import type {
 import { makeFakeRenderer, type FakeRenderer } from "./renderer-fixture.js";
 import type {
   AnswerHumanGateOffer,
+  ChangeModelChoiceOffer,
   BundleCatalogSnapshot,
   BundleFocusSnapshot,
   DiagnosticReference,
@@ -997,6 +998,28 @@ export const MODEL_OFFER = {
     ],
   },
 } as const;
+
+/** Mount a Run with a Model choice Offer; test-specific facts stay with the caller. */
+export function mountModelChoice({
+  offer,
+  run = {},
+  width = 100,
+  height = 40,
+  actions,
+}: {
+  offer: ChangeModelChoiceOffer;
+  run?: Partial<RunView>;
+  width?: number;
+  height?: number;
+  actions?: RunActionsView;
+}) {
+  return mountWorkbench(
+    runOf({ ...run, actionOffers: [offer] }),
+    width,
+    height,
+    actions,
+  );
+}
 
 /** Open the shared Model choice picker through the palette's Model or Effort App
  *  command (ADR 0040), the successor of the retired details `m` key. */

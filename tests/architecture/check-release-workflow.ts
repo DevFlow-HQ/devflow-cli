@@ -190,6 +190,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m12-focused-check-scenarios",
   "m12-test-interface-ownership",
   "m12-renderer-test-lifecycle",
+  "m12-local-test-helpers",
 ] as const;
 
 function testFilesIn(script: string): string[] {
