@@ -1,6 +1,6 @@
 # Secant's closed-source transition before the next release
 
-Researched 2026-10-07 for [Chart the fixes Secant needs before its public release](https://github.com/secantdev/secant/issues/235). The maintainer has decided that the source becomes private before the next release. Downloads remain free and anonymous, including npm. This report recommends a route; it does not approve a subscription, hosting provider, license text, or production migration.
+Researched 2026-10-07 for [Chart the fixes Secant needs before its public release](https://github.com/secantdev/secant/issues/235). The maintainer has decided that the source becomes private before the next release. Downloads remain free and anonymous, including npm. Budget is also a constraint; its numerical ceiling is not yet supplied. This report recommends a route; it does not approve a subscription, hosting provider, license text, or production migration.
 
 ## Recommendation
 
@@ -27,6 +27,20 @@ A recent 20-run completed sample averaged $0.9796 gross per run using current pr
 One recent candidate retained about 0.322 GiB of binaries, archives, and packages for 90 days. Routine retention should be shortened independently of durable release evidence. Under the deliberately high scenario that every invocation generates that candidate, 90-day steady-state storage approaches 491 GiB. Keeping routine artifacts for seven days cuts that scenario to about 38 GiB. Actual storage requires a complete inventory and failure/cancellation mix. The detailed CI report states the assumptions and overage calculation. [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
 Self-hosting an already owned, dedicated Apple Silicon Mac is a plausible later saving because macOS dominates the sampled compute cost. It does not repair private reviewer restrictions. Moving the whole gate to another CI provider adds substantial verification and release-path work; the researched Azure offer does not automatically include Secant's native macOS arm64 requirement. Preserve the three-OS gate unless the maintainer explicitly changes ADR 0027.
+
+## Make the budget a selection gate
+
+The maintainer explicitly adds a budget constraint. Select the total monthly CI and distribution design against that ceiling before buying a subscription. A $4 Team seat does not imply a $4 CI bill. Enterprise's higher allowance may lower total cost, but neither its advertised seat price nor its advertised minutes establishes the final invoice. Included-minute accounting, actual seat terms, private-runner timing, and routine artifact retention still need verification.
+
+Use an independent public releases repository and the existing website for the smallest initial hosting commitment. R2 is also plausible near-zero-cost hosting within its documented allowances. Neither option solves the private CI cost. Avoid paid mirrors or a second mandatory store at launch.
+
+For a strict low monthly ceiling, investigate existing dedicated hardware before purchasing new hardware. A self-hosted Apple Silicon worker targets the largest sampled expense; Linux and Windows can remain hosted if their usage fits the remaining allowance. Include electricity, hardware amortization, maintenance, isolation and availability in the comparison. Self-hosting is not a substitute for an enforced release approval boundary.
+
+Reduce unnecessary expenditure before relaxing verification. Shorten routine artifact retention while preserving approved release evidence. Inspect push and pull-request trigger overlap and superseded work; avoid duplicate verification only when candidate identity and required-check semantics prove it redundant. Inspect expensive job steps and keep the existing gate's behavior intact. The current default-branch and tag runs are intentionally durable evidence, so canceling them requires a policy change.
+
+If the ceiling is too low for the current frequency of hosted three-OS verification and suitable hardware is unavailable, make that conflict explicit. A maintainer can choose fewer CI-triggering pushes, a revised batching or merge policy, or a differently scheduled consumer gate. Moving Windows or macOS verification only to releases contradicts the existing ADR and cannot be adopted as a silent optimization. Do not promise that a public workflow can run private product builds for free; the public-publisher design keeps private build/test execution private.
+
+The present research supports a near-zero download-host cost and a potentially substantial CI bill at the observed run frequency. It does not establish a hosted three-OS plan within an unspecified small ceiling. The next policy session should first obtain that amount, then decide which architecture is affordable.
 
 ## Public hosting options
 
@@ -81,7 +95,7 @@ A private repository is achievable. Unrecoverable client code is a different pro
 
 ## Order the cutover before changing visibility
 
-1. Resolve the CI/approval design, primary host, legacy-link policy, future license boundary, public support home, and placement in the implementation spine. Confirm subscription terms and quota accounting. Commission the exact runtime and ownership review.
+1. Set the monthly budget ceiling, then resolve the CI/approval design, primary host, legacy-link policy, future license boundary, public support home, and placement in the implementation spine. Confirm subscription terms and quota accounting. Commission the exact runtime and ownership review.
 2. Inventory historical npm versions, export the five v0.1.0 assets, and recompute their hashes. Preserve historical license and release evidence.
 3. Provision the independent public store and stable domain paths. Copy v0.1.0 unchanged. Publish a verified bootstrap revision that uses the new origin and remains compatible with the historical manifest.
 4. Adapt the protected publisher and its credentials. Preserve three-OS checks, exact tag/version admission, candidate reuse, legal closure, and digest-bound human evidence. Rehearse on private runners without public publication.
