@@ -1053,3 +1053,289 @@ test("m10-observed-harness-facts: unqualified Codex command refusal and file-cha
     ],
   );
 });
+
+test("m10-observed-harness-facts: authentic Claude Edit retains supplied hunks on its exact call, requested edits prove nothing", async (t) => {
+  const calls = await claudeTools(
+    t,
+    recordedToolFrames("test-repair", [
+      "stdout-0.stdout",
+      "stdout-final.stdout",
+    ]),
+  );
+  const edits = calls.filter((call) => call.tool === "file-change");
+  assert.equal(edits[0]?.files, undefined);
+  assert.deepEqual(edits[1]?.files, [
+    {
+      path: "«WORKSPACE»/sum.mjs",
+      patch: {
+        kind: "structured",
+        hunks: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: [
+              "-export const sum = (a, b) => a - b;",
+              "+export const sum = (a, b) => a + b;",
+            ],
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(edits[0]?.callId, edits[1]?.callId);
+  const writes = await claudeTools(
+    t,
+    recordedToolFrames("model-change", ["turn-1a.stdout", "turn-1b.stdout"]),
+  );
+  assert.equal(writes[0]?.files, undefined);
+  assert.deepEqual(writes[1]?.files, [
+    {
+      path: "«WORKSPACE»/note.txt",
+      kind: "create",
+      patch: { kind: "structured", hunks: [] },
+    },
+  ]);
+  const rejected = await claudeTools(
+    t,
+    recordedToolFrames("steer-cancel", ["turn-1.stdout", "cancelled.stdout"]),
+  );
+  assert.equal(
+    rejected.find((call) => call.outcome.kind === "declined")?.files,
+    undefined,
+  );
+});
+
+test("m10-observed-harness-facts: authentic Codex per-call patches and cumulative snapshots remain separately associated and precede result", async (t) => {
+  const workspace = makeTempDir("secant-diff-qualified-");
+  const events = await codexFacts(t, [], workspace);
+  const calls = events.filter(
+    (event) => event.kind === "tool-call" && event.call.tool === "file-change",
+  );
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0]?.kind === "tool-call" && calls[1]?.kind === "tool-call");
+  assert.equal(calls[0].call.files, undefined);
+  assert.deepEqual(calls[1].call.files, [
+    {
+      path: join(workspace, "sum.mjs"),
+      kind: "update",
+      patch: {
+        kind: "unified",
+        content:
+          "@@ -1 +1 @@\n-export const sum = (a, b) => a - b;\n+export const sum = (a, b) => a + b;\n",
+      },
+    },
+  ]);
+  const diffs = events.filter(
+    (event) => event.kind === "turn-diff-preview" || event.kind === "turn-diff",
+  );
+  assert.equal(diffs.length, 5);
+  const final = diffs.at(-1);
+  assert.ok(final?.kind === "turn-diff");
+  assert.deepEqual(final.diff.files, [{ path: "sum.mjs" }]);
+  assert.equal(
+    final.diff.content,
+    "diff --git a/sum.mjs b/sum.mjs\nindex 2abed468420c79958609997d46bac81390728831..bc5f04ddb9e58bfd6e0038a714603f93a9621dab\n--- a/sum.mjs\n+++ b/sum.mjs\n@@ -1 +1 @@\n-export const sum = (a, b) => a - b;\n+export const sum = (a, b) => a + b;\n",
+  );
+  for (const diff of diffs) assert.deepEqual(diff.diff, final.diff);
+  assert.equal("callId" in final, false);
+});
+
+test("m10-observed-harness-facts: Claude interleaved edits use result paths, preserve supplied patches and ignore absent/malformed optional facts", async (t) => {
+  const result = (id: string, structured: object) => ({
+    type: "user",
+    message: {
+      content: [{ type: "tool_result", tool_use_id: id, content: "updated" }],
+    },
+    tool_use_result: structured,
+  });
+  const calls = await claudeTools(t, [
+    {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "A",
+            name: "Edit",
+            input: {
+              file_path: "requested.ts",
+              old_string: "old",
+              new_string: "new",
+            },
+          },
+          {
+            type: "tool_use",
+            id: "B",
+            name: "Edit",
+            input: { file_path: "requested.ts" },
+          },
+          {
+            type: "tool_use",
+            id: "C",
+            name: "Write",
+            input: { file_path: "requested.ts", content: "new" },
+          },
+        ],
+      },
+    },
+    result("B", {
+      filePath: "observed-B.ts",
+      structuredPatch: [
+        {
+          oldStart: 9,
+          oldLines: 0,
+          newStart: 9,
+          newLines: 1,
+          lines: ["+B_PATCH"],
+        },
+      ],
+      additions: 1,
+    }),
+    result("A", {
+      filePath: "observed-A.ts",
+      type: "unknown",
+      structuredPatch: "malformed",
+      content: "do not reconstruct",
+    }),
+    result("C", { content: "requested content is not a diff" }),
+  ]);
+  assert.equal(calls[3]?.callId, calls[1]?.callId);
+  assert.equal(calls[4]?.callId, calls[0]?.callId);
+  assert.deepEqual(calls[3]?.files, [
+    {
+      path: "observed-B.ts",
+      patch: {
+        kind: "structured",
+        hunks: [
+          {
+            oldStart: 9,
+            oldLines: 0,
+            newStart: 9,
+            newLines: 1,
+            lines: ["+B_PATCH"],
+          },
+        ],
+      },
+    },
+  ]);
+  assert.deepEqual(calls[4]?.files, [{ path: "observed-A.ts" }]);
+  assert.equal(calls[5]?.files, undefined);
+});
+
+test("m10-observed-harness-facts: Codex interleaving and foreign diffs cannot transfer per-call patches or invent kinds/counts", async (t) => {
+  const item = (
+    method: string,
+    id: string,
+    status: string,
+    changes: readonly object[],
+  ) => ({
+    method,
+    params: {
+      ...recordedTarget,
+      item: { type: "fileChange", id, status, changes },
+    },
+  });
+  const content =
+    "diff --git a/large.ts b/large.ts\n--- a/large.ts\n+++ b/large.ts\n@@ -1 +1 @@\n" +
+    "+large supplied content\n".repeat(1600) +
+    "LAST_NATIVE_DIFF";
+  const events = await codexFacts(t, [
+    item("item/started", "A", "inProgress", [
+      { path: "same.ts", diff: "A_REQUEST" },
+    ]),
+    item("item/started", "B", "inProgress", [
+      { path: "same.ts", diff: "B_REQUEST" },
+    ]),
+    item("item/completed", "B", "completed", [
+      {
+        path: "same.ts",
+        kind: { type: "update", move_path: null },
+        diff: "B_PATCH",
+        additions: 9,
+      },
+    ]),
+    item("item/completed", "A", "completed", [
+      { path: "same.ts", kind: { type: "unknown" }, diff: 7 },
+    ]),
+    {
+      method: "turn/diff/updated",
+      params: { ...recordedTarget, diff: content },
+    },
+    {
+      method: "turn/diff/updated",
+      params: { ...recordedTarget, turnId: "foreign", diff: "FOREIGN_TURN" },
+    },
+    {
+      method: "turn/diff/updated",
+      params: {
+        ...recordedTarget,
+        threadId: "foreign",
+        diff: "FOREIGN_THREAD",
+      },
+    },
+    { method: "turn/diff/updated", params: { ...recordedTarget, diff: 7 } },
+  ]);
+  const calls = events
+    .filter((event) => event.kind === "tool-call")
+    .map((event) => event.call)
+    .slice(-4);
+  assert.deepEqual(
+    calls.map((call) => call.outcome.kind),
+    ["running", "running", "completed", "completed"],
+  );
+  assert.equal(calls[0]?.callId, calls[3]?.callId);
+  assert.equal(calls[1]?.callId, calls[2]?.callId);
+  assert.deepEqual(calls[2]?.files, [
+    {
+      path: "same.ts",
+      kind: "update",
+      patch: { kind: "unified", content: "B_PATCH" },
+    },
+  ]);
+  assert.deepEqual(calls[3]?.files, [{ path: "same.ts" }]);
+  const final = events.find((event) => event.kind === "turn-diff");
+  assert.ok(final?.kind === "turn-diff");
+  assert.deepEqual(final.diff, { content, files: [{ path: "large.ts" }] });
+  assert.doesNotMatch(JSON.stringify(events), /FOREIGN_TURN|FOREIGN_THREAD/);
+});
+
+test("m10-observed-harness-facts: Codex only qualifies update kinds with explicit null move metadata", async (t) => {
+  const events = await codexFacts(
+    t,
+    [undefined, "new.ts"].map((move_path, index) => ({
+      method: "item/completed",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "fileChange",
+          id: `unqualified-move-${index}`,
+          status: "completed",
+          changes: [
+            {
+              path: "source.ts",
+              kind: {
+                type: "update",
+                ...(move_path === undefined ? {} : { move_path }),
+              },
+              diff: "SUPPLIED_PATCH",
+            },
+          ],
+        },
+      },
+    })),
+  );
+  const calls = events
+    .filter((event) => event.kind === "tool-call")
+    .map((event) => event.call)
+    .slice(-2);
+  assert.equal(calls.length, 2);
+  for (const call of calls)
+    assert.deepEqual(call.files, [
+      {
+        path: "source.ts",
+        patch: { kind: "unified", content: "SUPPLIED_PATCH" },
+      },
+    ]);
+});

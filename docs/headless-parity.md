@@ -46,3 +46,9 @@ position, so both headless transcript pages and exports exclude them. The frozen
 OpenAI `gpt-6.1-sol` via Codex; other provider/model pairs, Claude summaries and
 native reasoning duration remain evidence gaps. See
 [Thought qualification](../tests/harness/message-facts-provenance.md#thought-qualification-2026-10-06).
+
+Observed file facts and supplied patches stay with their calls in Session history (#416). Unassociated cumulative diffs replace
+one Turn row and persist once at orderly settlement. Both forms open complete inspection through Ctrl+O or click, without the
+command-tail or artifact-line limits. Memory-only cumulative snapshots do not survive a crash. Neither form gains a transcript
+position or changes `run show --json`; stored-only headless exclusions above remain in force. Native line totals are currently
+unqualified and stay absent. See [file qualification](../tests/harness/tool-facts-provenance.md).

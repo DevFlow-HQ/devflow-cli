@@ -527,6 +527,20 @@ const toolInput = z.object({
   file_path: lenientString,
   pattern: lenientString,
 });
+const suppliedHunks = z.array(
+  z.object({
+    oldStart: z.number().int().nonnegative(),
+    oldLines: z.number().int().nonnegative(),
+    newStart: z.number().int().nonnegative(),
+    newLines: z.number().int().nonnegative(),
+    lines: z.array(z.string()),
+  }),
+);
+const fileResult = z.object({
+  filePath: z.string().min(1),
+  type: z.literal("create").optional().catch(undefined),
+  structuredPatch: suppliedHunks.optional().catch(undefined),
+});
 const toolResult = z.object({
   file: z
     .object({
@@ -594,9 +608,31 @@ export function observedToolResult(
             ...(content === undefined ? {} : { error: content }),
           }
       : { kind: "completed" };
+  const file =
+    start.tool === "file-change" && outcome.kind === "completed"
+      ? fileResult.safeParse(frame.tool_use_result)
+      : undefined;
   return {
     ...start,
     outcome,
+    ...(file?.success
+      ? {
+          files: [
+            {
+              path: file.data.filePath,
+              ...(file.data.type === undefined ? {} : { kind: file.data.type }),
+              ...(file.data.structuredPatch === undefined
+                ? {}
+                : {
+                    patch: {
+                      kind: "structured" as const,
+                      hunks: file.data.structuredPatch,
+                    },
+                  }),
+            },
+          ],
+        }
+      : {}),
     ...(value === undefined
       ? {}
       : { count: { value, unit: start.tool === "read" ? "lines" : "files" } }),

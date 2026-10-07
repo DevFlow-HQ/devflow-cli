@@ -118,6 +118,10 @@ export type LiveModelChangeFn = (
 
 /** Coalesced live observations for the overlay (never durable). */
 export interface LiveObservation {
+  readonly diff?: Extract<TurnEvent, { kind: "turn-diff-preview" }>["diff"] & {
+    readonly turnId: string;
+    readonly session: string;
+  };
   readonly tool?: {
     readonly turnId: string;
     readonly session: string;
@@ -939,6 +943,9 @@ function notifyChannel(
     case "request-expired":
       channel.settled(event.requestId.opaque);
       return;
+    case "turn-diff-preview":
+      channel.observe({ diff: { turnId, session, ...event.diff } });
+      return;
     case "tool-preview":
       channel.observe({ tool: { turnId, session, call: event.call } });
       return;
@@ -1264,6 +1271,13 @@ function recordTurnEvent(
           ? {}
           : { parentActivity: event.parentActivity }),
       }),
+      at: new Date(),
+    });
+  } else if (event.kind === "turn-diff") {
+    owner.appendTurnEvent({
+      turnId,
+      kind: "turn-diff",
+      payload: JSON.stringify(event.diff),
       at: new Date(),
     });
   } else if (event.kind === "thought") {

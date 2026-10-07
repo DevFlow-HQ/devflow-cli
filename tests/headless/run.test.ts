@@ -675,6 +675,32 @@ test("m10-interruption-and-transcript: headless maps exact stored metadata and e
     }),
     at,
   });
+  owner.appendTurnEvent({
+    turnId: "message-turn",
+    kind: "tool-call",
+    payload: JSON.stringify({
+      callId: "file-call",
+      tool: "file-change",
+      input: "requested.ts",
+      outcome: { kind: "completed" },
+      files: [
+        {
+          path: "observed.ts",
+          patch: { kind: "unified", content: "PRIVATE_CALL_PATCH" },
+        },
+      ],
+    }),
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "message-turn",
+    kind: "turn-diff",
+    payload: JSON.stringify({
+      files: [{ path: "cumulative.ts" }],
+      content: "PRIVATE_TURN_DIFF",
+    }),
+    at,
+  });
   owner.settleTurn({
     turnId: "message-turn",
     session: "s",
@@ -759,6 +785,10 @@ test("m10-interruption-and-transcript: headless maps exact stored metadata and e
   ]);
   assert.equal("transcript" in shown.result.run, false);
   assert.equal("entries" in shown.result.run, false);
+  assert.doesNotMatch(
+    h.stdout(),
+    /PRIVATE_CALL_PATCH|PRIVATE_TURN_DIFF|observed.ts|cumulative.ts|turn-diff/,
+  );
 });
 
 // --- Repeat groups (#84, ADR 0020) -----------------------------------------

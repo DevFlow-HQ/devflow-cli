@@ -106,7 +106,7 @@ alone takes its keys, size, and resize from the Renderer Port; the Application s
   present. `c`/`x` act only while the panel is shown, confirm in the panel; the rail keeps only resume and the live-Turn interrupt/steer. A terminal/`halted` rest also shows
   one `restingProse` line beside the header state word (colour is never the only signal); `blocked` keeps that prose only in the panel, and `headerRows()` counts it.
 - Immediate durable Turn settlement clears the Run control overlay (`reduceRunUpdate`, `run-view.tsx`); a trailing `settling` observation cannot restore it (#412).
-  Session-history pages/previews retain ids through wrapping/settlement. Thoughts collapse by default; timeline Ctrl+O toggles the first visible one, mouse toggles its row.
+  History ids survive wrapping/settlement. Ctrl+O opens the first visible detail; click opens that row. Thoughts toggle; supplied diffs open uncapped inspection.
   History-only observer loss is visible and reconnectable; reopening issues fresh ids and resets the viewport. Workflow facts follow their Turn, including equal-time ties.
 
 ## Read next

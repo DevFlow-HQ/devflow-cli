@@ -379,6 +379,34 @@ type AnswerSource = "human" | "client-policy";
 // only coalesced, replaceable entries.
 // ---------------------------------------------------------------------------
 
+/** Supplied patch bytes or supplied hunk data, never reconstructed file content. */
+export type FilePatch =
+  | { readonly kind: "unified"; readonly content: string }
+  | {
+      readonly kind: "structured";
+      readonly hunks: readonly {
+        readonly oldStart: number;
+        readonly oldLines: number;
+        readonly newStart: number;
+        readonly newLines: number;
+        readonly lines: readonly string[];
+      }[];
+    };
+
+export interface FileChange {
+  readonly path: string;
+  readonly kind?: "create" | "update" | "delete";
+  readonly patch?: FilePatch;
+  readonly additions?: number;
+  readonly removals?: number;
+}
+
+/** Cumulative supplied diff without a call association. One value per Secant Turn. */
+export interface TurnDiff {
+  readonly content: string;
+  readonly files: readonly FileChange[];
+}
+
 /** One observed call. Native correlation stays private; identity is scoped to a Turn. */
 export interface ToolCall {
   readonly callId: string;
@@ -394,6 +422,7 @@ export interface ToolCall {
     | "other";
   readonly input: string;
   readonly count?: { readonly value: number; readonly unit: string };
+  readonly files?: readonly FileChange[];
   readonly outcome:
     | { readonly kind: "running" }
     | { readonly kind: "completed" }
@@ -509,6 +538,8 @@ export type TurnEvent =
       readonly content: string;
       readonly parentActivity?: string;
     }
+  | { readonly kind: "turn-diff-preview"; readonly diff: TurnDiff }
+  | { readonly kind: "turn-diff"; readonly diff: TurnDiff }
   | { readonly kind: "tool-call"; readonly call: ToolCall }
   | {
       readonly kind: "tool-preview";
@@ -571,6 +602,8 @@ export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "assistant-content",
   "tool-call",
   "tool-preview",
+  "turn-diff-preview",
+  "turn-diff",
   "request-raised",
   "request-answered",
   "request-expired",

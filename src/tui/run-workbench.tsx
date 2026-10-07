@@ -1378,6 +1378,7 @@ export function RunWorkbench(props: {
   });
   const rowText = (row: TimelineRow, index: number): string => {
     const prefix = `  ${index === 0 ? "Beginning of Run history · " : ""}`;
+    if (row.inspection !== undefined) return `  ▸ ${row.text}`;
     if (row.thought === undefined)
       return row.oneLine
         ? clip(prefix + row.text, innerW())
@@ -1405,7 +1406,8 @@ export function RunWorkbench(props: {
     wrapRows(
       timelineRows().map((row, index) => ({
         rules:
-          index === 0 && row.thought !== undefined
+          index === 0 &&
+          (row.thought !== undefined || row.inspection !== undefined)
             ? [
                 ...(row.dividers ?? []),
                 { glyph: "─", title: "Beginning of Run history" },
@@ -1466,7 +1468,7 @@ export function RunWorkbench(props: {
       );
   };
 
-  const thoughtAtLine = (line: number): TimelineRow | undefined => {
+  const rowAtLine = (line: number): TimelineRow | undefined => {
     let top = 0;
     for (const [index, height] of timelineWrapped().heights.entries()) {
       if (line >= top && line < top + height) return timelineRows()[index];
@@ -1474,9 +1476,10 @@ export function RunWorkbench(props: {
     }
     return undefined;
   };
-  const toggleThought = (row: TimelineRow | undefined): void => {
+  const openRowDetail = (row: TimelineRow | undefined): void => {
     if (
-      row?.thought === undefined ||
+      row === undefined ||
+      (row.thought === undefined && row.inspection === undefined) ||
       dialog.stack.length > 0 ||
       modalControl() ||
       confirmation() !== undefined ||
@@ -1484,6 +1487,10 @@ export function RunWorkbench(props: {
       transcript.reader()
     )
       return;
+    if (row.inspection !== undefined) {
+      inspection.open(row.inspection);
+      return;
+    }
     setExpandedThoughts((previous) => {
       const next = new Set(previous);
       if (next.has(row.key)) next.delete(row.key);
@@ -1491,17 +1498,18 @@ export function RunWorkbench(props: {
       return next;
     });
   };
-  const firstVisibleThought = () => {
+  const firstVisibleDetail = () => {
     const window = win();
     for (let line = window.top; line < window.top + window.visible; line++) {
-      const row = thoughtAtLine(line);
-      if (row?.thought !== undefined) return row;
+      const row = rowAtLine(line);
+      if (row?.thought !== undefined || row?.inspection !== undefined)
+        return row;
     }
     return undefined;
   };
   const clickTimelineLine = (index: number): void => {
-    const row = thoughtAtLine(win().top + index);
-    toggleThought(row);
+    const row = rowAtLine(win().top + index);
+    openRowDetail(row);
   };
   const scrollBy = (action: TimelineAction) =>
     setScroll((prev) =>
@@ -1731,7 +1739,7 @@ export function RunWorkbench(props: {
     }
     if (interruptArmed()) setInterruptConfirmation(undefined);
     if (name === "o" && key.ctrl && focus() === "timeline") {
-      toggleThought(firstVisibleThought());
+      openRowDetail(firstVisibleDetail());
       return;
     }
     // Steer opens on `s` while an available steer Offer is present and the timeline
@@ -1975,7 +1983,7 @@ export function RunWorkbench(props: {
               beginningVisible={beginningVisible}
               visibleLines={visibleLines}
               onTimelineLine={clickTimelineLine}
-              thoughtAvailable={() => firstVisibleThought() !== undefined}
+              detailAvailable={() => firstVisibleDetail() !== undefined}
               metadataLines={metadataLines}
               blockedBasis={blockedBasis}
               focus={focus}
@@ -2112,7 +2120,7 @@ function Workbench(props: {
   beginningVisible: Accessor<boolean>;
   visibleLines: Accessor<readonly string[]>;
   onTimelineLine: (index: number) => void;
-  thoughtAvailable: Accessor<boolean>;
+  detailAvailable: Accessor<boolean>;
   metadataLines: Accessor<readonly string[]>;
   blockedBasis: Accessor<string | undefined>;
   focus: Accessor<Focus>;
@@ -2198,7 +2206,7 @@ function Workbench(props: {
     const model = props.modelChoiceOffered() ? "m model · " : "";
     return props.focus() === "details"
       ? `${model}↑/↓ select · enter open · tab timeline · esc back · q quit`
-      : `${model}${props.thoughtAvailable() ? "^O toggle first visible Thought · " : ""}Alt+↑/↓ scroll · ^G/d details · Alt+End latest · esc back · q quit`;
+      : `${model}${props.detailAvailable() ? "^O expand first visible detail · " : ""}Alt+↑/↓ scroll · ^G/d details · Alt+End latest · esc back · q quit`;
   };
 
   const displayState = () =>

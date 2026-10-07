@@ -1344,3 +1344,286 @@ test("m10-session-history: empty Thought replacements suppress bodies and never 
   );
   await run.finish();
 });
+
+test("m10-session-history: cumulative diffs replace one Turn row, retain full content on settlement/reopen and never become call patches or transcript", async (t) => {
+  const timer = clock();
+  const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
+  t.after(run.finish);
+  admit(run.owner);
+  const opened = run.port.openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => opened.close());
+  const reader = opened.updates[Symbol.asyncIterator]();
+  const diff = {
+    files: [{ path: "observed.ts" }],
+    content:
+      "diff --git a/observed.ts b/observed.ts\n" +
+      "Full supplied patch\n".repeat(2200) +
+      "LAST_DIFF_LINE",
+  };
+  const before = run.owner.turnEvents();
+  run.channel.observe({ diff: { turnId: "turn", session: "s", ...diff } });
+  assert.deepEqual(run.owner.turnEvents(), before);
+  timer.flush();
+  const preview = await reader.next();
+  assert.ok(preview.value?.kind === "history-preview");
+  const identity = preview.value.row;
+  const call = {
+    callId: "same-path",
+    tool: "file-change",
+    input: "observed.ts",
+    files: [
+      {
+        path: "observed.ts",
+        patch: { kind: "unified", content: "PER_CALL_PATCH" },
+      },
+    ],
+    outcome: { kind: "completed" },
+  };
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "tool-call",
+    payload: JSON.stringify(call),
+    at: new Date(),
+  });
+  await reader.next();
+  run.channel.observe({
+    diff: {
+      turnId: "turn",
+      session: "s",
+      ...diff,
+      content: "Stale queued diff",
+    },
+  });
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "turn-diff",
+    payload: JSON.stringify(diff),
+    at: new Date(),
+  });
+  const update = await reader.next();
+  assert.ok(
+    update.value?.kind === "durable" && update.value.snapshot.result.found,
+  );
+  const rows: readonly SessionHistoryRow[] =
+    update.value.snapshot.result.history.rows;
+  assert.deepEqual(
+    rows.map((row) => row.value.kind),
+    ["message", "turn-diff", "tool"],
+  );
+  assert.equal(rows[1]?.id, identity.id);
+  assert.equal(rows[1]?.position, identity.position);
+  assert.deepEqual(rows[1]?.value, { kind: "turn-diff", ...diff });
+  assert.ok(rows[2]?.value.kind === "tool");
+  assert.deepEqual(rows[2].value.files, call.files);
+  timer.flush();
+  run.channel.observe({
+    diff: { turnId: "turn", session: "s", files: [], content: "Late stale" },
+  });
+  timer.flush();
+  const late = run.port.openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => late.close());
+  assert.ok(late.snapshot.result.found);
+  assert.deepEqual(late.snapshot.result.history.rows[1]?.value, {
+    kind: "turn-diff",
+    ...diff,
+  });
+  const transcript = run.port.readTranscript(
+    update.value.snapshot.result.history.transcriptExport,
+  );
+  assert.ok(transcript.found);
+  assert.deepEqual(
+    transcript.entries.map((entry) => entry.content),
+    ["Input"],
+  );
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "turn-diff",
+    payload: JSON.stringify({ files: [], content: "Duplicate final" }),
+    at: new Date(),
+  });
+  assert.equal(
+    run.owner.turnEvents().filter((event) => event.kind === "turn-diff").length,
+    1,
+  );
+  await run.finish();
+  const reopened = run.reopen().openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => reopened.close());
+  assert.ok(reopened.snapshot.result.found);
+  assert.deepEqual(reopened.snapshot.result.history.rows[1]?.value, {
+    kind: "turn-diff",
+    ...diff,
+  });
+});
+
+test("m10-session-history: cumulative diff shares preview fairness and the exact mixed 200/201 bound, without resurrection after eviction", async (t) => {
+  const timer = clock();
+  const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
+  t.after(run.finish);
+  admit(run.owner);
+  const open = () =>
+    run.port.openProjection({
+      family: "session-history",
+      runId: run.runId,
+      session: "s",
+    });
+  const opened = open();
+  t.after(() => opened.close());
+  run.channel.observe({
+    diff: {
+      turnId: "turn",
+      session: "s",
+      content: "First diff",
+      files: [{ path: "first.ts" }],
+    },
+  });
+  run.channel.observe({
+    thought: {
+      turnId: "turn",
+      session: "s",
+      summaryId: "thought",
+      content: "Thought",
+    },
+  });
+  timer.flush();
+  const reader = opened.updates[Symbol.asyncIterator]();
+  const diffPreview = await reader.next(),
+    thoughtPreview = await reader.next();
+  assert.ok(
+    diffPreview.value?.kind === "history-preview" &&
+      thoughtPreview.value?.kind === "history-preview",
+  );
+  assert.equal(diffPreview.value.row.value.kind, "turn-diff");
+  assert.equal(thoughtPreview.value.row.value.kind, "thought");
+  assert.deepEqual(timer.delays, [50]);
+  for (let index = 0; index < 197; index++) {
+    if (index % 2)
+      run.channel.observe({
+        message: {
+          turnId: "turn",
+          session: "s",
+          messageId: String(index),
+          content: `Message ${index}`,
+        },
+      });
+    else
+      run.owner.appendTurnEvent({
+        turnId: "turn",
+        kind: "tool-call",
+        payload: JSON.stringify({
+          callId: String(index),
+          tool: "file-change",
+          input: String(index),
+          outcome: { kind: "running" },
+        }),
+        at: new Date(),
+      });
+  }
+  const exact = open();
+  t.after(() => exact.close());
+  assert.ok(exact.snapshot.result.found);
+  assert.equal(exact.snapshot.result.history.rows.length, 200);
+  assert.equal(exact.snapshot.result.history.hasEarlier, false);
+  run.channel.observe({
+    diff: { turnId: "turn", session: "s", content: "Replacement", files: [] },
+  });
+  const replacement = open();
+  t.after(() => replacement.close());
+  assert.ok(replacement.snapshot.result.found);
+  assert.equal(replacement.snapshot.result.history.rows.length, 200);
+  assert.equal(
+    replacement.snapshot.result.history.rows[1]?.value.kind,
+    "turn-diff",
+  );
+  for (const messageId of ["201", "202"])
+    run.channel.observe({
+      message: { turnId: "turn", session: "s", messageId, content: messageId },
+    });
+  run.channel.observe({
+    diff: {
+      turnId: "turn",
+      session: "s",
+      content: "Evicted preview",
+      files: [],
+    },
+  });
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "turn-diff",
+    payload: JSON.stringify({ content: "Evicted final", files: [] }),
+    at: new Date(),
+  });
+  timer.flush();
+  const over = open();
+  t.after(() => over.close());
+  assert.ok(over.snapshot.result.found);
+  assert.equal(over.snapshot.result.history.rows.length, 200);
+  assert.equal(over.snapshot.result.history.hasEarlier, true);
+  assert.equal(
+    over.snapshot.result.history.rows.some(
+      (row) => row.value.kind === "turn-diff",
+    ),
+    false,
+  );
+  await run.finish();
+});
+
+test("m10-interruption-and-transcript: crash reopening loses memory-only cumulative snapshots and never attaches them to stored calls", async (t) => {
+  const timer = clock();
+  const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
+  t.after(run.finish);
+  admit(run.owner);
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "tool-call",
+    payload: JSON.stringify({
+      callId: "edit",
+      tool: "file-change",
+      input: "file.ts",
+      outcome: { kind: "running" },
+    }),
+    at: new Date(),
+  });
+  run.channel.observe({
+    diff: {
+      turnId: "turn",
+      session: "s",
+      content: "MEMORY_ONLY",
+      files: [{ path: "file.ts" }],
+    },
+  });
+  assert.equal(
+    run.owner.turnEvents().some((event) => event.kind === "turn-diff"),
+    false,
+  );
+  await run.finish();
+  const reopened = run.reopen().openProjection({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+  });
+  t.after(() => reopened.close());
+  assert.ok(reopened.snapshot.result.found);
+  assert.equal(
+    reopened.snapshot.result.history.rows.some(
+      (row) => row.value.kind === "turn-diff",
+    ),
+    false,
+  );
+  const call = reopened.snapshot.result.history.rows.find(
+    (row) => row.value.kind === "tool",
+  );
+  assert.ok(call?.value.kind === "tool");
+  assert.equal(call.value.files, undefined);
+});

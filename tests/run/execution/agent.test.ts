@@ -1488,3 +1488,71 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
     assert.equal(f.owner.turns()[0]?.resultKind, name);
   });
 }
+
+for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
+  test(`m10-interruption-and-transcript: supplied diffs drain exactly once at orderly ${name}, without preview persistence`, async (t) => {
+    const f = fixture(t);
+    const assets = promptAssets(f.workspace, "Discuss");
+    const diff = {
+      content:
+        "FULL_DIFF_START\n" + "supplied diff\n".repeat(3000) + "FULL_DIFF_END",
+      files: [{ path: "file.ts" }],
+    };
+    const prepared = await preparedHarness(profile(), [
+      {
+        events: [
+          {
+            kind: "turn-diff-preview",
+            diff: { content: "Old snapshot", files: [] },
+          },
+          {
+            kind: "tool-call",
+            call: {
+              callId: "file",
+              tool: "file-change",
+              input: "file.ts",
+              outcome: { kind: "running" },
+            },
+          },
+          { kind: "turn-diff-preview", diff },
+        ],
+        result: RESULT_CASES[name].result,
+      },
+    ]);
+    t.after(() => prepared.close());
+    await executeRouting([agentStep()], {
+      owner: f.owner,
+      platform: HOST,
+      resolveAsset: assets.resolveAsset,
+      now: () => AT,
+      process: executionProcess,
+      harness: {
+        inputRules: [],
+        prepared,
+        inputTypes: {},
+        assetKinds: { "prompt.md": "prompt" },
+      },
+    });
+    assert.deepEqual(
+      f.owner
+        .turnEvents()
+        .filter((event) => event.kind === "turn-diff")
+        .map((event) => JSON.parse(event.payload)),
+      [diff],
+    );
+    assert.equal(
+      f.owner.turnEvents().some((event) => event.kind === "turn-diff-preview"),
+      false,
+    );
+    assert.deepEqual(
+      f.owner.transcript().map((entry) => entry.content),
+      ["Discuss"],
+    );
+    assert.equal(f.owner.turns()[0]?.resultKind, name);
+    const call = f.owner
+      .turnEvents()
+      .find((event) => event.kind === "tool-call");
+    assert.ok(call);
+    assert.deepEqual(JSON.parse(call.payload).outcome, { kind: "running" });
+  });
+}

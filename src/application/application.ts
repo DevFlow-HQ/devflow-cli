@@ -589,6 +589,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     reported: reportedModelChange,
     message: (runId, message) => history.observe(runId, message),
     tool: (runId, tool) => history.observeTool(runId, tool),
+    diff: (runId, diff) => history.observeDiff(runId, diff),
     thought: (runId, thought) => history.observeThought(runId, thought),
     ended: (runId) => {
       for (const pending of [...(pendingModelChanges.get(runId) ?? [])])

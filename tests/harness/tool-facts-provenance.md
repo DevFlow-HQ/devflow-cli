@@ -1,6 +1,6 @@
 # Tool fact qualification
 
-#414 consumes identified calls through the Harness Interface. Existing `recording.json` sidecars own the versions,
+#414 consumes identified calls and #416 consumes supplied file facts through the Harness Interface. Existing `recording.json` sidecars own the versions,
 recording times, redactions, and refresh commands listed below. No recording bytes change. `observed-facts.test.ts`
 feeds authentic message frames and item bodies through the production Adapters over an injected Process.
 Synthetic envelopes, terminal omissions, id reuse, errors, and interleaving prove semantic behavior only.
@@ -16,7 +16,16 @@ their main paths and counts of 2 and 5 lines, Edit settlement, and identity befo
 `matt-front/implement-0.stdout`, 2.1.286, qualifies Glob `input.pattern` and `tool_use_result.numFiles`.
 The maintained case checks the pattern and the reported count of 2 files, independent of the filenames array.
 `model-change/turn-1a.stdout` and `turn-1b.stdout`, 2.1.289, qualify Write `input.file_path` and a correlated result.
-Requested edit/write inputs establish the target, not an observed patch. Diff extraction belongs to #416.
+Requested edit/write inputs establish the target, never an observed change.
+
+#416 qualifies Edit result `filePath` and `structuredPatch[]` with `oldStart`, `oldLines`, `newStart`, `newLines`,
+and supplied `lines[]` from `test-repair/stdout-final.stdout`, recorded 2026-09-16T10:35:47.881Z. These are hunk
+coordinates, not reported additions/removals. The Edit result reports no change-kind field, so kind stays absent.
+Write result `type: "create"`, `filePath`, and an empty `structuredPatch` come from `model-change/turn-1b.stdout`,
+recorded 2026-10-04T14:27:13.509Z. Empty hunks remain empty; `content`, `originalFile`, and old/new strings never
+manufacture a patch. Assertions preserve both complete hunk data and emptiness on the correlated terminal call.
+Each case's sidecar records Workspace/input-delta redactions and its `bun tests/harness/record.ts` refresh command.
+Synthetic interleaving, malformed patches/kinds, requested-only edits, and large content test semantic behavior.
 
 `steer-cancel/turn-1.stdout` and `cancelled.stdout`, 2.1.288, qualify rejected Write results with
 `is_error: true`, string `content`, and the structured refusal discriminator `tool_use_result: "User rejected tool use"`.
@@ -37,7 +46,15 @@ cross the Interface, and native-id reuse in later Turns or Sessions mints differ
 
 `test-repair/case.json`, codex-cli 0.160.0 and codex-probe-3, qualifies correlated `item/started` and `item/completed`
 `commandExecution` items with `id`, `command`, and `status`, including `inProgress`, `completed`, and `failed`.
-It also qualifies `fileChange.id`, `changes[].path`, `changes[].kind.type`, nullable `move_path`, and `status`.
+It also qualifies `fileChange.id`, `changes[].path`, `changes[].kind.type: "update"`, null `move_path`, and `status`.
+#416 qualifies `changes[].diff` as a supplied unified patch on the completed call. The started item describes the
+requested action and carries no observed file facts. `turn/diff/updated` supplies `threadId`, `turnId`, and `diff`:
+four repeated cumulative snapshots without a call association. Only their supplied unquoted `+++ b/<path>` headers
+outside hunks establish collapsed file paths; unfamiliar header forms stay absent while all diff bytes remain.
+No addition/removal totals are supplied. The production Adapter assertions check complete per-call content,
+Turn correlation, repeated replacements, and drain-before-result. The recording is dated 2026-10-03T21:26:02.175Z;
+its sidecar owns the Workspace/account/home redactions and `bun tests/harness/record-codex.ts test-repair` refresh.
+Synthetic cases verify foreign Turn/thread rejection, malformed optional data, same-path interleaving and large diffs.
 Main inputs preserve command text and affected paths/change kinds. Array length is not a reported result count.
 Command actions, output, cwd, and exit code are not consumed by this slice. #415 owns output evidence and retention.
 
@@ -55,6 +72,8 @@ Interrupt conformance retains that observation without a synthetic settlement.
 
 The authentic corpus does not qualify a non-null parent-call relation, native web/subagent item shapes,
 every optional count/error/refusal form in both Adapters, or Claude structured numeric shell exit codes.
+File additions/removals, Codex add/delete kinds and non-null moves, and Claude non-create kinds remain unqualified.
+Structured patch lengths are never converted to totals. Missing patches remain absent, including requested-only edits.
 Those fields stay absent. Codex synthetic collab/web/image/dynamic item schemas previously produced activity,
 but cannot qualify native observations. They now stay absent. The fake's maintained full-vocabulary case retains
 all eight semantic kinds, same-name interleaving, private parent ids, zero/optional counts, and error/refusal outcomes.

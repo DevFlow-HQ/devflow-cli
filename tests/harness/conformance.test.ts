@@ -770,3 +770,94 @@ test("m10-observed-harness-facts: fake retains all eight kinds, interleaved same
   await prepared.harness.close();
   assert.equal(events.length, count);
 });
+
+test("m10-observed-harness-facts: fake cumulative snapshots retain first appearance for late subscribers and drain once before result", async (t) => {
+  const ready = Promise.withResolvers<void>(),
+    finish = Promise.withResolvers<void>();
+  const diff = {
+    content: "complete supplied diff",
+    files: [{ path: "file.ts", additions: 0, removals: 2 }],
+  };
+  const adapter = createFake(
+    fake({
+      events: [
+        { kind: "turn-diff-preview", diff: { content: "first", files: [] } },
+        {
+          kind: "tool-call",
+          call: {
+            callId: "call",
+            tool: "file-change",
+            input: "file.ts",
+            outcome: { kind: "running" },
+          },
+        },
+        { kind: "turn-diff-preview", diff },
+        { kind: "activity", description: "READY" },
+      ],
+      block: true,
+      finish: finish.promise,
+      result: COMPLETED_OPEN,
+    }),
+  )();
+  const prepared = await adapter.prepare({ workspace: process.cwd() });
+  assert.ok(prepared.ok);
+  t.after(() => prepared.harness.close());
+  const turn = prepared.harness.startTurn(turnRequest("diff"));
+  turn.subscribe((event) => {
+    if (event.kind === "activity" && event.description === "READY")
+      ready.resolve();
+  });
+  await ready.promise;
+  const events: TurnEvent[] = [];
+  turn.subscribe((event) => events.push(event));
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ["turn-diff-preview", "tool-call", "activity"],
+  );
+  assert.deepEqual(events[0], { kind: "turn-diff-preview", diff });
+  finish.resolve();
+  assert.equal((await turn.result()).kind, "completed");
+  assert.deepEqual(
+    events.filter((event) => event.kind === "turn-diff"),
+    [{ kind: "turn-diff", diff }],
+  );
+  const count = events.length;
+  await prepared.harness.close();
+  assert.equal(events.length, count);
+});
+
+test("m10-observed-harness-facts: a resumed fake Turn never inherits a prior Turn's cumulative diff", async (t) => {
+  const first = { content: "FIRST_TURN_DIFF", files: [{ path: "first.ts" }] };
+  const second = {
+    content: "SECOND_TURN_DIFF",
+    files: [{ path: "second.ts" }],
+  };
+  const adapter = createFake(
+    fake(
+      {
+        events: [{ kind: "turn-diff-preview", diff: first }],
+        result: COMPLETED_OPEN,
+      },
+      {
+        events: [{ kind: "turn-diff-preview", diff: second }],
+        result: COMPLETED_OPEN,
+      },
+    ),
+  )();
+  const prepared = await adapter.prepare({ workspace: process.cwd() });
+  assert.ok(prepared.ok);
+  t.after(() => prepared.harness.close());
+  for (const [index, diff] of [first, second].entries()) {
+    const turn = prepared.harness.startTurn({
+      ...turnRequest(`diff-${index}`),
+      ...(index === 0 ? {} : { resume: { opaque: "tools" } }),
+    });
+    const events: TurnEvent[] = [];
+    turn.subscribe((event) => events.push(event));
+    assert.equal((await turn.result()).kind, "completed");
+    assert.deepEqual(
+      events.filter((event) => event.kind === "turn-diff"),
+      [{ kind: "turn-diff", diff }],
+    );
+  }
+});

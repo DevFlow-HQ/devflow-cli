@@ -2109,6 +2109,9 @@ class CodexTurn implements HarnessTurn {
           this.model.known ? this.model.effort : undefined,
         );
         return;
+      case "turn-diff":
+        this.emit({ kind: "turn-diff-preview", diff: notification.diff });
+        return;
       case "thought-delta": {
         if (!this.summaryQualified) return;
         this.deliverSteersInHistory();

@@ -810,3 +810,137 @@ test("m10-interruption-and-transcript: tool starts and observed settlements surv
     ["Prompt"],
   );
 });
+
+test("m10-session-history: validated supplied patches and Turn diffs survive crash with immutable identity/order and no transcript positions", (t) => {
+  const home = makeTempDir("secant-file-facts-");
+  const group = openRunGroup(home, WORKSPACE);
+  const created = create(group, "file-facts");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  owner.writeState("running");
+  for (const [turnId, session] of [
+    ["first", "s"],
+    ["second", "other"],
+  ]) {
+    assert.ok(turnId && session);
+    owner.admitTurn({
+      turnId,
+      session,
+      attemptId: "0.0:edit",
+      origin: "human",
+      kind: "interactive-agent",
+      input: "Input",
+      recoveryCoordinate: "private",
+      harness: "codex",
+      at: AT,
+    });
+  }
+  const files = [
+    {
+      path: "observed.ts",
+      kind: "update",
+      patch: {
+        kind: "structured",
+        hunks: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: ["-old", "+new" + " full patch".repeat(4000)],
+          },
+        ],
+      },
+      additions: 0,
+    },
+  ];
+  const append = (
+    turnId: string,
+    outcome: object,
+    historyOrder: number,
+    facts?: readonly object[],
+  ) =>
+    owner.appendTurnEvent({
+      turnId,
+      kind: "tool-call",
+      payload: JSON.stringify({
+        callId: "reused",
+        tool: "file-change",
+        input: "requested.ts",
+        outcome,
+        historyOrder,
+        ...(facts === undefined ? {} : { files: facts }),
+      }),
+      at: AT,
+    });
+  append("first", { kind: "running" }, 2);
+  append("second", { kind: "running" }, 1);
+  assert.throws(() =>
+    append("first", { kind: "completed" }, 99, [
+      { path: "bad.ts", additions: -1 },
+    ]),
+  );
+  append("first", { kind: "completed" }, 99, files);
+  const diff = {
+    files: [{ path: "cumulative.ts" }],
+    content: "Cumulative patch".repeat(3000),
+    historyOrder: 3,
+  };
+  assert.throws(() =>
+    owner.appendTurnEvent({
+      turnId: "first",
+      kind: "turn-diff",
+      payload: JSON.stringify({ files: [], content: 7 }),
+      at: AT,
+    }),
+  );
+  owner.appendTurnEvent({
+    turnId: "first",
+    kind: "turn-diff",
+    payload: JSON.stringify(diff),
+    at: AT,
+  });
+  owner.appendTurnEvent({
+    turnId: "first",
+    kind: "turn-diff",
+    payload: JSON.stringify({ files: [], content: "late" }),
+    at: AT,
+  });
+  const events = owner.turnEvents();
+  const terminal = events.filter((event) => event.kind === "tool-call").at(-1);
+  assert.ok(terminal);
+  assert.deepEqual(JSON.parse(terminal.payload), {
+    callId: "reused",
+    tool: "file-change",
+    input: "requested.ts",
+    outcome: { kind: "completed" },
+    historyOrder: 2,
+    files,
+  });
+  assert.deepEqual(
+    events
+      .filter((event) => event.kind === "turn-diff")
+      .map((event) => JSON.parse(event.payload)),
+    [diff],
+  );
+  assert.deepEqual(
+    owner.transcript().map((entry) => entry.content),
+    ["Input", "Input"],
+  );
+  owner.close();
+  group.close();
+  const reopened = openRunGroup(home, WORKSPACE);
+  t.after(() => reopened.close());
+  const recovered = reopened.acquireRun(created.runId);
+  assert.ok(recovered);
+  t.after(() => recovered.close());
+  assert.deepEqual(
+    recovered.turns().map((turn) => turn.resultKind),
+    ["lost", "lost"],
+  );
+  assert.deepEqual(recovered.turnEvents(), events);
+  assert.deepEqual(
+    recovered.transcript().map((entry) => entry.content),
+    ["Input", "Input"],
+  );
+});

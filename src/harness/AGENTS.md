@@ -25,7 +25,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Step kind decides the Attempt outcome above the Seam.
 - Terminal ordering is exact: an Adapter publishes remaining events, drops pending Steers, expires requests and unanswered Agent calls, then closes
   the producer and settles the one authoritative result. No event is observable after the result settles. The fake enforces this with an
-  `emit after result` guard; a real Adapter holds the same order. Unqualified previews stay absent; message/Thought partials follow Adapter notes (#411, #412, #417).
+  `emit after result` guard; a real Adapter holds the same order. Turn diffs drain once; requested edits never prove changes (#416). Partial rules follow Adapter notes.
 - Child reuse across Turns (a result may settle before the native `close`) is in [harness-adapters](../../docs/agents/harness-adapters.md).
 - Operational failures are typed values (`HarnessFailure`, `ControlReceipt` rejections, `RecordingReceipt`, `CleanupReport`). Only caller-contract
   violations throw: a second concurrent Turn on one Prepared Harness, a Turn after `close`, or a Turn beyond what an Adapter can serve. Control races

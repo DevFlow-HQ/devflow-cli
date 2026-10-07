@@ -6,6 +6,7 @@ import type {
   SessionHistoryView,
   SessionHistoryValue,
 } from "../application/projection-port.js";
+import type { Openable } from "./run-inspection.js";
 import type { Rule } from "./wrap.js";
 
 /** One row in the Workbench's combined durable + live timeline: one logical line,
@@ -21,6 +22,7 @@ export interface TimelineRow {
   readonly sessionName?: string;
   readonly iterationEnd?: true;
   readonly oneLine?: boolean;
+  readonly inspection?: Openable;
   readonly thought?: Extract<SessionHistoryValue, { kind: "thought" }> & {
     readonly live: boolean;
   };
@@ -234,6 +236,7 @@ function historyTimelineRows(
       session,
       sessionName: name,
       text: historyLabel(row.value, row.source === "preview"),
+      inspection: fileInspection(row.value),
       ...(row.value.kind === "agent-call" ? { oneLine: true } : {}),
       ...(row.value.kind === "thought"
         ? { thought: { ...row.value, live: row.source === "preview" } }
@@ -242,6 +245,32 @@ function historyTimelineRows(
     };
   });
 }
+/** Formats only supplied patch data. Requested inputs never create an inspection. */
+function fileInspection(value: SessionHistoryValue): Openable | undefined {
+  if (value.kind === "turn-diff")
+    return { label: "Turn diff", content: value.content, format: "diff" };
+  if (
+    value.kind !== "tool" ||
+    !value.files?.some((file) => file.patch !== undefined)
+  )
+    return undefined;
+  const content = value.files
+    .map((file) => {
+      const patch = file.patch;
+      if (patch === undefined) return `${file.path}\nNo patch supplied`;
+      if (patch.kind === "unified") return `${file.path}\n${patch.content}`;
+      const hunks = patch.hunks
+        .map(
+          (hunk) =>
+            `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n${hunk.lines.join("\n")}`,
+        )
+        .join("\n");
+      return `${file.path}\n${patch.hunks.length === 0 ? "No patch hunks supplied" : hunks}`;
+    })
+    .join("\n\n");
+  return { label: "Supplied call patches", content, format: "diff" };
+}
+
 function attachDividers(rows: readonly TimelineRow[]): TimelineRow[] {
   let step: string | undefined;
   let session: string | undefined;
@@ -260,6 +289,8 @@ function attachDividers(rows: readonly TimelineRow[]): TimelineRow[] {
 
 function historyLabel(value: SessionHistoryValue, preview: boolean): string {
   switch (value.kind) {
+    case "turn-diff":
+      return `Turn diff${preview ? " · updating" : ""}\n${fileLabels(value.files)}`;
     case "thought": {
       const label = screenReason(
         value.content
@@ -285,7 +316,7 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
           : value.outcome.kind === "declined"
             ? value.outcome.reason
             : undefined;
-      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}\n${value.input}${detail === undefined ? "" : `\n${detail}`}`;
+      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}\n${value.input}${value.files === undefined ? "" : `\n${fileLabels(value.files)}`}${detail === undefined ? "" : `\n${detail}`}`;
     }
     case "request":
       return `? ${value.description}`;
@@ -294,6 +325,18 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
     case "turn-result":
       return `Turn · ${value.origin === "managed" ? "Secant started the Step" : value.origin === "human" ? "started by you" : "origin unknown"} · ${value.result}${value.harness === undefined ? "" : ` · ${value.harness}`}${value.model === undefined ? "" : ` · ${value.model}`}${value.durationMs === undefined ? "" : ` · ${value.durationMs} ms`}`;
   }
+}
+
+function fileLabels(
+  files: NonNullable<Extract<SessionHistoryValue, { kind: "tool" }>["files"]>,
+): string {
+  if (files.length === 0) return "Changed files not reported";
+  return files
+    .map(
+      (file) =>
+        `${file.kind === undefined ? "" : `${file.kind} `}${file.path}${file.additions === undefined ? "" : ` +${file.additions}`}${file.removals === undefined ? "" : ` -${file.removals}`}`,
+    )
+    .join("\n");
 }
 
 /** Collapse whitespace so a serialized tool input or usage string stays one line. */

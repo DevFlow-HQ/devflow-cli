@@ -165,7 +165,7 @@ export const REPLAY_BARRIER: TurnEvent = {
 
 /** The event kinds that are transcript content, and so are replayed as history
  *  on a load-with-replay resume. Request lifecycle, previews, and Session
- *  availability are live facts of the Turn that produced them, not history. */
+ *  availability and cumulative diffs belong only to the Turn that produced them. */
 const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
   "assistant-content",
   "tool-call",
@@ -768,11 +768,15 @@ class FakeTurn {
     this.terminal = true;
     const previews = this.buffer.filter(
       (event) =>
-        event.kind === "message-preview" || event.kind === "thought-preview",
+        event.kind === "message-preview" ||
+        event.kind === "thought-preview" ||
+        event.kind === "turn-diff-preview",
     );
     this.removePreviews();
     for (const event of previews)
-      if (event.kind === "thought-preview")
+      if (event.kind === "turn-diff-preview")
+        this.emit({ kind: "turn-diff", diff: event.diff });
+      else if (event.kind === "thought-preview")
         this.emit({
           kind: "thought",
           summaryId: event.summaryId,
@@ -819,6 +823,13 @@ class FakeTurn {
     options: { readonly record: boolean } = { record: true },
   ): void {
     if (this.settled) throw new Error("emit after result: terminal ordering");
+    if (event.kind === "turn-diff" || event.kind === "turn-diff-preview") {
+      if (this.buffer.some((retained) => retained.kind === "turn-diff")) return;
+      if (event.kind === "turn-diff")
+        for (let index = this.buffer.length - 1; index >= 0; index--)
+          if (this.buffer[index]?.kind === "turn-diff-preview")
+            this.buffer.splice(index, 1);
+    }
     if (event.kind === "thought") this.removeThoughtPreviews(event.summaryId);
     if (event.kind === "thought-preview" && !event.content.trim()) return;
     if (event.kind === "assistant-content")
@@ -834,19 +845,23 @@ class FakeTurn {
       }
     }
     const preview =
-      event.kind === "tool-preview"
+      event.kind === "turn-diff-preview"
         ? this.buffer.findIndex(
-            (retained) =>
-              retained.kind === "tool-preview" &&
-              retained.call.callId === event.call.callId,
+            (retained) => retained.kind === "turn-diff-preview",
           )
-        : event.kind === "message-preview"
+        : event.kind === "tool-preview"
           ? this.buffer.findIndex(
               (retained) =>
-                retained.kind === "message-preview" &&
-                retained.messageId === event.messageId,
+                retained.kind === "tool-preview" &&
+                retained.call.callId === event.call.callId,
             )
-          : -1;
+          : event.kind === "message-preview"
+            ? this.buffer.findIndex(
+                (retained) =>
+                  retained.kind === "message-preview" &&
+                  retained.messageId === event.messageId,
+              )
+            : -1;
     const thoughtPreview =
       event.kind === "thought-preview"
         ? this.buffer.findIndex(

@@ -1252,6 +1252,25 @@ export interface SessionHistoryRow {
   readonly step?: string;
   readonly value: SessionHistoryValue;
 }
+/** Supplied file facts, with no native ids or inferred line totals. */
+interface SessionFileChange {
+  readonly path: string;
+  readonly kind?: "create" | "update" | "delete";
+  readonly additions?: number;
+  readonly removals?: number;
+  readonly patch?:
+    | { readonly kind: "unified"; readonly content: string }
+    | {
+        readonly kind: "structured";
+        readonly hunks: readonly {
+          readonly oldStart: number;
+          readonly oldLines: number;
+          readonly newStart: number;
+          readonly newLines: number;
+          readonly lines: readonly string[];
+        }[];
+      };
+}
 /** Complete tool value with Application-derived Turn liveness. No correlation ids cross the Port. */
 interface SessionToolValue {
   readonly kind: "tool";
@@ -1266,6 +1285,7 @@ interface SessionToolValue {
     | "other";
   readonly input: string;
   readonly count?: { readonly value: number; readonly unit: string };
+  readonly files?: readonly SessionFileChange[];
   readonly outcome:
     | { readonly kind: "running" }
     | { readonly kind: "unconfirmed" }
@@ -1274,6 +1294,11 @@ interface SessionToolValue {
     | { readonly kind: "declined"; readonly reason?: string };
 }
 export type SessionHistoryValue =
+  | {
+      readonly kind: "turn-diff";
+      readonly content: string;
+      readonly files: readonly SessionFileChange[];
+    }
   | SessionToolValue
   | {
       readonly kind: "thought";

@@ -8707,3 +8707,177 @@ for (const visible of [false, true]) {
     assert.equal(interrupted, 1);
   });
 }
+
+test("m10-session-history: cumulative diff collapse and keyboard/click inspection retain the complete large patch across resize", async () => {
+  const run = runOf({
+    sessions: [
+      { session: "conversation", name: "Conversation", availability: "open" },
+    ],
+  });
+  const wb = await mountWorkbench(run, 100, 26, undefined, false, 1);
+  const content =
+    "DIFF_FIRST\n" + "supplied patch line\n".repeat(2200) + "DIFF_LAST";
+  const page: SessionHistorySnapshot = {
+    family: "session-history",
+    runId: run.runId,
+    session: "conversation",
+    result: {
+      found: true,
+      history: {
+        rows: [
+          {
+            id: "opaque-diff",
+            position: "position",
+            source: "stored",
+            turnStartedAt: "2026-10-06T00:00:00Z",
+            turn: "turn",
+            value: {
+              kind: "turn-diff",
+              content,
+              files: [
+                { path: "observed.ts" },
+                { path: "counts.ts", additions: 0, removals: 7 },
+              ],
+            },
+          },
+        ],
+        hasEarlier: false,
+        transcriptPage: {
+          type: "transcript-page",
+          runId: run.runId,
+          session: "conversation",
+        },
+        transcriptExport: {
+          type: "transcript-export",
+          runId: run.runId,
+          session: "conversation",
+        },
+      },
+    },
+  };
+  wb.control.setHistory(page);
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Turn diff/);
+  assert.match(wb.t.captureCharFrame(), /observed.ts/);
+  assert.match(wb.t.captureCharFrame(), /counts.ts.*\+0.*-7/);
+  assert.doesNotMatch(
+    wb.t.captureCharFrame(),
+    /DIFF_FIRST|supplied patch line/,
+  );
+  await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /DIFF_FIRST/);
+  await press(wb.t, wb.renderer, "end");
+  assert.match(wb.t.captureCharFrame(), /DIFF_LAST/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /omitted|truncated/);
+  const beforeQuit = wb.t.captureCharFrame();
+  await press(wb.t, wb.renderer, "q");
+  await wb.t.waitForFrame((frame) =>
+    frame.includes("Halt 1 live Run and quit?"),
+  );
+  wb.t.mockInput.pressEnter();
+  await wb.t.waitForFrame(
+    (frame) => !frame.includes("Halt 1 live Run and quit?"),
+  );
+  assert.deepEqual(wb.exits, []);
+  assert.equal(wb.t.captureCharFrame(), beforeQuit);
+  wb.t.resize(40, 12);
+  wb.renderer.resize(40, 12);
+  await wb.t.renderOnce();
+  noOverflow(wb.t.captureCharFrame(), 40);
+  await press(wb.t, wb.renderer, "end");
+  assert.match(wb.t.captureCharFrame(), /DIFF_LAST/);
+  await press(wb.t, wb.renderer, "escape");
+  wb.t.resize(100, 26);
+  wb.renderer.resize(100, 26);
+  await wb.t.renderOnce();
+  const heading = wb.t
+    .captureCharFrame()
+    .split("\n")
+    .findIndex((line) => line.includes("Turn diff"));
+  assert.ok(heading >= 0);
+  await wb.t.mockMouse.click(10, heading);
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /DIFF_FIRST/);
+  await press(wb.t, wb.renderer, "end");
+  assert.match(wb.t.captureCharFrame(), /DIFF_LAST/);
+});
+
+test("m10-session-history: per-call structured patches inspect supplied coordinates and full lines, while requested-only calls have no diff affordance", async () => {
+  const run = runOf({
+    sessions: [
+      { session: "conversation", name: "Conversation", availability: "open" },
+    ],
+  });
+  const wb = await mountWorkbench(run, 80, 24);
+  const page = (
+    files?: Extract<SessionHistoryRow["value"], { kind: "tool" }>["files"],
+  ): SessionHistorySnapshot => ({
+    family: "session-history",
+    runId: run.runId,
+    session: "conversation",
+    result: {
+      found: true,
+      history: {
+        rows: [
+          {
+            id: "opaque-call",
+            position: "position",
+            source: "stored",
+            turnStartedAt: "2026-10-06T00:00:00Z",
+            turn: "turn",
+            value: {
+              kind: "tool",
+              tool: "file-change",
+              input: "requested.ts",
+              outcome: { kind: "unconfirmed" },
+              ...(files === undefined ? {} : { files }),
+            },
+          },
+        ],
+        hasEarlier: false,
+        transcriptPage: {
+          type: "transcript-page",
+          runId: run.runId,
+          session: "conversation",
+        },
+        transcriptExport: {
+          type: "transcript-export",
+          runId: run.runId,
+          session: "conversation",
+        },
+      },
+    },
+  });
+  wb.control.setHistory(page());
+  await wb.t.renderOnce();
+  const requested = wb.t.captureCharFrame();
+  await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.equal(wb.t.captureCharFrame(), requested);
+  const lines = [
+    "-PER_CALL_FIRST",
+    ...Array.from({ length: 1700 }, () => "+supplied large per-call content"),
+    "+PER_CALL_LAST",
+  ];
+  wb.control.setHistory(
+    page([
+      {
+        path: "observed.ts",
+        patch: {
+          kind: "structured",
+          hunks: [
+            { oldStart: 7, oldLines: 1, newStart: 11, newLines: 1701, lines },
+          ],
+        },
+      },
+    ]),
+  );
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /observed.ts/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /PER_CALL_FIRST/);
+  await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /@@ -7,1 \+11,1701 @@/);
+  assert.match(wb.t.captureCharFrame(), /PER_CALL_FIRST/);
+  await press(wb.t, wb.renderer, "end");
+  assert.match(wb.t.captureCharFrame(), /PER_CALL_LAST/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /omitted|truncated/);
+});

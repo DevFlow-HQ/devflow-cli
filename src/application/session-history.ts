@@ -1,4 +1,4 @@
-import { readToolCallEvent } from "../run/store/store.js";
+import { readToolCallEvent, readTurnDiffEvent } from "../run/store/store.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -126,6 +126,8 @@ function eventKey(
   index: number,
 ): string {
   const data = payload(event);
+  if (event.kind === "turn-diff")
+    return JSON.stringify([event.turnId, "turn-diff"]);
   if (event.kind === "tool-call" && data?.callId !== undefined)
     return toolKey(event.turnId, data.callId);
   if (event.kind === "assistant-content" && data?.messageId !== undefined)
@@ -307,6 +309,15 @@ export function createSessionHistory(deps: {
                   ? "completed"
                   : "dropped",
           };
+        if (event.kind === "turn-diff") {
+          const diff = readTurnDiffEvent(event);
+          if (diff !== undefined)
+            value = {
+              kind: "turn-diff",
+              content: diff.content,
+              files: diff.files,
+            };
+        }
         if (event.kind === "tool-call") {
           const tool = readToolCallEvent(event);
           if (tool !== undefined) {
@@ -315,6 +326,7 @@ export function createSessionHistory(deps: {
               input: tool.input,
               outcome: tool.outcome,
               ...(tool.count === undefined ? {} : { count: tool.count }),
+              ...(tool.files === undefined ? {} : { files: tool.files }),
             };
             value = {
               kind: "tool",
@@ -648,6 +660,24 @@ export function createSessionHistory(deps: {
         thoughtKey(thought.turnId, thought.summaryId),
       );
     },
+    observeDiff(
+      runId: string,
+      diff: NonNullable<LiveObservation["diff"]>,
+    ): void {
+      observePreview(
+        runId,
+        {
+          turnId: diff.turnId,
+          session: diff.session,
+          value: {
+            kind: "turn-diff",
+            content: diff.content,
+            files: diff.files,
+          },
+        },
+        JSON.stringify([diff.turnId, "turn-diff"]),
+      );
+    },
     observeTool(
       runId: string,
       tool: NonNullable<LiveObservation["tool"]>,
@@ -664,6 +694,7 @@ export function createSessionHistory(deps: {
             input: call.input,
             outcome: call.outcome,
             ...(call.count === undefined ? {} : { count: call.count }),
+            ...(call.files === undefined ? {} : { files: call.files }),
           },
         },
         toolKey(tool.turnId, call.callId),
@@ -678,6 +709,7 @@ export function createSessionHistory(deps: {
         ![
           "assistant-content",
           "thought",
+          "turn-diff",
           "steer",
           "agent-call",
           "tool-activity",

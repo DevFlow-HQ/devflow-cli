@@ -13,7 +13,7 @@ import {
 } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
-import type { ToolCall } from "../../harness/harness.js";
+import type { ToolCall, TurnDiff } from "../../harness/harness.js";
 import { harnessSessions, turnEvents, turns } from "./run-schema.js";
 import type {
   AdmitTurnRequest,
@@ -63,6 +63,45 @@ const harnessSessionRow = z.object({
 });
 // Only qualified settled messages and delivered Steers are conversation rows.
 // Unknown or unqualified metadata remains absent.
+const filePatch = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("unified"), content: z.string() }),
+  z.object({
+    kind: z.literal("structured"),
+    hunks: z.array(
+      z.object({
+        oldStart: z.number().int().nonnegative(),
+        oldLines: z.number().int().nonnegative(),
+        newStart: z.number().int().nonnegative(),
+        newLines: z.number().int().nonnegative(),
+        lines: z.array(z.string()),
+      }),
+    ),
+  }),
+]);
+const fileChange = z.object({
+  path: z.string().min(1),
+  kind: z.enum(["create", "update", "delete"]).optional(),
+  patch: filePatch.optional(),
+  additions: z.number().int().nonnegative().optional(),
+  removals: z.number().int().nonnegative().optional(),
+});
+const turnDiff = z.object({
+  content: z.string(),
+  files: z.array(fileChange),
+  historyOrder: z.number().int().nonnegative().optional(),
+});
+/** Only validated Secant-shaped supplied facts cross the persisted ingress. */
+export function readTurnDiffEvent(
+  event: Pick<TurnEventRecord, "kind" | "payload">,
+): (TurnDiff & { readonly historyOrder?: number }) | undefined {
+  if (event.kind !== "turn-diff") return undefined;
+  try {
+    const parsed = turnDiff.safeParse(JSON.parse(event.payload));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const toolCall = z.object({
   callId: z.string().min(1),
   parentCallId: z.string().optional(),
@@ -77,6 +116,7 @@ const toolCall = z.object({
     "other",
   ]),
   input: z.string(),
+  files: z.array(fileChange).optional(),
   count: z
     .object({ value: z.number().nonnegative(), unit: z.string() })
     .optional(),
@@ -224,7 +264,21 @@ export function appendTurnEvent(
 ): void {
   let payload = request.payload;
   let transcriptSeq: number | undefined;
-  if (request.kind === "thought") {
+  if (request.kind === "turn-diff") {
+    const diff = turnDiff.parse(JSON.parse(payload));
+    const duplicate = db
+      .select({ seq: turnEvents.seq })
+      .from(turnEvents)
+      .where(
+        and(
+          eq(turnEvents.turn_id, request.turnId),
+          eq(turnEvents.kind, "turn-diff"),
+        ),
+      )
+      .get();
+    if (duplicate !== undefined) return;
+    payload = JSON.stringify(diff);
+  } else if (request.kind === "thought") {
     const thought = thoughtSummary.parse(JSON.parse(payload));
     const duplicate = db
       .select({ seq: turnEvents.seq })

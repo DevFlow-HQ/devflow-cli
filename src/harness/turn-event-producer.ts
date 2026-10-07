@@ -24,6 +24,9 @@ export class TurnEventProducer {
     Extract<TurnEvent, { kind: "thought-preview" }>
   >();
   private readonly settledThoughts = new Set<string>();
+  private diffPreview:
+    Extract<TurnEvent, { kind: "turn-diff-preview" }> | undefined;
+  private diffSettled = false;
   private closed = false;
   get sealed(): boolean {
     return this.closed;
@@ -35,6 +38,20 @@ export class TurnEventProducer {
   }
   emit(event: TurnEvent): void {
     if (this.closed) return;
+    if (event.kind === "turn-diff-preview" || event.kind === "turn-diff") {
+      if (this.diffSettled) return;
+      if (event.kind === "turn-diff-preview") {
+        if (this.diffPreview === undefined) this.events.push(event);
+        else this.events[this.events.indexOf(this.diffPreview)] = event;
+        this.diffPreview = event;
+        for (const listener of this.listeners) listener(event);
+        return;
+      }
+      if (this.diffPreview !== undefined)
+        this.events.splice(this.events.indexOf(this.diffPreview), 1);
+      this.diffPreview = undefined;
+      this.diffSettled = true;
+    }
     if (event.kind === "tool-call" || event.kind === "tool-preview") {
       const previous = this.calls.get(event.call.callId);
       if (previous !== undefined && previous.call.outcome.kind !== "running")
@@ -115,6 +132,8 @@ export class TurnEventProducer {
         event.kind === "message-preview" || event.kind === "thought-preview",
     );
     this.clearPreview();
+    if (this.diffPreview !== undefined)
+      this.emit({ kind: "turn-diff", diff: this.diffPreview.diff });
     for (const event of pending) {
       if (event.kind === "thought-preview") {
         this.emit({

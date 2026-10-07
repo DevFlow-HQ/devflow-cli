@@ -36,6 +36,8 @@ export type Openable =
   | {
       readonly label: string;
       readonly content: string;
+      /** Supplied diffs stay complete, independent of the artifact inspection cap. */
+      readonly format?: "diff";
       readonly reference?: never;
     };
 
@@ -104,7 +106,9 @@ export function createInspection(deps: {
       // command forcing colour or drawing a progress bar (D4): strip the escapes
       // and split on `\r?\n` so a `\r` never corrupts a rendered row.
       const all = stripAnsi(read.content).split(/\r?\n/);
-      const truncated = all.length > MAX_INSPECT_LINES;
+      const truncated =
+        !("format" in target && target.format === "diff") &&
+        all.length > MAX_INSPECT_LINES;
       setInspecting({
         kind: "blob",
         title: target.label,

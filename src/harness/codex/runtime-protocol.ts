@@ -6,6 +6,7 @@ import type {
   UsageObservation,
   TurnEvent,
   ToolCall,
+  TurnDiff,
 } from "../harness.js";
 import { JsonlLineReader } from "../jsonl.js";
 
@@ -375,10 +376,14 @@ const fileChangeItemSchema = z.looseObject({
   changes: z.array(
     z.looseObject({
       path: z.string().min(1),
-      kind: z.looseObject({
-        type: z.enum(["add", "delete", "update"]),
-        move_path: z.string().nullable().optional(),
-      }),
+      kind: z
+        .looseObject({
+          type: z.enum(["add", "delete", "update"]),
+          move_path: z.string().nullable().optional(),
+        })
+        .optional()
+        .catch(undefined),
+      diff: z.string().optional().catch(undefined),
     }),
   ),
   status: z.enum(["inProgress", "completed", "failed", "declined"]),
@@ -480,6 +485,12 @@ const summaryDeltaSchema = z.looseObject({
   delta: z.string(),
 });
 export type CodexRuntimeNotification =
+  | {
+      readonly kind: "turn-diff";
+      readonly threadId: string;
+      readonly turnId: string;
+      readonly diff: TurnDiff;
+    }
   | {
       readonly kind: "thought-delta";
       readonly threadId: string;
@@ -675,6 +686,29 @@ export function parseRuntimeNotification(
         ...(params.turn.error?.message !== undefined
           ? { error: params.turn.error.message }
           : {}),
+      };
+    }
+    case "turn/diff/updated": {
+      const parsed = correlatedParamsSchema
+        .extend({ diff: z.string() })
+        .safeParse(message.params);
+      if (!parsed.success) return undefined;
+      const { threadId, turnId, diff } = parsed.data;
+      // Only supplied file headers outside hunks establish paths. Unknown header
+      // forms stay absent; patch text is retained byte-for-byte regardless.
+      const files = diff
+        .split(/^diff --git /m)
+        .slice(1)
+        .flatMap((section) => {
+          const headers = section.split(/^@@/m)[0] ?? "";
+          const path = /^\+\+\+ b\/(.+)$/m.exec(headers)?.[1];
+          return path === undefined || path.startsWith('"') ? [] : [{ path }];
+        });
+      return {
+        kind: "turn-diff",
+        threadId,
+        turnId,
+        diff: { content: diff, files },
       };
     }
     case "item/reasoning/summaryTextDelta": {
@@ -876,7 +910,38 @@ function normalizeItemContent(
         return { itemId: item.id, approvalInput: input };
       return {
         itemId: item.id,
-        event: toolCallEvent(item.id, "file-change", fileChange.status, input),
+        event: {
+          kind: "tool-call",
+          call: {
+            callId: item.id,
+            tool: "file-change",
+            input,
+            outcome: {
+              kind:
+                fileChange.status === "inProgress" ? "running" : "completed",
+            },
+            ...(fileChange.status === "completed"
+              ? {
+                  files: fileChange.changes.map((change) => ({
+                    path: change.path,
+                    // Authentic evidence qualifies update and a null move_path only.
+                    ...(change.kind?.type === "update" &&
+                    change.kind.move_path === null
+                      ? { kind: "update" as const }
+                      : {}),
+                    ...(change.diff === undefined
+                      ? {}
+                      : {
+                          patch: {
+                            kind: "unified" as const,
+                            content: change.diff,
+                          },
+                        }),
+                  })),
+                }
+              : {}),
+          },
+        },
         approvalInput: input,
       };
     }
@@ -908,8 +973,8 @@ function fileChangeApprovalInput(
 ): string {
   return changes
     .map((change) => {
-      if (change.kind.type !== "update" || change.kind.move_path == null) {
-        return `${change.kind.type} ${change.path}`;
+      if (change.kind?.type !== "update" || change.kind.move_path == null) {
+        return `${change.kind?.type ?? "change"} ${change.path}`;
       }
       return `move ${change.path} to ${change.kind.move_path}`;
     })
