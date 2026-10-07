@@ -1,0 +1,171 @@
+{
+  "checkedAt": "2026-10-07",
+  "method": "All Check runs created in window, every run attempt, completed assigned-runner job timestamps rounded up per job; public runtime not private invoice",
+  "summary": {
+    "period_start": "2026-09-07T00:00:00Z",
+    "period_end": "2026-10-06T23:59:59Z",
+    "run_count": 500,
+    "attempt_count": 522,
+    "minutes_by_os": {
+      "linux": 3157,
+      "windows": 5250,
+      "macos": 2781
+    },
+    "raw_minutes": 11188,
+    "legacy_weighted_minutes": 41467,
+    "gross_payg_usd": 243.864,
+    "observed_public_not_private": true,
+    "job_runtime_not_billing_api": true
+  },
+  "includedJobCount": 4147,
+  "attemptConclusions": {
+    "success": 431,
+    "failure": 79,
+    "cancelled": 12
+  },
+  "dailyRoundedJobMinutes": {
+    "2026-09-07": {
+      "linux": 10
+    },
+    "2026-09-09": {
+      "windows": 7,
+      "macos": 7,
+      "linux": 10
+    },
+    "2026-09-10": {
+      "macos": 2,
+      "linux": 2,
+      "windows": 6
+    },
+    "2026-09-11": {
+      "linux": 36,
+      "windows": 27,
+      "macos": 25
+    },
+    "2026-09-12": {
+      "windows": 53,
+      "linux": 68,
+      "macos": 53
+    },
+    "2026-09-13": {
+      "linux": 72,
+      "windows": 102,
+      "macos": 56
+    },
+    "2026-09-14": {
+      "linux": 25,
+      "windows": 39,
+      "macos": 20
+    },
+    "2026-09-15": {
+      "linux": 21,
+      "windows": 36,
+      "macos": 17
+    },
+    "2026-09-16": {
+      "linux": 77,
+      "macos": 66,
+      "windows": 144
+    },
+    "2026-09-17": {
+      "linux": 63,
+      "macos": 54,
+      "windows": 109
+    },
+    "2026-09-18": {
+      "linux": 169,
+      "macos": 147,
+      "windows": 342
+    },
+    "2026-09-19": {
+      "linux": 215,
+      "windows": 289,
+      "macos": 202
+    },
+    "2026-09-20": {
+      "linux": 151,
+      "windows": 195,
+      "macos": 96
+    },
+    "2026-09-21": {
+      "linux": 118,
+      "windows": 211,
+      "macos": 104
+    },
+    "2026-09-22": {
+      "linux": 110,
+      "macos": 95,
+      "windows": 225
+    },
+    "2026-09-23": {
+      "linux": 150,
+      "macos": 123,
+      "windows": 289
+    },
+    "2026-09-24": {
+      "linux": 71,
+      "macos": 57,
+      "windows": 149
+    },
+    "2026-09-25": {
+      "windows": 27,
+      "linux": 12,
+      "macos": 9
+    },
+    "2026-09-26": {
+      "linux": 25,
+      "windows": 49,
+      "macos": 19
+    },
+    "2026-09-27": {
+      "macos": 50,
+      "linux": 59,
+      "windows": 131
+    },
+    "2026-09-28": {
+      "linux": 56,
+      "windows": 110,
+      "macos": 47
+    },
+    "2026-09-29": {
+      "linux": 293,
+      "windows": 576,
+      "macos": 231
+    },
+    "2026-09-30": {
+      "linux": 180,
+      "macos": 164,
+      "windows": 348
+    },
+    "2026-10-01": {
+      "windows": 260,
+      "linux": 169,
+      "macos": 157
+    },
+    "2026-10-02": {
+      "linux": 181,
+      "macos": 165,
+      "windows": 268
+    },
+    "2026-10-03": {
+      "linux": 217,
+      "windows": 329,
+      "macos": 206
+    },
+    "2026-10-04": {
+      "linux": 123,
+      "macos": 122,
+      "windows": 204
+    },
+    "2026-10-05": {
+      "macos": 307,
+      "linux": 296,
+      "windows": 466
+    },
+    "2026-10-06": {
+      "linux": 178,
+      "windows": 259,
+      "macos": 180
+    }
+  }
+}

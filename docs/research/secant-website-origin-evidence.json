@@ -1,0 +1,35 @@
+{
+  "checkedAt": "2026-10-07",
+  "accountEvidence": "Owner checked existing Cloudflare dashboard in normal browser after Turnstile prevented agent access; no services changed",
+  "service": "wispy-haze-4b75",
+  "environment": "production",
+  "type": "Workers",
+  "pagesProjectCount": 0,
+  "accountPlan": "Free",
+  "zonePlan": "Free Website",
+  "customDomain": "secant.sh",
+  "defaultHostname": "wispy-haze-4b75.gargrohan831.workers.dev",
+  "apexDns": {
+    "type": "AAAA",
+    "target": "100::",
+    "proxied": true,
+    "authority": "Owner dashboard observation"
+  },
+  "anonymousResponses": [
+    {
+      "url": "https://secant.sh/",
+      "exit": 0,
+      "response": "200 text/html",
+      "bytes": 7658,
+      "sha256": "565c0819f47247d47e7c01ac0152c6b25a84c301aebd3338889f3bd8276433d9"
+    },
+    {
+      "url": "https://wispy-haze-4b75.gargrohan831.workers.dev/",
+      "exit": 0,
+      "response": "200 text/html",
+      "bytes": 7658,
+      "sha256": "565c0819f47247d47e7c01ac0152c6b25a84c301aebd3338889f3bd8276433d9"
+    }
+  ],
+  "sameHomepageBytes": true
+}

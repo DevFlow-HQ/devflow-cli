@@ -1,0 +1,170 @@
+{
+  "checkedAt": "2026-10-07T06:41:14.298206+00:00",
+  "method": "Anonymous curl, no Authorization, no product execution",
+  "downloads": [
+    {
+      "url": "https://github.com/secantdev/secant/releases/download/v0.1.0/candidate-manifest.json",
+      "size": 1468,
+      "sha256": "286edb5427d8377af0293a57b32d7853cfbb5b26eacb3a1ad3a8b81a2c862153",
+      "upstream_digest": "sha256:286edb5427d8377af0293a57b32d7853cfbb5b26eacb3a1ad3a8b81a2c862153",
+      "digest_match": true
+    },
+    {
+      "url": "https://github.com/secantdev/secant/releases/download/v0.1.0/secant-darwin-arm64.zip",
+      "size": 27850810,
+      "sha256": "f8313892b7bdf65f29e39b4fb4add17fc4d25b5d6c32caa067773c67dc3c7283",
+      "upstream_digest": "sha256:f8313892b7bdf65f29e39b4fb4add17fc4d25b5d6c32caa067773c67dc3c7283",
+      "digest_match": true
+    },
+    {
+      "url": "https://github.com/secantdev/secant/releases/download/v0.1.0/secant-linux-x64.tar.gz",
+      "size": 45108792,
+      "sha256": "0e413177c841436839357185a4e1823694361ccb7fbbb9bf87cc3d836e192e3e",
+      "upstream_digest": "sha256:0e413177c841436839357185a4e1823694361ccb7fbbb9bf87cc3d836e192e3e",
+      "digest_match": true
+    },
+    {
+      "url": "https://github.com/secantdev/secant/releases/download/v0.1.0/secant-windows-x64.zip",
+      "size": 41865823,
+      "sha256": "4a48722b13c08bde8c418b5d17cbd1ce8ad1d51107db99a86321e25afd02cdcf",
+      "upstream_digest": "sha256:4a48722b13c08bde8c418b5d17cbd1ce8ad1d51107db99a86321e25afd02cdcf",
+      "digest_match": true
+    },
+    {
+      "url": "https://github.com/secantdev/secant/releases/download/v0.1.0/SHA256SUMS",
+      "size": 269,
+      "sha256": "bc47308e32d3981e3a82e6ecd2eb7c215cf27dd4c288e3b8fbee28570b931030",
+      "upstream_digest": "sha256:bc47308e32d3981e3a82e6ecd2eb7c215cf27dd4c288e3b8fbee28570b931030",
+      "digest_match": true
+    }
+  ],
+  "npm": [
+    {
+      "name": "@secantdev/secant",
+      "versions": ["0.0.0", "0.1.0"],
+      "distTags": {
+        "latest": "0.1.0"
+      },
+      "sha256": "934afa590266414bca1f78cd257924c1d86b96535057f197f8217e043276d23e",
+      "sha512Integrity": "sha512-BaGylBgbiocpCTNcYKMexGhyZsCm3/RI/jepo4fGYRAKOx3yMy0fb33idw8VI+oZVL/JA6a8myRfwtuYiF7ZmQ==",
+      "integrityMatches": true
+    },
+    {
+      "name": "@secantdev/secant-linux-x64",
+      "versions": ["0.1.0"],
+      "distTags": {
+        "latest": "0.1.0"
+      },
+      "sha256": "9799d400a3312d91c85731f58d46a076cc96d456400738c1839cd1a96ff79109",
+      "sha512Integrity": "sha512-aWkcIQCYdeGjSEISp102LNUGOnCW8Z9jO65wCZIO30w4z3p83UK6EpsMQ9Tp4x6PipoL+rsWQn76p2r5iV0OOw==",
+      "integrityMatches": true
+    },
+    {
+      "name": "@secantdev/secant-darwin-arm64",
+      "versions": ["0.1.0"],
+      "distTags": {
+        "latest": "0.1.0"
+      },
+      "sha256": "12da7bdef694ae7f5bf65e9084a05e9b922cd4852a284d5bca5e5e1c3793a295",
+      "sha512Integrity": "sha512-XKDsRFHrO7AXMuBf8c4NZJddRSAQnM/Gegdj1xMV5jLvQC8kWJwz147nCusT1t9WeMVPp+likVGV2hsiixGKrw==",
+      "integrityMatches": true
+    },
+    {
+      "name": "@secantdev/secant-windows-x64",
+      "versions": ["0.1.0"],
+      "distTags": {
+        "latest": "0.1.0"
+      },
+      "sha256": "e264970d843673419b60635c7066d822116d277c3f827b37a72e952e1446b7b4",
+      "sha512Integrity": "sha512-uuPGBDgOJBWp3sK93Is9kk4rJHRBnaD/xwaGbXaTQOnFrDSM2U9Xpq4nvJgR8pzbsJAi1MZavjtb1st5nCgl5A==",
+      "integrityMatches": true
+    }
+  ],
+  "crossChannelChecks": [
+    {
+      "target": "windows-x64",
+      "archive_github_manifest_sums_equal": true,
+      "secant.exe_archive_npm_manifest_equal": true,
+      "LICENSE_archive_npm_manifest_equal": true,
+      "THIRD-PARTY-NOTICES.md_archive_npm_manifest_equal": true
+    },
+    {
+      "target": "darwin-arm64",
+      "archive_github_manifest_sums_equal": true,
+      "secant_archive_npm_manifest_equal": true,
+      "LICENSE_archive_npm_manifest_equal": true,
+      "THIRD-PARTY-NOTICES.md_archive_npm_manifest_equal": true
+    },
+    {
+      "target": "linux-x64",
+      "archive_github_manifest_sums_equal": true,
+      "secant_archive_npm_manifest_equal": true,
+      "LICENSE_archive_npm_manifest_equal": true,
+      "THIRD-PARTY-NOTICES.md_archive_npm_manifest_equal": true
+    }
+  ],
+  "archiveContents": [
+    {
+      "name": "secant-darwin-arm64.zip",
+      "entries": [
+        {
+          "name": "LICENSE",
+          "size": 1067,
+          "sha256": "b5d491fb2211b6656f238e0a6763f23a3ae975f0b0726b336ff9e1309178008a"
+        },
+        {
+          "name": "THIRD-PARTY-NOTICES.md",
+          "size": 35734,
+          "sha256": "dfdefe5aa2f1628fa75810b14ae282b1e9bbdab777c062dd573f6599dcfc04f0"
+        },
+        {
+          "name": "secant",
+          "size": 73603698,
+          "sha256": "5344316ddd7ca6a82b5ab0268382edcab03afbd739382fd4f4ac0e379a5b685a"
+        }
+      ]
+    },
+    {
+      "name": "secant-linux-x64.tar.gz",
+      "entries": [
+        {
+          "name": "LICENSE",
+          "size": 1067,
+          "sha256": "b5d491fb2211b6656f238e0a6763f23a3ae975f0b0726b336ff9e1309178008a"
+        },
+        {
+          "name": "THIRD-PARTY-NOTICES.md",
+          "size": 35734,
+          "sha256": "dfdefe5aa2f1628fa75810b14ae282b1e9bbdab777c062dd573f6599dcfc04f0"
+        },
+        {
+          "name": "secant",
+          "size": 116205024,
+          "sha256": "5887fcd386d3e4a8f6ca1e13f0848feafc1d66be08faf7685ca4b33db9b74712"
+        }
+      ]
+    },
+    {
+      "name": "secant-windows-x64.zip",
+      "entries": [
+        {
+          "name": "LICENSE",
+          "size": 1067,
+          "sha256": "b5d491fb2211b6656f238e0a6763f23a3ae975f0b0726b336ff9e1309178008a"
+        },
+        {
+          "name": "THIRD-PARTY-NOTICES.md",
+          "size": 35734,
+          "sha256": "dfdefe5aa2f1628fa75810b14ae282b1e9bbdab777c062dd573f6599dcfc04f0"
+        },
+        {
+          "name": "secant.exe",
+          "size": 97399808,
+          "sha256": "c1fab9956073b39ab689793f0a4232260986c521b98106fb28a9bd296ffa9577"
+        }
+      ]
+    }
+  ],
+  "totalReleaseAssetBytes": 114827162,
+  "totalArchiveBytes": 114825425
+}
