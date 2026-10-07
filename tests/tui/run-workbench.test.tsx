@@ -75,6 +75,8 @@ import type {
   TranscriptExportReference,
   TranscriptRead,
   WorkspaceSnapshot,
+  WorkspacePathSearch,
+  WorkspacePathQuery,
 } from "../../src/application/projection-port.js";
 
 // In-memory renderer tests for the Run Workbench (#91), reached the real way:
@@ -256,6 +258,9 @@ function makeRunView(initial: RunSnapshot) {
     decision: "allow" | "deny";
   }[] = [];
   const view: RunWorkbenchView = {
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
+    },
     openRun: () => ({
       snapshot,
       live,
@@ -10441,6 +10446,309 @@ test("m10-commands-and-input-rules: pending Turn admission keeps Slash discovery
       { runId: "run-1", stepId: "discuss", text: "captured text newer text" },
     ]);
     assert.deepEqual(wb.exits, []);
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+test("m10-workspace-mentions: native caret completion replaces only the token, quotes file ranges and retains surrounding text", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+  );
+  wb.control.view.searchWorkspacePaths = async () => ({
+    status: "available",
+    candidates: [{ path: "my file.ts", kind: "file" }],
+  });
+  try {
+    await type(wb.t, "before @my#L10-20 after");
+    for (let i = 0; i < 6; i++) wb.t.mockInput.pressArrow("left");
+    await until(() => {
+      void wb.t.renderOnce();
+      return wb.t.captureCharFrame().includes("my file.ts");
+    });
+    await press(wb.t, wb.renderer, "tab");
+    await type(wb.t, "!");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(
+      wb.control.sends[0]?.text,
+      'before @"my file.ts"#L10-20! after',
+    );
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+async function mentionFrame(
+  wb: Awaited<ReturnType<typeof mountWorkbench>>,
+  pattern: RegExp,
+) {
+  await until(() => {
+    void wb.t.renderOnce();
+    return pattern.test(wb.t.captureCharFrame());
+  });
+}
+
+for (const prefix of ["", "漢字 👩‍💻 ", "first\nsecond "]) {
+  test(`m10-workspace-mentions: folder selection drops ranges and preserves native Unicode/multiline editing ${JSON.stringify(prefix)}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    wb.control.view.searchWorkspacePaths = async () => ({
+      status: "available",
+      candidates: [
+        { path: "file.ts", kind: "file" },
+        { path: "my folder", kind: "folder" },
+      ],
+    });
+    try {
+      if (prefix.includes("\n")) {
+        await type(wb.t, "first");
+        wb.t.mockInput.pressKey("j", { ctrl: true });
+        await type(wb.t, "second ");
+      } else if (prefix !== "") {
+        await wb.t.mockInput.pasteBracketedText(prefix);
+        await wb.t.renderOnce();
+      }
+      await type(wb.t, "@my#L10-20 tail");
+      for (let i = 0; i < 5; i++) wb.t.mockInput.pressArrow("left");
+      await mentionFrame(wb, /› @file.ts/);
+      wb.renderer.key("down");
+      wb.t.mockInput.pressArrow("down");
+      await wb.t.renderOnce();
+      assert.match(wb.t.captureCharFrame(), /› @my folder/);
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(wb.control.sends.length, 0);
+      assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
+      await type(wb.t, "!");
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(wb.control.sends[0]?.text, `${prefix}@"my folder/"! tail`);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const text of [
+  "email@example.com",
+  "word@src",
+  "@.hidden/file",
+  "@ignored/file",
+  "@missing",
+  "@/outside/absolute",
+  "/unknown @missing",
+]) {
+  test(`m10-workspace-mentions: no-result Enter preserves manual text ${JSON.stringify(text)}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    try {
+      await type(wb.t, text);
+      if (!text.startsWith("email") && !text.startsWith("word"))
+        await mentionFrame(wb, /No path suggestions/);
+      else assert.doesNotMatch(wb.t.captureCharFrame(), /Searching Workspace/);
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(wb.control.sends[0]?.text, text);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const working of [false, true]) {
+  test(`m10-workspace-mentions: search unavailable leaves ordinary ${working ? "Steer" : "Send"} available`, async () => {
+    const wb = await mountWorkbench(
+      working
+        ? liveInteractiveRunOf({
+            actionOffers: [INTERRUPT_OFFER, AVAILABLE_STEER_OFFER],
+          })
+        : interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    wb.control.view.searchWorkspacePaths = async () => ({
+      status: "unavailable",
+      cause: new Error("search failed"),
+    });
+    try {
+      await type(wb.t, "please @missing");
+      await mentionFrame(wb, /Path search unavailable/);
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(
+        (working ? wb.control.steers : wb.control.sends)[0]?.text,
+        "please @missing",
+      );
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const text of [" /MoDeL @src", "/continue @src", "/themes @src"]) {
+  test(`m10-workspace-mentions: known unavailable/invalid command suppresses mentions ${text}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    wb.control.view.searchWorkspacePaths = async () => {
+      assert.fail("known command must suppress search");
+    };
+    try {
+      await type(wb.t, text);
+      await press(wb.t, wb.renderer, "return");
+      assert.match(wb.t.captureCharFrame(), /doesn't accept inline arguments/);
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /Workspace paths|path suggestions/,
+      );
+      assert.equal(wb.control.sends.length, 0);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("m10-workspace-mentions: Escape preserves draft and unknown Slash permits a later token", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+  );
+  wb.control.view.searchWorkspacePaths = async () => ({
+    status: "available",
+    candidates: [{ path: "src/a.ts", kind: "file" }],
+  });
+  try {
+    await type(wb.t, "/unknown @src");
+    await mentionFrame(wb, /› @src\/a.ts/);
+    await press(wb.t, wb.renderer, "escape");
+    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
+    assert.deepEqual(wb.exits, []);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, "/unknown @src");
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+for (const change of [
+  "query",
+  "token",
+  "Workspace",
+  "caret-leaves",
+  "request",
+  "gate",
+]) {
+  test(`m10-workspace-mentions: delayed reply cannot survive a changed ${change}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    const pending: {
+      input: WorkspacePathQuery;
+      resolve: (result: WorkspacePathSearch) => void;
+    }[] = [];
+    wb.control.view.searchWorkspacePaths = (input) =>
+      new Promise((resolve) => pending.push({ input, resolve }));
+    try {
+      await type(wb.t, "@old");
+      await until(() => pending.length === 1);
+      if (change === "query") await type(wb.t, "new");
+      if (change === "token") await type(wb.t, " @old");
+      if (change === "Workspace")
+        wb.control.setSnapshot(
+          snapshotOf(
+            interactiveRunOf({
+              workspacePath: "/new/workspace",
+              actionOffers: [SEND_OFFER],
+            }),
+          ),
+        );
+      if (change === "caret-leaves") wb.t.mockInput.pressKey("HOME");
+      if (change === "request") wb.control.setLive(requestOverlay());
+      if (change === "gate")
+        wb.control.setSnapshot(snapshotOf(freeTextRunOf()));
+      await wb.t.renderOnce();
+      if (["query", "token", "Workspace"].includes(change))
+        await until(() => pending.length === 2);
+      pending[0]?.resolve({
+        status: "available",
+        candidates: [{ path: "obsolete.ts", kind: "file" }],
+      });
+      await wb.t.renderOnce();
+      await wb.t.renderOnce();
+      assert.doesNotMatch(wb.t.captureCharFrame(), /obsolete.ts/);
+      if (pending[1]) {
+        pending[1].resolve({
+          status: "available",
+          candidates: [{ path: "current.ts", kind: "file" }],
+        });
+        await mentionFrame(wb, /› @current.ts/);
+        assert.equal(
+          pending[1].input.workspacePath,
+          change === "Workspace" ? "/new/workspace" : "/tmp/ws",
+        );
+      } else
+        assert.doesNotMatch(
+          wb.t.captureCharFrame(),
+          /Searching Workspace|enter\/tab insert/,
+        );
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const [width, height] of [
+  [24, 10],
+  [80, 16],
+]) {
+  test(`m10-workspace-mentions: bounded list and selected path stay visible through dual resize at ${width}x${height}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+      width,
+      height,
+    );
+    wb.control.view.searchWorkspacePaths = async () => ({
+      status: "available",
+      candidates: Array.from({ length: 10 }, (_, i) => ({
+        path: `path-${i}.ts`,
+        kind: "file",
+      })),
+    });
+    try {
+      await type(wb.t, "@path");
+      await mentionFrame(wb, /› @path-0.ts/);
+      for (let i = 0; i < 9; i++) await press(wb.t, wb.renderer, "down");
+      assert.match(wb.t.captureCharFrame(), /› @path-9.ts/);
+      noOverflow(wb.t.captureCharFrame(), width);
+      wb.t.resize(width + 10, height + 3);
+      wb.renderer.resize(width + 10, height + 3);
+      await wb.t.renderOnce();
+      assert.match(wb.t.captureCharFrame(), /› @path-9.ts/);
+      noOverflow(wb.t.captureCharFrame(), width + 10);
+      await press(wb.t, wb.renderer, "tab");
+      await type(wb.t, " done");
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(wb.control.sends[0]?.text, "@path-9.ts done");
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("m10-workspace-mentions: a hash inside a quoted file path is not its textual range delimiter", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+  );
+  const queries: string[] = [];
+  wb.control.view.searchWorkspacePaths = async (input) => {
+    queries.push(input.query);
+    return {
+      status: "available",
+      candidates: [{ path: "a#b c.ts", kind: "file" }],
+    };
+  };
+  try {
+    await type(wb.t, '@"a#b c.ts"#L10-20');
+    await mentionFrame(wb, /› @a#b c.ts/);
+    assert.deepEqual(queries, ["a#b c.ts"]);
+    await press(wb.t, wb.renderer, "tab");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, '@"a#b c.ts"#L10-20');
   } finally {
     wb.t.renderer.destroy();
   }

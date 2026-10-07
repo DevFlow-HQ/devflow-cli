@@ -170,6 +170,9 @@ function noRun(): RunWorkbenchView {
     throw new Error("run workbench not used in this test");
   };
   return {
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
+    },
     openHistory: unused,
     openRun: unused,
     readResource: unused,

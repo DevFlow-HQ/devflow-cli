@@ -1,5 +1,8 @@
+import stringWidth from "string-width";
+import type { MentionReplacement } from "./workspace-mentions.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
+  batch,
   createEffect,
   createSignal,
   untrack,
@@ -87,6 +90,9 @@ export function PromptControl(props: {
   model: Accessor<PromptModel>;
   draft: Accessor<string>;
   onInput: (value: string) => void;
+  onCaret: (caret: number) => void;
+  replacement: Accessor<MentionReplacement | undefined>;
+  onReplacement: () => void;
   focused: Accessor<boolean>;
   slashOpen: Accessor<boolean>;
   width: Accessor<number>;
@@ -132,6 +138,9 @@ export function PromptControl(props: {
         <PromptField
           draft={props.draft}
           onInput={props.onInput}
+          onCaret={props.onCaret}
+          replacement={props.replacement}
+          onReplacement={props.onReplacement}
           focused={props.focused}
           slashOpen={props.slashOpen}
           placeholder={() => clip(props.model().placeholder, w() - 2)}
@@ -729,6 +738,9 @@ export function Sidebar(props: {
 function PromptField(props: {
   draft: Accessor<string>;
   onInput: (value: string) => void;
+  onCaret: (caret: number) => void;
+  replacement: Accessor<MentionReplacement | undefined>;
+  onReplacement: () => void;
   focused: Accessor<boolean>;
   slashOpen: Accessor<boolean>;
   placeholder: Accessor<string>;
@@ -739,6 +751,59 @@ function PromptField(props: {
   const initial = untrack(props.draft);
   let reported = initial;
   const [box, setBox] = createSignal<TextareaRenderable>();
+  const report = () => {
+    const editor = box();
+    if (editor === undefined) return;
+    const value = editor.plainText;
+    const prefix = value
+      .split("\n")
+      .slice(0, editor.logicalCursor.row)
+      .map((line) => line + "\n")
+      .join("");
+    const line = value.split("\n")[editor.logicalCursor.row] ?? "";
+    let columns = 0;
+    let offset = prefix.length;
+    for (const { segment } of new Intl.Segmenter().segment(line)) {
+      const width = segment === "\t" ? 4 : stringWidth(segment);
+      if (columns + width > editor.logicalCursor.col) break;
+      columns += width;
+      offset += segment.length;
+    }
+    batch(() => {
+      if (value !== reported) {
+        reported = value;
+        props.onInput(value);
+      }
+      props.onCaret(offset);
+    });
+  };
+  createEffect(() => {
+    const editor = box();
+    const replacement = props.replacement();
+    if (editor === undefined || replacement === undefined) return;
+    untrack(() => {
+      const text = editor.plainText;
+      const displayOffset = (offset: number) =>
+        text
+          .slice(0, offset)
+          .split("\n")
+          .reduce(
+            (sum, line, i) =>
+              sum +
+              stringWidth(line.replace(/\t/g, "    ")) +
+              (i === 0 ? 0 : 1),
+            0,
+          );
+      editor.setSelection(
+        displayOffset(replacement.start),
+        displayOffset(replacement.end),
+      );
+      editor.insertText(replacement.text);
+      editor.clearSelection();
+      report();
+      props.onReplacement();
+    });
+  });
   createEffect(() => {
     const editor = box();
     const value = props.draft();
@@ -766,12 +831,8 @@ function PromptField(props: {
         { name: "up", action: props.slashOpen() ? "submit" : "move-up" },
         { name: "down", action: props.slashOpen() ? "submit" : "move-down" },
       ]}
-      onContentChange={() => {
-        const value = box()?.plainText;
-        if (value === undefined || value === reported) return;
-        reported = value;
-        props.onInput(value);
-      }}
+      onContentChange={report}
+      onCursorChange={report}
     />
   );
 }

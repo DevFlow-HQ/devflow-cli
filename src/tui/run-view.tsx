@@ -68,6 +68,7 @@ export interface RunWorkbenchView {
   /** Opens the `run` Projection for one Run id; closes it on cleanup of the
    *  calling owner. History opens separately by Session. */
   openRun(runId: string): RunWorkbenchProjection;
+  searchWorkspacePaths: ProjectionPort["searchWorkspacePaths"];
   openHistory(
     runId: string,
     session: string,
@@ -208,6 +209,7 @@ export function createLiveRunWorkbenchView(
         reconnect: followed.reconnect,
       };
     },
+    searchWorkspacePaths: (input) => port.searchWorkspacePaths(input),
     readResource: (reference) => port.readResource(reference),
     readTranscript: (reference) => port.readTranscript(reference),
     // The Gate answer: the same submit-and-settle protocol headless `run

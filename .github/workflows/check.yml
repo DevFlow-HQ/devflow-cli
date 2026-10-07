@@ -108,6 +108,12 @@ jobs:
           tests/release/shipped-bundles.test.ts
           tests/headless/interactive-agent.test.ts
           tests/tui/run-workbench.test.tsx
+      - name: m10-workspace-mentions
+        run: >-
+          bun run test --
+          tests/application/workspace-paths.test.ts
+          tests/tui/run-workbench.test.tsx
+          tests/headless/interactive-agent.test.ts
       - name: m10-home-and-preferences
         run: >-
           bun run test --

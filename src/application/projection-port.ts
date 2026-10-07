@@ -1868,7 +1868,25 @@ export type TranscriptRead =
     }
   | { readonly found: false; readonly problem: Problem };
 
+export interface WorkspacePathCandidate {
+  readonly path: string;
+  readonly kind: "file" | "folder";
+}
+export interface WorkspacePathQuery {
+  readonly workspacePath: string;
+  readonly query: string;
+  readonly signal?: AbortSignal;
+}
+export type WorkspacePathSearch =
+  | {
+      readonly status: "available";
+      readonly candidates: readonly WorkspacePathCandidate[];
+    }
+  | { readonly status: "unavailable"; readonly cause: unknown };
+
 export interface ProjectionPort {
+  /** Bounded, read-only path cues. Never loads candidate content or grants access. */
+  searchWorkspacePaths(input: WorkspacePathQuery): Promise<WorkspacePathSearch>;
   // Selector-typed overloads (#74 A8): each concrete selector resolves to the
   // snapshot type it names, so clients drop their `as` casts. A `bundle-catalog`
   // selector splits on `focus` — present is the focus, absent is the list. The

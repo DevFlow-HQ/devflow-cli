@@ -1,3 +1,4 @@
+import { searchWorkspacePaths } from "./workspace-paths.js";
 import { mergeHarnessInputRules } from "./harness-registry.js";
 export { mergeHarnessInputRules } from "./harness-registry.js";
 import { z } from "zod";
@@ -3961,6 +3962,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const projectionPort: ProjectionPort = {
     openProjection,
     submit: dispatch,
+    searchWorkspacePaths,
 
     readResource(
       reference:

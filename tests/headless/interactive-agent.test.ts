@@ -2126,3 +2126,57 @@ test("a Codex Steer is refused no reserved word, since Codex reserves none and l
     "applied",
   );
 });
+
+for (const harness of ["claude-code", "codex"] as const) {
+  test(`m10-workspace-mentions: ${harness} receives identical human path text without attachments or candidate reads`, async (t) => {
+    const inputs: unknown[] = [];
+    const fake = createFake({
+      profile: profile(),
+      turns: [COMPLETED_DETACHED, COMPLETED_DETACHED],
+    })();
+    const adapter = ownPreparations({
+      async prepare(options) {
+        const prepared = await fake.prepare(options);
+        if (!prepared.ok) return prepared;
+        const runtime = prepared.harness;
+        return {
+          ok: true,
+          harness: {
+            profile: runtime.profile,
+            readDefaults: () => runtime.readDefaults(),
+            startTurn(request) {
+              inputs.push(request.input);
+              return runtime.startTurn(request);
+            },
+            close: () => runtime.close(),
+          },
+        };
+      },
+    });
+    const { wired, runId } = await launchInteractive(
+      t,
+      adapter,
+      undefined,
+      undefined,
+      harness,
+    );
+    try {
+      const text =
+        'inspect @"my file.ts"#L10-20 and @folder/ @.hidden @ignored @missing @/outside';
+      const admission = wired.projectionPort.submit({
+        operation: "send-interactive-turn",
+        operationId: "path-text",
+        input: { runId, stepId: "discuss", text },
+      });
+      assert.ok(admission.admitted, JSON.stringify(admission));
+      assert.equal(
+        (await awaitSettled(wired.projectionPort, "path-text")).status,
+        "applied",
+      );
+      await awaitRunRest(wired.projectionPort, runId);
+      assert.deepEqual(inputs, [{ text }]);
+    } finally {
+      await wired.shutdown();
+    }
+  });
+}

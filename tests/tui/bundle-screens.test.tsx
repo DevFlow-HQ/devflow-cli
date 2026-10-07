@@ -214,6 +214,9 @@ function noLaunch(): RunLaunchView {
  *  App props the Workbench needs (#91). */
 function noRunView(): RunWorkbenchView {
   return {
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
+    },
     openHistory() {
       throw new Error("history not used in this test");
     },

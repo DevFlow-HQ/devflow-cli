@@ -23,7 +23,7 @@ decide the screen and its routes.
   Notices (Problem, conflict, view freshness, Operation receipts and refusals, Model choice messages) lead the conversation column and are counted; one
   status row under it carries the paused badge.
 - `PromptModel`/`promptHeight` (`run-workbench-views.tsx`) count exactly what `PromptControl` draws: a note, one field row per draft line up to four, the meta
-  row, bounded Slash list rows, wrapped refusal and recovery notices, and the hint rows. An armed Step ending or Interrupt confirm wraps its whole
+  row, bounded Slash or Workspace path list rows, wrapped refusal and recovery notices, and the hint rows. An armed Step ending or Interrupt confirm wraps its whole
   captured consequence, so the count grows with it.
 
 ## Keys and native input
@@ -46,6 +46,13 @@ decide the screen and its routes.
 - The working scanner (`working-scanner.tsx`, #292) leads the prompt's hint only while a Turn works: `working · esc esc interrupt`, or `enter steer · esc esc
 interrupt` while Steer is available. Its words carry the meaning, so the cells yield first on a narrow row; `reducedMotion` draws a static `[⋯]`. A refusal
   sits above the hint rather than replacing it. An applied Operation receipt leaves on the next key, which keeps its recipient.
+
+## Workspace path completion
+
+- `searchWorkspacePaths` filters ignores/dots/symlinks and returns ten paths; unavailable leaves text sendable. It reads no candidate content.
+- `workspace-mentions.ts` keys replies by Workspace, draft and caret, and cancels old search. Known Slash names suppress mentions.
+- Enter/Tab edits only the native token: quote whitespace, retain file ranges, slash folders without ranges. Escape keeps text; arrows leave the cursor still.
+- Requests/gates have no list. Rows share `PromptModel`; a compact hint fits narrow terminals. Acknowledge native replacements so remount cannot replay them.
 
 ## Slash discovery and dispatch
 
@@ -109,5 +116,4 @@ interrupt` while Steer is available. Its words carry the meaning, so the cells y
   Its Resource entry id anchors an offset relative to the role header; leading dividers have negative offsets, so newly attached dividers preserve content.
   Resize clamps only within the entry; read notices stay outside content. Only this reader pages older: `p` preserves position, including failed retries.
   Up at the top also loads older. Export (`e`) reads the complete Reference only on demand and queues text to the terminal clipboard, naming refusal.
-  `run-workbench-views.tsx` holds the Workbench's pure presentational leaves and the prompt's row model; state, focus, the resolved interaction, and the key
-  dispatcher stay in `run-workbench.tsx` (A12).
+  `run-workbench-views.tsx` holds the presentational leaves and prompt row model; state, focus, interaction and key dispatch stay in `run-workbench.tsx` (A12).

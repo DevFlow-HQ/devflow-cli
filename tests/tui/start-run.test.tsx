@@ -676,6 +676,9 @@ function noRunView(): RunWorkbenchView {
     openRun() {
       throw new Error("run workbench not opened in this test");
     },
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
+    },
     readResource() {
       throw new Error("run workbench not opened in this test");
     },
@@ -755,6 +758,9 @@ function succeedingRunView(): RunWorkbenchView {
         }),
         reconnect() {},
       };
+    },
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
     },
     readResource() {
       throw new Error("no reference read in this test");
@@ -2227,6 +2233,9 @@ function fakePort(config: {
     submit(submission: Submission): SubmissionAdmission {
       config.onSubmit?.(submission);
       return config.admission;
+    },
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
     },
     readResource() {
       throw new Error("not used");

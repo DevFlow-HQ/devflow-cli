@@ -89,6 +89,9 @@ function runViewOf(run: RunView): RunWorkbenchView {
     result: { found: true, run },
   });
   return {
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
+    },
     openHistory() {
       throw new Error("history not used in this test");
     },
@@ -146,6 +149,9 @@ function disappearingRunView(run: RunView): {
   const base = runViewOf(run);
   return {
     view: {
+      async searchWorkspacePaths() {
+        return { status: "available", candidates: [] };
+      },
       openHistory() {
         throw new Error("history not used in this test");
       },
@@ -205,6 +211,9 @@ function missingRunView(run: RunView): RunWorkbenchView {
     },
   });
   return {
+    async searchWorkspacePaths() {
+      return { status: "available", candidates: [] };
+    },
     openHistory() {
       throw new Error("history not used in this test");
     },

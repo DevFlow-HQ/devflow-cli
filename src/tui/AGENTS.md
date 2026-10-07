@@ -75,6 +75,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Agent-bearing Runs reserve two metadata lines outside the timeline (#418). Context/usage replacement cannot change history rows,
   viewport height, or the activity badge; empty reports leave blank slots. Metadata uses reported meanings and clips to the available width.
 
+- Native prompt caret offsets map logical columns through graphemes, never `cursorCharacterOffset`; completion edits native selection and acknowledges it once (#423).
 - Prompt receipts are independent per dispatch (#420). A native textarea `setText` moves its cursor to the start; prompt write-back calls
   `gotoBufferEnd` after clear or restore so continued typing extends the restored draft. Ordinary updates never write text back.
 - Workbench Steer receipts carry the Operation id as `steerId` for exact settlement matching; equal text never identifies a production capture.
@@ -93,7 +94,6 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - `app-commands.tsx` retains known names and aliases even when unavailable; its `entries()` exposes available commands to Home, Ctrl+P, and Slash.
 - `shell-commands.tsx` owns picker entry restoration and apply-before-save. `preferences-view.ts` generates a fresh Operation id on every save or retry.
-
 - Each screen reads the Projection Port through a per-screen view seam (`workspace-view.tsx`, `bundle-view.tsx`, `run-view.tsx` — the reactive `run` read +
   reference resolution the Workbench uses, plus its Step-interaction writes; `run-list-view.tsx` — the Previous Runs read seam that pages older rows by cursor
   and appends them, the only seam that re-opens its Projection to grow a page); other writes go through a per-screen submit seam (`run-actions-view.tsx` —

@@ -79,12 +79,12 @@ with a new `thread/start` (`sessionStartSource: "clear"` maps to `InitialHistory
 - **OpenCode** opens `@` at the start or after whitespace, searches files, directories, agents, and MCP resources (files via `fff`, falling
   back to `rg --files`, gitignore respected), supports `@path#10-20`, and sends file content as a structured part.
 - **T3 Code** opens `@` anywhere, searches paths only, inserts a markdown link, and sends the path text without content.
-- **Secant** has no workspace file search today. The Workspace is the canonical launch directory and need not be a Git worktree.
+- **Secant at the time of these probes** had no Workspace path search. #423 now adds read-only path completion through Application and inserts the same text for both Harnesses. The Workspace remains the canonical launch directory and need not be a Git worktree.
 
 ## The compose input
 
 `@opentui/core`'s textarea default bindings (`defaultTextareaKeyBindings`) give `ctrl+p` and `ctrl+n` nothing; `up`/`down` move the cursor and
-`ctrl+e` moves to line end. Secant passes no custom bindings.
+`ctrl+e` moves to line end. At the time of these probes Secant passed no custom bindings. The native Workbench now reserves Enter for its dispatcher and list arrows for Slash/path completion.
 
 ## Still unknown
 

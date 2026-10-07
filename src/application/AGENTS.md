@@ -1,7 +1,5 @@
 # application — Module-local notes
 
-Inherits the engineering baseline; records only non-obvious local facts. Ownership and import direction are the policy table's, not restated here.
-
 ## Invariants
 
 - Home-scoped `preferences` needs no Harness or approval. Its keys are raw strings; `change-preferences` returns the transaction's saved pair.
@@ -106,6 +104,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `OperationLedger.submit/open` owns receipts and their subscriptions; settlers return applied metadata, never mutate ledger entries (#393).
   Run authorization, Trust ordering, owners and abort stay in `createApplication`. The shared `SubscriptionLifecycle` ends observation before Run cleanup.
 - `bindAnswer` clears context/usage for every new Turn; reports replace optional fields, including empty reports (#418). Accounting stays live-only.
+- Workspace search bounds traversal and reads only ignore metadata. Never read candidate content or suggest escaping symlinks/.git internals (#423).
 
 ## Tests
 

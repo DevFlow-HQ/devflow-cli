@@ -1,3 +1,4 @@
+import { createWorkspaceMentions } from "./workspace-mentions.js";
 import stripAnsi from "strip-ansi";
 import { useRenderer } from "@opentui/solid";
 import {
@@ -589,6 +590,7 @@ export function RunWorkbench(props: {
 
   const [draftRestored, setDraftRestored] = createSignal(false);
   const [draft, setDraft] = createSignal("");
+  const [caret, setCaret] = createSignal(0);
   // Step-ending confirmations have no captured text and own their receipt.
   const [endingOutcome, setEndingOutcome] =
     createSignal<Accessor<AnswerOutcome>>();
@@ -1065,7 +1067,13 @@ export function RunWorkbench(props: {
         Math.max(1, draft().split("\n").length),
       ),
       ...(meta === undefined ? {} : { meta }),
-      hint: promptHint(prompt),
+      hint: mentions.open()
+        ? {
+            kind: "lines",
+            tone: "muted",
+            lines: [clip("↑↓ ↵/tab insert · esc", innerW())],
+          }
+        : promptHint(prompt),
     };
     const rows = slashMatches();
     const budget = Math.min(
@@ -1077,7 +1085,7 @@ export function RunWorkbench(props: {
           STATUS_ROWS -
           conversationMetadata().length -
           promptHeight(model) -
-          2,
+          (mentions.open() ? 1 : 2),
       ),
     );
     const active = slashActive();
@@ -1091,6 +1099,37 @@ export function RunWorkbench(props: {
           innerW(),
         ),
       );
+    if (mentions.open()) {
+      const candidates = mentions.candidates();
+      const start = Math.max(0, mentions.selection() - budget + 1);
+      const lines = candidates
+        .slice(start, start + budget)
+        .map((candidate) =>
+          clip(
+            `${candidate === mentions.active() ? "› " : "  "}@${candidate.path}${candidate.kind === "folder" ? "/" : ""} · ${candidate.kind}`,
+            innerW(),
+          ),
+        );
+      const result = mentions.result();
+      return {
+        ...model,
+        commands:
+          budget === 0
+            ? []
+            : lines.length > 0
+              ? lines
+              : [
+                  clip(
+                    result?.status === "unavailable"
+                      ? "Path search unavailable · enter sends text"
+                      : result === undefined
+                        ? "Searching Workspace paths…"
+                        : "No path suggestions · enter sends text",
+                    innerW(),
+                  ),
+                ],
+      };
+    }
     return {
       ...model,
       commands:
@@ -1683,6 +1722,24 @@ export function RunWorkbench(props: {
       );
     }),
   );
+  // The prompt's native field takes text only while nothing else holds the keys:
+  // no dialog, no confirmation, no focused details.
+  const promptFieldFocused = () =>
+    dialog.stack.length === 0 &&
+    focus() === "bottom" &&
+    promptInteraction() !== undefined &&
+    confirmation() === undefined;
+
+  const mentions = createWorkspaceMentions({
+    draft,
+    caret,
+    workspace: () => run()?.workspacePath,
+    enabled: () =>
+      promptFieldFocused() &&
+      !slashOpen() &&
+      commands.knownSlash(draft()) === undefined,
+    search: (input) => view.searchWorkspacePaths(input),
+  });
   const invokeSlash = (id?: string) => {
     const known = commands.knownSlash(draft());
     if (known?.arguments) {
@@ -1744,14 +1801,6 @@ export function RunWorkbench(props: {
     }
     return key.name === "return" && invokeSlash();
   };
-
-  // The prompt's native field takes text only while nothing else holds the keys:
-  // no dialog, no confirmation, no focused details.
-  const promptFieldFocused = () =>
-    dialog.stack.length === 0 &&
-    focus() === "bottom" &&
-    promptInteraction() !== undefined &&
-    confirmation() === undefined;
 
   const timelineRows = createMemo<readonly TimelineRow[]>(() => {
     const current = run();
@@ -2142,7 +2191,11 @@ export function RunWorkbench(props: {
       handleDetailsKey(key);
       return;
     }
-    if (current.kind === "prompt" && handleSlashKey(key)) return;
+    if (
+      current.kind === "prompt" &&
+      (handleSlashKey(key) || mentions.handleKey(key))
+    )
+      return;
     if (name === "tab" && detailsShown()) {
       setFocus("details");
       return;
@@ -2502,7 +2555,10 @@ export function RunWorkbench(props: {
                         draft={draft}
                         onInput={(value) => setDraft(value)}
                         focused={promptFieldFocused}
-                        slashOpen={slashOpen}
+                        slashOpen={() => slashOpen() || mentions.open()}
+                        onCaret={setCaret}
+                        replacement={mentions.replacement}
+                        onReplacement={mentions.replaced}
                         width={innerW}
                         reducedMotion={props.reducedMotion}
                         theme={theme}
