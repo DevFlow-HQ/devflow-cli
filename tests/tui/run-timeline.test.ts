@@ -7,10 +7,10 @@ import {
   type TimelineScroll,
 } from "../../src/tui/tui.js";
 
-// The pure timeline scroll model (#91 AC3, #288): live-edge following, the
-// new-activity count, the append-only and rewrap anchor, page sizing, and
-// jump-to-latest. Rows are given as their display-line heights, so the window
-// scrolls display lines while the anchor and the badge stay in rows.
+// The ordinal scroll model used by resource inspection (#91 AC4, #288):
+// display-line paging, append and rewrap anchoring, and jumping to the latest
+// content. Live Workbench history uses semantic row ids instead, covered by
+// run-workbench-history-scroll.test.tsx and run-history-scroll.test.ts.
 
 /** `count` single-line rows — the pre-wrap timeline. */
 function ones(count: number): number[] {

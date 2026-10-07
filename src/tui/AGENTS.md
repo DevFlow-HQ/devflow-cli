@@ -87,7 +87,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   dispatch, and small-width/resize relayout without overflow. A lone Escape is held briefly by OpenTUI key disambiguation — poll in real time, not by
   frame count.
 - The working scanner's drawing leaf (`working-scanner.tsx`) is unexported (topology's fenced-package rule, #308); only its plain frame model is.
-  Its colours are asserted in `run-workbench.test.tsx` against the Workbench's own `captureSpans` colours, which couples them to the prompt bar's
+  Its colours are asserted in `run-workbench-appearance.test.tsx` against the Workbench's own `captureSpans` colours, which couples them to the prompt bar's
   accent and the meta row's muted role.
 
 ## Read next

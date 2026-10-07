@@ -102,13 +102,13 @@ jobs:
           tests/run/execution/agent.test.ts
           tests/composition/wiring.test.ts
           tests/release/shipped-bundles.test.ts
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-prompt.test.tsx
       - name: m10-workspace-mentions
         run: >-
           bun run test --
           -t '^m10-workspace-mentions(:|$)'
           tests/application/workspace-paths.test.ts
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-prompt.test.tsx
           tests/headless/interactive-agent.test.ts
       - name: m10-home-and-preferences
         run: >-
@@ -118,19 +118,27 @@ jobs:
           tests/architecture/preferences-palettes.test.ts
           tests/tui/screens.test.tsx
           tests/tui/home-preferences.test.tsx
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-appearance.test.tsx
+          tests/tui/run-workbench-interaction.test.tsx
       - name: m10-full-transcript-prepend
         run: >-
           bun run test --
           -t '^m10-full-transcript-prepend(:|$)'
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-full-transcript.test.tsx
       - name: m10-workbench-interaction
         run: >-
           bun run test --
           -t '^m10-workbench-interaction(:|$)'
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-appearance.test.tsx
+          tests/tui/run-workbench-full-transcript.test.tsx
+          tests/tui/run-workbench-inspection.test.tsx
+          tests/tui/run-workbench-interaction.test.tsx
+          tests/tui/run-workbench-prompt.test.tsx
       - name: m10-confirmation-target-identity
-        run: bun run test -- -t '^m10-confirmation-target-identity(:|$)' tests/tui/run-workbench.test.tsx
+        run: >-
+          bun run test --
+          -t '^m10-confirmation-target-identity(:|$)'
+          tests/tui/run-workbench-interaction.test.tsx
       - name: m10-initial-preparation-ownership
         run: >-
           bun run test --
@@ -146,12 +154,13 @@ jobs:
           -t '^m10-session-history(:|$)'
           tests/application/session-history.test.ts
           tests/tui/run-view.test.ts
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-history-scroll.test.tsx
+          tests/tui/run-workbench-inspection.test.tsx
       - name: m10-paused-history-identity
         run: >-
           bun run test --
           -t '^m10-paused-history-identity(:|$)'
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-history-scroll.test.tsx
       - name: m10-interruption-and-transcript
         run: >-
           bun run test --
@@ -171,7 +180,18 @@ jobs:
           tests/harness/conformance.test.ts
           tests/application/observed-facts.test.ts
           tests/headless/run.test.ts
-          tests/tui/run-workbench.test.tsx
+          tests/tui/run-workbench-appearance.test.tsx
+          tests/tui/run-workbench-history-scroll.test.tsx
+      - name: m10-audit-workbench-test-domains
+        run: >-
+          bun run test --
+          -t '^m10-audit-workbench-test-domains(:|$)'
+          tests/tui/run-workbench-appearance.test.tsx
+          tests/tui/run-workbench-full-transcript.test.tsx
+          tests/tui/run-workbench-history-scroll.test.tsx
+          tests/tui/run-workbench-inspection.test.tsx
+          tests/tui/run-workbench-interaction.test.tsx
+          tests/tui/run-workbench-prompt.test.tsx
       - name: m12-focused-check-scenarios
         run: >-
           bun run test --
