@@ -378,6 +378,68 @@ jobs:
         id: release_archive_consumer
         continue-on-error: true
         run: bun scripts/release-consumer.ts "dist/release/${{ matrix.archive }}"
+      - name: Diagnose Windows consumer cleanup
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP "secant-cleanup-probe.mjs"
+          @'
+          import assert from "node:assert/strict";
+          import { spawnSync } from "node:child_process";
+          import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join, resolve } from "node:path";
+          import { pathToFileURL } from "node:url";
+          const { npmInstall, sha256File } = await import(pathToFileURL(resolve("scripts/release-helpers.ts")));
+          const manifest = JSON.parse(readFileSync("dist/packages/package-manifest.json", "utf8"));
+          const pkg = manifest.packages.find((entry) => entry.key === "windows-x64");
+          assert.ok(pkg);
+          const binary = resolve("dist/secant-windows-x64.exe");
+          const failures = [];
+          async function probe(name, exercise) {
+            const folder = mkdtempSync(join(tmpdir(), `secant-cleanup-${name}-`));
+            try {
+              await exercise(folder);
+              console.log(JSON.stringify({ name, stage: "exercise-complete", parentCwd: process.cwd() }));
+              rmSync(folder, { recursive: true, force: true });
+              console.log(JSON.stringify({ name, stage: "cleanup-complete" }));
+            } catch (error) {
+              let remaining;
+              try { remaining = readdirSync(folder, { recursive: true }); } catch (readError) { remaining = String(readError); }
+              console.error(JSON.stringify({ name, stage: "failed", message: String(error), remaining }));
+              failures.push(error);
+            }
+          }
+          await probe("checksum-only", async (folder) => {
+            const copied = join(folder, "secant.exe");
+            copyFileSync(binary, copied);
+            assert.equal(await sha256File(copied), pkg.binarySha256);
+          });
+          await probe("node-child-cwd", async (folder) => {
+            const result = spawnSync("node", ["-e", "process.stdout.write('ready')"], { cwd: folder, encoding: "utf8", timeout: 20000 });
+            if (result.error) throw result.error;
+            assert.equal(result.status, 0);
+            assert.equal(result.stdout, "ready");
+          });
+          await probe("candidate-image", async (folder) => {
+            const copied = join(folder, "secant.exe");
+            copyFileSync(binary, copied);
+            const result = spawnSync(copied, ["--version"], { encoding: "utf8", timeout: 20000 });
+            if (result.error) throw result.error;
+            assert.equal(result.status, 0);
+            assert.equal(result.stdout, `${manifest.version}\n`);
+          });
+          await probe("npm-install-cwd", async (folder) => {
+            writeFileSync(join(folder, "package.json"), JSON.stringify({ name: "cleanup-probe", private: true }));
+            const result = npmInstall({ tarballs: [resolve("dist/packages", pkg.tarball)], cwd: folder });
+            if (result.error) throw result.error;
+            assert.equal(result.status, 0, result.stderr);
+          });
+          if (failures.length) throw new AggregateError(failures, "Windows cleanup probes failed.");
+          '@ | Set-Content -LiteralPath $probe
+          bun $probe
       - name: Platform package consumer
         id: platform_package_consumer
         continue-on-error: true
