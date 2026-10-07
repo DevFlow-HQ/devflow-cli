@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -7,11 +8,14 @@ import { fileURLToPath } from "node:url";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import type {
   HarnessAdapter,
-  HarnessProfile,
   PreparedHarness,
 } from "../../src/harness/harness.js";
 import type { RunView } from "../../src/application/projection-port.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
@@ -35,35 +39,6 @@ const RECEIPT_LINE =
   /Write the required output "(spec-ref|tickets-ref)" as UTF-8 text to (.+) before you finish;/;
 
 type HarnessId = "claude-code" | "codex";
-
-function profile(harness: HarnessId): HarnessProfile {
-  return {
-    harness: harness === "codex" ? "codex" : "Claude Code",
-    executable: harness === "codex" ? "codex" : "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: true,
-      evidence: "Scripted agent calls.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: harness === "codex", evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 function completed(content: string): FakeScript["turns"][number] {
   return {
@@ -94,7 +69,18 @@ function trackerAgent(
         const prepared: PreparedHarness[] = [];
         for (const turn of turns) {
           const one = await createFake({
-            profile: profile(harness),
+            profile: fakeHarnessProfile({
+              harness: harness === "codex" ? "codex" : "Claude Code",
+              executable: harness === "codex" ? "codex" : "fake-claude",
+              agentCalls: {
+                available: true,
+                evidence: "Scripted agent calls.",
+              },
+              steer: {
+                available: harness === "codex",
+                evidence: "scripted fake",
+              },
+            }),
             turns: [completed(turn.reply)],
           })().prepare(options);
           if (!one.ok) return one;
@@ -103,7 +89,18 @@ function trackerAgent(
         return {
           ok: true,
           harness: {
-            profile: profile(harness),
+            profile: fakeHarnessProfile({
+              harness: harness === "codex" ? "codex" : "Claude Code",
+              executable: harness === "codex" ? "codex" : "fake-claude",
+              agentCalls: {
+                available: true,
+                evidence: "Scripted agent calls.",
+              },
+              steer: {
+                available: harness === "codex",
+                evidence: "scripted fake",
+              },
+            }),
             readDefaults: () => prepared[0]!.readDefaults(),
             startTurn(request) {
               const index = inputs.length;
@@ -169,17 +166,6 @@ function wire(
   return { wired, digest: entry.digest };
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
 async function submitAndSettle(
   wired: Wiring,
   submission: Parameters<Wiring["projectionPort"]["submit"]>[0],
@@ -220,14 +206,14 @@ async function driveToSpec(
     operation: "end-interactive-step",
     input: { runId, stepId: "grill" },
   });
-  const gate = readRun(wired, runId).pendingGate;
+  const gate = readRun(wired.projectionPort, runId).pendingGate;
   assert.equal(gate?.gate.stepId, "choose-tracker");
   await submitAndSettle(wired, {
     operationId: "op-tracker",
     operation: "answer-human-gate",
     input: { runId, gate: gate!.gate, text: tracker },
   });
-  return { runId, run: readRun(wired, runId) };
+  return { runId, run: readRun(wired.projectionPort, runId) };
 }
 
 function readOutput(
@@ -392,13 +378,13 @@ for (const harness of ["claude-code", "codex"] as const) {
         /finished when I approve the\s+final breakdown in the conversation/,
       );
       assert.equal(RECEIPT_LINE.exec(review), null);
-      let run = readRun(wired, runId);
+      let run = readRun(wired.projectionPort, runId);
       assert.equal(run.state, "blocked");
       assert.equal(readOutput(wired, run, "tickets-ref"), undefined);
 
       // A revision Turn in the same Session; the agent claiming approval ends nothing.
       await sendTurn(wired, runId, "Merge them into one ticket.");
-      run = readRun(wired, runId);
+      run = readRun(wired.projectionPort, runId);
       assert.equal(run.state, "blocked");
       assert.equal(agent.inputs.length, 4);
       assert.equal(agent.inputs[3], "Merge them into one ticket.");
@@ -410,7 +396,7 @@ for (const harness of ["claude-code", "codex"] as const) {
         input: { runId, stepId: "plan-tickets" },
       });
       // The implementation stage then opens its first ticket Session (#224).
-      run = readRun(wired, runId);
+      run = readRun(wired.projectionPort, runId);
       assert.equal(run.state, "blocked", JSON.stringify(run.progress));
       assert.equal(run.progress[run.position]?.id, "implement");
       assert.equal(agent.inputs.length, 6);
@@ -455,7 +441,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       input: { runId, stepId: "plan-tickets" },
     });
 
-    const run = readRun(wired, runId);
+    const run = readRun(wired.projectionPort, runId);
     assert.equal(run.state, "failed");
     // One publish Turn only: a retry could publish duplicate tickets.
     assert.equal(agent.inputs.length, 4);
@@ -550,7 +536,7 @@ for (const harness of ["claude-code", "codex"] as const) {
         /issue tracker the skills ask for is the tracker named above/,
       );
       assert.equal(RECEIPT_LINE.exec(entry), null);
-      let run = readRun(wired, runId);
+      let run = readRun(wired.projectionPort, runId);
       assert.equal(run.state, "blocked");
       assert.equal(run.progress[run.position]?.id, "implement");
       assert.ok(offered(run.actionOffers, "continue-repeat"));
@@ -573,14 +559,14 @@ for (const harness of ["claude-code", "codex"] as const) {
         input: { runId, stepId: "implement" },
       });
       assert.equal(agent.inputs[6], entry);
-      assert.equal(readRun(wired, runId).state, "blocked");
+      assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
 
       await submitAndSettle(wired, {
         operationId: "op-end-stage",
         operation: "end-stage",
         input: { runId, stepId: "implement" },
       });
-      run = readRun(wired, runId);
+      run = readRun(wired.projectionPort, runId);
       assert.equal(run.state, "succeeded");
       assert.equal(run.completion, "human-declared");
       assert.deepEqual(turnSessions(wired, runId).slice(4), [
@@ -608,7 +594,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     const runId = await driveToImplement(wired, digest, harness, "Linear");
 
     const rests = () => {
-      const run = readRun(wired, runId);
+      const run = readRun(wired.projectionPort, runId);
       assert.equal(run.state, "blocked");
       assert.equal(run.progress[run.position]?.id, "implement");
       assert.ok(offered(run.actionOffers, "continue-repeat"));

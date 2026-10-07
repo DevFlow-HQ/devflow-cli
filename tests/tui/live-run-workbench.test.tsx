@@ -29,40 +29,11 @@ import {
   type WorkspaceView,
 } from "../../src/tui/tui.js";
 import { mountRenderer, makeFakeRenderer, until } from "./renderer-fixture.js";
-import { createFake } from "../harness/fake-adapter.js";
+import { fakeHarnessProfile, createFake } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { inertRunActionsView, inertRunListView } from "./inert.js";
-
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: true,
-      evidence: "Scripted agent calls.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 /** The Model choice the fake reports, which Start a Run launches unchanged. */
 const REPORTED_DEFAULTS: HarnessDefaults = {
@@ -124,7 +95,12 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
     launchCwd: workspace,
     process: createFakeBundleProcess({ executables: [process.execPath] }),
     harnessAdapter: createFake({
-      profile: profile(),
+      profile: fakeHarnessProfile({
+        agentCalls: {
+          available: true,
+          evidence: "Scripted agent calls.",
+        },
+      }),
       defaults: REPORTED_DEFAULTS,
       turns: [
         {
@@ -342,7 +318,12 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
     supportsInteractiveTurns: true,
     process: createFakeBundleProcess({ executables: [process.execPath] }),
     harnessAdapter: createFake({
-      profile: profile(),
+      profile: fakeHarnessProfile({
+        agentCalls: {
+          available: true,
+          evidence: "Scripted agent calls.",
+        },
+      }),
       defaults: REPORTED_DEFAULTS,
       turns: [
         {
@@ -474,7 +455,12 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
 test("workbench-model-choice: the live read prepares the Offer and Run Actions preserves the applied choice, reach, and effort-reset receipt", async (t) => {
   setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   const harnessProfile: HarnessProfile = {
-    ...profile(),
+    ...fakeHarnessProfile({
+      agentCalls: {
+        available: true,
+        evidence: "Scripted agent calls.",
+      },
+    }),
     modelSelection: {
       at: "launch",
       evidence: "scripted choices",

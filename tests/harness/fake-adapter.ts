@@ -62,6 +62,38 @@ import type {
   TestPrepareOptions,
 } from "./test-adapters.js";
 
+export function fakeHarnessProfile(
+  overrides: Partial<HarnessProfile> = {},
+): HarnessProfile {
+  return {
+    harness: "Claude Code",
+    executable: "fake-claude",
+    executableVersion: "0.0.0-fake",
+    platform: "linux",
+    adapterRevision: "fake-1",
+    configurationPosture: "user-compatible",
+    recovery: { mode: "native-reattach", evidence: "scripted fake" },
+    interruption: { mode: "process-only", evidence: "scripted fake" },
+    approvals: { available: true, evidence: "scripted fake" },
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
+    clarifications: { available: false, evidence: "scripted fake" },
+    steer: { available: false, evidence: "scripted fake" },
+    modelSelection: { at: "unavailable", evidence: "scripted fake" },
+    modelObservation: { available: true, evidence: "scripted fake" },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
+    recoveryCoordinate: {
+      timing: "before-submission",
+      evidence: "scripted fake",
+    },
+    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
+    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
+    ...overrides,
+  };
+}
+
 /** One request the scripted Turn raises. `awaited` Turns settle only once it is
  *  answered; a non-awaited request is expired at terminal. */
 export interface FakeRequestSpec {

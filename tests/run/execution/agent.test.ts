@@ -27,7 +27,11 @@ import type {
   AssetKind,
   Platform,
 } from "../../../src/workflow/workflow.js";
-import { createFake, type FakeTurnScript } from "../../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeTurnScript,
+} from "../../harness/fake-adapter.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
 import { createFakeProcess } from "../../process/fake-adapter.js";
 import { openFakeRunGroup as openRunGroup } from "../store/fake-git-process.js";
@@ -37,44 +41,33 @@ const HOST: Platform = process.platform === "win32" ? "windows" : "linux";
 const SESSION = "shared-session";
 const executionProcess = createFakeProcess({});
 
-function profile(overrides: Partial<HarnessProfile> = {}): HarnessProfile {
-  return {
-    harness: "fake",
-    executable: "fake-harness",
-    executableVersion: "0.0.0-fake",
-    platform: HOST,
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "fake resumes by id" },
-    interruption: { mode: "process-only", evidence: "fake stops its process" },
-    approvals: { available: true, evidence: "fake approvals" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "fake has no questions" },
-    steer: { available: false, evidence: "fake has no steer" },
-    modelSelection: { at: "unavailable", evidence: "fake selects no model" },
-    modelObservation: {
-      available: true,
-      evidence: "fake observes its own model",
-    },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "fake records before submission",
-    },
-    skillDelivery: {
-      mode: "plain-path",
-      evidence: "fake reads a SKILL.md path",
-    },
-    fileDelivery: {
-      mode: "plain-path",
-      evidence: "fake reads absolute paths",
-    },
-    ...overrides,
-  };
-}
+const PROFILE_OVERRIDES = {
+  harness: "fake",
+  executable: "fake-harness",
+  platform: HOST,
+  recovery: { mode: "native-reattach", evidence: "fake resumes by id" },
+  interruption: { mode: "process-only", evidence: "fake stops its process" },
+  approvals: { available: true, evidence: "fake approvals" },
+  clarifications: { available: false, evidence: "fake has no questions" },
+  steer: { available: false, evidence: "fake has no steer" },
+  modelSelection: { at: "unavailable", evidence: "fake selects no model" },
+  modelObservation: {
+    available: true,
+    evidence: "fake observes its own model",
+  },
+  recoveryCoordinate: {
+    timing: "before-submission",
+    evidence: "fake records before submission",
+  },
+  skillDelivery: {
+    mode: "plain-path",
+    evidence: "fake reads a SKILL.md path",
+  },
+  fileDelivery: {
+    mode: "plain-path",
+    evidence: "fake reads absolute paths",
+  },
+} satisfies Partial<HarnessProfile>;
 
 interface Fixture {
   readonly owner: RunOwner;
@@ -263,13 +256,16 @@ const RESULT_CASES = {
 } as const satisfies Record<TurnResult["kind"], ResultCase>;
 
 for (const [kind, scenario] of Object.entries(RESULT_CASES)) {
-  test(`an Agent Turn result ${kind} maps to its Attempt and Session availability`, async (t) => {
+  test(`m12-harness-run-test-helpers: an Agent Turn result ${kind} maps to its Attempt and Session availability`, async (t) => {
     const f = fixture(t);
     const assets = promptAssets(f.workspace, "Do the work.\n");
     const turns = Array.from({ length: scenario.starts }, () => ({
       result: scenario.result,
     }));
-    const prepared = await preparedHarness(profile(), turns);
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      turns,
+    );
     t.after(() => prepared.close());
     let starts = 0;
     const availabilityBeforeStarts: string[] = [];
@@ -362,7 +358,10 @@ for (const [name, scenario] of Object.entries(ENTRY_CASES)) {
   test(`Entry Turn ${name}: the Run rests ${scenario.firstWalk} with no Attempt, and a later walk never re-sends it (#212, #353)`, async (t) => {
     const f = fixture(t);
     const assets = promptAssets(f.workspace, "Grill the idea.\n");
-    const prepared = await preparedHarness(profile(), [scenario.turn]);
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      [scenario.turn],
+    );
     t.after(() => prepared.close());
     const controller = new AbortController();
     let starts = 0;
@@ -460,7 +459,7 @@ test("a Turn resumed into an open Agent Attempt takes the next id in order, and 
   if (created.outcome !== "created") throw new Error("unreachable");
   const crashedOwner = crashedGroup.acquireRun(created.runId);
   assert.ok(crashedOwner);
-  const crashed = await preparedHarness(profile(), [
+  const crashed = await preparedHarness(fakeHarnessProfile(PROFILE_OVERRIDES), [
     { block: true, result: RESULT_CASES.completed.result },
   ]);
   let admitted: () => void = () => undefined;
@@ -486,7 +485,7 @@ test("a Turn resumed into an open Agent Attempt takes the next id in order, and 
   assert.equal(abandoned.turnId, "0.0:agent#turn-1");
   assert.equal(abandoned.resultKind, "lost");
 
-  const resumed = await preparedHarness(profile(), [
+  const resumed = await preparedHarness(fakeHarnessProfile(PROFILE_OVERRIDES), [
     { result: RESULT_CASES.completed.result },
   ]);
   t.after(() => resumed.close());
@@ -549,7 +548,10 @@ async function recordingHarness(
   readonly prepared: PreparedHarness;
   readonly requests: readonly TurnRequest[];
 }> {
-  const prepared = await preparedHarness(profile(), turns);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    turns,
+  );
   t.after(() => prepared.close());
   const requests: TurnRequest[] = [];
   return {
@@ -823,9 +825,10 @@ test("a Turn joining an Attempt that holds a pre-change `#turn` row takes the ne
     }),
     { ok: true },
   );
-  const prepared = await preparedHarness(profile(), [
-    { result: RESULT_CASES.completed.result },
-  ]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: RESULT_CASES.completed.result }],
+  );
   t.after(() => prepared.close());
 
   const report = await executeRouting([agentStep()], {
@@ -860,8 +863,9 @@ for (const delivery of ["skill", "file"] as const) {
     const prompt =
       delivery === "file" ? "Read {{artifact:report}}.\n" : "Use the skill.\n";
     const assets = promptAssets(f.workspace, prompt);
-    const harnessProfile = profile(
-      delivery === "skill"
+    const harnessProfile = fakeHarnessProfile({
+      ...PROFILE_OVERRIDES,
+      ...(delivery === "skill"
         ? {
             skillDelivery: {
               mode: "native",
@@ -873,8 +877,8 @@ for (const delivery of ["skill", "file"] as const) {
               mode: "native",
               evidence: "the fake accepts native files only",
             },
-          },
-    );
+          }),
+    });
     const prepared = await preparedHarness(harnessProfile, []);
     t.after(() => prepared.close());
     let starts = 0;
@@ -932,7 +936,10 @@ test("plain-path delivery keeps the rendered prompt byte-identical", async (t) =
     "Review {{artifact:report}} before acting.\n",
   );
   const completed = RESULT_CASES.completed.result;
-  const prepared = await preparedHarness(profile(), [{ result: completed }]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: completed }],
+  );
   t.after(() => prepared.close());
 
   await executeRouting(
@@ -1054,7 +1061,10 @@ function bindEarlier(owner: RunOwner, text: string): string {
 
 test("a completed Turn's validated receipt is published as the declared text output", async (t) => {
   const f = fixture(t);
-  const prepared = await preparedHarness(profile(), [{ result: COMPLETED }]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: COMPLETED }],
+  );
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, (paths) => {
     const path = paths.get("spec-ref");
@@ -1086,7 +1096,10 @@ test("a completed Turn's validated receipt is published as the declared text out
 test("a completed Turn with no receipt fails the Step and leaves the earlier binding intact", async (t) => {
   const f = fixture(t);
   const earlier = bindEarlier(f.owner, "LOCAL:spec.md");
-  const prepared = await preparedHarness(profile(), [{ result: COMPLETED }]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: COMPLETED }],
+  );
   t.after(() => prepared.close());
   // The agent's prose may claim publication; only the receipt file counts.
   const agent = receiptWriting(prepared, () => undefined);
@@ -1118,7 +1131,10 @@ for (const [title, write] of Object.entries(INVALID_RECEIPTS)) {
   test(`${title} fails the Step and moves no binding`, async (t) => {
     const f = fixture(t);
     const earlier = bindEarlier(f.owner, "LOCAL:spec.md");
-    const prepared = await preparedHarness(profile(), [{ result: COMPLETED }]);
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      [{ result: COMPLETED }],
+    );
     t.after(() => prepared.close());
     const agent = receiptWriting(prepared, (paths) =>
       write(paths.get("spec-ref")!),
@@ -1133,7 +1149,10 @@ for (const [title, write] of Object.entries(INVALID_RECEIPTS)) {
 
 test("a receipt of exactly the size limit is accepted", async (t) => {
   const f = fixture(t);
-  const prepared = await preparedHarness(profile(), [{ result: COMPLETED }]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: COMPLETED }],
+  );
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, (paths) =>
     writeFileSync(paths.get("spec-ref")!, "x".repeat(64 * 1024)),
@@ -1147,10 +1166,10 @@ test("a receipt of exactly the size limit is accepted", async (t) => {
 
 test("a retried Attempt names a fresh receipt path, so an earlier receipt never satisfies it", async (t) => {
   const f = fixture(t);
-  const prepared = await preparedHarness(profile(), [
-    { result: COMPLETED },
-    { result: COMPLETED },
-  ]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: COMPLETED }, { result: COMPLETED }],
+  );
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, (paths, turn) => {
     // The first Turn writes nothing; the retry writes its own receipt.
@@ -1177,9 +1196,10 @@ test("a retried Attempt names a fresh receipt path, so an earlier receipt never 
 
 test("a receipt left by a Turn that did not complete is never published", async (t) => {
   const f = fixture(t);
-  const prepared = await preparedHarness(profile(), [
-    { result: RESULT_CASES.failed.result },
-  ]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: RESULT_CASES.failed.result }],
+  );
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, (paths) =>
     writeFileSync(paths.get("spec-ref")!, "gh#12"),
@@ -1193,7 +1213,10 @@ test("a receipt left by a Turn that did not complete is never published", async 
 
 test("an Agent Step with no declared output gets no receipt instruction", async (t) => {
   const f = fixture(t);
-  const prepared = await preparedHarness(profile(), [{ result: COMPLETED }]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: COMPLETED }],
+  );
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, () => undefined);
 
@@ -1205,7 +1228,10 @@ test("an Agent Step with no declared output gets no receipt instruction", async 
 
 test("a producing Step whose working area is unusable fails typed before any Turn (#220)", async (t) => {
   const f = fixture(t);
-  const prepared = await preparedHarness(profile(), [{ result: COMPLETED }]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: COMPLETED }],
+  );
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, () => undefined);
   // Receipts live in the working area; a squatted area is typed, never a throw.
@@ -1223,10 +1249,10 @@ test("a producing Step whose working area is unusable fails typed before any Tur
 
 test("a receipt root conflict in a usable working area fails each Attempt before any Turn and binds nothing (#305)", async (t) => {
   const f = fixture(t);
-  const prepared = await preparedHarness(profile(), [
-    { result: COMPLETED },
-    { result: COMPLETED },
-  ]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: COMPLETED }, { result: COMPLETED }],
+  );
   t.after(() => prepared.close());
   const agent = receiptWriting(prepared, () => undefined);
   // The area itself is a usable directory, so only receipt preparation can fail.
@@ -1260,7 +1286,10 @@ test("a receipt root conflict in a usable working area fails each Attempt before
 test("m10-commands-and-input-rules: substituted reserved Agent prompts fail with no Turn or output", async (t) => {
   const f = fixture(t, { task: "\u2003/MODEL\nunsafe" });
   const assets = promptAssets(f.workspace, "{{artifact:task}}");
-  const prepared = await preparedHarness(profile(), []);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [],
+  );
   t.after(() => prepared.close());
   const report = await executeRouting(
     [
@@ -1300,7 +1329,10 @@ for (const kind of ["agent", "interactive-agent"] as const) {
       const f = fixture(t, { task: "\u2003/MODEL\nunsafe" });
       const assets = promptAssets(f.workspace, "{{artifact:task}}");
       if (source === "artifact") bindEarlier(f.owner, "\u2003/MODEL\nunsafe");
-      const prepared = await preparedHarness(profile(), []);
+      const prepared = await preparedHarness(
+        fakeHarnessProfile(PROFILE_OVERRIDES),
+        [],
+      );
       t.after(() => prepared.close());
       const report = await executeRouting(
         [
@@ -1364,9 +1396,10 @@ for (const kind of ["agent", "interactive-agent"] as const) {
 test("m10-commands-and-input-rules: a compatible Harness receives a reserved substituted word unchanged", async (t) => {
   const f = fixture(t, { task: " /MODEL\nwork" });
   const assets = promptAssets(f.workspace, "{{artifact:task}}");
-  const prepared = await preparedHarness(profile(), [
-    { result: RESULT_CASES.completed.result },
-  ]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [{ result: RESULT_CASES.completed.result }],
+  );
   t.after(() => prepared.close());
   const report = await executeRouting([agentStep({ requires: ["task"] })], {
     owner: f.owner,
@@ -1388,15 +1421,18 @@ test("m10-commands-and-input-rules: a compatible Harness receives a reserved sub
 test("m10-interruption-and-transcript: fake identified messages reach stored conversation without the final aggregate", async (t) => {
   const f = fixture(t);
   const assets = promptAssets(f.workspace, "Discuss");
-  const prepared = await preparedHarness(profile(), [
-    {
-      events: [
-        { kind: "assistant-content", messageId: "first", content: "First" },
-        { kind: "assistant-content", messageId: "second", content: "Second" },
-      ],
-      result: RESULT_CASES.completed.result,
-    },
-  ]);
+  const prepared = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [
+      {
+        events: [
+          { kind: "assistant-content", messageId: "first", content: "First" },
+          { kind: "assistant-content", messageId: "second", content: "Second" },
+        ],
+        result: RESULT_CASES.completed.result,
+      },
+    ],
+  );
   t.after(() => prepared.close());
   const report = await executeRouting([agentStep()], {
     owner: f.owner,
@@ -1430,27 +1466,34 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
   test(`m10-interruption-and-transcript: unfinished Thoughts settle once as incomplete at ${name}, outside the transcript`, async (t) => {
     const f = fixture(t);
     const assets = promptAssets(f.workspace, "Discuss");
-    const prepared = await preparedHarness(profile(), [
-      {
-        events: [
-          { kind: "thought-preview", summaryId: "first", content: "First" },
-          { kind: "message-preview", messageId: "same-id", content: "Answer" },
-          { kind: "thought-preview", summaryId: "second", content: "Second" },
-          {
-            kind: "thought",
-            summaryId: "second",
-            content: "Final second",
-            durationMs: 0,
-          },
-          {
-            kind: "thought-preview",
-            summaryId: "first",
-            content: "First complete preview",
-          },
-        ],
-        result: RESULT_CASES[name].result,
-      },
-    ]);
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      [
+        {
+          events: [
+            { kind: "thought-preview", summaryId: "first", content: "First" },
+            {
+              kind: "message-preview",
+              messageId: "same-id",
+              content: "Answer",
+            },
+            { kind: "thought-preview", summaryId: "second", content: "Second" },
+            {
+              kind: "thought",
+              summaryId: "second",
+              content: "Final second",
+              durationMs: 0,
+            },
+            {
+              kind: "thought-preview",
+              summaryId: "first",
+              content: "First complete preview",
+            },
+          ],
+          result: RESULT_CASES[name].result,
+        },
+      ],
+    );
     t.after(() => prepared.close());
     await executeRouting([agentStep()], {
       owner: f.owner,
@@ -1498,27 +1541,30 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
         "FULL_DIFF_START\n" + "supplied diff\n".repeat(3000) + "FULL_DIFF_END",
       files: [{ path: "file.ts" }],
     };
-    const prepared = await preparedHarness(profile(), [
-      {
-        events: [
-          {
-            kind: "turn-diff-preview",
-            diff: { content: "Old snapshot", files: [] },
-          },
-          {
-            kind: "tool-call",
-            call: {
-              callId: "file",
-              tool: "file-change",
-              input: "file.ts",
-              outcome: { kind: "running" },
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      [
+        {
+          events: [
+            {
+              kind: "turn-diff-preview",
+              diff: { content: "Old snapshot", files: [] },
             },
-          },
-          { kind: "turn-diff-preview", diff },
-        ],
-        result: RESULT_CASES[name].result,
-      },
-    ]);
+            {
+              kind: "tool-call",
+              call: {
+                callId: "file",
+                tool: "file-change",
+                input: "file.ts",
+                outcome: { kind: "running" },
+              },
+            },
+            { kind: "turn-diff-preview", diff },
+          ],
+          result: RESULT_CASES[name].result,
+        },
+      ],
+    );
     t.after(() => prepared.close());
     await executeRouting([agentStep()], {
       owner: f.owner,
@@ -1567,26 +1613,29 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const)
       input: "build",
       outcome: { kind: "running" as const },
     };
-    const prepared = await preparedHarness(profile(), [
-      {
-        events: [
-          { kind: "tool-call", call },
-          {
-            kind: "tool-preview",
-            call: { ...call, output: { text: "earlier" } },
-          },
-          {
-            kind: "tool-preview",
-            call: {
-              ...call,
-              output: { text: "OLD" + "x".repeat(30_000) },
-              nativeOmission: "reported omission",
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      [
+        {
+          events: [
+            { kind: "tool-call", call },
+            {
+              kind: "tool-preview",
+              call: { ...call, output: { text: "earlier" } },
             },
-          },
-        ],
-        result: RESULT_CASES[name].result,
-      },
-    ]);
+            {
+              kind: "tool-preview",
+              call: {
+                ...call,
+                output: { text: "OLD" + "x".repeat(30_000) },
+                nativeOmission: "reported omission",
+              },
+            },
+          ],
+          result: RESULT_CASES[name].result,
+        },
+      ],
+    );
     t.after(() => prepared.close());
     await executeRouting([agentStep()], {
       owner: f.owner,

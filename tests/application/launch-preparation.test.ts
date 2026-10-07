@@ -1,3 +1,4 @@
+import { fakeHarnessProfile } from "../harness/fake-adapter.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -12,7 +13,6 @@ import {
 import { buildBundle, writeZip } from "../../src/bundle/bundle.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
-import type { HarnessProfile } from "../../src/harness/harness.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import type {
   LaunchPreparationSnapshot,
@@ -56,41 +56,31 @@ interface Fixture {
 function listed(models: readonly string[]): ApplicationHarnessQualification {
   return {
     ok: true,
-    profile: listProfile(models),
-    defaults: { kind: "unavailable", reason: "Not part of these cases." },
-  };
-}
-
-function listProfile(models: readonly string[]): HarnessProfile {
-  return {
-    harness: "Codex",
-    executable: "/tools/codex",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "lp-test-v1",
-    configurationPosture: "Uses the user's existing Codex configuration.",
-    recovery: { mode: "native-reattach", evidence: "scripted" },
-    interruption: { mode: "active-turn", evidence: "scripted" },
-    approvals: { available: true, evidence: "scripted" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: true, evidence: "scripted" },
-    steer: { available: true, evidence: "scripted" },
-    modelSelection: {
-      at: "launch",
-      declaration: {
-        kind: "list",
-        models: models.map((model) => ({ model, label: model, efforts: [] })),
+    profile: fakeHarnessProfile({
+      harness: "Codex",
+      executable: "/tools/codex",
+      executableVersion: "1.2.3",
+      adapterRevision: "lp-test-v1",
+      configurationPosture: "Uses the user's existing Codex configuration.",
+      recovery: { mode: "native-reattach", evidence: "scripted" },
+      interruption: { mode: "active-turn", evidence: "scripted" },
+      approvals: { available: true, evidence: "scripted" },
+      clarifications: { available: true, evidence: "scripted" },
+      steer: { available: true, evidence: "scripted" },
+      modelSelection: {
+        at: "launch",
+        declaration: {
+          kind: "list",
+          models: models.map((model) => ({ model, label: model, efforts: [] })),
+        },
+        evidence: "Observed from model/list.",
       },
-      evidence: "Observed from model/list.",
-    },
-    modelObservation: { available: true, evidence: "scripted" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: { timing: "before-submission", evidence: "scripted" },
-    skillDelivery: { mode: "plain-path", evidence: "scripted" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted" },
+      modelObservation: { available: true, evidence: "scripted" },
+      recoveryCoordinate: { timing: "before-submission", evidence: "scripted" },
+      skillDelivery: { mode: "plain-path", evidence: "scripted" },
+      fileDelivery: { mode: "plain-path", evidence: "scripted" },
+    }),
+    defaults: { kind: "unavailable", reason: "Not part of these cases." },
   };
 }
 

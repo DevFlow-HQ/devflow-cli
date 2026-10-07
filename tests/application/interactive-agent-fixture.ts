@@ -1,3 +1,5 @@
+import { readRun, requireOffer } from "./run-test-helpers.js";
+
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -8,14 +10,16 @@ import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   type HarnessAdapter,
   type HarnessFailure,
-  type HarnessProfile,
 } from "../../src/harness/harness.js";
 import type {
-  ActionOffer,
   RunView,
   HarnessChoice,
 } from "../../src/application/projection-port.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -23,35 +27,6 @@ import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 // Shared Application setup for the interactive-agent and headless client suites.
 // All execution uses injected Process and Harness doubles.
-
-export function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 /** One scripted Turn that completes and leaves the Session detached, so the next
  *  human Turn (and the following Agent Step) resumes the same Session. Every Turn
@@ -234,27 +209,7 @@ export async function launchInteractive(
   const runId = admission.runId;
   assert.ok(runId);
   await awaitSettled(wired.projectionPort, "op-launch");
-  return { wired, runId, run: readRun(wired, runId), home };
-}
-
-/** Read the current `run` snapshot. */
-export function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
-export function offer<A extends ActionOffer["action"]>(
-  run: RunView,
-  action: A,
-): Extract<ActionOffer, { action: A }> | undefined {
-  return run.actionOffers.find((o) => o.action === action) as
-    Extract<ActionOffer, { action: A }> | undefined;
+  return { wired, runId, run: readRun(wired.projectionPort, runId), home };
 }
 
 export async function send(
@@ -290,7 +245,7 @@ export const INTERRUPTIBLE_TURN: FakeScript["turns"][number] = {
   interruptResult: {
     kind: "interrupted",
     detail: {
-      interruption: profile().interruption,
+      interruption: fakeHarnessProfile().interruption,
       session: {
         state: "detached",
         coordinate: { opaque: "coord-interrupted" },
@@ -314,10 +269,10 @@ export async function sendLiveTurn(
   assert.ok(sent.admitted, JSON.stringify(sent));
   const outcome = await awaitSettled(wired.projectionPort, operationId);
   assert.equal(outcome.status, "applied", JSON.stringify(outcome));
-  const live = readRun(wired, runId);
+  const live = readRun(wired.projectionPort, runId);
   assert.equal(live.state, "running");
-  const interrupt = offer(live, "interrupt-turn");
-  const steer = offer(live, "steer-turn");
+  const interrupt = requireOffer(live, "interrupt-turn");
+  const steer = requireOffer(live, "steer-turn");
   assert.ok(interrupt, JSON.stringify(live.actionOffers));
   assert.ok(steer, JSON.stringify(live.actionOffers));
   return { interrupt, steer };

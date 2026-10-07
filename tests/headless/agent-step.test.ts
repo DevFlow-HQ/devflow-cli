@@ -20,7 +20,11 @@ import type {
 } from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
@@ -44,45 +48,18 @@ const PLAIN_EXECUTABLE_VERSION = "2.1.273 (Claude Code)";
 // submission names, since only launch preparation resolves a preselection.
 const PLAIN_REPORTED_MODEL = "opus";
 
-/** The deterministic Claude Code profile the fake Adapter reports for the plain
- *  Turn: the observed identity (#125) the Agent-step assertions read back — an
- *  observed `claude-code` name, a resolved executable, and the recorded version. */
-function claudeCodeProfile(): HarnessProfile {
-  return {
-    harness: "claude-code",
-    executable: "/usr/bin/claude",
-    executableVersion: PLAIN_EXECUTABLE_VERSION,
-    platform: "linux",
-    adapterRevision: "fake-claude-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
 /** A single-Turn plain script: it observes the effective model (as Claude Code does
  *  at init), emits authoritative assistant content, then settles `completed` with
  *  that model and an open Session — the timeline kinds, model, and Session
  *  availability the plain replayer produced. */
 function plainScript(): FakeScript {
   return {
-    profile: claudeCodeProfile(),
+    profile: fakeHarnessProfile({
+      harness: "claude-code",
+      executable: "/usr/bin/claude",
+      executableVersion: PLAIN_EXECUTABLE_VERSION,
+      adapterRevision: "fake-claude-1",
+    }),
     // A flagless `run launch` starts from the Harness's reported Model choice.
     defaults: { kind: "reported", choice: { model: PLAIN_REPORTED_MODEL } },
     turns: [
@@ -104,35 +81,6 @@ function plainScript(): FakeScript {
         },
       },
     ],
-  };
-}
-
-function codexProfile(): HarnessProfile {
-  return {
-    harness: "Codex",
-    executable: "/usr/bin/codex",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "fake-codex-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "active-turn", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: true, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
   };
 }
 
@@ -353,7 +301,14 @@ test("[both-client-harness-selection] headless launch requires and accepts the s
 test("[selected-versus-observed-evidence] headless distinguishes durable selection before and after observed execution", async (t) => {
   const workspace = makeTempDir("secant-headless-codex-ws-");
   const successful = createFake({
-    profile: codexProfile(),
+    profile: fakeHarnessProfile({
+      harness: "Codex",
+      executable: "/usr/bin/codex",
+      executableVersion: "1.2.3",
+      adapterRevision: "fake-codex-1",
+      interruption: { mode: "active-turn", evidence: "scripted fake" },
+      steer: { available: true, evidence: "scripted fake" },
+    }),
     turns: [
       {
         result: {
@@ -516,7 +471,12 @@ async function runShow(wired: Wiring, runId: string): Promise<string> {
 
 test("run show names the waiting basis of an Agent Step an Interrupt left open, and headless offers no follow-up command (#354)", async (t) => {
   const { wired, runId, run } = await launchAgentRun(t, {
-    profile: claudeCodeProfile(),
+    profile: fakeHarnessProfile({
+      harness: "claude-code",
+      executable: "/usr/bin/claude",
+      executableVersion: PLAIN_EXECUTABLE_VERSION,
+      adapterRevision: "fake-claude-1",
+    }),
     turns: [
       {
         result: {
@@ -1220,7 +1180,12 @@ test("headless JSON launch succeeds while reporting preference read and save fai
 
 function lockedScript(): FakeScript {
   return {
-    profile: claudeCodeProfile(),
+    profile: fakeHarnessProfile({
+      harness: "claude-code",
+      executable: "/usr/bin/claude",
+      executableVersion: PLAIN_EXECUTABLE_VERSION,
+      adapterRevision: "fake-claude-1",
+    }),
     defaults: {
       kind: "reported",
       choice: { model: "opus", effort: "high" },

@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -19,7 +20,11 @@ import type {
   SendFollowUpTurnOffer,
   SteerTurnOffer,
 } from "../../src/application/projection-port.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import {
@@ -50,58 +55,48 @@ const STEER_EVIDENCE =
 /** The fake Claude Code profile: native reattach recovery, process-only interruption,
  *  and — the fact these cases turn on — steer unavailable, carrying the exact evidence
  *  the steer Offer and the steer-unavailable Problem surface. */
-function claudeProfile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "claude",
-    executableVersion: "2.1.273",
-    platform: "linux",
-    adapterRevision: "fake-claude-1",
-    configurationPosture: "user-compatible",
-    recovery: {
-      mode: "native-reattach",
-      evidence: "fake claude resumes by id",
-    },
-    interruption: {
-      mode: "process-only",
-      evidence: "fake claude stops the process",
-    },
-    approvals: {
-      available: true,
-      evidence: "fake claude hosts a permission bridge",
-    },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: {
-      available: false,
-      evidence: "fake claude offers no clarifications",
-    },
-    steer: { available: false, evidence: STEER_EVIDENCE },
-    modelSelection: {
-      at: "unavailable",
-      evidence: "fake claude selects no model",
-    },
-    modelObservation: {
-      available: true,
-      evidence: "fake claude observes its own model",
-    },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "fake claude mints a session id",
-    },
-    skillDelivery: {
-      mode: "plain-path",
-      evidence: "fake claude reads a SKILL.md path",
-    },
-    fileDelivery: {
-      mode: "plain-path",
-      evidence: "fake claude reads an absolute path",
-    },
-  };
-}
+const CLAUDE_PROFILE_OVERRIDES = {
+  executable: "claude",
+  executableVersion: "2.1.273",
+  adapterRevision: "fake-claude-1",
+  recovery: {
+    mode: "native-reattach",
+    evidence: "fake claude resumes by id",
+  },
+  interruption: {
+    mode: "process-only",
+    evidence: "fake claude stops the process",
+  },
+  approvals: {
+    available: true,
+    evidence: "fake claude hosts a permission bridge",
+  },
+  clarifications: {
+    available: false,
+    evidence: "fake claude offers no clarifications",
+  },
+  steer: { available: false, evidence: STEER_EVIDENCE },
+  modelSelection: {
+    at: "unavailable",
+    evidence: "fake claude selects no model",
+  },
+  modelObservation: {
+    available: true,
+    evidence: "fake claude observes its own model",
+  },
+  recoveryCoordinate: {
+    timing: "before-submission",
+    evidence: "fake claude mints a session id",
+  },
+  skillDelivery: {
+    mode: "plain-path",
+    evidence: "fake claude reads a SKILL.md path",
+  },
+  fileDelivery: {
+    mode: "plain-path",
+    evidence: "fake claude reads an absolute path",
+  },
+} satisfies Partial<HarnessProfile>;
 
 // A live Turn interrupted cleanly settles `interrupted` on every OS: the fake Harness
 // has no hidden-console child to force-kill, so the Windows force-kill→`lost` variant
@@ -365,7 +360,12 @@ function wire(
   const wired = wireOver(
     t,
     dirs,
-    [{ profile: claudeProfile(), turns: turnsFor(scenario) }],
+    [
+      {
+        profile: fakeHarnessProfile(CLAUDE_PROFILE_OVERRIDES),
+        turns: turnsFor(scenario),
+      },
+    ],
     harness,
   );
 
@@ -400,17 +400,6 @@ function awaitLiveTurn(
         candidate.turnId !== previousTurnId,
     ),
   );
-}
-
-function runView(port: ProjectionPort, runId: string): RunView {
-  const opened = port.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
 }
 
 function launchAgent(port: ProjectionPort, digest: string): string {
@@ -462,7 +451,7 @@ async function awaitFollowUpOffer(
   runId: string,
 ): Promise<SendFollowUpTurnOffer> {
   assert.equal((await awaitSettled(port, "op-launch")).status, "applied");
-  const offer = followUpOffer(runView(port, runId));
+  const offer = followUpOffer(readRun(port, runId));
   assert.ok(offer, "expected the follow-up offered");
   return offer;
 }
@@ -503,7 +492,7 @@ test("interrupt-turn ends only the Agent Turn: the Attempt stays open and the Ru
 
   const offer = await awaitLiveTurn(port, runId);
   // A steer-turn offer stands beside it, marked unavailable with the exact reason.
-  const steer = runView(port, runId).actionOffers.find(
+  const steer = readRun(port, runId).actionOffers.find(
     (candidate): candidate is SteerTurnOffer =>
       candidate.action === "steer-turn",
   );
@@ -519,7 +508,7 @@ test("interrupt-turn ends only the Agent Turn: the Attempt stays open and the Ru
 
   // The launch Operation settles once the walk rests at the waiting Step.
   assert.equal((await awaitSettled(port, "op-launch")).status, "applied");
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.progress[run.position]?.status, "blocked");
   assert.deepEqual(followUpOffer(run), {
@@ -578,7 +567,7 @@ test("an unavailable steer-turn is refused at admission with the profile's evide
   // Interrupt so the Run rests waiting and the wired process leaks no live Turn.
   await interrupt(port, runId, offer);
   await awaitSettled(port, "op-launch");
-  assert.equal(runView(port, runId).state, "blocked");
+  assert.equal(readRun(port, runId).state, "blocked");
 });
 
 test("the follow-up runs as a human Turn in the same Session and Attempt on the held Harness, and a clean one advances the Run (#354)", async (t) => {
@@ -697,7 +686,7 @@ test("a blank or stale follow-up changes nothing (#354)", async (t) => {
   if (stale.status === "not-applied") {
     assert.equal(stale.problem.code, "follow-up-turn-not-waiting");
   }
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   assert.equal(run.state, "blocked");
   assert.deepEqual(followUpOffer(run), offer);
   assert.equal(harness.requests.length, 1);
@@ -720,11 +709,16 @@ test("closing while waiting halts; resume waits without retrying, and a follow-u
   const next = wireOver(
     t,
     dirs,
-    [{ profile: claudeProfile(), turns: [completedTurn()] }],
+    [
+      {
+        profile: fakeHarnessProfile(CLAUDE_PROFILE_OVERRIDES),
+        turns: [completedTurn()],
+      },
+    ],
     reopened,
   );
   const port = next.projectionPort;
-  const halted = runView(port, runId);
+  const halted = readRun(port, runId);
   assert.equal(halted.state, "halted");
   assert.equal(followUpOffer(halted), undefined);
   assert.deepEqual(timelineDetails(halted, "attempt-settled"), []);
@@ -744,7 +738,7 @@ test("closing while waiting halts; resume waits without retrying, and a follow-u
     }).admitted,
   );
   assert.equal((await awaitSettled(port, "op-resume")).status, "applied");
-  const waiting = runView(port, runId);
+  const waiting = readRun(port, runId);
   assert.equal(waiting.state, "blocked");
   assert.deepEqual(timelineDetails(waiting, "attempt-settled"), []);
   assert.deepEqual(reopened.requests, []);
@@ -780,7 +774,7 @@ test("a signal (Ctrl+C) mid-Turn cancels the Agent Attempt and rests the Run hal
   await awaitLiveTurn(port, runId);
 
   await wired.shutdown();
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   assert.equal(run.state, "halted");
   assert.deepEqual(timelineDetails(run, "turn-settled"), ["interrupted"]);
   assert.deepEqual(timelineDetails(run, "attempt-settled"), ["cancelled"]);
@@ -789,7 +783,7 @@ test("a signal (Ctrl+C) mid-Turn cancels the Agent Attempt and rests the Run hal
 
 // Natural native boundaries release an ineffective interrupt independently of Steer.
 const INTERRUPT_PROFILE: HarnessProfile = {
-  ...claudeProfile(),
+  ...fakeHarnessProfile(CLAUDE_PROFILE_OVERRIDES),
   steer: { available: true, evidence: "scripted fake" },
 };
 
@@ -1034,7 +1028,7 @@ test("a completed Turn despite interrupt leaves the following Agent Turn working
   const f = await failedInterruptScenario(t, { first: "agent", next: "agent" });
   await f.release(0);
   await awaitSettled(f.port, "launch");
-  assert.equal(runView(f.port, f.runId).state, "succeeded");
+  assert.equal(readRun(f.port, f.runId).state, "succeeded");
   assert.deepEqual(f.interruptCalls, [0]);
   await assertRejected(f.port, "completed");
 });
@@ -1046,7 +1040,7 @@ test("a completed Turn despite interrupt leaves the following Command signal unf
   });
   await f.release(0);
   await awaitSettled(f.port, "launch");
-  assert.equal(runView(f.port, f.runId).state, "succeeded");
+  assert.equal(readRun(f.port, f.runId).state, "succeeded");
   assert.deepEqual(f.commandSignals, [false]);
   await assertRejected(f.port, "completed");
 });
@@ -1058,7 +1052,7 @@ test("a rejected interrupt receipt settles immediately and leaves the next human
     receipt: { outcome: "rejected", reason: "already-settled" },
   });
   await assertRejected(f.port, "already-settled");
-  assert.equal(runView(f.port, f.runId).state, "running");
+  assert.equal(readRun(f.port, f.runId).state, "running");
   await f.release(0);
   await awaitRunRest(f.port, f.runId);
   send(f.port, f.runId, "send-next");
@@ -1076,10 +1070,10 @@ test("interrupt settles on its own Turn while a following Agent Turn remains liv
   await f.release(0);
   await awaitLiveTurn(f.port, f.runId, f.turnId);
   await assertRejected(f.port, "completed");
-  assert.equal(runView(f.port, f.runId).state, "running");
+  assert.equal(readRun(f.port, f.runId).state, "running");
   await f.release(1);
   await awaitSettled(f.port, "launch");
-  assert.equal(runView(f.port, f.runId).state, "succeeded");
+  assert.equal(readRun(f.port, f.runId).state, "succeeded");
 });
 
 test("a failed Turn despite interrupt settles not-applied and permits the next human Turn (#298)", async (t) => {
@@ -1131,7 +1125,7 @@ test("an accepted interrupt whose Agent Turn ends lost applies and still halts, 
   await f.release(0);
   assert.equal((await awaitSettled(f.port, "interrupt")).status, "applied");
   await awaitSettled(f.port, "launch");
-  const run = runView(f.port, f.runId);
+  const run = readRun(f.port, f.runId);
   assert.equal(run.state, "halted");
   assert.deepEqual(timelineDetails(run, "turn-settled"), ["lost"]);
   assert.deepEqual(timelineDetails(run, "attempt-settled"), ["indeterminate"]);
@@ -1203,7 +1197,7 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
       return sequencedAdapter(
         [
           {
-            profile: claudeProfile(),
+            profile: fakeHarnessProfile(CLAUDE_PROFILE_OVERRIDES),
             turns: [completedTurn(), blockingTurn()],
           },
         ],
@@ -1304,7 +1298,7 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
   await interrupt(port, runId, live);
 
   const offer = await awaitFollowUpOffer(port, runId);
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   assert.equal(run.state, "blocked");
   assert.deepEqual(
     run.progress.map((step) => [step.id, step.status]),
@@ -1325,7 +1319,7 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
   wired.catalog.close();
   wired = wireApplication(overrides);
   const next = wired.projectionPort;
-  const halted = runView(next, runId);
+  const halted = readRun(next, runId);
   assert.equal(halted.state, "halted");
   assert.equal(halted.progress[halted.position]?.id, "fix");
   assert.equal(followUpOffer(halted), undefined);
@@ -1343,7 +1337,7 @@ test("an Agent Step opening a Repeat pass, interrupted in a later pass, waits as
     }).admitted,
   );
   assert.equal((await awaitSettled(next, "op-resume")).status, "applied");
-  const resumed = runView(next, runId);
+  const resumed = readRun(next, runId);
   assert.equal(resumed.state, "blocked");
   assert.equal(resumed.progress[resumed.position]?.id, "fix");
   assert.equal(followUpOffer(resumed)?.turnId, offer.turnId);

@@ -1,3 +1,5 @@
+import { readRun } from "../application/run-test-helpers.js";
+
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
@@ -33,7 +35,7 @@ import {
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
-import { createFake } from "../harness/fake-adapter.js";
+import { fakeHarnessProfile, createFake } from "../harness/fake-adapter.js";
 import {
   QUALIFICATION_DEFAULTS,
   QUALIFICATION_PROFILE,
@@ -45,11 +47,9 @@ import { call, completed } from "../helpers/agentCompletion.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { home, readLog } from "./log-sink.js";
 import {
-  profile,
   writeBundle,
   launch as launchLoggedRun,
   applied,
-  readRun,
   semantic,
   agentStep,
   COMPLETED,
@@ -67,7 +67,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       const adapter = (name: string) =>
         createFake({
           profile: {
-            ...profile(),
+            ...fakeHarnessProfile(),
             harness: name,
             agentCalls: { available: true, evidence: "Scripted calls." },
           },
@@ -885,16 +885,6 @@ async function appliedObserverOperation(
   assert.equal(outcome.status, "applied");
 }
 
-function readObserverRun(wired: Wiring, runId: string) {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found);
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
 for (const kind of ["agent", "interactive-agent"] as const) {
   test(`throwing every log record preserves an ${kind} Run, its Turn result, and cleanup`, async (t) => {
     const workspace = makeTempDir("secant-throw-run-ws-");
@@ -990,7 +980,7 @@ for (const kind of ["agent", "interactive-agent"] as const) {
     const outcome = await awaitSettled(wired.projectionPort, "op-launch");
     assert.equal(outcome.status, "applied");
     if (kind === "interactive-agent") {
-      assert.equal(readObserverRun(wired, runId).state, "blocked");
+      assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
       await appliedObserverOperation(wired, {
         operationId: "op-turn",
         operation: "send-interactive-turn",
@@ -1006,7 +996,7 @@ for (const kind of ["agent", "interactive-agent"] as const) {
         input: { runId, stepId: "draft" },
       });
     }
-    const run = readObserverRun(wired, runId);
+    const run = readRun(wired.projectionPort, runId);
     assert.equal(run.state, "succeeded");
     assert.deepEqual(
       run.timeline
@@ -1033,7 +1023,7 @@ for (const ownership of ["released", "held-elsewhere"] as const) {
       ...h.overrides,
       process: createFakeBundleProcess(),
       harnessAdapter: createFake({
-        profile: profile(),
+        profile: fakeHarnessProfile(),
         turns: [{ result: COMPLETED }],
       })(),
       discoverClaudeCode: () => ({
@@ -1138,7 +1128,7 @@ test("a preparation failure on a fenced owner records the refusal without claimi
         });
       }
       return createFake({
-        profile: profile(),
+        profile: fakeHarnessProfile(),
         turns: [{ result: COMPLETED }],
       })().prepare(options);
     },
@@ -1560,7 +1550,7 @@ for (const harness of ["claude-code", "codex"] as const) {
         makeTempDir("secant-input-rule-workspace-"),
       );
       const adapter = createFake({
-        profile: profile(),
+        profile: fakeHarnessProfile(),
         turns: harness === "codex" ? [{ result: completed }] : [],
       })();
       const wired = wireApplication({

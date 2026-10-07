@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,10 +12,13 @@ import type {
 import type { ProcessAdapter } from "../../src/process/process.js";
 import type {
   ProjectionPort,
-  RunView,
   SteerTurnOffer,
 } from "../../src/application/projection-port.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
@@ -30,52 +34,43 @@ import { makeTempDir } from "../helpers/tempDir.js";
 
 // The fake Codex Harness's profile: identical to Claude Code except native steer is
 // available, which is the one client-visible difference these cases exercise.
-function codexProfile(): HarnessProfile {
-  return {
-    harness: "codex",
-    executable: "codex",
-    executableVersion: "0.0.0-fake-codex",
-    platform: "linux",
-    adapterRevision: "fake-codex-1",
-    configurationPosture: "user-compatible",
-    recovery: {
-      mode: "native-reattach",
-      evidence: "fake codex reattaches a thread",
-    },
-    interruption: {
-      mode: "process-only",
-      evidence: "fake codex stops the process",
-    },
-    approvals: { available: true, evidence: "fake codex hosts approvals" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: {
-      available: false,
-      evidence: "fake codex offers no clarifications",
-    },
-    steer: {
-      available: true,
-      evidence: "fake codex offers native same-Turn steer",
-    },
-    modelSelection: {
-      at: "unavailable",
-      evidence: "fake codex selects no model",
-    },
-    modelObservation: {
-      available: true,
-      evidence: "fake codex observes its own model",
-    },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "fake codex mints a thread id",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
-    fileDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
-  };
-}
+const CODEX_PROFILE_OVERRIDES = {
+  harness: "codex",
+  executable: "codex",
+  executableVersion: "0.0.0-fake-codex",
+  adapterRevision: "fake-codex-1",
+  recovery: {
+    mode: "native-reattach",
+    evidence: "fake codex reattaches a thread",
+  },
+  interruption: {
+    mode: "process-only",
+    evidence: "fake codex stops the process",
+  },
+  approvals: { available: true, evidence: "fake codex hosts approvals" },
+  clarifications: {
+    available: false,
+    evidence: "fake codex offers no clarifications",
+  },
+  steer: {
+    available: true,
+    evidence: "fake codex offers native same-Turn steer",
+  },
+  modelSelection: {
+    at: "unavailable",
+    evidence: "fake codex selects no model",
+  },
+  modelObservation: {
+    available: true,
+    evidence: "fake codex observes its own model",
+  },
+  recoveryCoordinate: {
+    timing: "before-submission",
+    evidence: "fake codex mints a thread id",
+  },
+  skillDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
+  fileDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
+} satisfies Partial<HarnessProfile>;
 
 const COMPLETED: TurnResult = {
   kind: "completed",
@@ -111,11 +106,14 @@ function codexScript(fixture: string, finish: Promise<void>): FakeScript {
   }
   if (fixture === "steer") {
     return {
-      profile: codexProfile(),
+      profile: fakeHarnessProfile(CODEX_PROFILE_OVERRIDES),
       turns: [{ events, block: true, finish, result: COMPLETED }],
     };
   }
-  return { profile: codexProfile(), turns: [{ events, result: COMPLETED }] };
+  return {
+    profile: fakeHarnessProfile(CODEX_PROFILE_OVERRIDES),
+    turns: [{ events, result: COMPLETED }],
+  };
 }
 
 /** A fake Process that resolves any executable and reaches no real child; Git store
@@ -247,17 +245,6 @@ function launchCodex(
   return launch.runId;
 }
 
-function runView(port: ProjectionPort, runId: string): RunView {
-  const opened = port.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
 /** Poll the run Projection until a live Turn offers `steer-turn` available, so a
  *  control targets the current live generation (a Turn's durable admission pushes no
  *  durable update). Returns the available offer. */
@@ -267,7 +254,7 @@ async function awaitSteerable(
 ): Promise<Extract<SteerTurnOffer, { available: true }>> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const run = runView(port, runId);
+    const run = readRun(port, runId);
     const steer = run.actionOffers.find(
       (offer): offer is SteerTurnOffer => offer.action === "steer-turn",
     );
@@ -292,7 +279,7 @@ test("[codex-shared-client-interactions] a live Codex Turn offers native Steer; 
   const steer = await awaitSteerable(port, runId);
   assert.equal(steer.available, true);
   assert.match(steer.consequence, /without ending the Turn/);
-  const interrupt = runView(port, runId).actionOffers.find(
+  const interrupt = readRun(port, runId).actionOffers.find(
     (offer) => offer.action === "interrupt-turn",
   );
   assert.ok(interrupt, "interrupt is offered beside steer on a live Turn");
@@ -312,10 +299,10 @@ test("[codex-shared-client-interactions] a live Codex Turn offers native Steer; 
   const steerOutcome = await awaitSettled(port, "op-steer");
   assert.equal(steerOutcome.status, "applied", JSON.stringify(steerOutcome));
 
-  assert.equal(runView(port, runId).state, "running");
+  assert.equal(readRun(port, runId).state, "running");
   finish();
   await awaitSettled(port, "op-launch");
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   assert.equal(run.state, "succeeded");
   // Codex activity normalizes into the same timeline vocabulary as Claude Code: a
   // Turn started and settled, with authoritative assistant content in between — no
@@ -347,7 +334,7 @@ test("[codex-shared-client-interactions] a completed Codex Turn renders in exist
   const runId = launchCodex(port, bundleId, digest);
 
   await awaitSettled(port, "op-launch");
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   assert.equal(run.state, "succeeded");
   // A Codex Session records its availability through the same normalized view.
   assert.equal(run.sessions?.[0]?.session, "s");
@@ -392,7 +379,7 @@ test("[codex-shared-client-interactions] Interrupt records every pending Steer v
   );
   assert.equal((await awaitSettled(port, "stop")).status, "applied");
   await awaitSettled(port, "op-launch");
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   // The Interrupt ends only the Turn: the Agent Step waits for the follow-up (#354).
   assert.equal(run.state, "blocked");
   assert.ok(
@@ -436,7 +423,7 @@ test("[codex-shared-client-interactions] Interrupt records every pending Steer v
   if (late.status === "not-applied")
     assert.equal(late.problem.code, "turn-control-rejected");
   assert.equal(
-    runView(port, runId).timeline.filter((event) => event.event === "steer")
+    readRun(port, runId).timeline.filter((event) => event.event === "steer")
       .length,
     2,
   );
@@ -447,7 +434,7 @@ test("declined elicitations remain in Run history after the Turn completes", asy
   const port = wired.projectionPort;
   const runId = launchCodex(port, bundleId, digest);
   await awaitSettled(port, "op-launch");
-  const run = runView(port, runId);
+  const run = readRun(port, runId);
   assert.equal(run.state, "succeeded");
   assert.deepEqual(
     run.timeline

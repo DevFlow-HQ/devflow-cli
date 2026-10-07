@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -264,11 +265,7 @@ function fixture(t: TestContext): Fixture {
 }
 
 function stateOf(app: Application, runId: string): string {
-  const opened = app.projectionPort.openProjection({ family: "run", runId });
-  opened.close();
-  const result = opened.snapshot.result;
-  assert.ok(result.found, JSON.stringify(result));
-  return result.run.state;
+  return readRun(app.projectionPort, runId).state;
 }
 
 /** Leave a Run owned and idle with its Step held, its durable state `running`,

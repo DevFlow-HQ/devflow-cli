@@ -29,6 +29,7 @@ import {
   runStretchingSteerCases,
 } from "./conformance.js";
 import {
+  fakeHarnessProfile,
   createFake,
   REPLAY_BARRIER,
   type FakeModelChangeAnswer,
@@ -54,54 +55,47 @@ const FAKE_MODEL_B: ModelEntry = {
 };
 const FIVE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
-function profile(overrides?: Partial<HarnessProfile>): HarnessProfile {
-  return {
-    harness: "fake",
-    executable: "fake-harness",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "load-with-replay", evidence: "fake replays history" },
-    interruption: { mode: "process-only", evidence: "fake stops the process" },
-    approvals: { available: true, evidence: "fake hosts a bridge" },
-    agentCalls: {
-      available: true,
-      evidence: "The fake scripts the Session channel.",
-    },
-    clarifications: {
-      available: true,
-      evidence: "fake offers a question shape",
-    },
-    steer: { available: false, evidence: "fake rejects steer unless scripted" },
-    modelSelection: {
-      at: "launch",
-      declaration: { kind: "list", models: [FAKE_MODEL_A, FAKE_MODEL_B] },
-      evidence: "fake declares a supported-model list",
-    },
-    modelObservation: {
-      available: true,
-      evidence: "fake observes the effective model from its script",
-    },
-    modelChange: {
-      reach: "next-turn",
-      evidence: "fake applies a changed Model choice from the next Turn",
-    },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "fake mints the id before submission",
-    },
-    skillDelivery: {
-      mode: "plain-path",
-      evidence: "fake reads a SKILL.md path",
-    },
-    fileDelivery: {
-      mode: "plain-path",
-      evidence: "fake reads an absolute path",
-    },
-    ...overrides,
-  };
-}
+const PROFILE_OVERRIDES = {
+  harness: "fake",
+  executable: "fake-harness",
+  recovery: { mode: "load-with-replay", evidence: "fake replays history" },
+  interruption: { mode: "process-only", evidence: "fake stops the process" },
+  approvals: { available: true, evidence: "fake hosts a bridge" },
+  agentCalls: {
+    available: true,
+    evidence: "The fake scripts the Session channel.",
+  },
+  clarifications: {
+    available: true,
+    evidence: "fake offers a question shape",
+  },
+  steer: { available: false, evidence: "fake rejects steer unless scripted" },
+  modelSelection: {
+    at: "launch",
+    declaration: { kind: "list", models: [FAKE_MODEL_A, FAKE_MODEL_B] },
+    evidence: "fake declares a supported-model list",
+  },
+  modelObservation: {
+    available: true,
+    evidence: "fake observes the effective model from its script",
+  },
+  modelChange: {
+    reach: "next-turn",
+    evidence: "fake applies a changed Model choice from the next Turn",
+  },
+  recoveryCoordinate: {
+    timing: "before-submission",
+    evidence: "fake mints the id before submission",
+  },
+  skillDelivery: {
+    mode: "plain-path",
+    evidence: "fake reads a SKILL.md path",
+  },
+  fileDelivery: {
+    mode: "plain-path",
+    evidence: "fake reads an absolute path",
+  },
+} satisfies Partial<HarnessProfile>;
 
 function approval(id: string, awaited: boolean): FakeRequestSpec {
   const shape: RequestShape = {
@@ -174,7 +168,7 @@ const FAILED_RECOVERY: TurnResult = {
 
 function fake(...turns: FakeTurnScript[]): FakeScript {
   return {
-    profile: profile(),
+    profile: fakeHarnessProfile(PROFILE_OVERRIDES),
     turns,
     defaults: {
       kind: "reported",
@@ -251,7 +245,7 @@ const scenarios: ConformanceScenarios = {
     ),
   prepareFailure: () =>
     createFake({
-      profile: profile(),
+      profile: fakeHarnessProfile(PROFILE_OVERRIDES),
       prepareFailure: {
         phase: "prepare",
         category: "authentication",
@@ -404,7 +398,8 @@ function declaring(
     label,
     baseline: () =>
       createFake({
-        profile: profile({
+        profile: fakeHarnessProfile({
+          ...PROFILE_OVERRIDES,
           modelSelection: {
             at: "launch",
             declaration,
@@ -466,7 +461,8 @@ for (const scenario of [
 ]) {
   runModelDeclarationCases(scenario, test);
 }
-const STEER_PROFILE = profile({
+const STEER_PROFILE = fakeHarnessProfile({
+  ...PROFILE_OVERRIDES,
   steer: {
     available: true,
     evidence: "fake exposes guidance at scripted boundaries",
@@ -525,7 +521,8 @@ const LAUNCH_OBSERVED = {
   model: "fake-model-a-2026",
   effort: "low",
 } as const;
-const LIVE_CHANGE_PROFILE = profile({
+const LIVE_CHANGE_PROFILE = fakeHarnessProfile({
+  ...PROFILE_OVERRIDES,
   modelChange: {
     reach: "live-turn",
     evidence: "fake answers a live change from its script",
@@ -543,7 +540,10 @@ function blockingChange(
     answer?.outcome === "applied" ? answer.observation : LAUNCH_OBSERVED;
   return {
     factory: createFake({
-      profile: reach === "live-turn" ? LIVE_CHANGE_PROFILE : profile(),
+      profile:
+        reach === "live-turn"
+          ? LIVE_CHANGE_PROFILE
+          : fakeHarnessProfile(PROFILE_OVERRIDES),
       turns: [
         {
           events: [
@@ -619,7 +619,8 @@ runAgentCallCases(
       ),
     unsupported: () =>
       createFake({
-        profile: profile({
+        profile: fakeHarnessProfile({
+          ...PROFILE_OVERRIDES,
           agentCalls: {
             available: false,
             evidence: "scripted unsupported channel",

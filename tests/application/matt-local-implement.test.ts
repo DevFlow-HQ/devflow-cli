@@ -1,3 +1,4 @@
+import { readRun, findOffer, requireOffer } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -5,15 +6,10 @@ import { dirname, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import type {
-  HarnessAdapter,
-  HarnessProfile,
-} from "../../src/harness/harness.js";
-import type {
-  ActionOffer,
-  RunView,
-} from "../../src/application/projection-port.js";
+import type { HarnessAdapter } from "../../src/harness/harness.js";
+import type { RunView } from "../../src/application/projection-port.js";
 import {
+  fakeHarnessProfile,
   createFake,
   type FakeScript,
   type FakeTurnScript,
@@ -57,35 +53,6 @@ const TICKETS = [
 
 type HarnessId = "claude-code" | "codex";
 type TurnScript = FakeScript["turns"][number];
-
-function profile(harness: HarnessId): HarnessProfile {
-  return {
-    harness: harness === "codex" ? "codex" : "Claude Code",
-    executable: harness === "codex" ? "codex" : "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: true,
-      evidence: "Scripted agent calls.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: harness === "codex", evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 function completed(content: string): TurnScript {
   return {
@@ -134,7 +101,15 @@ function mattAgent(
       // prepare's list grows with the Turns it actually serves.
       const served: FakeTurnScript[] = [];
       const prepared = await createFake({
-        profile: profile(harness),
+        profile: fakeHarnessProfile({
+          harness: harness === "codex" ? "codex" : "Claude Code",
+          executable: harness === "codex" ? "codex" : "fake-claude",
+          agentCalls: {
+            available: true,
+            evidence: "Scripted agent calls.",
+          },
+          steer: { available: harness === "codex", evidence: "scripted fake" },
+        }),
         turns: served,
       })().prepare(options);
       if (!prepared.ok) return prepared;
@@ -254,28 +229,12 @@ async function settle(
   assert.equal(outcome.status, "applied", JSON.stringify(outcome));
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
-function offer<A extends ActionOffer["action"]>(
-  run: RunView,
-  action: A,
-): Extract<ActionOffer, { action: A }> | undefined {
-  return run.actionOffers.find((o) => o.action === action) as
-    Extract<ActionOffer, { action: A }> | undefined;
-}
-
 async function awaitInterruptOffer(wired: Wiring, runId: string) {
   for (let attempt = 0; attempt < 200; attempt++) {
-    const interrupt = offer(readRun(wired, runId), "interrupt-turn");
+    const interrupt = findOffer(
+      readRun(wired.projectionPort, runId),
+      "interrupt-turn",
+    );
     if (interrupt !== undefined) return interrupt;
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -310,7 +269,7 @@ async function publishLocalTickets(
     operation: "end-interactive-step",
     input: { runId, stepId: "grill" },
   });
-  const gate = readRun(wired, runId).pendingGate?.gate;
+  const gate = readRun(wired.projectionPort, runId).pendingGate?.gate;
   assert.equal(gate?.stepId, "choose-tracker");
   await settle(wired, {
     operationId: "op-tracker",
@@ -404,7 +363,7 @@ for (const harness of ["claude-code", "codex"] as const) {
 
     // Publishing leads straight into the implementation stage's first Entry Turn,
     // in a fresh Session of its own, and the Run rests there for the human.
-    const first = readRun(wired, runId);
+    const first = readRun(wired.projectionPort, runId);
     assert.equal(first.state, "blocked", JSON.stringify(first.progress));
     assert.deepEqual(
       first.progress.map((step) => [step.id, step.status]),
@@ -441,16 +400,16 @@ for (const harness of ["claude-code", "codex"] as const) {
       assertBundledSkill(entry.text, skill);
     }
     // At the Turn boundary: a question, Continue, or End Stage — never End Step.
-    assert.ok(offer(first, "send-interactive-turn"));
+    assert.ok(requireOffer(first, "send-interactive-turn"));
     assert.match(
-      offer(first, "continue-repeat")?.consequence ?? "",
+      requireOffer(first, "continue-repeat").consequence,
       /does not close the ticket/,
     );
     assert.match(
-      offer(first, "end-stage")?.consequence ?? "",
+      requireOffer(first, "end-stage").consequence,
       /Secant has not checked the tracker/,
     );
-    assert.equal(offer(first, "end-interactive-step"), undefined);
+    assert.equal(findOffer(first, "end-interactive-step"), undefined);
 
     // A later question goes verbatim into the same ticket Session.
     await settle(wired, {
@@ -463,7 +422,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       text: "Which test covers this?",
       session: entry.session,
     });
-    assert.equal(readRun(wired, runId).state, "blocked");
+    assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
     const afterFirst = trackerFiles(area);
     assert.match(
       afterFirst[join("issues", TICKETS[0][0])]!,
@@ -482,7 +441,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     assert.notEqual(second.session, entry.session);
     assert.notEqual(second.session, "spec");
     assert.deepEqual(trackerFiles(area), afterFirst);
-    const iteration1 = readRun(wired, runId);
+    const iteration1 = readRun(wired.projectionPort, runId);
     assert.equal(iteration1.state, "blocked");
     assert.equal(iteration1.progress[iteration1.position]?.id, "implement");
 
@@ -492,7 +451,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       operation: "end-stage",
       input: { runId, stepId: "implement" },
     });
-    const done = readRun(wired, runId);
+    const done = readRun(wired.projectionPort, runId);
     assert.equal(done.state, "succeeded");
     assert.equal(done.completion, "human-declared");
     assert.deepEqual(
@@ -559,10 +518,10 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
   const atBoundary = (run: RunView) => {
     assert.equal(run.state, "blocked");
     assert.equal(run.progress[run.position]?.id, "implement");
-    assert.ok(offer(run, "continue-repeat"));
+    assert.ok(requireOffer(run, "continue-repeat"));
   };
   const sentBefore = agent.turns.length;
-  atBoundary(readRun(wired, runId));
+  atBoundary(readRun(wired.projectionPort, runId));
   assert.equal(agent.turns.length, sentBefore);
 
   // A lost Turn halts the Run, and resume stays in the same Session.
@@ -572,13 +531,13 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
     input: { runId, stepId: "implement", text: "Please carry on." },
   });
   await awaitRunRest(wired.projectionPort, runId);
-  assert.equal(readRun(wired, runId).state, "halted");
+  assert.equal(readRun(wired.projectionPort, runId).state, "halted");
   await settle(wired, {
     operationId: "op-resume",
     operation: "resume-run",
     input: { runId },
   });
-  atBoundary(readRun(wired, runId));
+  atBoundary(readRun(wired.projectionPort, runId));
 
   // The agent reports no work; nothing advances, closes, or ends on its word.
   await settle(wired, {
@@ -587,11 +546,11 @@ test("[matt-local-implement] a no-work, interrupted or lost implementation Turn 
     input: { runId, stepId: "implement", text: "Which ticket did you choose?" },
   });
   await awaitRunRest(wired.projectionPort, runId);
-  const rested = readRun(wired, runId);
+  const rested = readRun(wired.projectionPort, runId);
   assert.equal(rested.state, "blocked");
   assert.equal(rested.progress[rested.position]?.id, "implement");
-  assert.ok(offer(rested, "continue-repeat"));
-  assert.ok(offer(rested, "end-stage"));
+  assert.ok(requireOffer(rested, "continue-repeat"));
+  assert.ok(requireOffer(rested, "end-stage"));
   assert.equal(
     rested.timeline.some(
       (event) =>
@@ -624,12 +583,12 @@ test("[matt-local-implement] an Entry Turn that finds no ready ticket rests in i
   await awaitSettled(wired.projectionPort, "op-approve-tickets");
   const area = agent.granted.at(-1)!;
 
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.progress[run.position]?.id, "implement");
-  assert.ok(offer(run, "send-interactive-turn"));
-  assert.ok(offer(run, "continue-repeat"));
-  assert.ok(offer(run, "end-stage"));
+  assert.ok(requireOffer(run, "send-interactive-turn"));
+  assert.ok(requireOffer(run, "continue-repeat"));
+  assert.ok(requireOffer(run, "end-stage"));
   assert.equal(
     run.timeline.some(
       (event) =>
@@ -702,7 +661,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     assert.ok(admission.admitted && admission.runId);
     const runId = admission.runId;
     await awaitSettled(wired.projectionPort, "op-launch");
-    const grilled = readRun(wired, runId);
+    const grilled = readRun(wired.projectionPort, runId);
     assert.equal(grilled.pendingGate?.gate.stepId, "choose-tracker");
     assert.equal(
       grilled.timeline.find((event) => event.event === "interactive-step-ended")

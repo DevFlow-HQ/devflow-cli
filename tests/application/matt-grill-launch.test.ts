@@ -1,3 +1,4 @@
+import { readRun, findOffer, requireOffer } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -5,17 +6,14 @@ import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import type {
-  HarnessAdapter,
-  HarnessProfile,
-  TurnResult,
-} from "../../src/harness/harness.js";
-import type {
-  ActionOffer,
-  RunView,
-} from "../../src/application/projection-port.js";
+import type { HarnessAdapter, TurnResult } from "../../src/harness/harness.js";
+import type { RunView } from "../../src/application/projection-port.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
@@ -34,36 +32,6 @@ const MATT_ID = "dev.secant.matt-front";
 const IDEA = "Add a dark-mode toggle that follows me across devices.";
 
 type HarnessId = "claude-code" | "codex";
-
-function profile(harness: HarnessId): HarnessProfile {
-  return {
-    harness: harness === "codex" ? "codex" : "Claude Code",
-    executable: harness === "codex" ? "codex" : "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: true,
-      evidence: "Scripted agent calls.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    // Codex's one client-visible difference: native same-Turn steer.
-    steer: { available: harness === "codex", evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 function completed(content: string): FakeScript["turns"][number] {
   return {
@@ -118,9 +86,21 @@ function scriptedAdapter(
       prepare(options) {
         const turns = scripts[Math.min(prepares, scripts.length - 1)]!;
         prepares += 1;
-        return createFake({ profile: profile(harness), turns })().prepare(
-          options,
-        );
+        return createFake({
+          profile: fakeHarnessProfile({
+            harness: harness === "codex" ? "codex" : "Claude Code",
+            executable: harness === "codex" ? "codex" : "fake-claude",
+            agentCalls: {
+              available: true,
+              evidence: "Scripted agent calls.",
+            },
+            steer: {
+              available: harness === "codex",
+              evidence: "scripted fake",
+            },
+          }),
+          turns,
+        })().prepare(options);
       },
     }),
     prepares: () => prepares,
@@ -209,25 +189,6 @@ async function launch(
   return admission.runId;
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
-function offer<A extends ActionOffer["action"]>(
-  run: RunView,
-  action: A,
-): Extract<ActionOffer, { action: A }> | undefined {
-  return run.actionOffers.find((o) => o.action === action) as
-    Extract<ActionOffer, { action: A }> | undefined;
-}
-
 function userEntries(wired: Wiring, run: RunView): string[] {
   const reference = run.sessions?.[0]?.transcriptPage;
   assert.ok(reference, JSON.stringify(run.sessions));
@@ -267,7 +228,10 @@ async function submitAndSettle(
 
 async function awaitInterruptOffer(wired: Wiring, runId: string) {
   for (let attempt = 0; attempt < 200; attempt++) {
-    const interrupt = offer(readRun(wired, runId), "interrupt-turn");
+    const interrupt = findOffer(
+      readRun(wired.projectionPort, runId),
+      "interrupt-turn",
+    );
     if (interrupt !== undefined) return interrupt;
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -287,12 +251,12 @@ for (const harness of ["claude-code", "codex"] as const) {
 
     // The entry Turn ran on launch: the Run rests at the grill's Turn boundary with
     // one Turn already taken, offering the human the next Turn and End Step.
-    const run = readRun(wired, runId);
+    const run = readRun(wired.projectionPort, runId);
     assert.equal(run.state, "blocked");
     assert.equal(run.progress[run.position]?.id, "grill");
     assert.equal(run.turnPosition, 1);
-    assert.ok(offer(run, "send-interactive-turn"));
-    assert.ok(offer(run, "end-interactive-step"));
+    assert.ok(requireOffer(run, "send-interactive-turn"));
+    assert.ok(requireOffer(run, "end-interactive-step"));
 
     const [entry] = userEntries(wired, run);
     assert.ok(entry);
@@ -340,7 +304,7 @@ for (const harness of ["claude-code", "codex"] as const) {
       input: { runId, stepId: "grill" },
     });
     assert.equal(ended.status, "applied", JSON.stringify(ended));
-    const afterEnd = readRun(wired, runId);
+    const afterEnd = readRun(wired.projectionPort, runId);
     assert.equal(afterEnd.progress[0]?.status, "succeeded");
     assert.equal(afterEnd.pendingGate?.gate.stepId, "choose-tracker");
     assert.deepEqual(
@@ -408,10 +372,10 @@ test("an interrupted entry Turn returns the grill to waiting in the same Session
 
   // The grill waits at its Turn boundary, not halted: the interrupted entry Turn
   // stays in history, is not re-sent, and the Harness stays held.
-  const waiting = readRun(wired, runId);
+  const waiting = readRun(wired.projectionPort, runId);
   assert.equal(waiting.state, "blocked");
   assert.equal(waiting.turnPosition, 1);
-  assert.ok(offer(waiting, "send-interactive-turn"));
+  assert.ok(requireOffer(waiting, "send-interactive-turn"));
   assert.deepEqual(
     waiting.timeline
       .filter((event) => event.event === "turn-settled")
@@ -454,9 +418,9 @@ test("shutdown during the entry Turn still halts the grill (#212, #353, ADR 0019
   // The signal settles the entry Turn `interrupted` too, but it is no Interrupt.
   await wired.shutdown();
 
-  const halted = readRun(wired, runId);
+  const halted = readRun(wired.projectionPort, runId);
   assert.equal(halted.state, "halted");
-  assert.ok(offer(halted, "resume-run")?.available);
+  assert.ok(requireOffer(halted, "resume-run")?.available);
   assert.deepEqual(
     turns(wired, runId).map((turn) => [turn.origin, turn.resultKind]),
     [["managed", "interrupted"]],
@@ -476,7 +440,7 @@ test("an unusable planning Session is reported, never replaced by a fresh conver
   const runId = await launch(wired, digest, "claude-code");
 
   // The failed entry Turn is truthful history; the Session reads unusable.
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.sessions?.[0]?.availability, "unusable");
 
@@ -491,7 +455,10 @@ test("an unusable planning Session is reported, never replaced by a fresh conver
   if (refused.status === "not-applied") {
     assert.equal(refused.problem.code, "interactive-turn-not-admitted");
   }
-  assert.equal(readRun(wired, runId).sessions?.[0]?.availability, "unusable");
+  assert.equal(
+    readRun(wired.projectionPort, runId).sessions?.[0]?.availability,
+    "unusable",
+  );
   assert.deepEqual(
     turns(wired, runId).map((turn) => [turn.origin, turn.resultKind]),
     [["managed", "failed"]],
@@ -530,7 +497,7 @@ test("a Run pinned to Matt 2.7.0 keeps its prompt and human controls after 2.8.0
   ]);
   const { wired, digest } = wire(t, "claude-code", adapter, true, true);
   const runId = await launch(wired, digest, "claude-code");
-  const before = readRun(wired, runId);
+  const before = readRun(wired.projectionPort, runId);
   assert.equal(before.bundle.version, "2.7.0");
   assert.match(
     userEntries(wired, before)[0] ?? "",
@@ -557,10 +524,10 @@ test("a Run pinned to Matt 2.7.0 keeps its prompt and human controls after 2.8.0
     input: { runId, stepId: "grill", text: "Continue the old interview." },
   });
   await awaitRunRest(wired.projectionPort, runId);
-  const after = readRun(wired, runId);
+  const after = readRun(wired.projectionPort, runId);
   assert.deepEqual(after.bundle, before.bundle);
   assert.equal(after.state, "blocked");
-  assert.ok(offer(after, "end-interactive-step"));
+  assert.ok(requireOffer(after, "end-interactive-step"));
   assert.equal(userEntries(wired, after).at(-1), "Continue the old interview.");
   const ended = await submitAndSettle(wired, "op-old-end", {
     operationId: "op-old-end",
@@ -569,7 +536,7 @@ test("a Run pinned to Matt 2.7.0 keeps its prompt and human controls after 2.8.0
   });
   assert.equal(ended.status, "applied");
   assert.equal(
-    readRun(wired, runId).pendingGate?.gate.stepId,
+    readRun(wired.projectionPort, runId).pendingGate?.gate.stepId,
     "choose-tracker",
   );
 });

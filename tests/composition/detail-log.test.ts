@@ -8,10 +8,13 @@ import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   startPermissionBridge,
   type HarnessFailure,
-  type HarnessProfile,
   type TurnResult,
 } from "../../src/harness/harness.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import {
   RUNTIME_NAME,
   writeGateBundle,
@@ -31,35 +34,6 @@ import { assertBase, readLog, steppingClock } from "./log-sink.js";
 // every time; only the sink's level decides whether one is written. The fake
 // Adapter scripts handshake steps whatever Harness it stands in for; only the
 // Codex Adapter reports them in production, which phase conformance pins.
-
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 const COMPLETED: TurnResult = {
   kind: "completed",
@@ -196,7 +170,7 @@ const STEPS = ["protocol-initialize", "account-check", "model-list"] as const;
 test("detail checkpoints are written with detail on and dropped with it off, for the same Run, leaving every other record unchanged", async (t) => {
   const bundle = writeBundle("draft the plan", "prepared");
   const script: FakeScript = {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [{ result: COMPLETED }],
     handshakeSteps: STEPS,
   };
@@ -310,7 +284,7 @@ test("a failed handshake step is a detail record carrying only typed failure fie
     detail: true,
     bundle,
     script: {
-      profile: profile(),
+      profile: fakeHarnessProfile(),
       turns: [],
       handshakeSteps: ["protocol-initialize", "account-check"],
       prepareFailure: failure,
@@ -366,7 +340,10 @@ test("an assessment's refused check settles refused with its codes while later c
       engineVersion: "9.8.7",
       hostPlatform: "linux",
       process: createFakeBundleProcess(),
-      harnessAdapter: createFake({ profile: profile(), turns: [] })(),
+      harnessAdapter: createFake({
+        profile: fakeHarnessProfile(),
+        turns: [],
+      })(),
       logSink: {
         folder,
         clock: steppingClock(),
@@ -422,7 +399,7 @@ test("with detail on, seeded prompts, arguments, environment values, and a regis
       detail: true,
       bundle,
       script: {
-        profile: profile(),
+        profile: fakeHarnessProfile(),
         turns: [{ result: COMPLETED }],
         handshakeSteps: STEPS,
       },
@@ -431,7 +408,7 @@ test("with detail on, seeded prompts, arguments, environment values, and a regis
       detail: true,
       bundle,
       script: {
-        profile: profile(),
+        profile: fakeHarnessProfile(),
         turns: [],
         handshakeSteps: STEPS,
         prepareFailure: {
@@ -517,7 +494,10 @@ test("a Human Gate's pending-gate write, a Materialization conflict's write, and
       engineVersion: "9.8.7",
       hostPlatform: "linux",
       process: createFakeBundleProcess(),
-      harnessAdapter: createFake({ profile: profile(), turns: [] })(),
+      harnessAdapter: createFake({
+        profile: fakeHarnessProfile(),
+        turns: [],
+      })(),
       logSink: {
         folder,
         clock: steppingClock(),

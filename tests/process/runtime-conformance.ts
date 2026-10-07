@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { readRun } from "../application/run-test-helpers.js";
+
 import { registerPreparationLifetime } from "../harness/preparation-lifetime.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -26,14 +28,11 @@ import {
 import type { RunView } from "../../src/application/projection-port.js";
 import { createClaudeCodeAdapter } from "../harness/test-adapters.js";
 import {
+  fakeHarnessProfile,
   createFake,
   type FakeTurnRequestRecord,
 } from "../harness/fake-adapter.js";
-import {
-  profile as waitingProfile,
-  writeBundle,
-  readRun,
-} from "../helpers/runLogFixture.js";
+import { writeBundle } from "../helpers/runLogFixture.js";
 import { wireApplication } from "../../src/composition/main.js";
 import {
   executeRouting,
@@ -1763,7 +1762,7 @@ async function applicationCloseWhileWaiting(): Promise<void> {
     launchCwd: workspace,
     process: processAdapter,
     harnessAdapter: createFake({
-      profile: waitingProfile(),
+      profile: fakeHarnessProfile(),
       turns: [],
       turnRequests: requests,
     })(),

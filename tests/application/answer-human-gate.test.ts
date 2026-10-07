@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import test, { type TestContext } from "node:test";
@@ -9,7 +10,6 @@ import {
 import type {
   OperationOutcome,
   RunGateReference,
-  RunView,
 } from "../../src/application/projection-port.js";
 import { openCatalog, type Catalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
@@ -180,22 +180,13 @@ async function launchGateBlocked(
 
 /** The authored pending gate a Run rests at, asserted present. */
 function pendingGateOf(app: Application, runId: string): RunGateReference {
-  const gate = runOf(app, runId).pendingGate?.gate;
+  const gate = readRun(app.projectionPort, runId).pendingGate?.gate;
   assert.ok(gate);
   return gate!;
 }
 
-function runOf(app: Application, runId: string): RunView {
-  const opened = app.projectionPort.openProjection({ family: "run", runId });
-  const result = opened.snapshot.result;
-  opened.close();
-  assert.ok(result.found);
-  if (!result.found) throw new Error("unreachable");
-  return result.run;
-}
-
 function gateOf(app: Application, runId: string): RunGateReference {
-  const gate = runOf(app, runId).checkpoint?.gate;
+  const gate = readRun(app.projectionPort, runId).checkpoint?.gate;
   assert.ok(gate);
   return gate!;
 }
@@ -213,7 +204,7 @@ test("continue grants an interval, resolves succeeded, and records a readable an
   const f = fixture(t);
   const runId = await launchBlocked(f, { interval: 2, passAt: 3 });
   const gate = gateOf(f.app, runId);
-  const offer = runOf(f.app, runId).actionOffers.find(
+  const offer = readRun(f.app.projectionPort, runId).actionOffers.find(
     (candidate) => candidate.action === "answer-human-gate",
   );
   assert.equal(offer?.basis, "durable Human Gate");
@@ -228,7 +219,7 @@ test("continue grants an interval, resolves succeeded, and records a readable an
     status: "applied",
   });
 
-  const run = runOf(f.app, runId);
+  const run = readRun(f.app.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   // The answer is a durable, readable output and lands on the timeline.
   const answer = run.outputs.find((o) => o.name === "human-gate-answer");
@@ -264,7 +255,7 @@ test("a blocked Run stays durably blocked and owned until its Human Gate answer 
   assert.deepEqual(await settleOutcome(f.app, admission.operationId), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
   assert.equal(
     f.runGroup.listRuns().find((run) => run.runId === runId)?.live,
     false,
@@ -274,7 +265,7 @@ test("a blocked Run stays durably blocked and owned until its Human Gate answer 
 test("shutdown releases a blocked Run without changing its rest or answer offer (#134 A21)", async (t) => {
   const f = fixture(t);
   const runId = await launchBlocked(f, { interval: 2, passAt: 3 });
-  assert.equal(runOf(f.app, runId).state, "blocked");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "blocked");
   assert.equal(
     f.runGroup.listRuns().find((run) => run.runId === runId)?.live,
     true,
@@ -297,7 +288,7 @@ test("shutdown releases a blocked Run without changing its rest or answer offer 
     runGroup: f.runGroup,
     runExecution,
   });
-  const run = runOf(reopened, runId);
+  const run = readRun(reopened.projectionPort, runId);
   assert.equal(run.state, "blocked");
   assert.ok(
     run.actionOffers.some((offer) => offer.action === "answer-human-gate"),
@@ -333,9 +324,9 @@ test("a checkpoint is answered applied while another Run is live in the same Wor
   assert.deepEqual(await settleOutcome(f.app, admission.operationId), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
   // The other Run is untouched: still blocked and live in this instance.
-  assert.equal(runOf(f.app, other).state, "blocked");
+  assert.equal(readRun(f.app.projectionPort, other).state, "blocked");
   assert.equal(
     f.runGroup.listRuns().find((run) => run.runId === other)?.live,
     true,
@@ -383,7 +374,7 @@ test("taking over a Run blocked in another process re-owns it blocked, and cance
   assert.ok(launch.admitted);
   await settleOutcome(owning, launch.operationId);
   const runId = launch.runId!;
-  assert.equal(runOf(owning, runId).state, "blocked");
+  assert.equal(readRun(owning.projectionPort, runId).state, "blocked");
 
   // A second instance (pid 2000, seeing pid 1000 alive) takes the blocked Run over.
   const second = openRunGroup(store, f.workspace, {
@@ -399,7 +390,7 @@ test("taking over a Run blocked in another process re-owns it blocked, and cance
     runGroup: second,
     runExecution,
   });
-  assert.deepEqual(runOf(app2, runId).liveness, {
+  assert.deepEqual(readRun(app2.projectionPort, runId).liveness, {
     state: "live-elsewhere",
     ownerPid: 1000,
   });
@@ -413,7 +404,7 @@ test("taking over a Run blocked in another process re-owns it blocked, and cance
     status: "applied",
   });
   // Re-owned here and still blocked (no execution ran; ownership just moved).
-  assert.equal(runOf(app2, runId).state, "blocked");
+  assert.equal(readRun(app2.projectionPort, runId).state, "blocked");
   assert.equal(
     second.listRuns().find((run) => run.runId === runId)?.ownedByThisProcess,
     true,
@@ -444,7 +435,10 @@ test("continue that keeps failing re-blocks with the count reset to the interval
   const f = fixture(t);
   const runId = await launchBlocked(f, { interval: 2 }); // always fails
   const firstGate = gateOf(f.app, runId);
-  assert.equal(runOf(f.app, runId).checkpoint?.completedIterations, 2);
+  assert.equal(
+    readRun(f.app.projectionPort, runId).checkpoint?.completedIterations,
+    2,
+  );
 
   const admission = f.app.projectionPort.submit({
     operationId: "answer-1",
@@ -456,7 +450,7 @@ test("continue that keeps failing re-blocks with the count reset to the interval
     status: "applied",
   });
 
-  const run = runOf(f.app, runId);
+  const run = readRun(f.app.projectionPort, runId);
   assert.equal(run.state, "blocked");
   // The count reset to the interval since the grant; a fresh interval ran, so the
   // Gate now names a different Attempt.
@@ -479,7 +473,7 @@ test("stop ends the Run failed with history and Artifacts intact (#85)", async (
     status: "applied",
   });
 
-  const run = runOf(f.app, runId);
+  const run = readRun(f.app.projectionPort, runId);
   assert.equal(run.state, "failed");
   // The loop's Verdict and the answer both remain readable; the timeline keeps
   // every iteration plus the answer.
@@ -507,7 +501,7 @@ test("the same operation id answered twice yields the same outcome and records o
   assert.deepEqual(await settleOutcome(f.app, "answer-1"), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   // A replay of the same operation id is admitted and applied, with no second
   // answer recorded.
@@ -520,7 +514,7 @@ test("the same operation id answered twice yields the same outcome and records o
   assert.deepEqual(await settleOutcome(f.app, "answer-1"), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   const owner = f.runGroup.acquireRun(runId)!;
   t.after(() => owner.close());
@@ -548,7 +542,7 @@ test("a stale Gate reference is not applied and changes nothing (#85)", async (t
   assert.equal(outcome.problem.code, "gate-reference-stale");
 
   // Nothing changed: the Run is still blocked at the same Gate, no answer recorded.
-  const run = runOf(f.app, runId);
+  const run = readRun(f.app.projectionPort, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.checkpoint?.gate.attemptId, gate.attemptId);
   assert.equal(
@@ -579,7 +573,7 @@ test("answering a Run that is not blocked is not applied (#85)", async (t) => {
   assert.ok(launch.admitted);
   const runId = launch.runId!;
   await settleOutcome(f.app, launch.operationId);
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   const admission = f.app.projectionPort.submit({
     operationId: "answer-1",
@@ -607,7 +601,7 @@ test("answering a Run that is not blocked is not applied (#85)", async (t) => {
 test("cancelling a Run at an authored Human Gate projects cancelled and offers only deletion (#336)", async (t) => {
   const f = fixture(t);
   const runId = await launchGateBlocked(f, { shape: "approve-reject" });
-  const blocked = runOf(f.app, runId);
+  const blocked = readRun(f.app.projectionPort, runId);
   assert.equal(blocked.state, "blocked");
   assert.ok(blocked.pendingGate);
   assert.deepEqual(
@@ -625,7 +619,7 @@ test("cancelling a Run at an authored Human Gate projects cancelled and offers o
     status: "applied",
   });
 
-  const cancelled = runOf(f.app, runId);
+  const cancelled = readRun(f.app.projectionPort, runId);
   assert.equal(cancelled.state, "cancelled");
   assert.equal(cancelled.pendingGate, undefined);
   assert.equal(cancelled.checkpoint, undefined);
@@ -644,7 +638,7 @@ test("an authored free-text gate blocks, then a text answer publishes the output
   });
 
   // The Run rests blocked at a durable authored gate, not a Review checkpoint.
-  const blocked = runOf(f.app, runId);
+  const blocked = readRun(f.app.projectionPort, runId);
   assert.equal(blocked.state, "blocked");
   assert.equal(blocked.checkpoint, undefined);
   assert.equal(blocked.pendingGate?.gate.shape, "free-text");
@@ -668,7 +662,7 @@ test("an authored free-text gate blocks, then a text answer publishes the output
 
   // The Run advanced past the gate: the downstream Command read the bound answer
   // (it references it), so the Run rests succeeded.
-  const run = runOf(f.app, runId);
+  const run = readRun(f.app.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.pendingGate, undefined);
   // The answer is published as a `text` output bound to the gate's declared name.
@@ -686,7 +680,10 @@ test("an authored approve-reject gate: continue advances, stop ends the Run fail
     id: "dev.secant.gate-approve",
     shape: "approve-reject",
   });
-  assert.equal(runOf(f.app, advance).pendingGate?.gate.shape, "approve-reject");
+  assert.equal(
+    readRun(f.app.projectionPort, advance).pendingGate?.gate.shape,
+    "approve-reject",
+  );
   const advanceGate = pendingGateOf(f.app, advance);
   const a = f.app.projectionPort.submit({
     operationId: "approve-1",
@@ -697,7 +694,7 @@ test("an authored approve-reject gate: continue advances, stop ends the Run fail
   assert.deepEqual(await settleOutcome(f.app, "approve-1"), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, advance).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, advance).state, "succeeded");
 
   // stop ends the Run failed, keeping history and Artifacts.
   const reject = await launchGateBlocked(f, {
@@ -714,7 +711,7 @@ test("an authored approve-reject gate: continue advances, stop ends the Run fail
   assert.deepEqual(await settleOutcome(f.app, "reject-1"), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, reject).state, "failed");
+  assert.equal(readRun(f.app.projectionPort, reject).state, "failed");
 });
 
 test("answer-shape mismatches change nothing: continue to a free-text gate, text to an approve-reject gate (#108)", async (t) => {
@@ -735,9 +732,11 @@ test("answer-shape mismatches change nothing: continue to a free-text gate, text
   if (out1.status !== "not-applied") throw new Error("unreachable");
   assert.equal(out1.problem.code, "gate-shape-mismatch");
   // Nothing changed: still blocked at the same gate, no output bound.
-  assert.equal(runOf(f.app, freeText).state, "blocked");
+  assert.equal(readRun(f.app.projectionPort, freeText).state, "blocked");
   assert.equal(
-    runOf(f.app, freeText).outputs.find((o) => o.name === "answer"),
+    readRun(f.app.projectionPort, freeText).outputs.find(
+      (o) => o.name === "answer",
+    ),
     undefined,
   );
 
@@ -756,7 +755,7 @@ test("answer-shape mismatches change nothing: continue to a free-text gate, text
   assert.equal(out2.status, "not-applied");
   if (out2.status !== "not-applied") throw new Error("unreachable");
   assert.equal(out2.problem.code, "gate-shape-mismatch");
-  assert.equal(runOf(f.app, approve).state, "blocked");
+  assert.equal(readRun(f.app.projectionPort, approve).state, "blocked");
 });
 
 test("a different operation answering an already-answered authored gate is refused, not masked as applied (#108)", async (t) => {
@@ -772,7 +771,7 @@ test("a different operation answering an already-answered authored gate is refus
   });
   assert.ok(a.admitted);
   assert.deepEqual(await settleOutcome(f.app, "op-a"), { status: "applied" });
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   // A genuinely different operation B targets the same, now-settled gate. It must
   // be refused (the gate is gone), not silently reported `applied`.
@@ -787,7 +786,7 @@ test("a different operation answering an already-answered authored gate is refus
   if (outcome.status !== "not-applied") throw new Error("unreachable");
   assert.equal(outcome.problem.code, "run-not-blocked");
   // B changed nothing: the Run is still succeeded, not flipped to failed by `stop`.
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 });
 
 test("the same free-text answer operation id twice publishes the output once (#108)", async (t) => {
@@ -804,7 +803,7 @@ test("the same free-text answer operation id twice publishes the output once (#1
   assert.deepEqual(await settleOutcome(f.app, "answer-once"), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   const replay = f.app.projectionPort.submit({
     operationId: "answer-once",
@@ -815,14 +814,16 @@ test("the same free-text answer operation id twice publishes the output once (#1
   assert.deepEqual(await settleOutcome(f.app, "answer-once"), {
     status: "applied",
   });
-  assert.equal(runOf(f.app, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   // Exactly one version of the answer output was published (idempotent).
   const owner = f.runGroup.acquireRun(runId)!;
   t.after(() => owner.close());
   const versionId = owner.currentVersion("answer");
   assert.ok(versionId);
-  const answer = runOf(f.app, runId).outputs.find((o) => o.name === "answer");
+  const answer = readRun(f.app.projectionPort, runId).outputs.find(
+    (o) => o.name === "answer",
+  );
   const read = f.app.projectionPort.readResource(answer!.reference);
   assert.ok(read.found);
   if (read.found) assert.equal(read.content, "final");
@@ -853,7 +854,7 @@ test("reusing a free-text answer operation id with different text is refused (#1
     assert.equal(reused.problem.code, "operation-id-reused");
   }
 
-  const answer = runOf(f.app, runId).outputs.find(
+  const answer = readRun(f.app.projectionPort, runId).outputs.find(
     (output) => output.name === "answer",
   );
   assert.ok(answer);

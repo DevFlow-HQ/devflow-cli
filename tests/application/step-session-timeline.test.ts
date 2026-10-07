@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -5,16 +6,16 @@ import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
-  type HarnessProfile,
   type TurnResult,
   type TurnEvent,
 } from "../../src/harness/harness.js";
-import type {
-  RunTimelineEvent,
-  RunView,
-} from "../../src/application/projection-port.js";
+import type { RunTimelineEvent } from "../../src/application/projection-port.js";
 import type { ProcessAdapter, SpawnResult } from "../../src/process/process.js";
-import { createFake, type FakeTurnScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeTurnScript,
+} from "../harness/fake-adapter.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
@@ -64,35 +65,6 @@ function fakeProcess(): ProcessAdapter {
     spawnCommand: (options) => commands.spawnCommand(options),
     spawnOwnedProcess: (options) => commands.spawnOwnedProcess(options),
     spawnCommandSync: (options) => sharedGit.spawnCommandSync(options),
-  };
-}
-
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "/usr/bin/claude",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
   };
 }
 
@@ -214,7 +186,10 @@ async function launch(
 }> {
   setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
   const adapter = createFake({
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+    }),
     turns: [
       {
         ...turn("grilled", COMPLETED),
@@ -266,17 +241,6 @@ async function launch(
   return { wired, runId: admission.runId };
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
 /** The Step sequence the timeline reads in, each run of one Step collapsed. */
 function stepRuns(timeline: readonly RunTimelineEvent[]): string[] {
   const runs: string[] = [];
@@ -303,7 +267,7 @@ test("[step-session-timeline] every Step-scoped event names its Step, each Step'
     now: Date.parse("2026-10-01T09:00:00.000Z"),
   });
   const { wired, runId } = await launch(t);
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "succeeded");
 
   // Every event shares the frozen instant, so the order below is the Application's.
@@ -441,7 +405,7 @@ test("declined elicitation crosses Harness execution into durable Projection Por
   const { wired, runId } = await launch(t, [
     { kind: "elicitation-declined", ...evidence },
   ]);
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   const row = run.timeline.find(
     (event) => event.event === "elicitation-declined",

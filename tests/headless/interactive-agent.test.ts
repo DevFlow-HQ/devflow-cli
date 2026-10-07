@@ -1,9 +1,9 @@
+import { fakeHarnessProfile } from "../harness/fake-adapter.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
 import type { Wiring } from "../../src/composition/main.js";
 import {
-  profile,
   COMPLETED_DETACHED,
   INTERRUPTIBLE_TURN,
   launchInteractive,
@@ -37,7 +37,7 @@ async function runShow(wired: Wiring, runId: string): Promise<string> {
 
 test("m12-test-interface-ownership: run show preserves historical interactive and Agent Turn order (#126)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED, COMPLETED_DETACHED, COMPLETED_DETACHED],
   });
   await send(wired, runId, "op-t1", "discuss", "let us start here");
@@ -63,7 +63,7 @@ test("m12-test-interface-ownership: run show preserves historical interactive an
 
 test("m12-test-interface-ownership: run show names the interactive Turn basis for a blocked interactive Step (#122, A15)", async (t) => {
   const { wired, runId, run } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   });
   assert.equal(run.state, "blocked");
@@ -73,7 +73,7 @@ test("m12-test-interface-ownership: run show names the interactive Turn basis fo
 
 test("m12-test-interface-ownership: run show reports the waiting Step after an interrupted interactive Turn (#353)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [INTERRUPTIBLE_TURN],
   });
   const { interrupt } = await sendLiveTurn(wired, runId, "op-send-interrupted");
@@ -91,7 +91,7 @@ test("m12-test-interface-ownership: run show identifies human-declared completio
   const { wired, runId } = await launchInteractive(
     t,
     {
-      profile: profile(),
+      profile: fakeHarnessProfile(),
       turns: [COMPLETED_DETACHED],
     },
     undefined,

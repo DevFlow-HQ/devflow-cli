@@ -9,14 +9,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import type { HarnessProfile } from "../../src/harness/harness.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
 import type {
   ProcessAdapter,
   SpawnResult,
   SpawnSyncResult,
 } from "../../src/process/process.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -96,44 +99,15 @@ function fakeTestRepairProcess(): ProcessAdapter {
 }
 
 /** A complete Harness profile for a scripted fake Adapter. */
-function profile(
-  harness: string,
-  overrides: Partial<HarnessProfile> = {},
-): HarnessProfile {
-  return {
-    harness,
-    executable: `fake-${harness}`,
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    ...overrides,
-  };
-}
 
 /** The Claude Code fix Turn: it surfaces the Edit as an approval Request the
  *  client answers by policy (the permission-bridge seam), then completes. */
 function claudeScript(sumPath: string): FakeScript {
   return {
-    profile: profile("Claude Code"),
+    profile: fakeHarnessProfile({
+      harness: "Claude Code",
+      executable: `fake-${"Claude Code"}`,
+    }),
     // The flagless launch starts from the Model choice the Harness reports, as
     // the two-harness smoke does: Claude Code's declared fallback.
     defaults: {
@@ -172,7 +146,9 @@ function claudeScript(sumPath: string): FakeScript {
  *  Request crosses to the client — the edit is a generic tool-activity event. */
 function codexScript(): FakeScript {
   return {
-    profile: profile("Codex", {
+    profile: fakeHarnessProfile({
+      harness: "Codex",
+      executable: `fake-${"Codex"}`,
       steer: { available: true, evidence: "fake native steer" },
     }),
     defaults: {

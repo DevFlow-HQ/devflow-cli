@@ -1,16 +1,18 @@
+import { readRun } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import {
-  CLAUDE_CODE_EXECUTABLE_ENV,
-  type HarnessProfile,
-} from "../../src/harness/harness.js";
+import { CLAUDE_CODE_EXECUTABLE_ENV } from "../../src/harness/harness.js";
 import type { RunView } from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
@@ -63,47 +65,6 @@ function fakeProcess(): ProcessAdapter {
 // no model, so any name is admitted.
 const FAKE_MODEL = "fake-model";
 
-function profile(harness = "Claude Code"): HarnessProfile {
-  return {
-    harness,
-    executable: "/usr/bin/claude",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
-function profileWithObservedIdentity(
-  harness: string,
-  executable: string,
-  executableVersion: string,
-): HarnessProfile {
-  return {
-    ...profile(harness),
-    executable,
-    executableVersion,
-  };
-}
-
 /** A single-Turn script that completes; `model` controls whether the Turn observed an
  *  effective model (missing-observation ⇒ undefined). */
 function completedScript(
@@ -111,7 +72,11 @@ function completedScript(
   harness = "Claude Code",
 ): FakeScript {
   return {
-    profile: profile(harness),
+    profile: fakeHarnessProfile({
+      harness: harness,
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+    }),
     turns: [
       {
         result: {
@@ -130,7 +95,11 @@ function completedScript(
 
 function failedScript(model?: string): FakeScript {
   return {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      harness: "Claude Code",
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+    }),
     turns: [
       {
         result: {
@@ -459,7 +428,7 @@ async function launch(
   const created = wired.runGroup.readRun(runId);
   assert.ok(created.ok);
   assert.equal(created.run.selectedHarness, bundle.selectedHarness);
-  const createdView = readRun(wired, runId);
+  const createdView = readRun(wired.projectionPort, runId);
   if (bundle.selectedHarness === undefined) {
     assert.equal(createdView.selectedHarness, undefined);
   } else {
@@ -489,18 +458,7 @@ async function launch(
 
   await awaitSettled(wired.projectionPort, "op-launch");
   assert.equal(prepareCount, bundle.expectedPrepareCount);
-  return { wired, runId, run: readRun(wired, runId) };
-}
-
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
+  return { wired, runId, run: readRun(wired.projectionPort, runId) };
 }
 
 test("[new-run-harness-selection] a new Agent Run pins Claude Code separately from observed Attempt evidence", async (t) => {
@@ -642,7 +600,10 @@ test("[both-client-harness-selection] selected Harness authentication and protoc
       /log in separately through Codex/i,
     );
   }
-  const haltedAfterAuthentication = readRun(wired, admission.runId);
+  const haltedAfterAuthentication = readRun(
+    wired.projectionPort,
+    admission.runId,
+  );
   assert.equal(haltedAfterAuthentication.state, "halted");
   assert.equal(haltedAfterAuthentication.selectedHarness, "codex");
   assert.equal(haltedAfterAuthentication.harness, undefined);
@@ -677,7 +638,7 @@ test("[both-client-harness-selection] selected Harness authentication and protoc
     assert.match(resumeOutcome.problem.remediation, /installed Codex version/i);
   }
   assert.equal(prepareCount, 2);
-  const haltedAfterProtocol = readRun(wired, admission.runId);
+  const haltedAfterProtocol = readRun(wired.projectionPort, admission.runId);
   assert.equal(haltedAfterProtocol.state, "halted");
   assert.equal(haltedAfterProtocol.selectedHarness, "codex");
   assert.equal(haltedAfterProtocol.harness, undefined);
@@ -696,7 +657,14 @@ test("[new-run-harness-selection] a new Interactive-agent Run pins Claude Code b
   const home = makeTempDir("secant-harness-id-home-");
   const { run } = await launch(
     t,
-    { profile: profile(), turns: [] },
+    {
+      profile: fakeHarnessProfile({
+        harness: "Claude Code",
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+      }),
+      turns: [],
+    },
     writeInteractiveAgentBundle(),
     home,
     makeTempDir("secant-harness-id-ws-"),
@@ -711,7 +679,14 @@ test("[new-run-harness-selection] an Agent nested in a Repeat group pins Claude 
   const home = makeTempDir("secant-harness-id-home-");
   const { run } = await launch(
     t,
-    { profile: profile(), turns: [] },
+    {
+      profile: fakeHarnessProfile({
+        harness: "Claude Code",
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+      }),
+      turns: [],
+    },
     writeNestedAgentBundle(),
     home,
     makeTempDir("secant-harness-id-ws-"),
@@ -745,7 +720,7 @@ test("the Harness identity is identical after the Run is reopened (#125)", async
     reopened.runGroup.close();
     reopened.catalog.close();
   });
-  const run = readRun(reopened, runId);
+  const run = readRun(reopened.projectionPort, runId);
   const reopenedRecord = reopened.runGroup.readRun(runId);
   assert.ok(reopenedRecord.ok);
   assert.equal(reopenedRecord.run.selectedHarness, "claude-code");
@@ -771,11 +746,11 @@ test("[selected-versus-observed-evidence] resume preserves selection while a lat
   assert.equal(launched.run.selectedHarness, "claude-code");
   assert.equal(launched.run.harness?.executableVersion, "1.2.3");
 
-  const resumedProfile = profileWithObservedIdentity(
-    "Claude Code Canary",
-    "/opt/claude-canary",
-    "2.0.0-canary",
-  );
+  const resumedProfile = fakeHarnessProfile({
+    harness: "Claude Code Canary",
+    executable: "/opt/claude-canary",
+    executableVersion: "2.0.0-canary",
+  });
   const reopened = wireApplication({
     secantHome: home,
     launchCwd: workspace,
@@ -809,7 +784,7 @@ test("[selected-versus-observed-evidence] resume preserves selection while a lat
   assert.ok(resume.admitted, JSON.stringify(resume));
   await awaitSettled(reopened.projectionPort, resume.operationId);
 
-  const run = readRun(reopened, launched.runId);
+  const run = readRun(reopened.projectionPort, launched.runId);
   assert.equal(run.selectedHarness, "claude-code");
   assert.deepEqual(run.harness, {
     name: "Claude Code Canary",
@@ -831,7 +806,11 @@ test("a reopened Run's steer Offer uses the recorded profile evidence (#134 A12)
   );
 
   const resumedScript: FakeScript = {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      harness: "Claude Code",
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+    }),
     turns: [
       {
         requests: [
@@ -887,12 +866,12 @@ test("a reopened Run's steer Offer uses the recorded profile evidence (#134 A12)
   opened.close();
   assert.ok(requestGeneration !== undefined);
 
-  const steer = readRun(reopened, runId).actionOffers.find(
+  const steer = readRun(reopened.projectionPort, runId).actionOffers.find(
     (offer) => offer.action === "steer-turn",
   );
   assert.ok(steer);
   if (steer?.action === "steer-turn" && steer.available === false) {
-    assert.equal(steer.reason, profile().steer.evidence);
+    assert.equal(steer.reason, "scripted fake");
   }
 
   const answer = reopened.projectionPort.submit({

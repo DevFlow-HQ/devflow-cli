@@ -14,12 +14,15 @@ import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   type HarnessAdapter,
-  type HarnessProfile,
   type PrepareOptions,
 } from "../../src/harness/harness.js";
 import type { OperationOutcome } from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -33,38 +36,12 @@ import { awaitSettled } from "../helpers/settleOperation.js";
 
 const BUNDLE_ID = "dev.secant.working-area";
 
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "/usr/bin/claude",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
 function script(kind: "completed" | "failed"): FakeScript {
   return {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+    }),
     turns: [
       {
         result:

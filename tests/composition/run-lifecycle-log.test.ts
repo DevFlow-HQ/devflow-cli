@@ -1,3 +1,5 @@
+import { readRun } from "../application/run-test-helpers.js";
+
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -15,7 +17,11 @@ import type {
   ActionOffer,
   ProjectionPort,
 } from "../../src/application/projection-port.js";
-import { createFake, type FakeTurnScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeTurnScript,
+} from "../harness/fake-adapter.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
@@ -23,11 +29,9 @@ import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
 
 import {
-  profile,
   writeBundle,
   launch,
   applied,
-  readRun,
   semantic,
   agentStep,
   COMPLETED,
@@ -153,7 +157,7 @@ async function invocation(
       harnessAdapter:
         options.adapter ??
         createFake({
-          profile: profile(),
+          profile: fakeHarnessProfile(),
           turns: options.turns,
         })(),
       supportsInteractiveTurns: options.supportsInteractiveTurns ?? false,
@@ -652,7 +656,7 @@ test("a preparation refusal after Continue logs the committed halted rest and co
           },
         });
       return createFake({
-        profile: profile(),
+        profile: fakeHarnessProfile(),
         turns: [{ result: COMPLETED }],
       })().prepare(options);
     },

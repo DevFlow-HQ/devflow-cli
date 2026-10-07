@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
@@ -11,13 +12,14 @@ import {
 import { dirname, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import type {
-  HarnessAdapter,
-  HarnessProfile,
-} from "../../src/harness/harness.js";
 import type { RunView } from "../../src/application/projection-port.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import { wireApplication, type Wiring } from "../../src/composition/main.js";
+import type { HarnessAdapter } from "../../src/harness/harness.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { awaitRunRest, awaitSettled } from "../helpers/settleOperation.js";
@@ -50,35 +52,6 @@ const TICKETS = [
 
 type HarnessId = "claude-code" | "codex";
 
-function profile(harness: HarnessId): HarnessProfile {
-  return {
-    harness: harness === "codex" ? "codex" : "Claude Code",
-    executable: harness === "codex" ? "codex" : "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: true,
-      evidence: "Scripted agent calls.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: harness === "codex", evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
 const COMPLETED: FakeScript["turns"][number] = {
   events: [{ kind: "assistant-content", content: "ok" }],
   result: {
@@ -103,7 +76,15 @@ function planningAgent(harness: HarnessId, writeReceipt: boolean) {
     async prepare(options) {
       granted.push(options.writableDirectory);
       const prepared = await createFake({
-        profile: profile(harness),
+        profile: fakeHarnessProfile({
+          harness: harness === "codex" ? "codex" : "Claude Code",
+          executable: harness === "codex" ? "codex" : "fake-claude",
+          agentCalls: {
+            available: true,
+            evidence: "Scripted agent calls.",
+          },
+          steer: { available: harness === "codex", evidence: "scripted fake" },
+        }),
         turns: Array.from({ length: 8 }, () => COMPLETED),
       })().prepare(options);
       if (!prepared.ok) return prepared;
@@ -207,17 +188,6 @@ async function settle(
   return admission;
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
 /** Launch, take the grill's entry Turn, end the grill, and choose Local. */
 async function planToLocal(
   wired: Wiring,
@@ -241,7 +211,7 @@ async function planToLocal(
     operation: "end-interactive-step",
     input: { runId, stepId: "grill" },
   });
-  const gate = readRun(wired, runId).pendingGate?.gate;
+  const gate = readRun(wired.projectionPort, runId).pendingGate?.gate;
   assert.equal(gate?.stepId, "choose-tracker");
   await settle(wired, {
     operationId: "op-tracker",
@@ -312,7 +282,7 @@ for (const harness of ["claude-code", "codex"] as const) {
 
     // Spec writing followed the tracker choice with no approval Gate between; the
     // Run then rests at ticket review (#223).
-    const run = readRun(wired, runId);
+    const run: RunView = readRun(wired.projectionPort, runId);
     assert.equal(run.state, "blocked", JSON.stringify(run.progress));
     assert.deepEqual(
       run.progress.map((step) => [step.id, step.status]),
@@ -368,7 +338,7 @@ test("[matt-local-spec] a completed spec Turn without a receipt fails the Run wi
   const { wired, digest } = wire(t, "claude-code", agent.adapter);
   const runId = await planToLocal(wired, digest, "claude-code");
 
-  const run = readRun(wired, runId);
+  const run: RunView = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "failed");
   assert.equal(
     run.progress.find((step) => step.id === "write-spec")?.status,
@@ -393,7 +363,7 @@ for (const harness of ["claude-code", "codex"] as const) {
 
     // Ticket planning opens on an entry Turn in a fresh Session that reads the
     // published spec through the original to-tickets folder, and rests for the human.
-    const planning = readRun(wired, runId);
+    const planning = readRun(wired.projectionPort, runId);
     assert.equal(planning.state, "blocked");
     assert.equal(planning.progress[planning.position]?.id, "plan-tickets");
     const entry = agent.inputs.at(-1)!;
@@ -420,7 +390,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     });
     await awaitRunRest(wired.projectionPort, runId);
     assert.equal(agent.inputs.at(-1), "Merge the last two tickets.");
-    assert.equal(readRun(wired, runId).state, "blocked");
+    assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
     assert.deepEqual(planningFiles(area), ["spec.md"]);
 
     // Ending the Step is the approval: the publish Turn follows in the same Session,
@@ -438,7 +408,7 @@ for (const harness of ["claude-code", "codex"] as const) {
     assert.equal(agent.inputs.length, 6);
     assert.ok(agent.granted.every((dir) => dir === area));
 
-    const run = readRun(wired, runId);
+    const run: RunView = readRun(wired.projectionPort, runId);
     assert.equal(run.state, "blocked", JSON.stringify(run.progress));
     assert.equal(workingArea(wired, runId), area);
     assert.deepEqual(

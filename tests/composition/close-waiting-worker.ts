@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { withClients } from "../../src/composition/main.js";
-import { createFake } from "../harness/fake-adapter.js";
-import { profile } from "../helpers/runLogFixture.js";
+import { fakeHarnessProfile, createFake } from "../harness/fake-adapter.js";
+
 import { awaitSettled, followRun } from "../helpers/settleOperation.js";
 
 // The real Secant signal path over a fake Harness. SIGTERM drains shutdown on
@@ -62,7 +62,7 @@ await withClients(
     secantHome: home,
     launchCwd: workspace,
     harnessAdapter: createFake({
-      profile: profile(),
+      profile: fakeHarnessProfile(),
       turns: [
         {
           block: true,
@@ -77,7 +77,7 @@ await withClients(
           interruptResult: {
             kind: "interrupted",
             detail: {
-              interruption: profile().interruption,
+              interruption: fakeHarnessProfile().interruption,
               session: { state: "detached", coordinate: { opaque: "s" } },
             },
           },

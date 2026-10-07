@@ -1,10 +1,10 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { FakeScript } from "../harness/fake-adapter.js";
 import { awaitSettled, followRun } from "../helpers/settleOperation.js";
 import {
   launchAgentCompletionRun as setup,
-  readCompletionRun as readRun,
   completed,
   call,
   reviewedLoop,
@@ -19,7 +19,7 @@ test("a clean Entry Turn applies the latest step done through the Projection Por
     (await awaitSettled(wired.projectionPort, "launch")).status,
     "applied",
   );
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.completion, "agent-declared");
   assert.deepEqual(
@@ -69,7 +69,7 @@ for (const kind of ["failed", "interrupted"] as const) {
       (await awaitSettled(wired.projectionPort, "launch")).status,
       "applied",
     );
-    const run = readRun(wired, runId);
+    const run = readRun(wired.projectionPort, runId);
     assert.equal(run.state, "blocked");
     assert.equal(run.completion, undefined);
     assert.equal(
@@ -94,7 +94,7 @@ test("without a call the Step waits; a human Turn can call done without added in
     { agentCalls: [call("human follow-up done")], result: completed },
   ]);
   await awaitSettled(wired.projectionPort, "launch");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
   const admission = wired.projectionPort.submit({
     operationId: "send",
     operation: "send-interactive-turn",
@@ -108,7 +108,9 @@ test("without a call the Step waits; a human Turn can call done without added in
   assert.equal(requests[1]?.input.text, "Keep going.");
   assert.deepEqual(requests[1]?.agentCalls, requests[0]?.agentCalls);
   assert.equal(
-    readRun(wired, runId).timeline.find((e) => e.endedBy === "agent")?.reason,
+    readRun(wired.projectionPort, runId).timeline.find(
+      (e) => e.endedBy === "agent",
+    )?.reason,
     "human follow-up done",
   );
 });
@@ -135,7 +137,7 @@ test("a call stays pending until a clean boundary; cancelling drops it", async (
     }).admitted,
   );
   await awaitSettled(wired.projectionPort, "cancel");
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "cancelled");
   assert.equal(
     run.timeline.some((e) => e.endedBy === "agent"),
@@ -159,13 +161,15 @@ test("the next Entry Turn is settled by the same Application loop", async (t) =>
     steps,
   );
   await awaitSettled(wired.projectionPort, "launch");
-  assert.equal(readRun(wired, runId).state, "succeeded");
+  assert.equal(readRun(wired.projectionPort, runId).state, "succeeded");
   assert.deepEqual(
     requests.map((r) => r.session),
     ["first", "second"],
   );
   assert.equal(
-    readRun(wired, runId).timeline.filter((e) => e.endedBy === "agent").length,
+    readRun(wired.projectionPort, runId).timeline.filter(
+      (e) => e.endedBy === "agent",
+    ).length,
     2,
   );
 });
@@ -368,9 +372,11 @@ test("Steers settle before an accepted call can apply", async (t) => {
     "applied",
   );
   finish();
-  assert.equal(readRun(wired, runId).state, "running");
+  assert.equal(readRun(wired.projectionPort, runId).state, "running");
   assert.equal(
-    readRun(wired, runId).timeline.some((e) => e.endedBy === "agent"),
+    readRun(wired.projectionPort, runId).timeline.some(
+      (e) => e.endedBy === "agent",
+    ),
     false,
   );
   deliver();
@@ -406,7 +412,7 @@ test("a shared Session keeps its tools but refuses a call on a Step not opted in
     steps,
   );
   await awaitSettled(wired.projectionPort, "launch");
-  assert.equal(readRun(wired, runId).state, "succeeded");
+  assert.equal(readRun(wired.projectionPort, runId).state, "succeeded");
   assert.deepEqual(
     answers.map((a) => a.outcome),
     ["accepted", "refused"],
@@ -455,7 +461,7 @@ for (const state of ["running", "blocked"] as const) {
       (await awaitSettled(recovered.projectionPort, "resume")).status,
       "applied",
     );
-    const run = readRun(recovered, runId);
+    const run = readRun(recovered.projectionPort, runId);
     assert.equal(run.state, "succeeded");
     assert.equal(run.timeline.filter((e) => e.endedBy === "agent").length, 1);
     assert.equal(
@@ -470,8 +476,9 @@ for (const state of ["running", "blocked"] as const) {
       }).admitted,
     );
     assert.equal(
-      readRun(recovered, runId).timeline.filter((e) => e.endedBy === "agent")
-        .length,
+      readRun(recovered.projectionPort, runId).timeline.filter(
+        (e) => e.endedBy === "agent",
+      ).length,
       1,
     );
   });
@@ -501,7 +508,7 @@ test("Interrupt drops a pending call and a later no-call Turn keeps waiting", as
     "applied",
   );
   await awaitSettled(wired.projectionPort, "launch");
-  const waiting = readRun(wired, runId);
+  const waiting = readRun(wired.projectionPort, runId);
   assert.equal(waiting.state, "blocked");
   assert.equal(waiting.pendingAgentCompletion, undefined);
   assert.ok(
@@ -571,7 +578,7 @@ test("completion after an Agent follow-up never reuses its closed Harness or inp
     steps,
   );
   await awaitSettled(wired.projectionPort, "launch");
-  const followUp = readRun(wired, runId).actionOffers.find(
+  const followUp = readRun(wired.projectionPort, runId).actionOffers.find(
     (o) => o.action === "send-follow-up-turn",
   );
   assert.ok(followUp);
@@ -620,7 +627,7 @@ for (const scope of ["fresh", "repeat"] as const) {
       steps,
     );
     await awaitSettled(wired.projectionPort, "launch");
-    assert.equal(readRun(wired, runId).state, "blocked");
+    assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
     assert.notEqual(requests[0]?.session, requests[1]?.session);
     assert.deepEqual(requests[0]?.agentCalls, []);
     assert.deepEqual(
@@ -654,7 +661,7 @@ test("agent Continues apply up to the Review checkpoint and the next is held", a
     "stage_done",
     "step_done",
   ]);
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "blocked");
   assert.deepEqual(run.heldForReview, {
     interval: 2,
@@ -700,7 +707,10 @@ test("the person's Continue resets the count and stage done is never held", asyn
     reviewedLoop({ interval: 2 }),
   );
   await awaitSettled(wired.projectionPort, "launch");
-  assert.equal(readRun(wired, runId).heldForReview?.reason, "ticket 3 done");
+  assert.equal(
+    readRun(wired.projectionPort, runId).heldForReview?.reason,
+    "ticket 3 done",
+  );
   assert.ok(
     wired.projectionPort.submit({
       operationId: "continue",
@@ -761,7 +771,7 @@ test("a person's End Stage after agent Continues is a human-declared completion"
     reviewedLoop(),
   );
   await awaitSettled(wired.projectionPort, "launch");
-  assert.equal(readRun(wired, runId).heldForReview, undefined);
+  assert.equal(readRun(wired.projectionPort, runId).heldForReview, undefined);
   assert.ok(
     wired.projectionPort.submit({
       operationId: "end",
@@ -770,7 +780,7 @@ test("a person's End Stage after agent Continues is a human-declared completion"
     }).admitted,
   );
   await awaitSettled(wired.projectionPort, "end");
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.completion, "human-declared");
 });
@@ -802,7 +812,7 @@ test("resume applies a clean stage done recorded before a crash", async (t) => {
   );
   owner.close();
   const recovered = reopen();
-  const before = readRun(recovered, runId);
+  const before = readRun(recovered.projectionPort, runId);
   assert.equal(before.state, "blocked");
   assert.ok(before.actionOffers.some((o) => o.action === "resume-run"));
   assert.ok(
@@ -816,7 +826,7 @@ test("resume applies a clean stage done recorded before a crash", async (t) => {
     (await awaitSettled(recovered.projectionPort, "resume")).status,
     "applied",
   );
-  const run = readRun(recovered, runId);
+  const run = readRun(recovered.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.completion, "agent-declared");
   assert.equal(

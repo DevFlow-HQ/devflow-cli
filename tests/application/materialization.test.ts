@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -146,20 +147,12 @@ async function launch(f: Fixture, id: string, digest: string): Promise<string> {
   return admission.runId;
 }
 
-function runView(f: Fixture, runId: string) {
-  const opened = f.app.projectionPort.openProjection({ family: "run", runId });
-  const result = opened.snapshot.result;
-  opened.close();
-  assert.ok(result.found);
-  return result.run;
-}
-
 test("a modified Workspace copy is a visible conflict resting the Run halted", async (t) => {
   const f = fixture(t);
   const { id, digest } = installMaterializationBundle(f, "modify");
   const runId = await launch(f, id, digest);
 
-  const run = runView(f, runId);
+  const run = readRun(f.app.projectionPort, runId);
   assert.equal(run.state, "halted");
   // The conflict names the artifact and its declared path.
   assert.ok(run.conflict);
@@ -187,7 +180,7 @@ test("a modified Workspace copy is a visible conflict resting the Run halted", a
 test("a deleted Workspace copy also rests the Run halted", async (t) => {
   const f = fixture(t);
   const { id, digest } = installMaterializationBundle(f, "delete");
-  const run = runView(f, await launch(f, id, digest));
+  const run = readRun(f.app.projectionPort, await launch(f, id, digest));
   assert.equal(run.state, "halted");
   assert.ok(run.conflict);
   assert.equal(run.conflict.path, "out/x.txt");
@@ -197,7 +190,7 @@ test("resuming after restoring the file continues the Run to succeeded", async (
   const f = fixture(t);
   const { id, digest } = installMaterializationBundle(f, "modify");
   const runId = await launch(f, id, digest);
-  assert.equal(runView(f, runId).state, "halted");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "halted");
 
   // Restore the file to its bound content, then resume through the Port.
   writeFileSync(join(f.workspace, "out", "x.txt"), "materialized-content");
@@ -209,7 +202,7 @@ test("resuming after restoring the file continues the Run to succeeded", async (
   assert.ok(admission.admitted);
   await settled(f, admission.operationId);
 
-  const run = runView(f, runId);
+  const run = readRun(f.app.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.conflict, undefined);
   // The consuming Step ran on resume and bound its output.
@@ -236,7 +229,7 @@ test("resume of a Run that is not halted is refused", async (t) => {
   // A conflict-free Bundle runs to succeeded; resuming it is refused.
   const { id, digest } = installMaterializationBundle(f, "none");
   const runId = await launch(f, id, digest);
-  assert.equal(runView(f, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   const admission = f.app.projectionPort.submit({
     operationId: "resume-done",
@@ -331,7 +324,7 @@ test("resume is idempotent per operation id (#86, AC3)", async (t) => {
   const f = fixture(t);
   const { id, digest } = installMaterializationBundle(f, "modify");
   const runId = await launch(f, id, digest);
-  assert.equal(runView(f, runId).state, "halted");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "halted");
   // Restore the tampered Workspace copy so the resume can complete.
   writeFileSync(join(f.workspace, "out", "x.txt"), "materialized-content");
 
@@ -342,7 +335,7 @@ test("resume is idempotent per operation id (#86, AC3)", async (t) => {
   });
   assert.ok(first.admitted);
   await settled(f, first.operationId);
-  assert.equal(runView(f, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 
   // A second submit with the same operation id replays: same Run, no re-execution.
   const second = f.app.projectionPort.submit({
@@ -353,14 +346,14 @@ test("resume is idempotent per operation id (#86, AC3)", async (t) => {
   assert.ok(second.admitted);
   await settled(f, second.operationId);
   assert.equal(second.runId, first.runId);
-  assert.equal(runView(f, runId).state, "succeeded");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "succeeded");
 });
 
 test("resume after the pinned digest is no longer installed names the reinstall (#86, AC3)", async (t) => {
   const f = fixture(t);
   const { id, digest } = installMaterializationBundle(f, "modify");
   const runId = await launch(f, id, digest);
-  assert.equal(runView(f, runId).state, "halted");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "halted");
   writeFileSync(join(f.workspace, "out", "x.txt"), "materialized-content");
 
   // Replace the pinned install: remove the exact managed bytes the Run pinned.
@@ -375,5 +368,5 @@ test("resume after the pinned digest is no longer installed names the reinstall 
   assert.equal(admission.problem.code, "bundle-bytes-missing");
   assert.match(admission.problem.remediation, /[Rr]einstall/);
   // Refused before authorizing work: the Run stays halted.
-  assert.equal(runView(f, runId).state, "halted");
+  assert.equal(readRun(f.app.projectionPort, runId).state, "halted");
 });

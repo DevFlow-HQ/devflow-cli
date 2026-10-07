@@ -5,13 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import type { Problem } from "../../src/application/projection-port.js";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import type {
-  HarnessDefaults,
-  HarnessProfile,
-} from "../../src/harness/harness.js";
+import type { HarnessDefaults } from "../../src/harness/harness.js";
 import type { RunOwner } from "../../src/run/store/store.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import {
+  fakeHarnessProfile,
   createFake,
   type FakeScript,
   type FakeTurnRequestRecord,
@@ -65,35 +63,6 @@ interface LegacyFixture {
   readonly runId: string;
 }
 
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "/usr/bin/claude",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
 /** What the fake reports as its own Model choice, which a legacy Run resolves
  *  through preselection once on resume (ADR 0034). */
 const REPORTED: HarnessDefaults = {
@@ -106,7 +75,10 @@ function completedScript(
   turnRequests?: FakeTurnRequestRecord[],
 ): FakeScript {
   return {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+    }),
     defaults,
     ...(turnRequests !== undefined ? { turnRequests } : {}),
     turns: [

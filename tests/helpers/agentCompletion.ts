@@ -6,43 +6,16 @@ import type { TestContext } from "node:test";
 import { wireApplication } from "../../src/composition/main.js";
 import {
   type HarnessAdapter,
-  HarnessProfile,
   TurnRequest,
   AgentCallAnswer,
 } from "../../src/harness/harness.js";
-import type { RunView } from "../../src/application/projection-port.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
-
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: true,
-      evidence: "scripted calls",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: true, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 export const completed: FakeScript["turns"][number]["result"] = {
   kind: "completed",
@@ -125,7 +98,13 @@ export async function launchAgentCompletionRun(
     ownPreparations({
       async prepare(options) {
         const prepared = await createFake({
-          profile: profile(),
+          profile: fakeHarnessProfile({
+            agentCalls: {
+              available: true,
+              evidence: "scripted calls",
+            },
+            steer: { available: true, evidence: "scripted fake" },
+          }),
           turns:
             typeof turns === "function"
               ? turns(prepares++, requests.length)
@@ -221,17 +200,4 @@ export async function launchAgentCompletionRun(
   assert.ok(admission.admitted, JSON.stringify(admission));
   assert.ok(admission.runId);
   return { wired, runId: admission.runId, requests, answers, reopen };
-}
-
-export function readCompletionRun(
-  wired: Awaited<ReturnType<typeof launchAgentCompletionRun>>["wired"],
-  runId: string,
-): RunView {
-  const view = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(view.snapshot.result.found);
-    return view.snapshot.result.run;
-  } finally {
-    view.close();
-  }
 }

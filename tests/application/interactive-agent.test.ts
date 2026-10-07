@@ -1,3 +1,5 @@
+import { findOffer, readRun, requireOffer } from "./run-test-helpers.js";
+
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { readdirSync, writeFileSync } from "node:fs";
@@ -10,7 +12,11 @@ import {
   type HarnessProfile,
 } from "../../src/harness/harness.js";
 import type { RunView } from "../../src/application/projection-port.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import {
@@ -20,13 +26,10 @@ import {
 } from "../helpers/settleOperation.js";
 
 import {
-  profile,
   COMPLETED_DETACHED,
   BLOCKING_TURN,
   INTERRUPTIBLE_TURN,
   launchInteractive,
-  readRun,
-  offer,
   send,
   sendLiveTurn,
   interruptTurn,
@@ -42,7 +45,10 @@ import {
 
 async function awaitInterruptOffer(wired: Wiring, runId: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    const interrupt = offer(readRun(wired, runId), "interrupt-turn");
+    const interrupt = findOffer(
+      readRun(wired.projectionPort, runId),
+      "interrupt-turn",
+    );
     if (interrupt !== undefined) return interrupt;
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -54,7 +60,7 @@ test("m12-test-interface-ownership: interactive-agent rests blocked, takes two h
   const { wired, runId, run } = await launchInteractive(
     t,
     {
-      profile: profile(),
+      profile: fakeHarnessProfile(),
       turns: [COMPLETED_DETACHED, COMPLETED_DETACHED, COMPLETED_DETACHED],
     },
     counts,
@@ -64,22 +70,22 @@ test("m12-test-interface-ownership: interactive-agent rests blocked, takes two h
   // offers exactly send + end at the boundary; no Attempt has settled yet.
   assert.equal(run.state, "blocked");
   assert.equal(run.progress[run.position]?.kind, "interactive-agent");
-  const sendOffer = offer(run, "send-interactive-turn");
+  const sendOffer = requireOffer(run, "send-interactive-turn");
   assert.ok(sendOffer, JSON.stringify(run.actionOffers));
   assert.equal(sendOffer.basis, "interactive Turn");
-  assert.ok(offer(run, "end-interactive-step"));
+  assert.ok(requireOffer(run, "end-interactive-step"));
   assert.equal(run.turnPosition, undefined);
 
   // Two human Turns: each is one Turn whose verbatim text is the transcript input.
   await send(wired, runId, "op-t1", "discuss", "let us start here");
-  const afterOne = readRun(wired, runId);
+  const afterOne = readRun(wired.projectionPort, runId);
   assert.equal(afterOne.state, "blocked");
   assert.equal(afterOne.turnPosition, 1);
 
   await send(wired, runId, "op-t2", "discuss", "now the next idea");
   assert.equal(counts.prepares, 1);
   assert.deepEqual(counts.closes, [0]);
-  const afterTwo = readRun(wired, runId);
+  const afterTwo = readRun(wired.projectionPort, runId);
   assert.equal(afterTwo.turnPosition, 2);
   const transcriptReference = afterTwo.sessions?.[0]?.transcriptPage;
   assert.ok(transcriptReference);
@@ -114,7 +120,7 @@ test("m12-test-interface-ownership: interactive-agent rests blocked, takes two h
   assert.equal(counts.prepares, 2);
   assert.deepEqual(counts.closes, [1, 1]);
 
-  const done = readRun(wired, runId);
+  const done = readRun(wired.projectionPort, runId);
   assert.equal(done.state, "succeeded");
   assert.deepEqual(
     done.progress.map((s) => s.status),
@@ -159,7 +165,7 @@ test("m12-test-interface-ownership: interactive-agent rests blocked, takes two h
 
 test("a blank interactive Turn is refused before any stdin is sent (#122)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   });
 
@@ -173,14 +179,14 @@ test("a blank interactive Turn is refused before any stdin is sent (#122)", asyn
   assert.equal(admission.problem.code, "interactive-turn-blank");
 
   // No Turn was admitted: the Run is still at its first blocked rest.
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.turnPosition, undefined);
 });
 
 test("Claude Code reserved Human Turns are refused before Operation or Turn admission (#358)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   });
   for (const text of [
@@ -211,7 +217,7 @@ test("Claude Code reserved Human Turns are refused before Operation or Turn admi
       /conversation, Model choice, or permission/,
     );
     assert.equal(admission.problem.possibleEffects, "none");
-    const run = readRun(wired, runId);
+    const run = readRun(wired.projectionPort, runId);
     assert.equal(run.state, "blocked");
     assert.equal(run.turnPosition, undefined);
   }
@@ -231,7 +237,7 @@ test("Claude Code reserved Human Turns are refused before Operation or Turn admi
 
 test("a Human Turn for an unknown Run is refused before Operation admission (#358)", async (t) => {
   const { wired } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   });
   const admission = wired.projectionPort.submit({
@@ -246,7 +252,7 @@ test("a Human Turn for an unknown Run is refused before Operation admission (#35
 
 test("an unselected legacy Run uses Claude Code's rules without upgrading or admitting (#358)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   });
   const original = wired.runGroup.readRun(runId);
@@ -291,7 +297,7 @@ test("an unselected legacy Run uses Claude Code's rules without upgrading or adm
 
 test("a damaged Run store refuses a Human Turn before Operation admission (#358)", async (t) => {
   const { wired, runId, home } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   });
   const original = wired.runGroup.readRun(runId);
@@ -325,7 +331,7 @@ test("Codex admits reserved-looking Human Turns unchanged (#358)", async (t) => 
   const { wired, runId } = await launchInteractive(
     t,
     {
-      profile: { ...profile(), harness: "Codex" },
+      profile: { ...fakeHarnessProfile(), harness: "Codex" },
       turns: Array.from({ length: 11 }, () => COMPLETED_DETACHED),
     },
     undefined,
@@ -355,7 +361,8 @@ test("Codex admits reserved-looking Human Turns unchanged (#358)", async (t) => 
     const outcome = await awaitSettled(wired.projectionPort, operationId);
     assert.equal(outcome.status, "applied", JSON.stringify({ text, outcome }));
     await awaitRunRest(wired.projectionPort, runId);
-    const reference = readRun(wired, runId).sessions?.[0]?.transcriptPage;
+    const reference = readRun(wired.projectionPort, runId).sessions?.[0]
+      ?.transcriptPage;
     assert.ok(reference);
     const transcript = wired.projectionPort.readTranscript(reference);
     assert.ok(transcript.found);
@@ -370,7 +377,7 @@ test("Codex admits reserved-looking Human Turns unchanged (#358)", async (t) => 
 
 test("Claude Code admits a non-reserved leading command (#358)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   });
   const admission = wired.projectionPort.submit({
@@ -404,13 +411,13 @@ const LOST_ON_INTERRUPT: FakeScript["turns"][number] = {
 
 test("an interactive send settles applied at Turn admission while the Turn is still live (#290)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [BLOCKING_TURN],
   });
   // A followed client, opened before the send: a fresh read already shows a live
   // Turn, so this proves admission also pushes it to an open Projection.
   const pushedInterrupt = followRun(wired.projectionPort, runId, (run) =>
-    run.state === "running" ? offer(run, "interrupt-turn") : undefined,
+    run.state === "running" ? findOffer(run, "interrupt-turn") : undefined,
   );
 
   const sent = wired.projectionPort.submit({
@@ -424,12 +431,12 @@ test("an interactive send settles applied at Turn admission while the Turn is st
 
   // Settled while the Turn is live: the Run is durably `running`, the Turn is
   // admitted with no result, and only the live-Turn controls are offered.
-  const live = readRun(wired, runId);
+  const live = readRun(wired.projectionPort, runId);
   assert.equal(live.state, "running");
-  const interrupt = offer(live, "interrupt-turn");
+  const interrupt = requireOffer(live, "interrupt-turn");
   assert.ok(interrupt, JSON.stringify(live.actionOffers));
-  assert.equal(offer(live, "send-interactive-turn"), undefined);
-  assert.equal(offer(live, "end-interactive-step"), undefined);
+  assert.equal(findOffer(live, "send-interactive-turn"), undefined);
+  assert.equal(findOffer(live, "end-interactive-step"), undefined);
 
   // The followed client sees the live Turn too: admission pushed its interrupt Offer.
   assert.equal((await pushedInterrupt).turnId, interrupt.turnId);
@@ -467,7 +474,7 @@ test("a send whose Turn is never admitted settles not-applied and leaves the bou
   // The first Turn fails and leaves its Session unusable, so the next Turn can never
   // be admitted (ADR 0022): the send must not read as applied.
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [
       {
         result: {
@@ -488,7 +495,10 @@ test("a send whose Turn is never admitted settles not-applied and leaves the bou
     ],
   });
   await send(wired, runId, "op-send-fails", "discuss", "first attempt");
-  assert.equal(readRun(wired, runId).sessions?.[0]?.availability, "unusable");
+  assert.equal(
+    readRun(wired.projectionPort, runId).sessions?.[0]?.availability,
+    "unusable",
+  );
 
   const sent = wired.projectionPort.submit({
     operationId: "op-send-unadmitted",
@@ -503,17 +513,17 @@ test("a send whose Turn is never admitted settles not-applied and leaves the bou
   assert.equal(outcome.problem.possibleEffects, "none");
 
   // Nothing was admitted: one Turn on record, and the Run is back at the boundary.
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "blocked");
   assert.equal(run.turnPosition, 1);
-  assert.ok(offer(run, "send-interactive-turn"));
+  assert.ok(requireOffer(run, "send-interactive-turn"));
 });
 
 test("a fault after admission reaches the Run, since the send already settled applied (#290)", async (t) => {
   // The scripted Turn is admitted and settles, then the Adapter faults: the Turn
   // driver throws after the send's Operation was already recorded `applied`.
   const fake = createFake({
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [COMPLETED_DETACHED],
   })();
   const faulting: HarnessAdapter = ownPreparations({
@@ -570,7 +580,7 @@ test("a Turn that rejects after admission puts its fault on the Run (#290)", asy
   // The interrupted Turn ends lost, which releases the Step's Harness, whose close
   // fails: the Turn's promise rejects long after the send settled applied at admission.
   const fake = createFake({
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [LOST_ON_INTERRUPT],
   })();
   const failingClose: HarnessAdapter = ownPreparations({
@@ -603,7 +613,10 @@ test("a Turn that rejects after admission puts its fault on the Run (#290)", asy
     (await awaitSettled(wired.projectionPort, sent.operationId)).status,
     "applied",
   );
-  const interrupt = offer(readRun(wired, runId), "interrupt-turn");
+  const interrupt = requireOffer(
+    readRun(wired.projectionPort, runId),
+    "interrupt-turn",
+  );
   assert.ok(interrupt);
   assert.ok(
     wired.projectionPort.submit({
@@ -626,7 +639,7 @@ test("shutdown closes the Step-scoped Harness once and leaves the interactive re
   const counts = { prepares: 0, closes: [] as number[] };
   const { wired, runId } = await launchInteractive(
     t,
-    { profile: profile(), turns: [COMPLETED_DETACHED] },
+    { profile: fakeHarnessProfile(), turns: [COMPLETED_DETACHED] },
     counts,
   );
   assert.equal(counts.prepares, 1);
@@ -635,7 +648,7 @@ test("shutdown closes the Step-scoped Harness once and leaves the interactive re
   await wired.shutdown();
 
   assert.deepEqual(counts.closes, [1]);
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
   assert.equal(
     wired.runGroup.listRuns().find((run) => run.runId === runId)?.live,
     false,
@@ -656,7 +669,7 @@ test("reopened interactive preparation failure halts with a selected-Harness Pro
   };
   const { wired, runId } = await launchInteractive(
     t,
-    { profile: profile(), turns: [COMPLETED_DETACHED] },
+    { profile: fakeHarnessProfile(), turns: [COMPLETED_DETACHED] },
     counts,
   );
   await wired.shutdown();
@@ -673,7 +686,7 @@ test("reopened interactive preparation failure halts with a selected-Harness Pro
     assert.equal(outcome.problem.code, "selected-harness-unavailable");
     assert.equal(outcome.problem.details?.harness, "claude-code");
   }
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "halted");
   assert.equal(run.problem?.code, "selected-harness-unavailable");
   const owner = wired.runGroup.acquireRun(runId);
@@ -686,7 +699,7 @@ test("an interrupted interactive Turn returns to waiting and keeps the Step-scop
   const counts = { prepares: 0, closes: [] as number[] };
   const { wired, runId } = await launchInteractive(
     t,
-    { profile: profile(), turns: [INTERRUPTIBLE_TURN] },
+    { profile: fakeHarnessProfile(), turns: [INTERRUPTIBLE_TURN] },
     counts,
   );
   const { interrupt } = await sendLiveTurn(wired, runId, "op-send-interrupted");
@@ -700,10 +713,10 @@ test("an interrupted interactive Turn returns to waiting and keeps the Step-scop
     "op-interrupt-interrupted",
   );
   assert.equal(waiting.state, "blocked");
-  assert.ok(offer(waiting, "send-interactive-turn"));
-  assert.ok(offer(waiting, "end-interactive-step"));
-  assert.equal(offer(waiting, "interrupt-turn"), undefined);
-  assert.equal(offer(waiting, "resume-run")?.available ?? false, false);
+  assert.ok(requireOffer(waiting, "send-interactive-turn"));
+  assert.ok(requireOffer(waiting, "end-interactive-step"));
+  assert.equal(findOffer(waiting, "interrupt-turn"), undefined);
+  assert.equal(findOffer(waiting, "resume-run")?.available ?? false, false);
   assert.equal(counts.prepares, 1);
   assert.deepEqual(counts.closes, [0]);
   assert.equal(
@@ -714,7 +727,7 @@ test("an interrupted interactive Turn returns to waiting and keeps the Step-scop
   // An interrupted Interactive rest keeps the same shutdown rule (#355).
   await wired.shutdown();
   assert.deepEqual(counts.closes, [1]);
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
   assert.equal(
     wired.runGroup.listRuns().find((run) => run.runId === runId)?.live,
     false,
@@ -729,7 +742,10 @@ test("an interrupted interactive Turn advances nothing and the next Turn continu
   };
   const { wired, runId } = await launchInteractive(
     t,
-    { profile: profile(), turns: [INTERRUPTIBLE_TURN, COMPLETED_DETACHED] },
+    {
+      profile: fakeHarnessProfile(),
+      turns: [INTERRUPTIBLE_TURN, COMPLETED_DETACHED],
+    },
     counts,
   );
   const { interrupt } = await sendLiveTurn(wired, runId, "op-send-long");
@@ -759,18 +775,18 @@ test("an interrupted interactive Turn advances nothing and the next Turn continu
   await send(wired, runId, "op-send-after", "discuss", "pick up where we were");
   assert.deepEqual(counts.resumes, [undefined, "coord-interrupted"]);
   assert.equal(counts.prepares, 1);
-  const after = readRun(wired, runId);
+  const after = readRun(wired.projectionPort, runId);
   assert.equal(after.state, "blocked");
   assert.equal(after.sessions?.length, 1);
   assert.equal(after.sessions?.[0]?.session, "s");
-  assert.ok(offer(after, "end-interactive-step"));
+  assert.ok(requireOffer(after, "end-interactive-step"));
 });
 
 test("shutdown during a live interactive Turn still halts the Run and closes its Harness (#353, ADR 0019)", async (t) => {
   const counts = { prepares: 0, closes: [] as number[] };
   const { wired, runId } = await launchInteractive(
     t,
-    { profile: profile(), turns: [INTERRUPTIBLE_TURN] },
+    { profile: fakeHarnessProfile(), turns: [INTERRUPTIBLE_TURN] },
     counts,
   );
   await sendLiveTurn(wired, runId, "op-send-shutdown");
@@ -778,13 +794,13 @@ test("shutdown during a live interactive Turn still halts the Run and closes its
   // The signal settles the live Turn `interrupted` too, but it is no Interrupt.
   await wired.shutdown();
 
-  const halted = readRun(wired, runId);
+  const halted = readRun(wired.projectionPort, runId);
   assert.equal(halted.state, "halted");
   assert.equal(
     halted.timeline.find((e) => e.event === "turn-settled")?.detail,
     "interrupted",
   );
-  assert.ok(offer(halted, "resume-run")?.available);
+  assert.ok(requireOffer(halted, "resume-run")?.available);
   assert.deepEqual(counts.closes, [1]);
 });
 
@@ -845,7 +861,7 @@ function steerableSessionTurn(
 
 test("a live interactive Turn accepts a Steer and keeps working under a Harness that declares steer (#294)", async (t) => {
   const steerProfile: HarnessProfile = {
-    ...profile(),
+    ...fakeHarnessProfile(),
     steer: { available: true, evidence: "scripted fake" },
   };
   const { wired, runId } = await launchInteractive(t, {
@@ -865,11 +881,11 @@ test("a live interactive Turn accepts a Steer and keeps working under a Harness 
   assert.equal(outcome.status, "applied", JSON.stringify(outcome));
 
   // A Steer never ends the Turn: the Run still runs it, with the same controls.
-  const after = readRun(wired, runId);
+  const after = readRun(wired.projectionPort, runId);
   assert.equal(after.state, "running");
-  assert.equal(offer(after, "interrupt-turn")?.turnId, interrupt.turnId);
-  assert.equal(offer(after, "steer-turn")?.available, true);
-  assert.equal(offer(after, "send-interactive-turn"), undefined);
+  assert.equal(requireOffer(after, "interrupt-turn").turnId, interrupt.turnId);
+  assert.equal(requireOffer(after, "steer-turn").available, true);
+  assert.equal(findOffer(after, "send-interactive-turn"), undefined);
 
   assert.equal(
     (
@@ -882,7 +898,7 @@ test("a live interactive Turn accepts a Steer and keeps working under a Harness 
     ).state,
     "blocked",
   );
-  const settled = readRun(wired, runId).timeline.find(
+  const settled = readRun(wired.projectionPort, runId).timeline.find(
     (event) => event.event === "steer",
   );
   assert.equal(settled?.steer?.steerId, "op-steer-live");
@@ -894,7 +910,9 @@ test("a live interactive Turn accepts a Steer and keeps working under a Harness 
 
 test("a live interactive Turn offers Steer unavailable with the profile's reason and refuses it as a value (#294)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      steer: { available: false, evidence: "scripted fake" },
+    }),
     turns: [BLOCKING_TURN],
   });
   const { interrupt, steer } = await sendLiveTurn(
@@ -905,20 +923,20 @@ test("a live interactive Turn offers Steer unavailable with the profile's reason
   // The reason is the profile's steer evidence, word for word.
   assert.equal(steer.available, false);
   if (steer.available) throw new Error("unreachable");
-  assert.equal(steer.reason, profile().steer.evidence);
+  assert.equal(steer.reason, "scripted fake");
 
   // Availability is checked first, before blank text or the input rules, and
   // refuses at admission: no Operation is admitted.
   for (const text of ["focus on the tests first", "   ", "/clear"]) {
     const refused = refuseSteer(wired, runId, steer.turnId, text);
     assert.equal(refused.code, "steer-unavailable");
-    assert.equal(refused.details?.reason, profile().steer.evidence);
+    assert.equal(refused.details?.reason, "scripted fake");
   }
 
   // The refusal changes nothing: the Turn is still live and still interruptible.
-  const after = readRun(wired, runId);
+  const after = readRun(wired.projectionPort, runId);
   assert.equal(after.state, "running");
-  assert.equal(offer(after, "interrupt-turn")?.turnId, interrupt.turnId);
+  assert.equal(requireOffer(after, "interrupt-turn").turnId, interrupt.turnId);
 
   assert.equal(
     (
@@ -940,7 +958,7 @@ test("end-interactive-step mid-Turn is rejected with a precise Problem (#122)", 
   const { wired, runId } = await launchInteractive(
     t,
     {
-      profile: profile(),
+      profile: fakeHarnessProfile(),
       turns: [
         {
           block: true,
@@ -971,7 +989,7 @@ test("end-interactive-step mid-Turn is rejected with a precise Problem (#122)", 
 
   // A live human Turn runs under `running`, not `blocked`, so a crash mid-Turn
   // reconciles through the #118 path instead of stranding the Run (#122).
-  assert.equal(readRun(wired, runId).state, "running");
+  assert.equal(readRun(wired.projectionPort, runId).state, "running");
 
   // End Step while the Turn is live is refused precisely, changing nothing.
   const endAdmission = wired.projectionPort.submit({
@@ -997,7 +1015,7 @@ test("end-interactive-step mid-Turn is rejected with a precise Problem (#122)", 
   const cancelOutcome = await awaitSettled(wired.projectionPort, "op-cancel");
   assert.equal(cancelOutcome.status, "applied", JSON.stringify(cancelOutcome));
   // The send settled at admission, but cancel still awaited the whole Turn (#290).
-  assert.equal(readRun(wired, runId).state, "cancelled");
+  assert.equal(readRun(wired.projectionPort, runId).state, "cancelled");
   assert.equal(
     (await awaitSettled(wired.projectionPort, "op-send")).status,
     "applied",
@@ -1077,7 +1095,9 @@ function perPrepareAdapter(
   return ownPreparations({
     prepare(options) {
       const turns = turnsPerPrepare[prepares++] ?? [];
-      return createFake({ profile: profile(), turns })().prepare(options);
+      return createFake({ profile: fakeHarnessProfile(), turns })().prepare(
+        options,
+      );
     },
   });
 }
@@ -1123,9 +1143,9 @@ test("an Interactive Step in a Verdict-driven Repeat gives each iteration its ow
   );
   assert.equal(run.state, "blocked");
   assert.equal(run.progress[run.position]?.id, "implement");
-  assert.ok(offer(run, "end-interactive-step"));
+  assert.ok(requireOffer(run, "end-interactive-step"));
   // A Verdict-driven Repeat has no Continue (#217): refused, changing nothing.
-  assert.equal(offer(run, "continue-repeat"), undefined);
+  assert.equal(findOffer(run, "continue-repeat"), undefined);
   const refusedContinue = await submitContinue(wired, runId, "op-continue");
   assert.equal(refusedContinue.status, "not-applied");
   if (refusedContinue.status === "not-applied") {
@@ -1135,7 +1155,7 @@ test("an Interactive Step in a Verdict-driven Repeat gives each iteration its ow
   // Two Turns in iteration 0: completion never advances; one conversation.
   await send(wired, runId, "op-i0-t1", "implement", "pick a ticket");
   await send(wired, runId, "op-i0-t2", "implement", "a follow-up question");
-  const iteration0 = readRun(wired, runId);
+  const iteration0 = readRun(wired.projectionPort, runId);
   assert.equal(iteration0.state, "blocked");
   assert.equal(iteration0.progress[iteration0.position]?.id, "implement");
   assert.deepEqual(sessionsOf(iteration0), ["impl-0.0:implement"]);
@@ -1143,10 +1163,10 @@ test("an Interactive Step in a Verdict-driven Repeat gives each iteration its ow
   // End advances exactly this iteration: check fails, the autonomous Agent Step
   // keeps its Run-wide named Session, and iteration 1 rests at the interactive Step.
   await endStep(wired, runId, "op-end-0", "implement");
-  const iteration1 = readRun(wired, runId);
+  const iteration1 = readRun(wired.projectionPort, runId);
   assert.equal(iteration1.state, "blocked");
   assert.equal(iteration1.progress[iteration1.position]?.id, "implement");
-  assert.ok(offer(iteration1, "send-interactive-turn"));
+  assert.ok(requireOffer(iteration1, "send-interactive-turn"));
 
   // Iteration 1's first Turn ends lost under an interrupt: the Run halts, resumable.
   const sent = wired.projectionPort.submit({
@@ -1164,7 +1184,7 @@ test("an Interactive Step in a Verdict-driven Repeat gives each iteration its ow
   assert.ok(interrupted.admitted);
   await awaitSettled(wired.projectionPort, interrupted.operationId);
   await awaitSettled(wired.projectionPort, sent.operationId);
-  const halted = readRun(wired, runId);
+  const halted = readRun(wired.projectionPort, runId);
   assert.equal(halted.state, "halted");
   assert.deepEqual(sessionsOf(halted), [
     "impl",
@@ -1183,13 +1203,13 @@ test("an Interactive Step in a Verdict-driven Repeat gives each iteration its ow
     (await awaitSettled(wired.projectionPort, "op-resume")).status,
     "applied",
   );
-  const afterResume = readRun(wired, runId);
+  const afterResume = readRun(wired.projectionPort, runId);
   assert.equal(afterResume.state, "blocked");
   assert.equal(afterResume.progress[afterResume.position]?.id, "implement");
   await send(wired, runId, "op-i1-t2", "implement", "carry on");
 
   await endStep(wired, runId, "op-end-1", "implement");
-  const done = readRun(wired, runId);
+  const done = readRun(wired.projectionPort, runId);
   assert.equal(done.state, "succeeded");
   assert.equal(
     done.timeline.filter((event) => event.event === "interactive-step-ended")
@@ -1269,9 +1289,9 @@ test("an entry Turn inside a Repeat opens each iteration's own Session (#212, #2
   );
   assert.equal(run.state, "blocked");
   await endStep(wired, runId, "op-end-0", "implement");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
   await endStep(wired, runId, "op-end-1", "implement");
-  assert.equal(readRun(wired, runId).state, "succeeded");
+  assert.equal(readRun(wired.projectionPort, runId).state, "succeeded");
 
   const owner = wired.runGroup.acquireRun(runId);
   assert.ok(owner);
@@ -1320,12 +1340,12 @@ test("a human-controlled Repeat offers Continue only at a Turn boundary; one Con
   // At the boundary: send + Continue, never End Step (Continue is this mode's control).
   assert.equal(run.state, "blocked");
   assert.equal(run.progress[run.position]?.id, "implement");
-  assert.ok(offer(run, "send-interactive-turn"));
-  const continueOffer = offer(run, "continue-repeat");
+  assert.ok(requireOffer(run, "send-interactive-turn"));
+  const continueOffer = requireOffer(run, "continue-repeat");
   assert.ok(continueOffer, JSON.stringify(run.actionOffers));
   assert.equal(continueOffer.stepId, "implement");
   assert.match(continueOffer.consequence, /fresh/);
-  assert.equal(offer(run, "end-interactive-step"), undefined);
+  assert.equal(findOffer(run, "end-interactive-step"), undefined);
   // End Step is refused in this mode, changing nothing.
   const end = wired.projectionPort.submit({
     operationId: "op-end",
@@ -1338,7 +1358,7 @@ test("a human-controlled Repeat offers Continue only at a Turn boundary; one Con
 
   // A completed Turn never advances the iteration.
   await send(wired, runId, "op-i0-t1", "implement", "pick a ticket");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
 
   // A live Turn: no Continue Offer, and a Continue submission cannot race it.
   const sent = wired.projectionPort.submit({
@@ -1348,7 +1368,10 @@ test("a human-controlled Repeat offers Continue only at a Turn boundary; one Con
   });
   assert.ok(sent.admitted);
   const interruptOffer = await awaitInterruptOffer(wired, runId);
-  assert.equal(offer(readRun(wired, runId), "continue-repeat"), undefined);
+  assert.equal(
+    findOffer(readRun(wired.projectionPort, runId), "continue-repeat"),
+    undefined,
+  );
   const raced = await submitContinue(wired, runId, "op-race");
   assert.equal(raced.status, "not-applied");
   if (raced.status === "not-applied") {
@@ -1365,24 +1388,24 @@ test("a human-controlled Repeat offers Continue only at a Turn boundary; one Con
   // The interrupt returns iteration 0 to its Turn boundary (#353).
   const boundary = await awaitRunRest(wired.projectionPort, runId);
   assert.equal(boundary.state, "blocked");
-  assert.ok(offer(boundary, "continue-repeat"));
+  assert.ok(requireOffer(boundary, "continue-repeat"));
 
   // One Continue settles exactly iteration 0 and rests at iteration 1.
   assert.equal(
     (await submitContinue(wired, runId, "op-continue-0")).status,
     "applied",
   );
-  const iteration1 = readRun(wired, runId);
+  const iteration1 = readRun(wired.projectionPort, runId);
   assert.equal(iteration1.state, "blocked");
   assert.equal(iteration1.progress[iteration1.position]?.id, "implement");
-  assert.ok(offer(iteration1, "continue-repeat"));
+  assert.ok(requireOffer(iteration1, "continue-repeat"));
   // The same Operation id again replays its admission and settles nothing new.
   assert.equal(
     (await submitContinue(wired, runId, "op-continue-0")).status,
     "applied",
   );
   await send(wired, runId, "op-i1-t1", "implement", "next ticket");
-  assert.deepEqual(sessionsOf(readRun(wired, runId)), [
+  assert.deepEqual(sessionsOf(readRun(wired.projectionPort, runId)), [
     "impl-0.0:implement",
     "impl-1.0:implement",
   ]);
@@ -1390,10 +1413,10 @@ test("a human-controlled Repeat offers Continue only at a Turn boundary; one Con
   // Two more Continues: never a Review checkpoint, only Continue moves the loop.
   await submitContinue(wired, runId, "op-continue-1");
   await submitContinue(wired, runId, "op-continue-2");
-  const later = readRun(wired, runId);
+  const later = readRun(wired.projectionPort, runId);
   assert.equal(later.state, "blocked");
   assert.equal(later.checkpoint, undefined);
-  assert.equal(offer(later, "answer-human-gate"), undefined);
+  assert.equal(findOffer(later, "answer-human-gate"), undefined);
   assert.equal(
     later.timeline.filter((event) => event.event === "repeat-continued").length,
     3,
@@ -1479,18 +1502,18 @@ test("confirmed End Stage settles a human-controlled Repeat and the Run once as 
   );
   // At the boundary End Stage sits beside send and Continue, never End Step, and its
   // consequence says the tracker has not been checked.
-  const endStage = offer(run, "end-stage");
+  const endStage = requireOffer(run, "end-stage");
   assert.ok(endStage, JSON.stringify(run.actionOffers));
   assert.equal(endStage.stepId, "implement");
   assert.match(endStage.consequence, /not checked the tracker/);
-  assert.ok(offer(run, "continue-repeat"));
-  assert.ok(offer(run, "send-interactive-turn"));
-  assert.equal(offer(run, "end-interactive-step"), undefined);
+  assert.ok(requireOffer(run, "continue-repeat"));
+  assert.ok(requireOffer(run, "send-interactive-turn"));
+  assert.equal(findOffer(run, "end-interactive-step"), undefined);
 
   // The agent's "done" prose ends nothing: the Step still waits for the human.
   await send(wired, runId, "op-i0-t1", "implement", "are we done?");
-  assert.equal(readRun(wired, runId).state, "blocked");
-  assert.equal(readRun(wired, runId).completion, undefined);
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).completion, undefined);
 
   // A live Turn: no End Stage Offer, and a raced End Stage is refused unchanged.
   const sent = wired.projectionPort.submit({
@@ -1500,7 +1523,10 @@ test("confirmed End Stage settles a human-controlled Repeat and the Run once as 
   });
   assert.ok(sent.admitted);
   const interruptOffer = await awaitInterruptOffer(wired, runId);
-  assert.equal(offer(readRun(wired, runId), "end-stage"), undefined);
+  assert.equal(
+    findOffer(readRun(wired.projectionPort, runId), "end-stage"),
+    undefined,
+  );
   const raced = await submitEndStage(wired, runId, "op-race");
   assert.equal(raced.status, "not-applied");
   if (raced.status === "not-applied") {
@@ -1518,22 +1544,22 @@ test("confirmed End Stage settles a human-controlled Repeat and the Run once as 
   // The interrupt returns iteration 0 to its Turn boundary (#353).
   const boundary = await awaitRunRest(wired.projectionPort, runId);
   assert.equal(boundary.state, "blocked");
-  assert.ok(offer(boundary, "end-stage"));
+  assert.ok(requireOffer(boundary, "end-stage"));
 
   // Continue once, then confirmed End Stage in iteration 1: the Run succeeds, sends
   // no Turn, and records a human declaration rather than a verified completion.
   await submitContinue(wired, runId, "op-continue-0");
-  const turnsBefore = readRun(wired, runId).turnPosition;
+  const turnsBefore = readRun(wired.projectionPort, runId).turnPosition;
   assert.equal(
     (await submitEndStage(wired, runId, "op-end-stage")).status,
     "applied",
   );
-  const done = readRun(wired, runId);
+  const done = readRun(wired.projectionPort, runId);
   assert.equal(done.state, "succeeded");
   assert.equal(done.completion, "human-declared");
   assert.equal(done.turnPosition, turnsBefore);
-  assert.equal(offer(done, "end-stage"), undefined);
-  assert.equal(offer(done, "continue-repeat"), undefined);
+  assert.equal(findOffer(done, "end-stage"), undefined);
+  assert.equal(findOffer(done, "continue-repeat"), undefined);
   assert.deepEqual(
     done.timeline
       .filter(
@@ -1593,7 +1619,7 @@ test("End Stage exits a human-controlled Repeat into the next node, and is refus
     (await submitEndStage(wired, runId, "op-end-stage")).status,
     "applied",
   );
-  const done = readRun(wired, runId);
+  const done = readRun(wired.projectionPort, runId);
   assert.equal(done.state, "succeeded");
   assert.equal(done.completion, "human-declared");
   assert.deepEqual(
@@ -1624,7 +1650,7 @@ test("after End Stage the Projection rests at the next node, not in another iter
     (await submitEndStage(wired, runId, "op-end-stage")).status,
     "applied",
   );
-  const next = readRun(wired, runId);
+  const next = readRun(wired.projectionPort, runId);
   assert.equal(next.state, "blocked");
   assert.equal(next.completion, undefined);
   assert.deepEqual(
@@ -1636,30 +1662,30 @@ test("after End Stage the Projection rests at the next node, not in another iter
   );
   assert.equal(next.progress[next.position]?.id, "review");
   // The next Step is outside the group, so it offers End Step, not End Stage.
-  assert.ok(offer(next, "end-interactive-step"));
-  assert.equal(offer(next, "end-stage"), undefined);
+  assert.ok(requireOffer(next, "end-interactive-step"));
+  assert.equal(findOffer(next, "end-stage"), undefined);
 });
 
 test("End Stage is refused as a value on an interactive Step outside a human-controlled Repeat (#218)", async (t) => {
   const { wired, runId, run } = await launchInteractive(t, {
-    profile: profile(),
+    profile: fakeHarnessProfile(),
     turns: [],
   });
-  assert.equal(offer(run, "end-stage"), undefined);
+  assert.equal(findOffer(run, "end-stage"), undefined);
   const refused = await submitEndStage(wired, runId, "op-end-stage", "discuss");
   assert.equal(refused.status, "not-applied");
   if (refused.status === "not-applied") {
     assert.equal(refused.problem.code, "end-stage-outside-human-repeat");
   }
-  const still = readRun(wired, runId);
+  const still = readRun(wired.projectionPort, runId);
   assert.equal(still.state, "blocked");
-  assert.ok(offer(still, "end-interactive-step"));
+  assert.ok(requireOffer(still, "end-interactive-step"));
 });
 
 test("Steer admission checks availability, then blank text, then input rules, then the Session's commands (#359)", async (t) => {
   const { wired, runId } = await launchInteractive(t, {
     profile: {
-      ...profile(),
+      ...fakeHarnessProfile(),
       steer: { available: true, evidence: "scripted fake" },
     },
     // `/clear` is both reserved and a listed Session command: the input rule,
@@ -1689,7 +1715,7 @@ test("Steer admission checks availability, then blank text, then input rules, th
 
   // A refusal consumes no Operation id and records nothing: the same id then
   // carries a Steer whose first word is no command at all.
-  const live = readRun(wired, runId);
+  const live = readRun(wired.projectionPort, runId);
   assert.equal(live.state, "running");
   assert.equal(
     live.timeline.filter((event) => event.event === "steer").length,
@@ -1723,7 +1749,7 @@ test("a Codex Steer is refused no reserved word, since Codex reserves none and l
     t,
     {
       profile: {
-        ...profile(),
+        ...fakeHarnessProfile(),
         harness: "Codex",
         steer: { available: true, evidence: "scripted fake" },
       },
@@ -1750,7 +1776,7 @@ for (const harness of ["claude-code", "codex"] as const) {
   test(`m10-workspace-mentions: ${harness} receives identical human path text without attachments or candidate reads`, async (t) => {
     const inputs: unknown[] = [];
     const fake = createFake({
-      profile: profile(),
+      profile: fakeHarnessProfile(),
       turns: [COMPLETED_DETACHED, COMPLETED_DETACHED],
     })();
     const adapter = ownPreparations({

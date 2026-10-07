@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -7,7 +8,6 @@ import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   type HarnessAdapter,
-  type HarnessProfile,
   type TurnResult,
 } from "../../src/harness/harness.js";
 import type {
@@ -15,7 +15,7 @@ import type {
   RunView,
 } from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
-import { createFake } from "../harness/fake-adapter.js";
+import { fakeHarnessProfile, createFake } from "../harness/fake-adapter.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
@@ -49,35 +49,6 @@ function fakeProcess(): ProcessAdapter {
   };
 }
 
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "/usr/bin/claude",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
 const COMPLETED: TurnResult = {
   kind: "completed",
   detail: {
@@ -102,7 +73,10 @@ function receiptAgent(
   inputs: string[];
 } {
   const inner = createFake({
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+    }),
     turns: receipts.map(() => ({ result: COMPLETED })),
   })();
   const inputs: string[] = [];
@@ -262,17 +236,6 @@ async function launch(
   return { wired, runId: admission.runId, launched };
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
 /** The text of the Run output `name` read back through the Port's resource read. */
 function readOutput(wired: Wiring, run: RunView, name: string): string {
   const output = run.outputs.find((candidate) => candidate.name === name);
@@ -294,7 +257,7 @@ test("[agent-output-receipt] a validated receipt binds the reference as a Run ou
     writeBundle("consume"),
   );
 
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(
     readOutput(wired, run, "spec-ref"),
@@ -318,7 +281,7 @@ test("[agent-output-receipt] a completed Turn with no receipt fails the Run and 
     writeBundle("republish"),
   );
 
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "failed");
   assert.equal(agent.inputs.length, 2);
   assert.equal(readOutput(wired, run, "spec-ref"), "LOCAL:spec.md");
@@ -350,7 +313,7 @@ test("[agent-output-receipt] a receipt root the Store cannot prepare fails each 
   // The launch Operation itself applied; only the Run's Step failed.
   assert.equal(launched.status, "applied", JSON.stringify(launched));
 
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   // The existing failed-Attempt policy: retried within budget, then the Run fails.
   assert.equal(run.state, "failed");
   assert.deepEqual(

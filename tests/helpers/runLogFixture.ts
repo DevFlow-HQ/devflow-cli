@@ -1,44 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { HarnessProfile, TurnResult } from "../../src/harness/harness.js";
-import type {
-  ProjectionPort,
-  RunView,
-} from "../../src/application/projection-port.js";
+import type { TurnResult } from "../../src/harness/harness.js";
+import type { ProjectionPort } from "../../src/application/projection-port.js";
 import { makeTempDir } from "./tempDir.js";
 import { awaitSettled } from "./settleOperation.js";
 
 // Shared fixtures for Run lifecycle records and multi-Application ownership wiring.
-
-export function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
 
 // Payloads seeded into prompts, Turn input, transcript, and failure detail; none
 // may reach the log.
@@ -116,16 +84,6 @@ export async function applied(
   assert.ok(admission.admitted, JSON.stringify(admission));
   const outcome = await awaitSettled(port, submission.operationId);
   assert.equal(outcome.status, "applied", JSON.stringify(outcome));
-}
-
-export function readRun(port: ProjectionPort, runId: string): RunView {
-  const opened = port.openProjection({ family: "run", runId });
-  try {
-    if (!opened.snapshot.result.found) throw new Error("the Run is not found");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
 }
 
 /** A record with the base fields dropped, for exact comparison. */

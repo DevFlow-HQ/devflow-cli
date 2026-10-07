@@ -6,12 +6,15 @@ import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
   type HarnessAdapter,
-  type HarnessProfile,
   type PrepareResult,
   type TurnResult,
 } from "../../src/harness/harness.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { writeCommandBundle } from "../helpers/commandBundle.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -36,61 +39,6 @@ import { usageEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 
 /** The fake Claude Code profile: it hosts a permission bridge, so an Agent Turn can
  *  raise an approval Harness Request. */
-function claudeProfile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "claude",
-    executableVersion: "2.1.273",
-    platform: "linux",
-    adapterRevision: "fake-claude-1",
-    configurationPosture: "user-compatible",
-    recovery: {
-      mode: "native-reattach",
-      evidence: "fake claude resumes by id",
-    },
-    interruption: {
-      mode: "process-only",
-      evidence: "fake claude stops the process",
-    },
-    approvals: {
-      available: true,
-      evidence: "fake claude hosts a permission bridge",
-    },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: {
-      available: false,
-      evidence: "fake claude offers no clarifications",
-    },
-    steer: {
-      available: false,
-      evidence: "fake claude has no same-Turn guidance frame",
-    },
-    modelSelection: {
-      at: "unavailable",
-      evidence: "fake claude selects no model",
-    },
-    modelObservation: {
-      available: true,
-      evidence: "fake claude observes its own model",
-    },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "fake claude mints a session id",
-    },
-    skillDelivery: {
-      mode: "plain-path",
-      evidence: "fake claude reads a SKILL.md path",
-    },
-    fileDelivery: {
-      mode: "plain-path",
-      evidence: "fake claude reads an absolute path",
-    },
-  };
-}
 
 const COMPLETED_OPEN: TurnResult = {
   kind: "completed",
@@ -106,7 +54,51 @@ const COMPLETED_OPEN: TurnResult = {
  *  the policy assertions observe (answered `allow`/`deny`, then the Run rests). */
 function agentScript(): FakeScript {
   return {
-    profile: claudeProfile(),
+    profile: fakeHarnessProfile({
+      executable: "claude",
+      executableVersion: "2.1.273",
+      adapterRevision: "fake-claude-1",
+      recovery: {
+        mode: "native-reattach",
+        evidence: "fake claude resumes by id",
+      },
+      interruption: {
+        mode: "process-only",
+        evidence: "fake claude stops the process",
+      },
+      approvals: {
+        available: true,
+        evidence: "fake claude hosts a permission bridge",
+      },
+      clarifications: {
+        available: false,
+        evidence: "fake claude offers no clarifications",
+      },
+      steer: {
+        available: false,
+        evidence: "fake claude has no same-Turn guidance frame",
+      },
+      modelSelection: {
+        at: "unavailable",
+        evidence: "fake claude selects no model",
+      },
+      modelObservation: {
+        available: true,
+        evidence: "fake claude observes its own model",
+      },
+      recoveryCoordinate: {
+        timing: "before-submission",
+        evidence: "fake claude mints a session id",
+      },
+      skillDelivery: {
+        mode: "plain-path",
+        evidence: "fake claude reads a SKILL.md path",
+      },
+      fileDelivery: {
+        mode: "plain-path",
+        evidence: "fake claude reads an absolute path",
+      },
+    }),
     // A flagless `run launch` starts from the Harness's reported Model choice.
     defaults: { kind: "reported", choice: { model: "fake-model" } },
     turns: [

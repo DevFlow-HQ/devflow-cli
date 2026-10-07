@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -22,6 +23,7 @@ import type {
 } from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
 import {
+  fakeHarnessProfile,
   createFake,
   type FakeScript,
   type FakeTurnRequestRecord,
@@ -75,46 +77,17 @@ function fakeProcess(): ProcessAdapter {
   };
 }
 
-function profile(
-  modelSelection: HarnessProfile["modelSelection"] = {
-    at: "unavailable",
-    evidence: "scripted fake",
-  },
-): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "/usr/bin/claude",
-    executableVersion: "1.2.3",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    // Selection unavailable by default ⇒ the fake admits any requested model
-    // without validating it, so most cases exercise the carry, not the list.
-    modelSelection,
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
 /** A single-Turn script that completes; `model` is the observed effective model. */
 function completedScript(model: string | undefined): FakeScript {
   return {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+      modelSelection: {
+        at: "unavailable",
+        evidence: "scripted fake",
+      },
+    }),
     turns: [
       {
         result: {
@@ -134,7 +107,14 @@ function completedScript(model: string | undefined): FakeScript {
 /** A single-Turn script that fails, so the Run rests `failed` and is resumable. */
 function failedScript(): FakeScript {
   return {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+      modelSelection: {
+        at: "unavailable",
+        evidence: "scripted fake",
+      },
+    }),
     turns: [
       {
         result: {
@@ -322,17 +302,6 @@ function wire(
   return { wired, digest: entry.digest };
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
 const AGENT_BUNDLE = "dev.secant.requested-model";
 
 /** A launch draft for the single-Agent Bundle with the given Model choice. */
@@ -434,7 +403,11 @@ function wireDeclaring(
   const home = makeTempDir("secant-model-choice-home-");
   const captured = recording({
     ...completedScript("observed"),
-    profile: profile(modelSelection),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+      modelSelection: modelSelection,
+    }),
     defaults,
   });
   const { wired, digest } = wire(
@@ -447,7 +420,7 @@ function wireDeclaring(
   return { wired, digest, requests: captured.requests, home };
 }
 
-test("[model-choice-durability] a launch's model and effort are held on the Run, sent on the Turn request, recorded on its first Turn, projected beside the effective model, and survive reopen", async (t) => {
+test("m12-harness-run-test-helpers: [model-choice-durability] a launch's model and effort are held on the Run, sent on the Turn request, recorded on its first Turn, projected beside the effective model, and survive reopen", async (t) => {
   const home = makeTempDir("secant-model-choice-home-");
   const workspace = makeTempDir("secant-model-choice-ws-");
   const captured = recording(completedScript("observed-sonnet"));
@@ -484,7 +457,7 @@ test("[model-choice-durability] a launch's model and effort are held on the Run,
 
   // Requested and effective stay distinct facts on the view; the run-level
   // `requestedModel` keeps naming the choice's model for older parsers.
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.deepEqual(run.modelChoice, {
     model: "requested-opus",
@@ -514,7 +487,7 @@ test("[model-choice-durability] a launch's model and effort are held on the Run,
   const reopenedRecord = reopened.runGroup.readRun(runId);
   assert.ok(reopenedRecord.ok);
   assert.deepEqual(reopenedRecord.run.modelChoice, created.run.modelChoice);
-  const reopenedRun = readRun(reopened, runId);
+  const reopenedRun = readRun(reopened.projectionPort, runId);
   assert.deepEqual(reopenedRun.modelChoice, run.modelChoice);
   assert.deepEqual(startedTurns(reopenedRun), startedTurns(run));
 });
@@ -525,7 +498,14 @@ test("each effective model and effort a Turn observes is recorded as a Turn even
   const read = { known: true, model: "observed-sonnet", effort: "high" };
   const rerouted = { known: true, model: "observed-haiku", effort: "high" };
   const script: FakeScript = {
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+      modelSelection: {
+        at: "unavailable",
+        evidence: "scripted fake",
+      },
+    }),
     turns: [
       {
         // A reroute replaces the first observation; an unknown one records
@@ -570,7 +550,7 @@ test("each effective model and effort a Turn observes is recorded as a Turn even
   assert.ok(runId);
   await awaitSettled(wired.projectionPort, "op-launch");
 
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.equal(run.effectiveModel, "observed-haiku");
   const turnEntries = run.timeline.filter(
@@ -640,7 +620,7 @@ test("[model-choice-durability] resume reuses the stored choice and never presel
   const runId = admission.runId;
   assert.ok(runId);
   await awaitSettled(wired.projectionPort, "op-launch");
-  assert.equal(readRun(wired, runId).state, "failed");
+  assert.equal(readRun(wired.projectionPort, runId).state, "failed");
 
   // Reopen with a Harness that now reports a different default and resume: the
   // resumed Turn requests the stored choice, not the new default.
@@ -669,7 +649,7 @@ test("[model-choice-durability] resume reuses the stored choice and never presel
   assert.deepEqual(captured.requests, [
     { session: "s", modelChoice: { model: "requested-opus", effort: "low" } },
   ]);
-  const run = readRun(reopened, runId);
+  const run = readRun(reopened.projectionPort, runId);
   assert.equal(run.state, "succeeded");
   assert.deepEqual(run.modelChoice, { model: "requested-opus", effort: "low" });
   assert.deepEqual(
@@ -691,7 +671,14 @@ test("an Agent Turn, an Interactive Entry Turn, and a human Turn each record the
   // Every prepare replays this script from its first Turn, so each Turn is the
   // same completion whichever prepared Harness serves it.
   const captured = recording({
-    profile: profile(),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+      modelSelection: {
+        at: "unavailable",
+        evidence: "scripted fake",
+      },
+    }),
     turns: [completed, completed, completed],
   });
   const { wired, digest } = wire(
@@ -718,7 +705,7 @@ test("an Agent Turn, an Interactive Entry Turn, and a human Turn each record the
   const runId = admission.runId;
   assert.ok(runId);
   await awaitSettled(wired.projectionPort, "op-launch");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
 
   const sent = wired.projectionPort.submit({
     operationId: "op-turn",
@@ -780,7 +767,11 @@ test("a model the Harness no longer lists fails the resumed Turn not-started, ad
     t,
     createFake({
       ...failedScript(),
-      profile: profile(listing(["listed-a", "listed-b"])),
+      profile: fakeHarnessProfile({
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+        modelSelection: listing(["listed-a", "listed-b"]),
+      }),
     })(),
     writeAgentBundle(),
     home,
@@ -795,13 +786,17 @@ test("a model the Harness no longer lists fails the resumed Turn not-started, ad
   const runId = admission.runId;
   assert.ok(runId);
   await awaitSettled(wired.projectionPort, "op-launch");
-  assert.equal(readRun(wired, runId).state, "failed");
+  assert.equal(readRun(wired.projectionPort, runId).state, "failed");
 
   // The Harness has since dropped `listed-b`. The model is not a prepare option,
   // so the resume prepares; the Turn is refused before admission.
   const captured = recording({
     ...completedScript("observed-later"),
-    profile: profile(listing(["listed-a"])),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+      modelSelection: listing(["listed-a"]),
+    }),
   });
   const reopened = wireApplication({
     secantHome: home,
@@ -824,7 +819,7 @@ test("a model the Harness no longer lists fails the resumed Turn not-started, ad
   assert.deepEqual(captured.requests, [
     { session: "s", modelChoice: { model: "listed-b" } },
   ]);
-  const run = readRun(reopened, runId);
+  const run = readRun(reopened.projectionPort, runId);
   // A not-started Turn fails the Agent Attempt like any other, here with no retry
   // budget left.
   assert.equal(run.state, "failed");
@@ -977,7 +972,7 @@ for (const [label, defaults, source] of [
     assert.deepEqual(requests, [
       { session: "s", modelChoice: { model: "alpha", effort: "high" } },
     ]);
-    const run = readRun(wired, admission.runId);
+    const run = readRun(wired.projectionPort, admission.runId);
     assert.deepEqual(run.modelChoice, { model: "alpha", effort: "high" });
     assert.deepEqual(
       startedTurns(run).map((turn) => [
@@ -1308,18 +1303,24 @@ for (const event of ["INSERT", "UPDATE"] as const) {
     });
     assert.ok(admission.admitted);
     assert.ok(admission.runId);
-    assert.deepEqual(readRun(wired, admission.runId).modelChoice, {
-      model: "beta",
-      effort: "medium",
-    });
+    assert.deepEqual(
+      readRun(wired.projectionPort, admission.runId).modelChoice,
+      {
+        model: "beta",
+        effort: "medium",
+      },
+    );
     assert.match(
-      readRun(wired, admission.runId).preferenceNotice ?? "",
+      readRun(wired.projectionPort, admission.runId).preferenceNotice ?? "",
       /active for this Run.*could not save/,
     );
     await awaitSettled(wired.projectionPort, "failed-save");
-    assert.equal(readRun(wired, admission.runId).state, "succeeded");
+    assert.equal(
+      readRun(wired.projectionPort, admission.runId).state,
+      "succeeded",
+    );
     assert.match(
-      readRun(wired, admission.runId).preferenceNotice ?? "",
+      readRun(wired.projectionPort, admission.runId).preferenceNotice ?? "",
       /could not save/,
     );
     const encoded = wired.catalog.getPreference(
@@ -1340,7 +1341,11 @@ test("two Applications sharing a home adopt the latest committed choice on their
   const adapter = () =>
     createFake({
       ...completedScript("observed"),
-      profile: profile(LISTED),
+      profile: fakeHarnessProfile({
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+        modelSelection: LISTED,
+      }),
       defaults: REPORTED,
     })();
   const first = wire(
@@ -1492,7 +1497,11 @@ test("a durable launch replay after reopening the Application preserves a newer 
   const adapter = () =>
     createFake({
       ...completedScript("observed"),
-      profile: profile(LISTED),
+      profile: fakeHarnessProfile({
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+        modelSelection: LISTED,
+      }),
       defaults: REPORTED,
     })();
   const first = wire(t, adapter(), bundle, home, workspace);
@@ -1552,10 +1561,13 @@ for (const requested of [
     assert.ok(admission.admitted);
     assert.ok(admission.runId);
     await awaitSettled(wired.projectionPort, "locked-launch");
-    assert.deepEqual(readRun(wired, admission.runId).modelChoice, {
-      model: requested?.model ?? "alpha",
-      effort: "high",
-    });
+    assert.deepEqual(
+      readRun(wired.projectionPort, admission.runId).modelChoice,
+      {
+        model: requested?.model ?? "alpha",
+        effort: "high",
+      },
+    );
     assert.equal(requests[0]?.modelChoice?.effort, "high");
   });
 }
@@ -1635,10 +1647,13 @@ for (const kind of ["reported", "fallback"] as const) {
     assert.ok(admission.admitted);
     assert.ok(admission.runId);
     await awaitSettled(wired.projectionPort, "saved-locked-launch");
-    assert.deepEqual(readRun(wired, admission.runId).modelChoice, {
-      model: "beta",
-      effort: "high",
-    });
+    assert.deepEqual(
+      readRun(wired.projectionPort, admission.runId).modelChoice,
+      {
+        model: "beta",
+        effort: "high",
+      },
+    );
     assert.deepEqual(requests[0]?.modelChoice, {
       model: "beta",
       effort: "high",
@@ -1792,7 +1807,15 @@ test("model-choice-bounded-eligibility", async (t) => {
               qualifications++;
               qualifying.resolve();
               await release.promise;
-              return { ok: true, profile: profile(LISTED), defaults: REPORTED };
+              return {
+                ok: true,
+                profile: fakeHarnessProfile({
+                  executable: "/usr/bin/claude",
+                  executableVersion: "1.2.3",
+                  modelSelection: LISTED,
+                }),
+                defaults: REPORTED,
+              };
             },
           },
         ],
@@ -1985,7 +2008,7 @@ test("[change-model-choice] an idle halted Run changes effort, retains its model
     choice: { model: "alpha", effort: "low" },
     reach: "next-turn",
   });
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "alpha",
     effort: "low",
   });
@@ -2026,7 +2049,7 @@ for (const state of [
     assert.equal(receipt.outcome.status, terminal ? "not-applied" : "applied");
     if (receipt.outcome.status === "not-applied")
       assert.equal(receipt.outcome.problem.code, "run-terminal");
-    assert.deepEqual(readRun(wired, runId).modelChoice, {
+    assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
       model: terminal ? "alpha" : "beta",
       effort: "high",
     });
@@ -2072,7 +2095,7 @@ test("[change-model-choice] incompatible effort resets to the declared default w
         "delta does not offer high effort. Effort changed to low, its default.",
     },
   });
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "delta",
     effort: "low",
   });
@@ -2098,7 +2121,7 @@ test("[change-model-choice] invalid models and efforts refuse without changing R
     assert.equal(result.outcome.status, "not-applied");
     if (result.outcome.status === "not-applied")
       assert.equal(result.outcome.problem.code, code);
-    assert.deepEqual(readRun(wired, runId).modelChoice, {
+    assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
       model: "alpha",
       effort: "high",
     });
@@ -2112,7 +2135,9 @@ test("[change-model-choice] invalid models and efforts refuse without changing R
     model: "gamma",
   });
   assert.equal(cleared.outcome.status, "applied");
-  assert.deepEqual(readRun(wired, runId).modelChoice, { model: "gamma" });
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
+    model: "gamma",
+  });
   assert.equal(
     cleared.modelChoiceChange?.effortReset?.explanation,
     "gamma does not offer an effort setting. Effort cleared.",
@@ -2140,7 +2165,7 @@ test("[change-model-choice] an omitted effort that has no declared default requi
   assert.equal(receipt.outcome.status, "not-applied");
   if (receipt.outcome.status === "not-applied")
     assert.equal(receipt.outcome.problem.code, "effort-choice-required");
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "alpha",
     effort: "high",
   });
@@ -2162,11 +2187,11 @@ test("[change-model-choice] suggested names remain open and the qualified lock s
     model: "organisation/model",
   });
   assert.equal(changed.outcome.status, "applied");
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "organisation/model",
     effort: "high",
   });
-  const offer = readRun(wired, runId).actionOffers.find(
+  const offer = readRun(wired.projectionPort, runId).actionOffers.find(
     (offer) => offer.action === "change-model-choice",
   );
   assert.ok(offer?.action === "change-model-choice" && offer.available);
@@ -2187,7 +2212,7 @@ test("[change-model-choice] suggested names remain open and the qualified lock s
       "Locked by opaque-setting. Change that setting outside Secant.",
     );
   }
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "organisation/model",
     effort: "high",
   });
@@ -2206,12 +2231,12 @@ test("[change-model-choice] failed preference save keeps the Run change and noti
     effort: "low",
   });
   assert.equal(first.outcome.status, "applied");
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "alpha",
     effort: "low",
   });
   assert.match(
-    readRun(wired, runId).preferenceNotice ?? "",
+    readRun(wired.projectionPort, runId).preferenceNotice ?? "",
     /active for this Run.*could not save/,
   );
   database.exec("DROP TRIGGER fail_choice");
@@ -2235,7 +2260,10 @@ test("[change-model-choice] failed preference save keeps the Run change and noti
   assert.ok(!different.admitted);
   assert.equal(different.problem.code, "operation-id-reused");
   await changeChoice(wired, "save-recovers", { runId, effort: "medium" });
-  assert.equal(readRun(wired, runId).preferenceNotice, undefined);
+  assert.equal(
+    readRun(wired.projectionPort, runId).preferenceNotice,
+    undefined,
+  );
   assert.equal(
     wired.catalog.getPreference("last-model-choice:claude-code"),
     JSON.stringify({ model: "alpha", effort: "medium" }),
@@ -2254,7 +2282,7 @@ test("[change-model-choice] a legacy partial change uses declared defaults and n
     effort: "low",
   });
   assert.equal(result.outcome.status, "applied");
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "alpha",
     effort: "low",
   });
@@ -2300,7 +2328,11 @@ test("[change-model-choice] an idle interactive Run and a fresh Repeat iteration
   const captured = recording({
     ...completed,
     turns: [...completed.turns, ...completed.turns],
-    profile: profile(LISTED),
+    profile: fakeHarnessProfile({
+      executable: "/usr/bin/claude",
+      executableVersion: "1.2.3",
+      modelSelection: LISTED,
+    }),
     defaults: REPORTED,
   });
   const { wired, digest } = wire(
@@ -2325,7 +2357,7 @@ test("[change-model-choice] an idle interactive Run and a fresh Repeat iteration
   assert.ok(launched.admitted && launched.runId);
   const runId = launched.runId;
   await awaitSettled(wired.projectionPort, "launch-repeat");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
   const changed = await changeChoice(wired, "change-between-turns", {
     runId,
     model: "beta",
@@ -2349,7 +2381,7 @@ test("[change-model-choice] an idle interactive Run and a fresh Repeat iteration
     }).admitted,
   );
   await awaitSettled(wired.projectionPort, "fresh-iteration");
-  assert.equal(readRun(wired, runId).state, "blocked");
+  assert.equal(readRun(wired.projectionPort, runId).state, "blocked");
   assert.deepEqual(
     captured.requests.map((request) => request.modelChoice),
     [
@@ -2359,7 +2391,7 @@ test("[change-model-choice] an idle interactive Run and a fresh Repeat iteration
     ],
   );
   assert.notEqual(captured.requests[0]?.session, captured.requests[2]?.session);
-  assert.deepEqual(startedTurns(readRun(wired, runId)), [
+  assert.deepEqual(startedTurns(readRun(wired.projectionPort, runId)), [
     {
       turnKind: "interactive-agent",
       requestedModel: "alpha",
@@ -2474,7 +2506,11 @@ test("[change-model-choice] a change while a Turn works is admitted here, keeps 
   assert.ok(complete);
   const captured = recording({
     profile: {
-      ...profile(LISTED),
+      ...fakeHarnessProfile({
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+        modelSelection: LISTED,
+      }),
       interruption: { mode: "active-turn", evidence: "fake" },
     },
     defaults: REPORTED,
@@ -2518,7 +2554,7 @@ test("[change-model-choice] a change while a Turn works is admitted here, keeps 
     effort: "medium",
   });
   assert.equal(result.outcome.status, "applied");
-  assert.equal(readRun(wired, runId).state, "running");
+  assert.equal(readRun(wired.projectionPort, runId).state, "running");
   assert.deepEqual(
     captured.requests.map((request) => request.modelChoice),
     [
@@ -2549,7 +2585,7 @@ test("[change-model-choice] a change while a Turn works is admitted here, keeps 
     effort: "medium",
   });
   assert.equal(
-    startedTurns(readRun(wired, runId)).at(-1)?.requestedModel,
+    startedTurns(readRun(wired.projectionPort, runId)).at(-1)?.requestedModel,
     "beta",
   );
   await wired.shutdown();
@@ -2593,7 +2629,11 @@ async function liveChangeRun(
   };
   const adapter = createFake({
     profile: {
-      ...profile(LISTED),
+      ...fakeHarnessProfile({
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+        modelSelection: LISTED,
+      }),
       interruption: { mode: "active-turn", evidence: "fake" },
       modelChange: LIVE_REACH,
     },
@@ -2753,7 +2793,7 @@ test("[live-model-change] a change reaching the live Turn is pending until the H
   t.after(() => pendingReceipt.close());
   assert.equal(pendingReceipt.snapshot.modelChoiceChange, undefined);
   const receiptUpdate = pendingReceipt.updates[Symbol.asyncIterator]().next();
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "alpha",
     effort: "high",
   });
@@ -2777,7 +2817,7 @@ test("[live-model-change] a change reaching the live Turn is pending until the H
     done: false,
     value: { kind: "durable", snapshot: settled },
   });
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.deepEqual(run.modelChoice, { model: "beta", effort: "medium" });
   assert.equal(
     wired.catalog.getPreference("last-model-choice:claude-code"),
@@ -2877,7 +2917,7 @@ test("[live-model-change] a refused live change keeps the previous choice and sa
   );
   assert.match(settled.outcome.problem.explanation, /keeps alpha/);
   assert.equal(settled.modelChoiceChange, undefined);
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "alpha",
     effort: "high",
   });
@@ -2919,7 +2959,7 @@ test("[live-model-change] a live change the Turn ends before answering applies f
   });
   assert.equal(settled.outcome.status, "applied");
   assert.equal(settled.modelChoiceChange?.reach, "next-turn");
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "beta",
     effort: "medium",
   });
@@ -2961,7 +3001,7 @@ test("[live-model-change] a later Turn's refused request restores the choice its
   });
   assert.equal(changed.outcome.status, "applied");
   assert.equal(changed.modelChoiceChange?.reach, "next-turn");
-  assert.deepEqual(readRun(wired, runId).modelChoice, {
+  assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
     model: "beta",
     effort: "medium",
   });
@@ -2971,7 +3011,7 @@ test("[live-model-change] a later Turn's refused request restores the choice its
     model: "beta",
     effort: "medium",
   });
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.deepEqual(run.modelChoice, { model: "alpha", effort: "high" });
   assert.equal(
     run.modelChoiceNotice,
@@ -3008,7 +3048,7 @@ test("[change-model-choice] absent or blank values refuse admission without cons
         ? "model-choice-change-required"
         : "model-choice-blank",
     );
-    assert.deepEqual(readRun(wired, runId).modelChoice, {
+    assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
       model: "alpha",
       effort: "high",
     });
@@ -3059,7 +3099,10 @@ test("[change-model-choice] unknown and Command-only Runs refuse without choosin
   assert.equal(refused.outcome.status, "not-applied");
   if (refused.outcome.status === "not-applied")
     assert.equal(refused.outcome.problem.code, "model-choice-irrelevant");
-  assert.equal(readRun(wired, created.runId).modelChoice, undefined);
+  assert.equal(
+    readRun(wired.projectionPort, created.runId).modelChoice,
+    undefined,
+  );
   assert.equal(
     wired.catalog.getPreference("last-model-choice:claude-code"),
     undefined,
@@ -3070,7 +3113,7 @@ for (const registered of [true, false]) {
   test(`[change-model-choice] ${registered ? "failed qualification" : "missing registration"} refuses and finishes Offer preparation without changing choice`, async (t) => {
     const { wired, digest } = wireDeclaring(t, LISTED, REPORTED);
     const runId = seedChoiceRun(wired, digest);
-    const workspace = readRun(wired, runId).workspacePath;
+    const workspace = readRun(wired.projectionPort, runId).workspacePath;
     wired.catalog.setPreference(
       "last-model-choice:claude-code",
       JSON.stringify({ model: "beta", effort: "medium" }),
@@ -3141,7 +3184,7 @@ for (const registered of [true, false]) {
     assert.equal(outcome.status, "not-applied");
     if (outcome.status === "not-applied")
       assert.equal(outcome.problem.code, "selected-harness-unavailable");
-    assert.deepEqual(readRun(wired, runId).modelChoice, {
+    assert.deepEqual(readRun(wired.projectionPort, runId).modelChoice, {
       model: "alpha",
       effort: "high",
     });

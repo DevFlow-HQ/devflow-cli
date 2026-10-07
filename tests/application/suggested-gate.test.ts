@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -173,21 +174,6 @@ function wire(
   return wired;
 }
 
-function readRun(wired: Wiring, runId: string): RunView {
-  const projection = wired.projectionPort.openProjection({
-    family: "run",
-    runId,
-  });
-  try {
-    const result = projection.snapshot.result;
-    assert.ok(result.found, JSON.stringify(result));
-    if (!result.found) throw new Error("unreachable");
-    return result.run;
-  } finally {
-    projection.close();
-  }
-}
-
 /** Every human/managed input the Run sent its Harness Session, in order. */
 function sentPrompts(wired: Wiring, run: RunView): string[] {
   const page = run.sessions?.[0]?.transcriptExport;
@@ -262,7 +248,7 @@ async function answer(
   operationId: string,
   text: string,
 ): Promise<RunGateReference> {
-  const gate = readRun(wired, runId).pendingGate?.gate;
+  const gate = readRun(wired.projectionPort, runId).pendingGate?.gate;
   assert.ok(gate, "the Run rests at the authored gate");
   const admission = wired.projectionPort.submit({
     operationId,
@@ -281,7 +267,7 @@ test("[suggested-gate] the gate projects its suggestions and a suggested answer 
   const wired = wire(t, home, workspace, COMPLETED);
   const { runId } = await launchToGate(t, wired, home, workspace);
 
-  const blocked = readRun(wired, runId);
+  const blocked = readRun(wired.projectionPort, runId);
   assert.equal(blocked.state, "blocked");
   assert.deepEqual(blocked.pendingGate, {
     gate: {
@@ -296,7 +282,7 @@ test("[suggested-gate] the gate projects its suggestions and a suggested answer 
   });
 
   await answer(wired, runId, "op-answer", "GitHub");
-  const done = readRun(wired, runId);
+  const done = readRun(wired.projectionPort, runId);
   assert.equal(done.state, "succeeded");
   assert.equal(done.pendingGate, undefined);
   const prompts = sentPrompts(wired, done);
@@ -311,7 +297,7 @@ test("[suggested-gate] a typed Other answer outside the suggestions is accepted 
   const { runId } = await launchToGate(t, wired, home, workspace);
 
   await answer(wired, runId, "op-answer", "Linear (via MCP)");
-  const done = readRun(wired, runId);
+  const done = readRun(wired.projectionPort, runId);
   assert.equal(done.state, "succeeded");
   const tracker = done.outputs.find((output) => output.name === "tracker");
   assert.ok(tracker);
@@ -334,12 +320,12 @@ test("[suggested-gate] suggestions survive a reopen, a replayed answer publishes
   // A fresh process reads the same durable gate, suggestions included, and answers it.
   // Its only Turn fails, so the Run rests `failed` after the gate settled.
   const second = wire(t, home, workspace, FAILED);
-  assert.deepEqual(readRun(second, runId).pendingGate?.suggestions, [
-    "Local",
-    "GitHub",
-  ]);
+  assert.deepEqual(
+    readRun(second.projectionPort, runId).pendingGate?.suggestions,
+    ["Local", "GitHub"],
+  );
   const gate = await answer(second, runId, "op-answer", "Local");
-  const failed = readRun(second, runId);
+  const failed = readRun(second.projectionPort, runId);
   assert.equal(failed.state, "failed");
 
   // Replaying the same answer Operation is idempotent: applied, changing nothing.
@@ -365,7 +351,7 @@ test("[suggested-gate] suggestions survive a reopen, a replayed answer publishes
   });
   assert.ok(resume.admitted, JSON.stringify(resume));
   await awaitSettled(third.projectionPort, "op-resume");
-  const done = readRun(third, runId);
+  const done = readRun(third.projectionPort, runId);
   assert.equal(done.state, "succeeded");
   assert.equal(done.pendingGate, undefined);
   const prompts = sentPrompts(third, done);

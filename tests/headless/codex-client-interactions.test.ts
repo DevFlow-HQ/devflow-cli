@@ -10,7 +10,11 @@ import {
   type TurnResult,
 } from "../../src/harness/harness.js";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
@@ -26,52 +30,43 @@ const APPROVAL_PROMPT =
 
 // The fake Codex Harness's profile: Codex hosts approvals and offers native steer,
 // the one client-visible difference from Claude Code.
-function codexProfile(): HarnessProfile {
-  return {
-    harness: "codex",
-    executable: "codex",
-    executableVersion: "0.0.0-fake-codex",
-    platform: "linux",
-    adapterRevision: "fake-codex-1",
-    configurationPosture: "user-compatible",
-    recovery: {
-      mode: "native-reattach",
-      evidence: "fake codex reattaches a thread",
-    },
-    interruption: {
-      mode: "process-only",
-      evidence: "fake codex stops the process",
-    },
-    approvals: { available: true, evidence: "fake codex hosts approvals" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: {
-      available: false,
-      evidence: "fake codex offers no clarifications",
-    },
-    steer: {
-      available: true,
-      evidence: "fake codex offers native same-Turn steer",
-    },
-    modelSelection: {
-      at: "unavailable",
-      evidence: "fake codex selects no model",
-    },
-    modelObservation: {
-      available: true,
-      evidence: "fake codex observes its own model",
-    },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "fake codex mints a thread id",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
-    fileDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
-  };
-}
+const CODEX_PROFILE_OVERRIDES = {
+  harness: "codex",
+  executable: "codex",
+  executableVersion: "0.0.0-fake-codex",
+  adapterRevision: "fake-codex-1",
+  recovery: {
+    mode: "native-reattach",
+    evidence: "fake codex reattaches a thread",
+  },
+  interruption: {
+    mode: "process-only",
+    evidence: "fake codex stops the process",
+  },
+  approvals: { available: true, evidence: "fake codex hosts approvals" },
+  clarifications: {
+    available: false,
+    evidence: "fake codex offers no clarifications",
+  },
+  steer: {
+    available: true,
+    evidence: "fake codex offers native same-Turn steer",
+  },
+  modelSelection: {
+    at: "unavailable",
+    evidence: "fake codex selects no model",
+  },
+  modelObservation: {
+    available: true,
+    evidence: "fake codex observes its own model",
+  },
+  recoveryCoordinate: {
+    timing: "before-submission",
+    evidence: "fake codex mints a thread id",
+  },
+  skillDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
+  fileDelivery: { mode: "plain-path", evidence: "fake codex reads a path" },
+} satisfies Partial<HarnessProfile>;
 
 // A flagless `run launch` starts from the Model choice the Harness reports.
 const REPORTED_DEFAULTS: FakeScript["defaults"] = {
@@ -99,7 +94,7 @@ function codexScript(fixture: string): FakeScript {
   ];
   if (fixture === "approval") {
     return {
-      profile: codexProfile(),
+      profile: fakeHarnessProfile(CODEX_PROFILE_OVERRIDES),
       defaults: REPORTED_DEFAULTS,
       turns: [
         {
@@ -122,7 +117,7 @@ function codexScript(fixture: string): FakeScript {
     };
   }
   return {
-    profile: codexProfile(),
+    profile: fakeHarnessProfile(CODEX_PROFILE_OVERRIDES),
     defaults: REPORTED_DEFAULTS,
     turns: [{ events, result: COMPLETED }],
   };

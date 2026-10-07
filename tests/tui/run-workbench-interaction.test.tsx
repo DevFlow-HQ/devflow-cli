@@ -1,7 +1,7 @@
+import { readRun } from "../application/run-test-helpers.js";
 import assert from "node:assert/strict";
 import {
   launchAgentCompletionRun,
-  readCompletionRun,
   completed,
   call,
   reviewedLoop,
@@ -1508,7 +1508,7 @@ for (const [width, height] of [
       assert.equal(ended.includes(control), false);
     noOverflow(ended, width);
     assert.equal(
-      readCompletionRun(wired, runId).timeline.find(
+      readRun(wired.projectionPort, runId).timeline.find(
         (event) => event.endedBy === "agent",
       )?.reason,
       reason,

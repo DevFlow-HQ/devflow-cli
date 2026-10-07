@@ -1,3 +1,4 @@
+import { readRun, findOffer, requireOffer } from "./run-test-helpers.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -7,17 +8,19 @@ import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import type {
   HarnessAdapter,
   HarnessFailure,
-  HarnessProfile,
 } from "../../src/harness/harness.js";
 import type {
-  ActionOffer,
   OperationOutcome,
   RunSnapshot,
   RunView,
   Submission,
 } from "../../src/application/projection-port.js";
 import type { ProcessAdapter } from "../../src/process/process.js";
-import { createFake, type FakeScript } from "../harness/fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "../harness/fake-adapter.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
@@ -40,38 +43,9 @@ const PREPARE_FAILURE: HarnessFailure = {
   diagnostics: "The pinned protocol subset did not qualify on the next drive.",
 };
 
-function profile(): HarnessProfile {
-  return {
-    harness: "Claude Code",
-    executable: "fake-claude",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "native-reattach", evidence: "scripted fake" },
-    interruption: { mode: "process-only", evidence: "scripted fake" },
-    approvals: { available: true, evidence: "scripted fake" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: { available: false, evidence: "scripted fake" },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: { at: "unavailable", evidence: "scripted fake" },
-    modelObservation: { available: true, evidence: "scripted fake" },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "before-submission",
-      evidence: "scripted fake",
-    },
-    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
-    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
-  };
-}
-
 /** Every prepared Harness replays this one completing Turn from the start. */
 const SCRIPT: FakeScript = {
-  profile: profile(),
+  profile: fakeHarnessProfile(),
   turns: [
     {
       result: {
@@ -334,29 +308,10 @@ async function launchBlocked(
     "applied",
   );
   launched = { runId, wired };
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "blocked", JSON.stringify(run.problem));
   assert.equal(evidence.prepares, 1);
   return { wired, runId, run, evidence };
-}
-
-function readRun(wired: Wiring, runId: string): RunView {
-  const opened = wired.projectionPort.openProjection({ family: "run", runId });
-  try {
-    assert.ok(opened.snapshot.result.found);
-    if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return opened.snapshot.result.run;
-  } finally {
-    opened.close();
-  }
-}
-
-function offer<A extends ActionOffer["action"]>(
-  run: RunView,
-  action: A,
-): Extract<ActionOffer, { action: A }> | undefined {
-  return run.actionOffers.find((o) => o.action === action) as
-    Extract<ActionOffer, { action: A }> | undefined;
 }
 
 /** Open the `run` Projection and collect every durable snapshot it is pushed. */
@@ -391,7 +346,7 @@ function answerGate(
   operationId: string,
   answer: { readonly answer: "continue" } | { readonly text: string },
 ): Submission {
-  const gate = offer(run, "answer-human-gate")?.gate;
+  const gate = requireOffer(run, "answer-human-gate")?.gate;
   assert.ok(gate, JSON.stringify(run.actionOffers));
   return {
     operationId,
@@ -428,14 +383,14 @@ async function assertRefusedDrive(
   assert.equal(outcome.problem.details?.nativeCode, "not-qualified");
   assert.equal(outcome.problem.possibleEffects, "none");
 
-  const run = readRun(wired, runId);
+  const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "halted");
   assert.equal(run.problem?.code, "selected-harness-unavailable");
   assert.equal(run.liveness.state, "not-live");
-  const resume = offer(run, "resume-run");
-  assert.ok(resume?.available, JSON.stringify(run.actionOffers));
-  assert.equal(offer(run, "answer-human-gate"), undefined);
-  assert.equal(offer(run, "end-interactive-step"), undefined);
+  const resume = requireOffer(run, "resume-run");
+  assert.ok(resume.available, JSON.stringify(run.actionOffers));
+  assert.equal(findOffer(run, "answer-human-gate"), undefined);
+  assert.equal(findOffer(run, "end-interactive-step"), undefined);
   assert.equal(
     wired.runGroup.listRuns().find((entry) => entry.runId === runId)?.live,
     false,
@@ -479,7 +434,7 @@ async function resume(launched: Launched): Promise<RunView> {
   });
   assert.equal(outcome.status, "applied", JSON.stringify(outcome));
   assert.equal(launched.evidence.prepares, 3);
-  return readRun(launched.wired, launched.runId);
+  return readRun(launched.wired.projectionPort, launched.runId);
 }
 
 test("[continuation-preparation-failure] an approved authored Gate halts on a refused preparation and keeps the approval", async (t) => {
@@ -607,7 +562,7 @@ test("[continuation-preparation-failure] Continue keeps the settled iteration af
   // Resume opens exactly the next iteration: one settled, the second blocked.
   const resumed = await resume(launched);
   assert.equal(resumed.state, "blocked");
-  assert.ok(offer(resumed, "continue-repeat"));
+  assert.ok(requireOffer(resumed, "continue-repeat"));
   const owner = launched.wired.runGroup.acquireRun(launched.runId);
   assert.ok(owner);
   try {

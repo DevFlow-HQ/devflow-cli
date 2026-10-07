@@ -16,55 +16,47 @@ import type {
   TurnEvent,
   TurnRequest,
 } from "../../src/harness/harness.js";
-import { createFake, type FakeScript } from "./fake-adapter.js";
+import {
+  fakeHarnessProfile,
+  createFake,
+  type FakeScript,
+} from "./fake-adapter.js";
 
-function profile(): HarnessProfile {
-  return {
-    harness: "fake",
-    executable: "fake-harness",
-    executableVersion: "0.0.0-fake",
-    platform: "linux",
-    adapterRevision: "fake-1",
-    configurationPosture: "user-compatible",
-    recovery: { mode: "load-with-replay", evidence: "fake replays history" },
-    interruption: {
-      mode: "active-turn",
-      evidence: "fake confirms interruption",
-    },
-    approvals: { available: true, evidence: "fake hosts a bridge" },
-    agentCalls: {
-      available: false,
-      evidence: "Native agent-call attachment is not qualified yet.",
-    },
-    clarifications: {
-      available: true,
-      evidence: "fake offers a question shape",
-    },
-    steer: { available: false, evidence: "scripted fake" },
-    modelSelection: {
-      at: "launch",
-      declaration: { kind: "free-text", efforts: [] },
-      evidence: "fake takes any model at launch",
-    },
-    modelObservation: {
-      available: true,
-      evidence: "fake observes the effective model",
-    },
-    modelChange: { reach: "next-turn", evidence: "scripted fake" },
-    recoveryCoordinate: {
-      timing: "after-acceptance",
-      evidence: "fake reveals the id after acceptance",
-    },
-    skillDelivery: {
-      mode: "native",
-      evidence: "fake delivers skills natively",
-    },
-    fileDelivery: {
-      mode: "plain-path",
-      evidence: "fake reads an absolute path",
-    },
-  };
-}
+const PROFILE_OVERRIDES = {
+  harness: "fake",
+  executable: "fake-harness",
+  recovery: { mode: "load-with-replay", evidence: "fake replays history" },
+  interruption: {
+    mode: "active-turn",
+    evidence: "fake confirms interruption",
+  },
+  approvals: { available: true, evidence: "fake hosts a bridge" },
+  clarifications: {
+    available: true,
+    evidence: "fake offers a question shape",
+  },
+  modelSelection: {
+    at: "launch",
+    declaration: { kind: "free-text", efforts: [] },
+    evidence: "fake takes any model at launch",
+  },
+  modelObservation: {
+    available: true,
+    evidence: "fake observes the effective model",
+  },
+  recoveryCoordinate: {
+    timing: "after-acceptance",
+    evidence: "fake reveals the id after acceptance",
+  },
+  skillDelivery: {
+    mode: "native",
+    evidence: "fake delivers skills natively",
+  },
+  fileDelivery: {
+    mode: "plain-path",
+    evidence: "fake reads an absolute path",
+  },
+} satisfies Partial<HarnessProfile>;
 
 function recorder(): {
   recorder: DurableTurnRecorder;
@@ -111,7 +103,7 @@ async function prepared(script: FakeScript): Promise<PreparedHarness> {
 test("native steer is accepted where the profile supports it", async () => {
   const harness = await prepared({
     profile: {
-      ...profile(),
+      ...fakeHarnessProfile(PROFILE_OVERRIDES),
       steer: { available: true, evidence: "scripted fake accepts steer" },
     },
     turns: [
@@ -167,7 +159,7 @@ test("native steer is accepted where the profile supports it", async () => {
 
 test("a structured clarification is answered by its text", async () => {
   const harness = await prepared({
-    profile: profile(),
+    profile: fakeHarnessProfile(PROFILE_OVERRIDES),
     turns: [
       {
         requests: [
@@ -216,7 +208,7 @@ test("a structured clarification is answered by its text", async () => {
 test("an after-acceptance coordinate is checkpointed without falsifying the result", async () => {
   const probe = recorder();
   const harness = await prepared({
-    profile: profile(),
+    profile: fakeHarnessProfile(PROFILE_OVERRIDES),
     turns: [
       {
         revealCoordinateAfterAcceptance: { opaque: "native-conv-1" },
@@ -241,7 +233,7 @@ test("an after-acceptance coordinate is checkpointed without falsifying the resu
 
 test("a second concurrent Turn is a caller-contract violation that throws", async () => {
   const harness = await prepared({
-    profile: profile(),
+    profile: fakeHarnessProfile(PROFILE_OVERRIDES),
     turns: [
       {
         requests: [
@@ -291,7 +283,7 @@ test("a second concurrent Turn is a caller-contract violation that throws", asyn
 
 test("startTurn after close is a caller-contract violation that throws", async () => {
   const harness = await prepared({
-    profile: profile(),
+    profile: fakeHarnessProfile(PROFILE_OVERRIDES),
     turns: [
       {
         result: {
@@ -309,4 +301,55 @@ test("startTurn after close is a caller-contract violation that throws", async (
     () => harness.startTurn(request(recorder().recorder)),
     /closed/,
   );
+});
+
+test("m12-harness-run-test-helpers: profile defaults and explicit capability overrides remain visible", async () => {
+  const expected = {
+    executableVersion: "0.0.0-fake",
+    platform: "linux",
+    adapterRevision: "fake-1",
+    configurationPosture: "user-compatible",
+    agentCalls: {
+      available: false,
+      evidence: "Native agent-call attachment is not qualified yet.",
+    },
+    steer: { available: false, evidence: "scripted fake" },
+    modelChange: { reach: "next-turn", evidence: "scripted fake" },
+    harness: "Claude Code",
+    executable: "fake-claude",
+    recovery: { mode: "native-reattach", evidence: "scripted fake" },
+    interruption: { mode: "process-only", evidence: "scripted fake" },
+    approvals: { available: true, evidence: "scripted fake" },
+    clarifications: { available: false, evidence: "scripted fake" },
+    modelSelection: { at: "unavailable", evidence: "scripted fake" },
+    modelObservation: { available: true, evidence: "scripted fake" },
+    recoveryCoordinate: {
+      timing: "before-submission",
+      evidence: "scripted fake",
+    },
+    skillDelivery: { mode: "plain-path", evidence: "scripted fake" },
+    fileDelivery: { mode: "plain-path", evidence: "scripted fake" },
+  };
+  assert.deepEqual(fakeHarnessProfile(), expected);
+  const configured = fakeHarnessProfile({
+    platform: "windows",
+    agentCalls: { available: true, evidence: "scripted completion" },
+    steer: { available: true, evidence: "scripted native steer" },
+    modelSelection: {
+      at: "launch",
+      declaration: { kind: "free-text", efforts: ["high"] },
+      evidence: "explicit model declaration",
+    },
+  });
+  assert.deepEqual(configured, {
+    ...expected,
+    platform: "windows",
+    agentCalls: { available: true, evidence: "scripted completion" },
+    steer: { available: true, evidence: "scripted native steer" },
+    modelSelection: {
+      at: "launch",
+      declaration: { kind: "free-text", efforts: ["high"] },
+      evidence: "explicit model declaration",
+    },
+  });
 });

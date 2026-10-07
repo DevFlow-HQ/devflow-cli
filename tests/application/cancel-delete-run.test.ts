@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { realpathSync, readdirSync, writeFileSync } from "node:fs";
@@ -159,12 +160,7 @@ function submit(
 
 /** The offered actions on the exact `run` Projection. */
 function offers(app: Application, runId: string): string[] {
-  const opened = app.projectionPort.openProjection({ family: "run", runId });
-  const snapshot = opened.snapshot;
-  opened.close();
-  assert.ok(snapshot.result.found);
-  if (!snapshot.result.found) throw new Error("unreachable");
-  return snapshot.result.run.actionOffers.map((o) => o.action);
+  return readRun(app.projectionPort, runId).actionOffers.map((o) => o.action);
 }
 
 test("cancel-run rests a live Run cancelled, keeps its store, and flips the offer", async (t) => {

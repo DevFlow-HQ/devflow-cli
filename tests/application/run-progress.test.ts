@@ -1,3 +1,4 @@
+import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import test, { type TestContext } from "node:test";
@@ -16,7 +17,6 @@ import {
   call,
   completed,
   launchAgentCompletionRun,
-  readCompletionRun,
   reviewedLoop,
 } from "../helpers/agentCompletion.js";
 import { createApplication } from "../helpers/application.js";
@@ -126,14 +126,6 @@ function launch(
   return admission.runId!;
 }
 
-function runOf(app: Application, runId: string): RunView {
-  const opened = app.projectionPort.openProjection({ family: "run", runId });
-  opened.close();
-  const result = opened.snapshot.result;
-  assert.ok(result.found, JSON.stringify(result));
-  return result.run;
-}
-
 /** Each Step as `id:status`, the position, and the Iteration marks, in order. */
 function progressOf(run: RunView) {
   return {
@@ -212,7 +204,7 @@ test("Repeat → outside Command → Human Gate projects the stored Gate, and an
   );
   await awaitSettled(app.projectionPort, "launch");
 
-  const blocked = runOf(app, runId);
+  const blocked = readRun(app.projectionPort, runId);
   assert.deepEqual(progressOf(blocked), {
     state: "blocked",
     progress: AT_GATE,
@@ -224,7 +216,7 @@ test("Repeat → outside Command → Human Gate projects the stored Gate, and an
   assert.deepEqual(h.runs, { baseline: 1, check: 1, outside: 1 });
 
   await answer(app, blocked, "answer");
-  assert.deepEqual(progressOf(runOf(app, runId)), {
+  assert.deepEqual(progressOf(readRun(app.projectionPort, runId)), {
     state: "succeeded",
     progress: ALL_SUCCEEDED,
     position: 5,
@@ -245,7 +237,7 @@ test("a zero-Iteration group before the outside Command and Gate passes without 
   ]);
   await awaitSettled(app.projectionPort, "launch");
 
-  const blocked = runOf(app, runId);
+  const blocked = readRun(app.projectionPort, runId);
   assert.deepEqual(progressOf(blocked), {
     state: "blocked",
     progress: AT_GATE,
@@ -256,7 +248,7 @@ test("a zero-Iteration group before the outside Command and Gate passes without 
   assert.deepEqual(h.runs, { baseline: 1, outside: 1 });
 
   await answer(app, blocked, "answer");
-  assert.deepEqual(progressOf(runOf(app, runId)), {
+  assert.deepEqual(progressOf(readRun(app.projectionPort, runId)), {
     state: "succeeded",
     progress: ALL_SUCCEEDED,
     position: 5,
@@ -284,7 +276,7 @@ test("failed retries stay with their own Step instance on both sides of the grou
   ]);
   await awaitSettled(app.projectionPort, "launch");
 
-  const blocked = runOf(app, runId);
+  const blocked = readRun(app.projectionPort, runId);
   assert.deepEqual(progressOf(blocked), {
     state: "blocked",
     progress: AT_GATE,
@@ -295,7 +287,7 @@ test("failed retries stay with their own Step instance on both sides of the grou
   assert.deepEqual(h.runs, { baseline: 1, check: 2, outside: 2 });
 
   await answer(app, blocked, "answer");
-  assert.deepEqual(progressOf(runOf(app, runId)), {
+  assert.deepEqual(progressOf(readRun(app.projectionPort, runId)), {
     state: "succeeded",
     progress: ALL_SUCCEEDED,
     position: 5,
@@ -341,7 +333,7 @@ test("each of several groups counts its own Iterations and Review grants (#384)"
   ]);
   await awaitSettled(app.projectionPort, "launch");
 
-  const atA = runOf(app, runId);
+  const atA = readRun(app.projectionPort, runId);
   assert.deepEqual(progressOf(atA), {
     state: "blocked",
     progress: [
@@ -369,7 +361,7 @@ test("each of several groups counts its own Iterations and Review grants (#384)"
     "checkB:blocked",
   ];
   await answer(app, atA, "grant-a");
-  const atB = runOf(app, runId);
+  const atB = readRun(app.projectionPort, runId);
   assert.deepEqual(progressOf(atB), {
     state: "blocked",
     progress: blockedAtB,
@@ -381,7 +373,7 @@ test("each of several groups counts its own Iterations and Review grants (#384)"
   assert.deepEqual(answerOffer(atB), atB.checkpoint?.gate);
 
   await answer(app, atB, "grant-b");
-  const atBAgain = runOf(app, runId);
+  const atBAgain = readRun(app.projectionPort, runId);
   assert.deepEqual(progressOf(atBAgain), {
     state: "blocked",
     progress: blockedAtB,
@@ -392,7 +384,7 @@ test("each of several groups counts its own Iterations and Review grants (#384)"
   assert.equal(atBAgain.checkpoint?.gate.attemptId, "3.0:checkB");
 
   await answer(app, atBAgain, "grant-b-again");
-  assert.deepEqual(progressOf(runOf(app, runId)), {
+  assert.deepEqual(progressOf(readRun(app.projectionPort, runId)), {
     state: "succeeded",
     progress: [
       "baseline:succeeded",
@@ -424,7 +416,7 @@ test("a group whose Verdict a later Command rebinds stays complete, and answerin
   ]);
   await awaitSettled(app.projectionPort, "launch");
 
-  const blocked = runOf(app, runId);
+  const blocked = readRun(app.projectionPort, runId);
   assert.deepEqual(progressOf(blocked), {
     state: "blocked",
     progress: AT_GATE,
@@ -435,7 +427,7 @@ test("a group whose Verdict a later Command rebinds stays complete, and answerin
   assert.deepEqual(h.runs, { baseline: 1, check: 1, outside: 1 });
 
   await answer(app, blocked, "answer");
-  assert.deepEqual(progressOf(runOf(app, runId)), {
+  assert.deepEqual(progressOf(readRun(app.projectionPort, runId)), {
     state: "succeeded",
     progress: ALL_SUCCEEDED,
     position: 5,
@@ -457,7 +449,7 @@ test("a reopened Run at the Gate projects the same Gate and answers from the new
   await first.app.shutdown();
 
   const second = h.open();
-  const reopened = runOf(second.app, runId);
+  const reopened = readRun(second.app.projectionPort, runId);
   assert.deepEqual(progressOf(reopened), {
     state: "blocked",
     progress: AT_GATE,
@@ -467,7 +459,7 @@ test("a reopened Run at the Gate projects the same Gate and answers from the new
   assertAtGate(reopened);
 
   await answer(second.app, reopened, "answer");
-  assert.deepEqual(progressOf(runOf(second.app, runId)), {
+  assert.deepEqual(progressOf(readRun(second.app.projectionPort, runId)), {
     state: "succeeded",
     progress: ALL_SUCCEEDED,
     position: 5,
@@ -491,7 +483,7 @@ test("a reconciliation marker after a passed group is no Step's success or Itera
   await first.app.shutdown();
 
   const second = h.open();
-  const halted = runOf(second.app, runId);
+  const halted = readRun(second.app.projectionPort, runId);
   assert.deepEqual(progressOf(halted), {
     state: "halted",
     progress: [
@@ -512,7 +504,7 @@ test("a reconciliation marker after a passed group is no Step's success or Itera
   });
   assert.ok(resume.admitted);
   await awaitSettled(second.app.projectionPort, "resume");
-  const blocked = runOf(second.app, runId);
+  const blocked = readRun(second.app.projectionPort, runId);
   assert.deepEqual(progressOf(blocked), {
     state: "blocked",
     progress: AT_GATE,
@@ -522,7 +514,7 @@ test("a reconciliation marker after a passed group is no Step's success or Itera
   assertAtGate(blocked);
 
   await answer(second.app, blocked, "answer");
-  assert.equal(runOf(second.app, runId).state, "succeeded");
+  assert.equal(readRun(second.app.projectionPort, runId).state, "succeeded");
   assert.deepEqual(h.runs, { baseline: 1, check: 1, outside: 2, after: 1 });
 });
 
@@ -572,7 +564,7 @@ for (const { declared, turns, endStage, iterations, completion } of [
       await awaitSettled(wired.projectionPort, "end");
     }
 
-    const blocked = readCompletionRun(wired, runId);
+    const blocked = readRun(wired.projectionPort, runId);
     assert.deepEqual(progressOf(blocked), {
       state: "blocked",
       progress: [
@@ -594,7 +586,7 @@ for (const { declared, turns, endStage, iterations, completion } of [
       }).admitted,
     );
     await awaitSettled(wired.projectionPort, "answer");
-    const done = readCompletionRun(wired, runId);
+    const done = readRun(wired.projectionPort, runId);
     assert.deepEqual(progressOf(done), {
       state: "succeeded",
       progress: [
@@ -635,7 +627,7 @@ test("a person's End Stage before an interactive Step holds that Step, not the g
   );
   await awaitSettled(wired.projectionPort, "end");
 
-  const held = readCompletionRun(wired, runId);
+  const held = readRun(wired.projectionPort, runId);
   assert.deepEqual(progressOf(held), {
     state: "blocked",
     progress: ["implement:succeeded", "discuss:blocked"],
