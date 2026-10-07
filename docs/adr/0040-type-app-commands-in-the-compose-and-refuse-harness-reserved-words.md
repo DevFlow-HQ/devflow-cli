@@ -38,7 +38,9 @@ Request, Human Gate, or Review checkpoint holds the bottom region, no `/` list b
 An entry leaves the open list when its Offer does, reads its Offer when it runs, and a stale Operation is refused with a notice by the existing
 fresh-state admission.
 
-**A Secant name is never forwarded.** A draft whose first word is a Slash command's name is that App command. There are no inline arguments:
+**A Secant name is never forwarded.** A draft whose first word is a Slash command's name is that App command. The 2026-10-07 implementation settles the spelling and draft choices:
+known names ignore leading whitespace and case, while discovery still requires a literal first-character `/`; a successful invocation clears its command
+draft before the action opens its picker or confirmation. There are no inline arguments:
 `/model haiku` or `/continue working on it` is refused with a notice and the draft kept. Every other draft goes to the Harness unchanged,
 including skills, `/compact`, paths, and unknown names, unless a Harness input rule refuses it. There is no escape syntax.
 

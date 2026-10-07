@@ -12,7 +12,7 @@ decide the screen and its routes.
   Harness Request before a Human Gate or Review checkpoint, then the Run's authoritative terminal state from the snapshot, then the ordinary prompt. Bottom-row
   accounting (`interactionRows`), the render `<Switch>`, focus effects, the key dispatcher, the prompt's hints, and the App commands the Workbench registers
   all read it. Never re-derive precedence from Offers or flags beside it. The `prompt` variant also carries the Step endings on offer (none while a Turn
-  works or an Operation is in flight), so keys, hints, and palette agree, and what a gate or checkpoint without a current Offer waits on.
+  works or an Operation is in flight), so keys, hints, palette, and Slash agree, and what a gate or checkpoint without a current Offer waits on.
   Dialogs are a separate layer above it, never a bottom variant.
 - The request and gate controls keep their private state and key branches (`run-request-control.tsx`, `run-gate-control.tsx`); the interaction only decides
   that one holds the bottom. A free-text gate is `gateHeight()` rows, 5 with authored suggestions (#213), whose `up`/`down` its control takes. An authored
@@ -23,7 +23,8 @@ decide the screen and its routes.
   Notices (Problem, conflict, view freshness, Operation receipts and refusals, Model choice messages) lead the conversation column and are counted; one
   status row under it carries the paused badge.
 - `PromptModel`/`promptHeight` (`run-workbench-views.tsx`) count exactly what `PromptControl` draws: a note, one field row per draft line up to four, the meta
-  row, wrapped refusal and recovery notices, and the hint rows. An armed Step ending or Interrupt confirm wraps its whole captured consequence, so the count grows with it.
+  row, bounded Slash list rows, wrapped refusal and recovery notices, and the hint rows. An armed Step ending or Interrupt confirm wraps its whole
+  captured consequence, so the count grows with it.
 
 ## Keys and native input
 
@@ -37,13 +38,27 @@ decide the screen and its routes.
 - Keys (ADR 0036/0040): Enter sends at a Turn boundary and steers a working Turn; Esc Esc Interrupts; Ctrl+E is End Step only; Ctrl+N Continue; Ctrl+O
   expands the first visible detail; Ctrl+G details; Ctrl+P the palette; Ctrl+R reconnects a disconnected view, else retries a failed appearance save; Ctrl+C
   clears a nonempty draft, then requests guarded Quit. End Stage has no key. No bare letter is a Workbench command beside the prompt. Alt+arrows/Home/End and
-  PageUp/Down scroll history; native arrows/Home/End edit. A focused checkpoint keeps navigation keys and the wheel; Esc at a Turn boundary leaves.
+  PageUp/Down scroll history; native arrows/Home/End edit. A focused checkpoint keeps navigation keys and the wheel;
+  Esc at a Turn boundary leaves after dismissing an open Slash list.
 - Every key clears the two-press Interrupt arm on arrival; only the prompt's Esc reads the arm it found, so dismissing a dialog, details, or inspection, or
   answering a request or gate, never arms or dispatches it. A withdrawn or replaced Turn Offer, or any interaction but the prompt, clears it too, and the
   next Esc after such a clear is consumed, so an Esc pair straddling the Turn's end never leaves. Ctrl+C clears a nonempty draft whatever holds focus.
 - The working scanner (`working-scanner.tsx`, #292) leads the prompt's hint only while a Turn works: `working · esc esc interrupt`, or `enter steer · esc esc
 interrupt` while Steer is available. Its words carry the meaning, so the cells yield first on a narrow row; `reducedMotion` draws a static `[⋯]`. A refusal
   sits above the hint rather than replacing it. An applied Operation receipt leaves on the next key, which keeps its recipient.
+
+## Slash discovery and dispatch
+
+- The catalog retains registered command identities with availability; `entries()` hides unavailable entries, and `knownSlash` recognizes their first word
+  and aliases even then. Names ignore leading whitespace and case, matching the Harness-input protection's breadth without copying Harness rules.
+- Discovery requires first-character `/` and no whitespace. It uses shared catalog search and initially highlights only a name prefix. Up/Down selects,
+  Enter/Tab resolves the current registered entry and runs its `run`. A withdrawn selection never silently chooses another command. Esc dismisses the list
+  and keeps text before Interrupt or leave; Tab runs a highlighted entry before details focus. Paths without a highlight keep ordinary Enter send/Steer.
+- The native textarea maps Up/Down to inert `submit` while discovery owns arrows. The Port alone moves the list; native delivery never moves the cursor.
+  Known unavailable names and inline arguments show a refusal and keep text. Unknown words and paths use unchanged Application send/Steer admission.
+- Successful invocation clears the command draft before its owner runs. The list joins `PromptModel` row accounting, clips by display columns, and bounds
+  its visible window around the selection. Pending receipts keep discovery available. Requests, gates, checkpoints, dialogs, and confirmations suppress
+  discovery; Ctrl+P retains its permitted scope.
 
 ## Drafts and restoration
 
@@ -67,7 +82,7 @@ interrupt` while Steer is available. Its words carry the meaning, so the cells y
 
 ## Confirmations, details, and dialogs
 
-- One `arm` path serves keys, palette commands, and focused details. Every confirmation captures its Offer and dispatches it only after checking its
+- One `arm` path serves keys, palette commands, Slash commands, and focused details. Every confirmation captures its Offer and dispatches it only after checking its
   semantic target against the current Offer (#389): Step endings compare Run and Step, Interrupt Run and Turn, resume its takeover owner and
   acknowledgement. Replacement or withdrawal clears the arm; reappearance needs a fresh arm; unchanged targets keep the original consequence. A request,
   gate, or checkpoint that takes the bottom clears every armed confirmation.

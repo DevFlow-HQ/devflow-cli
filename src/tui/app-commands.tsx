@@ -11,7 +11,7 @@ import type { SearchEntry } from "./command-search.js";
 /** Action owners publish current commands. This catalog supplies discovery, not
  * admission: each action reads its current Action Offer when it runs. */
 export interface AppCommand extends SearchEntry {
-  readonly slash?: string;
+  readonly available?: boolean;
 }
 function createCatalog() {
   const [owners, setOwners] = createSignal<
@@ -20,24 +20,43 @@ function createCatalog() {
   let palette: () => void = () => {};
   let preempt: () => void = () => {};
   let retry: () => void = () => {};
+  const all = () => {
+    const order = [
+      "start-run",
+      "bundles",
+      "previous-runs",
+      "harnesses",
+      "model",
+      "effort",
+      "end-step",
+      "continue",
+      "end-stage",
+      "themes",
+      "quit",
+    ];
+    return owners()
+      .flatMap((owner) => owner())
+      .sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  };
   return {
-    entries: () => {
-      const order = [
-        "start-run",
-        "bundles",
-        "previous-runs",
-        "harnesses",
-        "model",
-        "effort",
-        "end-step",
-        "continue",
-        "end-stage",
-        "themes",
-        "quit",
-      ];
-      return owners()
-        .flatMap((owner) => owner())
-        .sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    entries: () => all().filter((entry) => entry.available !== false),
+    /** Known names own the draft even while their Offer is unavailable. */
+    knownSlash(text: string) {
+      const [word = ""] = text.trimStart().split(/\s/, 1);
+      const name = word.toLowerCase();
+      const entry = all().find(
+        (entry) =>
+          entry.slash !== undefined &&
+          [entry.slash, ...(entry.aliases ?? [])].some(
+            (slash) => name === `/${slash}`,
+          ),
+      );
+      return entry === undefined
+        ? undefined
+        : {
+            entry,
+            arguments: text.trimStart().slice(word.length).trim().length > 0,
+          };
     },
     register(owner: Accessor<readonly AppCommand[]>) {
       setOwners((all) => [...all, owner]);

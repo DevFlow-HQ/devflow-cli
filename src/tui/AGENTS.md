@@ -91,7 +91,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Read next
 
-- `app-commands.tsx` holds the Secant catalog. Action owners register current commands; Home resets on mount and shares search with Ctrl+P.
+- `app-commands.tsx` retains known names and aliases even when unavailable; its `entries()` exposes available commands to Home, Ctrl+P, and Slash.
 - `shell-commands.tsx` owns picker entry restoration and apply-before-save. `preferences-view.ts` generates a fresh Operation id on every save or retry.
 
 - Each screen reads the Projection Port through a per-screen view seam (`workspace-view.tsx`, `bundle-view.tsx`, `run-view.tsx` — the reactive `run` read +

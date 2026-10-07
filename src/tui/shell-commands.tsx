@@ -146,6 +146,7 @@ export function ShellCommands(props: {
       name: "Quit",
       description: "Leave Secant with guarded live Run shutdown",
       slash: "quit",
+      aliases: ["exit"],
       keyHint: "ctrl+c",
       run: () => exit(),
     },

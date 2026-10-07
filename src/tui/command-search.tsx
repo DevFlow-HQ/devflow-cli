@@ -9,12 +9,14 @@ export interface SearchEntry {
   readonly name: string;
   readonly description: string;
   readonly keyHint?: string;
+  readonly slash?: string;
+  readonly aliases?: readonly string[];
   run(): void;
 }
 
 /** Every term must match. Name matches precede description matches, with the
  * caller's fixed order breaking ties. Locale and past use never change rank. */
-function searchCommands<T extends SearchEntry>(
+export function searchCommands<T extends SearchEntry>(
   entries: readonly T[],
   query: string,
 ): T[] {
@@ -23,12 +25,15 @@ function searchCommands<T extends SearchEntry>(
   return entries
     .map((entry, order) => {
       const name = entry.name.toLowerCase();
+      const names = [name, entry.slash, ...(entry.aliases ?? [])].filter(
+        (name): name is string => name !== undefined,
+      );
       const description = entry.description.toLowerCase();
       let score = 0;
       for (const term of terms) {
-        if (name === term) score += 4;
-        else if (name.startsWith(term)) score += 3;
-        else if (name.includes(term)) score += 2;
+        if (names.some((name) => name === term)) score += 4;
+        else if (names.some((name) => name.startsWith(term))) score += 3;
+        else if (names.some((name) => name.includes(term))) score += 2;
         else if (description.includes(term)) score += 1;
         else return { entry, order, score: -1 };
       }

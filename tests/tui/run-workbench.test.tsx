@@ -6095,7 +6095,13 @@ async function openModelChoice(
   t: Parameters<typeof type>[0],
   renderer: FakeRenderer,
   command: "Model" | "Effort" = "Model",
+  route: "palette" | "/model" | "/effort" = "palette",
 ) {
+  if (route !== "palette") {
+    await type(t, route);
+    await press(t, renderer, "return");
+    return;
+  }
   await press(t, renderer, "p", { ctrl: true });
   await type(t, command);
   await press(t, renderer, "down");
@@ -6202,106 +6208,128 @@ test("workbench-model-choice: absent, unavailable, and stale Offers never open t
   }
 });
 
-for (const [width, height] of [
-  [48, 24],
-  [60, 12],
-  [140, 44],
-]) {
-  test(`workbench-model-choice: the palette keeps Model reachable at ${width}x${height} and resize preserves effort and focus`, async () => {
-    const wb = await mountWorkbench(
-      runOf({ actionOffers: [MODEL_OFFER] }),
-      width,
-      height,
-    );
-    try {
-      assert.match(wb.t.captureCharFrame(), /\^P commands/);
-      await openModelChoice(wb.t, wb.renderer);
-      await press(wb.t, wb.renderer, "down");
-      await press(wb.t, wb.renderer, "return");
-      noOverflow(wb.t.captureCharFrame(), width);
-      wb.t.resize(140, 44);
-      wb.renderer.resize(140, 44);
-      await wb.t.renderOnce();
-      const effort = wb.t.captureCharFrame();
-      assert.match(effort, /2\. Choose effort/);
-      assert.match(effort, /Model: Deep/);
-      assert.match(effort, /› medium \[current\]/);
-      assert.doesNotMatch(effort, /tab Harness/);
-      await press(wb.t, wb.renderer, "escape");
-      assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
-      assert.match(wb.t.captureCharFrame(), /› Deep.*\[current\]/);
-      await press(wb.t, wb.renderer, "escape");
-      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-      assert.ok(onWorkbench(wb.t.captureCharFrame()));
-      noOverflow(wb.t.captureCharFrame(), 140);
-    } finally {
-      wb.t.renderer.destroy();
-    }
-  });
-}
-
-test("workbench-model-choice: Port Escape steps back even when the real keymap also receives Escape", async () => {
-  const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
-  try {
-    await openModelChoice(wb.t, wb.renderer);
-    await press(wb.t, wb.renderer, "return");
-    assert.match(wb.t.captureCharFrame(), /Choose effort/);
-    wb.renderer.key("escape");
-    // Explicit Escape sequence avoids the terminal's lone-Esc disambiguation wait.
-    wb.t.mockInput.pressKey("\x1b[27u");
-    await wb.t.renderOnce();
-    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
-    assert.doesNotMatch(wb.t.captureCharFrame(), /2\. Choose effort/);
-    await press(wb.t, wb.renderer, "c", { ctrl: true });
-    assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-    assert.deepEqual(wb.exits, []);
-  } finally {
-    wb.t.renderer.destroy();
+for (const route of ["palette", "/model", "/effort"] as const) {
+  for (const [width, height] of [
+    [48, 24],
+    [60, 12],
+    [140, 44],
+  ]) {
+    test(`workbench-model-choice: ${route} keeps Model choice reachable at ${width}x${height} and resize preserves effort and focus`, async () => {
+      const wb = await mountWorkbench(
+        runOf({ actionOffers: [MODEL_OFFER] }),
+        width,
+        height,
+      );
+      try {
+        assert.match(wb.t.captureCharFrame(), /\^P commands/);
+        await openModelChoice(wb.t, wb.renderer, "Model", route);
+        if (route !== "/effort") {
+          await press(wb.t, wb.renderer, "down");
+          await press(wb.t, wb.renderer, "return");
+        }
+        noOverflow(wb.t.captureCharFrame(), width);
+        wb.t.resize(140, 44);
+        wb.renderer.resize(140, 44);
+        await wb.t.renderOnce();
+        const effort = wb.t.captureCharFrame();
+        assert.match(effort, /2\. Choose effort/);
+        assert.match(
+          effort,
+          route === "/effort" ? /Model: Fast/ : /Model: Deep/,
+        );
+        assert.match(
+          effort,
+          route === "/effort" ? /› high \[current\]/ : /› medium \[current\]/,
+        );
+        assert.doesNotMatch(effort, /tab Harness/);
+        await press(wb.t, wb.renderer, "escape");
+        assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+        assert.match(
+          wb.t.captureCharFrame(),
+          route === "/effort" ? /› Fast.*\[current\]/ : /› Deep.*\[current\]/,
+        );
+        await press(wb.t, wb.renderer, "escape");
+        assert.doesNotMatch(
+          wb.t.captureCharFrame(),
+          /Choose a model|Choose effort/,
+        );
+        assert.ok(onWorkbench(wb.t.captureCharFrame()));
+        noOverflow(wb.t.captureCharFrame(), 140);
+      } finally {
+        wb.t.renderer.destroy();
+      }
+    });
   }
-});
 
-for (const modal of ["request", "gate", "checkpoint"] as const) {
-  test(`workbench-model-choice: a ${modal} closes the picker and owns its keys`, async () => {
+  test(`workbench-model-choice: ${route} Port Escape steps back even when the real keymap also receives Escape`, async () => {
     const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
     try {
-      await openModelChoice(wb.t, wb.renderer);
-      assert.match(wb.t.captureCharFrame(), /Choose a model/);
-      if (modal === "request") wb.control.setLive(requestOverlay());
-      else if (modal === "gate")
-        wb.control.setRun(
-          freeTextRunOf({ actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER] }),
-        );
-      else
-        wb.control.setRun(
-          blockedRunOf({ actionOffers: [MODEL_OFFER, ANSWER_OFFER] }),
-        );
+      await openModelChoice(wb.t, wb.renderer, "Model", route);
+      if (route !== "/effort") await press(wb.t, wb.renderer, "return");
+      assert.match(wb.t.captureCharFrame(), /Choose effort/);
+      wb.renderer.key("escape");
+      // Explicit Escape sequence avoids the terminal's lone-Esc disambiguation wait.
+      wb.t.mockInput.pressKey("\x1b[27u");
       await wb.t.renderOnce();
+      assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+      assert.doesNotMatch(wb.t.captureCharFrame(), /2\. Choose effort/);
+      await press(wb.t, wb.renderer, "c", { ctrl: true });
       assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-      if (modal === "checkpoint") {
-        // Model stays reachable through Ctrl+P over the checkpoint (ADR 0040),
-        // so details name that route rather than a key under the checkpoint.
-        await press(wb.t, wb.renderer, "g", { ctrl: true });
-        assert.match(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
-        await press(wb.t, wb.renderer, "tab");
-      }
-      // A bare `m` reaches the control that owns the bottom, never the picker.
-      await press(wb.t, wb.renderer, "m");
-      assert.doesNotMatch(wb.t.captureCharFrame(), /Choose a model/);
-      if (modal === "request") {
-        await press(wb.t, wb.renderer, "escape");
-        assert.equal(wb.control.requests[0]?.decision, "deny");
-      } else if (modal === "gate") {
-        await type(wb.t, "351");
-        await press(wb.t, wb.renderer, "return");
-        assert.equal(wb.control.texts[0]?.text, "351");
-      } else {
-        await press(wb.t, wb.renderer, "return");
-        assert.equal(wb.control.answers[0]?.answer, "continue");
-      }
+      assert.deepEqual(wb.exits, []);
     } finally {
       wb.t.renderer.destroy();
     }
   });
+
+  for (const modal of ["request", "gate", "checkpoint"] as const) {
+    test(`workbench-model-choice: ${route} a ${modal} closes the picker and owns its keys`, async () => {
+      const wb = await mountWorkbench(runOf({ actionOffers: [MODEL_OFFER] }));
+      try {
+        await openModelChoice(wb.t, wb.renderer, "Model", route);
+        assert.match(wb.t.captureCharFrame(), /Choose a model|Choose effort/);
+        if (modal === "request") wb.control.setLive(requestOverlay());
+        else if (modal === "gate")
+          wb.control.setRun(
+            freeTextRunOf({ actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER] }),
+          );
+        else
+          wb.control.setRun(
+            blockedRunOf({ actionOffers: [MODEL_OFFER, ANSWER_OFFER] }),
+          );
+        await wb.t.renderOnce();
+        assert.doesNotMatch(
+          wb.t.captureCharFrame(),
+          /Choose a model|Choose effort/,
+        );
+        if (modal === "checkpoint") {
+          // Model stays reachable through Ctrl+P over the checkpoint (ADR 0040),
+          // so details name that route rather than a key under the checkpoint.
+          await press(wb.t, wb.renderer, "g", { ctrl: true });
+          assert.match(wb.t.captureCharFrame(), /ctrl\+p Model choice/);
+          await press(wb.t, wb.renderer, "tab");
+        }
+        // A bare `m` reaches the control that owns the bottom, never the picker.
+        await press(wb.t, wb.renderer, "m");
+        assert.doesNotMatch(
+          wb.t.captureCharFrame(),
+          /Choose a model|Choose effort/,
+        );
+        if (modal === "request") {
+          await press(wb.t, wb.renderer, "escape");
+          assert.equal(wb.control.requests[0]?.decision, "deny");
+        } else if (modal === "gate") {
+          await type(wb.t, "351");
+          await press(wb.t, wb.renderer, "return");
+          assert.equal(wb.control.texts[0]?.text, "351");
+        } else {
+          await press(wb.t, wb.renderer, "return");
+          assert.equal(wb.control.answers[0]?.answer, "continue");
+        }
+      } finally {
+        wb.t.renderer.destroy();
+      }
+    });
+  }
 }
 
 for (const settlement of ["live-turn", "next-turn", "refused"] as const) {
@@ -6509,8 +6537,18 @@ test("m10-confirmation-target-identity: End Step cannot adopt a replacement Step
  *  command, which reaches the same arm-then-confirm path (ADR 0040). */
 async function armEnding(
   wb: Awaited<ReturnType<typeof mountWorkbench>>,
-  route: { readonly key: "e" | "n" } | { readonly command: string },
+  route:
+    | { readonly key: "e" | "n" }
+    | { readonly command: string }
+    | { readonly slash: string },
 ) {
+  if ("slash" in route) {
+    wb.t.mockInput.pressKey("\x15"); // native Ctrl+U clears the line without requesting Quit
+    await wb.t.renderOnce();
+    await type(wb.t, route.slash);
+    await press(wb.t, wb.renderer, "return");
+    return;
+  }
   if ("key" in route) {
     await press(wb.t, wb.renderer, route.key, { ctrl: true });
     return;
@@ -6524,7 +6562,7 @@ async function armEnding(
 // #389 exercises supported client snapshots. It does not measure how often a
 // live Harness produces a replacement, and Step Offers expose no Attempt id.
 // End Step and Continue run through both their key and the palette; End Stage has
-// no key, so only its palette command arms it (ADR 0040).
+// no key, so its palette and Slash commands arm it (ADR 0040).
 for (const ending of [
   {
     offer: END_OFFER,
@@ -6556,8 +6594,32 @@ for (const ending of [
     prompt: /y end stage/,
     writes: "endStages",
   },
+  {
+    offer: END_OFFER,
+    route: { slash: "/end-step" },
+    prompt: /End this interactive Step\?/,
+    writes: "ends",
+  },
+  {
+    offer: CONTINUE_OFFER,
+    route: { slash: "/continue" },
+    prompt: /y continue/,
+    writes: "continues",
+  },
+  {
+    offer: END_STAGE_OFFER,
+    route: { slash: "/end-stage" },
+    prompt: /y end stage/,
+    writes: "endStages",
+  },
 ] as const) {
-  const via = "key" in ending.route ? `ctrl+${ending.route.key}` : "palette";
+  const via =
+    "key" in ending.route
+      ? `ctrl+${ending.route.key}`
+      : "slash" in ending.route
+        ? ending.route.slash
+        : "palette";
+  const keptDraft = "slash" in ending.route ? "" : "kept draft";
   test(`m10-confirmation-target-identity: ${ending.offer.action} via ${via} rejects a replaced Run or Step`, async () => {
     for (const replacement of [
       { ...ending.offer, stepId: "next-step" },
@@ -6590,9 +6652,9 @@ for (const ending of [
     wb.control.setRun(initial);
     await press(wb.t, wb.renderer, "y");
     assert.deepEqual(wb.control[ending.writes], []);
-    assert.match(wb.t.captureCharFrame(), /> kept draft/);
+    assert.ok(wb.t.captureCharFrame().includes(`> ${keptDraft}`));
     await type(wb.t, " editable");
-    assert.match(wb.t.captureCharFrame(), /> kept draft editable/);
+    assert.ok(wb.t.captureCharFrame().includes(`> ${keptDraft} editable`));
     await armEnding(wb, ending.route);
     await press(wb.t, wb.renderer, "y");
     assert.deepEqual(wb.control[ending.writes], [
@@ -6639,18 +6701,18 @@ for (const ending of [
       const lines = frame.split("\n");
       assert.match(lines[30]!, /warning\s*$/);
       assert.equal(lines[31]!.trim(), "");
-      assert.ok(lines.some((line) => line.includes("> kept draft")));
+      assert.ok(lines.some((line) => line.includes(`> ${keptDraft}`)));
       assert.ok(
         conversationText(frame, width).includes(original.consequence.trim()),
       );
       assert.doesNotMatch(frame, /REPLACEMENT wording/);
     }
     await type(wb.t, "y");
-    assert.doesNotMatch(wb.t.captureCharFrame(), /> kept drafty/);
+    assert.ok(!wb.t.captureCharFrame().includes(`> ${keptDraft}y`));
     await press(wb.t, wb.renderer, "escape");
     assert.doesNotMatch(wb.t.captureCharFrame(), ending.prompt);
     await type(wb.t, " editable");
-    assert.match(wb.t.captureCharFrame(), /> kept draft editable/);
+    assert.ok(wb.t.captureCharFrame().includes(`> ${keptDraft} editable`));
     await armEnding(wb, ending.route);
     await press(wb.t, wb.renderer, "y");
     assert.deepEqual(wb.control[ending.writes], [
@@ -9954,4 +10016,432 @@ test("m10-workbench-interaction: Steer ids distinguish identical text in two Att
   assert.deepEqual(wb.control.followUps, [
     { runId: "run-1", turnId: "turn-8", text: "identical guidance" },
   ]);
+});
+
+test("m10-commands-and-input-rules: first-character discovery highlights only prefixes and Escape keeps text", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER, END_OFFER] }),
+  );
+  try {
+    await type(wb.t, "/mo");
+    assert.match(wb.t.captureCharFrame(), /› \/model/);
+    await press(wb.t, wb.renderer, "escape");
+    assert.doesNotMatch(wb.t.captureCharFrame(), /› \/model/);
+    assert.match(wb.t.captureCharFrame(), /> \/mo/);
+    assert.deepEqual(wb.exits, []);
+    assert.deepEqual(wb.control.sends, []);
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+for (const text of [
+  " /model",
+  "/MODEL",
+  "/model haiku",
+  "/continue working on it",
+  "/end-step",
+  "/end-stage",
+  "/effort extra",
+  "/quit now",
+  "/exit now",
+  "/themes light",
+]) {
+  test(`m10-commands-and-input-rules: known first word ${JSON.stringify(text)} owns the draft even when unavailable`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    try {
+      await type(wb.t, text);
+      await press(wb.t, wb.renderer, "return");
+      assert.match(
+        wb.t.captureCharFrame(),
+        /isn't available right now|doesn't accept inline arguments/,
+      );
+      assert.ok(wb.t.captureCharFrame().includes(text));
+      assert.deepEqual(wb.control.sends, []);
+      assert.deepEqual(wb.exits, []);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const text of [
+  "/tmp/x",
+  "/compact",
+  "/some-skill @file",
+  " /unknown",
+  "/tmp/model.ts",
+  "/unknown\nunchanged",
+]) {
+  test(`m10-commands-and-input-rules: unknown skills, Session words, and paths pass unchanged ${JSON.stringify(text)}`, async () => {
+    const wb = await mountWorkbench(interactiveRunOf());
+    try {
+      await type(wb.t, text);
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /› \/(?:model|effort|end-step|themes|quit)/,
+      );
+      await press(wb.t, wb.renderer, "return");
+      assert.deepEqual(wb.control.sends, [
+        { runId: "run-1", stepId: "discuss", text },
+      ]);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("m10-commands-and-input-rules: discovery ends at whitespace and never opens after a leading space", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
+  );
+  try {
+    await type(wb.t, " /mo");
+    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
+    await press(wb.t, wb.renderer, "c", { ctrl: true });
+    await type(wb.t, "/model ");
+    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+for (const command of ["model", "effort"]) {
+  for (const key of ["return", "tab"]) {
+    test(`m10-commands-and-input-rules: /${command} ${key} opens the joint picker at its correct focus and clears the command`, async () => {
+      const wb = await mountWorkbench(
+        interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
+      );
+      try {
+        await type(wb.t, `/${command}`);
+        await press(wb.t, wb.renderer, key);
+        assert.match(
+          wb.t.captureCharFrame(),
+          command === "model" ? /1\. Choose a model/ : /2\. Choose effort/,
+        );
+        assert.deepEqual(wb.control.sends, []);
+        await press(wb.t, wb.renderer, "c", { ctrl: true });
+        assert.doesNotMatch(wb.t.captureCharFrame(), /> \/(?:model|effort)/);
+      } finally {
+        wb.t.renderer.destroy();
+      }
+    });
+  }
+}
+
+for (const command of ["themes", "quit", "exit"]) {
+  test(`m10-commands-and-input-rules: /${command} invokes the shell owner`, async () => {
+    const wb = await mountWorkbench(interactiveRunOf());
+    try {
+      await type(wb.t, `/${command}`);
+      await press(wb.t, wb.renderer, "return");
+      if (command === "themes")
+        assert.match(wb.t.captureCharFrame(), /Themes · Dark/);
+      else assert.equal(wb.exits.length, 1);
+      assert.deepEqual(wb.control.sends, []);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("m10-commands-and-input-rules: drawn prefix loses its Offer before Enter and cannot adopt another command", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER, END_OFFER] }),
+  );
+  try {
+    await type(wb.t, "/e");
+    assert.match(wb.t.captureCharFrame(), /› \/effort/);
+    wb.control.setRun(
+      interactiveRunOf({ actionOffers: [SEND_OFFER, END_OFFER] }),
+    );
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /› \/end-step/);
+    await press(wb.t, wb.renderer, "return");
+    assert.match(wb.t.captureCharFrame(), /isn't available right now/);
+    assert.deepEqual(wb.control.sends, []);
+    assert.deepEqual(wb.control.ends, []);
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+test("m10-commands-and-input-rules: arrows have single ownership through Port and native field, Tab precedes details", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER, END_OFFER] }),
+  );
+  try {
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
+    await press(wb.t, wb.renderer, "tab");
+    await type(wb.t, "/");
+    wb.renderer.key("down");
+    wb.t.mockInput.pressArrow("down");
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /› \/effort/);
+    wb.renderer.key("up");
+    wb.t.mockInput.pressArrow("up");
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /› \/model/);
+    await type(wb.t, "mo");
+    assert.match(wb.t.captureCharFrame(), /> \/mo/);
+    wb.renderer.key("tab");
+    wb.t.mockInput.pressKey("\t");
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+    assert.deepEqual(wb.control.sends, []);
+  } finally {
+    wb.t.renderer.destroy();
+  }
+});
+
+for (const modal of ["request", "gate", "checkpoint"]) {
+  test(`m10-commands-and-input-rules: a ${modal} preempts discovery and palette retains permitted scope`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({
+        actionOffers: [
+          SEND_OFFER,
+          MODEL_OFFER,
+          END_OFFER,
+          CONTINUE_OFFER,
+          END_STAGE_OFFER,
+        ],
+      }),
+    );
+    try {
+      await type(wb.t, "/");
+      assert.match(wb.t.captureCharFrame(), /› \/model/);
+      if (modal === "request") wb.control.setLive(requestOverlay());
+      else if (modal === "gate")
+        wb.control.setRun(
+          freeTextRunOf({
+            actionOffers: [MODEL_OFFER, FREE_TEXT_OFFER, END_OFFER],
+          }),
+        );
+      else
+        wb.control.setRun(
+          blockedRunOf({
+            actionOffers: [MODEL_OFFER, ANSWER_OFFER, END_OFFER],
+          }),
+        );
+      await wb.t.renderOnce();
+      assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab run/);
+      await press(wb.t, wb.renderer, "p", { ctrl: true });
+      const frame = wb.t.captureCharFrame();
+      for (const name of ["Model", "Effort", "Themes", "Quit"])
+        assert.ok(frame.includes(name));
+      assert.doesNotMatch(frame, /Confirm ending|Confirm another/);
+      await press(wb.t, wb.renderer, "escape");
+      await press(wb.t, wb.renderer, "return");
+      if (modal === "request") assert.equal(wb.control.requests.length, 1);
+      else if (modal === "checkpoint")
+        assert.equal(wb.control.answers.length, 1);
+      assert.deepEqual(wb.control.sends, []);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const [width, height] of [
+  [48, 12],
+  [60, 12],
+  [120, 24],
+  [121, 24],
+  [160, 40],
+]) {
+  test(`m10-commands-and-input-rules: list rows at ${width}x${height} preserve prompt and selection through resize`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({
+        actionOffers: [
+          SEND_OFFER,
+          MODEL_OFFER,
+          END_OFFER,
+          CONTINUE_OFFER,
+          END_STAGE_OFFER,
+        ],
+      }),
+      width,
+      height,
+    );
+    try {
+      await type(wb.t, "/");
+      await press(wb.t, wb.renderer, "down");
+      for (const [w, h] of [
+        [width, height],
+        [160, 40],
+        [48, 12],
+      ]) {
+        wb.t.resize(w, h);
+        wb.renderer.resize(w, h);
+        await wb.t.renderOnce();
+        const frame = wb.t.captureCharFrame();
+        noOverflow(frame, w);
+        assert.match(frame, /> \//);
+        assert.match(frame, /› \/effort/);
+        assert.match(frame, /enter send Turn/);
+        assert.equal(frame.split("\n")[h - 1]?.trim(), "");
+      }
+      await press(wb.t, wb.renderer, "tab");
+      assert.match(wb.t.captureCharFrame(), /2\. Choose effort/);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const state of ["working", "agent", "finished"] as const) {
+  test(`m10-commands-and-input-rules: ${state} exposes only its permitted commands`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({
+        actionOffers: [
+          SEND_OFFER,
+          MODEL_OFFER,
+          END_OFFER,
+          CONTINUE_OFFER,
+          END_STAGE_OFFER,
+        ],
+      }),
+    );
+    try {
+      await type(wb.t, "/");
+      assert.match(wb.t.captureCharFrame(), /\/end-step/);
+      if (state === "working")
+        wb.control.setRun(
+          liveInteractiveRunOf({
+            actionOffers: [
+              INTERRUPT_OFFER,
+              AVAILABLE_STEER_OFFER,
+              MODEL_OFFER,
+              END_OFFER,
+            ],
+          }),
+        );
+      else if (state === "agent")
+        wb.control.setRun(runOf({ actionOffers: [MODEL_OFFER] }));
+      else
+        wb.control.setRun(
+          runOf({ state: "succeeded", actionOffers: [MODEL_OFFER] }),
+        );
+      await wb.t.renderOnce();
+      if (state === "agent") await type(wb.t, "/");
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /\/end-step|\/continue|\/end-stage/,
+      );
+      if (state !== "finished") {
+        for (const name of ["model", "effort", "themes", "quit"])
+          assert.ok(wb.t.captureCharFrame().includes(`/${name}`));
+      }
+      await press(wb.t, wb.renderer, "p", { ctrl: true });
+      const frame = wb.t.captureCharFrame();
+      assert.ok(frame.includes("Themes") && frame.includes("Quit"));
+      assert.doesNotMatch(frame, /Confirm ending|Confirm another/);
+      if (state === "finished")
+        assert.doesNotMatch(frame, /Change the Run model|Change effort/);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const text of ["/tmp/x", "/compact", "/unknown skill"]) {
+  test(`m10-commands-and-input-rules: working Turn passes ${text} unchanged to existing Steer admission`, async () => {
+    const wb = await mountWorkbench(
+      liveInteractiveRunOf({
+        actionOffers: [INTERRUPT_OFFER, AVAILABLE_STEER_OFFER],
+      }),
+    );
+    try {
+      await type(wb.t, text);
+      await press(wb.t, wb.renderer, "return");
+      assert.deepEqual(wb.control.steers, [
+        { runId: "run-1", turnId: "turn-7", text },
+      ]);
+      assert.deepEqual(wb.control.sends, []);
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+for (const command of ["model", "effort"]) {
+  test(`workbench-model-choice: /${command} absent, unavailable and stale Offers keep text and never open the picker`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    try {
+      for (const actionOffers of [
+        [SEND_OFFER],
+        [
+          SEND_OFFER,
+          {
+            ...MODEL_OFFER,
+            available: false as const,
+            problem: {
+              code: "checking",
+              explanation: "Checking choices",
+              remediation: "Wait",
+              possibleEffects: "none" as const,
+            },
+          },
+        ],
+        [SEND_OFFER, MODEL_OFFER],
+      ]) {
+        wb.control.setRun(interactiveRunOf({ actionOffers }));
+        if (
+          actionOffers.some(
+            (offer) =>
+              offer.action === "change-model-choice" && offer.available,
+          )
+        )
+          wb.control.setFreshness({
+            kind: "catching-up",
+            catchUp: "fresh",
+            lastConfirmedAt: "2026-10-05T00:00:00Z",
+          });
+        await wb.t.renderOnce();
+        await press(wb.t, wb.renderer, "c", { ctrl: true });
+        await type(wb.t, `/${command}`);
+        await press(wb.t, wb.renderer, "return");
+        assert.doesNotMatch(
+          wb.t.captureCharFrame(),
+          /Choose a model|Choose effort/,
+        );
+        assert.match(wb.t.captureCharFrame(), /isn't available right now/);
+        assert.match(wb.t.captureCharFrame(), new RegExp(`> /${command}`));
+        assert.deepEqual(wb.control.sends, []);
+      }
+    } finally {
+      wb.t.renderer.destroy();
+    }
+  });
+}
+
+test("m10-commands-and-input-rules: pending Turn admission keeps Slash discovery and the joint picker available without losing a refused capture (#420)", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
+  );
+  try {
+    await type(wb.t, "captured text");
+    await press(wb.t, wb.renderer, "return");
+    await type(wb.t, "/model");
+    assert.match(wb.t.captureCharFrame(), /› \/model/);
+    await press(wb.t, wb.renderer, "return");
+    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+    wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /1\. Choose a model/);
+    await press(wb.t, wb.renderer, "c", { ctrl: true });
+    await type(wb.t, " newer text");
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(wb.control.sends, [
+      { runId: "run-1", stepId: "discuss", text: "captured text" },
+      { runId: "run-1", stepId: "discuss", text: "captured text newer text" },
+    ]);
+    assert.deepEqual(wb.exits, []);
+  } finally {
+    wb.t.renderer.destroy();
+  }
 });

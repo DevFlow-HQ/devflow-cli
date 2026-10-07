@@ -62,6 +62,7 @@ export interface PromptModel {
   /** Saved old-target text and its explicit palette recovery route. */
   readonly recovery: readonly string[];
   readonly hint: PromptHint;
+  readonly commands?: readonly string[];
 }
 
 export function promptHeight(model: PromptModel): number {
@@ -71,6 +72,7 @@ export function promptHeight(model: PromptModel): number {
     (model.meta === undefined ? 0 : 1) +
     model.refusal.length +
     model.recovery.length +
+    (model.commands?.length ?? 0) +
     (model.hint.kind === "working" ? 1 : model.hint.lines.length)
   );
 }
@@ -86,6 +88,7 @@ export function PromptControl(props: {
   draft: Accessor<string>;
   onInput: (value: string) => void;
   focused: Accessor<boolean>;
+  slashOpen: Accessor<boolean>;
   width: Accessor<number>;
   reducedMotion: boolean;
   theme: Theme;
@@ -130,12 +133,20 @@ export function PromptControl(props: {
           draft={props.draft}
           onInput={props.onInput}
           focused={props.focused}
+          slashOpen={props.slashOpen}
           placeholder={() => clip(props.model().placeholder, w() - 2)}
           placeholderColor={theme.textMuted}
           width={() => Math.max(1, w() - 2)}
           rows={() => props.model().fieldRows}
         />
       </box>
+      <For each={props.model().commands}>
+        {(line) => (
+          <text fg={theme.text} flexShrink={0} wrapMode="none">
+            {line}
+          </text>
+        )}
+      </For>
       <Show when={props.model().meta}>
         {(meta) => (
           <text fg={theme.textMuted} flexShrink={0} wrapMode="none">
@@ -719,6 +730,7 @@ function PromptField(props: {
   draft: Accessor<string>;
   onInput: (value: string) => void;
   focused: Accessor<boolean>;
+  slashOpen: Accessor<boolean>;
   placeholder: Accessor<string>;
   placeholderColor: Theme["textMuted"];
   width: Accessor<number>;
@@ -749,6 +761,10 @@ function PromptField(props: {
         { name: "return", action: "submit" },
         { name: "return", shift: true, action: "newline" },
         { name: "j", ctrl: true, action: "newline" },
+        // The Port owns list navigation. Submit has no handler and keeps the
+        // native cursor still when the same arrow reaches the focused field.
+        { name: "up", action: props.slashOpen() ? "submit" : "move-up" },
+        { name: "down", action: props.slashOpen() ? "submit" : "move-down" },
       ]}
       onContentChange={() => {
         const value = box()?.plainText;

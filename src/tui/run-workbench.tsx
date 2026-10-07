@@ -41,6 +41,7 @@ import type {
 import type { RendererKeyEvent, RendererPort } from "./renderer/renderer.js";
 import { useAppCommands, type AppCommand } from "./app-commands.js";
 import { clip } from "./clip.js";
+import { searchCommands } from "./command-search.js";
 import {
   useRunActionsView,
   type RunActionOutcome,
@@ -625,6 +626,7 @@ export function RunWorkbench(props: {
     );
   const [promptRefusal, setPromptRefusal] = createSignal<
     | { readonly kind: "refused"; readonly problem: Problem }
+    | { readonly kind: "command"; readonly message: string }
     | {
         readonly kind: "unavailable-steer";
         readonly offer: Extract<SteerTurnOffer, { available: false }>;
@@ -697,7 +699,7 @@ export function RunWorkbench(props: {
     setEndingOutcome(() => view.endStage(offer.runId, offer.stepId));
   };
 
-  // The one arm-then-confirm path every entry reaches — keys, the palette, and
+  // The one arm-then-confirm path every entry reaches — keys, palette, Slash, and
   // focused details — capturing the Offer and its consequence as they are now.
   const arm = (kind: TConfirmation["kind"]) => {
     const current = offers();
@@ -1048,13 +1050,13 @@ export function RunWorkbench(props: {
     const note = promptNote(prompt);
     const meta = promptMeta();
     const refusal = promptRefusal();
-    return {
+    const model: PromptModel = {
       recovery: recoveryLines(),
       refusal:
         refusal === undefined
           ? []
           : hintLines(
-              `✗ ${refusal.kind === "refused" ? refusal.problem.explanation : `steer unavailable · ${refusal.offer.reason}`}`,
+              `✗ ${refusal.kind === "refused" ? refusal.problem.explanation : refusal.kind === "command" ? refusal.message : `steer unavailable · ${refusal.offer.reason}`}`,
             ),
       ...(note === undefined ? {} : { note }),
       placeholder: promptPlaceholder(prompt),
@@ -1064,6 +1066,37 @@ export function RunWorkbench(props: {
       ),
       ...(meta === undefined ? {} : { meta }),
       hint: promptHint(prompt),
+    };
+    const rows = slashMatches();
+    const budget = Math.min(
+      6,
+      Math.max(
+        0,
+        interiorH() -
+          noticeRows() -
+          STATUS_ROWS -
+          conversationMetadata().length -
+          promptHeight(model) -
+          2,
+      ),
+    );
+    const active = slashActive();
+    const index = rows.findIndex((entry) => entry.id === active?.id);
+    const start = Math.max(0, index - budget + 1);
+    const list = rows
+      .slice(start, start + budget)
+      .map((entry) =>
+        clip(
+          `${entry.id === active?.id ? "› " : "  "}/${entry.slash} · ${entry.name}${entry.keyHint ? ` (${entry.keyHint})` : ""}`,
+          innerW(),
+        ),
+      );
+    return {
+      ...model,
+      commands:
+        list.length === 0
+          ? []
+          : [...list, clip("↑/↓ select · enter/tab run · esc close", innerW())],
     };
   };
 
@@ -1522,27 +1555,55 @@ export function RunWorkbench(props: {
   // shared arm-then-confirm path; Application still admits the Operation.
   commands.register(() => {
     const current = interaction();
-    const entries: AppCommand[] = [];
-    if (
+    const modelAvailable =
       current.kind !== "finished" &&
       offers().modelChoice?.available === true &&
-      !modelChoice.pending()
-    ) {
-      entries.push({
+      !modelChoice.pending();
+    const endings = current.kind === "prompt" ? current.endings : {};
+    const entries: AppCommand[] = [
+      {
         id: "model",
         name: "Model",
         description: "Change the Run model and effort",
         slash: "model",
+        available: modelAvailable,
         run: () => modelChoice.open("model", true),
-      });
-      entries.push({
+      },
+      {
         id: "effort",
         name: "Effort",
         description: "Change effort with the Model choice",
         slash: "effort",
+        available: modelAvailable,
         run: () => modelChoice.open("effort", true),
-      });
-    }
+      },
+      {
+        id: "end-step",
+        name: "End Step",
+        description: "Confirm ending the interactive Step",
+        slash: "end-step",
+        keyHint: "ctrl+e",
+        available: endings.end !== undefined,
+        run: () => arm("end-step"),
+      },
+      {
+        id: "continue",
+        name: "Continue",
+        description: "Confirm another Repeat iteration",
+        slash: "continue",
+        keyHint: "ctrl+n",
+        available: endings.continue !== undefined,
+        run: () => arm("continue"),
+      },
+      {
+        id: "end-stage",
+        name: "End Stage",
+        description: "Confirm ending the stage",
+        slash: "end-stage",
+        available: endings.endStage !== undefined,
+        run: () => arm("end-stage"),
+      },
+    ];
     if (current.kind !== "prompt" && recoverable().length > 0)
       entries.push({
         id: "copy-unsent-text",
@@ -1572,36 +1633,117 @@ export function RunWorkbench(props: {
               setDraftNotice("Earlier-input text recovered into this draft");
             }),
         });
-      const available = current.endings;
-      if (available.end)
-        entries.push({
-          id: "end-step",
-          name: "End Step",
-          description: "Confirm ending the interactive Step",
-          slash: "end-step",
-          keyHint: "ctrl+e",
-          run: () => arm("end-step"),
-        });
-      if (available.continue)
-        entries.push({
-          id: "continue",
-          name: "Continue",
-          description: "Confirm another Repeat iteration",
-          slash: "continue",
-          keyHint: "ctrl+n",
-          run: () => arm("continue"),
-        });
-      if (available.endStage)
-        entries.push({
-          id: "end-stage",
-          name: "End Stage",
-          description: "Confirm ending the stage",
-          slash: "end-stage",
-          run: () => arm("end-stage"),
-        });
     }
     return entries;
   });
+
+  const [slashDismissed, setSlashDismissed] = createSignal<string>();
+  const [slashSelection, setSlashSelection] = createSignal<{
+    draft: string;
+    id: string;
+  }>();
+  const slashOpen = () =>
+    promptInteraction() !== undefined &&
+    focus() === "bottom" &&
+    dialog.stack.length === 0 &&
+    confirmation() === undefined &&
+    draft().startsWith("/") &&
+    !/\s/.test(draft()) &&
+    slashDismissed() !== draft();
+  const slashMatches = () =>
+    slashOpen()
+      ? searchCommands(
+          commands.entries().filter((entry) => entry.slash !== undefined),
+          draft().slice(1),
+        )
+      : [];
+  const slashActive = () => {
+    const rows = slashMatches();
+    const selected = slashSelection();
+    if (selected?.draft === draft())
+      return rows.find((entry) => entry.id === selected.id);
+    const prefix = draft().slice(1).toLowerCase();
+    return rows.find((entry) =>
+      [entry.slash, ...(entry.aliases ?? [])].some((name) =>
+        name?.startsWith(prefix),
+      ),
+    );
+  };
+  createEffect(
+    on(draft, (text) => {
+      setSlashDismissed(undefined);
+      const prefix = text.slice(1).toLowerCase();
+      const entry = slashMatches().find((entry) =>
+        [entry.slash, ...(entry.aliases ?? [])].some((name) =>
+          name?.startsWith(prefix),
+        ),
+      );
+      setSlashSelection(
+        entry === undefined ? undefined : { draft: text, id: entry.id },
+      );
+    }),
+  );
+  const invokeSlash = (id?: string) => {
+    const known = commands.knownSlash(draft());
+    if (known?.arguments) {
+      setPromptRefusal({
+        kind: "command",
+        message: `/${known.entry.slash} doesn't accept inline arguments`,
+      });
+      return true;
+    }
+    const entry =
+      id === undefined
+        ? known?.entry
+        : commands.entries().find((entry) => entry.id === id);
+    if (entry === undefined && known === undefined && id === undefined)
+      return false;
+    if (entry === undefined || entry.available === false) {
+      setPromptRefusal({
+        kind: "command",
+        message: `/${known?.entry.slash ?? id} isn't available right now`,
+      });
+      return true;
+    }
+    batch(() => {
+      restoredPrefix = [];
+      setDraftNotice(undefined);
+      setDraft("");
+      setDraftRestored(false);
+      setPromptRefusal(undefined);
+    });
+    entry.run();
+    return true;
+  };
+  const handleSlashKey = (key: RendererKeyEvent) => {
+    if (key.ctrl || key.alt || key.shift) return false;
+    if (slashOpen()) {
+      if (key.name === "escape") {
+        setSlashDismissed(draft());
+        return true;
+      }
+      if (key.name === "up" || key.name === "down") {
+        const rows = slashMatches();
+        const index = rows.findIndex((entry) => entry.id === slashActive()?.id);
+        const entry =
+          rows[
+            Math.max(
+              0,
+              Math.min(rows.length - 1, index + (key.name === "up" ? -1 : 1)),
+            )
+          ];
+        if (entry) setSlashSelection({ draft: draft(), id: entry.id });
+        return true;
+      }
+      if (key.name === "return" || key.name === "tab") {
+        const active = slashActive();
+        if (active !== undefined) return invokeSlash(active.id);
+        const held = slashSelection();
+        if (held?.draft === draft()) return invokeSlash(held.id);
+      }
+    }
+    return key.name === "return" && invokeSlash();
+  };
 
   // The prompt's native field takes text only while nothing else holds the keys:
   // no dialog, no confirmation, no focused details.
@@ -2000,6 +2142,7 @@ export function RunWorkbench(props: {
       handleDetailsKey(key);
       return;
     }
+    if (current.kind === "prompt" && handleSlashKey(key)) return;
     if (name === "tab" && detailsShown()) {
       setFocus("details");
       return;
@@ -2359,6 +2502,7 @@ export function RunWorkbench(props: {
                         draft={draft}
                         onInput={(value) => setDraft(value)}
                         focused={promptFieldFocused}
+                        slashOpen={slashOpen}
                         width={innerW}
                         reducedMotion={props.reducedMotion}
                         theme={theme}
