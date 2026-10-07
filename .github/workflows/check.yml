@@ -109,7 +109,7 @@ jobs:
           -t '^m10-workspace-mentions(:|$)'
           tests/application/workspace-paths.test.ts
           tests/tui/run-workbench-prompt.test.tsx
-          tests/headless/interactive-agent.test.ts
+          tests/application/interactive-agent.test.ts
       - name: m10-home-and-preferences
         run: >-
           bun run test --
@@ -198,6 +198,15 @@ jobs:
           -t '^m12-focused-check-scenarios(:|$)'
           tests/architecture/release-workflow.test.ts
           tests/architecture/structural-step.test.ts
+      - name: m12-test-interface-ownership
+        run: >-
+          bun run test --
+          -t '^m12-test-interface-ownership(:|$)'
+          tests/application/interactive-agent.test.ts
+          tests/application/preflight.test.ts
+          tests/application/projection-port.test.ts
+          tests/headless/interactive-agent.test.ts
+          tests/process/conformance.test.ts
       - name: Test
         run: bun run test
       - name: Build

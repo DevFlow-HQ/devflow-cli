@@ -690,7 +690,7 @@ test("the Proof Bundle's Agent Step is dispatchable and refused at Preflight whe
   assert.deepEqual(f.runGroup.listRuns(), []);
 });
 
-test("a headless launch refuses an interactive-agent Bundle with interactive-step-needs-tui (#116)", (t) => {
+test("m12-test-interface-ownership: a headless launch refuses an interactive-agent Bundle with interactive-step-needs-tui (#116)", (t) => {
   const f = fixture(t, workspace());
   // An interactive-agent Bundle authored directly (no command-bundle helper covers
   // it): the headless client cannot relay human turn-taking, so Preflight refuses

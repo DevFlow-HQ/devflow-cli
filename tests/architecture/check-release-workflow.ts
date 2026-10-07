@@ -188,6 +188,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-observed-harness-facts",
   "m10-audit-workbench-test-domains",
   "m12-focused-check-scenarios",
+  "m12-test-interface-ownership",
 ] as const;
 
 function testFilesIn(script: string): string[] {

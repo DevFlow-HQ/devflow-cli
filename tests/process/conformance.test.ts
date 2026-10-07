@@ -357,7 +357,9 @@ test("fake process reports each scripted child's facts as the real Adapter would
   ]);
 });
 
-test("every spawn declares a caller role from the closed set", () => {
+// Compiler evidence: typecheck rejects missing, internal-only and free-text roles.
+// Runtime assertions retain the guard inputs; they do not prove type rejection.
+test("m12-test-interface-ownership: compiler guards require a caller role from the closed set", () => {
   const { role, ...roleless } = basicCommandOptions;
   assert.equal(role, "command");
   // @ts-expect-error -- a spawn without a role fails typecheck.

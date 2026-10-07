@@ -313,11 +313,15 @@ test("opening the operation projection on an unknown id yields a Problem snapsho
   }
 });
 
-test("closing a projection twice is a no-op", async (t) => {
+test("m12-test-interface-ownership: closing a projection twice ends pending and future reads", async (t) => {
   const { port } = await fixture(t);
   const opened = port.openProjection({ family: "workspace" });
+  const reader = opened.updates[Symbol.asyncIterator]();
+  const pending = reader.next();
   opened.close();
   opened.close();
+  assert.deepEqual(await pending, { done: true, value: undefined });
+  assert.deepEqual(await reader.next(), { done: true, value: undefined });
 });
 
 test("shutdown ends every idle Projection branch, releases pending readers, and permits later explicit opens", async (t) => {
