@@ -1,5 +1,7 @@
 # Secant's closed-source transition before the next release
 
+Verification update: [Closed-source transition verification](./secant-closed-source-verification.md) confirms the one-seat monthly checkout, replaces the short-sample monthly estimate with a complete census, verifies all historical artifact bytes, and records the native-runtime notice gap. Read that update before acting on the original research below.
+
 Researched 2026-10-07 for [Chart the fixes Secant needs before its public release](https://github.com/secantdev/secant/issues/235). The maintainer has decided that the source becomes private before the next release. Downloads remain free and anonymous, including npm. The monthly ceiling is $21 at the present one-user scale, with a preference for the plan offering 50,000 CI minutes. That plan is Enterprise Cloud, not Team. This report recommends a route; it does not approve a purchase, hosting provider, license text, or production migration.
 
 ## Recommendation

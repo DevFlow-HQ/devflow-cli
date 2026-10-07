@@ -1,5 +1,7 @@
 # Secant historical-release and licensing transition
 
+Verification update: [Closed-source transition verification](./secant-closed-source-verification.md) confirms the one-seat monthly checkout, replaces the short-sample monthly estimate with a complete census, verifies all historical artifact bytes, and records the native-runtime notice gap. Read that update before acting on the original research below.
+
 Researched 2026-10-07 for [Establish the v0.1.0 and licensing transition constraints](https://github.com/secantdev/secant/issues/426). This is research and an advisory cutover sequence, not approval to change visibility, licensing, published bytes, or production configuration. The maintainer confirms that the source becomes private while binaries remain free to download anonymously.
 
 ## Findings that determine the cutover

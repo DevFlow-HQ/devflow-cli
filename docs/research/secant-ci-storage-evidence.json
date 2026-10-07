@@ -1,0 +1,142 @@
+{
+  "checkedAt": "2026-10-07",
+  "method": "GitHub Actions artifacts API, all pages, sum size_in_bytes for nonexpired entries; transport compressed sizes, not hourly metered storage",
+  "totalEntries": 1310,
+  "nonexpiredEntries": 1310,
+  "nonexpiredBytes": 142396346093,
+  "byName": {
+    "binaries": {
+      "count": 491,
+      "bytes": 57363547112
+    },
+    "release-archives": {
+      "count": 374,
+      "bytes": 42822289683
+    },
+    "platform-packages": {
+      "count": 371,
+      "bytes": 42204769788
+    },
+    "operational-logs-consumer-macos-latest": {
+      "count": 5,
+      "bytes": 160160
+    },
+    "operational-logs-consumer-ubuntu-latest": {
+      "count": 3,
+      "bytes": 144485
+    },
+    "operational-logs-consumer-windows-latest": {
+      "count": 3,
+      "bytes": 153712
+    },
+    "operational-logs-check-windows-latest": {
+      "count": 11,
+      "bytes": 756424
+    },
+    "operational-logs-check-macos-latest": {
+      "count": 8,
+      "bytes": 776843
+    },
+    "operational-logs-check-ubuntu-latest": {
+      "count": 3,
+      "bytes": 84285
+    },
+    "diag-two-worker-3": {
+      "count": 1,
+      "bytes": 83427
+    },
+    "diag-two-worker-4": {
+      "count": 1,
+      "bytes": 93693
+    },
+    "diag-control-4": {
+      "count": 2,
+      "bytes": 184956
+    },
+    "diag-control-5": {
+      "count": 2,
+      "bytes": 200546
+    },
+    "diag-control-3": {
+      "count": 3,
+      "bytes": 315315
+    },
+    "diag-control-2": {
+      "count": 3,
+      "bytes": 274786
+    },
+    "diag-two-worker-2": {
+      "count": 1,
+      "bytes": 88762
+    },
+    "diag-two-worker-1": {
+      "count": 1,
+      "bytes": 98823
+    },
+    "diag-control-1": {
+      "count": 3,
+      "bytes": 297763
+    },
+    "diag-two-worker-5": {
+      "count": 1,
+      "bytes": 82953
+    },
+    "diag-temp-workspace-drive-5": {
+      "count": 1,
+      "bytes": 66798
+    },
+    "diag-defender-exclusion-2": {
+      "count": 1,
+      "bytes": 98514
+    },
+    "diag-one-worker-2": {
+      "count": 1,
+      "bytes": 77771
+    },
+    "diag-temp-workspace-drive-1": {
+      "count": 2,
+      "bytes": 140535
+    },
+    "diag-temp-workspace-drive-3": {
+      "count": 2,
+      "bytes": 70153
+    },
+    "diag-one-worker-1": {
+      "count": 1,
+      "bytes": 39122
+    },
+    "diag-defender-exclusion-3": {
+      "count": 1,
+      "bytes": 829
+    },
+    "diag-temp-workspace-drive-2": {
+      "count": 2,
+      "bytes": 135709
+    },
+    "diag-temp-workspace-drive-4": {
+      "count": 1,
+      "bytes": 70397
+    },
+    "diag-one-worker-3": {
+      "count": 1,
+      "bytes": 70965
+    },
+    "diag-defender-exclusion-1": {
+      "count": 1,
+      "bytes": 92227
+    },
+    "opencode-qualification-macOS-ARM64": {
+      "count": 3,
+      "bytes": 4736
+    },
+    "opencode-qualification-Linux-X64": {
+      "count": 3,
+      "bytes": 4743
+    },
+    "issue-177-bun-child-lifecycle": {
+      "count": 3,
+      "bytes": 1070078
+    }
+  },
+  "nonexpiredGiB": 132.6169316591695
+}

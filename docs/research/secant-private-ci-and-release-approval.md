@@ -1,5 +1,7 @@
 # Private-source CI and release approval
 
+Verification update: [Closed-source transition verification](./secant-closed-source-verification.md) confirms the one-seat monthly checkout, replaces the short-sample monthly estimate with a complete census, verifies all historical artifact bytes, and records the native-runtime notice gap. Read that update before acting on the original research below.
+
 Research for [Establish private-source CI costs and a viable release approval boundary](https://github.com/secantdev/secant/issues/424), accessed 2026-10-07. This report records provider facts, account observations, estimates, and advisory designs. It changes no settings and buys no plan.
 
 ## Findings that determine the decision

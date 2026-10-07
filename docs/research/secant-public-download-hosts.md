@@ -1,5 +1,7 @@
 # Public downloads after Secant source becomes private
 
+Verification update: [Closed-source transition verification](./secant-closed-source-verification.md) confirms the one-seat monthly checkout, replaces the short-sample monthly estimate with a complete census, verifies all historical artifact bytes, and records the native-runtime notice gap. Read that update before acting on the original research below.
+
 Research date: 2026-10-07. This resolves the research question in [Compare public download hosts and the secant.sh installer contract](https://github.com/secantdev/secant/issues/425). It proposes decisions for review and makes no provider, repository, or source changes.
 
 ## Recommendation
