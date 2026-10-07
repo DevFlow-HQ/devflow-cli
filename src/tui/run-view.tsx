@@ -47,7 +47,10 @@ import { submitAndSettle, type SettleOutcome } from "./submit-and-settle.js";
 /** An answer as the Workbench observes it: `pending` until it settles, then
  *  `applied` (the open snapshot then drops the checkpoint and its offer) or a
  *  refusal Problem. This is the shared submit-and-settle outcome (A23). */
-export type AnswerOutcome = SettleOutcome;
+export type AnswerOutcome = SettleOutcome & {
+  /** Steer Operations use the same opaque id as their durable settlement. */
+  readonly steerId?: string;
+};
 export type TRunViewFreshness = TProjectionStreamHealth;
 
 /** The durable Run snapshot joined with its explicitly separate ephemeral Turn
@@ -255,12 +258,15 @@ export function createLiveRunWorkbenchView(
     // reach the live Turn before it settles. The Application refuses an unavailable
     // Harness or a stale/rejected control as a value; an applied steer leaves the
     // Turn running, and the open snapshot keeps following it.
-    steer: (runId, turnId, text) =>
-      submitAndSettle(port, {
-        operationId: randomUUID(),
+    steer: (runId, turnId, text) => {
+      const steerId = randomUUID();
+      const outcome = submitAndSettle(port, {
+        operationId: steerId,
         operation: "steer-turn",
         input: { runId, turnId, text },
-      }),
+      });
+      return () => ({ ...outcome(), steerId });
+    },
     // A free-text gate answer publishes the text as the gate's declared output and
     // advances the Run in one Store boundary (#108); the open snapshot follows the
     // Run leaving `blocked`, so this seam never re-reads it.

@@ -75,6 +75,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Agent-bearing Runs reserve two metadata lines outside the timeline (#418). Context/usage replacement cannot change history rows,
   viewport height, or the activity badge; empty reports leave blank slots. Metadata uses reported meanings and clips to the available width.
 
+- Prompt receipts are independent per dispatch (#420). A native textarea `setText` moves its cursor to the start; prompt write-back calls
+  `gotoBufferEnd` after clear or restore so continued typing extends the restored draft. Ordinary updates never write text back.
+- Workbench Steer receipts carry the Operation id as `steerId` for exact settlement matching; equal text never identifies a production capture.
+
 ## Tests
 
 - Workbench resize evidence resizes both `testRender` and the injected Renderer Port: changing only the Port leaves the captured terminal at its original width.

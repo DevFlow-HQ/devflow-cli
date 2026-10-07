@@ -22,6 +22,9 @@ above ([ADR 0040](./adr/0040-type-app-commands-in-the-compose-and-refuse-harness
 The Workbench's headerless layout, its sidebar or prompt meta row, and its one bottom interaction (prompt, request, gate, checkpoint, or finished
 outcome) are TUI presentation, not a gap: `run show` prints the same state, Steps, gate, and Model choice facts ([#419](https://github.com/secantdev/secant/issues/419)).
 
+Immediate draft clearing, editable pending sends, ordered refused-text and Interrupt-drop restoration, and Ctrl+P's `Recover unsent text` or `Copy unsent text` are
+TUI draft handling. Headless has no compose; its admission and stored transcript contracts are unchanged ([#420](https://github.com/secantdev/secant/issues/420)).
+
 Bundle prompt rules apply to both clients. Build and install refuse authored prompts against all supported Harness rules, including Shipped Bundles.
 Launch Preparation and headless launch report a selected-Harness finding with `harness` as its correction; installed Bundles remain usable on a compatible
 Harness. Execution checks substituted prompts before Turn admission, failing an Agent Attempt or blocking an Interactive Entry. The missing resting

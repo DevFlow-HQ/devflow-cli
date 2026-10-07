@@ -23,7 +23,7 @@ decide the screen and its routes.
   Notices (Problem, conflict, view freshness, Operation receipts and refusals, Model choice messages) lead the conversation column and are counted; one
   status row under it carries the paused badge.
 - `PromptModel`/`promptHeight` (`run-workbench-views.tsx`) count exactly what `PromptControl` draws: a note, one field row per draft line up to four, the meta
-  row, a wrapped refusal, and the hint rows. An armed Step ending or Interrupt confirm wraps its whole captured consequence, so the count grows with it.
+  row, wrapped refusal and recovery notices, and the hint rows. An armed Step ending or Interrupt confirm wraps its whole captured consequence, so the count grows with it.
 
 ## Keys and native input
 
@@ -31,7 +31,7 @@ decide the screen and its routes.
   listeners **before** the focused renderable, and the production Renderer Port adapter (`renderer/renderer.ts`) is such a listener, so the Workbench
   dispatcher always runs first. It claims only command keys and lets every other key reach the field, which owns text, cursor motion, word deletion, paste,
   and punctuation. We do **not** call `stopPropagation` (the Port key carries no such method, A16): instead the field is blurred whenever a dialog, a
-  confirmation, focused details, or a pending send holds the keys, so a confirming `y` never types. #420 owns retiring the pending-send blur.
+  confirmation or focused details holds the keys, so a confirming `y` never types. A pending send never blurs the ordinary prompt.
 - The prompt is a `<textarea>` with Enter bound to `submit`, so only the dispatcher sends; Shift+Enter and Ctrl+J insert newlines. The Port key carries `shift`,
   so the dispatcher never treats Shift+Enter as Enter. The textarea owns its text after mount: write back only a changed draft (a clear, a restore).
 - Keys (ADR 0036/0040): Enter sends at a Turn boundary and steers a working Turn; Esc Esc Interrupts; Ctrl+E is End Step only; Ctrl+N Continue; Ctrl+O
@@ -51,12 +51,19 @@ interrupt` while Steer is available. Its words carry the meaning, so the cells y
   follow-up for another Attempt, resets only the departed draft; a follow-up first naming the steered Step's Attempt keeps it. Requests, unrelated updates,
   resize, and catch-ups keep the draft and focus. Each newly interrupted Turn's follow-up refocuses the prompt. After an Interrupt the prompt's note says
   the agent waits on the person: the follow-up's, or an interactive Step's until a later Turn settles.
-- A send is held until admission (#290) and a refused one keeps its text (A9). A Steer keeps the field's keys while it settles; a second Enter in flight is
-  ignored, and an applied Steer clears the draft only while it still holds the sent text. An unavailable Steer shows its Offer's reason only at Enter.
-- Interrupt-drop settlements restore full Steer text once, after the live Turn leaves and pending receipts settle (#356). New drops join in recorded order
-  before the unsent draft; opening old history restores nothing, and repeated snapshots never duplicate a restore. Full text comes from
-  `RunTimelineEvent.steer`, never its capped `detail`. They restore only into a prompt that can send them: an interactive Step's, or an Agent Step's follow-up
-  (#354). An Agent Step a signal halted has nothing to send them to, so its drops stay history.
+- Enter captures and clears sent Turn, follow-up and Steer text immediately (#420); admission never clears newer typing. The field stays editable.
+  A still-pending capture cannot be dispatched twice. A pending Steer holds a second Steer or boundary send back without freezing native editing.
+  Step-ending confirmations own a separate receipt. An unavailable Steer shows its Offer's reason only at Enter.
+- Refused receipts and Interrupt drops share one ordered restore before unsent text, separated by a single newline. Earlier pending captures hold later
+  restores back. Restored captures keep their order across later restores while native edits preserve the restored prefix; edits to that prefix make it
+  ordinary draft text. Every capture restores once, even if both a refusal and a drop are observed. Late Steer refusals say that text returned to the draft.
+- Restoration is bound to the captured Step and known follow-up Attempt. Old-target text stays out of a replacement draft and remains saved behind a
+  counted notice and Ctrl+P's `Recover unsent text`. Only that command moves it into the current draft. Distinct bottom controls instead offer
+  `Copy unsent text` through the terminal clipboard; unavailable clipboard support leaves text saved. Automatic restores preserve details or dialog focus.
+- Interrupt drops wait for the live Turn and pending receipts to leave (#356). Full text comes from `RunTimelineEvent.steer`, never its capped `detail`.
+  Steer receipts carry their opaque Operation id to match durable `steerId`, including identical-text retries and different Attempts.
+  Captured send order wins; uncaptured drops retain recorded order. Opening old history and repeated snapshots never restore twice. Restore only into an
+  interactive Step's prompt or an Agent Step's follow-up (#354); a signal-halted Agent Step's same-target drops stay history.
 
 ## Confirmations, details, and dialogs
 

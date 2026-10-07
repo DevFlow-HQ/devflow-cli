@@ -33,7 +33,7 @@ import { WorkingScanner } from "./working-scanner.js";
 
 /** What the prompt's hint rows show (ADR 0036): the working scanner beside its
  *  words while a Turn works, or plain lines the owner has already wrapped to the
- *  width — key hints, an armed confirmation, or the sending state. */
+ *  width — key hints or an armed confirmation. */
 export type PromptHint =
   | {
       readonly kind: "working";
@@ -59,6 +59,8 @@ export interface PromptModel {
   /** A refused send or Steer, wrapped; it sits above the hint, so the working
    *  state and its keys stay visible beside it. */
   readonly refusal: readonly string[];
+  /** Saved old-target text and its explicit palette recovery route. */
+  readonly recovery: readonly string[];
   readonly hint: PromptHint;
 }
 
@@ -68,6 +70,7 @@ export function promptHeight(model: PromptModel): number {
     model.fieldRows +
     (model.meta === undefined ? 0 : 1) +
     model.refusal.length +
+    model.recovery.length +
     (model.hint.kind === "working" ? 1 : model.hint.lines.length)
   );
 }
@@ -76,8 +79,7 @@ export function promptHeight(model: PromptModel): number {
  *  textarea that owns text, cursor motion, word deletion, paste, and newlines
  *  (Shift+Enter, Ctrl+J), the narrow meta row, and the hint rows. The Workbench's
  *  Port dispatcher claims Enter and the command keys first; the field is blurred
- *  while a dialog, a confirmation, focused details, or a pending send holds the
- *  keys, so a confirming `y` never types. Every line is plain words, so whose move
+ *  while a dialog, a confirmation, focused details holds the keys, so a confirming `y` never types. Every line is plain words, so whose move
  *  it is reads without colour. */
 export function PromptControl(props: {
   model: Accessor<PromptModel>;
@@ -141,6 +143,13 @@ export function PromptControl(props: {
           </text>
         )}
       </Show>
+      <For each={props.model().recovery}>
+        {(line) => (
+          <text fg={theme.warning} flexShrink={0} wrapMode="none">
+            {line}
+          </text>
+        )}
+      </For>
       <For each={props.model().refusal}>
         {(line) => (
           <text fg={theme.error} flexShrink={0} wrapMode="none">
@@ -724,6 +733,7 @@ function PromptField(props: {
     if (editor === undefined || editor.plainText === value) return;
     reported = value;
     editor.setText(value);
+    editor.gotoBufferEnd();
   });
   return (
     <textarea

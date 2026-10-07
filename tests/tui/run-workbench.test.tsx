@@ -226,23 +226,28 @@ function makeRunView(initial: RunSnapshot) {
     gate: RunGateReference;
     answer: "continue" | "stop";
   }[] = [];
-  // The interactive seams are hand-driven too (#122): each records its dispatch and
-  // returns the shared outcome accessor a test advances, so the tests exercise the
-  // blank guard, the boundary-gated End Step, and the pending path.
-  const [interactiveOutcome, setInteractiveOutcome] =
-    createSignal<AnswerOutcome>({ kind: "pending" });
+  // Every captured write gets an independent receipt, including concurrent sends.
+  const interactiveReceipts: ReturnType<typeof createSignal<AnswerOutcome>>[] =
+    [];
+  const steerReceipts: ReturnType<typeof createSignal<AnswerOutcome>>[] = [];
+  const receipt = (receipts: typeof interactiveReceipts) => {
+    const outcome = createSignal<AnswerOutcome>({ kind: "pending" });
+    receipts.push(outcome);
+    return outcome[0];
+  };
+  const setInteractiveOutcome = (
+    outcome: AnswerOutcome,
+    index = interactiveReceipts.length - 1,
+  ) => interactiveReceipts[index]?.[1](outcome);
+  const setSteerOutcome = (
+    outcome: AnswerOutcome,
+    index = steerReceipts.length - 1,
+  ) => steerReceipts[index]?.[1](outcome);
   const sends: { runId: string; stepId: string; text: string }[] = [];
-  // A follow-up after an Interrupt (#354) shares the interactive outcome accessor.
   const followUps: { runId: string; turnId: string; text: string }[] = [];
   const ends: { runId: string; stepId: string }[] = [];
   const continues: { runId: string; stepId: string }[] = [];
   const endStages: { runId: string; stepId: string }[] = [];
-  // The steer seam (#148) is hand-driven the same way: it records each dispatch and
-  // returns the shared outcome accessor a test advances (pending → applied/refused),
-  // so tests exercise the blank guard, the applied close, and the refusal-keeps-draft.
-  const [steerOutcome, setSteerOutcome] = createSignal<AnswerOutcome>({
-    kind: "pending",
-  });
   const steers: { runId: string; turnId: string; text: string }[] = [];
   const texts: { gate: RunGateReference; text: string }[] = [];
   const requests: {
@@ -347,27 +352,27 @@ function makeRunView(initial: RunSnapshot) {
     },
     sendInteractiveTurn: (runId, stepId, text) => {
       sends.push({ runId, stepId, text });
-      return interactiveOutcome;
+      return receipt(interactiveReceipts);
     },
     sendFollowUpTurn: (offer, text) => {
       followUps.push({ runId: offer.runId, turnId: offer.turnId, text });
-      return interactiveOutcome;
+      return receipt(interactiveReceipts);
     },
     endInteractiveStep: (runId, stepId) => {
       ends.push({ runId, stepId });
-      return interactiveOutcome;
+      return receipt(interactiveReceipts);
     },
     continueRepeat: (runId, stepId) => {
       continues.push({ runId, stepId });
-      return interactiveOutcome;
+      return receipt(interactiveReceipts);
     },
     endStage: (runId, stepId) => {
       endStages.push({ runId, stepId });
-      return interactiveOutcome;
+      return receipt(interactiveReceipts);
     },
     steer: (runId, turnId, text) => {
       steers.push({ runId, turnId, text });
-      return steerOutcome;
+      return receipt(steerReceipts);
     },
     answerText: (gate, text) => {
       texts.push({ gate, text });
@@ -3663,14 +3668,18 @@ test("the armed End Step confirms on y over the Port and no y lands in the field
   assert.deepEqual(wb.control.ends, [{ runId: "run-1", stepId: "discuss" }]);
 });
 
-test("the interactive field is blurred until the send is admitted so no key types (D9, #290)", async () => {
+test("m10-workbench-interaction: a pending send clears immediately, keeps native editing and never sends its capture twice (#420)", async () => {
   const wb = await mountWorkbench(interactiveRunOf());
   await type(wb.t, "hi");
-  await press(wb.t, wb.renderer, "return"); // send → outcome pending → field blurs
-  assert.match(wb.t.captureCharFrame(), /… sending…/); // the pre-admission hint
-  await type(wb.t, "X"); // the field is blurred, so this does not land
-  assert.match(wb.t.captureCharFrame(), /> hi/);
-  assert.doesNotMatch(wb.t.captureCharFrame(), /> hiX/);
+  await press(wb.t, wb.renderer, "return");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /> hi|sending/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends.length, 1);
+  await type(wb.t, "next");
+  assert.match(wb.t.captureCharFrame(), /> next/);
+  wb.control.setInteractiveOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /> next/);
 });
 
 test("End Step is not offered mid-Turn (#122)", async () => {
@@ -4253,27 +4262,26 @@ test("on a narrow row the detail clips first, then the mark yields so the interr
   );
 });
 
-test("an applied send clears the draft at Turn admission with no sending state while the agent works (#290)", async () => {
+test("an applied send leaves the immediately cleared draft and newer text intact while the agent works (#290, #420)", async () => {
   const wb = await mountWorkbench(interactiveRunOf(), 100, 40, okActions());
   await type(wb.t, "hi there");
   await press(wb.t, wb.renderer, "return");
-  // Between Enter and admission the field is blurred under a short pending hint.
-  assert.match(wb.t.captureCharFrame(), /… sending…/);
-  assert.match(wb.t.captureCharFrame(), /> hi there/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /sending|> hi there/);
+  await type(wb.t, "new draft");
 
   // Admission: the Run push carries the live Turn first, then the send settles applied.
   wb.control.setRun(liveInteractiveRunOf());
   await wb.t.renderOnce();
-  assert.match(wb.t.captureCharFrame(), /> hi there/); // held until admission
+  assert.match(wb.t.captureCharFrame(), /> new draft/);
   wb.control.setInteractiveOutcome({ kind: "applied" });
   await wb.t.renderOnce();
   let frame = wb.t.captureCharFrame();
   assert.doesNotMatch(frame, /hi there/); // the draft went with the admitted Turn
   assert.doesNotMatch(frame, /sending/); // nothing lingers for the Turn's length
-  assert.match(frame, /◆ The agent is working/);
+  assert.match(frame, /> new draft/);
   assert.match(frame, /esc esc interrupt/);
 
-  // The field is live again during the Turn, so the next Turn can be drafted...
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
   await type(wb.t, "next");
   assert.match(wb.t.captureCharFrame(), /> next/);
   // ...and when the Turn ends the move returns to the human with that draft intact.
@@ -4292,7 +4300,7 @@ test("at a Turn boundary the interactive Esc still leaves the Workbench (#219)",
   assert.match(wb.t.captureCharFrame(), /Secant/);
 });
 
-test("a draft longer than a narrow input stays in bounds and clears at admission (#290)", async () => {
+test("a draft longer than a narrow input stays in bounds and clears at Enter (#290, #420)", async () => {
   const wb = await mountWorkbench(interactiveRunOf(), 48, 24, okActions());
   const long = "draft ".repeat(40).trim(); // far wider than the 48-column input
   await type(wb.t, long);
@@ -4331,8 +4339,7 @@ test("a refused send surfaces the refusal and keeps the typed draft (#122, A9, #
   // The reason is said in words, clipped to the width rather than overflowing it.
   assert.match(frame, /✗ Run run-1 did not admit the/);
   noOverflow(frame, 48);
-  // The refusal re-enables the field with the draft intact (A9), no sending state
-  // lingers, and the move stays the human's since no Turn was admitted.
+  // The refusal restores text and the field keeps focus (A9). No Turn was admitted.
   assert.match(frame, /> hi/);
   assert.doesNotMatch(frame, /sending|working/);
   await type(wb.t, "!");
@@ -4785,6 +4792,9 @@ test("blank Steer guidance is not sent, and Esc arms the Interrupt rather than s
 
 test("a refused Steer keeps the typed guidance and surfaces the refusal (#148)", async () => {
   const wb = await mountWorkbench(steerableRunOf(), 100, 40, okActions());
+
+  await type(wb.t, "keep going");
+  await press(wb.t, wb.renderer, "return");
   wb.control.setSteerOutcome({
     kind: "refused",
     problem: {
@@ -4794,8 +4804,7 @@ test("a refused Steer keeps the typed guidance and surfaces the refusal (#148)",
       possibleEffects: "none",
     },
   });
-  await type(wb.t, "keep going");
-  await press(wb.t, wb.renderer, "return");
+  await wb.t.renderOnce();
   const frame = wb.t.captureCharFrame();
   // The draft survives a refusal (A9-style), and the refusal replaces the hint line.
   assert.match(frame, /> keep going/);
@@ -4812,18 +4821,18 @@ test("a still-pending Agent-step Steer never freezes the prompt, ignores a secon
   ]);
   // The field keeps its keys while the Steer settles; Enter in flight is ignored.
   await type(wb.t, " more");
-  assert.match(wb.t.captureCharFrame(), /> first guidance more/);
+  assert.match(wb.t.captureCharFrame(), /> {2}more/);
   await press(wb.t, wb.renderer, "return");
   assert.equal(wb.control.steers.length, 1);
-  // Applied: the draft no longer holds the sent text, so the newer text stays.
+  // Admission leaves the separately typed draft intact.
   wb.control.setSteerOutcome({ kind: "applied" });
   await wb.t.renderOnce();
-  assert.match(wb.t.captureCharFrame(), /> first guidance more/);
+  assert.match(wb.t.captureCharFrame(), /> {2}more/);
   await press(wb.t, wb.renderer, "return");
   assert.deepEqual(wb.control.steers[1], {
     runId: "run-1",
     turnId: "turn-7",
-    text: "first guidance more",
+    text: " more",
   });
 });
 
@@ -4889,7 +4898,7 @@ test("Enter in the interactive input steers a live Turn with the draft, with no 
   await press(wb.t, wb.renderer, "return");
   assert.equal(wb.control.steers.length, 1);
 
-  // Applied: the sent draft clears and the Turn keeps working.
+  // Admission keeps the already-cleared draft and the Turn working.
   wb.control.setSteerOutcome({ kind: "applied" });
   await wb.t.renderOnce();
   frame = wb.t.captureCharFrame();
@@ -4998,11 +5007,11 @@ test("text typed while an interactive Steer settles survives its applied outcome
   await press(wb.t, wb.renderer, "return");
   // The field keeps its keys in flight, so the human can draft more guidance...
   await type(wb.t, " and then");
-  assert.match(wb.t.captureCharFrame(), /> check the logs and then/);
+  assert.match(wb.t.captureCharFrame(), /> {2}and then/);
   // ...which is theirs, not the sent Steer's, so the applied outcome leaves it.
   wb.control.setSteerOutcome({ kind: "applied" });
   await wb.t.renderOnce();
-  assert.match(wb.t.captureCharFrame(), /> check the logs and then/);
+  assert.match(wb.t.captureCharFrame(), /> {2}and then/);
   assert.deepEqual(wb.control.steers, [
     { runId: "run-1", turnId: "turn-7", text: "check the logs" },
   ]);
@@ -5037,6 +5046,7 @@ test("a Steer still settling when its Turn ends holds back the send until it set
   await wb.t.renderOnce();
   let frame = wb.t.captureCharFrame();
   assert.match(frame, /✗ The Turn had already ended/);
+  assert.match(frame, /Late Steer · text restored to draft/);
   assert.match(frame, /> late guidance/);
   await press(wb.t, wb.renderer, "return");
   assert.deepEqual(wb.control.sends, [
@@ -5081,6 +5091,9 @@ test("a refused interactive Steer keeps the draft, and arming the Interrupt clea
     40,
     actions,
   );
+
+  await type(wb.t, "keep going");
+  await press(wb.t, wb.renderer, "return");
   wb.control.setSteerOutcome({
     kind: "refused",
     problem: {
@@ -5090,8 +5103,7 @@ test("a refused interactive Steer keeps the draft, and arming the Interrupt clea
       possibleEffects: "none",
     },
   });
-  await type(wb.t, "keep going");
-  await press(wb.t, wb.renderer, "return");
+  await wb.t.renderOnce();
   let frame = wb.t.captureCharFrame();
   assert.match(frame, /✗ The live Turn rejected the guidance/);
   assert.match(frame, /> keep going/);
@@ -5415,7 +5427,7 @@ test("an Agent-step Interrupt hands the bottom input to the person, and Enter se
     { runId: "run-1", turnId: "turn-7", text: "quit the docs, then test" },
   ]);
   assert.deepEqual(control.sends, []);
-  assert.match(t.captureCharFrame(), /… sending…/);
+  assert.doesNotMatch(t.captureCharFrame(), /sending|> quit the docs/);
 
   // Admission applies the send and clears the draft; the follow-up Turn goes live and
   // the prompt's working controls take over again.
@@ -5666,7 +5678,7 @@ for (const [width, height] of [
     await press(wb.t, wb.renderer, "return");
     assert.equal(
       wb.control.sends[0]?.text,
-      "restore this guidance\n\nsecond guidance\n\nmy unsent draft",
+      "restore this guidance\nsecond guidance\nmy unsent draft",
     );
     assert.doesNotMatch(wb.control.sends[0]?.text ?? "", /already exposed/);
   });
@@ -5757,7 +5769,7 @@ test("a signal-halted Agent Step parks no compose for Steers its Turn dropped (#
   assert.match(frame, /Run run-1 halted/);
 });
 
-test("settlement observed before its receipt restores only after acceptance clears the original draft (#356)", async () => {
+test("settlement observed before its receipt restores once after admission, with Enter already clearing the draft (#356, #420)", async () => {
   const wb = await mountWorkbench(
     steerableInteractiveRunOf(),
     100,
@@ -9557,4 +9569,389 @@ test("m10-workbench-interaction: the sidebar names a requested Model choice unti
   });
   await wb.t.renderOnce();
   assert.doesNotMatch(wb.t.captureCharFrame(), /→ requested/);
+});
+
+const DRAFT_REFUSAL: AnswerOutcome = {
+  kind: "refused",
+  problem: {
+    code: "draft-not-admitted",
+    explanation: "The captured text was not admitted.",
+    remediation: "Send it again.",
+    possibleEffects: "none",
+  },
+};
+
+for (const route of ["turn", "follow-up", "steer"] as const) {
+  for (const result of ["applied", "refused"] as const) {
+    test(`m10-workbench-interaction: ${route} ${result} preserves a newer multiline draft through updates and resize (#420)`, async () => {
+      const initial =
+        route === "turn"
+          ? interactiveRunOf()
+          : route === "follow-up"
+            ? waitingRunOf()
+            : steerableInteractiveRunOf();
+      const wb = await mountWorkbench(initial, 48, 18);
+      await type(wb.t, "captured first");
+      wb.t.mockInput.pressKey("j", { ctrl: true });
+      await type(wb.t, "captured second");
+      await press(wb.t, wb.renderer, "return");
+      assert.doesNotMatch(wb.t.captureCharFrame(), /captured|sending/);
+      await type(wb.t, "new first");
+      wb.t.mockInput.pressKey("j", { ctrl: true });
+      await type(wb.t, "new second");
+      for (const width of [120, 121, 48, 140]) {
+        wb.control.setRun({
+          ...initial,
+          windowsCleanupNotice: "An unrelated update.",
+        });
+        wb.renderer.resize(width, 24);
+        wb.t.resize(width, 24);
+        await wb.t.renderOnce();
+        const frame = wb.t.captureCharFrame();
+        assert.match(frame, /new first/);
+        assert.match(frame, /new second/);
+        assert.doesNotMatch(frame, /captured|sending/);
+        noOverflow(frame, width);
+      }
+      const outcome =
+        result === "applied" ? ({ kind: "applied" } as const) : DRAFT_REFUSAL;
+      if (route === "steer") wb.control.setSteerOutcome(outcome);
+      else wb.control.setInteractiveOutcome(outcome);
+      await wb.t.renderOnce();
+      const expected =
+        result === "refused"
+          ? "captured first\ncaptured second\nnew first\nnew second"
+          : "new first\nnew second";
+      // Snapshot repetition must neither duplicate a restore nor clear newer work.
+      wb.control.setRun({ ...initial });
+      await wb.t.renderOnce();
+      await press(wb.t, wb.renderer, "return");
+      const submissions =
+        route === "turn"
+          ? wb.control.sends
+          : route === "follow-up"
+            ? wb.control.followUps
+            : wb.control.steers;
+      assert.equal(submissions[1]?.text, expected);
+    });
+  }
+}
+
+for (const route of ["turn", "follow-up"] as const) {
+  test(`m10-workbench-interaction: two ${route} refusals settle out of order but restore in capture order (#420)`, async () => {
+    const initial = route === "turn" ? interactiveRunOf() : waitingRunOf();
+    const wb = await mountWorkbench(initial, 60, 24);
+    await type(wb.t, "first capture");
+    await press(wb.t, wb.renderer, "return");
+    // Re-entering a still-pending capture is suppressed independently of focus.
+    await type(wb.t, "first capture");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(
+      (route === "turn" ? wb.control.sends : wb.control.followUps).length,
+      1,
+    );
+    await press(wb.t, wb.renderer, "c", { ctrl: true });
+    await type(wb.t, "second capture");
+    await press(wb.t, wb.renderer, "return");
+    await type(wb.t, "unsent");
+    wb.control.setInteractiveOutcome(DRAFT_REFUSAL, 1);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /> unsent/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /second capture/);
+    wb.control.setInteractiveOutcome(DRAFT_REFUSAL, 0);
+    await wb.t.renderOnce();
+    wb.control.setRun({ ...initial });
+    await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "return");
+    const submissions =
+      route === "turn" ? wb.control.sends : wb.control.followUps;
+    assert.equal(submissions[2]?.text, "first capture\nsecond capture\nunsent");
+  });
+}
+
+for (const target of ["Step", "Attempt"] as const) {
+  test(`m10-workbench-interaction: a late receipt after a new ${target} stays recoverable until explicitly recovered (#420)`, async () => {
+    const initial = target === "Step" ? interactiveRunOf() : waitingRunOf();
+    const replacement =
+      target === "Step"
+        ? interactiveRunOf({
+            progress: [
+              {
+                id: "replacement",
+                kind: "interactive-agent",
+                status: "blocked",
+              },
+            ],
+            actionOffers: [{ ...SEND_OFFER, stepId: "replacement" }],
+          })
+        : waitingRunOf({
+            actionOffers: [
+              {
+                ...FOLLOW_UP_OFFER,
+                attemptId: "replacement-attempt",
+                turnId: "turn-8",
+              },
+            ],
+          });
+    const wb = await mountWorkbench(initial, 48, 18);
+    await type(wb.t, "old target text");
+    await press(wb.t, wb.renderer, "return");
+    await type(wb.t, "departed draft");
+    wb.control.setRun(replacement);
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /departed draft/);
+    await type(wb.t, "new target draft");
+    wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+    await wb.t.renderOnce();
+    for (const width of [48, 121, 60]) {
+      wb.control.setRun({ ...replacement });
+      wb.t.resize(width, 24);
+      wb.renderer.resize(width, 24);
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      assert.match(frame, /Unsent text from an earlier input saved/);
+      assert.match(frame, /Recover unsent\s+text/);
+      assert.match(frame, /> new target draft/);
+      assert.doesNotMatch(frame, /old target text|departed draft/);
+      noOverflow(frame, width);
+    }
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    await type(wb.t, "Recover unsent text");
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+    assert.match(wb.t.captureCharFrame(), /Earlier-input text recovered/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /earlier input saved/);
+    await press(wb.t, wb.renderer, "return");
+    const submissions =
+      target === "Step" ? wb.control.sends : wb.control.followUps;
+    assert.equal(submissions[1]?.text, "old target text\nnew target draft");
+  });
+}
+
+test("m10-workbench-interaction: Ctrl+C clears newer text while a send is pending and its refusal can still restore the capture (#420)", async () => {
+  const wb = await mountWorkbench(interactiveRunOf());
+  await type(wb.t, "capture");
+  await press(wb.t, wb.renderer, "return");
+  await type(wb.t, "newer");
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  assert.deepEqual(wb.exits, []);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /newer|capture/);
+  wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /> capture/);
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  assert.equal(wb.exits.length, 1);
+});
+
+test("m10-workbench-interaction: an old-Step Steer drop and refused receipt retain one recoverable copy (#420)", async () => {
+  const wb = await mountWorkbench(steerableRunOf(), 60, 24);
+  await type(wb.t, "old guidance");
+  await press(wb.t, wb.renderer, "return");
+  const timeline = [
+    steerSettlement(
+      "old-drop",
+      "old guidance",
+      { kind: "dropped", reason: "interrupt" },
+      "repair",
+    ),
+  ];
+  wb.control.setRun(interactiveRunOf({ timeline }));
+  await wb.t.renderOnce();
+  await type(wb.t, "current text");
+  wb.control.setSteerOutcome({
+    kind: "refused",
+    problem: { ...DRAFT_REFUSAL.problem, possibleEffects: "unknown" },
+    steerId: "old-drop",
+  });
+  await wb.t.renderOnce();
+  wb.control.setRun(interactiveRunOf({ timeline }));
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Recover unsent text \(1\)/);
+  assert.match(wb.t.captureCharFrame(), /> current text/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /> old guidance|draft restored/);
+});
+
+test("m10-workbench-interaction: refused receipts and Interrupt drops share capture order even across repeated snapshots (#420)", async () => {
+  const wb = await mountWorkbench(steerableInteractiveRunOf(), 60, 24);
+  await type(wb.t, "first steer");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  await type(wb.t, "second steer");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({
+    kind: "refused",
+    problem: { ...DRAFT_REFUSAL.problem, possibleEffects: "unknown" },
+    steerId: "second-drop",
+  });
+  await wb.t.renderOnce();
+  await type(wb.t, " unsent");
+  const timeline = [
+    steerSettlement("second-drop", "second steer", {
+      kind: "dropped",
+      reason: "interrupt",
+    }),
+    steerSettlement("first-drop", "first steer", {
+      kind: "dropped",
+      reason: "interrupt",
+    }),
+  ];
+  wb.control.setRun(interactiveRunOf({ timeline }));
+  await wb.t.renderOnce();
+  wb.control.setRun(interactiveRunOf({ timeline }));
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, "first steer\nsecond steer unsent");
+});
+
+test("m10-workbench-interaction: an identical-text Steer retry restores the accepted retry's Interrupt drop (#420)", async () => {
+  const wb = await mountWorkbench(steerableInteractiveRunOf(), 60, 24);
+  await type(wb.t, "again");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome(DRAFT_REFUSAL);
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({ kind: "applied" });
+  await wb.t.renderOnce();
+  wb.control.setRun(
+    interactiveRunOf({
+      timeline: [
+        steerSettlement("retry-drop", "again", {
+          kind: "dropped",
+          reason: "interrupt",
+        }),
+      ],
+    }),
+  );
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, "again");
+});
+
+test("m10-workbench-interaction: a capture before its first named Attempt cannot restore into a replacement Attempt (#420)", async () => {
+  const wb = await mountWorkbench(steerableRunOf(), 60, 24);
+  await type(wb.t, "original Attempt guidance");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setRun(waitingRunOf());
+  await wb.t.renderOnce();
+  wb.control.setRun(
+    waitingRunOf({
+      actionOffers: [
+        { ...FOLLOW_UP_OFFER, attemptId: "replacement", turnId: "turn-8" },
+      ],
+    }),
+  );
+  await wb.t.renderOnce();
+  await type(wb.t, "replacement draft");
+  wb.control.setSteerOutcome(DRAFT_REFUSAL);
+  await wb.t.renderOnce();
+  assert.doesNotMatch(wb.t.captureCharFrame(), /original Attempt guidance/);
+  assert.match(wb.t.captureCharFrame(), /Recover unsent text \(1\)/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.followUps[0]?.text, "replacement draft");
+});
+
+test("m10-workbench-interaction: a refused receipt restores text without taking focus from details (#420)", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 100, 30);
+  await type(wb.t, "capture");
+  await press(wb.t, wb.renderer, "return");
+  await press(wb.t, wb.renderer, "g", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /› Details/);
+  wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /› Details/);
+  await type(wb.t, "X");
+  assert.doesNotMatch(wb.t.captureCharFrame(), /captureX/);
+  await press(wb.t, wb.renderer, "escape");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[1]?.text, "capture");
+});
+
+test("m10-workbench-interaction: a receipt refused after Run completion offers explicit text recovery (#420)", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 60, 24);
+  await type(wb.t, "late text");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setRun(interactiveRunOf({ state: "succeeded", actionOffers: [] }));
+  await wb.t.renderOnce();
+  wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+  await wb.t.renderOnce();
+  assert.match(
+    wb.t.captureCharFrame(),
+    /Unsent text from an earlier input saved/,
+  );
+  const copied: string[] = [];
+  const original = wb.t.renderer.copyToClipboardOSC52;
+  wb.t.renderer.copyToClipboardOSC52 = (text) => {
+    copied.push(text);
+    return true;
+  };
+  try {
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    await type(wb.t, "Copy unsent text");
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(copied, ["late text"]);
+    assert.match(
+      wb.t.captureCharFrame(),
+      /unsent text copied to\s+terminal clipboard/,
+    );
+    wb.t.renderer.copyToClipboardOSC52 = () => false;
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    await type(wb.t, "Copy unsent text");
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+    assert.match(wb.t.captureCharFrame(), /Clipboard unavailable/);
+    assert.match(wb.t.captureCharFrame(), /unsent\s+text\s+remains\s+saved/);
+  } finally {
+    wb.t.renderer.copyToClipboardOSC52 = original;
+  }
+});
+
+test("m10-workbench-interaction: Steer ids distinguish identical text in two Attempts and keep each recovery on its target (#420)", async () => {
+  const wb = await mountWorkbench(steerableRunOf(), 100, 30);
+  await type(wb.t, "identical guidance");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({ kind: "applied", steerId: "first-id" });
+  await wb.t.renderOnce();
+  wb.control.setRun(waitingRunOf());
+  await wb.t.renderOnce();
+  const newOffer = {
+    ...FOLLOW_UP_OFFER,
+    attemptId: "replacement",
+    turnId: "turn-8",
+  };
+  wb.control.setRun(waitingRunOf({ actionOffers: [newOffer] }));
+  await wb.t.renderOnce();
+  wb.control.setRun(steerableRunOf());
+  await wb.t.renderOnce();
+  await type(wb.t, "identical guidance");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({ kind: "applied", steerId: "second-id" });
+  await wb.t.renderOnce();
+  wb.control.setRun(
+    waitingRunOf({
+      actionOffers: [newOffer],
+      timeline: [
+        steerSettlement(
+          "second-id",
+          "identical guidance",
+          { kind: "dropped", reason: "interrupt" },
+          "repair",
+        ),
+        steerSettlement(
+          "first-id",
+          "identical guidance",
+          { kind: "dropped", reason: "interrupt" },
+          "repair",
+        ),
+      ],
+    }),
+  );
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Recover unsent text \(1\)/);
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.followUps, [
+    { runId: "run-1", turnId: "turn-8", text: "identical guidance" },
+  ]);
 });
