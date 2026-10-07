@@ -380,7 +380,7 @@ type AnswerSource = "human" | "client-policy";
 // ---------------------------------------------------------------------------
 
 /** Supplied patch bytes or supplied hunk data, never reconstructed file content. */
-export type FilePatch =
+type FilePatch =
   | { readonly kind: "unified"; readonly content: string }
   | {
       readonly kind: "structured";
@@ -393,7 +393,7 @@ export type FilePatch =
       }[];
     };
 
-export interface FileChange {
+interface FileChange {
   readonly path: string;
   readonly kind?: "create" | "update" | "delete";
   readonly patch?: FilePatch;
