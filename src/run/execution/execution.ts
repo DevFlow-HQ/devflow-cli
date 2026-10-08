@@ -19,6 +19,7 @@ import {
 } from "../../workflow/workflow.js";
 import {
   isolatedGitEnvironment,
+  type AppendTurnEventResult,
   type AttemptLogEntry,
   type CandidateOutput,
   type PublishAttemptRequest,
@@ -190,6 +191,15 @@ export type StoreWrite =
  *  precedes the write, so a hang names it, and its end says whether it
  *  committed or the owner refused it. */
 export type ExecutionEvent =
+  | {
+      readonly kind: "turn-event-refused";
+      readonly runId: string;
+      readonly attemptId: string;
+      readonly turnId: string;
+      readonly session: string;
+      readonly eventKind: string;
+      readonly refusal: Extract<AppendTurnEventResult, { readonly ok: false }>;
+    }
   | ({
       readonly kind: "store-write-start";
       readonly runId: string;

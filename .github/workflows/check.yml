@@ -284,6 +284,15 @@ jobs:
           bun run test --
           -t '^m10-audit-runtime-failure-causes(:|$)'
           tests/run/store/ownership-and-recovery.test.ts
+      - name: m10-audit-turn-event-refusal
+        run: >-
+          bun run test --
+          -t '^m10-audit-turn-event-refusal(:|$)'
+          tests/run/store/session-and-transcript-evidence.test.ts
+          tests/run/execution/agent.test.ts
+          tests/composition/run-lifecycle-log.test.ts
+          tests/headless/agent-step.test.ts
+          tests/tui/live-run-workbench.test.tsx
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test

@@ -50,6 +50,21 @@ export function runLifecycleObserver(
       });
       return;
     }
+    if (event.kind === "turn-event-refused") {
+      write({
+        event: event.kind,
+        runId,
+        attemptId: event.attemptId,
+        turnId: event.turnId,
+        session: event.session,
+        eventKind: event.eventKind,
+        reason: event.refusal.reason,
+        ...(event.refusal.reason === "unrecordable"
+          ? { cause: event.refusal.safeCause }
+          : {}),
+      });
+      return;
+    }
     const run = `run:${runId}`;
     switch (event.kind) {
       case "run-start":

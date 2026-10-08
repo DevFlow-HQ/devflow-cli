@@ -1,3 +1,4 @@
+import { turnEventRefusalScript } from "../helpers/turnEventRefusal.js";
 import { readRun } from "../application/run-test-helpers.js";
 
 import { ownPreparations } from "../harness/preparation-double.js";
@@ -125,6 +126,7 @@ async function invocation(
     readonly clock?: ReturnType<typeof steppingClock>;
     readonly adapter?: HarnessAdapter;
     readonly supportsInteractiveTurns?: boolean;
+    readonly home?: string;
   },
   body: (port: ProjectionPort, digest: string) => Promise<void>,
 ): Promise<Logged> {
@@ -149,7 +151,7 @@ async function invocation(
       return 0;
     },
     {
-      secantHome: makeTempDir("secant-runlog-home-"),
+      secantHome: options.home ?? makeTempDir("secant-runlog-home-"),
       launchCwd: workspace,
       engineVersion: "9.8.7",
       hostPlatform: "linux",
@@ -807,5 +809,73 @@ for (const [result, rest] of Object.entries(HUMAN_TURN_RESTS)) {
       runId,
       outcome: rest,
     });
+  });
+}
+
+for (const fault of ["invalid", "storage"] as const) {
+  test(`m10-audit-turn-event-refusal: ${fault} refusal reaches the operational log and preserves the conversation`, async (t) => {
+    const home = makeTempDir("secant-refusal-log-");
+    let runId = "";
+    const logged = await invocation(
+      t,
+      {
+        home,
+        routing: [agentStep("work", 0)],
+        turns: [turnEventRefusalScript(home, fault)],
+      },
+      async (port, digest) => {
+        runId = launch(port, digest);
+        await awaitSettled(port, "op-launch");
+        const run = readRun(port, runId);
+        assert.equal(run.state, "succeeded");
+        assert.equal(
+          run.timeline.some(
+            (row) => row.event === "turn-settled" && row.detail === "completed",
+          ),
+          true,
+        );
+        assert.equal(JSON.stringify(run).includes("unrecordable"), false);
+        assert.equal(
+          JSON.stringify(run).includes("injected append fault"),
+          false,
+        );
+        assert.equal(
+          run.timeline.some(
+            (row) =>
+              row.event === "assistant-content" &&
+              row.detail === "Still reading after refusal",
+          ),
+          true,
+        );
+      },
+    );
+    const refusals = logged.records.filter(
+      (record) => record.event === "turn-event-refused",
+    );
+    assert.equal(refusals.length, 1);
+    const refusal = refusals[0]!;
+    assert.equal(refusal.level, "warn");
+    assert.equal(refusal.runId, runId);
+    assert.equal(refusal.eventKind, "tool-call");
+    assert.equal(refusal.reason, "unrecordable");
+    assert.equal(typeof refusal.turnId, "string");
+    assert.equal(typeof refusal.attemptId, "string");
+    assert.ok(refusal.cause !== null && typeof refusal.cause === "object");
+    assert.equal("payload" in refusal, false);
+    assert.equal(logged.text.includes("requested.ts"), false);
+    assert.equal(logged.text.includes("Still reading after refusal"), false);
+    assert.equal(
+      logged.records.some(
+        (record) => record.category === "protocol-corruption",
+      ),
+      false,
+    );
+    assert.equal(
+      logged.records.some(
+        (record) =>
+          record.event === "turn-end" && record.result === "completed",
+      ),
+      true,
+    );
   });
 }

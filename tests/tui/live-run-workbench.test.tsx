@@ -1,9 +1,10 @@
+import { turnEventRefusalScript } from "../helpers/turnEventRefusal.js";
 import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { createRoot, createSignal } from "solid-js";
 import type {
   BundleCatalogSnapshot,
@@ -86,12 +87,19 @@ function catalogView(
   return { openList: () => listValue, openFocus: () => focusValue };
 }
 
-test("a scripted fake Harness streams through the Port into the Run Workbench", async (t) => {
-  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
+async function refusalWorkbench(
+  t: TestContext,
+  fault: "invalid" | "storage",
+): Promise<void> {
+  setEnvironmentForTest(t, {
+    [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath,
+  });
 
   const workspace = makeTempDir("secant-tui-live-ws-");
+  const home = makeTempDir("secant-tui-live-home-");
+  const refusal = turnEventRefusalScript(home, fault);
   const wired = wireApplication({
-    secantHome: makeTempDir("secant-tui-live-home-"),
+    secantHome: home,
     launchCwd: workspace,
     process: createFakeBundleProcess({ executables: [process.execPath] }),
     harnessAdapter: createFake({
@@ -104,7 +112,9 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
       defaults: REPORTED_DEFAULTS,
       turns: [
         {
+          pace: refusal.pace,
           events: [
+            ...(refusal.events ?? []),
             {
               kind: "session",
               availability: { state: "open" },
@@ -289,6 +299,11 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
   // completion — the whole client wiring, not a hand-built Port submit (#121 AC1).
   fakeRenderer.key("return");
   await rendered.waitForFrame((next) => next.includes("Run succeeded"));
+  assert.match(rendered.captureCharFrame(), /Still reading after refusal/);
+  assert.doesNotMatch(
+    rendered.captureCharFrame(),
+    /protocol.corruption|unrecordable|injected append fault/,
+  );
   assert.match(rendered.captureCharFrame(), /Tool · file change · unconfirmed/);
   assert.match(rendered.captureCharFrame(), /Thought.*incomplete/);
   assert.doesNotMatch(rendered.captureCharFrame(), /Thinking/);
@@ -305,7 +320,12 @@ test("a scripted fake Harness streams through the Port into the Run Workbench", 
     rendered.captureCharFrame(),
     /Observed Harness · Claude Code · fake-claude · 0\.0\.0-fake · model fake-sonnet/,
   );
-});
+}
+
+for (const fault of ["invalid", "storage"] as const) {
+  test(`m10-audit-turn-event-refusal: ${fault} refusal streams through the Port into the Run Workbench`, (t) =>
+    refusalWorkbench(t, fault));
+}
 
 test("the Matt grill takes its idea on the inputs screen and opens on the first Turn built from it (#212)", async (t) => {
   setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });

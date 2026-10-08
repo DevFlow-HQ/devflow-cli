@@ -83,6 +83,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `countRuns` (#396) opens each store once and reads ownership apart from the record, counting unreadable ownership rather than unowned. A coordinator rebuild
   reads each readable Run's owner before restoring registration, so a live owner survives corruption and the following reconciliation decides its fate.
 
+- Turn-event append faults keep the original driver cause plus a safe diagnostic. Drizzle query parameters and JSON syntax-error text can contain Turn content.
+
 ## Tests
 
 - Store Interface tests are split by concern into `ownership-and-recovery.test.ts`, `attempt-and-artifact-publication.test.ts`,

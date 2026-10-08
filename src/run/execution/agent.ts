@@ -524,6 +524,18 @@ async function driveHarnessTurn(
 ): Promise<TurnResult> {
   const { session, attemptId, turnId, observe } = params;
   const ids = { runId: owner.runId, attemptId, turnId, session };
+  const append: RunOwner["appendTurnEvent"] = (request) => {
+    const receipt = owner.appendTurnEvent(request);
+    if (!receipt.ok) {
+      observe({
+        kind: "turn-event-refused",
+        ...ids,
+        eventKind: request.kind,
+        refusal: receipt,
+      });
+    }
+    return receipt;
+  };
   const harnessName = prepared.profile.harness;
   // The one read of the Model choice current at Turn start (ADR 0034): the same
   // value is sent on the Turn request and recorded on the admitted Turn, so the
@@ -620,7 +632,7 @@ async function driveHarnessTurn(
             : legality.kind === "held-for-review"
               ? { outcome: "held-for-review" }
               : { outcome: "refused", reason: legality.reason };
-        const recorded = owner.appendTurnEvent({
+        const recorded = append({
           turnId,
           kind: "agent-call",
           payload: JSON.stringify({
@@ -637,11 +649,11 @@ async function driveHarnessTurn(
               callId: event.call.callId,
               ...(recorded.ok
                 ? answer
-                : ({ outcome: "refused", reason: "fenced" } as const)),
+                : ({ outcome: "refused", reason: recorded.reason } as const)),
             })
             .then((receipt) => {
               if (receipt.outcome === "rejected")
-                owner.appendTurnEvent({
+                append({
                   turnId,
                   kind: "agent-call-expired",
                   payload: JSON.stringify({ callId: event.call.callId.opaque }),
@@ -650,7 +662,7 @@ async function driveHarnessTurn(
             }),
         );
       }
-      recordTurnEvent(owner, turnId, event, answerSources);
+      recordTurnEvent(append, turnId, event, answerSources);
       if (channel !== undefined) notifyChannel(channel, event, turnId, session);
       if (event.kind === "model" && event.change !== undefined)
         channel?.modelChanged(event.change);
@@ -1140,13 +1152,13 @@ function readPromptText(prompt: Reference, context: StepContext): string {
  *  means another process took over the Run, and that is surfaced authoritatively
  *  when this Attempt's `publishAttempt` is refused and the walk unwinds. */
 function recordTurnEvent(
-  owner: RunOwner,
+  append: RunOwner["appendTurnEvent"],
   turnId: string,
   event: TurnEvent,
   answerSources: ReadonlyMap<string, RequestAnswerBy>,
 ): void {
   if (event.kind === "elicitation-declined") {
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: event.kind,
       payload: JSON.stringify({
@@ -1158,7 +1170,7 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "steer") {
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: "steer",
       payload: JSON.stringify({
@@ -1175,7 +1187,7 @@ function recordTurnEvent(
     if (!event.observation.known) return;
     if (event.change !== undefined && event.change.outcome !== "applied")
       return;
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: "model",
       payload: JSON.stringify({
@@ -1187,7 +1199,7 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "assistant-content") {
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: "assistant-content",
       payload: JSON.stringify({
@@ -1205,14 +1217,14 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "turn-diff") {
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: "turn-diff",
       payload: JSON.stringify(event.diff),
       at: new Date(),
     });
   } else if (event.kind === "thought") {
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: "thought",
       payload: JSON.stringify({
@@ -1226,7 +1238,7 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "tool-call" || event.kind === "tool-partial") {
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: event.kind,
       payload: JSON.stringify(event.call),
@@ -1237,7 +1249,7 @@ function recordTurnEvent(
     // approval a Turn paused on (#117 AC1). Durable history only; the request is
     // never stored as live state, so a resumed Run re-raises nothing.
     if (event.request.shape.kind === "approval") {
-      owner.appendTurnEvent({
+      append({
         turnId,
         kind: "request-raised",
         payload: JSON.stringify({
@@ -1255,7 +1267,7 @@ function recordTurnEvent(
     const by = answerSources.get(event.requestId.opaque) ?? event.by;
     const decision =
       event.answer.kind === "approval" ? event.answer.decision : undefined;
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: "request-answered",
       payload: JSON.stringify({
@@ -1266,7 +1278,7 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "request-expired") {
-    owner.appendTurnEvent({
+    append({
       turnId,
       kind: "request-expired",
       payload: JSON.stringify({ requestId: event.requestId.opaque }),

@@ -9,10 +9,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { asc, desc, eq, isNotNull, notInArray, or } from "drizzle-orm";
+import {
+  asc,
+  desc,
+  DrizzleQueryError,
+  eq,
+  isNotNull,
+  notInArray,
+  or,
+} from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
-import type { ModelChoice } from "../../harness/harness.js";
+import { translateCause, type ModelChoice } from "../../harness/harness.js";
 import type { ProcessAdapter } from "../../process/process.js";
 import { waitingAgentTurn } from "./agent-attempt.js";
 import { openArtifactRepo } from "./artifacts/artifacts.js";
@@ -1171,8 +1179,27 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       return toWriteResult(admitted);
     },
     appendTurnEvent(request) {
-      const appended = guardedWrite((tx) => appendTurnEvent(tx, request));
-      return toWriteResult(appended);
+      try {
+        const appended = guardedWrite((tx) => appendTurnEvent(tx, request));
+        return toWriteResult(appended);
+      } catch (cause) {
+        // Drizzle's wrapper includes SQL parameters, which contain Turn content.
+        // Retain the original database fault rather than that query wrapper.
+        const original =
+          cause instanceof DrizzleQueryError ? cause.cause : cause;
+        return {
+          ok: false,
+          reason: "unrecordable",
+          cause: original,
+          safeCause:
+            original instanceof SyntaxError
+              ? {
+                  type: "SyntaxError",
+                  message: "Turn event payload is not valid JSON.",
+                }
+              : translateCause(original),
+        };
+      }
     },
     settleTurn(request) {
       const settled = guardedWrite((tx) => settleTurn(tx, request));

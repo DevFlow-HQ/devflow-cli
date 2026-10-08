@@ -1,3 +1,7 @@
+import {
+  refuseToolAppend,
+  turnEventRefusalScript,
+} from "../helpers/turnEventRefusal.js";
 import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import { Database } from "bun:sqlite";
@@ -166,6 +170,7 @@ function wireAgent(
     adapter?: HarnessAdapter;
     process?: ProcessAdapter;
     repeated?: boolean;
+    home?: string;
   } = {},
 ): {
   wired: Wiring;
@@ -179,7 +184,7 @@ function wireAgent(
   setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
 
   const workspace = makeTempDir("secant-agent-ws-");
-  const home = makeTempDir("secant-agent-home-");
+  const home = options.home ?? makeTempDir("secant-agent-home-");
   const wired = wireApplication({
     secantHome: home,
     launchCwd: workspace,
@@ -1560,4 +1565,152 @@ test("[change-model-choice] a foreign live Run returns an Operation JSON refusal
   assert.ok(owner.writeState("running").ok);
   assert.deepEqual(owner.record.modelChoice, { model: "opus", effort: "high" });
   assert.equal(err.join(""), "");
+});
+
+for (const fault of ["invalid", "storage"] as const) {
+  test(`m10-audit-turn-event-refusal: headless ${fault} refusal shows completed Turn and successful Run`, async (t) => {
+    const home = makeTempDir("secant-refusal-headless-");
+    const { wired, bundleId, digest, docPath } = wireAgent(t, {
+      home,
+      adapter: createFake({
+        profile: fakeHarnessProfile(),
+        turns: [turnEventRefusalScript(home, fault)],
+      })(),
+    });
+    const output: string[] = [];
+    const errors: string[] = [];
+    const io: HeadlessIO = {
+      out: (text) => output.push(text),
+      err: (text) => errors.push(text),
+      cwd: () => home,
+    };
+    const status = await runHeadless(
+      wired,
+      [
+        "run",
+        "launch",
+        bundleId,
+        "--trust",
+        digest,
+        "--harness",
+        "claude-code",
+        "--model",
+        "fake-model",
+        "--input",
+        `doc=${docPath}`,
+      ],
+      io,
+    );
+    assert.equal(status, 0, errors.join(""));
+    const runId = /^Run (\S+)$/m.exec(output.join(""))?.[1];
+    assert.ok(runId);
+    output.length = 0;
+    assert.equal(await runHeadless(wired, ["run", "show", runId], io), 0);
+    assert.match(output.join(""), /State: succeeded/);
+    assert.match(output.join(""), /completed/);
+    assert.match(output.join(""), /Still reading after refusal/);
+    assert.doesNotMatch(
+      output.join(""),
+      /protocol.corruption|unrecordable|injected append fault/,
+    );
+  });
+}
+
+test("m10-audit-turn-event-refusal: Claude's native reader continues after a storage refusal", async (t) => {
+  const home = makeTempDir("secant-native-refusal-");
+  const native = scriptedClaude({
+    answer: "confirm",
+    userFrame: (index) => {
+      if (index === 0) refuseToolAppend(home, true);
+      return [
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "12121212-1212-4121-8121-121212121212",
+          model: "scripted-model",
+        },
+        {
+          type: "assistant",
+          message: {
+            id: "tool",
+            content: [
+              {
+                type: "tool_use",
+                id: "refused",
+                name: "Read",
+                input: { file_path: "requested.ts" },
+              },
+            ],
+          },
+        },
+        {
+          type: "assistant",
+          message: {
+            id: "later",
+            content: [{ type: "text", text: "Native reader continued" }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          result: "Native reader continued",
+          is_error: false,
+        },
+      ];
+    },
+  });
+  const base = createFakeBundleProcess({ executables: [process.execPath] });
+  const { wired, bundleId, digest, docPath } = wireAgent(t, {
+    home,
+    adapter: createClaudeCodeAdapter({
+      sessionId: () => "12121212-1212-4121-8121-121212121212",
+      env: { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath },
+    }),
+    process: {
+      ...base,
+      spawnCommand: (options) =>
+        options.role === "harness-probe"
+          ? Promise.resolve({
+              kind: "exited",
+              status: 0,
+              text: new TextEncoder().encode("2.1.288 (Claude Code)"),
+            })
+          : base.spawnCommand(options),
+      spawnOwnedProcess: (options) =>
+        options.args.includes("--no-session-persistence")
+          ? scriptedClaude({ answer: "confirm" }).process.spawnOwnedProcess(
+              options,
+            )
+          : native.process.spawnOwnedProcess(options),
+    },
+  });
+  const runId = await launchWith(wired, { bundleId, digest, docPath }, []);
+  const run = await runShowJson(wired, runId);
+  assert.equal(run.state, "succeeded");
+  assert.equal(
+    run.timeline.some(
+      (row) => row.event === "turn-settled" && row.detail === "completed",
+    ),
+    true,
+  );
+  assert.equal(
+    run.timeline.some(
+      (row) =>
+        row.event === "assistant-content" &&
+        row.detail === "Native reader continued",
+    ),
+    true,
+  );
+  assert.equal(JSON.stringify(run).includes("protocol-corruption"), false);
+  const owner = wired.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  try {
+    assert.equal(
+      owner.turnEvents().some((event) => event.kind === "tool-call"),
+      false,
+    );
+    assert.equal(owner.turns()[0]?.resultKind, "completed");
+  } finally {
+    owner.close();
+  }
 });

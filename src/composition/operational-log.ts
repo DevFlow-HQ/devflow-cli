@@ -66,6 +66,7 @@ const DETAIL_EVENTS = new Set([
 function recordLevel(record: OperationalRecord): "debug" | "info" | "warn" {
   if (DETAIL_EVENTS.has(record.event) || "step" in record) return "debug";
   switch (record.event) {
+    case "turn-event-refused":
     case "child-spawn-error":
     case "child-timeout":
     case "child-kill-escalation":

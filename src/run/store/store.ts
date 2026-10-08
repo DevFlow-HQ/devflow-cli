@@ -15,7 +15,11 @@ import { drizzle, type SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import type { MigrationsJournal } from "drizzle-orm/migrator";
 import { z } from "zod";
-import type { ModelChoice, SteerCapability } from "../../harness/harness.js";
+import type {
+  ModelChoice,
+  SafeCause,
+  SteerCapability,
+} from "../../harness/harness.js";
 import { type ProcessAdapter } from "../../process/process.js";
 import type {
   ArtifactType,
@@ -414,6 +418,17 @@ export interface AppendTurnEventRequest {
   readonly at: Date;
 }
 
+/** Refuse an unrecordable observation without changing the live Turn outcome.
+ *  Keep the original cause for callers and use only safeCause in diagnostics. */
+export type AppendTurnEventResult =
+  | WriteResult
+  | {
+      readonly ok: false;
+      readonly reason: "unrecordable";
+      readonly cause: unknown;
+      readonly safeCause: SafeCause;
+    };
+
 /** Settle a Turn authoritatively (#116). Immutable: a settle after a settled
  *  result is a no-op. Updates only the Turn result and Session availability.
  *  Settled assistant messages already reside in canonical Turn events. */
@@ -600,8 +615,9 @@ export interface RunOwner {
    *  `not-started`); otherwise the `turn` row, the Session, and the input
    *  transcript entry are written in one transaction. */
   admitTurn(request: AdmitTurnRequest): WriteResult;
-  /** Append one normalized durable Turn event (append-only). Refused if fenced. */
-  appendTurnEvent(request: AppendTurnEventRequest): WriteResult;
+  /** Append one normalized durable Turn event (append-only). Refused if fenced
+   *  or unrecordable; validation and storage faults never escape this write. */
+  appendTurnEvent(request: AppendTurnEventRequest): AppendTurnEventResult;
   /** Settle a Turn authoritatively (#116); immutable once settled. Refused if
    *  fenced. */
   settleTurn(request: SettleTurnRequest): WriteResult;

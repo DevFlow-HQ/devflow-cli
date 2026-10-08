@@ -68,4 +68,4 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Human Turns take it on `InteractiveTurnRequest`; the Application reports the Attempts it settles.
 - Execution's own Run Store writes report `store-write-start`/`-end` through `observedWrite` (`store-write.ts`, #325): the state write, Attempt publish,
   pending gate, Materialization conflict, Turn admission, and Turn settlement, by kind and ids only. `appendTurnEvent` runs per transcript item and
-  reports nothing; the Run Store Interface takes no observer.
+  reports only refusals; the Run Store Interface takes no observer.

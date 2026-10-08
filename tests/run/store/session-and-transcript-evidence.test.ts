@@ -875,10 +875,11 @@ test("m10-session-history: validated supplied patches and Turn diffs survive cra
     });
   append("first", { kind: "running" }, 2);
   append("second", { kind: "running" }, 1);
-  assert.throws(() =>
+  assert.equal(
     append("first", { kind: "completed" }, 99, [
       { path: "bad.ts", additions: -1 },
-    ]),
+    ]).ok,
+    false,
   );
   append("first", { kind: "completed" }, 99, files);
   const diff = {
@@ -886,13 +887,14 @@ test("m10-session-history: validated supplied patches and Turn diffs survive cra
     content: "Cumulative patch".repeat(3000),
     historyOrder: 3,
   };
-  assert.throws(() =>
+  assert.equal(
     owner.appendTurnEvent({
       turnId: "first",
       kind: "turn-diff",
       payload: JSON.stringify({ files: [], content: 7 }),
       at: AT,
-    }),
+    }).ok,
+    false,
   );
   owner.appendTurnEvent({
     turnId: "first",
@@ -1070,3 +1072,137 @@ for (const size of [29_999, 30_000, 30_001])
       },
     });
   });
+
+test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse atomically, then the Turn settles", (t) => {
+  const home = makeTempDir("secant-refusal-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-refusal");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.ok(
+    owner.admitTurn({
+      turnId: "turn",
+      attemptId: "attempt",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      input: "Work",
+      recoveryCoordinate: "native",
+      harness: "claude-code",
+      at: AT,
+    }).ok,
+  );
+  for (const call of [
+    {
+      callId: "",
+      tool: "file-change",
+      input: "requested.ts",
+      outcome: { kind: "completed" },
+    },
+    {
+      callId: "path",
+      tool: "file-change",
+      input: "requested.ts",
+      outcome: { kind: "completed" },
+      files: [{ path: "" }],
+    },
+    {
+      callId: "count",
+      tool: "file-change",
+      input: "requested.ts",
+      outcome: { kind: "completed" },
+      files: [{ path: "x", additions: -1 }],
+    },
+    {
+      callId: "count-value",
+      tool: "search",
+      input: "query",
+      outcome: { kind: "completed" },
+      count: { value: -1, unit: "matches" },
+    },
+    {
+      callId: "exit",
+      tool: "command",
+      input: "true",
+      outcome: { kind: "completed" },
+      exitCode: 0.5,
+    },
+  ]) {
+    const result = owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-call",
+      payload: JSON.stringify(call),
+      at: AT,
+    });
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail("invalid fact was recorded");
+    assert.equal(result.reason, "unrecordable");
+    assert.deepEqual(owner.turnEvents(), []);
+  }
+  const malformed = owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "thought",
+    payload: "private_turn_text_432",
+    at: AT,
+  });
+  assert.equal(malformed.ok, false);
+  if (!malformed.ok && malformed.reason === "unrecordable") {
+    assert.ok(malformed.cause instanceof SyntaxError);
+    assert.deepEqual(malformed.safeCause, {
+      type: "SyntaxError",
+      message: "Turn event payload is not valid JSON.",
+    });
+    assert.equal(
+      JSON.stringify(malformed.safeCause).includes("private_turn_text_432"),
+      false,
+    );
+  }
+  const database = new Database(
+    join(groupDirOf(home), created.runId, "run.db"),
+  );
+  t.after(() => database.close());
+  database.exec(
+    "CREATE TRIGGER refuse_event BEFORE INSERT ON turn_event BEGIN SELECT RAISE(ABORT, 'injected append fault'); END",
+  );
+  const fault = owner.appendTurnEvent({
+    turnId: "turn",
+    kind: "assistant-content",
+    payload: JSON.stringify({ messageId: "failed", content: "Missing" }),
+    at: AT,
+  });
+  assert.equal(fault.ok, false);
+  if (fault.ok) assert.fail("faulted append was recorded");
+  assert.equal(fault.reason, "unrecordable");
+  if (fault.reason === "unrecordable") assert.ok(fault.cause instanceof Error);
+  assert.deepEqual(owner.turnEvents(), []);
+  assert.deepEqual(
+    owner.transcript().map((entry) => entry.content),
+    ["Work"],
+  );
+  database.exec("DROP TRIGGER refuse_event");
+  assert.ok(
+    owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "assistant-content",
+      payload: JSON.stringify({ messageId: "later", content: "Later" }),
+      at: AT,
+    }).ok,
+  );
+  assert.ok(
+    owner.settleTurn({
+      turnId: "turn",
+      session: "s",
+      resultKind: "completed",
+      resultDetail: "{}",
+      availability: "open",
+      at: AT,
+    }).ok,
+  );
+  assert.equal(owner.turns()[0]?.resultKind, "completed");
+  assert.deepEqual(
+    owner.transcript().map((entry) => entry.content),
+    ["Work", "Later"],
+  );
+});

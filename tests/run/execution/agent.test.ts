@@ -6,11 +6,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
-import type {
-  HarnessProfile,
-  PreparedHarness,
-  TurnRequest,
-  TurnResult,
+import {
+  translateCause,
+  type HarnessProfile,
+  type PreparedHarness,
+  type TurnRequest,
+  type TurnResult,
 } from "../../../src/harness/harness.js";
 import {
   executeRouting,
@@ -1743,5 +1744,112 @@ for (const kind of ["agent", "interactive-agent"] as const) {
       requests[0]?.input.text,
       `${join(f.workspace, "src", "a.ts")}\n${join(f.workspace, "src", "b.ts")}\n${absolute}\n${absolute}\nsrc/text.ts\nsrc/bound.ts`,
     );
+  });
+}
+
+for (const fault of ["invalid", "storage", "malformed", "fenced"] as const) {
+  test(`m10-audit-turn-event-refusal: ${fault} refusal drains later events and settles the Turn`, async (t) => {
+    const f = fixture(t);
+    const assets = promptAssets(f.workspace, "Work");
+    const cause = new Error("injected storage fault");
+    const owner: RunOwner =
+      fault === "invalid"
+        ? f.owner
+        : {
+            ...f.owner,
+            appendTurnEvent(request) {
+              if (request.kind === "tool-call" && fault === "malformed") {
+                return f.owner.appendTurnEvent({
+                  ...request,
+                  payload: "private_turn_text_432",
+                });
+              }
+              if (request.kind === "tool-call")
+                return fault === "fenced"
+                  ? { ok: false, reason: "fenced" }
+                  : {
+                      ok: false,
+                      reason: "unrecordable",
+                      cause,
+                      safeCause: translateCause(cause),
+                    };
+              return f.owner.appendTurnEvent(request);
+            },
+          };
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      [
+        {
+          events: [
+            {
+              kind: "tool-call",
+              call: {
+                callId: "bad",
+                tool: "file-change",
+                input: "file",
+                files: [{ path: "" }],
+                outcome: { kind: "completed" },
+              },
+            },
+            {
+              kind: "assistant-content",
+              messageId: "later",
+              content: "Still reading",
+            },
+          ],
+          result: {
+            kind: "completed",
+            detail: {
+              finalContent: "Still reading",
+              effectiveModel: { known: false },
+              session: { state: "open" },
+            },
+          },
+        },
+      ],
+    );
+    t.after(() => prepared.close());
+    const events: ExecutionEvent[] = [];
+    const report = await executeRouting([agentStep()], {
+      owner,
+      platform: HOST,
+      resolveAsset: assets.resolveAsset,
+      now: () => AT,
+      process: executionProcess,
+      inputTypes: {},
+      observe: (event) => events.push(event),
+      harness: {
+        inputRules: [],
+        prepared,
+        assetKinds: { "prompt.md": "prompt" },
+      },
+    });
+    assert.equal(report.outcome, "succeeded");
+    assert.equal(f.owner.turns()[0]?.resultKind, "completed");
+    assert.deepEqual(
+      f.owner.transcript().map((entry) => entry.content),
+      ["Work", "Still reading"],
+    );
+    assert.deepEqual(
+      f.owner.turnEvents().map((event) => event.kind),
+      ["assistant-content"],
+    );
+    const refusals = events.filter(
+      (event) => event.kind === "turn-event-refused",
+    );
+    assert.equal(refusals.length, 1);
+    assert.equal(refusals[0]?.eventKind, "tool-call");
+    assert.equal(
+      refusals[0]?.refusal.reason,
+      fault === "fenced" ? "fenced" : "unrecordable",
+    );
+    const refusal = refusals[0]?.refusal;
+    if (refusal?.reason === "unrecordable") {
+      assert.equal(
+        JSON.stringify(refusal.safeCause).includes("private_turn_text_432"),
+        false,
+      );
+      if (fault === "storage") assert.equal(refusal.cause, cause);
+    }
   });
 }
