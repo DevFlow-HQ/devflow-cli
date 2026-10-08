@@ -43,7 +43,7 @@ this file owns only the milestone loop.
 ## Closing a milestone and gates
 
 - The milestone closes only after its `Audit: M<n>` ([milestone audit](./milestone-audit.md) owns when it is created and how it runs) has a decision
-  comment and every fix-now ticket it cut is closed.
+  comment and every fix-now ticket it cut is closed, and after its `Audit: M<n> follow-up`, when one runs, meets the same bar.
 - Close-out comment on the milestone issue: tickets closed, the gate introduced and its CI evidence, deletions performed, one audit line (a link to
   the audit, fix-now tickets closed, hand-over rows named), and anything handed forward. Then close the issue.
 - If the spine names a refactoring gate after this milestone, open `G<n>: <title>` as a human-in-the-loop **plan** review. Its checklist is the

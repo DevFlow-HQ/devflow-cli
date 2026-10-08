@@ -62,3 +62,18 @@ The local OpenCode checkout is the comparison. knip's test-only list is a human-
 - A finding whose fix needs an ADR or policy change becomes a wayfinder ticket on the map, stamped hand-over, and never blocks the milestone.
 - Implementation tickets outside the audit keep the obvious calls: adopt a dependency when the policy and OpenCode make it obvious, otherwise
   hand-roll the smallest thing and mark it `ponytail:`. [Change review](./change-review.md) keeps "purpose of each new dependency".
+
+## Hand-over follow-ups
+
+- A resolved hand-over records its decision in its resolution comment, its ADR, and the map; never in the audited milestone's built spec.
+- The milestone issue carries one `## Hand-over ledger` comment, edited at each resolution: Hand-over | Row | Decision | ADR commit | Lands in
+  (tickets, a spec, waiting, or no code).
+- Once every hand-over is resolved, one `/to-spec` session specs the waiting rows from the milestone issue, and `/to-tickets` publishes them as
+  sub-issues of the milestone titled `M<n> audit:` that do not block it.
+
+## Follow-up audit
+
+- After every ticket the audit and its hand-overs produced is closed, `Audit: M<n> follow-up` runs the Flow above over only the code changed since
+  `Audit: M<n>` closed. It blocks the milestone close, so the next milestone opens after it; skip it when the audit cut no tickets.
+- Stop rule: it stamps fix-now only for fixes that need no ADR or policy change. Every other finding hands over to the next milestone, never to
+  another round on this one.
