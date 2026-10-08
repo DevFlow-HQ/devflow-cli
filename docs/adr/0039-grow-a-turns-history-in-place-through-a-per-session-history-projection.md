@@ -14,7 +14,12 @@ publication, but an observer may skip unread intermediate states under the lates
 **Identity and order.** Each item carries an opaque identity that is stable within its Turn: the Adapter supplies it for assistant text, Thoughts,
 and tool calls, and Secant supplies it for Steers and Agent calls. The Projection issues its own opaque row identity at the Projection Port, so the
 Seam's identity never reaches a client and clients never learn where an identity came from. A row keeps the position where its item first
-appeared, not where it settled.
+appeared, not where it settled. Amendment (2026-10-08): this is the canonical conversation order for Session history, full transcript pages, and
+exports, as decided in [Decide one conversation order for the full transcript and Session history](https://github.com/secantdev/secant/issues/457).
+Turn input comes first, and retained items follow their first appearance within the Turn. Settlement, confirmed Steer delivery, and an Interrupt
+do not move an item. Persist the observed first-appearance order with its durable fact; no chunk persistence is added. Transcript eligibility and
+retained-entry identity are separate from order. Preserve existing retained-entry identities when changing the comparator. Previous-release
+conversation keeps its authoritative migrated order; missing first appearances are never reconstructed from timestamps or legacy event copies.
 
 **Steer, Agent call, and Turn facts.** A Steer is stored when sent, then becomes delivered, not delivered after an Interrupt, or delivery not
 confirmed after a lost Turn. An Agent call is one row carrying the call and its reason, then Secant's reply (accepted, held for review, refused),
@@ -92,12 +97,30 @@ budget alone still permits repeated pages to overflow a finite queue; latest-pag
 
 **One record of the conversation.** `transcript_entry` retires. The Turn's input becomes its first row, `settleTurn` stops appending a final
 assistant copy, and transcript pages and exports are built from Turn rows: human input, delivered Steers, and settled assistant messages.
-Previous-release databases migrate at open through the embedded journals.
+Previous-release databases migrate at open through the embedded journals. Amendment (2026-10-08): an eligible message or delivered Steer keeps its
+first-appearance position in this record. Assistant text still streaming and waiting or undelivered Steers remain absent from the stored transcript.
+An orderly Turn settlement retains partial text with the existing incomplete marker; a crash does not reconstruct live-only content.
+
+**Fixed transcript traversal (2026-10-08).** The first page read fixes the set of eligible stored conversation entries for that traversal. Every
+older-page read carries the same eligibility cutoff and an exclusive first-appearance order boundary behind its opaque cursor. Later settlements,
+Steer deliveries, and Turn inputs cannot enter that traversal, even if their first-appearance position lies inside a range already read. Re-reading
+an older cursor returns the same entries while the Run is retained. Opening the transcript again starts a fresh traversal and includes newly
+eligible entries in canonical order. The ordinary Session-history Projection continues updating independently.
+
+Each export captures its own fresh eligibility cutoff when requested and orders that fixed set by the same canonical comparator. An export may
+therefore include entries absent from an earlier-opened transcript reader. Identical retained entries have the same relative order. No new
+shared-snapshot control or refresh action is required. Preserve the existing 20-entry pages, chronological order within each page, bounded export
+behavior, opaque older cursor, Resource read envelopes, and stable retained-entry identity used for prepend and scroll anchoring. Application owns
+the cutoff, cursor validation, and ordering behind the Projection Port. An eligibility cutoff and order key need no eagerly copied transcript or
+transaction held open while a human reads. Exact cursor encoding and query mechanics belong to the implementing slice.
 
 **Headless.** Headless stays stored-only and gains no live stream. `run read --transcript --json` entries keep `session`, `role`, and `content`,
 gain optional `kind` (message, Steer, Entry prompt), `turn`, `steer`, and `incomplete` fields, and now list each settled assistant message rather
 than one per Turn. Tool, Thought, diff, and Agent-call rows, live previews, waiting Steers, and context and usage are headless parity gaps
-recorded in [headless parity](../headless-parity.md). `run show --json` is unchanged.
+recorded in [headless parity](../headless-parity.md). `run show --json` is unchanged. Amendment (2026-10-08): canonical ordering and fixed transcript
+reads change no headless JSON shape. Keep the existing optional `step`, decided optional metadata, `{ page, export }` envelope, and read-result
+fields. Presentation identities, first-appearance keys, and eligibility cutoffs remain private and never become JSON entry fields. The cursor
+remains an opaque string in its existing field.
 
 Rejected: storing only at settle, which erases in-flight work from a lost Turn; storing every chunk, which ADR 0038 excludes; a Secant counter as
 item identity, which breaks when a native item is split or re-sent; inlining history in `RunView`, which re-sends the whole history on every
