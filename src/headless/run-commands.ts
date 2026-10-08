@@ -1,5 +1,4 @@
 import { headlessJson } from "./json.js";
-import { settledOperation } from "./operation-settlement.js";
 import { createRunNoticeReporter, runSnapshotJson } from "./run-notice.js";
 import { randomUUID } from "node:crypto";
 import stripAnsi from "strip-ansi";
@@ -12,7 +11,6 @@ import type {
   LaunchRunInput,
   ObserverEnd,
   OpenedProjection,
-  OperationOutcome,
   Problem,
   ProjectionPort,
   ResumeRunOffer,
@@ -488,13 +486,6 @@ export function splitSelector(selector: string): {
 
 // --- shared settlement -----------------------------------------------------
 
-async function settledOutcome(
-  port: ProjectionPort,
-  operationId: string,
-): Promise<OperationOutcome> {
-  return (await settledOperation(port, operationId)).outcome;
-}
-
 /** The Run-command exit-code contract (A36, src/headless/AGENTS.md): exit 0 only
  *  when the Run rests exactly `succeeded`; 2 when it rests `blocked` at its Human
  *  Gate checkpoint (the gate's expected outcome, distinguished so the CI gate can
@@ -525,7 +516,7 @@ async function settleAndReportRun(
     runId,
     policy,
     async () => {
-      const outcome = await settledOutcome(port, operationId);
+      const { outcome } = await port.settledOperation(operationId);
       if (outcome.status === "not-applied")
         return fail(io, json, outcome.problem);
 
@@ -1184,39 +1175,28 @@ async function changeRunModelChoice(
     input,
   });
   if (!admission.admitted) return fail(io, json, admission.problem);
-  const outcome = await settledOutcome(port, admission.operationId);
-  const operation = port.openProjection({
-    family: "operation",
-    operationId: admission.operationId,
-  });
+  const receipt = await port.settledOperation(admission.operationId);
+  const noticeView = port.openProjection({ family: "run", runId: input.runId });
   try {
-    const noticeView = port.openProjection({
-      family: "run",
-      runId: input.runId,
-    });
-    try {
-      createRunNoticeReporter((text) => io.err(text))(noticeView.snapshot);
-    } finally {
-      noticeView.close();
-    }
-    if (json) {
-      io.out(`${headlessJson(operation.snapshot)}\n`);
-      return outcome.status === "applied" ? 0 : 1;
-    }
-    if (outcome.status === "not-applied")
-      return fail(io, false, outcome.problem);
-    const result = operation.snapshot.modelChoiceChange;
-    if (result !== undefined) {
-      io.out(
-        `Model choice for Run ${input.runId}: ${result.choice.model}${result.choice.effort === undefined ? "" : `, ${result.choice.effort} effort`}. Applies from the next Turn.\n`,
-      );
-      if (result.effortReset !== undefined)
-        io.out(`${result.effortReset.explanation}\n`);
-    }
-    return 0;
+    createRunNoticeReporter((text) => io.err(text))(noticeView.snapshot);
   } finally {
-    operation.close();
+    noticeView.close();
   }
+  if (json) {
+    io.out(`${headlessJson(receipt)}\n`);
+    return receipt.outcome.status === "applied" ? 0 : 1;
+  }
+  if (receipt.outcome.status === "not-applied")
+    return fail(io, false, receipt.outcome.problem);
+  const result = receipt.modelChoiceChange;
+  if (result !== undefined) {
+    io.out(
+      `Model choice for Run ${input.runId}: ${result.choice.model}${result.choice.effort === undefined ? "" : `, ${result.choice.effort} effort`}. Applies from the next Turn.\n`,
+    );
+    if (result.effortReset !== undefined)
+      io.out(`${result.effortReset.explanation}\n`);
+  }
+  return 0;
 }
 
 /** Submit a cancel-run/delete-run Operation and report its settled outcome. Both

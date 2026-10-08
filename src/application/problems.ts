@@ -867,6 +867,16 @@ export function harnessRequestIndeterminate(
   };
 }
 
+export function operationObservationEnded(operationId: string): Problem {
+  return {
+    code: "operation-observation-ended",
+    explanation: `Secant stopped reporting Operation ${operationId} before it settled (application-shutdown).`,
+    remediation:
+      "Reconnect to Secant and read the current state before retrying the Operation.",
+    possibleEffects: "unknown",
+  };
+}
+
 export function operationNotFound(operationId: string): Problem {
   return {
     code: "operation-not-found",

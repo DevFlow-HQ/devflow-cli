@@ -30,7 +30,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   and its budget is exact: a `<text>` wraps even a one-column overrun onto a second line, ellipsis and all, despite `overflow="hidden"` (#307).
 - A launch resolves at **admission** (`run-launch-view.tsx`): the Run id is known and the Run is observable `running` at once (#98 A7), so the flow reaches
   the Workbench before the Run rests and the Workbench follows the live `run` Projection. Every _other_ write (answer, resume, cancel, delete) follows the
-  operation stream to settlement through `submit-and-settle.ts`, because a Run — and a cancel-as-abort of a live Run — settles asynchronously now (#98).
+  Application-owned `ProjectionPort.settledOperation` through `submit-and-settle.ts` (#448), because Run settlement can be asynchronous (#98).
   Captured command output is stripped of ANSI escapes with `strip-ansi` and split on `/\r?\n/` in the inspection read path (D4).
 - Sanctioned Seam leak (A29): `createProductionRenderer` (`renderer/renderer.ts`) returns an `@opentui/core` `CliRenderer` that composition
   (`composition/tui-runtime.ts`) binds and hands to `mountTui`, so an inferred `@opentui/core` type crosses into composition where the boundary suite —
@@ -85,9 +85,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `harness-view.tsx` keeps list opening spawn-free, `harness-format.ts` owns shared wording, and the inspector renders normalized facts with no Actions.
   The row reads `harnessRowStatus` (Start a Run's words) and `harnessModelLine`; discovery evidence lives in the inspector (#285).
 - Two private helpers back those seams: `follow.ts` (`followProjection`) owns the read seams' follow, health, and reconnect loop (A22); `submit-and-settle.ts`
-  (`submitAndSettle`) owns submit-then-follow and reopens a lost pending Operation receipt (A23).
+  (`submitAndSettle`) maps admission and the Port's settled receipt to reactive outcomes (#448).
   The Previous Runs seam (`run-list-view.tsx`) reopens an `observer-lagged` page in place, keeping older loaded pages (#306).
-- `submitAndSettle` recovers lag and temporary disconnection, but shutdown/subject loss ends a pending receipt with unknown effects (#310), never a reopen or success.
+- Application ends pending settlement waits at shutdown with `operation-observation-ended` and unknown effects; TUI presents the returned Problem (#448).
 - Read [tui-workbench](../../docs/agents/tui-workbench.md) before changing the Run Workbench's layout, bottom interaction, key routing, prompt, drafts,
   confirmations, dialogs, or details panel.
 - `previous-runs.tsx` is the Previous Runs screen reached from Home.

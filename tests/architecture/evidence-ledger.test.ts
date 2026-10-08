@@ -76,6 +76,9 @@ const PROCESS_FREE_TEST_FILES = new Set([
   // Born process-free: fake view/Renderer Port controls, in-process Catalog, and an Application
   // whose injected helper Process throws on every launch route.
   "tests/tui/home-preferences.test.tsx",
+  // Born process-free: Run reads use openLiveRun's fake Process; settlement uses
+  // temporary Catalog/SQLite and the Application helper's throwing Process (#448).
+  "tests/tui/run-view.test.ts",
   // Born process-free: the Application runs over the fake Bundle Process; every other case reads
   // fake snapshots.
   "tests/tui/run-workbench-interaction.test.tsx",
@@ -399,6 +402,9 @@ test("m10-audit-guidance-refresh: born process-free suites are classified outsid
   const rows = ledgerRows(readFileSync(ledgerPath, "utf8"));
   for (const path of [
     "tests/tui/home-preferences.test.tsx",
+    // Born process-free: Run reads use openLiveRun's fake Process; settlement uses
+    // temporary Catalog/SQLite and the Application helper's throwing Process (#448).
+    "tests/tui/run-view.test.ts",
     "tests/application/preferences.test.ts",
     "tests/application/workspace-paths.test.ts",
     "tests/headless/settings.test.ts",

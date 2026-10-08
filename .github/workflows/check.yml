@@ -203,6 +203,15 @@ jobs:
           tests/run/execution/execution.test.ts
           tests/run/execution/agent.test.ts
           tests/application/preflight.test.ts
+
+      - name: m10-audit-operation-settlement-owner
+        run: >-
+          bun run test --
+          -t '^m10-audit-operation-settlement-owner(:|$)'
+          tests/application/operation-receipt.test.ts
+          tests/headless/run.test.ts
+          tests/headless/agent-step.test.ts
+          tests/tui/run-view.test.ts
       - name: m10-audit-guidance-refresh
         run: >-
           bun run test --

@@ -10,15 +10,12 @@ import { type HeadlessIO, runHeadless } from "../../src/headless/headless.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import { executeRouting } from "../../src/run/execution/execution.js";
 import type {
-  ObserverEnd,
   OpenedProjection,
   ProjectionPort,
   ProjectionSelector,
-  ProjectionUpdate,
   RunSnapshot,
 } from "../../src/application/projection-port.js";
 import { createApplication } from "../helpers/application.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
 import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 import {
   countingBundleProcess,
@@ -124,151 +121,87 @@ test("m12-local-test-helpers: [headless-on-doubles] run launch --trust runs to s
   assert.match(h.stdout(), /^State: succeeded$/m);
 });
 
-/** A Projection Port over `inner` whose first opened `operation` stream, while its
- *  Operation is still pending, ends with `reason` instead of delivering the settled
- *  outcome — the loss the Port signals when that observer falls behind (#306). The
- *  real Application pushes an Operation's stream only once, so it never lags it. */
-function losingOperationStream(
-  inner: ProjectionPort,
-  reason: ObserverEnd,
-): {
-  port: ProjectionPort;
-  lost: () => readonly string[];
-  operationOpens: () => number;
-} {
-  const lost: string[] = [];
-  let operationOpens = 0;
-  const open = (selector: ProjectionSelector): OpenedProjection => {
-    const opened = inner.openProjection(selector);
-    if (selector.family !== "operation") return opened;
-    operationOpens += 1;
-    if (
-      opened.snapshot.family !== "operation" ||
-      opened.snapshot.outcome.status !== "pending" ||
-      lost.length > 0
-    ) {
-      return opened;
-    }
-    lost.push(selector.operationId);
-    opened.close();
-    const updates: AsyncIterable<ProjectionUpdate> = (async function* () {
-      yield { kind: "closed", reason } as const;
-    })();
-    return {
-      snapshot: opened.snapshot,
-      catchUp: opened.catchUp,
-      updates,
-      close: () => undefined,
-    };
-  };
-  return {
-    port: {
-      ...inner,
-      openProjection: open as ProjectionPort["openProjection"],
-    },
-    lost: () => lost,
-    operationOpens: () => operationOpens,
-  };
-}
-
-test("run launch reopens a pending Operation lost observer-lagged and reports the settled Run (#306)", async (t) => {
-  const h = await harness(t);
-  const { id, digest } = await h.install();
-  h.approve();
-  const losing = losingOperationStream(
-    h.clients.projectionPort,
-    "observer-lagged",
-  );
-
-  const code = await runHeadless(
-    { ...h.clients, projectionPort: losing.port },
-    ["run", "launch", id, "--trust", digest],
-    h.io,
-  );
-  // The lost receipt was reopened, not read as the still-pending snapshot.
-  assert.equal(losing.lost().length, 1);
-  assert.equal(losing.operationOpens(), 2);
-  assert.equal(code, 0, h.stdout() + h.stderr());
-  assert.match(h.stdout(), /^State: succeeded$/m);
-});
-
-test("run launch reports an unrecoverable observer end as a Problem, never the pending Run (#306)", async (t) => {
-  const h = await harness(t);
-  const { id, digest } = await h.install();
-  h.approve();
-  const losing = losingOperationStream(
-    h.clients.projectionPort,
-    "application-shutdown",
-  );
-
-  const code = await runHeadless(
-    { ...h.clients, projectionPort: losing.port },
-    ["run", "launch", id, "--trust", digest],
-    h.io,
-  );
-  assert.equal(code, 1);
-  assert.match(h.stderr(), /operation-observation-ended/);
-  assert.doesNotMatch(h.stdout(), /^State:/m);
-  // The admitted launch still runs to its own settlement.
-  const [operationId] = losing.lost();
-  assert.ok(operationId);
-  const outcome = await awaitSettled(h.clients.projectionPort, operationId);
-  assert.equal(outcome.status, "applied");
-});
-
-test("headless shutdown ends the request follower and pending wait without reopening or reporting success", async (t) => {
+test("m10-audit-operation-settlement-owner: headless launch waits on the Port receipt and reports the settled Run", async (t) => {
   const h = await harness(t);
   const { id, digest } = await h.install();
   h.approve();
   const inner = h.clients.projectionPort;
-  let followerEnded!: () => void;
-  const ended = new Promise<void>((resolve) => {
-    followerEnded = resolve;
-  });
-  let runOpens = 0;
-  let operationOpens = 0;
-  let readAfterEnd = false;
-  let answers = 0;
-  let operationId = "";
+  const calls: string[] = [];
   const open = (selector: ProjectionSelector): OpenedProjection => {
-    const view = inner.openProjection(selector);
-    if (selector.family === "run") {
-      runOpens++;
-      view.close();
-      return {
-        ...view,
-        updates: (async function* () {
-          try {
-            yield { kind: "closed", reason: "application-shutdown" } as const;
-            readAfterEnd = true;
-            throw new Error("follower read past shutdown");
-          } finally {
-            followerEnded();
-          }
-        })(),
-      };
-    }
-    if (selector.family === "operation") {
-      operationOpens++;
-      operationId = selector.operationId;
-      assert.ok(
-        view.snapshot.family === "operation" &&
-          view.snapshot.outcome.status === "pending",
-      );
-      view.close();
-      return {
-        ...view,
-        updates: (async function* () {
-          await ended;
-          yield { kind: "closed", reason: "application-shutdown" } as const;
-        })(),
-      };
-    }
-    return view;
+    assert.notEqual(
+      selector.family,
+      "operation",
+      "settlement must not reopen a receipt",
+    );
+    return inner.openProjection(selector);
   };
   const port: ProjectionPort = {
     ...inner,
     openProjection: open as ProjectionPort["openProjection"],
+    settledOperation(operationId) {
+      calls.push(operationId);
+      return inner.settledOperation(operationId);
+    },
+  };
+  const code = await runHeadless(
+    { ...h.clients, projectionPort: port },
+    ["run", "launch", id, "--trust", digest],
+    h.io,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(code, 0, h.output());
+  assert.match(h.stdout(), /^State: succeeded$/m);
+});
+
+test("m10-audit-operation-settlement-owner: headless shutdown ends the request follower and pending wait without reporting success", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  const inner = h.clients.projectionPort;
+  let runOpens = 0;
+  let readAfterEnd = false;
+  let terminalSeen = false;
+  let followerEnded!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    followerEnded = resolve;
+  });
+  let operationId = "";
+  let answers = 0;
+  let stopping: Promise<void> | undefined;
+  const open = (selector: ProjectionSelector): OpenedProjection => {
+    assert.notEqual(selector.family, "operation");
+    const view = inner.openProjection(selector);
+    if (selector.family !== "run") return view;
+    runOpens++;
+    return {
+      ...view,
+      updates: (async function* () {
+        try {
+          for await (const update of view.updates) {
+            if (update.kind === "closed") terminalSeen = true;
+            yield update;
+            if (update.kind === "closed") {
+              readAfterEnd = true;
+              throw new Error("follower read past shutdown");
+            }
+          }
+        } finally {
+          followerEnded();
+        }
+      })(),
+    };
+  };
+  const port: ProjectionPort = {
+    ...inner,
+    openProjection: open as ProjectionPort["openProjection"],
+    async settledOperation(id) {
+      operationId = id;
+      const receipt = inner.settledOperation(id);
+      stopping = h.clients.shutdown();
+      const snapshot = await receipt;
+      await ended;
+      return snapshot;
+    },
     submit(submission) {
       if (submission.operation === "answer-harness-request") answers++;
       return inner.submit(submission);
@@ -279,15 +212,17 @@ test("headless shutdown ends the request follower and pending wait without reope
     ["run", "launch", id, "--trust", digest],
     h.io,
   );
+  await stopping;
   assert.equal(code, 1);
   assert.match(h.stderr(), /operation-observation-ended/);
   assert.match(h.stderr(), /application-shutdown/);
   assert.doesNotMatch(h.stdout(), /State:|succeeded/);
   assert.equal(runOpens, 1);
-  assert.equal(operationOpens, 1);
-  assert.equal(readAfterEnd, false);
   assert.equal(answers, 0);
-  assert.equal((await awaitSettled(inner, operationId)).status, "applied");
+  assert.equal(terminalSeen, true);
+  assert.equal(readAfterEnd, false);
+  const outcome = await inner.settledOperation(operationId);
+  assert.notEqual(outcome.outcome.status, "pending");
 });
 
 test("run launch --input accepts a multi-line text value unchanged, line endings included (#287)", async (t) => {

@@ -1714,3 +1714,101 @@ test("m10-audit-turn-event-refusal: Claude's native reader continues after a sto
     owner.close();
   }
 });
+
+for (const shutdown of [false, true]) {
+  test(`m10-audit-operation-settlement-owner: run model --json prints the ${shutdown ? "shutdown" : "applied"} receipt used for its exit code`, async (t) => {
+    const { wired, digest, docPath } = wireAgent(t);
+    const runId = seedHeadlessModelRun(wired, digest, docPath);
+    const workspaceView = wired.projectionPort.openProjection({
+      family: "workspace",
+    });
+    const workspace = workspaceView.snapshot.path;
+    workspaceView.close();
+    const held: (() => void | Promise<void>)[] = [];
+    const script = lockedScript();
+    const app = createApplication({
+      catalog: wired.catalog,
+      runGroup: wired.runGroup,
+      launchWorkspacePath: workspace,
+      process: createFakeBundleProcess(),
+      scheduleSettlement: (settle) => {
+        held.push(settle);
+      },
+      harnessRegistry: [
+        {
+          choice: {
+            id: "claude-code",
+            name: "Claude Code",
+            availability: "available",
+          },
+          inputRules: [],
+          servedCapabilities: [],
+          discover: () => ({
+            kind: "found",
+            source: "configured",
+            description: "fake",
+          }),
+          qualify: async () => ({
+            ok: true,
+            profile: script.profile,
+            defaults: script.defaults ?? {
+              kind: "unavailable",
+              reason: "No scripted defaults.",
+            },
+          }),
+        },
+      ],
+    });
+    const inner = app.projectionPort;
+    let returned:
+      Awaited<ReturnType<typeof inner.settledOperation>> | undefined;
+    const port = {
+      ...inner,
+      async settledOperation(operationId: string) {
+        const receipt = inner.settledOperation(operationId);
+        if (shutdown) await app.shutdown();
+        else await held.shift()?.();
+        returned = await receipt;
+        return returned;
+      },
+    };
+    const out: string[] = [],
+      err: string[] = [];
+    const code = await runHeadless(
+      { ...app, projectionPort: port },
+      ["run", "model", runId, "--model", "sonnet", "--json"],
+      {
+        out: (text) => out.push(text),
+        err: (text) => err.push(text),
+        cwd: () => workspace,
+      },
+    );
+    assert.ok(returned);
+    assert.equal(code, shutdown ? 1 : 0);
+    assert.deepEqual(JSON.parse(out.join("")), returned);
+    assert.equal(err.join(""), "");
+    if (shutdown) {
+      assert.equal(returned.outcome.status, "not-applied");
+      if (returned.outcome.status === "not-applied") {
+        assert.equal(
+          returned.outcome.problem.code,
+          "operation-observation-ended",
+        );
+        assert.equal(returned.outcome.problem.possibleEffects, "unknown");
+      }
+      const ledger = inner.openProjection({
+        family: "operation",
+        operationId: returned.operationId,
+      });
+      assert.equal(ledger.snapshot.outcome.status, "pending");
+      ledger.close();
+      await held.shift()?.();
+    } else {
+      assert.deepEqual(returned.modelChoiceChange, {
+        choice: { model: "sonnet", effort: "xhigh" },
+        reach: "next-turn",
+      });
+    }
+    await app.shutdown();
+  });
+}

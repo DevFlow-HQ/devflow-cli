@@ -35,8 +35,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `run show` labels the immutable `run.selectedHarness` as `Selected Harness:` and the latest Agent-step Attempt's `run.harness`/`effectiveModel` facts as
   `Observed Harness:`/`Observed executable:`/`Observed version:`/`Observed effective model:` (#125, #147). The version prints unadorned since it may contain
   parentheses. `selectedHarness` is additive, the existing observed JSON fields stay unchanged, and Command-only Runs omit all of them so their frozen shape is unchanged.
-- Command groups register onto the configured program with `io`/`execute`/`fail`/`settle`. Run and settings share the receipt waiter in
-  `operation-settlement.ts`; Run owns `settleAndReportRun` and `splitSelector`, also used by `bundle inspect`.
+- Command groups register onto the configured program with `io`/`execute`/`fail`/`settle`. Run and settings share the receipt waiter on the
+  Projection Port; Run owns `settleAndReportRun` and `splitSelector`, also used by `bundle inspect`.
 - Headless JSON omits operational Problem causes in every envelope; normalized fields and user data named `cause` remain intact (#449).
 - Settings show JSON is only the theme/appearance pair. Set JSON is the Operation receipt, with `preferencesChange` only on an applied save.
   Fallback notices use stderr and exit zero; failed saves retain not-applied receipts and exit one. Bare settings prints help without composition.
@@ -47,9 +47,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   re-offered at a later generation (a prior answer went stale) is retried. `--harness-requests` defaults to **`deny`** (`parseHarnessRequestPolicy`): an
   unattended Run denies every approval unless the operator opts into `allow` (the only other value; Claude Code offers no "always"). `withHarnessRequests` starts
   the follower before settlement is awaited, so an Agent Turn that pauses on approval is unblocked and the Run can rest; it is harmless for a Command-only Run.
-- `settledOutcome` is only the Run-local outcome extractor; `settledOperation` in `operation-settlement.ts` owns receipt observation for Run and settings.
-- Observer loss never strands headless work (#306): `followHarnessRequests` and `settledOperation` reopen after `observer-lagged`. Any other end stops the follower, and
-  `settledOperation` returns `operation-observation-ended` (unknown effects) instead of the still-pending snapshot, so neither reopens into a spin at shutdown.
+- Run and settings await `ProjectionPort.settledOperation`; Application owns receipt settlement and the shutdown Problem with unknown effects (#448).
+  `run model` prints that returned receipt, so JSON and exit code agree even if the ledger still holds a pending Operation after shutdown.
+- `followHarnessRequests` reopens only after `observer-lagged`; any other end stops the follower (#306).
 - Launch preparation and Harness inspection share a private readiness waiter (#390): only `observer-lagged` reopens; every other end fails with no effects.
   Launch waits for ready/not-ready; inspection waits for a missing Harness or qualification beyond `not-checked`, including valid negative results.
 - `run launch --harness claude-code|codex` forwards the semantic choice through `LaunchRunInput`; Application owns required/unknown/irrelevant refusal. Resume accepts

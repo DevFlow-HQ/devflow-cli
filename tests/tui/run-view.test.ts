@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRoot } from "solid-js";
 import type {
-  OperationSnapshot,
+  SettledOperationSnapshot,
   ProjectionPort,
   ProjectionSelector,
   ProjectionUpdate,
@@ -13,9 +13,14 @@ import type {
 } from "../../src/application/projection-port.js";
 import {
   createLiveRunWorkbenchView,
+  createLivePreferencesView,
   type TRunViewFreshness,
   type RunWorkbenchProjection,
 } from "../../src/tui/tui.js";
+import { realpathSync } from "node:fs";
+import { openCatalog } from "../../src/catalog/catalog.js";
+import { createApplication } from "../helpers/application.js";
+import { makeTempDir } from "../helpers/tempDir.js";
 import { openLiveRun, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 
 class UpdateQueue<T> implements AsyncIterable<T> {
@@ -300,38 +305,21 @@ test("a real Run stream that lags reports loss, and reconnect restores the curre
   await run.finish();
 });
 
-test("a pending Operation receipt survives stream loss and settles from the reopened Projection", async () => {
-  const first = new UpdateQueue<ProjectionUpdate<OperationSnapshot>>();
-  const second = new UpdateQueue<ProjectionUpdate<OperationSnapshot>>();
-  const third = new UpdateQueue<ProjectionUpdate<OperationSnapshot>>();
-  const pending: OperationSnapshot = {
-    family: "operation",
-    operationId: "op-1",
-    outcome: { status: "pending" },
-  };
-  const streams = [first, second, third];
-  let opens = 0;
+test("m10-audit-operation-settlement-owner: a TUI answer waits on the Port receipt without opening an Operation Projection", async () => {
+  let resolve!: (snapshot: SettledOperationSnapshot) => void;
+  const receipt = new Promise<SettledOperationSnapshot>((settle) => {
+    resolve = settle;
+  });
   const port = {
     submit() {
       return { admitted: true, operationId: "op-1" } as const;
     },
-    openProjection(selector: ProjectionSelector) {
-      assert.deepEqual(selector, {
-        family: "operation",
-        operationId: "op-1",
-      });
-      const updates = streams[opens];
-      opens += 1;
-      if (updates === undefined) throw new Error("unexpected third open");
-      return {
-        snapshot: pending,
-        catchUp: "fresh" as const,
-        updates,
-        close() {},
-      };
+    settledOperation(operationId: string) {
+      assert.equal(operationId, "op-1");
+      return receipt;
     },
-    readResource() {
-      throw new Error("readResource is not used");
+    openProjection() {
+      throw new Error("settlement must not open a Projection");
     },
   } as unknown as ProjectionPort;
   const gate: RunGateReference = {
@@ -340,35 +328,20 @@ test("a pending Operation receipt survives stream loss and settles from the reop
     attemptId: "attempt-1",
     shape: "approve-reject",
   };
-
   const outcome = createLiveRunWorkbenchView(port).answer(gate, "continue");
   assert.equal(outcome().kind, "pending");
-  first.push({ kind: "closed", reason: "temporarily-unavailable" });
   await flushUpdates();
   assert.equal(outcome().kind, "pending");
-  assert.equal(opens, 2);
-
-  second.push({ kind: "closed", reason: "observer-lagged" });
-  await flushUpdates();
-  assert.equal(outcome().kind, "pending");
-  assert.equal(opens, 3);
-
-  third.push({
-    kind: "durable",
-    snapshot: {
-      family: "operation",
-      operationId: "op-1",
-      outcome: { status: "applied" },
-    },
+  resolve({
+    family: "operation",
+    operationId: "op-1",
+    outcome: { status: "applied" },
   });
   await flushUpdates();
   assert.equal(outcome().kind, "applied");
-  first.end();
-  second.end();
-  third.end();
 });
 
-test("shutdown disconnects the Run view, clears live controls, and ends a pending TUI Operation without reopening", async () => {
+test("m10-audit-operation-settlement-owner: shutdown disconnects the Run view, clears live controls, and ends a pending TUI Operation", async (t) => {
   const live = openLiveProjection(snapshotOf(runOf()));
   live.updates.push({ kind: "live", overlay: REQUESTING });
   await flushUpdates();
@@ -383,39 +356,27 @@ test("shutdown disconnects the Run view, clears live controls, and ends a pendin
   live.dispose();
   live.updates.end();
 
-  const updates = new UpdateQueue<ProjectionUpdate<OperationSnapshot>>();
-  let opens = 0;
-  let closes = 0;
-  const port = {
-    submit: () => ({ admitted: true, operationId: "shutdown-answer" }),
-    openProjection() {
-      opens++;
-      assert.equal(opens, 1, "a shutdown stream must never reopen");
-      return {
-        snapshot: {
-          family: "operation",
-          operationId: "shutdown-answer",
-          outcome: { status: "pending" },
-        },
-        catchUp: "fresh",
-        updates,
-        close() {
-          closes++;
-        },
-      };
+  const catalog = openCatalog(makeTempDir("secant-tui-settle-home-"));
+  t.after(() => catalog.close());
+  const held: (() => void | Promise<void>)[] = [];
+  const app = createApplication({
+    catalog,
+    launchWorkspacePath: realpathSync.native(
+      makeTempDir("secant-tui-settle-ws-"),
+    ),
+    scheduleSettlement: (settle) => {
+      held.push(settle);
     },
-  } as unknown as ProjectionPort;
-  const outcome = createLiveRunWorkbenchView(port).answer(
-    {
-      runId: "run-1",
-      stepId: "review",
-      attemptId: "attempt-1",
-      shape: "approve-reject",
-    },
-    "continue",
-  );
+  });
+  let dispose!: () => void;
+  const preferences = createRoot((end) => {
+    dispose = end;
+    return createLivePreferencesView(app.projectionPort);
+  });
+  t.after(() => dispose());
+  const outcome = preferences.save({ theme: "aura", appearance: "light" });
   assert.equal(outcome().kind, "pending");
-  updates.push({ kind: "closed", reason: "application-shutdown" });
+  await app.shutdown();
   await flushUpdates();
   const ended = outcome();
   assert.equal(ended.kind, "refused");
@@ -424,9 +385,10 @@ test("shutdown disconnects the Run view, clears live controls, and ends a pendin
     assert.equal(ended.problem.possibleEffects, "unknown");
     assert.match(ended.problem.explanation, /application-shutdown/);
   }
-  assert.equal(opens, 1);
-  assert.equal(closes, 1);
-  updates.end();
+  // The end of observation never changes the effect's eventual ledger receipt.
+  await held.shift()?.();
+  await flushUpdates();
+  assert.deepEqual(outcome(), ended);
 });
 
 test("a durable update whose liveness leaves live-here drops the live overlay (A8) — fails at HEAD", async () => {

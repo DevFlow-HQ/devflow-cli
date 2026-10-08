@@ -327,3 +327,146 @@ test("operation-receipt-identity-and-lifetime: a lagged Run observer leaves its 
   assert.deepEqual(reopened.snapshot.outcome, { status: "applied" });
   reopened.close();
 });
+
+for (const deferred of [false, true]) {
+  test(`m10-audit-operation-settlement-owner: ${deferred ? "deferred" : "inline"} settlement returns the ledger receipt to every waiter`, async (t) => {
+    const catalog = openCatalog(makeTempDir("secant-settlement-home-"));
+    t.after(() => catalog.close());
+    const workspace = realpathSync.native(makeTempDir("secant-settlement-ws-"));
+    const held: (() => void | Promise<void>)[] = [];
+    const app = createApplication({
+      catalog,
+      launchWorkspacePath: workspace,
+      scheduleSettlement: deferred
+        ? (settle) => {
+            held.push(settle);
+          }
+        : undefined,
+    });
+    t.after(() => app.shutdown());
+    const port = app.projectionPort;
+    assert.deepEqual(
+      port.submit({
+        operationId: "save",
+        operation: "change-preferences",
+        input: { theme: "aura", appearance: "light" },
+      }),
+      { admitted: true, operationId: "save" },
+    );
+    let resolved = false;
+    const first = port.settledOperation("save").then((receipt) => {
+      resolved = true;
+      return receipt;
+    });
+    const second = port.settledOperation("save");
+    if (deferred) {
+      await Promise.resolve();
+      assert.equal(resolved, false);
+      await held.shift()?.();
+    }
+    const expected = {
+      family: "operation",
+      operationId: "save",
+      outcome: { status: "applied" },
+      preferencesChange: { theme: "aura", appearance: "light" },
+    };
+    assert.deepEqual(await first, expected);
+    assert.deepEqual(await second, expected);
+    assert.deepEqual(await port.settledOperation("save"), expected);
+  });
+}
+
+test("m10-audit-operation-settlement-owner: shutdown ends pending waits without changing the ledger outcome", async (t) => {
+  const catalog = openCatalog(makeTempDir("secant-settlement-stop-"));
+  t.after(() => catalog.close());
+  const workspace = realpathSync.native(makeTempDir("secant-settlement-ws-"));
+  const held: (() => void | Promise<void>)[] = [];
+  const app = createApplication({
+    catalog,
+    launchWorkspacePath: workspace,
+    scheduleSettlement: (settle) => {
+      held.push(settle);
+    },
+  });
+  const port = app.projectionPort;
+  port.submit({
+    operationId: "approval-stop",
+    operation: "approve-workspace",
+    input: { path: workspace },
+  });
+  const first = port.settledOperation("approval-stop");
+  const second = port.settledOperation("approval-stop");
+  await app.shutdown();
+  const expected = {
+    family: "operation",
+    operationId: "approval-stop",
+    outcome: {
+      status: "not-applied",
+      problem: {
+        code: "operation-observation-ended",
+        explanation:
+          "Secant stopped reporting Operation approval-stop before it settled (application-shutdown).",
+        remediation:
+          "Reconnect to Secant and read the current state before retrying the Operation.",
+        possibleEffects: "unknown",
+      },
+    },
+  };
+  assert.deepEqual(await first, expected);
+  assert.deepEqual(await second, expected);
+  assert.deepEqual(await port.settledOperation("approval-stop"), expected);
+  const ledger = port.openProjection({
+    family: "operation",
+    operationId: "approval-stop",
+  });
+  assert.deepEqual(ledger.snapshot.outcome, { status: "pending" });
+  ledger.close();
+  await held.shift()?.();
+  assert.deepEqual(await port.settledOperation("approval-stop"), {
+    family: "operation",
+    operationId: "approval-stop",
+    outcome: { status: "applied" },
+  });
+});
+
+test("m10-audit-operation-settlement-owner: unknown ids and failed effects return not-applied receipts", async (t) => {
+  const catalog = openCatalog(makeTempDir("secant-settlement-failure-"));
+  t.after(() => catalog.close());
+  const failure = new Error("injected write failure");
+  const app = createApplication({
+    catalog: {
+      ...catalog,
+      approveWorkspace() {
+        throw failure;
+      },
+    },
+    launchWorkspacePath: realpathSync.native(
+      makeTempDir("secant-settlement-ws-"),
+    ),
+  });
+  const port = app.projectionPort;
+  const missing = await port.settledOperation("unknown");
+  assert.equal(missing.operationId, "unknown");
+  assert.equal(missing.outcome.status, "not-applied");
+  if (missing.outcome.status === "not-applied")
+    assert.equal(missing.outcome.problem.code, "operation-not-found");
+  const workspace = port.openProjection({ family: "workspace" });
+  const path = workspace.snapshot.path;
+  workspace.close();
+  assert.deepEqual(
+    port.submit({
+      operationId: "failed",
+      operation: "approve-workspace",
+      input: { path },
+    }),
+    { admitted: true, operationId: "failed" },
+  );
+  const failed = await port.settledOperation("failed");
+  assert.equal(failed.outcome.status, "not-applied");
+  if (failed.outcome.status === "not-applied") {
+    assert.equal(failed.outcome.problem.code, "run-execution-fault");
+    assert.equal(failed.outcome.problem.possibleEffects, "unknown");
+  }
+  await app.shutdown();
+  assert.deepEqual(await port.settledOperation("failed"), failed);
+});

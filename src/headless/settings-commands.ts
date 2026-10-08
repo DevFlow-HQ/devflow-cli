@@ -1,6 +1,5 @@
 import { headlessJson } from "./json.js";
 import { randomUUID } from "node:crypto";
-import { settledOperation } from "./operation-settlement.js";
 import type { Command } from "commander";
 import type {
   AppearancePreferences,
@@ -61,10 +60,8 @@ export function registerSettingsCommands(
           });
           const json = options.json ?? false;
           if (!admission.admitted) return fail(io, json, admission.problem);
-          const receipt = await settledOperation(
-            clients.projectionPort,
+          const receipt = await clients.projectionPort.settledOperation(
             admission.operationId,
-            "Run `secant settings show` to read saved Preferences before retrying.",
           );
           if (json) io.out(`${headlessJson(receipt)}\n`);
           if (receipt.outcome.status === "not-applied")

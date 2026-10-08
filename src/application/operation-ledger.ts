@@ -2,12 +2,14 @@ import type { ApplicationObserver } from "./observer.js";
 import {
   operationIdReused,
   operationNotFound,
+  operationObservationEnded,
   runExecutionFault,
 } from "./problems.js";
 import type {
   OpenedProjection,
   OperationOutcome,
   OperationSnapshot,
+  SettledOperationSnapshot,
   Submission,
   SubmissionAdmission,
 } from "./projection-port.js";
@@ -43,6 +45,8 @@ interface Receipt {
   readonly admission: Extract<SubmissionAdmission, { admitted: true }>;
   snapshot: OperationSnapshot;
   readonly observers: Set<UpdateStream<OperationSnapshot>>;
+  readonly waiters: Set<(snapshot: SettledOperationSnapshot) => void>;
+  observationEnded: boolean;
 }
 
 /** Private receipt ownership. Authorization and settlement retain their domain
@@ -98,6 +102,8 @@ export class OperationLedger {
         outcome: { status: "pending" },
       },
       observers: new Set(),
+      waiters: new Set(),
+      observationEnded: false,
     };
     this.receipts.set(identity.operationId, receipt);
     this.deps.observe({
@@ -167,6 +173,55 @@ export class OperationLedger {
     };
   }
 
+  settledOperation(operationId: string): Promise<SettledOperationSnapshot> {
+    const receipt = this.receipts.get(operationId);
+    if (receipt === undefined)
+      return Promise.resolve({
+        family: "operation",
+        operationId,
+        outcome: {
+          status: "not-applied",
+          problem: operationNotFound(operationId),
+        },
+      });
+    const { snapshot } = receipt;
+    if (snapshot.outcome.status !== "pending")
+      return Promise.resolve({ ...snapshot, outcome: snapshot.outcome });
+    if (receipt.observationEnded)
+      return Promise.resolve(this.observationEnded(receipt));
+    return new Promise((resolve) => {
+      receipt.waiters.add(resolve);
+    });
+  }
+
+  endObservation(): void {
+    for (const receipt of this.receipts.values()) {
+      if (receipt.snapshot.outcome.status !== "pending") continue;
+      receipt.observationEnded = true;
+      this.resolveWaiters(receipt, this.observationEnded(receipt));
+    }
+  }
+
+  private observationEnded(receipt: Receipt): SettledOperationSnapshot {
+    const operationId = receipt.identity.operationId;
+    return {
+      family: "operation",
+      operationId,
+      outcome: {
+        status: "not-applied",
+        problem: operationObservationEnded(operationId),
+      },
+    };
+  }
+
+  private resolveWaiters(
+    receipt: Receipt,
+    snapshot: SettledOperationSnapshot,
+  ): void {
+    for (const resolve of receipt.waiters) resolve(snapshot);
+    receipt.waiters.clear();
+  }
+
   private refuse(
     identity: OperationIdentity,
     problem: Extract<SubmissionAdmission, { admitted: false }>["problem"],
@@ -182,9 +237,9 @@ export class OperationLedger {
   }
 
   private record(receipt: Receipt, settlement: OperationSettlement): void {
-    const outcome: OperationOutcome =
+    const outcome: SettledOperationSnapshot["outcome"] =
       settlement.status === "applied" ? { status: "applied" } : settlement;
-    receipt.snapshot = {
+    const snapshot: SettledOperationSnapshot = {
       family: "operation",
       operationId: receipt.identity.operationId,
       outcome,
@@ -197,6 +252,8 @@ export class OperationLedger {
         ? { modelChoiceChange: settlement.modelChoiceChange }
         : {}),
     };
+    receipt.snapshot = snapshot;
+    this.resolveWaiters(receipt, snapshot);
     this.deps.observe({
       kind: "operation-outcome",
       operationId: receipt.identity.operationId,

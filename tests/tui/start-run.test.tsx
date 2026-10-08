@@ -2229,6 +2229,9 @@ function fakePort(config: {
   };
   return {
     openProjection: openProjection as ProjectionPort["openProjection"],
+    settledOperation() {
+      throw new Error("launch resolves at admission");
+    },
     submit(submission: Submission): SubmissionAdmission {
       config.onSubmit?.(submission);
       return config.admission;

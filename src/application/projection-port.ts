@@ -683,6 +683,11 @@ export interface OperationSnapshot {
     };
   };
 }
+/** A receipt returned by settlement, including an observation-ended Problem. */
+export type SettledOperationSnapshot = Omit<OperationSnapshot, "outcome"> & {
+  readonly outcome: Exclude<OperationOutcome, { status: "pending" }>;
+};
+
 export type OperationOutcome =
   | { readonly status: "pending" }
   | { readonly status: "applied" }
@@ -1754,10 +1759,7 @@ export type ProjectionUpdate<
  *  stopped reading past a private retained bound (#306) — the Run and every other
  *  observer continue, and reopening reads current state. */
 export type ObserverEnd =
-  | "subject-gone"
-  | "observer-lagged"
-  | "temporarily-unavailable"
-  | "application-shutdown";
+  "subject-gone" | "observer-lagged" | "application-shutdown";
 
 /** The seven launch-draft fields a finding or refusal routes correction to
  *  (#189). A client moves to the step that owns the named field; it never
@@ -1939,6 +1941,10 @@ export interface ProjectionPort {
   }): OpenedProjection<RunListSnapshot>;
   openProjection(selector: ProjectionSelector): OpenedProjection;
   submit(submission: Submission): SubmissionAdmission;
+  /** Await the ledger receipt without opening a Projection. Shutdown ends pending
+   * waits with operation-observation-ended and unknown effects; it does not settle
+   * the Operation itself. Unknown ids return operation-not-found. */
+  settledOperation(operationId: string): Promise<SettledOperationSnapshot>;
   readResource(
     reference:
       ResourceReference | DiagnosticReference | HarnessDiagnosticReference,

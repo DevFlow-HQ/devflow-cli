@@ -3962,6 +3962,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const projectionPort: ProjectionPort = {
     openProjection,
     submit: dispatch,
+    settledOperation: (operationId) => operations.settledOperation(operationId),
     async searchWorkspacePaths(input) {
       try {
         const read = runGroup?.readRun(input.runId);
@@ -4035,6 +4036,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   let shutdownPromise: Promise<void> | undefined;
   function shutdown(): Promise<void> {
     history.shutdown();
+    operations.endObservation();
     subscriptions.shutdown();
     return (shutdownPromise ??= shutdownRuns().finally(() => {
       shutdownPromise = undefined;

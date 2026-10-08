@@ -79,8 +79,9 @@
 - App-release trust is a recorded Trust grant (operation id `app-release`) that the startup ensure (`shipped-bundles.ts`) writes only on an Entry whose
   origin is `built-in`, re-checked every startup, so launch, resume, and the timeline read it like any grant; `trustState` shows a grant on a built-in as
   `app-release`. Equal bytes a user imported first keep their own origin and trust (#227).
-- `OperationLedger.submit/open` owns receipts and their subscriptions; settlers return applied metadata, never mutate ledger entries (#393).
-  Run authorization, Trust ordering, owners and abort stay in `createApplication`. The shared `SubscriptionLifecycle` ends observation before Run cleanup.
+- `OperationLedger.submit/open/settledOperation` owns receipts, subscriptions, and settlement waiters; settlers return metadata, never mutate ledger entries (#393, #448).
+  Run authorization, Trust ordering, owners and abort stay in `createApplication`. Shutdown ends pending ledger waits and subscriptions before Run cleanup.
+  An observation-ended receipt has unknown effects and never replaces ledger truth; a later settlement remains readable (#448).
 
 ## Tests
 

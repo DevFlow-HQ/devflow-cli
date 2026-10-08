@@ -338,7 +338,6 @@ test("headless-launch-readiness-observer-end: lagged assessment can settle not-r
 
 const terminalEnds: readonly (ObserverEnd | undefined)[] = [
   "subject-gone",
-  "temporarily-unavailable",
   "application-shutdown",
   undefined,
 ];

@@ -26,8 +26,7 @@ import { submitAndSettle } from "./submit-and-settle.js";
 //
 // Each action returns a reactive outcome that starts `pending` and settles once
 // the Operation resolves: resume drives execution and a cancel-as-abort aborts a
-// live Run, both asynchronous now (#98), so the seam follows the operation stream
-// rather than reading an inline outcome. The Run's resulting state (a resumed Run
+// live Run, both asynchronous now (#98), so the seam awaits the Application receipt. The Run's resulting state (a resumed Run
 // advancing, a cancelled Run resting) reaches the Workbench through the `run` read
 // seam's durable updates, exactly as headless re-reads the Run after settlement.
 
