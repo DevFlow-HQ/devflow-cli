@@ -131,6 +131,9 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Entry Turn** — an **Interactive agent step**'s optional first **Turn**: its Bundle-authored prompt, rendered with **Launch inputs** and bundled
   skill paths, sent once on entry so the human need not retype what the launch already carries. It is never re-sent: after an **Interrupt** or a halt the
   human continues the same **Harness Session**.
+- **Entry prompt** — a **Turn**'s input that Secant sent from a **Step**'s Bundle prompt rather than the human typed: an **Entry Turn**'s prompt,
+  and the prompt that starts each **Agent step**'s **Step Attempt**, including any re-send. The conversation attributes it to Secant, never to the
+  human. _Avoid_: user message, for Secant-authored input.
 - **Steer** — a message the human sends while a **Turn** is live, delivered natively at the **Harness**'s next boundary and inside that Turn,
   which lasts until every Steer is delivered. Delivered means the Harness put it in front of the model, not that the model followed it. An
   **Interrupt** drops a Steer not yet delivered and returns its text to the human. _Avoid_: queued message.

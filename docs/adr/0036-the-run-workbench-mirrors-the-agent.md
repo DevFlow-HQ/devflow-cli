@@ -22,7 +22,9 @@ appears once the Run leaves an active state.
 
 - The human's messages sit in a panel with a bar in the agent colour. A **Steer** is the human's message inside its Turn, marked waiting, read by the
   agent, or not delivered.
-- An **Entry Turn**'s Bundle prompt is one muted line saying Secant started the Step with it, since the human did not write it.
+- An **Entry Turn**'s Bundle prompt is one muted line saying Secant started the Step with it, since the human did not write it. Amendment
+  (2026-10-08, [#462](https://github.com/secantdev/secant/issues/462)): this applies to every **Entry prompt**, any Turn input Secant sent from a
+  Step's Bundle prompt, including an Agent step Attempt's prompt. Only input the human typed sits in the human's panel.
 - Assistant text streams as markdown and is never truncated, so an agent's question is always read in full.
 - A supplied reasoning summary is one collapsed Thought row, with its first nonempty line as a shortened label, a spinner and `Thinking` while it
   streams, and a duration only when the Harness reports a trustworthy reasoning duration. Existing Harness summary settings and unset defaults are
@@ -45,6 +47,12 @@ Amendment (2026-10-08, [#461](https://github.com/secantdev/secant/issues/461)): 
 call's file-change row, show the first 10 reported files in the Harness's order with paths wrapping, and the title line counts the rest as
 `N more files`; 10 or fewer files add no count. `ctrl+o` or a click still opens the complete Turn diff or call patch, and updates never expand the
 list. Only the list of names is capped; supplied diffs and patches stay uncut.
+Amendment (2026-10-08, [#462](https://github.com/secantdev/secant/issues/462)): `ctrl+o` acts on one row, not everything collapsed. It toggles the
+bottom-most row with at least one line on screen that hides or opens detail: a Thought with a body, shell output over 10 lines, the Entry prompt, or
+a Turn diff or call patch, which opens the complete inspection. A row with nothing hidden is skipped, and a second press closes the row it opened.
+The view then moves as for a click: a reader at the live edge stays there, and a paused reader's content stays fixed while the row grows. A click
+still toggles any row. Expanding everything was rejected because one press would lay out and, once content loads on demand, read every retained body
+in the window; the bottom-most row is the newest one, which a top-most rule leaves out of reach at the live edge.
 
 **Colour.** Colour comes only from the vendored theme roles, and everforest is the default theme. The agent colour marks the human's messages, the
 prompt bar, the Turn line, and the working indicator. Muted text marks settled work, `warning` marks reasoning rows and Harness Requests, `error`

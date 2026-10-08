@@ -121,6 +121,11 @@ recorded in [headless parity](../headless-parity.md). `run show --json` is uncha
 reads change no headless JSON shape. Keep the existing optional `step`, decided optional metadata, `{ page, export }` envelope, and read-result
 fields. Presentation identities, first-appearance keys, and eligibility cutoffs remain private and never become JSON entry fields. The cursor
 remains an opaque string in its existing field.
+Amendment (2026-10-08, [#462](https://github.com/secantdev/secant/issues/462)): the Entry prompt `kind` marks every Turn input Secant authored
+(origin `managed`), including an Agent step Attempt's prompt, not only an Interactive agent step's Entry Turn. History derives it from the Turn,
+so earlier Runs relabel on screen; stored transcript and export values are not backfilled, so earlier Agent-step prompts stay `message` there. The
+JSON gains no kind or field. Headless text output names the authored kinds, `user · Entry prompt:` and `user · Steer:`, as the transcript reader
+already does.
 
 Rejected: storing only at settle, which erases in-flight work from a lost Turn; storing every chunk, which ADR 0038 excludes; a Secant counter as
 item identity, which breaks when a native item is split or re-sent; inlining history in `RunView`, which re-sends the whole history on every
