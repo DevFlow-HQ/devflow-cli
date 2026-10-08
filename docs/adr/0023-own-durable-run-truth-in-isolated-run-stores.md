@@ -43,7 +43,12 @@ Workspace-only canonical Artifacts, Agent-maintained duplicate copies, automatic
 sacrifice cross-Run byte deduplication and create more small stores, but make deletion, corruption isolation, maintenance, and ownership local. The
 durability promise covers process, OS, and power failure while the local storage survives; disk loss, manual store deletion, and remote backup are not
 part of it. Canonical Run content remains exact even when sensitive, protected by filesystem permissions or future transparent encryption rather than
-truth-altering redaction. This decision resolves [Define durable Run truth, outputs, Artifacts, transcripts, and recovery](https://github.com/DevFlow-HQ/devflow-cli/issues/16).
+truth-altering redaction. **Amended 2026-10-08 ([#459](https://github.com/secantdev/secant/issues/459)):** secrets Secant itself introduces, such as
+an Agent-call token, are replaced in every Harness Turn event before it is recorded, as they already are in a Detailed diagnostic; the user's own
+secrets are never pattern-matched, and all other content stays exact. Secant sets the permissions this relies on: each start makes the home
+(`SECANT_HOME`) owner-only (`0700`), and Secant creates its directories `0700` and its files `0600`, never changing the mode of an existing file. A home
+Secant cannot restrict, such as one on a filesystem without POSIX modes or owned by another account, draws a one-line warning and Secant continues.
+Windows sets no mode and relies on the per-user profile's access control. This decision resolves [Define durable Run truth, outputs, Artifacts, transcripts, and recovery](https://github.com/DevFlow-HQ/devflow-cli/issues/16).
 
 ## Amendment (2026-09-07): home directory
 
