@@ -41,3 +41,6 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
   Previews share that first-appearance order with their settled fact. Execution never stamps it independently.
 - Each `session-history` subscription mints its own opaque row `id` and `position`; retained rows keep them across preview replacement and settlement.
   Reopening creates new identities. They are presentation identities, never native call ids, Store keys, or retained transcript entry ids.
+
+- Migrated legacy input precedes event write order; its authoritative assistant copy follows the events, before the Turn result.
+  Legacy per-Turn message positions never compare directly with Run-wide event indexes.

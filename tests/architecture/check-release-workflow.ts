@@ -183,6 +183,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-confirmation-target-identity",
   "m10-initial-preparation-ownership",
   "m10-previous-release-conversation",
+  "m10-audit-legacy-turn-order",
   "m10-session-history",
   "m10-paused-history-identity",
   "m10-interruption-and-transcript",

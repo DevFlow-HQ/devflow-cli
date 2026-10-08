@@ -1,0 +1,425 @@
+{
+  "family": "run",
+  "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+  "result": {
+    "found": true,
+    "run": {
+      "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+      "bundle": {
+        "id": "dev.secant.conversation-fixture",
+        "version": "1.0.0",
+        "name": "Conversation fixture",
+        "digest": "64a2a7ddde4af66943ea75ab2b522d6fafa1a6604d7000cfc4a2166d52d2f636"
+      },
+      "workspacePath": "/fixture/conversation",
+      "launchedAt": "2026-10-06T00:00:00.000Z",
+      "state": "blocked",
+      "liveness": {
+        "state": "not-live"
+      },
+      "progress": [
+        {
+          "id": "discuss",
+          "kind": "interactive-agent",
+          "status": "blocked"
+        }
+      ],
+      "position": 0,
+      "timeline": [
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "run-created"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "attempt-settled",
+          "detail": "succeeded",
+          "step": "done"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "gate-answered",
+          "detail": "continue"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 0",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 1",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 2",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 3",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 4",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 5",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 6",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 7",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 8",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 9",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "shared",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 10",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "shared",
+          "sessionName": "shared"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-started",
+          "detail": "other",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "other",
+          "sessionName": "shared, iteration 1"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "assistant-content",
+          "detail": "event 11",
+          "step": "discuss",
+          "session": "other",
+          "sessionName": "shared, iteration 1"
+        },
+        {
+          "at": "2026-10-06T00:00:00.000Z",
+          "event": "turn-settled",
+          "detail": "completed",
+          "turnKind": "interactive-agent",
+          "step": "discuss",
+          "session": "other",
+          "sessionName": "shared, iteration 1"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "human-gate-answer",
+          "type": "text",
+          "reference": {
+            "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+            "artifactName": "human-gate-answer",
+            "versionId": "cf68b00af793ee1daa70cbad624a312e1952130a",
+            "type": "text"
+          }
+        }
+      ],
+      "actionOffers": [
+        {
+          "action": "send-interactive-turn",
+          "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+          "stepId": "discuss",
+          "basis": "interactive Turn",
+          "consequence": "send the typed text as one human Turn in the Step's Session; the Run stays blocked for the next Turn."
+        },
+        {
+          "action": "end-interactive-step",
+          "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+          "stepId": "discuss",
+          "consequence": "end the interactive Step succeeded and advance the Run; the following Step reuses the same Session."
+        },
+        {
+          "action": "cancel-run",
+          "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+          "consequence": "end the live Run cancelled, stopping execution and keeping its history and Artifacts."
+        }
+      ],
+      "sessions": [
+        {
+          "session": "shared",
+          "name": "shared",
+          "availability": "detached",
+          "transcriptPage": {
+            "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+            "session": "shared",
+            "type": "transcript-page"
+          },
+          "transcriptExport": {
+            "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+            "session": "shared",
+            "type": "transcript-export"
+          }
+        },
+        {
+          "session": "other",
+          "name": "shared, iteration 1",
+          "availability": "detached",
+          "transcriptPage": {
+            "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+            "session": "other",
+            "type": "transcript-page"
+          },
+          "transcriptExport": {
+            "runId": "2d155326-c7f6-4bdb-a27d-bffc1ca96c39",
+            "session": "other",
+            "type": "transcript-export"
+          }
+        }
+      ],
+      "selectedHarness": "claude-code",
+      "turnPosition": 12
+    }
+  }
+}

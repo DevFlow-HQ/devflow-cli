@@ -211,3 +211,90 @@ for (const failure of [
     }
   });
 }
+
+test("m10-audit-legacy-turn-order: authentic tool/request writes and interleaved Sessions survive migration and an unfinished Turn is reconciled lost", () => {
+  const extended = new URL(
+    "../../fixtures/previous-release-turn-order/",
+    import.meta.url,
+  );
+  const before = z
+    .object({
+      runId: z.string(),
+      transcript: z.array(z.unknown()),
+      turns: z.array(z.unknown()),
+      events: z.array(z.unknown()),
+    })
+    .parse(
+      JSON.parse(readFileSync(new URL("expected.json", extended), "utf8")),
+    );
+  const home = makeTempDir("secant-legacy-migration-");
+  cpSync(extended, home, { recursive: true });
+  const live = openRunGroup(home, workspace, {
+    selfPid: -1,
+    isOwnerAlive: () => true,
+  });
+  try {
+    const owner = live.acquireRun(before.runId, { takeover: true });
+    assert.ok(owner);
+    try {
+      assert.deepEqual(owner.turns(), before.turns);
+      assert.deepEqual(owner.currentTurn(), { turnId: "turn-3" });
+      assert.deepEqual(owner.turnEvents(), before.events);
+      assert.deepEqual(conversation(owner.transcript()), before.transcript);
+    } finally {
+      owner.close();
+    }
+  } finally {
+    live.close();
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    const group = openRunGroup(home, workspace, { isOwnerAlive: () => false });
+    try {
+      const owner = group.acquireRun(before.runId);
+      assert.ok(owner);
+      try {
+        assert.deepEqual(conversation(owner.transcript()), before.transcript);
+        assert.deepEqual(owner.turnEvents(), before.events);
+        assert.deepEqual(owner.turns().slice(0, 3), before.turns.slice(0, 3));
+        assert.deepEqual(
+          owner.turns().map((turn) => turn.session),
+          ["shared", "other", "shared", "other"],
+        );
+        const lost = owner.turns()[3];
+        assert.equal(lost?.turnId, "turn-3");
+        assert.equal(lost?.resultKind, "lost");
+        assert.deepEqual(JSON.parse(lost!.resultDetail!), {
+          kind: "lost",
+          unknown: "completion",
+        });
+        assert.deepEqual(owner.harnessSessions(), [
+          {
+            session: "shared",
+            availability: "detached",
+            availabilityDetail: "fixture-shared",
+          },
+          {
+            session: "other",
+            availability: "detached",
+            availabilityDetail: "fixture-other",
+          },
+        ]);
+        assert.equal(owner.currentTurn(), undefined);
+        assert.ok(
+          owner
+            .transcript()
+            .every(
+              (entry) =>
+                !("kind" in entry) &&
+                !("turn" in entry) &&
+                !("incomplete" in entry),
+            ),
+        );
+      } finally {
+        owner.close();
+      }
+    } finally {
+      group.close();
+    }
+  }
+});

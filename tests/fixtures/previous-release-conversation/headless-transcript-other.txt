@@ -1,0 +1,38 @@
+{
+  "page": {
+    "found": true,
+    "type": "transcript-page",
+    "entries": [
+      {
+        "session": "other",
+        "role": "user",
+        "content": "input 11",
+        "step": "discuss"
+      },
+      {
+        "session": "other",
+        "role": "assistant",
+        "content": "transcript 11",
+        "step": "discuss"
+      }
+    ]
+  },
+  "export": {
+    "found": true,
+    "type": "transcript-export",
+    "entries": [
+      {
+        "session": "other",
+        "role": "user",
+        "content": "input 11",
+        "step": "discuss"
+      },
+      {
+        "session": "other",
+        "role": "assistant",
+        "content": "transcript 11",
+        "step": "discuss"
+      }
+    ]
+  }
+}

@@ -106,6 +106,10 @@ const PROCESS_FREE_TEST_FILES = new Set([
   // Born process-free (#411): copied real SQLite plus injected fake Git through the public Store.
   // Artifact-byte and relocated-home evidence run in copied-binary acceptance.
   "tests/run/store/conversation-migration.test.ts",
+  // Born process-free (#434): copied predecessor SQLite, fake Git and injected Process
+  // through Application/Projection and headless Interfaces. No execution or child spawns.
+  "tests/application/session-history-legacy.test.ts",
+  "tests/headless/legacy-conversation.test.ts",
 ]);
 
 const SUBPROCESS_SOURCE_PATTERNS = [

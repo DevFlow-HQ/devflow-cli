@@ -27,3 +27,11 @@ with `missing`. Rollback cases add an aborting insert trigger on copied `turn_ev
 These are synthetic migration fault injections against the authentic schema.
 They qualify recovery semantics and do not qualify Harness wire fields.
 The older pre-Drizzle fixture remains a separate, unchanged compatibility baseline.
+
+The companion [Turn-order home](../previous-release-turn-order/README.md) extends this baseline with legacy activity and requests, interleaved Sessions,
+and an unfinished Turn. Set `FIXTURE_TURN_ORDER=1` when running `seed.txt` to create it. The original database and Artifact bytes remain unchanged.
+
+`headless-transcript-shared.txt`, `headless-transcript-other.txt`, and `headless-show.txt` are the predecessor's exact JSON stdout, including its final newline.
+They were captured through the predecessor's public Application and headless Interfaces after copying this home. To recapture, copy `headless-seed.txt`
+into the predecessor checkout as `.capture-headless.ts` and run `FIXTURE_SOURCE=<absolute-fixture-folder> timeout -k 10s 60s bun .capture-headless.ts`.
+The capture script uses the predecessor's real Process for any Artifact reads and cleans its temporary copy after closing Application, Store and Catalog.

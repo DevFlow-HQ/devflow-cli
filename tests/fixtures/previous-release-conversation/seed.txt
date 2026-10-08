@@ -14,20 +14,30 @@ if (!built.ok) throw new Error(JSON.stringify(built));
 const catalog = openCatalog(home);
 catalog.installBundle({identity:{id:"dev.secant.conversation-fixture",version:"1.0.0"},digest:built.built.digest,bytes:built.built.bytes,origin:{kind:"local-build",folder},installedAt:new Date("2026-10-06T00:00:00.000Z")});
 catalog.close();
+const extended = process.env.FIXTURE_TURN_ORDER === "1";
 const at = new Date("2026-10-06T00:00:00.000Z");
 const group = openRunGroup(home, "/fixture/conversation", { process: createProcessAdapter() });
 const created = group.createRun({ operationId: "fixture-create", bundleSnapshotDigest: built.built.digest, launch: {}, selectedHarness: "claude-code", at });
 const owner = group.acquireRun(created.runId);
-for (let n = 0; n < 12; n++) {
+for (let n = 0; n < (extended ? 4 : 12); n++) {
   const turnId = `turn-${n}`;
-  const session = n === 11 ? "other" : "shared";
+  const session = (extended ? n % 2 === 1 : n === 11) ? "other" : "shared";
   owner.admitTurn({ turnId, attemptId: `0.${n}:discuss`, session, origin: "human", kind: "interactive-agent", input: n === 0 ? "" : `input ${n}`, recoveryCoordinate: `fixture-${session}`, harness: "claude-code", at });
+  if (extended) {
+    owner.appendTurnEvent({ turnId, kind: "model", payload: JSON.stringify({ model: "fixture-model" }), at });
+    owner.appendTurnEvent({ turnId, kind: "tool-activity", payload: JSON.stringify({ tool: "Read", phase: "started", summary: `file ${n}` }), at });
+    owner.appendTurnEvent({ turnId, kind: "request-raised", payload: JSON.stringify({ requestId: `request-${n}`, tool: "Read", input: `file ${n}`, decisions: ["allow", "deny"] }), at });
+    if (n === 3) continue;
+    owner.appendTurnEvent({ turnId, kind: "request-answered", payload: JSON.stringify({ requestId: `request-${n}`, by: "human", decision: "allow" }), at });
+    owner.appendTurnEvent({ turnId, kind: "tool-activity", payload: JSON.stringify({ tool: "Read", phase: "completed", summary: `file ${n}` }), at });
+  }
   owner.appendTurnEvent({ turnId, kind: "assistant-content", payload: JSON.stringify({ content: `event ${n}` }), at });
   owner.settleTurn({ turnId, session, resultKind: "completed", resultDetail: JSON.stringify({ finalContent: `event ${n}` }), availability: "detached", availabilityDetail: `fixture-${session}`, assistantContent: n === 0 ? "" : `transcript ${n}`, at });
 }
 owner.publishAttempt({ attemptId: "0.0:done", outcome: "succeeded", required: [{ name: "proof", type: "text" }], outputs: [{ name: "proof", type: "text", content: "retained artifact" }], at });
 owner.recordGateAnswer({ operationId: "fixture-answer", gateAttemptId: "0.0:gate", answer: "continue", iterationsAtGrant: 2, artifactName: "human-gate-answer", at });
 owner.recordPendingGate({ attemptId: "0.1:gate", stepId: "gate", shape: "approve-reject", message: "Keep this gate", at });
+if (extended) owner.writeState("running");
 const expected = { runId: created.runId, transcript: owner.transcript(), turns: owner.turns(), events: owner.turnEvents(), attempts: owner.attemptLog(), gates: owner.gateAnswers(), pendingGate: owner.pendingGate(), sessions: owner.harnessSessions() };
 owner.close();
 group.close();

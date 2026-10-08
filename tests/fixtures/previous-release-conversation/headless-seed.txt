@@ -1,0 +1,28 @@
+import { cpSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { openRunGroup } from "./src/run/store/store.ts";
+import { openCatalog } from "./src/catalog/catalog.ts";
+import { createProcessAdapter } from "./src/process/process.ts";
+import { createApplication } from "./src/application/application.ts";
+import { runHeadless } from "./src/headless/headless.ts";
+const fixture = process.env.FIXTURE_SOURCE!;
+const home = mkdtempSync(join(tmpdir(), "secant-predecessor-headless-"));
+cpSync(fixture, home, { recursive: true });
+const runId = JSON.parse(readFileSync(join(home, "expected.json"), "utf8")).runId;
+const catalog = openCatalog(home);
+const processAdapter = createProcessAdapter();
+const runGroup = openRunGroup(home, "/fixture/conversation", { process: processAdapter });
+const app = createApplication({catalog, runGroup, process: processAdapter, launchWorkspacePath: home, hostPlatform: "linux"});
+try {
+  for (const [name, args] of [
+    ["headless-transcript-shared.txt", ["run", "read", `${runId}/shared`, "--transcript", "--json"]],
+    ["headless-transcript-other.txt", ["run", "read", `${runId}/other`, "--transcript", "--json"]],
+    ["headless-show.txt", ["run", "show", runId, "--json"]],
+  ] as const) {
+    let out = "", err = "";
+    const status = await runHeadless(app, args, {out: text => out += text, err: text => err += text, cwd: () => home});
+    if (status !== 0) throw new Error(`${status}: ${err} ${out}`);
+    writeFileSync(join(fixture, name), out);
+  }
+} finally { await app.shutdown(); runGroup.close(); catalog.close(); rmSync(home, {recursive: true, force: true}); }

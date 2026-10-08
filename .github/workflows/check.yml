@@ -154,6 +154,13 @@ jobs:
           tests/composition/wiring.test.ts
       - name: m10-previous-release-conversation
         run: bun run test -- -t '^m10-previous-release-conversation(:|$)' tests/run/store/conversation-migration.test.ts
+      - name: m10-audit-legacy-turn-order
+        run: >-
+          bun run test --
+          -t '^m10-audit-legacy-turn-order(:|$)'
+          tests/run/store/conversation-migration.test.ts
+          tests/application/session-history-legacy.test.ts
+          tests/headless/legacy-conversation.test.ts
       - name: m10-session-history
         run: >-
           bun run test --

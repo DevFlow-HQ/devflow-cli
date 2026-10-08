@@ -1,0 +1,39 @@
+{
+  "sourceCommit": "48f2f26638f9b1a936c60ea6bf12976d5bbfa006",
+  "workspace": "/fixture/conversation",
+  "reproduction": "cp tests/fixtures/previous-release-conversation/seed.txt .fixture-seed.ts; FIXTURE_HOME=<empty-home> FIXTURE_TURN_ORDER=1 bun .fixture-seed.ts",
+  "redactions": [],
+  "databases": [
+    {
+      "path": "catalog.db",
+      "sha256": "0cbc8848d0d7115c398bab0eacb83023abac879493f216006dc6c6b4226ed152",
+      "journal": ["chubby_vanisher", "high_norrin_radd"]
+    },
+    {
+      "path": "runs/conversation--681c0672f3ad5727/coordination.db",
+      "sha256": "57582aec181995fcebee2b104753aa021ce1acfa5f77d71cb7fb104cbaee3075",
+      "journal": ["yellow_forge", "white_alex_power"]
+    },
+    {
+      "path": "runs/conversation--681c0672f3ad5727/1dc1389c-1661-4f85-861b-3398daf70834/run.db",
+      "sha256": "800f99f4fa5a23e5bc7180d66a0169f7bd4402009d261e69006ede8e6effe153",
+      "journal": [
+        "hesitant_silverclaw",
+        "mighty_vivisector",
+        "cooing_squadron_supreme",
+        "ambiguous_the_hand",
+        "easy_iceman",
+        "curvy_piledriver",
+        "sudden_black_tom",
+        "ancient_rocket_racer",
+        "superb_lily_hollister",
+        "gate_suggestions",
+        "stage_ended",
+        "turn_model_choice",
+        "run_model_choice",
+        "agent_ended"
+      ]
+    }
+  ],
+  "mutations": "No database or canonical Artifact mutation. Unused Git sample hooks removed. Four alternating Session Turns, legacy tool/request writes, divergent event/assistant messages, and an unsettled Turn were created through the predecessor public Store Interface. All facts share a timestamp to distinguish write order from time order."
+}

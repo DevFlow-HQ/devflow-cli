@@ -1,0 +1,269 @@
+{
+  "runId": "1dc1389c-1661-4f85-861b-3398daf70834",
+  "transcript": [
+    {
+      "session": "shared",
+      "turnId": "turn-0",
+      "role": "user",
+      "content": "",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-0",
+      "role": "assistant",
+      "content": "",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "other",
+      "turnId": "turn-1",
+      "role": "user",
+      "content": "input 1",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "other",
+      "turnId": "turn-1",
+      "role": "assistant",
+      "content": "transcript 1",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-2",
+      "role": "user",
+      "content": "input 2",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "shared",
+      "turnId": "turn-2",
+      "role": "assistant",
+      "content": "transcript 2",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "session": "other",
+      "turnId": "turn-3",
+      "role": "user",
+      "content": "input 3",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "turns": [
+    {
+      "turnId": "turn-0",
+      "attemptId": "0.0:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 0,
+      "input": "",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 0\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "attemptId": "0.1:discuss",
+      "session": "other",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 1,
+      "input": "input 1",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 1\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "attemptId": "0.2:discuss",
+      "session": "shared",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 2,
+      "input": "input 2",
+      "admittedAt": "2026-10-06T00:00:00.000Z",
+      "resultKind": "completed",
+      "resultDetail": "{\"finalContent\":\"event 2\"}",
+      "settledAt": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-3",
+      "attemptId": "0.3:discuss",
+      "session": "other",
+      "origin": "human",
+      "kind": "interactive-agent",
+      "sequence": 3,
+      "input": "input 3",
+      "admittedAt": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "events": [
+    {
+      "turnId": "turn-0",
+      "kind": "model",
+      "payload": "{\"model\":\"fixture-model\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-0",
+      "kind": "tool-activity",
+      "payload": "{\"tool\":\"Read\",\"phase\":\"started\",\"summary\":\"file 0\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-0",
+      "kind": "request-raised",
+      "payload": "{\"requestId\":\"request-0\",\"tool\":\"Read\",\"input\":\"file 0\",\"decisions\":[\"allow\",\"deny\"]}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-0",
+      "kind": "request-answered",
+      "payload": "{\"requestId\":\"request-0\",\"by\":\"human\",\"decision\":\"allow\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-0",
+      "kind": "tool-activity",
+      "payload": "{\"tool\":\"Read\",\"phase\":\"completed\",\"summary\":\"file 0\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-0",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 0\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "kind": "model",
+      "payload": "{\"model\":\"fixture-model\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "kind": "tool-activity",
+      "payload": "{\"tool\":\"Read\",\"phase\":\"started\",\"summary\":\"file 1\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "kind": "request-raised",
+      "payload": "{\"requestId\":\"request-1\",\"tool\":\"Read\",\"input\":\"file 1\",\"decisions\":[\"allow\",\"deny\"]}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "kind": "request-answered",
+      "payload": "{\"requestId\":\"request-1\",\"by\":\"human\",\"decision\":\"allow\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "kind": "tool-activity",
+      "payload": "{\"tool\":\"Read\",\"phase\":\"completed\",\"summary\":\"file 1\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-1",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 1\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "kind": "model",
+      "payload": "{\"model\":\"fixture-model\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "kind": "tool-activity",
+      "payload": "{\"tool\":\"Read\",\"phase\":\"started\",\"summary\":\"file 2\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "kind": "request-raised",
+      "payload": "{\"requestId\":\"request-2\",\"tool\":\"Read\",\"input\":\"file 2\",\"decisions\":[\"allow\",\"deny\"]}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "kind": "request-answered",
+      "payload": "{\"requestId\":\"request-2\",\"by\":\"human\",\"decision\":\"allow\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "kind": "tool-activity",
+      "payload": "{\"tool\":\"Read\",\"phase\":\"completed\",\"summary\":\"file 2\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-2",
+      "kind": "assistant-content",
+      "payload": "{\"content\":\"event 2\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-3",
+      "kind": "model",
+      "payload": "{\"model\":\"fixture-model\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-3",
+      "kind": "tool-activity",
+      "payload": "{\"tool\":\"Read\",\"phase\":\"started\",\"summary\":\"file 3\"}",
+      "at": "2026-10-06T00:00:00.000Z"
+    },
+    {
+      "turnId": "turn-3",
+      "kind": "request-raised",
+      "payload": "{\"requestId\":\"request-3\",\"tool\":\"Read\",\"input\":\"file 3\",\"decisions\":[\"allow\",\"deny\"]}",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "attempts": [
+    {
+      "attemptId": "0.0:done",
+      "outcome": "succeeded",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "gates": [
+    {
+      "answerId": "2e801e73-0492-4c73-aa8e-b2e98194ec32",
+      "operationId": "fixture-answer",
+      "gateAttemptId": "0.0:gate",
+      "answer": "continue",
+      "iterationsAtGrant": 2,
+      "versionId": "215c07055eef5a53545ab57c1fc4b3db78066ea1",
+      "at": "2026-10-06T00:00:00.000Z"
+    }
+  ],
+  "pendingGate": {
+    "attemptId": "0.1:gate",
+    "stepId": "gate",
+    "shape": "approve-reject",
+    "message": "Keep this gate",
+    "raisedAt": "2026-10-06T00:00:00.000Z"
+  },
+  "sessions": [
+    {
+      "session": "shared",
+      "availability": "detached",
+      "availabilityDetail": "fixture-shared"
+    },
+    {
+      "session": "other",
+      "availability": "open"
+    }
+  ]
+}

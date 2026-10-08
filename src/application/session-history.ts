@@ -229,7 +229,9 @@ export function createSessionHistory(deps: {
           facts.set(key, {
             key,
             turn,
-            order: index,
+            // Legacy messages have per-Turn positions; events have Run-wide indexes.
+            // Keep authoritative input before activity and replies after it.
+            order: entry.role === "user" ? -1 : records.events.length + index,
             source: "stored",
             value: {
               kind: "message",
