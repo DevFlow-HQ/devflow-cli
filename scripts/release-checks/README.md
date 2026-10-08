@@ -10,7 +10,10 @@ to those candidate bytes.
 Run this check on Windows when the Bun pin, OpenTUI pin, or
 `src/tui/renderer/` has changed. It must use the final compiled single-file
 executable for the release (ADR 0030); the pseudo-terminal CI job does not
-replace this real-terminal check.
+replace this real-terminal check. Use a Windows Terminal version with kitty
+keyboard protocol support and an installed, authenticated Harness. The Workbench
+check launches the built-in Matt Front Spec Bundle in a disposable Workspace;
+this invokes the real Harness.
 
 1. Open a Windows Terminal tab at the repository root.
 2. Install the exact locked dependencies with `bun install --frozen-lockfile`.
@@ -19,16 +22,24 @@ replace this real-terminal check.
 4. Run `bun run check:windows-terminal` and follow every prompt. The script
    verifies the binary version, computes its SHA-256 digest, prepares an
    approved temporary Workspace, and guides the Windows Terminal and
-   observed-only legacy-conhost runs.
+   observed-only legacy-conhost runs. Quit from Home with Ctrl+P, type `Quit`,
+   then press Enter. The second exit check uses Ctrl+C.
+   The Workbench prompts exercise Alt+Up/Alt+Down with an unsent draft, mouse-wheel
+   scrolling, Shift+Enter newline without sending a Turn, and OSC 52 transcript
+   export. Verify clipboard content by pasting into another application.
 5. Only a report whose Windows Terminal outcome is `pass` satisfies the release
-   check. Paste the complete Markdown report printed by the script into the
+   check. Both exit paths and all four Workbench actions must pass; answer `n`
+   for a failed or untested action, including missing kitty protocol support.
+   Paste the complete Markdown report printed by the script into the
    release checklist issue for the milestone currently in progress (the open
    milestone gate issue), not a pinned issue number. The conhost rows record what
    happened — whether the notice appeared, whether it could be read before a
    keypress let the TUI take over, and whether the window survived quit — but do
    not decide the outcome.
 
-The generated report records `fresh real-terminal check`. When the Bun pin,
+The generated report records `fresh real-terminal check`.
+[Windows Terminal Preview 1.25 added kitty keyboard protocol support](https://devblogs.microsoft.com/commandline/windows-terminal-preview-1-25-release/),
+which lets applications distinguish Shift+Enter from Enter. When the Bun pin,
 OpenTUI pin, and renderer are unchanged, the release checklist may instead name
 the prior passing report and the exact comparison that proves none of those
 triggers changed. Record both names as the report's `carry-forward` evidence

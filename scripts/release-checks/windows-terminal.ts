@@ -11,7 +11,10 @@ import { release, tmpdir, version as osVersion } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { formatWindowsTerminalReport } from "./windows-terminal-report.js";
+import {
+  formatWindowsTerminalReport,
+  windowsTerminalOutcome,
+} from "./windows-terminal-report.js";
 import { fail, sha256File } from "../release-helpers.js";
 
 const HELP = `Windows Terminal human real-terminal check
@@ -20,8 +23,10 @@ Usage:
   bun run check:windows-terminal [path-to-secant-windows-x64.exe]
 
 Run this from a Windows Terminal tab after \`bun run check\`. The script checks
-the packed binary, guides both supported exit paths and the observed-only
-legacy-conhost run, then prints the digest-bound release evidence report.`;
+the packed binary, guides both supported exit paths, Run Workbench terminal
+behaviours and the observed-only legacy-conhost run, then prints the digest-bound
+release evidence report. Use a Windows Terminal version with kitty keyboard
+protocol support and an installed, authenticated Harness for the Workbench run.`;
 
 interface PackageManifest {
   readonly name: string;
@@ -113,10 +118,14 @@ function approveWorkspace(context: CheckContext): void {
 async function runExitPath(
   prompt: ReturnType<typeof createInterface>,
   context: CheckContext,
-  key: "q" | "Ctrl+C",
+  key: "Quit command" | "Ctrl+C",
 ): Promise<boolean> {
   console.log(
-    `\nSecant will start in this Windows Terminal tab. Wait for Home, press ${key}, and do not close the tab.`,
+    `\nSecant will start in this Windows Terminal tab. Wait for Home, ${
+      key === "Quit command"
+        ? 'press Ctrl+P, type "Quit", and press Enter'
+        : "press Ctrl+C"
+    }, and do not close the tab.`,
   );
   await prompt.question("Press Enter to launch Secant. ");
   const result = spawnSync(context.binary, [], {
@@ -135,6 +144,62 @@ async function runExitPath(
     );
   }
   return result.status === 0 && responsive;
+}
+
+async function runWorkbenchPaths(
+  prompt: ReturnType<typeof createInterface>,
+  context: CheckContext,
+) {
+  console.log(`
+Secant will start again for the Run Workbench terminal checks.
+1. At Home, choose Start a Run, select Matt Front Spec and your authenticated
+   Harness. Enter a disposable idea and launch. This uses the real Harness.
+2. Continue the interactive conversation until its history exceeds the viewport.
+   Ask for a numbered list of 100 short lines if more scrollable text is needed.
+   Wait until the compose accepts input before proceeding.
+3. Type an unsent draft. Press Alt+Up and Alt+Down. Check that history moves
+   in both directions and that the draft stays intact and compose keeps focus.
+4. Put the pointer over history. Scroll the mouse wheel up and down and check
+   that history moves in both directions. Alt+End returns to the latest content.
+5. In compose, type "terminal check first line", press Shift+Enter, then type
+   "terminal check second line". Check that both lines remain in compose and
+   no Turn was sent. This requires kitty keyboard protocol support; an untested
+   action must be answered n, not recorded as a pass.
+6. Open Ctrl+G details, choose Session transcript and press Enter, then press e to export via OSC 52.
+   Paste into another application, such as Notepad, and compare the copied text
+   with the transcript. A success notice alone does not prove clipboard copy.
+7. Return to Secant, close the transcript and details with Escape, then use
+   Ctrl+P, Quit, Enter. Confirm Halt and Quit if a live Run needs to be stopped.
+   Return here to record each result. Answer n for any action not exercised.`);
+  await prompt.question("Press Enter to launch the Workbench check. ");
+  const result = spawnSync(context.binary, [], {
+    cwd: context.workspace,
+    env: context.env,
+    stdio: "inherit",
+  });
+  checkSpawn(result, "start Secant for the Run Workbench terminal checks");
+  const altArrowScrollPassed = await askYesNo(
+    prompt,
+    "Did Alt+Up and Alt+Down scroll history while preserving compose focus and the draft?",
+  );
+  const mouseWheelScrollPassed = await askYesNo(
+    prompt,
+    "Did the mouse wheel scroll history up and down?",
+  );
+  const shiftEnterNewlinePassed = await askYesNo(
+    prompt,
+    "Under the kitty keyboard protocol, did Shift+Enter insert a compose newline without sending a Turn?",
+  );
+  const clipboardCopyPassed = await askYesNo(
+    prompt,
+    "Did the OSC 52 transcript export paste matching text into another application?",
+  );
+  return {
+    altArrowScrollPassed,
+    mouseWheelScrollPassed,
+    shiftEnterNewlinePassed,
+    clipboardCopyPassed,
+  };
 }
 
 function quotePowerShell(value: string): string {
@@ -209,8 +274,15 @@ async function main(): Promise<void> {
     console.log(`SHA-256 ${digest}`);
     const terminalVersion = await askTerminalVersion(prompt);
 
-    const quitBindingPassed = await runExitPath(prompt, context, "q");
+    const quitBindingPassed = await runExitPath(
+      prompt,
+      context,
+      "Quit command",
+    );
     const ctrlCPassed = await runExitPath(prompt, context, "Ctrl+C");
+
+    const workbench = await runWorkbenchPaths(prompt, context);
+    const observations = { quitBindingPassed, ctrlCPassed, ...workbench };
 
     console.log(`
 Observed-only legacy conhost row (this does not decide the outcome):
@@ -221,8 +293,8 @@ Observed-only legacy conhost row (this does not decide the outcome):
    & ${quotePowerShell(binary)}
 3. Note whether the startup notice appeared and stayed on screen until you
    pressed a key, then press a key to continue.
-4. Wait for Home, press q, then test whether the same window still accepts
-   input. Close it when finished.
+4. Wait for Home, press Ctrl+P, type "Quit", and press Enter. Then test whether
+   the same window still accepts input. Close it when finished.
 5. Return to this Windows Terminal tab and answer the three questions.`);
     await prompt.question(
       "Press Enter after the conhost observation is complete. ",
@@ -237,7 +309,7 @@ Observed-only legacy conhost row (this does not decide the outcome):
     );
     const conhostWindowSurvived = await askYesNo(
       prompt,
-      "Did the conhost window survive and remain responsive after q?",
+      "Did the conhost window survive and remain responsive after the Quit command?",
     );
 
     const report = formatWindowsTerminalReport({
@@ -255,12 +327,11 @@ Observed-only legacy conhost row (this does not decide the outcome):
         bunVersion: bunPin,
         secantVersion: manifest.version,
         binarySha256: digest,
-        outcome: quitBindingPassed && ctrlCPassed ? "pass" : "fail",
+        outcome: windowsTerminalOutcome(observations),
         timestamp: new Date().toISOString(),
       },
       evidence: { kind: "fresh" },
-      quitBindingPassed,
-      ctrlCPassed,
+      ...observations,
       conhostNoticeAppeared,
       conhostNoticeReadable,
       conhostWindowSurvived,

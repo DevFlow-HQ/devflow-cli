@@ -140,6 +140,10 @@ test("[release-evidence-contract] Windows Terminal names fresh and carry-forward
   const observations = {
     quitBindingPassed: true,
     ctrlCPassed: true,
+    altArrowScrollPassed: true,
+    mouseWheelScrollPassed: true,
+    shiftEnterNewlinePassed: true,
+    clipboardCopyPassed: true,
     conhostNoticeAppeared: true,
     conhostNoticeReadable: false,
     conhostWindowSurvived: false,

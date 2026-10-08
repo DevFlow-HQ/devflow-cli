@@ -192,6 +192,11 @@ jobs:
           tests/tui/run-workbench-inspection.test.tsx
           tests/tui/run-workbench-interaction.test.tsx
           tests/tui/run-workbench-prompt.test.tsx
+      - name: m10-audit-windows-release-check
+        run: >-
+          bun run test --
+          -t '^m10-audit-windows-release-check(:|$)'
+          tests/release-checks/windows-terminal.test.ts
       - name: m12-focused-check-scenarios
         run: >-
           bun run test --
