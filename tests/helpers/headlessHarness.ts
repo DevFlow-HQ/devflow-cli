@@ -1,6 +1,9 @@
 import { realpathSync } from "node:fs";
 import { type TestContext } from "node:test";
-import { type RunExecution } from "../../src/application/application.js";
+import {
+  type ApplicationDependencies,
+  type RunExecution,
+} from "../../src/application/application.js";
 import type { ApplicationHarnessRegistration } from "../../src/application/application.js";
 import { type HeadlessIO, runHeadless } from "../../src/headless/headless.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
@@ -38,6 +41,7 @@ export interface HeadlessHarnessOptions {
   readonly commandTimeoutMs?: number;
   /** Override the Process double (default: the shared bundle-command fake). */
   readonly process?: ProcessAdapter;
+  readonly workspacePathHelper?: ApplicationDependencies["workspacePathHelper"];
   /** Literal normalized Harness registrations for catalog/selection tests. */
   readonly harnessRegistry?: readonly ApplicationHarnessRegistration[];
   /** Application clock for deterministic Projection evidence. */
@@ -95,6 +99,7 @@ export function openHeadlessHarness(
   const clients = createApplication({
     catalog,
     process: executionProcess,
+    workspacePathHelper: opts.workspacePathHelper,
     launchWorkspacePath: workspace,
     ...(opts.hostPlatform !== undefined
       ? { hostPlatform: opts.hostPlatform }

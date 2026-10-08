@@ -32,7 +32,8 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
   no Step, so progress attributes it to none: it is neither a success nor evidence a node was reached.
 - `bindAnswer` clears context/usage for every new Turn; reports replace optional fields, including empty reports (#418). Accounting stays live-only.
 - Workspace search resolves the Run through `readRun` without acquiring an owner; terminal or unavailable Runs never start listing (#482).
-  It bounds traversal and reads only ignore metadata. Never read candidate content or suggest escaping symlinks/.git internals (#423).
+  One token signal owns a capped embedded-ripgrep listing; edits re-rank it, abort disposes it, and shutdown drains active helpers (#484).
+  Never read candidate content or suggest symlinks/.git internals (#423).
 
 ## History order and identity
 

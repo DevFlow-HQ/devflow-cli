@@ -1126,19 +1126,54 @@ export function RunWorkbench(props: {
       );
     if (mentions.open()) {
       const candidates = mentions.candidates();
-      const start = Math.max(0, mentions.selection() - budget + 1);
+      const result = mentions.result();
+      const notice = result?.status === "available" ? result.notice : undefined;
+      const compactNotice = notice !== undefined && budget < 2;
+      const capAction =
+        prompt.send.kind === "steer"
+          ? prompt.send.offer.available
+            ? "↵ steer"
+            : "working"
+          : prompt.send.kind === "none"
+            ? ""
+            : "↵ send";
+      const listBudget = Math.max(
+        0,
+        budget - (notice === undefined || compactNotice ? 0 : 1),
+      );
+      const start = Math.max(0, mentions.selection() - listBudget + 1);
       const lines = candidates
-        .slice(start, start + budget)
+        .slice(start, start + listBudget)
         .map((candidate) =>
           clip(
             `${candidate === mentions.active() ? "› " : "  "}@${candidate.path}${candidate.kind === "folder" ? "/" : ""} · ${candidate.kind}`,
             innerW(),
           ),
         );
-      const result = mentions.result();
+      if (notice !== undefined && !compactNotice) {
+        if (candidates.length === 0)
+          lines.push(clip("No path suggestions · enter sends text", innerW()));
+        lines.push(clip(notice, innerW()));
+      }
       return {
         ...model,
-        hint: budget === 0 ? promptHint(prompt) : model.hint,
+        hint:
+          budget === 0
+            ? promptHint(prompt)
+            : compactNotice
+              ? {
+                  kind: "lines",
+                  tone: "muted",
+                  lines: [
+                    clip(
+                      candidates.length === 0
+                        ? `100k cap ${capAction} · esc`
+                        : "100k cap ↑↓ ↵/tab esc",
+                      innerW(),
+                    ),
+                  ],
+                }
+              : model.hint,
         commands:
           budget === 0
             ? []
@@ -1766,6 +1801,7 @@ export function RunWorkbench(props: {
       promptFieldFocused() &&
       !slashOpen() &&
       commands.knownSlash(draft()) === undefined,
+    selectionVisible: () => completionVisible(),
     search: (input) => view.searchWorkspacePaths(input),
   });
   const invokeSlash = (id?: string) => {

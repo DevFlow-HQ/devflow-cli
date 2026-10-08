@@ -1780,3 +1780,44 @@ test("m10-audit-file-input-resolution: Command-only wiring supplies input types 
   assert.equal(commands[0]?.env?.DOCS, expectedSet);
   assert.equal(commands[0]?.cwd, join(workspace, "packages", "web"));
 });
+
+for (const failure of ["missing", "json", "schema"] as const) {
+  test(`m10-audit-token-ripgrep-listing: ${failure} helper manifest remains a search failure with its original cause`, async (t) => {
+    const assets = makeTempDir("secant-rg-assets-");
+    if (failure !== "missing")
+      writeFileSync(
+        join(assets, "manifest.json"),
+        failure === "json"
+          ? "{"
+          : JSON.stringify({ version: null, targets: {} }),
+      );
+    const wired = wireApplication({
+      secantHome: makeTempDir("secant-rg-state-"),
+      launchCwd: makeTempDir("secant-rg-ws-"),
+      process: storedProcess({ script: {} }),
+      ripgrepAssetRoot: assets,
+    });
+    t.after(() => wired.close());
+    const run = wired.runGroup.createRun({
+      operationId: "manifest",
+      bundleSnapshotDigest: "sha256:paths",
+      launch: {},
+      at: new Date(),
+    });
+    const result = await wired.projectionPort.searchWorkspacePaths({
+      runId: run.runId,
+      query: "",
+    });
+    assert.equal(result.status, "unavailable");
+    if (result.status === "unavailable") {
+      assert.ok(result.cause instanceof Error);
+      if (failure === "missing")
+        assert.equal("code" in result.cause && result.cause.code, "ENOENT");
+      else
+        assert.equal(
+          result.cause.name,
+          failure === "json" ? "SyntaxError" : "ZodError",
+        );
+    }
+  });
+}

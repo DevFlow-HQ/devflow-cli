@@ -83,6 +83,8 @@
   Run authorization, Trust ordering, owners and abort stay in `createApplication`. Shutdown ends pending ledger waits and subscriptions before Run cleanup.
   An observation-ended receipt has unknown effects and never replaces ledger truth; a later settlement remains readable (#448).
 
+- ripgrep 15.1.0's `--no-require-git` disables linked-worktree `commondir` lookup. Use it only outside Git; native Git rules keep their precedence (#484).
+
 ## Tests
 
 - Read a held Run through its Projection. `runGroup.acquireRun` bumps the fencing epoch and refuses that Run's next Turn as fenced (#353).

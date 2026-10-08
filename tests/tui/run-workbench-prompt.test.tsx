@@ -2679,7 +2679,9 @@ for (const change of [
     await wb.t.renderOnce();
     if (["query", "token", "Run"].includes(change))
       await until(() => pending.length === 2);
-    assert.equal(pending[0]?.input.signal?.aborted, true);
+    assert.equal(pending[0]?.input.signal?.aborted, change !== "query");
+    if (change === "query")
+      assert.equal(pending[1]?.input.signal, pending[0]?.input.signal);
     pending[0]?.resolve({
       status: "available",
       candidates: [{ path: "obsolete.ts", kind: "file" }],
@@ -2712,7 +2714,7 @@ for (const [width, height] of [
   [121, 24],
   [160, 40],
 ]) {
-  test(`m10-audit-run-keyed-workspace-paths: bounded list and selected path stay visible through dual resize at ${width}x${height}`, async () => {
+  test(`m10-audit-token-ripgrep-listing: cap notice and selected path stay visible through dual resize at ${width}x${height}`, async () => {
     const wb = await mountWorkbench(
       interactiveRunOf({ actionOffers: [SEND_OFFER] }),
       width,
@@ -2724,10 +2726,12 @@ for (const [width, height] of [
         path: `path-${i}.ts`,
         kind: "file",
       })),
+      notice: "Large Workspace: only the first 100,000 files are searchable",
     });
 
     await type(wb.t, "@path");
     await mentionFrame(wb, /› @path-0.ts/);
+    assert.match(wb.t.captureCharFrame(), /Large Workspace|100k cap/);
     for (let i = 0; i < 9; i++) await press(wb.t, wb.renderer, "down");
     assert.match(wb.t.captureCharFrame(), /› @path-9.ts/);
     noOverflow(wb.t.captureCharFrame(), width);
@@ -2764,7 +2768,7 @@ test("m10-workspace-mentions: a hash inside a quoted file path is not its textua
 });
 
 for (const appearance of ["dark", "light"] as const) {
-  test(`m10-audit-run-keyed-workspace-paths: ${appearance} cues preserve paused history, large paths and focus`, async () => {
+  test(`m10-audit-token-ripgrep-listing: ${appearance} cap cues preserve paused history, large paths and focus`, async () => {
     const preferences = {
       ...inertPreferencesView(),
       snapshot: () => ({
@@ -2792,6 +2796,7 @@ for (const appearance of ["dark", "light"] as const) {
           { path: "folder", kind: "folder" },
           { path: longPath, kind: "file" },
         ],
+        notice: "Large Workspace: only the first 100,000 files are searchable",
       };
     };
     await type(wb.t, "@folder");
@@ -2923,4 +2928,153 @@ test("m10-audit-steer-stored-when-sent: opening on a waiting Steer still restore
       text: "pending guidance\nunsent draft",
     },
   ]);
+});
+
+test("m10-audit-token-ripgrep-listing: query edits share a token signal and Escape ends it", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+  );
+  const queries: WorkspacePathQuery[] = [];
+  wb.control.view.searchWorkspacePaths = async (input) => {
+    queries.push(input);
+    return {
+      status: "available",
+      candidates: [{ path: "file.ts", kind: "file" }],
+    };
+  };
+  await type(wb.t, "@f");
+  await mentionFrame(wb, /› @file.ts/);
+  await type(wb.t, "i");
+  await until(() => queries.length === 2);
+  assert.equal(queries[0]?.signal, queries[1]?.signal);
+  assert.equal(queries[0]?.signal?.aborted, false);
+  await press(wb.t, wb.renderer, "escape");
+  assert.equal(queries[0]?.signal?.aborted, true);
+  await type(wb.t, " @f");
+  await until(() => queries.length === 3);
+  assert.notEqual(queries[2]?.signal, queries[0]?.signal);
+});
+
+test("m10-audit-token-ripgrep-listing: a capped list with no matches keeps the ordinary Enter cue and Send", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+  );
+  wb.control.view.searchWorkspacePaths = async () => ({
+    status: "available",
+    candidates: [],
+    notice: "Large Workspace: only the first 100,000 files are searchable",
+  });
+  await type(wb.t, "@missing");
+  await mentionFrame(wb, /No path suggestions/);
+  assert.match(wb.t.captureCharFrame(), /Large Workspace|100k cap/);
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, "@missing");
+});
+
+for (const height of [9, 10, 11])
+  for (const found of [true, false]) {
+    test(`m10-audit-token-ripgrep-listing: capped paths preserve draft, history and keys at 24x${height}, found=${found}`, async () => {
+      const wb = await mountWorkbench(
+        interactiveRunOf({ actionOffers: [SEND_OFFER], timeline: events(2) }),
+        24,
+        height,
+      );
+      wb.control.view.searchWorkspacePaths = async () => ({
+        status: "available",
+        candidates: found ? [{ path: "path.ts", kind: "file" }] : [],
+        notice: "Large Workspace: only the first 100,000 files are searchable",
+      });
+      await type(wb.t, "@path");
+      if (height >= 10) await mentionFrame(wb, /Large Workspace|100k cap/);
+      else await mentionFrame(wb, /enter send Turn|esc back/);
+      const frame = wb.t.captureCharFrame();
+      assert.match(frame, /> @path/);
+      assert.match(frame, /e1/);
+      assert.match(frame, height === 9 ? /enter send Turn/ : /esc|sends text/);
+      if (height >= 10)
+        assert.match(frame, found ? /› @path.ts/ : /No path suggestions/);
+      noOverflow(frame, 24);
+      if (found && height >= 10) await press(wb.t, wb.renderer, "tab");
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(
+        wb.control.sends[0]?.text,
+        found && height >= 10 ? "@path.ts" : "@path",
+      );
+    });
+  }
+
+for (const available of [true, false]) {
+  test(`m10-audit-token-ripgrep-listing: hidden capped suggestions describe the current working Enter action, steer=${available}`, async () => {
+    const wb = await mountWorkbench(
+      steerableInteractiveRunOf({
+        actionOffers: [
+          INTERRUPT_OFFER,
+          available ? AVAILABLE_STEER_OFFER : STEER_OFFER,
+          CANCEL_OFFER,
+        ],
+      }),
+      48,
+      9,
+    );
+    let replied = false;
+    wb.control.view.searchWorkspacePaths = async () => {
+      replied = true;
+      return {
+        status: "available",
+        candidates: [{ path: "file.ts", kind: "file" }],
+        notice: "Large Workspace: only the first 100,000 files are searchable",
+      };
+    };
+    await type(wb.t, "@file");
+    await until(() => replied);
+    await mentionFrame(wb, available ? /enter steer/ : /working/);
+    const frame = wb.t.captureCharFrame();
+    assert.doesNotMatch(frame, /↵ send|› @file.ts/);
+    assert.match(frame, available ? /steer/ : /working/);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends.length, 0);
+    assert.equal(wb.control.steers.length, available ? 1 : 0);
+  });
+}
+
+test("m10-audit-token-ripgrep-listing: hidden capped suggestions preserve the armed Interrupt warning", async () => {
+  const wb = await mountWorkbench(steerableInteractiveRunOf(), 48, 9);
+  let replied = false;
+  wb.control.view.searchWorkspacePaths = async () => {
+    replied = true;
+    return {
+      status: "available",
+      candidates: [{ path: "file.ts", kind: "file" }],
+      notice: "Large Workspace: only the first 100,000 files are searchable",
+    };
+  };
+  await type(wb.t, "@file");
+  await until(() => replied);
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "escape");
+  assert.match(wb.t.captureCharFrame(), /Press esc again to interrupt/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /100k cap/);
+});
+
+test("m10-audit-token-ripgrep-listing: hidden capped suggestions leave idle Escape with the prompt", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    48,
+    9,
+  );
+  let replied = false;
+  wb.control.view.searchWorkspacePaths = async () => {
+    replied = true;
+    return {
+      status: "available",
+      candidates: [{ path: "file.ts", kind: "file" }],
+      notice: "Large Workspace: only the first 100,000 files are searchable",
+    };
+  };
+  await type(wb.t, "@file");
+  await until(() => replied);
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "escape");
+  assert.match(wb.t.captureCharFrame(), /Search commands/);
+  assert.equal(wb.control.sends.length, 0);
 });

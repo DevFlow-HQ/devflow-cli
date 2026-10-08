@@ -247,7 +247,8 @@ function expandDp0(token: string, shimDir: string): string {
  *  label could carry a Command's executable or arguments, which the operational
  *  log excludes: the closed set is part of that privacy control. A role names a
  *  child's purpose, never which Harness owns it. */
-type SpawnRole = "git" | "command" | "harness-probe" | "harness-runtime";
+type SpawnRole =
+  "git" | "command" | "harness-probe" | "harness-runtime" | "workspace-paths";
 
 /** A child's role in a fact: its caller's declared role, or one of the two this
  *  Module assigns its own spawns and no caller can declare — the Windows

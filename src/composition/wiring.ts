@@ -1,3 +1,4 @@
+import { embeddedRipgrep } from "./embedded-ripgrep.js";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -144,6 +145,8 @@ export interface WiringOverrides {
   /** Where the Shipped Bundle `.wfb` files are read from. Production reads the
    *  `builtin/` asset directory `scripts/build.ts` embeds beside the entry module. */
   readonly shippedBundleDir?: string;
+  /** Source helper asset root for deterministic manifest-failure fixtures. */
+  readonly ripgrepAssetRoot?: string;
   /** The operational log's test Seam: target folder, clock, and fallback
    *  channel. Semantic tests use it and never set the log environment names. */
   readonly logSink?: LogSinkOverrides;
@@ -334,6 +337,10 @@ export function wireApplication(
       supportsInteractiveTurns: overrides.supportsInteractiveTurns ?? false,
       harnessRegistry: harnessRegistry.applicationRegistrations(),
       process: processAdapter,
+      workspacePathHelper: embeddedRipgrep(
+        secantHome,
+        overrides.ripgrepAssetRoot,
+      ),
       runExecution: makeRunExecution({
         catalog,
         platform: host ?? "linux",

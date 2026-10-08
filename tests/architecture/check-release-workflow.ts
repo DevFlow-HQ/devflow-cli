@@ -179,6 +179,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-commands-and-input-rules",
   "m10-workspace-mentions",
   "m10-audit-run-keyed-workspace-paths",
+  "m10-audit-token-ripgrep-listing",
   "m10-home-and-preferences",
   "m10-full-transcript-prepend",
   "m10-workbench-interaction",

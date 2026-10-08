@@ -1,4 +1,4 @@
-import { searchWorkspacePaths } from "./workspace-paths.js";
+import { createWorkspacePathSearch } from "./workspace-paths.js";
 import { mergeHarnessInputRules } from "./harness-registry.js";
 export { mergeHarnessInputRules } from "./harness-registry.js";
 import { z } from "zod";
@@ -362,6 +362,7 @@ export interface ApplicationDependencies {
   readonly catalog: Catalog;
   /** Process reaches Preflight through composition. */
   readonly process: ProcessAdapter;
+  readonly workspacePathHelper?: import("./workspace-path-helper.js").WorkspacePathHelper;
   /** The launch Workspace path, typically the raw cwd; Application canonicalises
    *  it (A6): the roots pass the path they were given, this Module owns the
    *  `realpathSync.native` invariant. */
@@ -3982,6 +3983,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
     }
   }
 
+  const workspacePaths = createWorkspacePathSearch({
+    process: deps.process,
+    helper: deps.workspacePathHelper,
+  });
   const projectionPort: ProjectionPort = {
     openProjection,
     submit: dispatch,
@@ -3998,7 +4003,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
             status: "unavailable",
             cause: new Error("Workspace path search requires an open Run."),
           };
-        return searchWorkspacePaths({
+        return workspacePaths.search({
+          runId: input.runId,
           workspacePath: read.run.workspacePath,
           query: input.query,
           signal: input.signal,
@@ -4061,9 +4067,24 @@ export function createApplication(deps: ApplicationDependencies): Application {
     history.shutdown();
     operations.endObservation();
     subscriptions.shutdown();
-    return (shutdownPromise ??= shutdownRuns().finally(() => {
-      shutdownPromise = undefined;
-    }));
+    return (shutdownPromise ??= Promise.allSettled([
+      workspacePaths.close(),
+      shutdownRuns(),
+    ])
+      .then((results) => {
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1)
+          throw new AggregateError(
+            failures,
+            "application: shutdown cleanup failed",
+          );
+      })
+      .finally(() => {
+        shutdownPromise = undefined;
+      }));
   }
 
   async function shutdownRuns(): Promise<void> {

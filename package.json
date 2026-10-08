@@ -69,7 +69,6 @@
     "@opentui/solid": "0.4.5",
     "commander": "14.0.2",
     "drizzle-orm": "1.0.0-rc.4",
-    "ignore": "7.0.5",
     "semver": "7.7.4",
     "solid-js": "1.9.12",
     "string-width": "7.2.0",

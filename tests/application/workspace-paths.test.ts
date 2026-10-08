@@ -4,7 +4,21 @@ import type {
 } from "../../src/application/projection-port.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import {
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  mkdirSync,
+  symlinkSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  createFakeProcess,
+  type FakeProcessScript,
+} from "../process/fake-adapter.js";
+import type { ApplicationDependencies } from "../../src/application/application.js";
+import type { OwnedProcessOptions } from "../../src/process/process.js";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { realpathSync } from "node:fs";
@@ -12,203 +26,49 @@ import { openFakeRunGroup } from "../run/store/fake-git-process.js";
 import { createApplication } from "../helpers/application.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 
-test("m10-workspace-mentions: non-Git Workspace search ranks and bounds distinct file/folder paths", async (t) => {
-  const { workspacePath, runId, port } = fixture(t);
-
-  mkdirSync(join(workspacePath, "src"));
-  writeFileSync(
-    join(workspacePath, "src", "alpha.ts"),
-    "never load this content",
-  );
-  writeFileSync(join(workspacePath, "alpha"), "");
-  writeFileSync(join(workspacePath, "alpha-long"), "");
-  writeFileSync(join(workspacePath, "z-a-l-p-h-a"), "");
-  assert.deepEqual(
-    await port.searchWorkspacePaths({
-      runId,
-      query: "alpha",
-    }),
-    {
-      status: "available",
-      candidates: [
-        { path: "alpha", kind: "file" },
-        { path: "alpha-long", kind: "file" },
-        { path: "src/alpha.ts", kind: "file" },
-        { path: "z-a-l-p-h-a", kind: "file" },
-      ],
-    },
-  );
-  assert.deepEqual(
-    await port.searchWorkspacePaths({
-      runId,
-      query: "src",
-    }),
-    {
-      status: "available",
-      candidates: [
-        { path: "src", kind: "folder" },
-        { path: "src/alpha.ts", kind: "file" },
-      ],
-    },
-  );
-  for (let i = 0; i < 15; i++)
-    writeFileSync(
-      join(workspacePath, `item-${String(i).padStart(2, "0")}`),
-      "",
-    );
-  const result = await port.searchWorkspacePaths({
-    runId,
-    query: "item",
-  });
-  assert.equal(result.status, "available");
-  if (result.status === "available")
-    assert.deepEqual(
-      result.candidates.map((c) => c.path),
-      [
-        "item-00",
-        "item-01",
-        "item-02",
-        "item-03",
-        "item-04",
-        "item-05",
-        "item-06",
-        "item-07",
-        "item-08",
-        "item-09",
-      ],
-    );
-});
-
-test("m10-workspace-mentions: ignore precedence, explicit dot segments, .git exclusion and confined symlinks", async (t) => {
-  const { workspacePath, runId, port } = fixture(t);
-  const outside = makeTempDir("secant-outside-");
-
-  for (const dir of ["src", ".hidden", "ignored", ".git"])
-    mkdirSync(join(workspacePath, dir));
-  mkdirSync(join(workspacePath, ".git", "info"));
-  writeFileSync(
-    join(workspacePath, ".git", "info", "exclude"),
-    "excluded.txt\n",
-  );
-  writeFileSync(join(workspacePath, "excluded.txt"), "");
-  writeFileSync(
-    join(workspacePath, ".gitignore"),
-    "*.log\nignored/\n*.tmp\n!keep.tmp\n",
-  );
-  writeFileSync(join(workspacePath, ".ignore"), "local.txt\n");
-  writeFileSync(
-    join(workspacePath, "src", ".gitignore"),
-    "!nested.tmp\n/secret.txt\n",
-  );
-  for (const path of [
-    "drop.log",
-    "keep.tmp",
-    "drop.tmp",
-    "local.txt",
-    "visible.txt",
-    ".hidden/config",
-    "ignored/a",
-    ".git/internal",
-    "src/nested.tmp",
-    "src/secret.txt",
-    "src/visible.txt",
-  ])
-    writeFileSync(join(workspacePath, path), "");
-  writeFileSync(join(outside, "secret.txt"), "");
-  symlinkSync(
-    outside,
-    join(workspacePath, "escape"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  symlinkSync(
-    join(workspacePath, "src"),
-    join(workspacePath, "inside"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  symlinkSync(
-    workspacePath,
-    join(workspacePath, "src", "cycle"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const search = async (query: string) => {
-    const result = await port.searchWorkspacePaths({
-      runId,
-      query,
-    });
-    assert.equal(result.status, "available");
-    return result.status === "available"
-      ? result.candidates.map((c) => c.path)
-      : [];
-  };
-  assert.deepEqual(await search(""), [
-    "inside",
-    "inside/cycle",
-    "inside/nested.tmp",
-    "inside/visible.txt",
-    "keep.tmp",
-    "src",
-    "src/cycle",
-    "src/nested.tmp",
-    "src/visible.txt",
-    "visible.txt",
+test("m10-audit-token-ripgrep-listing: one token reuses its listing and a new token lists freshly", async (t) => {
+  const { runId, port, launches } = fixture(t, [
+    "src/old.ts\0",
+    "src/new.ts\0",
   ]);
-  assert.deepEqual(await search(".hidden/"), [".hidden", ".hidden/config"]);
-  assert.deepEqual(await search("src/.git"), ["src/.gitignore"]);
-  assert.deepEqual(await search(".git/internal"), []);
-  assert.deepEqual(await search("drop"), []);
-  assert.deepEqual(await search("escape"), []);
-  assert.deepEqual(await search("secret"), []);
-  rmSync(join(workspacePath, "src", "cycle"));
-});
-
-test("m10-workspace-mentions: search failure and invalid ingress are unavailable, never missing-path claims", async (t) => {
-  const { workspacePath, runId, port } = fixture(t);
-
-  for (const input of [
-    { runId, query: "\0" },
-    { runId, query: "x".repeat(1025) },
-  ]) {
-    assertUnavailable(await port.searchWorkspacePaths(input));
-  }
-  rmSync(workspacePath, { recursive: true });
-  assertUnavailable(await port.searchWorkspacePaths({ runId, query: "a" }));
-});
-
-test("m10-workspace-mentions: cancellation, deep trees and oversized ignore metadata stop search as unavailable", async (t) => {
-  const { workspacePath, runId, port } = fixture(t);
-  const controller = new AbortController();
-  controller.abort();
-  const aborted = await port.searchWorkspacePaths({
-    runId,
-    query: "",
-    signal: controller.signal,
-  });
-  assertUnavailable(aborted);
-  if (aborted.status === "unavailable")
-    assert.equal(aborted.cause, controller.signal.reason);
-  writeFileSync(join(workspacePath, ".gitignore"), "x".repeat(256 * 1024 + 1));
-  assertUnavailable(await port.searchWorkspacePaths({ runId, query: "" }));
-  rmSync(join(workspacePath, ".gitignore"));
-  let path = workspacePath;
-  for (let i = 0; i < 65; i++) {
-    path = join(path, "d");
-    mkdirSync(path);
-  }
-  assertUnavailable(await port.searchWorkspacePaths({ runId, query: "" }));
-});
-
-test("m10-workspace-mentions: linked-worktree .git files and non-file ignore metadata keep ordinary search available", async (t) => {
-  const { workspacePath, runId, port } = fixture(t);
-  writeFileSync(
-    join(workspacePath, ".git"),
-    "gitdir: /outside/repository/worktrees/example\n",
-  );
-  mkdirSync(join(workspacePath, ".gitignore"));
-  writeFileSync(join(workspacePath, "visible.ts"), "");
+  const first = new AbortController();
   assert.deepEqual(
-    await port.searchWorkspacePaths({ runId, query: "visible" }),
-    { status: "available", candidates: [{ path: "visible.ts", kind: "file" }] },
+    await port.searchWorkspacePaths({
+      runId,
+      query: "old",
+      signal: first.signal,
+    }),
+    {
+      status: "available",
+      candidates: [{ path: "src/old.ts", kind: "file" }],
+    },
   );
+  assert.deepEqual(
+    await port.searchWorkspacePaths({
+      runId,
+      query: "new",
+      signal: first.signal,
+    }),
+    {
+      status: "available",
+      candidates: [],
+    },
+  );
+  assert.equal(launches.length, 1);
+  first.abort();
+  const second = new AbortController();
+  assert.deepEqual(
+    await port.searchWorkspacePaths({
+      runId,
+      query: "new",
+      signal: second.signal,
+    }),
+    {
+      status: "available",
+      candidates: [{ path: "src/new.ts", kind: "file" }],
+    },
+  );
+  assert.equal(launches.length, 2);
 });
 
 function assertUnavailable(result: WorkspacePathSearch) {
@@ -216,7 +76,50 @@ function assertUnavailable(result: WorkspacePathSearch) {
   if (result.status === "unavailable") assert.ok(result.cause instanceof Error);
 }
 
-function fixture(t: TestContext) {
+function fixture(
+  t: TestContext,
+  listings = Array.from({ length: 8 }, () => "run-only.ts\0still-open.ts\0"),
+  options: {
+    helper?: ApplicationDependencies["workspacePathHelper"] | null;
+    script?: FakeProcessScript;
+    onSpawn?: () => void;
+  } = {},
+) {
+  const launches: OwnedProcessOptions[] = [];
+  let launched: () => void = () => {};
+  const waitForLaunch = new Promise<void>((resolve) => {
+    launched = resolve;
+  });
+  const fake = createFakeProcess(
+    options.script ?? {
+      ownedProcesses: listings.map((text) => ({
+        kind: "launched",
+        emissions: [
+          { kind: "stdout", bytes: Buffer.from(text) },
+          {
+            kind: "terminal",
+            trigger: "automatic",
+            close: { kind: "exited", status: 0 },
+          },
+        ],
+      })),
+    },
+  );
+  const helperBytes = Buffer.from("pinned helper fixture");
+  let reads = 0;
+  const helper =
+    options.helper === null
+      ? undefined
+      : (options.helper ?? {
+          kind: "embedded" as const,
+          stateDirectory: makeTempDir("secant-helper-"),
+          version: "15.1.0",
+          sha256: createHash("sha256").update(helperBytes).digest("hex"),
+          readBytes: async () => {
+            reads++;
+            return helperBytes;
+          },
+        });
   const workspacePath = realpathSync.native(makeTempDir("secant-paths-"));
   const catalog = openCatalog(makeTempDir("secant-path-catalog-"));
   const runGroup = openFakeRunGroup(
@@ -229,8 +132,23 @@ function fixture(t: TestContext) {
     launch: {},
     at: new Date("2026-10-08T00:00:00Z"),
   });
+  const optionsOnSpawn = options.onSpawn ?? (() => {});
   const app = createApplication({
     catalog,
+    process: {
+      ...fake,
+      resolveExecutable: (...args) => fake.resolveExecutable(...args),
+      spawnCommand: (options) => fake.spawnCommand(options),
+      spawnCommandSync: (options) => fake.spawnCommandSync(options),
+      spawnOwnedProcess: (options) => {
+        launches.push(options);
+        launched();
+        const result = fake.spawnOwnedProcess(options);
+        optionsOnSpawn();
+        return result;
+      },
+    },
+    workspacePathHelper: helper,
     launchWorkspacePath: makeTempDir("secant-other-launch-"),
     runGroup,
   });
@@ -240,7 +158,19 @@ function fixture(t: TestContext) {
     catalog.close();
   });
   const port: ProjectionPort = app.projectionPort;
-  return { workspacePath, runId: created.runId, runGroup, catalog, port };
+  return {
+    workspacePath,
+    runId: created.runId,
+    runGroup,
+    catalog,
+    port,
+    app,
+    waitForLaunch,
+    launches,
+    helper,
+    helperBytes,
+    reads: () => reads,
+  };
 }
 
 test("m10-audit-run-keyed-workspace-paths: the Run Store supplies the Workspace without acquiring or granting access", async (t) => {
@@ -337,4 +267,547 @@ test("m10-audit-run-keyed-workspace-paths: absent Run support reports search una
       query: "",
     }),
   );
+});
+
+test("m10-workspace-mentions: bounded distinct file/folder candidates preserve ordinary ranking", async (t) => {
+  const { runId, port } = fixture(t, [
+    "alpha\0alpha-long\0src/alpha.ts\0z-a-l-p-h-a\0alpha\0",
+    Array.from(
+      { length: 15 },
+      (_, i) => `item-${String(i).padStart(2, "0")}\0`,
+    ).join(""),
+  ]);
+  assert.deepEqual(await port.searchWorkspacePaths({ runId, query: "alpha" }), {
+    status: "available",
+    candidates: [
+      { path: "alpha", kind: "file" },
+      { path: "alpha-long", kind: "file" },
+      { path: "src/alpha.ts", kind: "file" },
+      { path: "z-a-l-p-h-a", kind: "file" },
+    ],
+  });
+  const result = await port.searchWorkspacePaths({ runId, query: "item" });
+  assert.equal(result.status, "available");
+  if (result.status === "available")
+    assert.deepEqual(
+      result.candidates.map((c) => c.path),
+      [
+        "item-00",
+        "item-01",
+        "item-02",
+        "item-03",
+        "item-04",
+        "item-05",
+        "item-06",
+        "item-07",
+        "item-08",
+        "item-09",
+      ],
+    );
+});
+
+test("m10-audit-token-ripgrep-listing: bare @ shows derived top-level folders first; dot queries reveal only named segments", async (t) => {
+  const { runId, port } = fixture(t, [
+    "z.ts\0src/a.ts\0.hid/config\0src/.gitignore\0a.ts\0.empty/config\0",
+  ]);
+  const signal = new AbortController().signal;
+  const search = (query: string) =>
+    port.searchWorkspacePaths({ runId, query, signal });
+  assert.deepEqual(await search(""), {
+    status: "available",
+    candidates: [
+      { path: "src", kind: "folder" },
+      { path: "a.ts", kind: "file" },
+      { path: "z.ts", kind: "file" },
+    ],
+  });
+  assert.deepEqual(await search(".hid/"), {
+    status: "available",
+    candidates: [
+      { path: ".hid", kind: "folder" },
+      { path: ".hid/config", kind: "file" },
+    ],
+  });
+  assert.deepEqual(await search("src/.git"), {
+    status: "available",
+    candidates: [{ path: "src/.gitignore", kind: "file" }],
+  });
+  assert.deepEqual(await search("empty"), {
+    status: "available",
+    candidates: [],
+  });
+});
+
+test("m10-audit-token-ripgrep-listing: paths are confined, normalized, distinct, bounded and never load candidate contents", async (t) => {
+  const names = [
+    "./src/a.ts",
+    "src/a.ts",
+    "/outside",
+    "../escape",
+    "a/../escape",
+    "C:/escape",
+    "a//b",
+    ".git/config",
+    "src/.git/config",
+    "line\nfile",
+    "x".repeat(4097),
+    "deep/".repeat(70) + "leaf.ts",
+  ];
+  const { runId, port } = fixture(t, [names.join("\0") + "\0"]);
+  const signal = new AbortController().signal;
+  assert.deepEqual(
+    await port.searchWorkspacePaths({ runId, query: "src", signal }),
+    {
+      status: "available",
+      candidates: [
+        { path: "src", kind: "folder" },
+        { path: "src/a.ts", kind: "file" },
+      ],
+    },
+  );
+  const deep = await port.searchWorkspacePaths({
+    runId,
+    query: "leaf",
+    signal,
+  });
+  assert.equal(deep.status, "available");
+  if (deep.status === "available")
+    assert.deepEqual(deep.candidates, [
+      { path: "deep/".repeat(70) + "leaf.ts", kind: "file" },
+    ]);
+});
+
+test("m10-audit-token-ripgrep-listing: first-use publication is verified, reusable and safe across concurrent Applications", async (t) => {
+  const a = fixture(t);
+  assert.ok(a.helper?.kind === "embedded");
+  const b = fixture(t, undefined, { helper: a.helper });
+  await Promise.all([
+    a.port.searchWorkspacePaths({ runId: a.runId, query: "run-only" }),
+    b.port.searchWorkspacePaths({ runId: b.runId, query: "run-only" }),
+  ]);
+  assert.equal(a.launches.length, 1);
+  assert.equal(b.launches.length, 1);
+  const executable = a.launches[0]?.executable;
+  assert.ok(executable);
+  assert.equal(executable, b.launches[0]?.executable);
+  assert.match(executable, /rg-15\.1\.0-/);
+  assert.deepEqual(readFileSync(executable), a.helperBytes);
+  assert.equal(readdirSync(a.helper.stateDirectory).length, 1);
+  if (process.platform !== "win32")
+    assert.equal(statSync(executable).mode & 0o777, 0o700);
+  const reads = a.reads();
+  await a.port.searchWorkspacePaths({ runId: a.runId, query: "" });
+  assert.equal(a.reads(), reads);
+  assert.equal(a.launches.length, 2);
+  assert.equal(a.launches[0]?.role, "workspace-paths");
+  assert.equal(a.launches[0]?.cwd, a.workspacePath);
+  assert.deepEqual(a.launches[0]?.args, [
+    "--no-config",
+    "--files",
+    "--null",
+    "--hidden",
+    "--no-require-git",
+    "--no-follow",
+    "--glob",
+    "!**/.git",
+    "--glob",
+    "!**/.git/**",
+    ".",
+  ]);
+  writeFileSync(executable, "corrupt helper");
+  assertUnavailable(
+    await a.port.searchWorkspacePaths({ runId: a.runId, query: "" }),
+  );
+  assert.equal(a.launches.length, 2);
+});
+
+for (const failure of [
+  "absent",
+  "missing",
+  "wrong-digest",
+  "state-is-file",
+  "non-regular",
+  "symlink",
+] as const) {
+  test(`m10-audit-token-ripgrep-listing: ${failure} helper makes only search unavailable`, async (t) => {
+    const initial = fixture(t);
+    assert.ok(initial.helper?.kind === "embedded");
+    const helper = { ...initial.helper };
+    if (failure === "missing")
+      helper.readBytes = async () => {
+        throw new Error("missing embedded helper");
+      };
+    if (failure === "wrong-digest") helper.sha256 = "0".repeat(64);
+    if (failure === "state-is-file") {
+      helper.stateDirectory = join(makeTempDir("secant-helper-file-"), "file");
+      writeFileSync(helper.stateDirectory, "");
+    }
+    const final = join(
+      helper.stateDirectory,
+      `rg-${helper.version}-${helper.sha256.slice(0, 16)}${process.platform === "win32" ? ".exe" : ""}`,
+    );
+    if (failure === "non-regular") mkdirSync(final);
+    if (failure === "symlink")
+      symlinkSync(
+        makeTempDir("secant-helper-link-"),
+        final,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    const { port, runId, launches } = fixture(t, undefined, {
+      helper: failure === "absent" ? null : helper,
+    });
+    assertUnavailable(await port.searchWorkspacePaths({ runId, query: "" }));
+    assert.equal(launches.length, 0);
+  });
+}
+
+for (const [status, text, available] of [
+  [0, "", true],
+  [1, "", true],
+  [2, "a.ts\0", true],
+  [2, "", false],
+  [3, "a.ts\0", false],
+] as const) {
+  test(`m10-audit-token-ripgrep-listing: helper exit ${status} with ${text ? "output" : "no output"} is ${available ? "available" : "unavailable"}`, async (t) => {
+    const { port, runId } = fixture(t, undefined, {
+      script: {
+        ownedProcesses: [
+          {
+            kind: "launched",
+            emissions: [
+              { kind: "stdout", bytes: Buffer.from(text) },
+              { kind: "stderr", bytes: Buffer.from("permission denied") },
+              {
+                kind: "terminal",
+                trigger: "automatic",
+                close: { kind: "exited", status },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const result = await port.searchWorkspacePaths({ runId, query: "" });
+    assert.equal(result.status, available ? "available" : "unavailable");
+    if (result.status === "available")
+      assert.deepEqual(
+        result.candidates,
+        text ? [{ path: "a.ts", kind: "file" }] : [],
+      );
+  });
+}
+
+for (const failure of ["launch", "invalid-utf8", "unterminated"] as const) {
+  test(`m10-audit-token-ripgrep-listing: ${failure} output never becomes a partial success`, async (t) => {
+    const { port, runId } = fixture(t, undefined, {
+      script: {
+        ownedProcesses: [
+          failure === "launch"
+            ? {
+                kind: "launch-failure",
+                failure: {
+                  ok: false,
+                  failure: {
+                    kind: "spawn-error",
+                    cause: new Error("missing helper"),
+                  },
+                },
+              }
+            : {
+                kind: "launched",
+                emissions: [
+                  {
+                    kind: "stdout",
+                    bytes:
+                      failure === "invalid-utf8"
+                        ? Uint8Array.of(255, 0)
+                        : Buffer.from("path"),
+                  },
+                  {
+                    kind: "terminal",
+                    trigger: "automatic",
+                    close: { kind: "exited", status: 0 },
+                  },
+                ],
+              },
+        ],
+      },
+    });
+    assertUnavailable(await port.searchWorkspacePaths({ runId, query: "" }));
+  });
+}
+
+test("m10-audit-token-ripgrep-listing: split UTF-8 and NUL output reconstruct one path", async (t) => {
+  const bytes = Buffer.from("./é.ts\0");
+  const { port, runId } = fixture(t, undefined, {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            { kind: "stdout", bytes: bytes.subarray(0, 3) },
+            { kind: "stdout", bytes: bytes.subarray(3, 6) },
+            { kind: "stdout", bytes: bytes.subarray(6) },
+            {
+              kind: "terminal",
+              trigger: "automatic",
+              close: { kind: "exited", status: 0 },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(await port.searchWorkspacePaths({ runId, query: "é" }), {
+    status: "available",
+    candidates: [{ path: "é.ts", kind: "file" }],
+  });
+});
+
+test("m10-audit-token-ripgrep-listing: cancellation before launch and invalid ingress never start a helper", async (t) => {
+  const { runId, port, launches } = fixture(t);
+  for (const query of ["\0", "x".repeat(1025), "\x7f"])
+    assertUnavailable(await port.searchWorkspacePaths({ runId, query }));
+  const controller = new AbortController();
+  controller.abort();
+  const result = await port.searchWorkspacePaths({
+    runId,
+    query: "",
+    signal: controller.signal,
+  });
+  assertUnavailable(result);
+  if (result.status === "unavailable")
+    assert.equal(result.cause, controller.signal.reason);
+  assert.equal(launches.length, 0);
+});
+
+test("m10-audit-token-ripgrep-listing: closing a live token stops its owned helper and returns unavailable", async (t) => {
+  const controller = new AbortController();
+  const { runId, port } = fixture(t, undefined, {
+    onSpawn: () => controller.abort(),
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            { kind: "stdout", bytes: Buffer.from("a.ts\0") },
+            {
+              kind: "terminal",
+              trigger: "interrupt",
+              expectedGracefulMs: 1000,
+              interruption: {
+                close: { kind: "signal", signal: "SIGTERM" },
+                escalated: true,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  const result = await port.searchWorkspacePaths({
+    runId,
+    query: "",
+    signal: controller.signal,
+  });
+  assertUnavailable(result);
+  if (result.status === "unavailable")
+    assert.equal(result.cause, controller.signal.reason);
+});
+
+test("m10-audit-token-ripgrep-listing: cap counts files before folders, searches the retained subset and stops its helper", async (t) => {
+  const files = Array.from(
+    { length: 100001 },
+    (_, i) => `folder-${i}/file-${i}.ts\0`,
+  ).join("");
+  const { runId, port } = fixture(t, undefined, {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            { kind: "stdout", bytes: Buffer.from(files) },
+            {
+              kind: "terminal",
+              trigger: "interrupt",
+              expectedGracefulMs: 1000,
+              interruption: {
+                close: { kind: "signal", signal: "SIGTERM" },
+                escalated: true,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  const signal = new AbortController().signal;
+  assert.deepEqual(
+    await port.searchWorkspacePaths({ runId, query: "file-99999.ts", signal }),
+    {
+      status: "available",
+      candidates: [{ path: "folder-99999/file-99999.ts", kind: "file" }],
+      notice: "Large Workspace: only the first 100,000 files are searchable",
+    },
+  );
+  assert.deepEqual(
+    await port.searchWorkspacePaths({ runId, query: "file-100000.ts", signal }),
+    {
+      status: "available",
+      candidates: [],
+      notice: "Large Workspace: only the first 100,000 files are searchable",
+    },
+  );
+});
+
+test("m10-audit-token-ripgrep-listing: Application shutdown drains a pending listing without Run ownership", async (t) => {
+  const { runId, port, app, waitForLaunch } = fixture(t, undefined, {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            { kind: "stdout", bytes: Buffer.from("a.ts\0") },
+            {
+              kind: "terminal",
+              trigger: "interrupt",
+              expectedGracefulMs: 1000,
+              interruption: {
+                close: { kind: "signal", signal: "SIGTERM" },
+                escalated: true,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  const pending = port.searchWorkspacePaths({ runId, query: "" });
+  await waitForLaunch;
+  await app.shutdown();
+  assertUnavailable(await pending);
+});
+
+for (const marker of ["folder", "linked-file"] as const) {
+  test(`m10-audit-token-ripgrep-listing: ${marker} Git metadata retains ripgrep's native Git rules`, async (t) => {
+    const { workspacePath, runId, port, launches } = fixture(t);
+    if (marker === "folder") mkdirSync(join(workspacePath, ".git"));
+    if (marker === "linked-file")
+      writeFileSync(join(workspacePath, ".git"), "gitdir: /other/state\n");
+    await port.searchWorkspacePaths({ runId, query: "" });
+    assert.equal(launches[0]?.args.includes("--no-require-git"), false);
+  });
+}
+
+test("m10-audit-token-ripgrep-listing: visible ancestors of hidden files remain folder candidates", async (t) => {
+  const { runId, port } = fixture(t, ["src/.hidden/config\0"]);
+  assert.deepEqual(await port.searchWorkspacePaths({ runId, query: "" }), {
+    status: "available",
+    candidates: [{ path: "src", kind: "folder" }],
+  });
+});
+
+test("m10-audit-token-ripgrep-listing: a token is bound to its Run even when two Runs share a Workspace", async (t) => {
+  const { port, runId, runGroup, launches } = fixture(t, [
+    "old.ts\0",
+    "new.ts\0",
+  ]);
+  const other = runGroup.createRun({
+    operationId: "other-run",
+    bundleSnapshotDigest: "sha256:paths",
+    launch: {},
+    at: new Date(),
+  });
+  const signal = new AbortController().signal;
+  await port.searchWorkspacePaths({ runId, query: "", signal });
+  assertUnavailable(
+    await port.searchWorkspacePaths({ runId: other.runId, query: "", signal }),
+  );
+  assert.equal(launches.length, 1);
+  assert.deepEqual(
+    await port.searchWorkspacePaths({
+      runId: other.runId,
+      query: "new",
+      signal: new AbortController().signal,
+    }),
+    { status: "available", candidates: [{ path: "new.ts", kind: "file" }] },
+  );
+});
+
+test("m10-audit-token-ripgrep-listing: exit 2 with filtered path output is still a successful listing", async (t) => {
+  const { port, runId } = fixture(t, undefined, {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            { kind: "stdout", bytes: Buffer.from("line\nfile\0") },
+            {
+              kind: "terminal",
+              trigger: "automatic",
+              close: { kind: "exited", status: 2 },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(await port.searchWorkspacePaths({ runId, query: "" }), {
+    status: "available",
+    candidates: [],
+  });
+});
+
+test("m10-audit-token-ripgrep-listing: the file cap precedes path filtering as well as folder derivation", async (t) => {
+  const listed =
+    Array.from({ length: 100000 }, (_, i) => `line\nfile-${i}\0`).join("") +
+    "late.ts\0";
+  const { port, runId } = fixture(t, [listed]);
+  assert.deepEqual(await port.searchWorkspacePaths({ runId, query: "late" }), {
+    status: "available",
+    candidates: [],
+    notice: "Large Workspace: only the first 100,000 files are searchable",
+  });
+});
+
+test("m10-audit-token-ripgrep-listing: a complete 100,000-file listing needs no cap notice", async (t) => {
+  const listed =
+    Array.from({ length: 99999 }, (_, i) => `file-${i}.ts\0`).join("") +
+    "last.ts\0";
+  const { port, runId } = fixture(t, [listed]);
+  assert.deepEqual(await port.searchWorkspacePaths({ runId, query: "last" }), {
+    status: "available",
+    candidates: [{ path: "last.ts", kind: "file" }],
+  });
+});
+
+test("m10-audit-token-ripgrep-listing: a cap does not hide a genuine helper cleanup failure", async (t) => {
+  const cause = new Error("helper cleanup failed");
+  const bytes = Buffer.from(
+    Array.from({ length: 100001 }, (_, i) => `file-${i}\0`).join(""),
+  );
+  const { port, runId } = fixture(t, undefined, {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            { kind: "stdout", bytes },
+            {
+              kind: "terminal",
+              trigger: "interrupt",
+              expectedGracefulMs: 1000,
+              interruption: {
+                close: { kind: "cleanup-error", cause },
+                escalated: true,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  const result = await port.searchWorkspacePaths({ runId, query: "" });
+  assert.equal(result.status, "unavailable");
+  if (result.status === "unavailable") assert.equal(result.cause, cause);
 });

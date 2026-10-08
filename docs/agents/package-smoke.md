@@ -13,6 +13,10 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 
 - **compiled-binary-interface**: the copied binary answers `--help` and `--version` exactly (on macOS after `codesign --verify --deep --strict`), and an
   unknown command or flag exits non-zero with usage before any composition wiring (#72).
+- **m10-audit-embedded-ripgrep-consumer** (#484): two concurrent copied-binary `run paths` invocations with no external program on PATH
+  perform first-use verified helper publication and actual path search, on Windows as well as POSIX. Later queries reuse the same file;
+  dot paths and empty-folder exclusion remain searchable offline, and corrupt helper bytes refuse only search with cause-free JSON.
+  A long-name Workspace exceeds the cap while ripgrep is still writing; its bounded results and operational log prove a live helper was stopped and reaped.
 - **m10-settings-consumer** (#408): defaults, text/JSON, paired and partial saves, a second invocation in another unapproved Workspace,
   invalid/empty no-write refusals, Model-choice bytes, atomic rollback, cause-free failure JSON (#449), preference-read fallback, stdout/stderr separation
   and exits through the copied binary.
@@ -81,7 +85,7 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **windows-app-execution-alias**: when the runner exposes a `pwsh` or `winget` alias that `where.exe` finds after the primary PATH walk misses, a
   Command naming it passes Preflight and runs; a runner without such an alias records the reasoned gap.
 - **no-interactive-terminal** (#55): with piped stdio the TUI launch rejects with the `no-interactive-terminal` Problem before any renderer exists.
-- **operational-log** (#318, #323): sets an isolated `SECANT_LOG_DIR`, as does the POSIX root-lifetime proof. `--help`, `--version`, and a parse error
+- **operational-log** (#318, #323): sets an isolated `SECANT_LOG_DIR`, as do the POSIX root-lifetime and embedded-ripgrep cap proofs. `--help`, `--version`, and a parse error
   write no log; a successful and a refused headless command each write one valid JSONL file with matching start and end records (Secant invocation id,
   client, version, platform, exit status, elapsed time), both final initial-preparation reports before the end (#407), the approval's Operation admission and outcome sharing
   one id (#319), and no trace of a seeded environment value or

@@ -62,3 +62,6 @@ one Turn row and persist once at orderly settlement. Both forms open complete in
 command-tail or artifact-line limits. Memory-only cumulative snapshots do not survive a crash. Neither form gains a transcript
 position or changes `run show --json`; stored-only headless exclusions above remain in force. Native line totals are currently
 unqualified and stay absent. See [file qualification](../tests/harness/tool-facts-provenance.md).
+
+`run paths <run-id> [query] [--json]` exposes the bounded Workspace path query used by completion (#484). Each invocation takes one fresh listing
+without approval, Run ownership, or candidate-content reads. Helper failure refuses only the query; manual paths remain ordinary text in the Workbench.

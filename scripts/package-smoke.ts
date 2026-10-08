@@ -1,3 +1,4 @@
+import { embeddedRipgrepConsumer } from "./package-smoke/workspace-paths.js";
 import { spawn, spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -333,6 +334,14 @@ await withCleanup(
     const binary = await runNamedScenario(
       "compiled-binary-interface",
       compiledBinaryInterfaceScenario,
+    );
+
+    await runNamedScenario("m10-audit-embedded-ripgrep-consumer", () =>
+      embeddedRipgrepConsumer(
+        binary,
+        smokeRoot,
+        homeEnv(join(smokeRoot, "rgh")),
+      ),
     );
 
     await runNamedScenario("m10-settings-consumer", () =>
@@ -3272,8 +3281,8 @@ await withCleanup(
       // The operational log inside the compiled binary (#318): synchronous
       // writes produce one JSONL file per Secant invocation, a seeded secret
       // never reaches it, and a fatal error flushes its failure record and names
-      // the file. The only scenario that sets SECANT_LOG_DIR; each command gets
-      // its own folder so its one file is unambiguous.
+      // the file. Each command gets its own SECANT_LOG_DIR so its one file is
+      // unambiguous; the POSIX root-lifetime and ripgrep-cap cases also isolate logs.
       const logsRoot = join(smokeRoot, "operational-logs");
       const secret = "sk-ant-smoke-seeded-7d41";
       const platform = { win32: "windows", darwin: "macos", linux: "linux" }[

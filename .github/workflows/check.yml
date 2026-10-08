@@ -116,6 +116,14 @@ jobs:
           -t '^m10-audit-run-keyed-workspace-paths(:|$)'
           tests/application/workspace-paths.test.ts
           tests/tui/run-workbench-prompt.test.tsx
+      - name: m10-audit-token-ripgrep-listing
+        run: >-
+          bun run test --
+          -t '^m10-audit-token-ripgrep-listing(:|$)'
+          tests/application/workspace-paths.test.ts
+          tests/tui/run-workbench-prompt.test.tsx
+          tests/headless/workspace-paths.test.ts
+          tests/composition/wiring.test.ts
       - name: m10-home-and-preferences
         run: >-
           bun run test --

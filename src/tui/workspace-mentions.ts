@@ -24,6 +24,7 @@ export function createWorkspaceMentions(input: {
   caret: Accessor<number>;
   runId: Accessor<string | undefined>;
   enabled: Accessor<boolean>;
+  selectionVisible: Accessor<boolean>;
   search: ProjectionPort["searchWorkspacePaths"];
 }) {
   const [dismissed, setDismissed] = createSignal<string>();
@@ -41,19 +42,40 @@ export function createWorkspaceMentions(input: {
     const token = tokenAt(text, caret);
     if (token === undefined) return;
     const key = JSON.stringify([runId, text, caret, token.start, token.end]);
-    return { ...token, runId, key };
+    return {
+      ...token,
+      runId,
+      key,
+      identity: JSON.stringify([
+        runId,
+        token.start,
+        text.slice(0, token.start),
+      ]),
+    };
+  });
+  const identity = createMemo(() => {
+    const value = current();
+    return value === undefined || value.key === dismissed()
+      ? undefined
+      : value.identity;
+  });
+  const lifetime = createMemo(() =>
+    identity() === undefined ? undefined : new AbortController(),
+  );
+  createEffect(() => {
+    const controller = lifetime();
+    onCleanup(() => controller?.abort());
   });
   createEffect(() => {
     const value = current();
+    const controller = lifetime();
     setSelection(0);
-    if (value === undefined || value.key === dismissed()) return;
-    const controller = new AbortController();
+    if (value === undefined || controller === undefined) return;
     let disposed = false;
     onCleanup(() => {
       disposed = true;
-      controller.abort();
     });
-    // One queued query replaces typing bursts before filesystem work starts.
+    // Coalesce typing bursts; query cleanup discards replies, never the token list.
     const timer = setTimeout(() => {
       void input
         .search({
@@ -91,6 +113,7 @@ export function createWorkspaceMentions(input: {
       return true;
     }
     if (key.name === "up" || key.name === "down") {
+      if (!input.selectionVisible()) return false;
       setSelection((index) =>
         Math.max(
           0,
@@ -102,7 +125,7 @@ export function createWorkspaceMentions(input: {
       );
       return true;
     }
-    const candidate = active();
+    const candidate = input.selectionVisible() ? active() : undefined;
     const token = current();
     if (
       (key.name === "return" || key.name === "tab") &&

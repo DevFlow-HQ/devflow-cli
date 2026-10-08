@@ -5,6 +5,7 @@ import pkg from "../package.json" with { type: "json" };
 import { buildShippedBundles } from "./shipped-bundles.js";
 import { TARGETS, hostTargetKey, type CompileTarget } from "./targets.js";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { ripgrepInput, verifyEmbeddedRipgrep } from "./embedded-ripgrep.js";
 
 // Compiles the shell to a Bun single-file executable, one per gated target
@@ -42,6 +43,14 @@ async function compile(target: CompileTarget): Promise<void> {
   const outfile = `dist/${target.outfile}`;
   const result = await Bun.build({
     ...sharedBuildInput(),
+    define: {
+      ...sharedBuildInput().define,
+      __SECANT_RIPGREP__: JSON.stringify({
+        version: helper.version,
+        sha256: helper.memberSha256,
+        assetName: basename(helper.path),
+      }),
+    },
     compile: {
       target: target.triple,
       outfile,

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerWorkspacePathCases } from "../composition/workspace-paths-conformance.js";
 import { readRun } from "../application/run-test-helpers.js";
 
 import { registerPreparationLifetime } from "../harness/preparation-lifetime.js";
@@ -278,6 +279,7 @@ function registeredCases(): RunnerCase[] {
   registerWindowsContainmentCases((test) => cases.push(test));
   registerWindowsHarnessCases((test) => cases.push(test));
   registerStdinErrorCases((test) => cases.push(test));
+  registerWorkspacePathCases((test) => cases.push(test));
   registerPosixExitedRootCases((test) => cases.push(test));
   registerPosixLongTempCases((test) => cases.push(test));
   registerPosixSignalFailureCases((test) => cases.push(test));
@@ -2101,6 +2103,10 @@ runSupervised({
   boundMs: SCENARIO_TIMEOUT_MS,
   cases: () => {
     const cases = registeredCases();
+    if (process.argv.includes("--workspace-paths"))
+      return cases.filter((test) =>
+        test.name.startsWith("m10-audit-token-ripgrep-listing:"),
+      );
     return process.argv.includes("--audit-runtime-failure-causes")
       ? cases.filter((test) =>
           test.name.startsWith("m10-audit-runtime-failure-causes:"),

@@ -60,7 +60,7 @@ export function registerRunCommands(
   const run = program
     .command("run")
     .description(
-      "launch, list, show, read, answer, resume, model, cancel, and delete Runs",
+      "launch, list, show, read, paths, answer, resume, model, cancel, and delete Runs",
     );
   const launch = run
     .command("launch")
@@ -162,6 +162,65 @@ export function registerRunCommands(
         ),
       );
     });
+  run
+    .command("paths")
+    .description(
+      "search an open Run's Workspace paths without reading contents",
+    )
+    .argument("[run-id]", "the Run whose Workspace is searched")
+    .argument("[query]", "path query; omitted lists top-level paths", "")
+    .option("--json", "print candidates and any listing notice as JSON")
+    .action(
+      (
+        runId: string | undefined,
+        query: string,
+        options: { json?: boolean },
+      ) => {
+        const json = options.json ?? false;
+        if (runId === undefined)
+          return settle(
+            fail(io, json, {
+              code: "missing-run-id",
+              explanation: "run paths needs a Run id.",
+              remediation: "Run `secant run paths <run-id> [query]`.",
+              possibleEffects: "none",
+            }),
+          );
+        return settle(
+          execute(async (clients) => {
+            const token = new AbortController();
+            try {
+              const result = await clients.projectionPort.searchWorkspacePaths({
+                runId,
+                query,
+                signal: token.signal,
+              });
+              if (result.status === "unavailable")
+                return fail(io, json, {
+                  code: "workspace-path-search-unavailable",
+                  explanation:
+                    "Workspace path search is unavailable for this Run.",
+                  remediation:
+                    "Use an open Run with an available embedded helper. Typed paths can still be sent as text.",
+                  possibleEffects: "none",
+                  cause: result.cause,
+                });
+              if (json) io.out(`${headlessJson(result)}\n`);
+              else {
+                for (const candidate of result.candidates)
+                  io.out(
+                    `${candidate.path}${candidate.kind === "folder" ? "/" : ""}\n`,
+                  );
+                if (result.notice !== undefined) io.err(`${result.notice}\n`);
+              }
+              return 0;
+            } finally {
+              token.abort();
+            }
+          }),
+        );
+      },
+    );
   run
     .command("model")
     .description("change an open Run's Model choice from its next Turn")

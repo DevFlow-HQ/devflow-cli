@@ -112,9 +112,12 @@ const PROCESS_FREE_TEST_FILES = new Set([
   // Real temporary Catalog/SQLite and the Application fixture's refusing Process. No Harness
   // preparation or child work is consumed.
   "tests/application/preferences.test.ts",
-  // Born process-free: Projection Port over real temporary trees and Catalog with the throwing
-  // Process stub. No child spawns.
+  // Born process-free: Projection Port over real temporary files/Catalog and the scripted
+  // helper Process (#484). Real ripgrep fixtures run only in standalone conformance.
   "tests/application/workspace-paths.test.ts",
+  // Born process-free (#484): the headless harness injects scripted helper processes and fake
+  // Git. Extraction/spawn from the shipped executable runs in compiled-binary acceptance.
+  "tests/headless/workspace-paths.test.ts",
   // Real temporary Catalog/SQLite and the Application fixture's refusing Process; copied-binary
   // coverage is m10-settings-consumer.
   "tests/headless/settings.test.ts",

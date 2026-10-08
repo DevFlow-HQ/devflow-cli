@@ -1879,12 +1879,14 @@ export interface WorkspacePathCandidate {
 export interface WorkspacePathQuery {
   readonly runId: string;
   readonly query: string;
+  /** Stable for one open @ token. Abort disposes its listing; edits reuse it. */
   readonly signal?: AbortSignal;
 }
 export type WorkspacePathSearch =
   | {
       readonly status: "available";
       readonly candidates: readonly WorkspacePathCandidate[];
+      readonly notice?: "Large Workspace: only the first 100,000 files are searchable";
     }
   | { readonly status: "unavailable"; readonly cause: unknown };
 
