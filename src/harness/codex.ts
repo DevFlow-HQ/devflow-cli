@@ -67,7 +67,11 @@ import {
   type CodexModelList,
   type CodexRecordingObserver,
 } from "./codex/qualification.js";
-import { validateRequiredSchema } from "./codex/required-schema.js";
+import {
+  validateRequiredSchema,
+  OPTIONAL_SCHEMA_FACTS,
+  type CodexDisplayFact,
+} from "./codex/required-schema.js";
 import {
   boundedCodexExchange,
   CodexExchangeTimeoutError,
@@ -200,7 +204,7 @@ class CodexAdapter implements HarnessAdapter {
     );
   }
 
-  private readonly cache = new Set<string>();
+  private readonly cache = new Map<string, ReadonlySet<CodexDisplayFact>>();
 
   constructor(private readonly overrides: CodexAdapterOverrides) {
     this.preparations = new PreparationOwner(overrides.preparationClock);
@@ -248,14 +252,17 @@ class CodexAdapter implements HarnessAdapter {
       platform: cachePlatform,
       probeRevision,
     });
-    if (cacheKey === undefined || !this.cache.has(cacheKey)) {
+    let disabledFacts =
+      cacheKey === undefined ? undefined : this.cache.get(cacheKey);
+    if (disabledFacts === undefined) {
       const schema = await this.qualifySchema(
         processAdapter,
         discovery.target,
         probeRevision,
       );
       if (!schema.ok) return refuse(schema.failure);
-      if (cacheKey !== undefined) this.cache.add(cacheKey);
+      disabledFacts = schema.value;
+      if (cacheKey !== undefined) this.cache.set(cacheKey, disabledFacts);
     }
 
     const live = await this.qualifyLive(
@@ -273,6 +280,7 @@ class CodexAdapter implements HarnessAdapter {
       platform,
       probeRevision,
       models: live.modelList.models,
+      disabledFacts,
     });
     const harness = new CodexPreparedHarness(
       profile,
@@ -293,6 +301,7 @@ class CodexAdapter implements HarnessAdapter {
       options.writableDirectory,
       options.phases,
       live.modelList,
+      disabledFacts,
     );
     this.overrides.observeAppServerLifecycle?.({
       end: () => harness.endAppServer(),
@@ -436,7 +445,7 @@ class CodexAdapter implements HarnessAdapter {
     processAdapter: ProcessAdapter,
     target: TDiscoveredTarget,
     probeRevision: string,
-  ): Promise<TProbeResult<true>> {
+  ): Promise<TProbeResult<ReadonlySet<CodexDisplayFact>>> {
     const directory = mkdtempSync(join(tmpdir(), "secant-codex-schema-"));
     try {
       const generated = await runTextProbe({
@@ -467,7 +476,7 @@ class CodexAdapter implements HarnessAdapter {
           `Generated Codex schema is incompatible: ${validated.diagnostics}.`,
         );
       }
-      return { ok: true, value: true };
+      return { ok: true, value: validated.disabledFacts };
     } catch (cause) {
       return {
         ok: false,
@@ -639,6 +648,7 @@ class CodexPreparedHarness implements PreparedHarness {
     /** The qualification's `model/list`, which the defaults read resolves
      *  against. */
     private readonly modelList: CodexModelList,
+    private readonly disabledFacts: ReadonlySet<CodexDisplayFact>,
   ) {
     this.attachGeneration(generation);
   }
@@ -1044,7 +1054,10 @@ class CodexPreparedHarness implements PreparedHarness {
     const active = this.active;
     if (active === undefined || active.settled) return;
     try {
-      const notification = parseRuntimeNotification(message);
+      const notification = parseRuntimeNotification(
+        message,
+        this.disabledFacts,
+      );
       if (notification !== undefined) active.accept(notification);
     } catch (cause) {
       active.protocolFailure("Codex emitted incompatible runtime data.", cause);
@@ -2957,6 +2970,7 @@ interface TBuildProfile {
   readonly probeRevision: string;
   /** The non-hidden models `model/list` observed during qualification. */
   readonly models: readonly ModelEntry[];
+  readonly disabledFacts: ReadonlySet<CodexDisplayFact>;
 }
 
 function buildProfile(options: TBuildProfile): HarnessProfile {
@@ -2967,6 +2981,12 @@ function buildProfile(options: TBuildProfile): HarnessProfile {
     executableVersion: options.version,
     platform: options.platform,
     adapterRevision: options.probeRevision,
+    displayFactLimits: OPTIONAL_SCHEMA_FACTS.filter((definition) =>
+      options.disabledFacts.has(definition.fact),
+    ).map(
+      (definition) =>
+        `${definition.label} are unavailable because the installed Harness changed their format.`,
+    ),
     configurationPosture:
       "user-compatible: inherits the user's Codex home and environment; experimental API is disabled, a caller-requested model and reasoning effort are applied natively per Turn and none is set otherwise, personality, approval policy, and sandbox mode remain inherited; the reviewer is user, and opted-in Sessions attach the Secant MCP server with pre-approved tools.",
     recovery: {

@@ -97,6 +97,7 @@ function focusWith(
     name: "Codex",
     discovery,
     qualification,
+    displayFactLimits: [],
     capabilities: [],
   };
 }

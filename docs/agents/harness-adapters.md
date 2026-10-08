@@ -8,6 +8,18 @@ Before changing Claude Code internals, read [Claude Code Adapter](./claude-code-
 
 Before changing Codex internals, read [Codex Adapter](./codex-adapter.md).
 
+## Required and optional native facts
+
+A fact is required when a Turn cannot run correctly without it: admission and terminal, the final agent message, tool calls, Harness Requests,
+Steer, Interrupt, resume, the effective model, and the native shapes that place them in Session history. Codex's model-output item kinds that
+prove Steer delivery remain required. Thought summaries, cumulative Turn diffs, context and usage, and live previews of messages, command output
+and summaries are optional. Unconsumed facts belong in neither list.
+
+Each Adapter classifies privately beside its check and evaluates every fact. A required failure makes the Harness not ready with a typed reason.
+If an optional fact fails format qualification, disable only that fact before a Run; runtime never parses its notification or field. Malformed enabled optional
+facts stay absent without failing the Turn. Only person-readable display limits cross the Harness Interface, apart from capabilities. Models or
+settings that produce no summary add no limit. See [ADR 0022](../adr/0022-own-a-truthful-deep-harness-seam.md#amendment-2026-10-08-required-and-optional-native-facts).
+
 ## Native phases
 
 Each Adapter reports the five phases through `phases.ts`, settling each start once with monotonic elapsed time (#322). Handshake exchanges nest

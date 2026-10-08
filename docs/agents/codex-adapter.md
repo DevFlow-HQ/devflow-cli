@@ -8,7 +8,13 @@ Read before changing the private Codex Adapter.
 - `codex.ts` owns orchestration, cache, and profile; `codex/qualification.ts` owns bounded pre-thread validation and diagnostics; `codex/runtime-protocol.ts`
   owns retained JSONL state and normalization; `codex/required-schema.ts` owns generated-schema compatibility. Native protocol types stay private.
 - Every `prepare` observes `codex --version`; cached schema evidence is keyed by discovery source, path, SHA-256 identity, version, platform, and revision.
-  The host platform driving discovery/profile is immutable; only the cache-key test seam varies platform evidence. A hit skips schema generation only.
+  The host platform driving discovery/profile is immutable; only the cache-key test seam varies platform evidence. A hit skips schema generation only
+  and retains the disabled display-fact set; every Prepared Harness receives that generation's set.
+- `required-schema.ts` applies the [shared classification rule](./harness-adapters.md#required-and-optional-native-facts) with named required and
+  optional lists, collecting every failure. Missing optional definitions degrade only their display. Completed Thought summaries and summary previews
+  qualify independently; provider/model evidence still comes only from `qualifiesThoughtSummary`. The private set gates runtime parsing, not Steer
+  item identity. Steer-only item kinds require only `id` and `type`, never unused payloads. Malformed enabled accounting leaves prior observations intact.
+  Profiles expose only readable limits. The four unconsumed notifications in #499 have no qualification role.
 - Live qualification sends one `initialize` then `initialized`, runs bounded `account/read` and `model/list`, and transfers its child and connection.
   `model/list` entries keep each model's `supportedReasoningEfforts` and `defaultReasoningEffort` as reported (a model with no efforts gets no
   default), and its `isDefault` model is the defaults fallback. One page is read (`cursor: null`); `nextCursor` is not followed.

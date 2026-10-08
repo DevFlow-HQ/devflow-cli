@@ -62,6 +62,7 @@ const QUALIFIED_CODEX: HarnessFocus = {
     kind: "reported",
     choice: { model: "gpt-5", effort: "high" },
   },
+  displayFactLimits: [],
   capabilities: [
     {
       capability: "session-recovery",
@@ -116,6 +117,7 @@ const UNAVAILABLE_CLAUDE: HarnessFocus = {
     state: "not-ready",
     checkedAt: "2026-09-22T00:01:00.000Z",
   },
+  displayFactLimits: [],
   capabilities: QUALIFIED_CODEX.capabilities.map((capability) => ({
     capability: capability.capability,
     name: capability.name,
@@ -541,6 +543,7 @@ test("a fully qualified Harness counts and renders without a limits suffix", asy
       observation: limitedQualification.observation,
     },
     supportedModels: QUALIFIED_CODEX.supportedModels,
+    displayFactLimits: [],
     capabilities: QUALIFIED_CODEX.capabilities,
     configurationPosture: QUALIFIED_CODEX.configurationPosture,
   };
@@ -568,6 +571,7 @@ test("unchecked discovery variants, free-text models, and a focus Problem remain
     qualification: { state: "not-checked" },
     supportedModels: { kind: "free-text" },
     modelDeclaration: { kind: "free-text", efforts: [] },
+    displayFactLimits: [],
     capabilities: QUALIFIED_CODEX.capabilities.map((capability) => ({
       capability: capability.capability,
       name: capability.name,
@@ -660,6 +664,7 @@ test("qualified rows name free-text entry, and a Harness without model selection
     },
     supportedModels: { kind: "free-text" },
     modelDeclaration: { kind: "free-text", efforts: ["low", "high"] },
+    displayFactLimits: [],
     capabilities: QUALIFIED_CODEX.capabilities,
   };
   const noModels: HarnessFocus = {
@@ -670,6 +675,7 @@ test("qualified rows name free-text entry, and a Harness without model selection
       state: "qualified",
       observation: qualification.observation,
     },
+    displayFactLimits: [],
     capabilities: QUALIFIED_CODEX.capabilities,
   };
   const catalog = staticCatalog([freeText, noModels], (id) => ({
@@ -746,6 +752,7 @@ test("the inspector's models, efforts, and reported settings survive small sizes
       reason: "Claude Code's own settings were not read before launch.",
       effortLock: { effort: "xhigh", source: "CLAUDE_CODE_EFFORT_LEVEL=xhigh" },
     },
+    displayFactLimits: [],
     capabilities: QUALIFIED_CODEX.capabilities,
   };
   const catalog = staticCatalog([suggested], () => ({
@@ -906,3 +913,31 @@ test("Harnesses open on search with nothing selected and move focus like the Bun
   await t.waitForFrame(() => pane()[0] === "Find a Harness");
   assert.match(t.captureCharFrame(), /name, model, or capability/);
 });
+
+for (const width of [80, 120, 121, 180]) {
+  test(`m10-audit-optional-native-facts: catalog displays and searches limits separately at ${width} columns`, async () => {
+    const harness = {
+      ...QUALIFIED_CODEX,
+      displayFactLimits: ["Thought summaries are unavailable."],
+    };
+    const catalog = staticCatalog([harness, UNAVAILABLE_CLAUDE], (id) => ({
+      found: true,
+      harness: id === "codex" ? harness : UNAVAILABLE_CLAUDE,
+    }));
+    const { t } = await mount({ width, height: 90, catalog });
+    await t.waitForFrame((frame) => frame.includes("Display fact limits"));
+    const frame = t.captureCharFrame();
+    assert.match(frame, /Capabilities/);
+    assert.match(
+      frame.replace(/\n/g, " "),
+      /Thought summaries are unavailable/,
+    );
+    t.mockInput.pressKey("/");
+    await t.mockInput.typeText("Thought summaries");
+    await t.waitForFrame(
+      (frame) => !resultsPane(frame).includes("Claude Code"),
+    );
+    assert.match(resultsPane(t.captureCharFrame()), /Codex/);
+    t.renderer.destroy();
+  });
+}

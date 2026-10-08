@@ -265,13 +265,18 @@ function focusOf(
 ): HarnessFocus {
   const summary = summaryOf(registration, held);
   if (held === undefined) {
-    return { ...summary, capabilities: uncheckedCapabilities() };
+    return {
+      ...summary,
+      capabilities: uncheckedCapabilities(),
+      displayFactLimits: [],
+    };
   }
   if (!held.result.ok) {
     const failure = held.result.failure;
     return {
       ...summary,
       capabilities: uncheckedCapabilities(),
+      displayFactLimits: [],
       ...(failure.category === "authentication"
         ? {
             authenticationInstructions: `Log in separately through ${registration.choice.name}; Secant does not transport credentials.`,
@@ -302,6 +307,7 @@ function focusOf(
     harnessDefaults: defaultsView(defaults),
     ...preselectionView(catalog, registration.choice, profile, defaults),
     capabilities: capabilitiesOf(profile),
+    displayFactLimits: [...(profile.displayFactLimits ?? [])],
     configurationPosture: profile.configurationPosture,
   };
 }
@@ -456,9 +462,10 @@ function qualificationView(
 function qualifiedState(
   profile: HarnessProfile,
 ): "qualified" | "qualified-with-limits" {
-  return capabilitiesOf(profile).every(
-    (capability) => capability.state === "available",
-  )
+  return (profile.displayFactLimits?.length ?? 0) === 0 &&
+    capabilitiesOf(profile).every(
+      (capability) => capability.state === "available",
+    )
     ? "qualified"
     : "qualified-with-limits";
 }

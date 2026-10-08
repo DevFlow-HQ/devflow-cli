@@ -25,7 +25,8 @@ Read before changing the private Claude Code Adapter.
   Only the fields dispatch iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
   `unknown-result`); every other field degrades to absent (`.catch(undefined)`), unknown fields pass through, and a known type whose
   observation parse fails or an unknown type is ignored, never protocol corruption. Control requests use the failure rule above.
-  `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
+  This applies the [shared classification rule](./harness-adapters.md#required-and-optional-native-facts): unreadable optional observations stay absent,
+  with no named display limits. `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
 - `OwnedProcess.writeStdin` resolves after its error-free write callback and, when `write` returned `false`, the `drain` event. Errors reject.
   Bytes are accepted before the promise settles; durable admission relies on this ordering.
 - `jsonl.ts` is the one private hand-rolled NDJSON splitter both native Adapters use (M3 D15, M4 D1): it splits on `\n`, strips a trailing `\r`, preserves

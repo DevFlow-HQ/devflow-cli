@@ -8,6 +8,10 @@ import type {
   ToolCall,
   TurnDiff,
 } from "../harness.js";
+import {
+  OPTIONAL_SCHEMA_FACTS,
+  type CodexDisplayFact,
+} from "./required-schema.js";
 import { JsonlLineReader } from "../jsonl.js";
 
 const rpcIdSchema = z.union([z.string(), z.number()]);
@@ -370,7 +374,7 @@ const turnStartedSchema = z.looseObject({
 });
 const turnCompletedSchema = turnStartedSchema;
 const agentDeltaSchema = correlatedParamsSchema.extend({
-  itemId: z.string().optional(),
+  itemId: z.string().min(1),
   delta: z.string(),
 });
 const itemLifecycleSchema = correlatedParamsSchema.extend({
@@ -447,8 +451,8 @@ const requestResolvedSchema = z.looseObject({
 
 // Authentic codex-cli 0.160.0 / codex-probe-3 test-repair traffic qualifies
 // these meanings. Total/last usage is never context occupancy. Optional facts
-// degrade independently; malformed accounting cannot fail a Turn.
-const reportedNumber = z.number().optional().catch(undefined);
+// degrade independently; malformed accounting is ignored without replacing observations.
+const reportedNumber = z.number().int().optional();
 const usageCountersSchema = z.looseObject({
   totalTokens: reportedNumber,
   inputTokens: reportedNumber,
@@ -460,14 +464,11 @@ const usageCountersSchema = z.looseObject({
 const tokenUsageSchema = z.looseObject({
   threadId: z.string(),
   turnId: z.string(),
-  tokenUsage: z
-    .looseObject({
-      total: usageCountersSchema.optional().catch(undefined),
-      last: usageCountersSchema.optional().catch(undefined),
-      modelContextWindow: reportedNumber,
-    })
-    .optional()
-    .catch(undefined),
+  tokenUsage: z.looseObject({
+    total: usageCountersSchema.optional(),
+    last: usageCountersSchema.optional(),
+    modelContextWindow: reportedNumber.nullable(),
+  }),
 });
 
 function usageSummary(
@@ -605,6 +606,7 @@ export type CodexRuntimeNotification =
 
 export function parseRuntimeNotification(
   message: CodexRpcEnvelope,
+  disabledFacts: ReadonlySet<CodexDisplayFact>,
 ): CodexRuntimeNotification | undefined {
   const method = message.method;
   if (method === undefined) return undefined;
@@ -663,12 +665,17 @@ export function parseRuntimeNotification(
     }
     return { kind: "unsupported-server-request", method };
   }
+  const optional = OPTIONAL_SCHEMA_FACTS.find(
+    (definition) => "method" in definition && definition.method === method,
+  );
+  if (optional !== undefined && disabledFacts.has(optional.fact))
+    return undefined;
   switch (method) {
     case "thread/tokenUsage/updated": {
       const parsed = tokenUsageSchema.safeParse(message.params);
       if (!parsed.success) return undefined;
       const { threadId, turnId, tokenUsage } = parsed.data;
-      const limitTokens = tokenUsage?.modelContextWindow;
+      const limitTokens = tokenUsage.modelContextWindow ?? undefined;
       const total = usageSummary(tokenUsage?.total);
       const last = usageSummary(tokenUsage?.last);
       return {
@@ -750,10 +757,12 @@ export function parseRuntimeNotification(
       return { kind: "command-output", ...parsed.data };
     }
     case "item/agentMessage/delta": {
-      const params = parseResult(message.params, agentDeltaSchema, method);
+      const parsed = agentDeltaSchema.safeParse(message.params);
+      if (!parsed.success) return undefined;
+      const params = parsed.data;
       return {
         kind: "preview",
-        ...(params.itemId === undefined ? {} : { messageId: params.itemId }),
+        messageId: params.itemId,
         threadId: params.threadId,
         turnId: params.turnId,
         delta: params.delta,
@@ -766,7 +775,7 @@ export function parseRuntimeNotification(
         kind: "item-event",
         threadId: params.threadId,
         turnId: params.turnId,
-        ...normalizeItem(params.item, method === "item/started"),
+        ...normalizeItem(params.item, method === "item/started", disabledFacts),
       };
     }
     case "error": {
@@ -824,6 +833,7 @@ const MODEL_OUTPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
 function normalizeItem(
   value: unknown,
   started: boolean,
+  disabledFacts: ReadonlySet<CodexDisplayFact>,
 ): {
   readonly itemId: string;
   readonly userMessageClientId?: string;
@@ -837,7 +847,7 @@ function normalizeItem(
     "item lifecycle",
   );
   return {
-    ...normalizeItemContent(item, started),
+    ...normalizeItemContent(item, started, disabledFacts),
     modelOutput: MODEL_OUTPUT_ITEM_TYPES.has(item.type),
   };
 }
@@ -845,6 +855,7 @@ function normalizeItem(
 function normalizeItemContent(
   item: { readonly id: string; readonly type: string },
   started: boolean,
+  disabledFacts: ReadonlySet<CodexDisplayFact>,
 ): {
   readonly itemId: string;
   readonly userMessageClientId?: string;
@@ -853,13 +864,15 @@ function normalizeItemContent(
 } {
   const type = item.type;
   if (type === "reasoning") {
+    if (started || disabledFacts.has("thought-summary"))
+      return { itemId: item.id };
     // summary is provider-written display text. Never read content/encrypted data.
     const parsed = z
       .looseObject({ summary: z.array(z.string()) })
       .safeParse(item);
     return {
       itemId: item.id,
-      ...(!started && parsed.success
+      ...(parsed.success
         ? {
             event: {
               kind: "thought" as const,

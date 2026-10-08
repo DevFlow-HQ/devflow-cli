@@ -39,8 +39,9 @@ generic **Projection**, **Action Offer**, and **Operation** terms live in the [c
   with its source, an unsupported shim, or not found with the locations searched — its last **Qualification state**, and the observed executable,
   version, platform, and checked-at evidence when a qualification result is held in this process. It spawns nothing and asserts no capability the
   `focus` view has not qualified. _Avoid_: Harness record, catalog entry.
-- **Qualification state** — how far one **Harness** has been qualified in this process, one of `qualified` (every **Capability state** is `available`),
-  `qualified-with-limits` (qualification succeeded but at least one capability is limited or unavailable), `not-ready` (qualification failed), or
+- **Qualification state** — how far one **Harness** has been qualified in this process, one of `qualified` (every **Capability state** is `available`
+  and no display fact is limited),
+  `qualified-with-limits` (qualification succeeded but a capability or display fact is limited, or a capability is unavailable), `not-ready` (qualification failed), or
   `not-checked` (not yet qualified this process). A **`harness-catalog`** `list` open spawns nothing and qualifies no Harness, so one never qualified
   this process reads `not-checked`; a `focus` open qualifies that one Harness, and a result already held this process shows through the `list` view too.
   _Avoid_: Installed, ready.

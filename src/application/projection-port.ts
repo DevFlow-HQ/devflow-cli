@@ -632,6 +632,8 @@ export interface HarnessFocus extends HarnessSummary {
   readonly preselection?: PreselectionView;
   readonly preferenceNotice?: string;
   readonly capabilities: readonly HarnessCapabilityView[];
+  /** Person-readable display limits, independent of capability availability. */
+  readonly displayFactLimits: readonly string[];
   readonly configurationPosture?: string;
   readonly authenticationInstructions?: string;
   readonly unavailable?: Problem;

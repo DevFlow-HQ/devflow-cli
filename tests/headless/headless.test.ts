@@ -293,8 +293,14 @@ test("harness inspect awaits qualification and freezes text and inner JSON", asy
   assert.equal(await h.run(["harness", "inspect", "codex", "--json"]), 0);
   // #341 adds `modelDeclaration` and `harnessDefaults`; every earlier field,
   // `supportedModels` included, keeps its frozen shape.
-  const { modelDeclaration, harnessDefaults, preselection, ...frozen } =
-    JSON.parse(h.stdout());
+  const {
+    modelDeclaration,
+    harnessDefaults,
+    preselection,
+    displayFactLimits,
+    ...frozen
+  } = JSON.parse(h.stdout());
+  assert.deepEqual(displayFactLimits, []);
   assert.deepEqual(modelDeclaration, {
     kind: "list",
     models: [
@@ -991,4 +997,27 @@ test("m10-audit-headless-output-parity: shared failure JSON preserves normalized
     h.stderr(),
     "Error [injected-failure]: The operation failed.\n- bundle: Invalid Bundle.\nRemediation: Repair storage and retry.\n",
   );
+});
+
+test("m10-audit-optional-native-facts: harness inspect keeps display limits separate and adds them to JSON", async (t) => {
+  const limits = [
+    "Thought summaries are unavailable because the installed Harness changed their format.",
+  ];
+  const h = harnessCatalog(t, {
+    ok: true,
+    profile: { ...HEADLESS_HARNESS_PROFILE, displayFactLimits: limits },
+    defaults: { kind: "reported", choice: { model: "gpt-5" } },
+  });
+  assert.equal(await h.run(["harness", "inspect", "codex"]), 0);
+  assert.match(h.stdout(), /Qualification: qualified with limits/);
+  assert.match(
+    h.stdout(),
+    /Capabilities:[\s\S]*Display fact limits:\n {2}Thought summaries are unavailable/,
+  );
+  assert.match(h.stdout(), /Session recovery: Available/);
+  h.reset();
+  assert.equal(await h.run(["harness", "inspect", "codex", "--json"]), 0);
+  const focused = JSON.parse(h.stdout());
+  assert.deepEqual(focused.displayFactLimits, limits);
+  assert.equal(focused.capabilities.length, 6);
 });

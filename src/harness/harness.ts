@@ -197,6 +197,8 @@ export interface HarnessProfile {
   /** How the Harness was configured for the qualification (e.g. the flags
    *  Secant added), stated as a posture rather than raw arguments. */
   readonly configurationPosture: string;
+  /** Person-readable limits on display facts, separate from capabilities. */
+  readonly displayFactLimits?: readonly string[];
   readonly recovery: RecoveryCapability;
   readonly interruption: InterruptionCapability;
   readonly approvals: ApprovalsCapability;

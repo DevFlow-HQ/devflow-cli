@@ -1,7 +1,7 @@
 // Recorded Codex protocol replies behind the scripted Process. Extra frames are
 // synthetic semantic overlays of already-qualified native shapes.
 import assert from "node:assert/strict";
-import { copyFileSync, readFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { createCodexAdapter } from "../../src/harness/harness.js";
@@ -24,6 +24,8 @@ export function scriptedCodexFacts(
       summaryId: string;
     }) => readonly object[];
   },
+  schemaMutation?: (schema: unknown) => void,
+  recordingCase = "test-repair",
 ): TestHarnessAdapter {
   const traffic = z
     .object({
@@ -34,7 +36,10 @@ export function scriptedCodexFacts(
     .parse(
       JSON.parse(
         readFileSync(
-          new URL("./fixtures/codex/test-repair/case.json", import.meta.url),
+          new URL(
+            `./fixtures/codex/${recordingCase}/case.json`,
+            import.meta.url,
+          ),
           "utf8",
         ),
       ),
@@ -77,13 +82,17 @@ export function scriptedCodexFacts(
       if (command.args.includes("generate-json-schema")) {
         const out = command.args[command.args.indexOf("--out") + 1];
         assert.ok(out);
-        copyFileSync(
-          new URL(
-            "./fixtures/codex/codex-qualification/stable-schema.generated.json",
-            import.meta.url,
-          ),
-          join(out, "codex_app_server_protocol.schemas.json"),
+        const source = new URL(
+          "./fixtures/codex/codex-qualification/stable-schema.generated.json",
+          import.meta.url,
         );
+        const target = join(out, "codex_app_server_protocol.schemas.json");
+        if (schemaMutation === undefined) copyFileSync(source, target);
+        else {
+          const schema: unknown = JSON.parse(readFileSync(source, "utf8"));
+          schemaMutation(schema);
+          writeFileSync(target, JSON.stringify(schema));
+        }
       }
       return {
         kind: "exited",
@@ -192,7 +201,30 @@ export function scriptedCodexFacts(
                 .map((value) => envelope.parse(value)),
             );
           }
-          if (request.method === "turn/start") {
+          // Summary recordings read effective values before their model output.
+          // Preserve that ordering through the injected Process, with original bytes.
+          if (recordingCase !== "test-repair") {
+            if (request.method === "turn/start")
+              frames.push(
+                ...notifications
+                  .filter(
+                    (value) => envelope.parse(value).method === "turn/started",
+                  )
+                  .map((value) => envelope.parse(value)),
+              );
+            if (request.method === "thread/read")
+              frames.push(
+                ...notifications
+                  .filter(
+                    (value) => envelope.parse(value).method !== "turn/started",
+                  )
+                  .map((value) => envelope.parse(value)),
+              );
+          }
+          if (
+            request.method === "turn/start" &&
+            recordingCase === "test-repair"
+          ) {
             const terminal = notifications.findIndex(
               (value) => envelope.parse(value).method === "turn/completed",
             );
@@ -215,8 +247,7 @@ export function scriptedCodexFacts(
                   })
                   .parse(value);
                 if (
-                  (extra.params?.item !== undefined ||
-                    extra.params?.itemId !== undefined) &&
+                  extra.params !== undefined &&
                   extra.params.threadId === undefined
                 ) {
                   const correlated = z

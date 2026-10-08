@@ -227,6 +227,14 @@ export function renderHarnessFocus(harness: HarnessFocus): string {
     }
   }
 
+  if (harness.displayFactLimits.length > 0) {
+    lines.push(
+      "",
+      "Display fact limits:",
+      ...harness.displayFactLimits.map((limit) => `  ${limit}`),
+    );
+  }
+
   lines.push(
     "",
     `Configuration: ${harness.configurationPosture ?? "Not checked"}`,

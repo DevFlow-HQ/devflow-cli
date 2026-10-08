@@ -5,6 +5,8 @@
 // Adapter body (`claude-code.ts`) dispatches on the parsed frame and mutates Turn
 // state; it never touches a raw field.
 //
+// Applies docs/agents/harness-adapters.md#required-and-optional-native-facts.
+// Unreadable optional facts stay absent without a named display limit.
 // Parsing is deliberately lenient, exactly as the hand-rolled readers were: an
 // unknown frame type, or a known observation whose parse fails, is ignored and is never
 // protocol corruption. A control request cannot be ignored: unsupported or malformed

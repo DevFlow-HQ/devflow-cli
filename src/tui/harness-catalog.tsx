@@ -243,6 +243,7 @@ function filterHarnesses(params: THarnessFilterParams) {
         qualificationLabel(harness.qualification.state),
         models,
         capabilities,
+        focused?.displayFactLimits.join(" ") ?? "",
       ].some((value) => value.toLocaleLowerCase().includes(needle));
     });
 }

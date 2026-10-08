@@ -87,6 +87,7 @@ const unchecked: HarnessFocusSnapshot = {
       name: "Codex",
       discovery: { state: "found", source: "path", description: "codex" },
       qualification: { state: "not-checked" },
+      displayFactLimits: [],
       capabilities: [],
     },
   },

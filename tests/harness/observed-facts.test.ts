@@ -78,12 +78,27 @@ async function codexFacts(
   extra: readonly object[] = [],
   workspace = makeTempDir("secant-observed-codex-"),
   summaryCase?: { provider: string; model: string; reroute?: string },
+  qualification?: {
+    mutate: (schema: unknown) => void;
+    limits: readonly string[];
+  },
+  recordingCase = "test-repair",
 ) {
-  const adapter = scriptedCodexFacts(extra, workspace, summaryCase);
+  const adapter = scriptedCodexFacts(
+    extra,
+    workspace,
+    summaryCase,
+    qualification?.mutate,
+    recordingCase,
+  );
   t.after(() => adapter.close());
   const prepared = await adapter.prepare({ workspace });
   assert.ok(prepared.ok, JSON.stringify(prepared));
   t.after(() => prepared.harness.close());
+  assert.deepEqual(
+    prepared.harness.profile.displayFactLimits,
+    qualification?.limits ?? [],
+  );
   const turn = prepared.harness.startTurn({
     ...turnRequest("recorded"),
     modelChoice: { model: "gpt-6.1-sol" },
@@ -261,18 +276,6 @@ for (const [description, tokenUsage, context, summary] of [
     },
     { limitTokens: 2 },
     "total: total 1 tokens, input 500 tokens, output 900 tokens; last: output 0 tokens",
-  ],
-  [
-    "malformed",
-    {
-      total: { totalTokens: "wrong", outputTokens: 3 },
-      last: "wrong",
-      modelContextWindow: "wrong",
-      percentage: 90,
-      reasoningDurationMs: 42,
-    },
-    {},
-    "total: output 3 tokens",
   ],
 ] as const) {
   test(`m10-observed-harness-facts: Codex ${description} report replaces fields without repairing figures`, async (t) => {
@@ -1673,3 +1676,232 @@ test("m10-audit-changed-file-cap: Codex running calls supply ordered targets wit
     })),
   );
 });
+
+function isNativeRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function schemaDefinitions(schema: unknown): Record<string, unknown> {
+  assert.ok(isNativeRecord(schema));
+  const definitions = schema.definitions;
+  assert.ok(isNativeRecord(definitions));
+  const v2 = definitions.v2;
+  assert.ok(isNativeRecord(v2));
+  return v2;
+}
+function mutateDefinition(schema: unknown, name: string): void {
+  const definitions = schemaDefinitions(schema);
+  assert.ok(name in definitions);
+  delete definitions[name];
+}
+for (const [name, label, kinds] of [
+  [
+    "TurnDiffUpdatedNotification",
+    "Turn diffs",
+    ["turn-diff", "turn-diff-preview"],
+  ],
+  [
+    "ThreadTokenUsageUpdatedNotification",
+    "Context and usage",
+    ["context", "usage"],
+  ],
+  [
+    "AgentMessageDeltaNotification",
+    "Agent message previews",
+    ["message-preview"],
+  ],
+  [
+    "CommandExecutionOutputDeltaNotification",
+    "Command output previews",
+    ["tool-preview"],
+  ],
+  [
+    "ReasoningSummaryTextDeltaNotification",
+    "Thought summary previews",
+    ["thought-preview"],
+  ],
+] satisfies [string, string, string[]][]) {
+  test(`m10-audit-optional-native-facts: replay skips disabled ${label} and retains final messages`, async (t) => {
+    const events = await codexFacts(
+      t,
+      [],
+      undefined,
+      { provider: "openai", model: "gpt-6.1-sol" },
+      {
+        mutate: (schema) => mutateDefinition(schema, name),
+        limits: [
+          `${label} are unavailable because the installed Harness changed their format.`,
+        ],
+      },
+    );
+    assert.equal(
+      events.some((event) => kinds.includes(event.kind)),
+      false,
+    );
+    assert.equal(
+      events.some((event) => event.kind === "assistant-content"),
+      true,
+    );
+    assert.equal(
+      events.some((event) => event.kind === "model" && event.observation.known),
+      true,
+    );
+    if (name !== "ThreadTokenUsageUpdatedNotification")
+      assert.equal(
+        events.some((event) => event.kind === "usage"),
+        true,
+      );
+  });
+}
+for (const params of [
+  { itemId: "malformed", delta: { changed: true } },
+  { delta: "unidentified preview" },
+]) {
+  test(`m10-audit-optional-native-facts: malformed enabled agent preview is ignored and final message arrives (${JSON.stringify(params)})`, async (t) => {
+    const events = await codexFacts(t, [
+      { method: "item/agentMessage/delta", params },
+    ]);
+    assert.equal(
+      events.some((event) => event.kind === "assistant-content"),
+      true,
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          event.kind === "message-preview" &&
+          (event.messageId === "malformed" ||
+            event.content.includes("unidentified preview")),
+      ),
+      false,
+    );
+  });
+}
+
+test("m10-audit-optional-native-facts: replay never reads a disabled completed summary while its qualified preview survives", async (t) => {
+  const events = await codexFacts(
+    t,
+    [],
+    undefined,
+    { provider: "openai", model: "gpt-6.1-sol" },
+    {
+      mutate: (schema) => {
+        const definitions = schemaDefinitions(schema);
+        const items = definitions.ThreadItem;
+        assert.ok(
+          typeof items === "object" &&
+            items !== null &&
+            "oneOf" in items &&
+            Array.isArray(items.oneOf),
+        );
+        const reasoning = items.oneOf.find((item: unknown) =>
+          z
+            .looseObject({
+              properties: z.looseObject({
+                type: z.object({ enum: z.array(z.string()) }),
+              }),
+            })
+            .parse(item)
+            .properties.type.enum.includes("reasoning"),
+        );
+        assert.ok(
+          typeof reasoning === "object" &&
+            reasoning !== null &&
+            "properties" in reasoning,
+        );
+        assert.ok(
+          typeof reasoning.properties === "object" &&
+            reasoning.properties !== null,
+        );
+        Reflect.deleteProperty(reasoning.properties, "summary");
+      },
+      limits: [
+        "Thought summaries are unavailable because the installed Harness changed their format.",
+      ],
+    },
+  );
+  assert.equal(
+    events.some((event) => event.kind === "thought" && !event.incomplete),
+    false,
+  );
+  assert.equal(
+    events.some((event) => event.kind === "thought-preview"),
+    true,
+  );
+  assert.equal(
+    events.some((event) => event.kind === "assistant-content"),
+    true,
+  );
+});
+
+for (const recordingCase of [
+  "thought-summary-configured",
+  "thought-summary-unconfigured",
+]) {
+  test(`m10-audit-optional-native-facts: authentic ${recordingCase} produces no display limit`, async (t) => {
+    const events = await codexFacts(
+      t,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      recordingCase,
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.kind === "thought")
+        .map((event) => event.content),
+      recordingCase === "thought-summary-configured"
+        ? ["**Determining minimal three-digit number**"]
+        : [],
+    );
+  });
+}
+test("m10-audit-optional-native-facts: an unqualified model's honest summary absence adds no limit", async (t) => {
+  const events = await codexFacts(t, [], undefined, {
+    provider: "openai",
+    model: "other-model",
+  });
+  assert.equal(
+    events.some(
+      (event) => event.kind === "thought" || event.kind === "thought-preview",
+    ),
+    false,
+  );
+});
+
+for (const tokenUsage of [
+  false,
+  { total: { outputTokens: 1.5 } },
+  { last: "wrong" },
+  { modelContextWindow: "wrong" },
+  {
+    total: { totalTokens: "wrong", outputTokens: 3 },
+    last: "wrong",
+    modelContextWindow: "wrong",
+    percentage: 90,
+    reasoningDurationMs: 42,
+  },
+]) {
+  test(`m10-audit-optional-native-facts: malformed enabled usage preserves earlier observations (${JSON.stringify(tokenUsage)})`, async (t) => {
+    const events = await codexFacts(t, [
+      {
+        method: "thread/tokenUsage/updated",
+        params: {
+          ...recordedTarget,
+          tokenUsage: { modelContextWindow: 8192, total: { totalTokens: 42 } },
+        },
+      },
+      {
+        method: "thread/tokenUsage/updated",
+        params: { ...recordedTarget, tokenUsage },
+      },
+    ]);
+    assert.deepEqual(
+      events.filter((event) => event.kind === "context").at(-1),
+      { kind: "context", observation: { limitTokens: 8192 } },
+    );
+    assert.deepEqual(events.filter((event) => event.kind === "usage").at(-1), {
+      kind: "usage",
+      observation: { summary: "total: total 42 tokens" },
+    });
+  });
+}

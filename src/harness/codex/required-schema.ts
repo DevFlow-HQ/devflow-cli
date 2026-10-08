@@ -9,12 +9,17 @@ const variantSchema = z.looseObject({
   }),
   required: z.array(z.string()).optional(),
 });
-const variantsSchema = z.looseObject({ oneOf: z.array(variantSchema) });
+// Malformed unconsumed/optional variants cannot poison the required bundle.
+// Their absence is classified by the named lists below.
+const variantsSchema = z.looseObject({
+  oneOf: z.array(variantSchema.catch({ properties: {} })),
+});
 const enumSchema = z.looseObject({ enum: z.array(z.string()) });
 const shapeSchema = z.looseObject({
   properties: z.record(z.string(), z.unknown()).optional(),
   required: z.array(z.string()).optional(),
 });
+const optionalShapeSchema = shapeSchema.extend({ type: z.literal("object") });
 const literalUnionSchema = z.looseObject({
   oneOf: z.array(z.looseObject({ enum: z.array(z.string()).optional() })),
 });
@@ -48,8 +53,6 @@ const generatedSchema = z.looseObject({
       CommandExecutionStatus: enumSchema,
       PatchApplyStatus: enumSchema,
       McpToolCallStatus: enumSchema,
-      DynamicToolCallStatus: enumSchema,
-      CollabAgentToolCallStatus: enumSchema,
       ThreadItem: variantsSchema,
       FileUpdateChange: shapeSchema,
       PatchChangeKind: variantsSchema,
@@ -77,13 +80,7 @@ const generatedSchema = z.looseObject({
       TurnCompletedNotification: shapeSchema,
       ItemStartedNotification: shapeSchema,
       ItemCompletedNotification: shapeSchema,
-      AgentMessageDeltaNotification: shapeSchema,
-      ReasoningSummaryTextDeltaNotification: shapeSchema,
-      CommandExecutionOutputDeltaNotification: shapeSchema,
-      FileChangeOutputDeltaNotification: shapeSchema,
-      FileChangePatchUpdatedNotification: shapeSchema,
       ServerRequestResolvedNotification: shapeSchema,
-      McpToolCallProgressNotification: shapeSchema,
       RequestId: primitiveUnionSchema,
     }),
   }),
@@ -109,18 +106,11 @@ const CLIENT_NOTIFICATIONS: TRequiredVariants = {
 
 const SERVER_NOTIFICATIONS: TRequiredVariants = {
   error: ["method", "params"],
-  "thread/started": ["method", "params"],
   "turn/started": ["method", "params"],
   "turn/completed": ["method", "params"],
   "item/started": ["method", "params"],
   "item/completed": ["method", "params"],
-  "item/agentMessage/delta": ["method", "params"],
-  "item/reasoning/summaryTextDelta": ["method", "params"],
-  "item/commandExecution/outputDelta": ["method", "params"],
-  "item/fileChange/outputDelta": ["method", "params"],
-  "item/fileChange/patchUpdated": ["method", "params"],
   "serverRequest/resolved": ["method", "params"],
-  "item/mcpToolCall/progress": ["method", "params"],
   "model/rerouted": ["method", "params"],
 };
 
@@ -135,14 +125,15 @@ const THREAD_ITEMS: TRequiredVariants = {
   userMessage: ["id", "content", "type"],
   agentMessage: ["id", "text", "type"],
   reasoning: ["id", "type"],
+  plan: ["id", "type"],
   commandExecution: ["id", "command", "status", "type"],
   fileChange: ["id", "changes", "status", "type"],
   mcpToolCall: ["id", "server", "tool", "status", "type"],
-  dynamicToolCall: ["id", "tool", "status", "type"],
-  collabAgentToolCall: ["id", "status", "type"],
-  webSearch: ["id", "query", "type"],
-  imageView: ["id", "path", "type"],
-  imageGeneration: ["id", "status", "type"],
+  dynamicToolCall: ["id", "type"],
+  collabAgentToolCall: ["id", "type"],
+  webSearch: ["id", "type"],
+  imageView: ["id", "type"],
+  imageGeneration: ["id", "type"],
 };
 
 const TURN_STATUSES = ["completed", "interrupted", "failed", "inProgress"];
@@ -166,24 +157,12 @@ const CLIENT_REQUEST_PARAM_REFS: Readonly<Record<string, string>> = {
 
 const SERVER_NOTIFICATION_PARAM_REFS: Readonly<Record<string, string>> = {
   error: "#/definitions/v2/ErrorNotification",
-  "thread/started": "#/definitions/v2/ThreadStartedNotification",
   "turn/started": "#/definitions/v2/TurnStartedNotification",
   "turn/completed": "#/definitions/v2/TurnCompletedNotification",
   "item/started": "#/definitions/v2/ItemStartedNotification",
   "item/completed": "#/definitions/v2/ItemCompletedNotification",
-  "item/agentMessage/delta": "#/definitions/v2/AgentMessageDeltaNotification",
-  "item/reasoning/summaryTextDelta":
-    "#/definitions/v2/ReasoningSummaryTextDeltaNotification",
-  "item/commandExecution/outputDelta":
-    "#/definitions/v2/CommandExecutionOutputDeltaNotification",
-  "item/fileChange/outputDelta":
-    "#/definitions/v2/FileChangeOutputDeltaNotification",
-  "item/fileChange/patchUpdated":
-    "#/definitions/v2/FileChangePatchUpdatedNotification",
   "serverRequest/resolved":
     "#/definitions/v2/ServerRequestResolvedNotification",
-  "item/mcpToolCall/progress":
-    "#/definitions/v2/McpToolCallProgressNotification",
   "model/rerouted": "#/definitions/v2/ModelReroutedNotification",
 };
 
@@ -207,15 +186,16 @@ const THREAD_ITEM_FIELD_TYPES: Readonly<
 > = {
   userMessage: { id: "string", content: "array" },
   agentMessage: { id: "string", text: "string" },
-  reasoning: { id: "string", summary: "array" },
+  reasoning: { id: "string" },
+  plan: { id: "string" },
   commandExecution: { id: "string", command: "string" },
   fileChange: { id: "string", changes: "array" },
   mcpToolCall: { id: "string", server: "string", tool: "string" },
-  dynamicToolCall: { id: "string", tool: "string" },
+  dynamicToolCall: { id: "string" },
   collabAgentToolCall: { id: "string" },
-  webSearch: { id: "string", query: "string" },
+  webSearch: { id: "string" },
   imageView: { id: "string" },
-  imageGeneration: { id: "string", status: "string" },
+  imageGeneration: { id: "string" },
 };
 
 const THREAD_ITEM_FIELD_REFS: Readonly<
@@ -226,11 +206,6 @@ const THREAD_ITEM_FIELD_REFS: Readonly<
   },
   fileChange: { status: "#/definitions/v2/PatchApplyStatus" },
   mcpToolCall: { status: "#/definitions/v2/McpToolCallStatus" },
-  dynamicToolCall: { status: "#/definitions/v2/DynamicToolCallStatus" },
-  collabAgentToolCall: {
-    status: "#/definitions/v2/CollabAgentToolCallStatus",
-  },
-  imageView: { path: "#/definitions/v2/LegacyAppPathString" },
 };
 
 const THREAD_ITEM_ARRAY_ITEM_REFS: Readonly<
@@ -246,6 +221,45 @@ interface TSchemaFact {
 }
 
 const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
+  ...[
+    "ErrorNotification",
+    "ItemStartedNotification",
+    "ItemCompletedNotification",
+    "ModelReroutedNotification",
+  ].flatMap((definition) =>
+    ["threadId", "turnId"].map((field) =>
+      fact(
+        `${definition} ${field}`,
+        "string",
+        "definitions",
+        "v2",
+        definition,
+        "properties",
+        field,
+        "type",
+      ),
+    ),
+  ),
+  fact(
+    "Turn start correlation",
+    "string",
+    "definitions",
+    "v2",
+    "TurnStartedNotification",
+    "properties",
+    "threadId",
+    "type",
+  ),
+  fact(
+    "Turn error message",
+    "string",
+    "definitions",
+    "v2",
+    "TurnError",
+    "properties",
+    "message",
+    "type",
+  ),
   fact(
     "MCP config map",
     true,
@@ -624,66 +638,6 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
     "$ref",
   ),
   fact(
-    "agent delta",
-    "string",
-    "definitions",
-    "v2",
-    "AgentMessageDeltaNotification",
-    "properties",
-    "delta",
-    "type",
-  ),
-  fact(
-    "summary delta",
-    "string",
-    "definitions",
-    "v2",
-    "ReasoningSummaryTextDeltaNotification",
-    "properties",
-    "delta",
-    "type",
-  ),
-  fact(
-    "summary index",
-    "integer",
-    "definitions",
-    "v2",
-    "ReasoningSummaryTextDeltaNotification",
-    "properties",
-    "summaryIndex",
-    "type",
-  ),
-  fact(
-    "summary item",
-    "string",
-    "definitions",
-    "v2",
-    "ReasoningSummaryTextDeltaNotification",
-    "properties",
-    "itemId",
-    "type",
-  ),
-  fact(
-    "command delta",
-    "string",
-    "definitions",
-    "v2",
-    "CommandExecutionOutputDeltaNotification",
-    "properties",
-    "delta",
-    "type",
-  ),
-  fact(
-    "file delta",
-    "string",
-    "definitions",
-    "v2",
-    "FileChangeOutputDeltaNotification",
-    "properties",
-    "delta",
-    "type",
-  ),
-  fact(
     "command approval item id",
     "string",
     "definitions",
@@ -779,8 +733,180 @@ const REQUIRED_SCHEMA_FACTS: readonly TSchemaFact[] = [
   ),
 ];
 
+/** Private display classification. A completed summary and its live preview can
+ * degrade independently; missing model/settings output does not affect this check. */
+export const OPTIONAL_SCHEMA_FACTS = [
+  {
+    fact: "thought-summary",
+    label: "Thought summaries",
+    item: "reasoning",
+    field: "summary",
+  },
+  {
+    fact: "thought-preview",
+    label: "Thought summary previews",
+    method: "item/reasoning/summaryTextDelta",
+    definition: "ReasoningSummaryTextDeltaNotification",
+    fields: {
+      threadId: "string",
+      turnId: "string",
+      itemId: "string",
+      summaryIndex: "integer",
+      delta: "string",
+    },
+  },
+  {
+    fact: "turn-diff",
+    label: "Turn diffs",
+    method: "turn/diff/updated",
+    definition: "TurnDiffUpdatedNotification",
+    fields: { threadId: "string", turnId: "string", diff: "string" },
+  },
+  {
+    fact: "usage",
+    label: "Context and usage",
+    method: "thread/tokenUsage/updated",
+    definition: "ThreadTokenUsageUpdatedNotification",
+    fields: { threadId: "string", turnId: "string" },
+  },
+  {
+    fact: "agent-preview",
+    label: "Agent message previews",
+    method: "item/agentMessage/delta",
+    definition: "AgentMessageDeltaNotification",
+    fields: {
+      threadId: "string",
+      turnId: "string",
+      itemId: "string",
+      delta: "string",
+    },
+  },
+  {
+    fact: "command-preview",
+    label: "Command output previews",
+    method: "item/commandExecution/outputDelta",
+    definition: "CommandExecutionOutputDeltaNotification",
+    fields: {
+      threadId: "string",
+      turnId: "string",
+      itemId: "string",
+      delta: "string",
+    },
+  },
+] as const;
+
+export type CodexDisplayFact = (typeof OPTIONAL_SCHEMA_FACTS)[number]["fact"];
+
+type TOptionalSchemaFact = (typeof OPTIONAL_SCHEMA_FACTS)[number];
+
+function optionalFactCompatible(
+  schema: z.infer<typeof generatedSchema>,
+  definition: TOptionalSchemaFact,
+): boolean {
+  if ("item" in definition) {
+    const item = schema.definitions.v2.ThreadItem.oneOf.find((variant) =>
+      variant.properties.type?.enum.includes(definition.item),
+    );
+    const summary = item?.properties[definition.field];
+    return (
+      isRecord(summary) &&
+      summary.type === "array" &&
+      isRecord(summary.items) &&
+      summary.items.type === "string"
+    );
+  }
+  const variants = schema.definitions.ServerNotification.oneOf;
+  if (
+    validateVariants(
+      variants,
+      "method",
+      { [definition.method]: ["method", "params"] },
+      "optional notification",
+    ) !== undefined ||
+    validateVariantReferences(
+      variants,
+      "method",
+      { [definition.method]: `#/definitions/v2/${definition.definition}` },
+      "optional notification",
+    ) !== undefined
+  )
+    return false;
+  const parsed = optionalShapeSchema.safeParse(
+    schema.definitions.v2[definition.definition],
+  );
+  if (!parsed.success) return false;
+  const shape = parsed.data;
+  const fields = Object.keys(definition.fields);
+  if (
+    validateShape(
+      shape,
+      definition.fact === "usage" ? [...fields, "tokenUsage"] : fields,
+      "optional notification",
+    ) !== undefined
+  )
+    return false;
+  const checks = Object.entries(definition.fields).map(([field, type]) => {
+    const property = shape.properties?.[field];
+    return isRecord(property) && property.type === type;
+  });
+  if (definition.fact === "usage") {
+    checks.push(
+      validatePropertyReference(
+        shape,
+        "tokenUsage",
+        "#/definitions/v2/ThreadTokenUsage",
+        "token usage",
+      ) === undefined,
+    );
+    const usage = optionalShapeSchema.safeParse(
+      schema.definitions.v2.ThreadTokenUsage,
+    );
+    const counters = optionalShapeSchema.safeParse(
+      schema.definitions.v2.TokenUsageBreakdown,
+    );
+    if (!usage.success || !counters.success) return false;
+    checks.push(
+      validatePropertyReference(
+        usage.data,
+        "total",
+        "#/definitions/v2/TokenUsageBreakdown",
+        "total usage",
+      ) === undefined,
+    );
+    checks.push(
+      validatePropertyReference(
+        usage.data,
+        "last",
+        "#/definitions/v2/TokenUsageBreakdown",
+        "last usage",
+      ) === undefined,
+    );
+    checks.push(
+      validateNullableProperty(
+        usage.data,
+        "modelContextWindow",
+        "integer",
+        "context window",
+      ) === undefined,
+    );
+    for (const field of [
+      "totalTokens",
+      "inputTokens",
+      "cachedInputTokens",
+      "cacheWriteInputTokens",
+      "outputTokens",
+      "reasoningOutputTokens",
+    ]) {
+      const property = counters.data.properties?.[field];
+      checks.push(isRecord(property) && property.type === "integer");
+    }
+  }
+  return checks.every(Boolean);
+}
+
 export type TSchemaValidation =
-  { readonly ok: true } | { readonly ok: false; readonly diagnostics: string };
+  | { readonly ok: true; readonly disabledFacts: ReadonlySet<CodexDisplayFact> }
+  | { readonly ok: false; readonly diagnostics: string };
 
 /** Compare the generated stable schema with the exact structural subset the M4
  *  Adapter interprets. Additive methods and fields remain compatible; a missing
@@ -914,6 +1040,12 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       "file change",
     ),
     validateNullableStringField(
+      definitions.v2.ThreadItem.oneOf,
+      "userMessage",
+      "clientId",
+      "Steer history identity",
+    ),
+    validateNullableStringField(
       definitions.v2.PatchChangeKind.oneOf,
       "update",
       "move_path",
@@ -975,16 +1107,6 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       definitions.v2.McpToolCallStatus.enum,
       ["inProgress", "completed", "failed"],
       "MCP tool status",
-    ),
-    validateMembers(
-      definitions.v2.DynamicToolCallStatus.enum,
-      ["inProgress", "completed", "failed"],
-      "dynamic tool status",
-    ),
-    validateMembers(
-      definitions.v2.CollabAgentToolCallStatus.enum,
-      ["inProgress", "completed", "failed", "interrupted"],
-      "collaboration tool status",
     ),
     validateShape(
       definitions.InitializeParams,
@@ -1109,39 +1231,9 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
       "item/completed notification",
     ),
     validateShape(
-      definitions.v2.AgentMessageDeltaNotification,
-      ["delta", "itemId", "threadId", "turnId"],
-      "agent-message delta",
-    ),
-    validateShape(
-      definitions.v2.ReasoningSummaryTextDeltaNotification,
-      ["delta", "itemId", "summaryIndex", "threadId", "turnId"],
-      "reasoning-summary delta",
-    ),
-    validateShape(
-      definitions.v2.CommandExecutionOutputDeltaNotification,
-      ["delta", "itemId", "threadId", "turnId"],
-      "command-output delta",
-    ),
-    validateShape(
-      definitions.v2.FileChangeOutputDeltaNotification,
-      ["delta", "itemId", "threadId", "turnId"],
-      "file-change delta",
-    ),
-    validateShape(
-      definitions.v2.FileChangePatchUpdatedNotification,
-      ["changes", "itemId", "threadId", "turnId"],
-      "file-change patch",
-    ),
-    validateShape(
       definitions.v2.ServerRequestResolvedNotification,
       ["requestId", "threadId"],
       "request resolution",
-    ),
-    validateShape(
-      definitions.v2.McpToolCallProgressNotification,
-      ["itemId", "message", "threadId", "turnId"],
-      "MCP progress",
     ),
     validateShape(
       definitions.CommandExecutionRequestApprovalParams,
@@ -1193,11 +1285,16 @@ export function validateRequiredSchema(value: unknown): TSchemaValidation {
   for (const schemaFact of REQUIRED_SCHEMA_FACTS) {
     checks.push(validateSchemaFact(parsed.data, schemaFact));
   }
-  const incompatible = checks.find((check) => check !== undefined);
-  if (incompatible !== undefined) {
-    return { ok: false, diagnostics: incompatible };
+  const incompatible = checks.filter((check) => check !== undefined);
+  const disabledFacts = new Set<CodexDisplayFact>();
+  for (const definition of OPTIONAL_SCHEMA_FACTS) {
+    if (!optionalFactCompatible(parsed.data, definition))
+      disabledFacts.add(definition.fact);
   }
-  return { ok: true };
+  if (incompatible.length > 0) {
+    return { ok: false, diagnostics: incompatible.join("; ") };
+  }
+  return { ok: true, disabledFacts };
 }
 
 type TVariant = z.infer<typeof variantSchema>;
@@ -1208,24 +1305,24 @@ function validateVariants(
   requiredVariants: TRequiredVariants,
   label: string,
 ): string | undefined {
+  const failures: string[] = [];
   for (const [name, requiredFields] of Object.entries(requiredVariants)) {
     const variant = variants.find((candidate) =>
       candidate.properties[discriminator]?.enum.includes(name),
     );
-    if (variant === undefined) return `missing required ${label} '${name}'`;
-    const required = variant.required ?? [];
-    const missing = requiredFields.find((field) => !required.includes(field));
-    if (missing !== undefined) {
-      return `${label} '${name}' no longer requires '${missing}'`;
+    if (variant === undefined) {
+      failures.push(`missing required ${label} '${name}'`);
+      continue;
     }
-    const missingShape = requiredFields.find(
-      (field) => !isRecord(variant.properties[field]),
-    );
-    if (missingShape !== undefined) {
-      return `${label} '${name}' has no schema for '${missingShape}'`;
+    const required = variant.required ?? [];
+    for (const field of requiredFields) {
+      if (!required.includes(field))
+        failures.push(`${label} '${name}' no longer requires '${field}'`);
+      if (!isRecord(variant.properties[field]))
+        failures.push(`${label} '${name}' has no schema for '${field}'`);
     }
   }
-  return undefined;
+  return failures.join("; ") || undefined;
 }
 
 function validateNullableStringField(
@@ -1256,6 +1353,7 @@ function validateVariantReferences(
   expectedRefs: Readonly<Record<string, string>>,
   label: string,
 ): string | undefined {
+  const failures: string[] = [];
   for (const [name, expectedRef] of Object.entries(expectedRefs)) {
     const variant = variants.find((candidate) =>
       candidate.properties[discriminator]?.enum.includes(name),
@@ -1263,10 +1361,12 @@ function validateVariantReferences(
     if (variant === undefined) continue;
     const params = variant.properties.params;
     if (!isRecord(params) || params.$ref !== expectedRef) {
-      return `${label} '${name}' params no longer reference '${expectedRef}'`;
+      failures.push(
+        `${label} '${name}' params no longer reference '${expectedRef}'`,
+      );
     }
   }
-  return undefined;
+  return failures.join("; ") || undefined;
 }
 
 function validateVariantFieldReferencesByDiscriminator(
@@ -1276,16 +1376,19 @@ function validateVariantFieldReferencesByDiscriminator(
   expectedRefs: Readonly<Record<string, string>>,
   label: string,
 ): string | undefined {
+  const failures: string[] = [];
   for (const [name, expectedRef] of Object.entries(expectedRefs)) {
     const variant = variants.find((candidate) =>
       candidate.properties[discriminator]?.enum.includes(name),
     );
     if (variant === undefined) continue;
     if (!schemaHasReference(variant.properties[field], expectedRef)) {
-      return `${label} '${name}.${field}' no longer references '${expectedRef}'`;
+      failures.push(
+        `${label} '${name}.${field}' no longer references '${expectedRef}'`,
+      );
     }
   }
-  return undefined;
+  return failures.join("; ") || undefined;
 }
 
 function validatePrimitiveUnion(
@@ -1304,6 +1407,7 @@ function validateVariantFieldTypes(
   variants: readonly TVariant[],
   expectedTypes: Readonly<Record<string, Readonly<Record<string, string>>>>,
 ): string | undefined {
+  const failures: string[] = [];
   for (const [name, fields] of Object.entries(expectedTypes)) {
     const variant = variants.find((candidate) =>
       candidate.properties.type?.enum.includes(name),
@@ -1312,17 +1416,20 @@ function validateVariantFieldTypes(
     for (const [field, expectedType] of Object.entries(fields)) {
       const property = variant.properties[field];
       if (!isRecord(property) || property.type !== expectedType) {
-        return `thread item '${name}.${field}' is no longer type '${expectedType}'`;
+        failures.push(
+          `thread item '${name}.${field}' is no longer type '${expectedType}'`,
+        );
       }
     }
   }
-  return undefined;
+  return failures.join("; ") || undefined;
 }
 
 function validateVariantFieldReferences(
   variants: readonly TVariant[],
   expectedRefs: Readonly<Record<string, Readonly<Record<string, string>>>>,
 ): string | undefined {
+  const failures: string[] = [];
   for (const [name, fields] of Object.entries(expectedRefs)) {
     const variant = variants.find((candidate) =>
       candidate.properties.type?.enum.includes(name),
@@ -1331,17 +1438,20 @@ function validateVariantFieldReferences(
     for (const [field, expectedRef] of Object.entries(fields)) {
       const property = variant.properties[field];
       if (!schemaHasReference(property, expectedRef)) {
-        return `thread item '${name}.${field}' no longer references '${expectedRef}'`;
+        failures.push(
+          `thread item '${name}.${field}' no longer references '${expectedRef}'`,
+        );
       }
     }
   }
-  return undefined;
+  return failures.join("; ") || undefined;
 }
 
 function validateVariantArrayItemReferences(
   variants: readonly TVariant[],
   expectedRefs: Readonly<Record<string, Readonly<Record<string, string>>>>,
 ): string | undefined {
+  const failures: string[] = [];
   for (const [name, fields] of Object.entries(expectedRefs)) {
     const variant = variants.find((candidate) =>
       candidate.properties.type?.enum.includes(name),
@@ -1353,11 +1463,13 @@ function validateVariantArrayItemReferences(
         !isRecord(property) ||
         !schemaHasReference(property.items, expectedRef)
       ) {
-        return `thread item '${name}.${field}' items no longer reference '${expectedRef}'`;
+        failures.push(
+          `thread item '${name}.${field}' items no longer reference '${expectedRef}'`,
+        );
       }
     }
   }
-  return undefined;
+  return failures.join("; ") || undefined;
 }
 
 function validateNullableProperty(
@@ -1468,10 +1580,12 @@ function validateMembers(
   required: readonly string[],
   label: string,
 ): string | undefined {
-  const missing = required.find((member) => !actual.includes(member));
-  return missing === undefined
-    ? undefined
-    : `missing required ${label} '${missing}'`;
+  return (
+    required
+      .filter((member) => !actual.includes(member))
+      .map((member) => `missing required ${label} '${member}'`)
+      .join("; ") || undefined
+  );
 }
 
 type TShape = z.infer<typeof shapeSchema>;
@@ -1482,14 +1596,14 @@ function validateShape(
   label: string,
 ): string | undefined {
   const required = shape.required ?? [];
-  const missing = requiredFields.find((field) => !required.includes(field));
-  if (missing !== undefined) return `${label} no longer requires '${missing}'`;
-  const missingShape = requiredFields.find(
-    (field) => !isRecord(shape.properties?.[field]),
-  );
-  return missingShape === undefined
-    ? undefined
-    : `${label} has no schema for '${missingShape}'`;
+  const failures: string[] = [];
+  for (const field of requiredFields) {
+    if (!required.includes(field))
+      failures.push(`${label} no longer requires '${field}'`);
+    if (!isRecord(shape.properties?.[field]))
+      failures.push(`${label} has no schema for '${field}'`);
+  }
+  return failures.join("; ") || undefined;
 }
 
 type TLiteralUnion = z.infer<typeof literalUnionSchema>;

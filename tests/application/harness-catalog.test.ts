@@ -392,6 +392,7 @@ test("harness focus qualifies once, maps normalized capabilities, and reuses the
         choice: { model: "gpt-5", effort: "high" },
         source: { kind: "reported" },
       },
+      displayFactLimits: [],
       capabilities: [
         {
           capability: "session-recovery",
@@ -654,3 +655,51 @@ test("unknown Harness focus is a Problem and performs no qualification", async (
   });
   assert.equal(qualificationCalls, 0);
 });
+
+for (const limits of [
+  [],
+  [
+    "Thought summaries are unavailable because the installed Harness changed their format.",
+  ],
+]) {
+  test(`m10-audit-optional-native-facts: display limits determine qualification with every capability available (${limits.length})`, async (t) => {
+    const port = await portWithRegistration(t, async () => ({
+      ok: true,
+      profile: {
+        ...PROFILE,
+        displayFactLimits: limits,
+        recovery: { mode: "native-reattach", evidence: "Native resume." },
+        interruption: { mode: "active-turn", evidence: "Native interrupt." },
+        steer: { available: true, evidence: "Native steer." },
+        clarifications: { available: true, evidence: "Native questions." },
+      },
+      defaults: DEFAULTS,
+    }));
+    const opened = port.openProjection({
+      family: "harness-catalog",
+      focus: { id: "codex" },
+    });
+    t.after(() => opened.close());
+    const update = await opened.updates[Symbol.asyncIterator]().next();
+    assert.ok(update.value?.kind === "durable");
+    const snapshot: HarnessFocusSnapshot = update.value.snapshot;
+    assert.ok(
+      snapshot.family === "harness-catalog" &&
+        snapshot.view === "focus" &&
+        snapshot.result.found,
+    );
+    const harness = snapshot.result.harness;
+    assert.deepEqual(harness.displayFactLimits, limits);
+    assert.equal(harness.capabilities.length, 6);
+    assert.equal(
+      harness.capabilities.every(
+        (capability) => capability.state === "available",
+      ),
+      true,
+    );
+    assert.equal(
+      harness.qualification.state,
+      limits.length === 0 ? "qualified" : "qualified-with-limits",
+    );
+  });
+}

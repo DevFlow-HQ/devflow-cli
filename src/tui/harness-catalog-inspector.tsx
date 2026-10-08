@@ -86,6 +86,13 @@ export function HarnessCatalogInspector(props: {
           </For>
         </box>
       </Section>
+      <Show when={harness().displayFactLimits.length > 0}>
+        <Section title="Display fact limits">
+          <For each={harness().displayFactLimits}>
+            {(limit) => <text fg={theme.textMuted}>{`· ${limit}`}</text>}
+          </For>
+        </Section>
+      </Show>
       <Section title="Configuration">
         <text fg={theme.text}>
           {harness().configurationPosture ?? "Not checked"}

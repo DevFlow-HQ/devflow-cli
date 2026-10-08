@@ -210,6 +210,15 @@ jobs:
           tests/headless/run.test.ts
           tests/tui/run-workbench-appearance.test.tsx
           tests/tui/run-workbench-history-scroll.test.tsx
+      - name: m10-audit-optional-native-facts
+        run: >-
+          bun run test --
+          -t '^m10-audit-optional-native-facts(:|$)'
+          tests/harness/codex-semantic-schema.test.ts
+          tests/harness/observed-facts.test.ts
+          tests/application/harness-catalog.test.ts
+          tests/headless/headless.test.ts
+          tests/tui/harness-screens.test.tsx
       - name: m10-audit-file-input-resolution
         run: >-
           bun run test --

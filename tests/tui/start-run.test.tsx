@@ -235,6 +235,7 @@ function focusOf(spec: HarnessSpec): HarnessFocus {
     return {
       ...summary,
       qualification: { state: "not-ready", checkedAt: OBSERVATION.checkedAt },
+      displayFactLimits: [],
       capabilities: [],
       unavailable: spec.unavailable,
     };
@@ -274,6 +275,7 @@ function focusOf(spec: HarnessSpec): HarnessFocus {
     ...(spec.preferenceNotice === undefined
       ? {}
       : { preferenceNotice: spec.preferenceNotice }),
+    displayFactLimits: [],
     capabilities: [],
     configurationPosture: "Harness-owned settings stay with the Harness.",
   };
@@ -347,7 +349,11 @@ function checkingHarnessCatalog(specs: readonly HarnessSpec[]): {
         selection: selector,
         result: {
           found: true,
-          harness: { ...summaryOf(spec), capabilities: [] },
+          harness: {
+            ...summaryOf(spec),
+            capabilities: [],
+            displayFactLimits: [],
+          },
         },
       });
       holders.set(selector.id, () =>
@@ -357,7 +363,11 @@ function checkingHarnessCatalog(specs: readonly HarnessSpec[]): {
           selection: selector,
           result: {
             found: true,
-            harness: { ...summaryOf(spec), capabilities: [] },
+            harness: {
+              ...summaryOf(spec),
+              capabilities: [],
+              displayFactLimits: [],
+            },
           },
         }),
       );
