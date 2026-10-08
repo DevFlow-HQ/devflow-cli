@@ -8,8 +8,8 @@ Projection and headless --json](https://github.com/secantdev/secant/issues/263) 
 **Stored at start and at settle, never per chunk.** A tool call, an Agent call, and a Steer are stored when they start and again when they settle;
 assistant text and Thought rows are stored once when they settle. No delta or output chunk is written. A Turn that is later `lost` therefore still
 shows what was in flight, with its outcome unconfirmed. Every row goes through the existing admitted `appendTurnEvent`, so the Harness-facing half
-keeps exactly three admitted Turn writes. Each stored row reaches open clients during the Turn; the Turn's durable history no longer waits for the
-Attempt's publication.
+keeps exactly three admitted Turn writes. Amendment (2026-10-08): changed history is published during the Turn without waiting for the Attempt's
+publication, but an observer may skip unread intermediate states under the latest-state delivery rule below.
 
 **Identity and order.** Each item carries an opaque identity that is stable within its Turn: the Adapter supplies it for assistant text, Thoughts,
 and tool calls, and Secant supplies it for Steers and Agent calls. The Projection issues its own opaque row identity at the Projection Port, so the
@@ -29,19 +29,66 @@ unconfirmed and settled rows stand.
 
 **Command output and diffs.** Each call retains the last 30,000 characters of its output, live and stored alike, matching OpenCode's shell
 preview. When earlier output is dropped a Secant marker says so, distinct from any omission the Harness itself reported. Live previews reach
-clients at most every 50 ms per Run; terminal facts are never coalesced. Supplied final output replaces the preview without appending to it; a
+clients at most every 50 ms per Run. Amendment (2026-10-08): starts and terminal facts remain recorded individually, but unread Session-history
+pages and row previews may be superseded by their latest reconciled values under the delivery rule below. Supplied final output replaces the preview
+without appending to it; a
 call that completes without output keeps its preview with that label; a failed or declined call shows its error with any retained preview below. A
 cumulative Turn diff is one row that collapses to the changed files with lines added and removed and expands to the full diff; per-call patches
 are not cut. Context and usage stay in the live overlay, replaced on each report and never stored.
 
-**One per-Session history family.** A new `openProjection` family reads one Session's history: the newest 200 rows, with no cursor. Each stored
-change arrives as that whole page through the existing `durable` update, so clients never merge stored rows; the one new update variant carries a
-single row's live preview. The Application owns preview-to-row reconciliation, coalescing, stale-preview removal, and liveness behind it (ADR
+**One per-Session history family.** A new `openProjection` family reads one Session's history: the newest 200 rows, with no cursor. Amendment
+(2026-10-08): a changed history publishes a complete, payload-bounded replacement page through the existing `durable` update. Large retained bodies
+are reached through typed Resource References instead of being copied into every page. Clients never merge stored rows; the one live update variant
+carries a complete replacement of one row's bounded preview and content references. The Application owns preview-to-row reconciliation, coalescing,
+stale-preview removal, and liveness behind it (ADR
 0038). A row that falls off the top of the page is no longer shown or updated, as in OpenCode; the page marks that earlier conversation is not
 shown. The whole conversation stays readable on demand through the Session's transcript page and export References, which the Run Workbench opens
 from its details panel. The `run` family's live overlay loses its Run-wide `preview` and `activity` strings and the `preview` update kind. The
 overlay keeps the Turn phase, outstanding requests, Action Offers, context, and usage. `RunView.timeline` keeps its frozen shape, derived from the
 new rows.
+
+**Bounded latest-state delivery (2026-10-08).** [Decide how a Session history page fits the update stream's bound](https://github.com/secantdev/secant/issues/456)
+amends the never-coalescing rule in [Bound Projection queues and end only a lagging subscription](https://github.com/secantdev/secant/issues/306)
+for `session-history` only. Each observer retains at most one unread complete page and one later preview per retained row. A newer complete page
+supersedes every earlier unread page and preview. Later previews replace earlier previews for the same row and respect Application's newest
+window. Starts and settlements remain canonical stored facts even when the screen skips intermediate states. Preserve row identity, position,
+source, and paused viewport anchors. A replaced preview cannot resurrect a settled or evicted row. Suppress unchanged pages before delivery.
+
+The retained page and later previews together must fit a finite payload allowance; bound initial pages too. Use encoded UTF-8 payload accounting
+for this family, with 8 MiB as the existing nominal delivery budget, rather than calling the current UTF-16 estimate a byte bound. Application
+chooses private inline thresholds and reserves space for metadata, references, and pending previews under that aggregate allowance. Large values,
+including messages, Thoughts, patches, tool input/output, errors, and file lists, cannot bypass it. Do not reduce the 200-row window or silently cut
+retained content to meet delivery limits. There is no oversized-current-history-page exception. Terminal closure still releases retained state,
+unregisters the observer, delivers its one prescribed terminal ahead of pending state, and rejects later pushes. Producers never wait, and observers
+remain independent. Other Projection families keep their existing FIFO, accounting, overflow, and reopen behavior.
+
+**Content read on demand (2026-10-08).** Application extends the Projection Port's typed Resource reading for retained history content. Keep complete
+supplied patches and existing retained message/Thought bodies outside the bounded delivery page. Command output still retains only its 30,000-character
+tail; this adds no full-output capture. A reference selects one exact content version. Read large bodies in bounded chunks with Application-owned
+opaque continuation, preserving the supplied text exactly. Neither one read nor a concatenated hidden cache may eagerly load an arbitrarily large
+body. Metadata and large file lists follow the same rule. Storage/native coordinates, provider deltas, and resource retention decisions stay behind
+the Port. Existing transcript References cannot supply tool, Thought, or diff details and are not a substitute for this extension.
+
+The Workbench loads content when an existing panel expands or inspection requests it; fully shown messages and questions load as needed for their
+visible text without a new collapse rule. Expansion stays in place, may briefly show loading, and preserves its row and scroll anchor. Reading more
+content does not change `View freshness`. Show a read failure with a retry on that content, without disconnecting the history view or affecting the
+Run. A read completing for an older row/content version cannot overwrite a newer value or restore removed content. Stored content follows Run
+retention until deletion. Live-only content remains ephemeral and follows the current row/observer lifetime; no chunk writes, crash reconstruction,
+or timer-based persistence is added. Retain live content versions only while the latest delivery state or a bounded set of active reads needs them.
+Reclaim superseded live versions; reading one after reclamation returns a stale, retryable content Problem and never substitutes a newer body's chunks.
+Release demand-loaded content when it is no longer needed, keeping only a bounded viewport/inspection cache.
+The exact typed read shapes and private thresholds are specified with the implementing slice; the above limits and version behavior are mandatory.
+
+The references supply the mechanisms rather than a ready-made Secant contract. OpenCode keeps a
+[30,000-character live shell tail](https://github.com/anomalyco/opencode/blob/228e9095ba3988a02664c3816cb51f98584e86c2/packages/opencode/src/tool/shell.ts#L487)
+and [separates oversized tool output from its inline result](https://github.com/anomalyco/opencode/blob/228e9095ba3988a02664c3816cb51f98584e86c2/packages/opencode/src/tool/truncate.ts#L85).
+T3 Code [projects compact activity on the server](https://github.com/pingdotgg/t3code/blob/de251fc2971a884cb5b1305ba4daf309dc8cccb0/apps/server/src/orchestration/ActivityPayloadProjection.ts#L164),
+[coalesces identified tool updates](https://github.com/pingdotgg/t3code/blob/de251fc2971a884cb5b1305ba4daf309dc8cccb0/apps/server/src/orchestration/ThreadLiveEventCoalescer.ts#L51),
+and [fetches diff bodies separately](https://github.com/pingdotgg/t3code/blob/de251fc2971a884cb5b1305ba4daf309dc8cccb0/packages/contracts/src/review.ts#L31).
+Its [live-stream budget](https://github.com/pingdotgg/t3code/blob/de251fc2971a884cb5b1305ba4daf309dc8cccb0/apps/server/src/orchestration/LiveStreamBudget.ts#L17)
+measures encoded bytes. Secant keeps reconciliation in Application and adapts these ideas to opaque Resource References. OpenCode's expiring local
+output files and unbounded SSE queue, T3's client event reduction and 1 MiB diff-detail rejection, and a larger FIFO are not adopted. A strict page
+budget alone still permits repeated pages to overflow a finite queue; latest-page replacement alone still permits an arbitrarily large patch.
 
 **One record of the conversation.** `transcript_entry` retires. The Turn's input becomes its first row, `settleTurn` stops appending a final
 assistant copy, and transcript pages and exports are built from Turn rows: human input, delivered Steers, and settled assistant messages.

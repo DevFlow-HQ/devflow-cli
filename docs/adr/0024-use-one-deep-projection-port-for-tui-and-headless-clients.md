@@ -39,8 +39,11 @@ style them differently: the Run Workbench grows streaming text in place and mark
 ## Amendment (2026-09-30): the per-Session history family and the retired `preview` update
 
 [ADR 0039](./0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) adds a bounded, per-Session history family: the
-newest 200 rows of one Session's conversation, with no cursor. Each stored change arrives as that whole page through the `durable` update, so
-clients never reduce stored rows; one new live update variant carries a single row's preview. Durable, live, and preview updates stay distinct as
+newest 200 rows of one Session's conversation, with no cursor. Amendment (2026-10-08): changed history arrives as a complete payload-bounded page
+through the `durable` update, with large retained bodies read on demand through typed, version-bound Resource References and bounded reads.
+Unread history pages and row previews may be replaced by newer reconciled state under ADR 0039; other Projection families retain their FIFO rule.
+Clients never reduce stored rows; one live update variant carries a single row's bounded preview and content references. Durable, live, and preview
+updates stay distinct as
 data. The `run` family's live overlay drops its Run-wide `preview` and `activity` strings, and the scalar `preview` update kind retires. No other
 decision here changes.
 

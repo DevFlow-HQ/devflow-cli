@@ -38,6 +38,9 @@ to their line. `ctrl+o` or a click expands everything collapsed. Assistant text,
 The shell bound applies to live output and completed output alike, fits the available width, and expands only on human action. Native output updates
 replace the same call's preview; streaming never automatically opens a panel (ADR 0038). A Turn's cumulative diff collapses to its changed files
 with lines added and removed and expands to the full diff; per-call patches are not cut (ADR 0039).
+Amendment (2026-10-08): ADR 0039 bounds the content carried in history updates and reads large retained bodies on demand in bounded pieces.
+Existing panels still expand in place and may briefly show loading or a retryable content-read failure. Fully shown messages and questions remain
+readable without a new collapse rule; their visible text loads as needed. This changes delivery and loading, not the retained-content rules above.
 
 **Colour.** Colour comes only from the vendored theme roles, and everforest is the default theme. The agent colour marks the human's messages, the
 prompt bar, the Turn line, and the working indicator. Muted text marks settled work, `warning` marks reasoning rows and Harness Requests, `error`
