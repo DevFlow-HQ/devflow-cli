@@ -1,5 +1,6 @@
 import { createWorkspaceMentions } from "./workspace-mentions.js";
-import stripAnsi from "strip-ansi";
+import { createHistoryLayout } from "./run-history-layout.js";
+import { useLayoutObserver } from "./layout-observer.js";
 import { useRenderer } from "@opentui/solid";
 import {
   historyWindow,
@@ -16,6 +17,7 @@ import {
   mapArray,
   createSignal,
   For,
+  Index,
   onCleanup,
   on,
   Show,
@@ -95,7 +97,7 @@ import {
   reportedMetadata,
   type TimelineRow,
 } from "./run-timeline-rows.js";
-import { wrap, wrapRows } from "./wrap.js";
+import { wrap } from "./wrap.js";
 import { createModelChoiceControl } from "./run-model-choice.js";
 import { useExit } from "./vendor/exit.js";
 import { useDialog } from "./vendor/dialog.js";
@@ -127,7 +129,6 @@ const DETAILS_COMPACT_WIDTH = 80;
 const SIDEBAR_BREAKPOINT = 120;
 /** Columns a wrapped timeline row's continuation lines indent by, two past the
  *  row's own indent, so a row's lines read as one activity (#288). */
-const TIMELINE_HANG = 4;
 /** Rows the Review checkpoint interaction holds: the heading with its message,
  *  the cadence-and-evidence line, two controls each with their consequence line,
  *  and a status/hint line. */
@@ -296,8 +297,39 @@ export function RunWorkbench(props: {
     const result = snapshot().result;
     return result.found ? result.run : undefined;
   };
+  const sessionSelection = createMemo(() => {
+    const current = run();
+    if (current === undefined)
+      return { current: undefined, working: undefined, step: undefined };
+    const step = current.progress[current.position]?.id;
+    const timeline = [...current.timeline].reverse();
+    const latest = timeline.find((event) => event.event === "turn-started");
+    const started =
+      step === undefined
+        ? undefined
+        : timeline.find(
+            (event) => event.event === "turn-started" && event.step === step,
+          );
+    const stepSession = started?.session ?? started?.detail;
+    const latestSession = latest?.session ?? latest?.detail;
+    return {
+      current:
+        stepSession ?? latestSession ?? current.sessions?.at(-1)?.session,
+      working: live() === undefined ? undefined : latestSession,
+      step: stepSession,
+    };
+  });
   const historyFollowers = mapArray(
-    () => run()?.sessions?.map((session) => session.session) ?? [],
+    () => {
+      const selected = sessionSelection();
+      return [
+        ...new Set(
+          [selected.current, selected.working].filter(
+            (session): session is string => session !== undefined,
+          ),
+        ),
+      ];
+    },
     (session) => ({
       session,
       followed: view.openHistory(props.runId, session),
@@ -851,16 +883,9 @@ export function RunWorkbench(props: {
   // The current Step's Session by its plain name, which carries any Iteration
   // ("implement, iteration 2"); the Step's latest started Turn names it.
   const currentSession = () => {
-    const current = run();
-    const step = current?.progress[current.position]?.id;
-    if (current === undefined || step === undefined) return undefined;
-    const started = [...current.timeline]
-      .reverse()
-      .find((event) => event.step === step && event.event === "turn-started");
-    const session = started?.session ?? started?.detail;
-    if (session === undefined) return undefined;
+    const session = sessionSelection().step;
     return (
-      current.sessions?.find((row) => row.session === session)?.name ?? session
+      run()?.sessions?.find((row) => row.session === session)?.name ?? session
     );
   };
   const sidebarRows = (): readonly DetailsRow[] => {
@@ -1832,65 +1857,12 @@ export function RunWorkbench(props: {
       return next.size === previous.size ? previous : next;
     });
   });
-  const rowText = (row: TimelineRow, index: number): string => {
-    const prefix = `  ${index === 0 ? "Beginning of Run history · " : ""}`;
-    if (row.inspection !== undefined) return `  ▸ ${row.text}`;
-    if (row.output !== undefined) {
-      const expanded = expandedHistory().has(row.key);
-      const output = stripAnsi(row.output.text)
-        .replace(/\r(?!\n)/g, "\n")
-        .replace(/\p{Cc}/gu, (character) =>
-          ["\n", "\r", "\t"].includes(character) ? character : "",
-        );
-      const lines =
-        output === "" ? [] : wrapRows([output], innerW(), TIMELINE_HANG).lines;
-      const hidden = expanded ? 0 : Math.max(0, lines.length - 10);
-      const label = row.output.live
-        ? "live"
-        : row.output.incomplete
-          ? "potentially incomplete"
-          : "final";
-      return `${prefix}${row.text}\n  ${expanded ? "▾" : "▸"} Output · ${label}${lines.length === 0 ? " · empty" : ""}${hidden === 0 ? "" : ` · ${hidden} hidden lines`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${lines.length === 0 ? "" : `\n${(expanded ? lines : lines.slice(0, 10)).join("\n")}`}`;
-    }
-    if (row.thought === undefined)
-      return row.oneLine
-        ? clip(prefix + row.text, innerW())
-        : prefix + row.text;
-    const expanded = expandedHistory().has(row.key);
-    const thoughtPrefix = "  ";
-    const label = row.thought.live
-      ? row.text.replace(
-          "Thought · Thinking",
-          `Thought · Thinking ${props.reducedMotion ? "[.]" : "|"}`,
-        )
-      : row.text;
-    const header = clip(
-      `${thoughtPrefix}${expanded ? "▾" : "▸"} ${label}`,
-      innerW(),
-    );
-    return expanded ? `${header}\n${row.thought.content}` : header;
-  };
-  // Each row wraps at the interior width (#288), so the reducer windows display
-  // lines while holding its anchor and badge in rows. The beginning marker always
-  // leads the first row: it shows exactly when that row's first line is in view.
-  // A row's dividers (#289) are laid out above it in the same step, so they scroll
-  // with it and never count as new activity.
+  const layoutHistory = createHistoryLayout(
+    useLayoutObserver(),
+    props.reducedMotion,
+  );
   const timelineWrapped = createMemo(() =>
-    wrapRows(
-      timelineRows().map((row, index) => ({
-        rules:
-          index === 0 &&
-          (row.thought !== undefined || row.inspection !== undefined)
-            ? [
-                ...(row.dividers ?? []),
-                { glyph: "─", title: "Beginning of Run history" },
-              ]
-            : (row.dividers ?? []),
-        text: rowText(row, index),
-      })),
-      innerW(),
-      TIMELINE_HANG,
-    ),
+    layoutHistory(timelineRows(), innerW(), expandedHistory()),
   );
   createEffect(
     on(
@@ -1915,31 +1887,28 @@ export function RunWorkbench(props: {
       viewportH(),
     );
   const beginningVisible = () => win().top === 0;
-  const liveThoughtHeaders = createMemo(() => {
-    const lines = timelineWrapped().lines;
-    const headers = new Set<number>();
-    let top = 0;
-    for (const [index, row] of timelineRows().entries()) {
-      if (row.thought?.live) {
-        const header = rowText(row, index).split("\n")[0]!;
-        const at = lines.indexOf(header, top);
-        if (at >= top && at < top + timelineWrapped().heights[index]!)
-          headers.add(at);
-      }
-      top += timelineWrapped().heights[index]!;
-    }
-    return headers;
-  });
-  const visibleLines = () => {
+  const visibleLines = createMemo(() => {
     const w = win();
-    return timelineWrapped()
-      .lines.slice(w.top, w.top + w.visible)
-      .map((line, index) =>
-        liveThoughtHeaders().has(w.top + index) && !props.reducedMotion
-          ? line.replace("Thinking |", `Thinking ${thoughtMark()}`)
-          : line,
-      );
-  };
+    const lines: string[] = [];
+    let top = 0;
+    for (const row of timelineWrapped().rows) {
+      if (top >= w.top + w.visible) break;
+      if (top + row.lines.length > w.top) {
+        const from = Math.max(0, w.top - top);
+        const to = Math.min(row.lines.length, w.top + w.visible - top);
+        for (let index = from; index < to; index++) {
+          const line = row.lines[index]!;
+          lines.push(
+            index === row.thoughtHeader && !props.reducedMotion
+              ? line.replace("Thinking |", `Thinking ${thoughtMark()}`)
+              : line,
+          );
+        }
+      }
+      top += row.lines.length;
+    }
+    return lines;
+  });
 
   const rowAtLine = (line: number): TimelineRow | undefined => {
     let top = 0;
@@ -2442,18 +2411,18 @@ export function RunWorkbench(props: {
                       </text>
                     }
                   >
-                    <For each={visibleLines()}>
+                    <Index each={visibleLines()}>
                       {(line, index) => (
                         <text
                           fg={theme.text}
                           flexShrink={0}
                           wrapMode="none"
-                          onMouseDown={() => clickTimelineLine(index())}
+                          onMouseDown={() => clickTimelineLine(index)}
                         >
-                          {line}
+                          {line()}
                         </text>
                       )}
-                    </For>
+                    </Index>
                   </Show>
                 </box>
                 <text fg={theme.textMuted} flexShrink={0} wrapMode="none">

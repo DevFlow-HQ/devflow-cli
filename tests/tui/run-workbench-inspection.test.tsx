@@ -1007,7 +1007,7 @@ test("m10-session-history: per-call structured patches inspect supplied coordina
 });
 
 for (const appearance of ["dark", "light"] as const)
-  test(`m10-session-history: ${appearance} command output stays at ten displayed lines until Ctrl+O or click, retaining expansion through final replacement`, async () => {
+  test(`m10-session-history: ${appearance} command output stays at ten logical lines until Ctrl+O or click, retaining expansion through final replacement`, async () => {
     const run = runOf({
       sessions: [{ session: "s", name: "Conversation", availability: "open" }],
     });
@@ -1127,7 +1127,16 @@ for (const appearance of ["dark", "light"] as const)
       ),
     );
     await wb.t.renderOnce();
-    assert.match(wb.t.captureCharFrame(), /2 hidden lines/);
+    // #441 collapses before wrapping: all six logical lines remain visible even
+    // when each wraps, and the hidden-line count must not depend on the width.
+    assert.doesNotMatch(wb.t.captureCharFrame(), /hidden lines/);
+    assert.equal(
+      (
+        wb.t.captureCharFrame().match(/word word word word word word word/g) ??
+        []
+      ).length,
+      6,
+    );
     noOverflow(wb.t.captureCharFrame(), 40);
     resizeWorkbench(wb.t, wb.renderer, 32, 12);
     await wb.t.renderOnce();

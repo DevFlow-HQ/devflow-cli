@@ -585,6 +585,14 @@ function dividedRun(): RunView {
         session: "fresh-1.1:implement",
         sessionName: "fresh, iteration 2",
       },
+      {
+        at: "T12.5",
+        event: "assistant-content",
+        detail: "Current conversation reply",
+        step: "implement",
+        session: "fresh-1.1:implement",
+        sessionName: "fresh, iteration 2",
+      },
       { at: "T13", event: "materialization-conflict", detail: "docs/spec.md" },
     ],
   });
@@ -625,7 +633,7 @@ test("[step-session-dividers] the timeline marks each Step and Harness Session w
   for (const label of [
     /○ Run created/,
     /✓ Trust granted/,
-    /Assistant[\s\S]*Questions answered/,
+    /Assistant[\s\S]*Current conversation reply/,
     /↻ Iteration 1 complete/,
     /\? Harness Request expired/,
     /! Materialization conflict · docs\/spec\.md/,
@@ -636,6 +644,8 @@ test("[step-session-dividers] the timeline marks each Step and Harness Session w
     text,
     /run-created|trust-granted|attempt-settled|request-expired|materialization-conflict|iteration 1 1/,
   );
+  // #441 retains current-Session history, with prior Workflow facts only.
+  assert.doesNotMatch(text, /Questions answered/);
   assert.doesNotMatch(text, /fresh-\d|op-trust-1|req-42|session/);
   assert.doesNotMatch(text, /\b(?:open|detached|unusable)\b/);
 });

@@ -3,7 +3,7 @@ import type { PreferencesView } from "../../src/tui/tui.js";
 import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { mountRenderer } from "./renderer-fixture.js";
-import { createSignal } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { App } from "../../src/tui/tui.js";
 import {
   inertHarnessCatalogView,
@@ -174,6 +174,8 @@ export function makeRunView(initial: RunSnapshot) {
       catchUp: "fresh",
       lastConfirmedAt: "2026-09-22T10:30:00.000Z",
     });
+  const historyOpens: string[] = [];
+  const historyActive = new Set<string>();
   const reconnects: string[] = [];
   const reads = new Map<string, ResourceRead>();
   // Transcript pages, keyed by the requested `older` cursor ("" for the newest).
@@ -239,6 +241,9 @@ export function makeRunView(initial: RunSnapshot) {
       reconnect: () => reconnects.push("reconnect"),
     }),
     openHistory(runId, session) {
+      historyOpens.push(session);
+      historyActive.add(session);
+      onCleanup(() => historyActive.delete(session));
       return {
         freshness: historyFreshness,
         reconnect: () => reconnects.push("history"),
@@ -383,6 +388,8 @@ export function makeRunView(initial: RunSnapshot) {
   };
   return {
     transcriptReads,
+    historyOpens,
+    historyActive,
     view,
     setRun: (run: RunView) =>
       setSnapshot({
@@ -603,11 +610,13 @@ export async function mountApp(
   reducedMotion = false,
   ownedLiveRuns: number | "unavailable" = 0,
   preferences: PreferencesView = inertPreferencesView(),
+  observeLayout?: Parameters<typeof App>[0]["observeLayout"],
 ) {
   const exits: unknown[] = [];
   const t = await mountRenderer(
     () => (
       <App
+        observeLayout={observeLayout}
         preferences={preferences}
         view={approvedWorkspace(ownedLiveRuns)}
         bundles={oneBundle()}
@@ -642,6 +651,7 @@ export async function mountWorkbench(
   reducedMotion = false,
   ownedLiveRuns?: number | "unavailable",
   preferences?: PreferencesView,
+  observeLayout?: Parameters<typeof App>[0]["observeLayout"],
 ) {
   const control = makeRunView(snapshotOf(run));
   const renderer = makeFakeRenderer(width, height);
@@ -655,6 +665,7 @@ export async function mountWorkbench(
     reducedMotion,
     ownedLiveRuns,
     preferences,
+    observeLayout,
   );
   await t.waitForFrame(workbenchShown);
   return { t, control, renderer, exits };

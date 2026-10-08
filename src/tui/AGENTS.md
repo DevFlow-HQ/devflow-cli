@@ -16,6 +16,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The Run Workbench (`run-workbench.tsx`) is the one screen that takes its keys, size, and resize from the injected Renderer Port (`size`/`onKey`/`onResize`,
   A13) instead of `@opentui/keymap` + `useTerminalDimensions`: a single raw-key pipeline drives every control, so its input and layout are driven by a fake
   renderer in tests. Every other screen keeps the keymap/`useTerminalDimensions` path. Drawing still goes through OpenTUI elements — the Port never carries it.
+- History layouts (#441) retain row/value/width/expansion work, release evicted rows, and window visible lines; transcript prepends re-layout only new entries
+  and changed divider junctions. `App.observeLayout` measures actual cache misses through the Renderer fixture; height-only resize must reuse the layout.
 - Before changing history rendering, scrolling, or row inspection, read [Workbench history](../../docs/agents/tui-workbench.md#history).
 - Workbench Step-ending Offers expose Run and Step ids, not an Attempt id. Resume evidence is ownerPid and acknowledgement; Interrupt exposes turnId
   (#389). Confirmation lifecycle rules live in [Workbench interaction](../../docs/agents/tui-workbench.md).

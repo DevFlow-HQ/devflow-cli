@@ -33,7 +33,11 @@ export function wrap(text: string, width: number, hang = 0): string[] {
     used = indent.length;
     fresh = true;
   };
-  for (const token of tokens(text.replaceAll("\t", TAB))) {
+  const normalized = text.replaceAll("\t", TAB);
+  const ascii = /^[\x20-\x7e]*$/.test(normalized);
+  const measure = ascii ? (value: string) => value.length : stringWidth;
+  const measuredGraphemes = ascii ? undefined : new Map<string, number>();
+  for (const token of tokens(normalized)) {
     if (token === "") continue;
     if (token.startsWith(" ")) {
       spaces += token;
@@ -41,29 +45,55 @@ export function wrap(text: string, width: number, hang = 0): string[] {
     }
     let piece = fresh ? token : spaces + token;
     spaces = "";
-    if (used + stringWidth(piece) > columns && !fresh && used > 0) {
+    let remainingWidth = measure(piece);
+    if (used + remainingWidth > columns && !fresh && used > 0) {
       breakLine();
       piece = token;
+      remainingWidth = measure(piece);
     }
-    // Break a piece still too wide for a whole line by grapheme.
-    while (used + stringWidth(piece) > columns) {
-      let head = "";
+    // Segment each overlong piece once. Every wrapped line advances through the
+    // same measured graphemes, without scanning the remaining suffix again.
+    const graphemes =
+      measuredGraphemes === undefined || used + remainingWidth <= columns
+        ? []
+        : Array.from(segmenter.segment(piece), ({ segment }) => {
+            let width = measuredGraphemes.get(segment);
+            if (width === undefined) {
+              width = stringWidth(segment);
+              measuredGraphemes.set(segment, width);
+            }
+            return { length: segment.length, width };
+          });
+    let graphemeIndex = 0;
+    let pieceOffset = 0;
+    while (used + remainingWidth > columns) {
+      let head: string;
       let headWidth = 0;
-      for (const { segment } of segmenter.segment(piece)) {
-        const segmentWidth = stringWidth(segment);
-        // Always take one grapheme, so a glyph wider than the line still advances.
-        if (head !== "" && used + headWidth + segmentWidth > columns) break;
-        head += segment;
-        headWidth += segmentWidth;
+      if (ascii) {
+        const count = Math.max(1, columns - used);
+        head = piece.slice(pieceOffset, pieceOffset + count);
+        headWidth = head.length;
+      } else {
+        let length = 0;
+        while (graphemeIndex < graphemes.length) {
+          const grapheme = graphemes[graphemeIndex]!;
+          // Always take one grapheme, so a glyph wider than the line advances.
+          if (length > 0 && used + headWidth + grapheme.width > columns) break;
+          length += grapheme.length;
+          headWidth += grapheme.width;
+          graphemeIndex++;
+        }
+        head = piece.slice(pieceOffset, pieceOffset + length);
       }
       line += head;
       used += headWidth;
-      piece = piece.slice(head.length);
-      if (piece === "") break;
+      pieceOffset += head.length;
+      remainingWidth -= headWidth;
+      if (pieceOffset === piece.length) break;
       breakLine();
     }
-    line += piece;
-    used += stringWidth(piece);
+    line += piece.slice(pieceOffset);
+    used += remainingWidth;
     fresh = false;
   }
   lines.push(line);
@@ -103,6 +133,11 @@ function ruleLines(rule: Rule, width: number): string[] {
   return wrap(rule.title, columns - 2).map((line) => `${rule.glyph} ${line}`);
 }
 
+/** The counted divider prefix shared by history and transcript entry layouts. */
+export function wrapRules(rules: readonly Rule[], width: number): string[] {
+  return rules.flatMap((rule) => ruleLines(rule, width));
+}
+
 /** A row laid out under the rules that lead it: each rule's lines, then the row's
  *  wrapped text, counted as one row. */
 export interface RuledRow {
@@ -131,7 +166,7 @@ export function wrapRows(
     const { rules, text } =
       typeof row === "string" ? { rules: [], text: row } : row;
     const wrapped = [
-      ...rules.flatMap((rule) => ruleLines(rule, width)),
+      ...wrapRules(rules, width),
       ...text.split(/\r?\n/).flatMap((line) => wrap(line, width, hang)),
     ];
     for (const line of wrapped) lines.push(line);

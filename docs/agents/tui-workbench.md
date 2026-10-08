@@ -77,14 +77,16 @@ Before changing completion, Slash discovery, drafts, prompt captures, or restora
 
 ## History
 
-- Workbench history (#412) consumes keyed complete Session pages and complete preview values. `mapArray` retains subscriptions by semantic Session;
-  ordinary Run updates never reopen them. `run-history-scroll.ts` stores opaque row ids and displayed-line offsets, and uses ordinals only for layout.
+- Workbench history (#412, #441) consumes keyed complete Session pages and complete preview values. `mapArray` retains only the current Session
+  and a distinct live Turn's Session; ordinary Run updates never reopen them. Prior Turn starts/settlements remain Workflow facts, not older conversation.
+  `run-history-scroll.ts` stores opaque row ids and displayed-line offsets, and uses ordinals only for layout.
   Alt+Up/Down scroll lines, PageUp/Down half a viewport, minimum one, Alt+Home oldest and Alt+End latest; native arrows/Home/End edit the prompt.
   Keys yield to modal/details focus; OpenTUI wheel events bubble with the same guards. The Renderer Adapter maps `meta` to the Port's `alt`.
   Passive changes stay paused. Up starts at the actual anchor, including blank space below short pages; only latest or deliberate Down resumes following.
   A removed anchor chooses the nearest prior survivor, ties later, at offset zero; a short or empty page stays paused. Dividers count toward their content row.
 - Ctrl+O/click opens a history detail: output and Thoughts toggle by row id; call patches and Turn diffs open complete supplied content (#415–#417).
-  Output collapses at ten wrapped lines, never auto-expands; diff inspection stays uncapped. Thought ticks change headings; modal/input key ownership stays unchanged.
+  Output collapses before wrapping at ten logical lines or `10 * Math.max(20, width - 6)` code points, whichever comes first; the omission count names
+  lines or characters truthfully. It never auto-expands; diff inspection stays uncapped. Thought ticks change headings; modal/input key ownership stays unchanged.
 - The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
   `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.

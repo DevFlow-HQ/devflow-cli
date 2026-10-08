@@ -81,3 +81,66 @@ test("a capped row's truncation marker is never split and ends its last display 
   // Only a line narrower than the marker itself breaks it, by grapheme.
   fits(wrap(`yy … output truncated`, 12), 12);
 });
+
+test("m10-audit-row-layout-once: printable ASCII fast path matches grapheme wrapping across widths, indentation, tabs and word breaks", () => {
+  // Replacing a with á forces the grapheme path without changing display width,
+  // word boundaries or break positions. Literal examples above remain the oracle
+  // for both paths' whitespace and continuation semantics.
+  const texts = [
+    "a",
+    "   a  b   ",
+    "a\tbb\tccc",
+    "a".repeat(300),
+    "ab abcdefgh",
+    "a ~!@#$%^&*()[]{}:;,.?/123",
+  ];
+  let seed = 441;
+  for (let i = 0; i < 30; i++) {
+    let text = "a";
+    for (let j = 0; j < 100; j++) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      text += "abc   \t012!"[seed % 11];
+    }
+    texts.push(text);
+  }
+  for (const text of texts)
+    for (const width of [1, 2, 5, 12, 40, 96, 116, 121])
+      for (const hang of [0, 1, 4, 200]) {
+        const unicode = wrap(text.replaceAll("a", "á"), width, hang).map(
+          (line) => line.replaceAll("á", "a"),
+        );
+        assert.deepEqual(
+          wrap(text, width, hang),
+          unicode,
+          `width=${width}, hang=${hang}, text=${JSON.stringify(text)}`,
+        );
+      }
+});
+
+for (const [glyph, columns, lines] of [
+  ["é", 1, 300],
+  ["漢", 2, 600],
+] as const) {
+  test(`m10-audit-row-layout-once: an unbroken 30000-character ${glyph} line wraps in linear time with exact display-column parity`, () => {
+    const text = glyph.repeat(30_000);
+    const before = performance.now();
+    const wrapped = wrap(text, 100);
+    const elapsed = performance.now() - before;
+    assert.deepEqual(
+      wrapped,
+      Array.from({ length: lines }, () => glyph.repeat(100 / columns)),
+    );
+    assert.ok(
+      elapsed < 100,
+      `30000 ${glyph} characters took ${elapsed.toFixed(1)} ms`,
+    );
+    assert.equal(wrapped.join(""), text);
+  });
+}
+
+test("m10-audit-row-layout-once: Unicode wrapping preserves combining marks, joined emoji, flags and zero-width segments", () => {
+  assert.deepEqual(wrap("e\u0301".repeat(3), 2), ["e\u0301e\u0301", "e\u0301"]);
+  assert.deepEqual(wrap("👩‍💻".repeat(3), 2), ["👩‍💻", "👩‍💻", "👩‍💻"]);
+  assert.deepEqual(wrap("🇮🇳".repeat(3), 2), ["🇮🇳", "🇮🇳", "🇮🇳"]);
+  assert.deepEqual(wrap("\u200babc", 2), ["\u200bab", "c"]);
+});

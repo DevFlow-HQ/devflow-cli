@@ -1,3 +1,4 @@
+import { useLayoutObserver } from "./layout-observer.js";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, createSignal, For, type Accessor } from "solid-js";
 import stripAnsi from "strip-ansi";
@@ -83,6 +84,7 @@ export function createInspection(deps: {
   interiorH: Accessor<number>;
   width: Accessor<number>;
 }): InspectionController {
+  const observe = useLayoutObserver();
   const [inspecting, setInspecting] = createSignal<
     BlobInspection | undefined
   >();
@@ -137,7 +139,23 @@ export function createInspection(deps: {
       .slice(0, -1)
       .concat(`${last} ${RUN_TIMELINE_TRUNCATION_MARKER}`);
   };
-  const wrapped = createMemo(() => wrapRows(logicalLines(), deps.width()));
+  const layoutAtWidth = createMemo(() => {
+    const current = inspecting();
+    const logical = logicalLines();
+    const widths = new Map<number, ReturnType<typeof wrapRows>>();
+    return (width: number) => {
+      let layout = widths.get(width);
+      if (layout === undefined) {
+        if (current !== undefined)
+          observe({ kind: "inspection", id: current.title, width });
+        layout = wrapRows(logical, width);
+        widths.set(width, layout);
+      }
+      return layout;
+    };
+  });
+  const width = createMemo(deps.width);
+  const wrapped = createMemo(() => layoutAtWidth()(width()));
   const lines = () => wrapped().lines;
   const viewportH = () => Math.max(1, deps.interiorH() - 2); // title + footer
   const window = () => timelineWindow(scroll(), wrapped().heights, viewportH());

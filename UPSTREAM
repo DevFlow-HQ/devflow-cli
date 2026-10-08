@@ -564,3 +564,17 @@ Dropped as OpenCode-branded (the "three extra" drops):
     vendor/dialog.tsx: Workbench dialogs follow Renderer Port geometry;
     a delayed focus restore yields to a replacement dialog.
     The 25 palette bytes and shipped attribution notices remain unchanged.
+
+
+2026-10-08, #441: bounded collapsed command output
+    Studied packages/tui/src/routes/session/index.tsx (Shell, lines 2053-2055)
+    and packages/tui/src/util/collapse-tool-output.ts at OpenCode revision
+    228e9095ba3988a02664c3816cb51f98584e86c2.
+    Rebuilt the collapse policy in src/tui/run-history-layout.ts.
+    Taken: ten logical lines and a character budget of
+    10 * Math.max(20, width - 6), with code-point-safe prefix truncation.
+    Changed: Secant reports omitted characters when the character limit wins
+    and omitted source lines otherwise. The count replaces the upstream
+    line-only ellipsis; character truncation still ends in an ellipsis.
+    Sanitization and per-row/value/width/expansion caching remain Secant-owned.
+    No OpenCode source is copied.

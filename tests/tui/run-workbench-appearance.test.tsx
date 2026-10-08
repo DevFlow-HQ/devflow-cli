@@ -43,7 +43,10 @@ test("[selected-versus-observed-evidence] selected and observed Harness facts st
         {
           at: "T000",
           event: "turn-started",
-          detail: "repair",
+          detail: "fixture-preview",
+          session: "fixture-preview",
+          sessionName: "Live conversation",
+          step: "repair",
           turnKind: "agent",
         },
       ],
@@ -96,7 +99,10 @@ test("[selected-versus-observed-evidence] selected and observed Harness facts st
         {
           at: "T000",
           event: "turn-started",
-          detail: "repair",
+          detail: "fixture-preview",
+          session: "fixture-preview",
+          sessionName: "Live conversation",
+          step: "repair",
           turnKind: "agent",
         },
         {

@@ -1,3 +1,4 @@
+import { useLayoutObserver, type LayoutObserver } from "./layout-observer.js";
 import { TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import {
@@ -5,7 +6,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  For,
+  Index,
   Show,
   untrack,
   type Accessor,
@@ -21,7 +22,7 @@ import type {
 import { clip } from "./clip.js";
 import { SCROLL_KEYS } from "./run-timeline.js";
 import { sessionDivider, stepDivider } from "./run-timeline-rows.js";
-import { wrapRows, type Rule } from "./wrap.js";
+import { wrapRows, wrapRules, type Rule } from "./wrap.js";
 import type { Theme } from "./vendor/theme.js";
 
 export interface TranscriptTarget {
@@ -61,34 +62,73 @@ type Anchor =
 /** Retained entries own their wrapped content and attached dividers. Offset zero
  * names the role header; negative offsets name its leading divider lines. Adding
  * a newly known Step/Session divider cannot change the anchored content line. */
-function entryLayout(reader: Reader, width: number) {
-  let step: string | undefined;
-  let start = 0;
-  return reader.entries.map((entry, index) => {
-    const rules: Rule[] = [];
-    const fromStart = reader.older === undefined;
-    if (index === 0 && fromStart)
-      rules.push(sessionDivider(reader.target.sessionName));
-    if (
-      (index > 0 || fromStart) &&
-      entry.step !== undefined &&
-      entry.step !== step
-    )
-      rules.push(stepDivider(entry.step));
-    step = entry.step ?? step;
-    const header = `${entry.role === "user" ? "◇ User Turn" : "◆ Assistant"}${entryAnnotation(entry)}`;
-    const ruled = wrapRows([{ rules, text: header }], width).lines;
-    const headerLines = wrapRows([header], width).lines.length;
-    const prefix = ruled.length - headerLines;
-    const lines = [
-      ...ruled,
-      ...wrapRows(stripAnsi(entry.content).split(/\r?\n/).concat(""), width)
-        .lines,
-    ];
-    const result = { id: entry.id, start, prefix, lines };
-    start += lines.length;
-    return result;
-  });
+function createEntryLayout(observe: LayoutObserver) {
+  type Layout = { readonly prefix: number; readonly lines: readonly string[] };
+  type Cached = {
+    readonly entry: RunTranscriptEntryView;
+    readonly rules: readonly Rule[];
+    readonly widths: Map<number, Layout>;
+  };
+  const cache = new Map<string, Cached>();
+  return (reader: Reader | undefined, width: number) => {
+    if (reader === undefined) {
+      cache.clear();
+      return [];
+    }
+    const retained = new Set(reader.entries.map((entry) => entry.id));
+    for (const id of cache.keys()) if (!retained.has(id)) cache.delete(id);
+    let step: string | undefined;
+    let start = 0;
+    return reader.entries.map((entry, index) => {
+      const rules: Rule[] = [];
+      const fromStart = reader.older === undefined;
+      if (index === 0 && fromStart)
+        rules.push(sessionDivider(reader.target.sessionName));
+      if (
+        (index > 0 || fromStart) &&
+        entry.step !== undefined &&
+        entry.step !== step
+      )
+        rules.push(stepDivider(entry.step));
+      step = entry.step ?? step;
+      let cached = cache.get(entry.id);
+      if (
+        cached === undefined ||
+        cached.entry !== entry ||
+        cached.rules.length !== rules.length ||
+        rules.some(
+          (rule, i) =>
+            rule.glyph !== cached?.rules[i]?.glyph ||
+            rule.title !== cached?.rules[i]?.title,
+        )
+      ) {
+        cached = { entry, rules, widths: new Map() };
+        cache.set(entry.id, cached);
+      }
+      let layout = cached.widths.get(width);
+      if (layout === undefined) {
+        observe({ kind: "transcript", id: entry.id, width });
+        const leading = wrapRules(rules, width);
+        const header = `${entry.role === "user" ? "◇ User Turn" : "◆ Assistant"}${entryAnnotation(entry)}`;
+        const lines = [
+          ...leading,
+          ...wrapRows([header], width).lines,
+          ...wrapRows(stripAnsi(entry.content).split(/\r?\n/).concat(""), width)
+            .lines,
+        ];
+        layout = { prefix: leading.length, lines };
+        cached.widths.set(width, layout);
+      }
+      const result = {
+        id: entry.id,
+        start,
+        prefix: layout.prefix,
+        lines: layout.lines,
+      };
+      start += layout.lines.length;
+      return result;
+    });
+  };
 }
 
 /** Only this details reader requests older pages. Its loaded page remains a
@@ -101,14 +141,12 @@ export function createTranscriptReader(deps: {
   interiorH: Accessor<number>;
 }) {
   const renderer = useRenderer();
+  const observe = useLayoutObserver();
   const [reader, setReader] = createSignal<Reader>();
   const [anchor, setAnchor] = createSignal<Anchor>({ mode: "latest" });
   const [exportNotice, setExportNotice] = createSignal<string>();
-  const layout = createMemo(() => {
-    const current = reader();
-    return current === undefined ? [] : entryLayout(current, deps.width());
-  });
-  const lines = () => layout().flatMap((entry) => entry.lines);
+  const entryLayout = createEntryLayout(observe);
+  const layout = createMemo(() => entryLayout(reader(), deps.width()));
   const height = () =>
     Math.max(
       1,
@@ -310,7 +348,22 @@ export function createTranscriptReader(deps: {
     reader,
     open,
     handleKey,
-    visible: () => lines().slice(position().top, position().top + height()),
+    visible: createMemo(() => {
+      const top = position().top;
+      const bottom = top + height();
+      const lines: string[] = [];
+      for (const entry of layout()) {
+        if (entry.start >= bottom) break;
+        if (entry.start + entry.lines.length <= top) continue;
+        lines.push(
+          ...entry.lines.slice(
+            Math.max(0, top - entry.start),
+            bottom - entry.start,
+          ),
+        );
+      }
+      return lines;
+    }),
     location,
     notice,
   };
@@ -341,13 +394,13 @@ export function TranscriptReaderView(props: {
         )}
       </text>
       <box flexDirection="column" flexGrow={1} overflow="hidden">
-        <For each={props.visible()}>
+        <Index each={props.visible()}>
           {(line) => (
             <text fg={props.theme.text} flexShrink={0} wrapMode="none">
-              {line}
+              {line()}
             </text>
           )}
-        </For>
+        </Index>
       </box>
       <Show when={props.interiorH() >= 5}>
         <text fg={props.theme.textMuted} flexShrink={0}>

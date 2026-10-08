@@ -1,3 +1,7 @@
+import {
+  LayoutObserverProvider,
+  type LayoutObserver,
+} from "./layout-observer.js";
 import { TextAttributes } from "@opentui/core";
 import {
   createEffect,
@@ -339,6 +343,8 @@ function GuardedExitProvider(props: ParentProps<{ exit: Exit }>) {
 }
 
 export function App(props: {
+  /** Optional layout measurement, with no effect on Run or Renderer contracts. */
+  observeLayout?: LayoutObserver;
   preferences: PreferencesView;
   view: WorkspaceView;
   bundles: BundleCatalogView;
@@ -359,44 +365,49 @@ export function App(props: {
 }) {
   const keymap = createTuiKeymap();
   return (
-    <ExitProvider exit={props.exit}>
-      <ThemeProvider initial={props.preferences.snapshot().preferences}>
-        <KeymapProvider keymap={keymap}>
-          <WorkspaceViewProvider view={props.view}>
-            <BundleCatalogViewProvider view={props.bundles}>
-              <HarnessCatalogViewProvider view={props.harnesses}>
-                <LaunchPreparationViewProvider view={props.preparation}>
-                  <RunLaunchViewProvider view={props.launch}>
-                    <RunWorkbenchViewProvider view={props.run}>
-                      <RunListViewProvider view={props.runList}>
-                        <RunActionsViewProvider view={props.actions}>
-                          <AppCommandsProvider>
-                            <DialogProvider>
-                              <GuardedExitProvider exit={props.exit}>
-                                <ErrorBoundary
-                                  fallback={(error) => (
-                                    <Fallback error={error} exit={props.exit} />
-                                  )}
-                                >
-                                  <Route
-                                    renderer={props.renderer}
-                                    preferences={props.preferences}
-                                    reducedMotion={props.reducedMotion}
-                                  />
-                                </ErrorBoundary>
-                              </GuardedExitProvider>
-                            </DialogProvider>
-                          </AppCommandsProvider>
-                        </RunActionsViewProvider>
-                      </RunListViewProvider>
-                    </RunWorkbenchViewProvider>
-                  </RunLaunchViewProvider>
-                </LaunchPreparationViewProvider>
-              </HarnessCatalogViewProvider>
-            </BundleCatalogViewProvider>
-          </WorkspaceViewProvider>
-        </KeymapProvider>
-      </ThemeProvider>
-    </ExitProvider>
+    <LayoutObserverProvider observer={props.observeLayout}>
+      <ExitProvider exit={props.exit}>
+        <ThemeProvider initial={props.preferences.snapshot().preferences}>
+          <KeymapProvider keymap={keymap}>
+            <WorkspaceViewProvider view={props.view}>
+              <BundleCatalogViewProvider view={props.bundles}>
+                <HarnessCatalogViewProvider view={props.harnesses}>
+                  <LaunchPreparationViewProvider view={props.preparation}>
+                    <RunLaunchViewProvider view={props.launch}>
+                      <RunWorkbenchViewProvider view={props.run}>
+                        <RunListViewProvider view={props.runList}>
+                          <RunActionsViewProvider view={props.actions}>
+                            <AppCommandsProvider>
+                              <DialogProvider>
+                                <GuardedExitProvider exit={props.exit}>
+                                  <ErrorBoundary
+                                    fallback={(error) => (
+                                      <Fallback
+                                        error={error}
+                                        exit={props.exit}
+                                      />
+                                    )}
+                                  >
+                                    <Route
+                                      renderer={props.renderer}
+                                      preferences={props.preferences}
+                                      reducedMotion={props.reducedMotion}
+                                    />
+                                  </ErrorBoundary>
+                                </GuardedExitProvider>
+                              </DialogProvider>
+                            </AppCommandsProvider>
+                          </RunActionsViewProvider>
+                        </RunListViewProvider>
+                      </RunWorkbenchViewProvider>
+                    </RunLaunchViewProvider>
+                  </LaunchPreparationViewProvider>
+                </HarnessCatalogViewProvider>
+              </BundleCatalogViewProvider>
+            </WorkspaceViewProvider>
+          </KeymapProvider>
+        </ThemeProvider>
+      </ExitProvider>
+    </LayoutObserverProvider>
   );
 }

@@ -53,9 +53,15 @@ export function buildTimelineRows(
     readonly history: SessionHistoryView;
   }[],
 ): readonly TimelineRow[] {
+  const subscribed = new Set(histories.map((history) => history.session));
   const conversation = [
     ...durableTimelineRows(
-      run.timeline.filter((event) => event.session === undefined),
+      run.timeline.filter(
+        (event) =>
+          event.session === undefined ||
+          (!subscribed.has(event.session) &&
+            ["turn-started", "turn-settled"].includes(event.event)),
+      ),
     ),
     ...histories.flatMap(({ name, session, history }) =>
       historyTimelineRows(history, name, session),
