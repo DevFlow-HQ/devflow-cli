@@ -1733,7 +1733,7 @@ export function RunWorkbench(props: {
   const mentions = createWorkspaceMentions({
     draft,
     caret,
-    workspace: () => run()?.workspacePath,
+    runId: () => run()?.runId,
     enabled: () =>
       promptFieldFocused() &&
       !slashOpen() &&

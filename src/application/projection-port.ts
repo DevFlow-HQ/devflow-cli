@@ -1872,7 +1872,7 @@ export interface WorkspacePathCandidate {
   readonly kind: "file" | "folder";
 }
 export interface WorkspacePathQuery {
-  readonly workspacePath: string;
+  readonly runId: string;
   readonly query: string;
   readonly signal?: AbortSignal;
 }

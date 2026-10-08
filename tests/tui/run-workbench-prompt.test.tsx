@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { inertPreferencesView } from "./inert.js";
 import { test } from "node:test";
 import { createSignal } from "solid-js";
 import type { AnswerOutcome, RunActionOutcome } from "../../src/tui/tui.js";
@@ -2555,7 +2556,7 @@ for (const text of [
 }
 
 for (const working of [false, true]) {
-  test(`m10-workspace-mentions: search unavailable leaves ordinary ${working ? "Steer" : "Send"} available`, async () => {
+  test(`m10-audit-run-keyed-workspace-paths: search unavailable leaves ordinary ${working ? "Steer" : "Send"} available`, async () => {
     const wb = await mountWorkbench(
       working
         ? liveInteractiveRunOf({
@@ -2619,12 +2620,12 @@ test("m10-workspace-mentions: Escape preserves draft and unknown Slash permits a
 for (const change of [
   "query",
   "token",
-  "Workspace",
+  "Run",
   "caret-leaves",
   "request",
   "gate",
 ]) {
-  test(`m10-workspace-mentions: delayed reply cannot survive a changed ${change}`, async () => {
+  test(`m10-audit-run-keyed-workspace-paths: delayed reply cannot survive a changed ${change}`, async () => {
     const wb = await mountWorkbench(
       interactiveRunOf({ actionOffers: [SEND_OFFER] }),
     );
@@ -2637,13 +2638,19 @@ for (const change of [
 
     await type(wb.t, "@old");
     await until(() => pending.length === 1);
+    assert.equal(pending[0]?.input.runId, "run-1");
+    assert.deepEqual(Object.keys(pending[0]?.input ?? {}).sort(), [
+      "query",
+      "runId",
+      "signal",
+    ]);
     if (change === "query") await type(wb.t, "new");
     if (change === "token") await type(wb.t, " @old");
-    if (change === "Workspace")
+    if (change === "Run")
       wb.control.setSnapshot(
         snapshotOf(
           interactiveRunOf({
-            workspacePath: "/new/workspace",
+            runId: "run-2",
             actionOffers: [SEND_OFFER],
           }),
         ),
@@ -2652,8 +2659,9 @@ for (const change of [
     if (change === "request") wb.control.setLive(requestOverlay());
     if (change === "gate") wb.control.setSnapshot(snapshotOf(freeTextRunOf()));
     await wb.t.renderOnce();
-    if (["query", "token", "Workspace"].includes(change))
+    if (["query", "token", "Run"].includes(change))
       await until(() => pending.length === 2);
+    assert.equal(pending[0]?.input.signal?.aborted, true);
     pending[0]?.resolve({
       status: "available",
       candidates: [{ path: "obsolete.ts", kind: "file" }],
@@ -2668,8 +2676,8 @@ for (const change of [
       });
       await mentionFrame(wb, /› @current.ts/);
       assert.equal(
-        pending[1].input.workspacePath,
-        change === "Workspace" ? "/new/workspace" : "/tmp/ws",
+        pending[1].input.runId,
+        change === "Run" ? "run-2" : "run-1",
       );
     } else
       assert.doesNotMatch(
@@ -2682,8 +2690,11 @@ for (const change of [
 for (const [width, height] of [
   [24, 10],
   [80, 16],
+  [120, 24],
+  [121, 24],
+  [160, 40],
 ]) {
-  test(`m10-workspace-mentions: bounded list and selected path stay visible through dual resize at ${width}x${height}`, async () => {
+  test(`m10-audit-run-keyed-workspace-paths: bounded list and selected path stay visible through dual resize at ${width}x${height}`, async () => {
     const wb = await mountWorkbench(
       interactiveRunOf({ actionOffers: [SEND_OFFER] }),
       width,
@@ -2733,3 +2744,66 @@ test("m10-workspace-mentions: a hash inside a quoted file path is not its textua
   await press(wb.t, wb.renderer, "return");
   assert.equal(wb.control.sends[0]?.text, '@"a#b c.ts"#L10-20');
 });
+
+for (const appearance of ["dark", "light"] as const) {
+  test(`m10-audit-run-keyed-workspace-paths: ${appearance} cues preserve paused history, large paths and focus`, async () => {
+    const preferences = {
+      ...inertPreferencesView(),
+      snapshot: () => ({
+        family: "preferences" as const,
+        preferences: { theme: "everforest", appearance },
+        supportedThemes: ["everforest"],
+        actionOffers: [],
+      }),
+    };
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER], timeline: events(80) }),
+      121,
+      24,
+      undefined,
+      false,
+      undefined,
+      preferences,
+    );
+    const longPath = "folder/" + "large-file-name-".repeat(30) + ".ts";
+    wb.control.view.searchWorkspacePaths = async (input) => {
+      assert.equal(input.runId, "run-1");
+      return {
+        status: "available",
+        candidates: [
+          { path: "folder", kind: "folder" },
+          { path: longPath, kind: "file" },
+        ],
+      };
+    };
+    await type(wb.t, "@folder");
+    await mentionFrame(wb, /› @folder\/ · folder/);
+    const spans = wb.t.captureSpans().lines.flatMap((line) => line.spans);
+    const candidate = spans.find((span) => span.text.includes("› @folder/"));
+    assert.ok(candidate);
+    assert.deepEqual(
+      [candidate.fg.r, candidate.fg.g, candidate.fg.b].map((v) =>
+        Math.round(v * 255),
+      ),
+      appearance === "dark" ? [211, 198, 170] : [92, 106, 114],
+    );
+    await press(wb.t, wb.renderer, "pageup");
+    assert.match(wb.t.captureCharFrame(), /Jump to latest/);
+    const firstRow = wb.t.captureCharFrame().split("\n")[1];
+    wb.control.setRun(
+      interactiveRunOf({ actionOffers: [SEND_OFFER], timeline: events(85) }),
+    );
+    await wb.t.renderOnce();
+    assert.equal(wb.t.captureCharFrame().split("\n")[1], firstRow);
+    await press(wb.t, wb.renderer, "down");
+    assert.match(wb.t.captureCharFrame(), /› @folder\/large-file-name-/);
+    assert.match(wb.t.captureCharFrame(), /…/);
+    resizeWorkbench(wb.t, wb.renderer, 120, 24);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /Jump to latest/);
+    noOverflow(wb.t.captureCharFrame(), 120);
+    await press(wb.t, wb.renderer, "tab");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, "@" + longPath);
+  });
+}

@@ -9,7 +9,9 @@ import type {
 } from "./projection-port.js";
 
 export async function searchWorkspacePaths(
-  input: WorkspacePathQuery,
+  input: Pick<WorkspacePathQuery, "query" | "signal"> & {
+    readonly workspacePath: string;
+  },
 ): Promise<WorkspacePathSearch> {
   try {
     if (

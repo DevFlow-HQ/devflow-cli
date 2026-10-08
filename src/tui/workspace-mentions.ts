@@ -22,7 +22,7 @@ export interface MentionReplacement {
 export function createWorkspaceMentions(input: {
   draft: Accessor<string>;
   caret: Accessor<number>;
-  workspace: Accessor<string | undefined>;
+  runId: Accessor<string | undefined>;
   enabled: Accessor<boolean>;
   search: ProjectionPort["searchWorkspacePaths"];
 }) {
@@ -34,20 +34,14 @@ export function createWorkspaceMentions(input: {
   const [selection, setSelection] = createSignal(0);
   const [replacement, setReplacement] = createSignal<MentionReplacement>();
   const current = createMemo(() => {
-    const workspacePath = input.workspace();
-    if (!input.enabled() || workspacePath === undefined) return;
+    const runId = input.runId();
+    if (!input.enabled() || runId === undefined) return;
     const text = input.draft();
     const caret = input.caret();
     const token = tokenAt(text, caret);
     if (token === undefined) return;
-    const key = JSON.stringify([
-      workspacePath,
-      text,
-      caret,
-      token.start,
-      token.end,
-    ]);
-    return { ...token, workspacePath, key };
+    const key = JSON.stringify([runId, text, caret, token.start, token.end]);
+    return { ...token, runId, key };
   });
   createEffect(() => {
     const value = current();
@@ -63,7 +57,7 @@ export function createWorkspaceMentions(input: {
     const timer = setTimeout(() => {
       void input
         .search({
-          workspacePath: value.workspacePath,
+          runId: value.runId,
           query: value.query,
           signal: controller.signal,
         })

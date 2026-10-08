@@ -3962,7 +3962,27 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const projectionPort: ProjectionPort = {
     openProjection,
     submit: dispatch,
-    searchWorkspacePaths,
+    async searchWorkspacePaths(input) {
+      try {
+        const read = runGroup?.readRun(input.runId);
+        if (
+          !read?.ok ||
+          read.run.state === "succeeded" ||
+          read.run.state === "cancelled"
+        )
+          return {
+            status: "unavailable",
+            cause: new Error("Workspace path search requires an open Run."),
+          };
+        return searchWorkspacePaths({
+          workspacePath: read.run.workspacePath,
+          query: input.query,
+          signal: input.signal,
+        });
+      } catch (cause) {
+        return { status: "unavailable", cause };
+      }
+    },
 
     readResource(
       reference:
