@@ -228,6 +228,7 @@ export function runTurnProducerTraceCases(
     streaming(): TestHarnessAdapterFactory;
     readonly live: readonly TurnEvent[];
     readonly previews: readonly string[];
+    readonly mintedContentIdentity?: true;
     readonly content: Extract<
       TurnEvent,
       { readonly kind: "assistant-content" }
@@ -272,14 +273,39 @@ export function runTurnProducerTraceCases(
             });
           });
         });
+        const contentFacts = (events: readonly TurnEvent[]) =>
+          events.filter(isContentEvent).map((event) => {
+            if (
+              !scenarios.mintedContentIdentity ||
+              event.kind !== "assistant-content"
+            )
+              return event;
+            const { messageId, parentActivity, ...facts } = event;
+            assert.ok(
+              messageId?.length,
+              "an unidentified reply receives an identity",
+            );
+            if (parentActivity !== undefined) {
+              assert.ok(parentActivity.length);
+              assert.doesNotMatch(parentActivity, /^toolu_/);
+              assert.notEqual(messageId, parentActivity);
+            }
+            return {
+              ...facts,
+              messageId: "minted-message-id",
+              ...(parentActivity === undefined
+                ? {}
+                : { parentActivity: "minted-parent-call-id" }),
+            };
+          });
         const result = await turn.result();
         assert.equal(result.kind, "completed");
-        assert.deepEqual(early.filter(isContentEvent), scenarios.live);
+        assert.deepEqual(contentFacts(early), scenarios.live);
         assert.deepEqual(
-          late,
+          contentFacts(late),
           scenarios.previews.length === 0 ? [] : scenarios.live,
         );
-        assert.deepEqual(unsubscribed, [scenarios.live[0]]);
+        assert.deepEqual(contentFacts(unsubscribed), [scenarios.live[0]]);
         assert.deepEqual(
           snapshots,
           scenarios.previews.map((content) => [
@@ -295,7 +321,7 @@ export function runTurnProducerTraceCases(
         );
         const history: TurnEvent[] = [];
         turn.subscribe((event) => history.push(event)).unsubscribe();
-        assert.deepEqual(history.filter(isContentEvent), [scenarios.content]);
+        assert.deepEqual(contentFacts(history), [scenarios.content]);
         assert.deepEqual(
           history,
           early.filter((event) => event.kind !== "message-preview"),

@@ -742,9 +742,24 @@ test("a known frame with an unrecognised extra field, or with a required field o
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
   assert.equal(result.detail.finalContent, "done");
+  const messages = events.filter((event) => event.kind === "assistant-content");
+  assert.equal(messages.length, 1);
+  const message = messages[0];
+  assert.ok(message);
+  assert.ok(
+    message.messageId?.length,
+    "an unidentified reply receives an identity",
+  );
+  assert.deepEqual(message, {
+    kind: "assistant-content",
+    content: "hello",
+    messageId: message.messageId,
+  });
+  const replay: TurnEvent[] = [];
+  turn.subscribe((event) => replay.push(event)).unsubscribe();
   assert.deepEqual(
-    events.filter((event) => event.kind === "assistant-content"),
-    [{ kind: "assistant-content", content: "hello" }],
+    replay.filter((event) => event.kind === "assistant-content"),
+    messages,
   );
   const activity = events.flatMap((event) =>
     event.kind === "activity" ? [event.description] : [],
@@ -1396,24 +1411,30 @@ test("one stream-json Turn yields normalized events and an authoritative complet
     { name: "secant", status: "connected" },
   ]);
   const assistant = events.find((event) => event.kind === "assistant-content");
-  assert.equal(
-    assistant?.kind === "assistant-content"
-      ? assistant.parentActivity
-      : undefined,
-    "toolu_parent",
+  assert.ok(assistant);
+  assert.ok(
+    assistant.messageId?.length,
+    "an unidentified reply receives an identity",
   );
+  assert.ok(assistant.parentActivity?.length);
+  assert.notEqual(assistant.parentActivity, "toolu_parent");
+  assert.notEqual(assistant.messageId, assistant.parentActivity);
+  assert.equal(assistant.content, "hello");
   const tools = events.filter((event) => event.kind === "tool-call");
   assert.deepEqual(
-    tools.map((event) =>
-      event.kind === "tool-call"
-        ? [event.call.outcome.kind, event.call.parentCallId]
-        : [],
-    ),
+    tools.map((event) => [event.call.outcome.kind, event.call.parentCallId]),
     [
-      ["running", undefined],
-      ["completed", undefined],
+      ["running", assistant.parentActivity],
+      ["completed", assistant.parentActivity],
     ],
   );
+  assert.ok(tools[0]?.call.callId.length);
+  assert.equal(tools[0]?.call.callId, tools[1]?.call.callId);
+  assert.notEqual(tools[0]?.call.callId, assistant.parentActivity);
+  assert.equal(JSON.stringify(events).includes("toolu_"), false);
+  const replay: TurnEvent[] = [];
+  turn.subscribe((event) => replay.push(event)).unsubscribe();
+  assert.deepEqual(replay, events);
   assert.equal(
     JSON.stringify(events).includes("private chain of thought"),
     false,
