@@ -1,0 +1,45 @@
+{
+  "executableVersion": "2.1.294 (Claude Code)",
+  "startedAt": "2026-10-08T08:38:48.127Z",
+  "finishedAt": "2026-10-08T08:38:52.220Z",
+  "args": [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--safe-mode",
+    "--strict-mcp-config",
+    "--tools",
+    "Bash,Read,Edit",
+    "--allowedTools",
+    "Bash",
+    "Read",
+    "Edit",
+    "--permission-prompts",
+    "none",
+    "--no-session-persistence"
+  ],
+  "processExitCode": 0,
+  "signal": null,
+  "omitted": {
+    "private-payload-frame": 5
+  },
+  "settingsPolicy": "No model, effort, thinking, reasoning-summary, or settings override. Safe mode disables customizations; authentication and model selection remain inherited. No session persistence. Native credentials are not read.",
+  "redactions": [
+    {
+      "placeholder": "«WORKSPACE»",
+      "reason": "probe workspace"
+    },
+    {
+      "placeholder": "«RUNTIME_DIR»",
+      "reason": "per-user runtime path"
+    },
+    {
+      "placeholder": "«PRIVATE-PAYLOAD-FRAMES»",
+      "reason": "whole frames containing thinking, signatures, or encrypted payload excluded; allowlisted metadata inventoried separately"
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "capture": [
+    {
+      "direction": "stdin",
+      "line": "{\"id\":4,\"method\":\"thread/start\",\"params\":{\"cwd\":\"/tmp/secant-native-evidence-460/codex/workspace-normal\",\"approvalsReviewer\":\"user\"}}"
+    },
+    {
+      "direction": "stdin",
+      "line": "{\"id\":5,\"method\":\"turn/start\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"input\":[{\"type\":\"text\",\"text\":\"Use apply_patch to change sample.txt from first, second, third lines to first, replacement, third, fourth lines. Then run `printf \\\"recorded command output\\\\n\\\"`. Do not read any other files or call any other tools. Reply done.\"}]}}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/started\",\"params\":{\"item\":{\"type\":\"fileChange\",\"id\":\"exec-191be1af-cf60-4a8c-9eff-3c5dd77dccc8\",\"changes\":[{\"path\":\"/tmp/secant-native-evidence-460/codex/workspace-normal/sample.txt\",\"kind\":{\"type\":\"update\",\"move_path\":null},\"diff\":\"@@ -1,3 +1,4 @@\\n first\\n-second\\n+replacement\\n third\\n+fourth\\n\"}],\"status\":\"inProgress\"},\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"startedAtMs\":1791448239076},\"emittedAtMs\":1791448239076}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/fileChange/requestApproval\",\"id\":0,\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"itemId\":\"exec-191be1af-cf60-4a8c-9eff-3c5dd77dccc8\",\"startedAtMs\":1791448239098,\"reason\":null,\"grantRoot\":null}}"
+    },
+    {
+      "direction": "stdin",
+      "line": "{\"id\":0,\"result\":{\"decision\":\"accept\"}}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"serverRequest/resolved\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"requestId\":0},\"emittedAtMs\":1791448239100}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"fileChange\",\"id\":\"exec-191be1af-cf60-4a8c-9eff-3c5dd77dccc8\",\"changes\":[{\"path\":\"/tmp/secant-native-evidence-460/codex/workspace-normal/sample.txt\",\"kind\":{\"type\":\"update\",\"move_path\":null},\"diff\":\"@@ -1,3 +1,4 @@\\n first\\n-second\\n+replacement\\n third\\n+fourth\\n\"}],\"status\":\"completed\"},\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"completedAtMs\":1791448239153},\"emittedAtMs\":1791448239175}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"turn/diff/updated\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"diff\":\"diff --git a/sample.txt b/sample.txt\\nindex ff6e6b1a505523bd4c9af36bd9d70d136872b225..c9203d7bd416c8065eb91451d2ac36c1ff6ec918\\n--- a/sample.txt\\n+++ b/sample.txt\\n@@ -1,3 +1,4 @@\\n first\\n-second\\n+replacement\\n third\\n+fourth\\n\"},\"emittedAtMs\":1791448239175}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/started\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"id\":\"exec-4e8ec69a-4090-49ec-b7fe-6ebc0cdae27a\",\"pluginId\":null,\"scriptPath\":null,\"command\":\"/bin/bash -lc \\\"printf \\\\\\\"recorded command output\\\\\\\\n\\\\\\\"\\\"\",\"cwd\":\"/tmp/secant-native-evidence-460/codex/workspace-normal\",\"processId\":\"80174\",\"source\":\"unifiedExecStartup\",\"status\":\"inProgress\",\"commandActions\":[{\"type\":\"unknown\",\"command\":\"printf \\\"recorded command output\\\\n\\\"\"}],\"aggregatedOutput\":null,\"exitCode\":null,\"durationMs\":null},\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"startedAtMs\":1791448239330},\"emittedAtMs\":1791448239331}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"id\":\"exec-4e8ec69a-4090-49ec-b7fe-6ebc0cdae27a\",\"pluginId\":null,\"scriptPath\":null,\"command\":\"/bin/bash -lc \\\"printf \\\\\\\"recorded command output\\\\\\\\n\\\\\\\"\\\"\",\"cwd\":\"/tmp/secant-native-evidence-460/codex/workspace-normal\",\"processId\":\"80174\",\"source\":\"unifiedExecStartup\",\"status\":\"completed\",\"commandActions\":[{\"type\":\"unknown\",\"command\":\"printf \\\"recorded command output\\\\n\\\"\"}],\"aggregatedOutput\":\"recorded command output\\n\",\"exitCode\":0,\"durationMs\":0},\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"completedAtMs\":1791448239330},\"emittedAtMs\":1791448239332}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"tokenUsage\":{\"total\":{\"totalTokens\":27860,\"inputTokens\":27753,\"cachedInputTokens\":12288,\"cacheWriteInputTokens\":0,\"outputTokens\":107,\"reasoningOutputTokens\":0},\"last\":{\"totalTokens\":27860,\"inputTokens\":27753,\"cachedInputTokens\":12288,\"cacheWriteInputTokens\":0,\"outputTokens\":107,\"reasoningOutputTokens\":0},\"modelContextWindow\":828400}},\"emittedAtMs\":1791448239354}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"turn/diff/updated\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"diff\":\"diff --git a/sample.txt b/sample.txt\\nindex ff6e6b1a505523bd4c9af36bd9d70d136872b225..c9203d7bd416c8065eb91451d2ac36c1ff6ec918\\n--- a/sample.txt\\n+++ b/sample.txt\\n@@ -1,3 +1,4 @@\\n first\\n-second\\n+replacement\\n third\\n+fourth\\n\"},\"emittedAtMs\":1791448239354}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"tokenUsage\":{\"total\":{\"totalTokens\":55785,\"inputTokens\":55673,\"cachedInputTokens\":39808,\"cacheWriteInputTokens\":0,\"outputTokens\":112,\"reasoningOutputTokens\":0},\"last\":{\"totalTokens\":27925,\"inputTokens\":27920,\"cachedInputTokens\":27520,\"cacheWriteInputTokens\":0,\"outputTokens\":5,\"reasoningOutputTokens\":0},\"modelContextWindow\":828400}},\"emittedAtMs\":1791448241655}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"turn/diff/updated\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turnId\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"diff\":\"diff --git a/sample.txt b/sample.txt\\nindex ff6e6b1a505523bd4c9af36bd9d70d136872b225..c9203d7bd416c8065eb91451d2ac36c1ff6ec918\\n--- a/sample.txt\\n+++ b/sample.txt\\n@@ -1,3 +1,4 @@\\n first\\n-second\\n+replacement\\n third\\n+fourth\\n\"},\"emittedAtMs\":1791448241655}"
+    },
+    {
+      "direction": "stdout-projection",
+      "line": "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"01a11aa2-ad40-7513-928c-df07c9a21f80\",\"turn\":{\"id\":\"01a11aa2-add8-7fd1-9108-461880aa3a7c\",\"status\":\"completed\",\"keys\":[\"id\",\"items\",\"itemsView\",\"status\",\"error\",\"startedAt\",\"completedAt\",\"durationMs\"],\"durationMs\":10285}}}"
+    }
+  ],
+  "omittedReasoningFieldNames": [],
+  "methods": {
+    "remoteControl/status/changed": 1,
+    "account/updated": 1,
+    "thread/started": 1,
+    "mcpServer/startupStatus/updated": 10,
+    "thread/status/changed": 4,
+    "turn/started": 1,
+    "hook/started": 8,
+    "hook/completed": 8,
+    "item/started": 5,
+    "item/completed": 5,
+    "item/agentMessage/delta": 16,
+    "item/fileChange/requestApproval": 1,
+    "serverRequest/resolved": 1,
+    "turn/diff/updated": 3,
+    "thread/tokenUsage/updated": 2,
+    "account/rateLimits/updated": 2,
+    "turn/completed": 1
+  },
+  "result": {
+    "kind": "completed"
+  },
+  "receipts": [
+    {
+      "outcome": "accepted"
+    }
+  ],
+  "cleanupClean": true,
+  "closed": {
+    "kind": "exited",
+    "status": 0
+  }
+}

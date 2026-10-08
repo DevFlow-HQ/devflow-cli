@@ -1,0 +1,8 @@
+{
+  "harness": "codex",
+  "executableVersion": "codex-cli 0.161.0",
+  "protocolVersion": "codex-probe-5",
+  "recordedAt": "2026-10-08T08:30:41.718Z",
+  "redactions": [],
+  "refreshCommand": "timeout -k 10s 150s bun docs/research/native-observed-facts-captures/codex/probe.mjs normal"
+}
