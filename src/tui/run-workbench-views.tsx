@@ -6,6 +6,7 @@ import {
   createEffect,
   createSignal,
   untrack,
+  onCleanup,
   For,
   Match,
   Show,
@@ -751,6 +752,7 @@ function PromptField(props: {
   const initial = untrack(props.draft);
   let reported = initial;
   const [box, setBox] = createSignal<TextareaRenderable>();
+  onCleanup(() => box()?.blur());
   const report = () => {
     const editor = box();
     if (editor === undefined) return;

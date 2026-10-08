@@ -1,3 +1,4 @@
+import { InputRenderable } from "@opentui/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSignal } from "solid-js";
@@ -324,3 +325,55 @@ for (const size of [
       assert.ok(line.length <= 70);
   });
 }
+
+for (const place of ["Home", "palette"] as const) {
+  test(`m10-audit-truthful-keys: typing from ${place} results edits native search and Escape returns to search`, async () => {
+    const { t, exits } = await mount(controlledPreferences().view);
+    if (place === "palette") {
+      t.mockInput.pressKey("p", { ctrl: true });
+      await t.waitForFrame((frame) => frame.includes("App commands"));
+    }
+    t.mockInput.pressArrow("down");
+    await t.renderOnce();
+    await type(t, "Quit");
+    assert.match(t.captureCharFrame(), /Quit/);
+    const input = t.renderer.currentFocusedRenderable;
+    assert.ok(input instanceof InputRenderable);
+    assert.equal(input.value, "Quit");
+    assert.deepEqual(exits, []);
+    t.mockInput.pressEscape();
+    if (place === "palette")
+      await until(() => !t.captureCharFrame().includes("App commands"));
+    else {
+      await until(() =>
+        t.captureCharFrame().includes("Search commands [focused]"),
+      );
+      assert.match(t.captureCharFrame(), /Quit/);
+      t.mockInput.pressEscape();
+      await until(() => t.captureCharFrame().includes("Workflow Bundles"));
+    }
+    assert.deepEqual(exits, []);
+  });
+}
+
+test("m10-audit-truthful-keys: preference read notice is visible on Home at launch and after resize", async () => {
+  const preferences = controlledPreferences().view;
+  const { t } = await mount({
+    ...preferences,
+    snapshot: () => ({
+      ...preferences.snapshot(),
+      notice: {
+        code: "preferences-read-failed",
+        explanation: "Saved preferences could not be read",
+        remediation: "Using defaults",
+        possibleEffects: "none",
+      },
+    }),
+  });
+  assert.match(t.captureCharFrame(), /Saved preferences could not be read/);
+  t.resize(48, 12);
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /Saved preferences could not be read/);
+  await type(t, "Quit");
+  assert.match(t.captureCharFrame(), /Saved preferences could not be read/);
+});

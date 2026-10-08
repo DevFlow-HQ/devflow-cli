@@ -248,6 +248,16 @@ jobs:
           tests/tui/run-workbench-inspection.test.tsx
           tests/tui/run-workbench-interaction.test.tsx
           tests/tui/run-workbench-prompt.test.tsx
+      - name: m10-audit-truthful-keys
+        run: >-
+          bun run test --
+          -t '^m10-audit-truthful-keys(:|$)'
+          tests/tui/home-preferences.test.tsx
+          tests/tui/run-workbench-appearance.test.tsx
+          tests/tui/run-workbench-history-scroll.test.tsx
+          tests/tui/run-workbench-interaction.test.tsx
+          tests/tui/run-workbench-layout.test.tsx
+          tests/tui/run-workbench-prompt.test.tsx
       - name: m10-audit-row-layout-once
         run: >-
           bun run test --

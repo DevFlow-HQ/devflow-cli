@@ -135,11 +135,6 @@ function Route(props: {
 
   return (
     <>
-      <ShellCommands
-        preferences={props.preferences}
-        renderer={props.renderer}
-        portDriven={screen().name === "run-workbench"}
-      />
       <Switch
         fallback={
           <Home
@@ -212,6 +207,11 @@ function Route(props: {
           <HarnessCatalog onBack={() => setScreen({ name: "home" })} />
         </Match>
       </Switch>
+      <ShellCommands
+        preferences={props.preferences}
+        renderer={props.renderer}
+        portDriven={screen().name === "run-workbench"}
+      />
     </>
   );
 }

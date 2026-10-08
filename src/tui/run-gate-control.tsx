@@ -1,6 +1,12 @@
 import { useDialog } from "./vendor/dialog.js";
-import { TextAttributes } from "@opentui/core";
-import { createMemo, createSignal, Show, type Accessor } from "solid-js";
+import { TextAttributes, type InputRenderable } from "@opentui/core";
+import {
+  createMemo,
+  createSignal,
+  onCleanup,
+  Show,
+  type Accessor,
+} from "solid-js";
 import type {
   AnswerHumanGateOffer,
   Problem,
@@ -190,6 +196,7 @@ export function FreeTextGateControl(props: {
   text: Accessor<string>;
   choice: Accessor<number>;
   onInput: (value: string) => void;
+  focused: Accessor<boolean>;
   pending: Accessor<boolean>;
   refusal: Accessor<Problem | undefined>;
   width: Accessor<number>;
@@ -197,6 +204,8 @@ export function FreeTextGateControl(props: {
 }) {
   const { theme } = props;
   const dialog = useDialog();
+  let field: InputRenderable | undefined;
+  onCleanup(() => field?.blur());
   const w = () => props.width();
   const status = () => {
     if (props.pending()) return "… submitting your answer";
@@ -242,9 +251,14 @@ export function FreeTextGateControl(props: {
           {"  > "}
         </text>
         <input
+          ref={(input) => {
+            field = input;
+          }}
           value={props.text()}
           onInput={props.onInput}
-          focused={!props.pending() && dialog.stack.length === 0}
+          focused={
+            props.focused() && !props.pending() && dialog.stack.length === 0
+          }
           width={Math.max(1, w() - 4)}
         />
       </box>

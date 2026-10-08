@@ -8,7 +8,8 @@ Read before changing Workspace path completion, Slash discovery, prompt captures
 - `searchWorkspacePaths` filters ignores/dots/symlinks and returns ten paths; unavailable leaves text sendable. It reads no candidate content.
 - `workspace-mentions.ts` keys replies by Run, draft and caret, and cancels old search. Known Slash names suppress mentions.
 - Enter/Tab edits only the native token: quote whitespace, retain file ranges, slash folders without ranges. Escape keeps text; arrows leave the cursor still.
-- Requests/gates have no list. Rows share `PromptModel`; a compact hint fits narrow terminals. Acknowledge native replacements so remount cannot replay them.
+- Requests/gates have no list. Rows share `PromptModel`; key capture and native-arrow ownership require drawn list rows, including after resize.
+  A hidden list leaves Enter and Escape with the prompt and hides its insert hint. Acknowledge native replacements so remount cannot replay them.
 
 ## Slash discovery and dispatch
 

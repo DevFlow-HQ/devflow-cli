@@ -280,11 +280,16 @@ async function refusalWorkbench(
   assert.doesNotMatch(frame, /Retained summary body/);
   fakeRenderer.key("o", { ctrl: true });
   await rendered.renderOnce();
-  assert.doesNotMatch(
+  assert.match(
     rendered.captureCharFrame(),
     /Retained summary body/,
-    "approval owns the key",
+    "history expansion stays available during approval (#445)",
   );
+  assert.match(rendered.captureCharFrame(), /Permission required/);
+  fakeRenderer.key("o", { ctrl: true });
+  await rendered.renderOnce();
+  assert.doesNotMatch(rendered.captureCharFrame(), /Retained summary body/);
+  assert.match(rendered.captureCharFrame(), /Permission required/);
   assert.match(frame, /Context · used 12500 tokens, capacity 200000 tokens/);
   assert.match(frame, /Usage · estimated 25 tokens/);
   assert.match(frame, /Tool: Edit/); // the exact tool

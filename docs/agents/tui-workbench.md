@@ -39,11 +39,12 @@ decide the screen and its routes.
 - Keys (ADR 0036/0040): Enter sends at a Turn boundary and steers a working Turn; Esc Esc Interrupts; Ctrl+E is End Step only; Ctrl+N Continue; Ctrl+O
   expands the first visible detail; Ctrl+G details; Ctrl+P the palette; Ctrl+R reconnects a disconnected view, else retries a failed appearance save; Ctrl+C
   clears a nonempty draft, then requests guarded Quit. End Stage has no key. No bare letter is a Workbench command beside the prompt. Alt+arrows/Home/End and
-  PageUp/Down scroll history; native arrows/Home/End edit. A focused checkpoint keeps navigation keys and the wheel;
+  PageUp/Down scroll history; native arrows/Home/End edit. Checkpoints keep Left/Right choices while modified navigation and the wheel scroll history;
   Esc at a Turn boundary leaves after dismissing an open Slash list.
 - Every key clears the two-press Interrupt arm on arrival; only the prompt's Esc reads the arm it found, so dismissing a dialog, details, or inspection, or
   answering a request or gate, never arms or dispatches it. A withdrawn or replaced Turn Offer, or any interaction but the prompt, clears it too, and the
-  next Esc after such a clear is consumed, so an Esc pair straddling the Turn's end never leaves. Ctrl+C clears a nonempty draft whatever holds focus.
+  next Esc after such a clear is consumed, so an Esc pair straddling the Turn's end never leaves. Ctrl+C clears a nonempty draft while drawn;
+  compact details and readers request guarded Quit and preserve hidden text.
 - The working scanner (`working-scanner.tsx`, #292) leads the prompt hint only while a Turn works.
   The hint reads `working · esc esc interrupt`, or `enter steer · esc esc interrupt` while Steer is available.
   Its words carry the meaning, so the cells yield first on a narrow row; `reducedMotion` draws a static `[⋯]`.
@@ -60,6 +61,7 @@ Before changing completion, Slash discovery, drafts, prompt captures, or restora
 - Step endings (End Step, Continue, End Stage) confirm in the prompt's hint and leave with the prompt. Lifecycle actions confirm in the details panel and
   drop when it hides: resume dispatches at once unless its Offer carries a takeover (names the owner process) or an acknowledgement (#194 story 39); an
   unavailable resume shows its reason and `r` no-ops. `c`/`x` act only while the inline panel shows.
+- Ctrl+G details and Ctrl+O expansion stay reachable during Requests and free-text Gates. Focused details own input and blur the Gate field.
 - Ctrl+G opens and focuses details; focused details own `up`/`down`, Enter/`o`, and `r`/`c`/`x`; Esc or Tab returns focus to the bottom control and Ctrl+G
   closes the panel. Below the panel breakpoints a focused resource list replaces the screen. `buildDetailsRows` builds the panel once and the container
   reserves exactly its rows. The Run id and owner process live there; the id shows on screen again only once the Run leaves an active state.

@@ -2519,13 +2519,14 @@ for (const prefix of ["", "漢字 👩‍💻 ", "first\nsecond "]) {
     await type(wb.t, "@my#L10-20 tail");
     for (let i = 0; i < 5; i++) wb.t.mockInput.pressArrow("left");
     await mentionFrame(wb, /› @file.ts/);
+    assert.match(wb.t.captureCharFrame(), /↵\/tab insert/);
     wb.renderer.key("down");
     wb.t.mockInput.pressArrow("down");
     await wb.t.renderOnce();
     assert.match(wb.t.captureCharFrame(), /› @my folder/);
     await press(wb.t, wb.renderer, "return");
     assert.equal(wb.control.sends.length, 0);
-    assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /↵\/tab insert/);
     await type(wb.t, "!");
     await press(wb.t, wb.renderer, "return");
     assert.equal(wb.control.sends[0]?.text, `${prefix}@"my folder/"! tail`);
@@ -2610,8 +2611,9 @@ test("m10-workspace-mentions: Escape preserves draft and unknown Slash permits a
 
   await type(wb.t, "/unknown @src");
   await mentionFrame(wb, /› @src\/a.ts/);
+  assert.match(wb.t.captureCharFrame(), /↵\/tab insert/);
   await press(wb.t, wb.renderer, "escape");
-  assert.doesNotMatch(wb.t.captureCharFrame(), /enter\/tab insert/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /↵\/tab insert/);
   assert.deepEqual(wb.exits, []);
   await press(wb.t, wb.renderer, "return");
   assert.equal(wb.control.sends[0]?.text, "/unknown @src");
@@ -2638,6 +2640,8 @@ for (const change of [
 
     await type(wb.t, "@old");
     await until(() => pending.length === 1);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /↵\/tab insert/);
     assert.equal(pending[0]?.input.runId, "run-1");
     assert.deepEqual(Object.keys(pending[0]?.input ?? {}).sort(), [
       "query",
@@ -2682,7 +2686,7 @@ for (const change of [
     } else
       assert.doesNotMatch(
         wb.t.captureCharFrame(),
-        /Searching Workspace|enter\/tab insert/,
+        /Searching Workspace|↵\/tab insert/,
       );
   });
 }
@@ -2805,5 +2809,73 @@ for (const appearance of ["dark", "light"] as const) {
     await press(wb.t, wb.renderer, "tab");
     await press(wb.t, wb.renderer, "return");
     assert.equal(wb.control.sends[0]?.text, "@" + longPath);
+  });
+}
+
+for (const completion of ["slash", "mention"] as const) {
+  for (const key of ["return", "escape"]) {
+    test(`m10-audit-truthful-keys: hidden ${completion} list leaves ${key} with the prompt`, async () => {
+      const wb = await mountWorkbench(
+        interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
+        48,
+        completion === "slash" ? 10 : 9,
+      );
+      wb.control.view.searchWorkspacePaths = async () => ({
+        status: "available",
+        candidates: [{ path: "src/a.ts", kind: "file" }],
+      });
+      const text = completion === "slash" ? "/e" : "@sr";
+      await type(wb.t, text);
+      await wb.t.renderOnce();
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /› \/effort|› @src\/a.ts|↵\/tab insert/,
+      );
+      await press(wb.t, wb.renderer, key);
+      if (key === "escape") {
+        assert.match(wb.t.captureCharFrame(), /Search commands/);
+        assert.deepEqual(wb.control.sends, []);
+      } else
+        assert.deepEqual(wb.control.sends, [
+          { runId: "run-1", stepId: "discuss", text },
+        ]);
+      assert.doesNotMatch(wb.t.captureCharFrame(), /Model choice/);
+    });
+  }
+}
+
+for (const completion of ["slash", "mention"] as const) {
+  test(`m10-audit-truthful-keys: ${completion} key ownership follows list visibility through dual resize`, async () => {
+    const short = completion === "slash" ? 10 : 9;
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER, MODEL_OFFER] }),
+      48,
+      short,
+    );
+    wb.control.view.searchWorkspacePaths = async () => ({
+      status: "available",
+      candidates: [{ path: "src/a.ts", kind: "file" }],
+    });
+    const text = completion === "slash" ? "/e" : "@sr";
+    await type(wb.t, text);
+    resizeWorkbench(wb.t, wb.renderer, 48, 24);
+    await mentionFrame(
+      wb,
+      completion === "slash" ? /› \/effort/ : /› @src\/a.ts/,
+    );
+    assert.match(
+      wb.t.captureCharFrame(),
+      completion === "slash" ? /enter\/tab run/ : /↵\/tab insert/,
+    );
+    resizeWorkbench(wb.t, wb.renderer, 48, short);
+    await wb.t.renderOnce();
+    assert.equal(wb.t.captureSpans().rows, short);
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /› \/effort|› @src\/a.ts|↵\/tab insert/,
+    );
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, text);
+    noOverflow(wb.t.captureCharFrame(), 48);
   });
 }

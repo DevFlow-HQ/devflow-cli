@@ -170,7 +170,7 @@ export function CommandSearch(props: {
           : "Search commands"}
       </text>
       <input
-        focused={props.enabled && s.pane() === "search"}
+        focused={props.enabled}
         value={s.query()}
         onInput={s.input}
         placeholder="Type a name or description"

@@ -2613,3 +2613,45 @@ test("m12-local-test-helpers: the sidebar names a requested Model choice until i
   await wb.t.renderOnce();
   assert.doesNotMatch(wb.t.captureCharFrame(), /→ requested/);
 });
+
+test("m10-audit-truthful-keys: compact details Ctrl+C quits and keeps the hidden draft", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 58, 20);
+  await type(wb.t, "saved draft");
+  await press(wb.t, wb.renderer, "g", { ctrl: true });
+  assert.match(wb.t.captureCharFrame(), /ctrl\+c quit/);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /saved draft/);
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  assert.equal(wb.exits.length, 1);
+  await press(wb.t, wb.renderer, "escape");
+  assert.match(wb.t.captureCharFrame(), /> saved draft/);
+  assert.deepEqual(wb.control.sends, []);
+});
+
+for (const kind of ["request", "gate"] as const) {
+  test(`m10-audit-truthful-keys: ${kind} keeps details keys and returns focus to its own control`, async () => {
+    const wb = await mountWorkbench(
+      kind === "gate" ? freeTextRunOf() : interactiveRunOf(),
+      121,
+      32,
+    );
+    if (kind === "request") wb.control.setLive(requestOverlay());
+    await wb.t.renderOnce();
+    if (kind === "gate") await type(wb.t, "gate answer");
+    assert.match(wb.t.captureCharFrame(), /ctrl\+g details/);
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
+    assert.match(wb.t.captureCharFrame(), /› Details/);
+    await type(wb.t, "ignored");
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(wb.control.requests, []);
+    assert.deepEqual(wb.control.texts, []);
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /› Details/);
+    await press(wb.t, wb.renderer, "return");
+    if (kind === "request") assert.equal(wb.control.requests.length, 1);
+    else
+      assert.deepEqual(wb.control.texts, [
+        { gate: FREE_TEXT_GATE, text: "gate answer" },
+      ]);
+    assert.deepEqual(wb.control.sends, []);
+  });
+}

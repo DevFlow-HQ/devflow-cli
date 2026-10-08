@@ -865,3 +865,49 @@ test("m10-home-and-preferences: Workbench picker size and resize come from the R
   await press(wb.t, wb.renderer, "return");
   assert.doesNotMatch(wb.t.captureCharFrame(), /Themes · Dark/);
 });
+
+for (const appearance of ["dark", "light"] as const) {
+  test(`m10-audit-truthful-keys: ${appearance} Request and Details cues retain theme roles and reduced-motion focus`, async () => {
+    const preferences = previewPreferences();
+    const wb = await mountWorkbench(
+      liveInteractiveRunOf(),
+      121,
+      32,
+      undefined,
+      true,
+      0,
+      {
+        ...preferences,
+        snapshot: () => ({
+          ...preferences.snapshot(),
+          preferences: { theme: "everforest", appearance },
+        }),
+      },
+    );
+    wb.control.setLive(requestOverlay());
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /Permission required/);
+    assert.equal(
+      frameColorOf(wb.t, /Permission required/),
+      appearance === "dark" ? "230,152,117" : "245,125,38",
+    );
+    assert.equal(
+      frameColorOf(wb.t, /ctrl\+g details/),
+      appearance === "dark" ? "122,132,120" : "166,176,160",
+    );
+    await press(wb.t, wb.renderer, "g", { ctrl: true });
+    assert.match(wb.t.captureCharFrame(), /› Details/);
+    await type(wb.t, "ignored details typing");
+    resizeWorkbench(wb.t, wb.renderer, 48, 18);
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /Details · Resources/);
+    noOverflow(wb.t.captureCharFrame(), 48);
+    await press(wb.t, wb.renderer, "escape");
+    assert.match(wb.t.captureCharFrame(), /Permission required/);
+    assert.deepEqual(wb.control.requests, []);
+    wb.control.setLive(undefined);
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /ignored details typing|[■⬝]/);
+    assert.match(wb.t.captureCharFrame(), /\[⋯\]/);
+  });
+}

@@ -1531,7 +1531,7 @@ for (const width of [40, 100]) {
     "confirmation",
     "details",
   ] as const) {
-    test(`m10-paused-history-identity: ${owner} owns navigation before history at ${width}`, async () => {
+    test(`m10-paused-history-identity: ${owner} ${owner === "checkpoint" ? "allows history navigation" : "owns navigation before history"} at ${width}`, async () => {
       const wb = await mountHistory(width, 30, true);
       const rows = Array.from({ length: 30 }, (_, i) =>
         historyRow(`row-${i}`, `ROW_${i}`),
@@ -1565,6 +1565,12 @@ for (const width of [40, 100]) {
       assert.deepEqual(wb.control.ends, []);
       assert.deepEqual(wb.control.sends, []);
       assert.deepEqual(wb.control.texts, []);
+      const expectedAnchor =
+        owner === "checkpoint"
+          ? firstHistoryLine(wb.t.captureCharFrame())
+          : "ROW_5";
+      const expectedBadge = owner === "checkpoint" ? 14 : badge;
+      if (owner === "checkpoint") assert.notEqual(expectedAnchor, "ROW_5");
       if (owner === "dialog") {
         // The Port-driven palette takes Escape from the Renderer Port.
         await press(wb.t, wb.renderer, "escape");
@@ -1578,8 +1584,8 @@ for (const width of [40, 100]) {
         wb.control.setRun(interactiveRunOf({ sessions }));
         await wb.t.renderOnce();
       }
-      assert.equal(firstHistoryLine(wb.t.captureCharFrame()), "ROW_5");
-      assert.equal(historyBadge(wb.t.captureCharFrame()), badge);
+      assert.equal(firstHistoryLine(wb.t.captureCharFrame()), expectedAnchor);
+      assert.equal(historyBadge(wb.t.captureCharFrame()), expectedBadge);
       if (owner === "confirmation")
         assert.doesNotMatch(
           wb.t.captureCharFrame(),
@@ -1636,3 +1642,25 @@ for (const appearance of ["dark", "light"] as const) {
     }
   });
 }
+
+test("m10-audit-truthful-keys: Review checkpoint preserves history navigation and wheel scrolling", async () => {
+  const wb = await mountWorkbench(
+    blockedRunOf({ timeline: events(60) }),
+    100,
+    24,
+  );
+  const latest = timelineLines(wb.t.captureCharFrame());
+  await press(wb.t, wb.renderer, "pageup");
+  assert.notDeepEqual(timelineLines(wb.t.captureCharFrame()), latest);
+  assert.match(wb.t.captureCharFrame(), /Jump to latest/);
+  await press(wb.t, wb.renderer, "home", { alt: true });
+  assert.match(wb.t.captureCharFrame(), /e0\b/);
+  await wb.t.mockMouse.scroll(5, 4, "down");
+  await wb.t.renderOnce();
+  assert.doesNotMatch(timelineLines(wb.t.captureCharFrame())[0] ?? "", /e0\b/);
+  await press(wb.t, wb.renderer, "end", { alt: true });
+  assert.deepEqual(timelineLines(wb.t.captureCharFrame()), latest);
+  await press(wb.t, wb.renderer, "right");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.answers[0]?.answer, "stop");
+});

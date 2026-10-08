@@ -8,6 +8,9 @@ import type {
 } from "../../src/application/projection-port.js";
 import {
   mountWorkbench,
+  interactiveRunOf,
+  freeTextRunOf,
+  requestOverlay,
   runOf,
   press,
   transcriptRun,
@@ -463,5 +466,62 @@ for (const glyph of ["é", "漢"]) {
     await press(wb.t, wb.renderer, "home", { alt: true });
     assert.match(wb.t.captureCharFrame(), /▾ Output.*live/);
     assert.doesNotMatch(wb.t.captureCharFrame(), /hidden characters/);
+  });
+}
+
+for (const kind of ["request", "gate"] as const) {
+  test(`m10-audit-truthful-keys: ${kind} permits expansion of large history and preserves details across resize`, async () => {
+    const sessions = [
+      { session: "s", name: "Conversation", availability: "open" as const },
+    ];
+    const wb = await mountWorkbench(
+      kind === "gate"
+        ? freeTextRunOf({ sessions })
+        : interactiveRunOf({ sessions }),
+      121,
+      32,
+      undefined,
+      true,
+    );
+    wb.control.setHistory(
+      page([
+        command(
+          "large",
+          Array.from({ length: 80 }, (_, i) => `OUTPUT_LINE_${i}`).join("\n"),
+        ),
+      ]),
+    );
+    if (kind === "request") wb.control.setLive(requestOverlay());
+    await wb.t.renderOnce();
+    if (kind === "gate") await type(wb.t, "kept answer");
+    assert.match(wb.t.captureCharFrame(), /70 hidden lines/);
+    await press(wb.t, wb.renderer, "o", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /70 hidden lines/);
+    assert.match(wb.t.captureCharFrame(), /OUTPUT_LINE_79/);
+    await press(wb.t, wb.renderer, "o", { ctrl: true });
+    assert.match(wb.t.captureCharFrame(), /70 hidden lines/);
+    for (const width of [120, 121, 48, 160]) {
+      resizeWorkbench(wb.t, wb.renderer, width, 32);
+      await wb.t.renderOnce();
+      assert.match(
+        wb.t.captureCharFrame(),
+        kind === "request" ? /Permission required/ : /Workflow decision/,
+      );
+      await press(wb.t, wb.renderer, "g", { ctrl: true });
+      assert.match(
+        wb.t.captureCharFrame(),
+        width === 48 ? /Details · Resources/ : /› Details/,
+      );
+      await type(wb.t, "ignored");
+      assert.equal(wb.t.captureSpans().cols, width);
+      noOverflow(wb.t.captureCharFrame(), width);
+      await press(wb.t, wb.renderer, "escape");
+      assert.deepEqual(wb.control.requests, []);
+      assert.deepEqual(wb.control.texts, []);
+    }
+    if (kind === "gate") {
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(wb.control.texts[0]?.text, "kept answer");
+    }
   });
 }

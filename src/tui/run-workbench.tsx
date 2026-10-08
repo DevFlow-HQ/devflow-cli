@@ -1138,6 +1138,7 @@ export function RunWorkbench(props: {
       const result = mentions.result();
       return {
         ...model,
+        hint: budget === 0 ? promptHint(prompt) : model.hint,
         commands:
           budget === 0
             ? []
@@ -1797,9 +1798,13 @@ export function RunWorkbench(props: {
     entry.run();
     return true;
   };
+  const completionVisible = () => (promptModel()?.commands?.length ?? 0) > 0;
+  const slashVisible = () => slashOpen() && completionVisible();
+  const mentionsVisible = () => mentions.open() && completionVisible();
+
   const handleSlashKey = (key: RendererKeyEvent) => {
     if (key.ctrl || key.alt || key.shift) return false;
-    if (slashOpen()) {
+    if (slashVisible()) {
       if (key.name === "escape") {
         setSlashDismissed(draft());
         return true;
@@ -1925,8 +1930,6 @@ export function RunWorkbench(props: {
         row.inspection === undefined &&
         row.output === undefined) ||
       dialog.stack.length > 0 ||
-      interaction().kind === "request" ||
-      interaction().kind === "gate" ||
       confirmation() !== undefined ||
       inspection.inspecting() ||
       transcript.reader()
@@ -2021,7 +2024,6 @@ export function RunWorkbench(props: {
     if (name === "e" && prompt.endings.end !== undefined) arm("end-step");
     else if (name === "n" && prompt.endings.continue !== undefined)
       arm("continue");
-    else if (name === "o") openRowDetail(firstVisibleDetail());
   };
 
   // Focused details own their letters: resume, cancel, and delete with their
@@ -2081,8 +2083,13 @@ export function RunWorkbench(props: {
       transcript.reader() !== undefined ||
       inspection.inspecting() !== undefined;
     if (name === "c" && key.ctrl) {
-      // Ctrl+C clears a nonempty draft first, then requests guarded Quit.
-      if (!reading && promptInteraction() !== undefined && draft() !== "") {
+      // Ctrl+C clears a visible nonempty draft first, then requests guarded Quit.
+      if (
+        !reading &&
+        !compactDetails() &&
+        promptInteraction() !== undefined &&
+        draft() !== ""
+      ) {
         setDraft("");
         setDraftRestored(false);
         setPromptRefusal(undefined);
@@ -2111,16 +2118,6 @@ export function RunWorkbench(props: {
       return;
     }
     const current = interaction();
-    // A request or gate owns Esc and every printable key (A33): its private control
-    // consumes them all, so no prompt, Interrupt, or Run action fires beneath it.
-    if (current.kind === "request") {
-      requestControl.handleKey(name);
-      return;
-    }
-    if (current.kind === "gate") {
-      gateControl.handleKey(name);
-      return;
-    }
     // A pending confirmation waits for its confirming keypress: `y` confirms and
     // Escape declines, refocusing the prompt with its draft; any other key is
     // ignored, so a stray keystroke never dispatches it.
@@ -2143,8 +2140,13 @@ export function RunWorkbench(props: {
       return;
     }
     // Modified navigation and page keys scroll the conversation beside native
-    // prompt editing; focused details and a focused checkpoint keep their keys.
-    if (!focusedDetails() && current.kind !== "checkpoint" && !key.ctrl) {
+    // prompt editing and checkpoint choices; focused details keep their keys.
+    if (
+      !focusedDetails() &&
+      current.kind !== "request" &&
+      current.kind !== "gate" &&
+      !key.ctrl
+    ) {
       const action =
         (key.alt && ["up", "down", "home", "end"].includes(name)) ||
         name === "pageup" ||
@@ -2160,9 +2162,23 @@ export function RunWorkbench(props: {
       handleDetailsKey(key);
       return;
     }
+    if (name === "o" && key.ctrl) {
+      openRowDetail(firstVisibleDetail());
+      return;
+    }
+    // A request or gate owns Esc and every printable key (A33): its private control
+    // consumes them all, so no prompt, Interrupt, or Run action fires beneath it.
+    if (current.kind === "request") {
+      requestControl.handleKey(name);
+      return;
+    }
+    if (current.kind === "gate") {
+      gateControl.handleKey(name);
+      return;
+    }
     if (
       current.kind === "prompt" &&
-      (handleSlashKey(key) || mentions.handleKey(key))
+      (handleSlashKey(key) || (mentionsVisible() && mentions.handleKey(key)))
     )
       return;
     if (name === "tab" && detailsShown()) {
@@ -2177,11 +2193,9 @@ export function RunWorkbench(props: {
         else if (name === "right" && !answerPending()) setControl("stop");
         else if (name === "return") dispatchAnswer(control());
         else if (name === "escape") props.onLeave();
-        else if (name === "o" && key.ctrl) openRowDetail(firstVisibleDetail());
         return;
       case "finished":
         if (name === "escape") props.onLeave();
-        else if (name === "o" && key.ctrl) openRowDetail(firstVisibleDetail());
         return;
       case "prompt":
         handlePromptKey(current, key, armedInterrupt);
@@ -2225,7 +2239,6 @@ export function RunWorkbench(props: {
           dialog.stack.length > 0 ||
           kind === "request" ||
           kind === "gate" ||
-          (kind === "checkpoint" && focus() === "bottom") ||
           confirmation() !== undefined ||
           focusedDetails() ||
           transcript.reader() !== undefined ||
@@ -2474,6 +2487,7 @@ export function RunWorkbench(props: {
                         text={gateControl.text}
                         choice={gateControl.choice}
                         onInput={gateControl.onInput}
+                        focused={() => focus() === "bottom"}
                         pending={gateControl.pending}
                         refusal={gateControl.refusal}
                         width={innerW}
@@ -2524,7 +2538,7 @@ export function RunWorkbench(props: {
                         draft={draft}
                         onInput={(value) => setDraft(value)}
                         focused={promptFieldFocused}
-                        slashOpen={() => slashOpen() || mentions.open()}
+                        slashOpen={() => slashVisible() || mentionsVisible()}
                         onCaret={setCaret}
                         replacement={mentions.replacement}
                         onReplacement={mentions.replaced}

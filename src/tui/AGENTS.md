@@ -53,6 +53,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Agent-bearing Runs reserve two metadata lines outside the timeline (#418). Context/usage replacement cannot change history rows,
   viewport height, or the activity badge; empty reports leave blank slots. Metadata uses reported meanings and clips to the available width.
 
+- Blur native prompt and Gate fields on disposal: OpenTUI defers removed-node destruction, so a detached focused field can still edit hidden text (#445).
 - Native prompt caret offsets map logical columns through graphemes, never `cursorCharacterOffset`; completion edits native selection and acknowledges it once (#423).
 - Prompt receipts are independent per dispatch (#420). A native textarea `setText` moves its cursor to the start; prompt write-back calls
   `gotoBufferEnd` after clear or restore so continued typing extends the restored draft. Ordinary updates never write text back.
