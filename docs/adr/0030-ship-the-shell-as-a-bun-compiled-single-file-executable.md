@@ -32,6 +32,21 @@ with no override variable, matching OpenCode's fixed `~/.opencode/bin`. An npm l
 `optionalDependencies` package with **no postinstall**, so `--ignore-scripts` and pnpm cannot break it; Node of any version is needed only to run
 npm and the shim. No Homebrew, winget, scoop, or Docker in v1. No self-updater and no version check in v1.
 
+### Embedded ripgrep, 2026-10-08
+
+[#455](https://github.com/secantdev/secant/issues/455) makes ripgrep 15.1.0 the lister behind Workspace path search. The executable embeds the
+official release build for its own target (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`), pinned by SHA-256. A
+compiled Bun binary cannot spawn an embedded file, so on first use Secant writes the helper to a version-named file in its own state, verifies the
+digest, and reuses it afterwards. Secant never takes `rg` from `PATH` and never downloads it: the no-self-updater rule covers helper programs too.
+A missing, unverifiable, or failing helper makes path search unavailable and never fails the shell. Archives and platform packages still carry only
+the executable, `LICENSE`, and `THIRD-PARTY-NOTICES.md`.
+
+The release legal closure records ripgrep as a fixed embedded member per target. Its notices cover the linked crates, PCRE2, SLJIT, and, on Linux,
+jemalloc, musl, and libunwind. Four licence identities are admitted for ripgrep alone: the Unicode data licence, `BSD-3-Clause WITH
+PCRE2-exception`, `Apache-2.0 WITH LLVM-exception`, and the Microsoft C runtime redistribution terms on Windows. A Windows CI scenario qualifies
+the write-out and spawn from the compiled executable, including two concurrent processes. This is the first shipped helper program; another needs
+its own amendment.
+
 ## Signing, v1
 
 macOS binaries carry Bun's automatic **ad-hoc** signature — Apple silicon refuses arm64 code without at least that — and CI runs
@@ -117,6 +132,10 @@ the next Bun release. Nothing else triggers it; version churn is handled by the 
 - **`node:sqlite`.** Its Windows `close()` file-lock bug breaks the Catalog's open-per-command pattern.
 - **Node twin implementations of the Bun call sites.** Untested surface for no v1 consumer; OpenCode's exist only for its Electron build.
 - **Homebrew, winget, or scoop channels in v1.** Homebrew casks must pass Gatekeeper since 2026-09-01, and v1 does no Developer ID signing.
+- **ripgrep from `PATH` or downloaded on first use** (OpenCode's route). A `PATH` copy lets an arbitrary version change results; a download breaks
+  offline first use and is a self-updater by another name.
+- **`git ls-files` with a fallback walk outside Git** (Hermes Agent's route). Exact Git rules at no shipping cost, but two listers with different
+  rules and no submodule files; one lister everywhere, on the engine OpenCode and Codex both trust, won (#455).
 
 ## Future-version ledger
 
@@ -125,3 +144,8 @@ the next Bun release. Nothing else triggers it; version churn is handled by the 
   crashes on next launch until reboot).
 - Extra targets (macOS x64, Linux arm64/musl, Windows arm64), Homebrew/winget/scoop, a passive update notice, and dropping the conhost notice once
   Bun fixes stdin release.
+- fff (`@ff-labs/fff-bun`) for path search: a resident index with a watcher and code-aware ranking, loaded the way OpenTUI's library is. Deferred
+  by #455 because its native library links libgit2 (GPL-2.0 with linking exception, and LGPL-2.1 xdiff), LMDB, and other licences outside the
+  legal closure with no shipped notices. It also runs in-process, so a native crash ends the shell. It is unqualified on Windows, where OpenCode
+  disables it. Its watcher has open CPU and inotify-limit reports, and since 0.10 it drops ancestor, `info/exclude`, and global ignore rules.
+  Reopen when a build without its Git and database features passes the legal closure and qualifies on all three targets.
