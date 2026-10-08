@@ -114,6 +114,12 @@ export async function settingsConsumer(
     );
     assert.equal(failed.outcome.status, "not-applied");
     assert.equal(failed.outcome.problem.possibleEffects, "none");
+    assert.deepEqual(Object.keys(failed.outcome.problem).sort(), [
+      "code",
+      "explanation",
+      "possibleEffects",
+      "remediation",
+    ]);
     assert.equal(failed.preferencesChange, undefined);
     show("ayu", "dark");
     database.exec("DROP TRIGGER fail_settings; DROP TABLE preferences");

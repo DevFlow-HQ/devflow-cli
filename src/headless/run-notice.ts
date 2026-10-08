@@ -1,3 +1,4 @@
+import { headlessJson } from "./json.js";
 import type { RunSnapshot } from "../application/projection-port.js";
 
 /** One stderr report per Run command, shared by live updates and final read. */
@@ -21,16 +22,12 @@ export function createRunNoticeReporter(
 
 /** Keep transient informational copy out of the existing JSON contract. */
 export function runSnapshotJson(snapshot: RunSnapshot): string {
-  if (!snapshot.result.found) return JSON.stringify(snapshot, null, 2);
+  if (!snapshot.result.found) return headlessJson(snapshot);
   const {
     windowsCleanupNotice: _windowsNotice,
     preferenceNotice: _preferenceNotice,
     modelChoiceNotice: _modelChoiceNotice,
     ...run
   } = snapshot.result.run;
-  return JSON.stringify(
-    { ...snapshot, result: { ...snapshot.result, run } },
-    null,
-    2,
-  );
+  return headlessJson({ ...snapshot, result: { ...snapshot.result, run } });
 }

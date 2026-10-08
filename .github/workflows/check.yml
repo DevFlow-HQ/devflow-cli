@@ -293,6 +293,15 @@ jobs:
           tests/composition/run-lifecycle-log.test.ts
           tests/headless/agent-step.test.ts
           tests/tui/live-run-workbench.test.tsx
+      - name: m10-audit-headless-output-parity
+        run: >-
+          bun run test --
+          -t '^m10-audit-headless-output-parity(:|$)'
+          tests/headless/settings.test.ts
+          tests/headless/headless.test.ts
+          tests/headless/run.test.ts
+          tests/catalog/catalog.test.ts
+          tests/application/preferences.test.ts
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test

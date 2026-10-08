@@ -105,6 +105,13 @@ export interface Catalog {
   /** A home-wide Preference's encoded value, or undefined when absent.
    * Malformed rows and storage failures throw; callers can default this read. */
   getPreference(key: string): string | undefined;
+  /** Resolve synchronous Preference reads from one committed snapshot.
+   * Malformed rows and storage failures throw; no write lock is acquired. */
+  readPreferences<Result>(
+    read: (
+      getPreference: Catalog["getPreference"],
+    ) => Result extends PromiseLike<unknown> ? never : Result,
+  ): Result;
   /** Atomically replace only this key. The latest committed write wins. */
   setPreference(key: string, value: string): void;
   /** Replace supplied keys, then resolve a result through ordinary Preference
@@ -546,14 +553,22 @@ export function openCatalog(
     };
   }
 
+  function readPreference(connection: Pick<typeof db, "select">, key: string) {
+    const row = connection
+      .select()
+      .from(preferences)
+      .where(eq(preferences.key, key))
+      .get();
+    return row === undefined ? undefined : preferenceRow.parse(row).value;
+  }
+
   return {
-    getPreference(key) {
-      const row = db
-        .select()
-        .from(preferences)
-        .where(eq(preferences.key, key))
-        .get();
-      return row === undefined ? undefined : preferenceRow.parse(row).value;
+    getPreference: (key) => readPreference(db, key),
+    readPreferences(read) {
+      return db.transaction(
+        (tx) => ({ result: read((key) => readPreference(tx, key)) }),
+        { behavior: "deferred" },
+      ).result;
     },
     setPreference(key, value) {
       db.transaction(
@@ -579,16 +594,7 @@ export function openCatalog(
               .run();
           }
           return {
-            result: read((key) => {
-              const row = tx
-                .select()
-                .from(preferences)
-                .where(eq(preferences.key, key))
-                .get();
-              return row === undefined
-                ? undefined
-                : preferenceRow.parse(row).value;
-            }),
+            result: read((key) => readPreference(tx, key)),
           };
         },
         { behavior: "immediate" },

@@ -159,7 +159,7 @@ test("settings accepts all 25 exact identifiers and rejects empty, unsupported, 
 });
 
 for (const event of ["INSERT", "UPDATE"]) {
-  test(`settings ${event} failure has not-applied Operation JSON and rolls back both keys`, async (t) => {
+  test(`m10-audit-headless-output-parity: settings ${event} failure omits causes and rolls back both keys`, async (t) => {
     const f = fixture(t);
     if (event === "UPDATE") {
       f.catalog.setPreference("theme", "everforest");
@@ -189,6 +189,16 @@ for (const event of ["INSERT", "UPDATE"]) {
     assert.equal(receipt.outcome.status, "not-applied");
     assert.equal(receipt.outcome.problem.code, "preferences-save-failed");
     assert.equal(receipt.outcome.problem.possibleEffects, "none");
+    assert.deepEqual(Object.keys(receipt.outcome.problem).sort(), [
+      "code",
+      "explanation",
+      "possibleEffects",
+      "remediation",
+    ]);
+    assert.doesNotMatch(
+      result.stdout,
+      /cause|DrizzleQueryError|SQLITE_CONSTRAINT|INSERT INTO|injected/,
+    );
     assert.deepEqual(
       JSON.parse((await f.run(["settings", "show", "--json"])).stdout),
       { theme: "everforest", appearance: "dark" },

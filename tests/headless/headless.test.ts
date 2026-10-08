@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { createApplication } from "../helpers/application.js";
+import type { Problem } from "../../src/application/projection-port.js";
 import { type HeadlessIO, runHeadless } from "../../src/headless/headless.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import { buildBundle } from "../../src/bundle/bundle.js";
@@ -936,4 +937,58 @@ test("bundle install of the built file reports already installed", async (t) => 
     0,
   );
   assert.match(h.stdout(), /Already installed/);
+});
+
+test("m10-audit-headless-output-parity: shared failure JSON preserves normalized fields and never traverses causes", async (t) => {
+  const h = await harness(t);
+  const normalized = {
+    code: "injected-failure",
+    explanation: "The operation failed.",
+    remediation: "Repair storage and retry.",
+    possibleEffects: "partial",
+    correction: "bundle",
+    details: {
+      code: "semantic code",
+      explanation: "semantic explanation",
+      remediation: "semantic remediation",
+      possibleEffects: "none",
+      cause: "semantic detail",
+      location: "home",
+    },
+    fieldViolations: [{ field: "bundle", explanation: "Invalid Bundle." }],
+  } satisfies Problem;
+  const cause = {
+    toJSON() {
+      assert.fail("Headless JSON must never serialize a cause");
+    },
+  };
+  const problem: Problem = { ...normalized, cause };
+  const clients = {
+    ...h.clients,
+    bundleManagement: {
+      ...h.clients.bundleManagement,
+      install: () => ({ ok: false, problem }) as const,
+    },
+  };
+  assert.equal(
+    await runHeadless(
+      clients,
+      ["bundle", "install", "failed.wfb", "--json"],
+      h.io,
+    ),
+    1,
+  );
+  assert.deepEqual(JSON.parse(h.stdout()), normalized);
+  assert.equal(h.stderr(), "");
+  assert.equal(problem.cause, cause);
+  h.reset();
+  assert.equal(
+    await runHeadless(clients, ["bundle", "install", "failed.wfb"], h.io),
+    1,
+  );
+  assert.equal(h.stdout(), "");
+  assert.equal(
+    h.stderr(),
+    "Error [injected-failure]: The operation failed.\n- bundle: Invalid Bundle.\nRemediation: Repair storage and retry.\n",
+  );
 });

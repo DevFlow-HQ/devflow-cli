@@ -253,3 +253,49 @@ test("m10-home-and-preferences: partial saves default malformed omitted keys whi
     { bytes: "01" },
   );
 });
+
+test("m10-audit-headless-output-parity: Preferences projection reads its pair from the Catalog snapshot", (t) => {
+  const f = fixture(t);
+  f.database.exec("PRAGMA journal_mode = WAL");
+  const other = openCatalog(f.home);
+  t.after(() => other.close());
+  f.change("initial", { theme: "nord", appearance: "light" });
+  const readPreferences = f.catalog.readPreferences;
+  f.catalog.readPreferences = (read) =>
+    readPreferences((getPreference) =>
+      read((key) => {
+        const value = getPreference(key);
+        if (key === "theme")
+          other.changePreferences(
+            { theme: "ayu", appearance: "dark" },
+            () => undefined,
+          );
+        return value;
+      }),
+    );
+  assert.deepEqual(f.read().preferences, {
+    theme: "nord",
+    appearance: "light",
+  });
+  assert.equal(other.getPreference("theme"), "ayu");
+  assert.equal(other.getPreference("appearance"), "dark");
+  f.catalog.readPreferences = readPreferences;
+  assert.deepEqual(f.read().preferences, { theme: "ayu", appearance: "dark" });
+});
+
+test("m10-audit-headless-output-parity: a failed Preference read transaction defaults the pair with a notice", (t) => {
+  const f = fixture(t);
+  f.change("initial", { theme: "nord", appearance: "light" });
+  const cause = new Error("unavailable transaction");
+  f.catalog.readPreferences = () => {
+    throw cause;
+  };
+  const snapshot = f.read();
+  assert.deepEqual(snapshot.preferences, {
+    theme: "everforest",
+    appearance: "dark",
+  });
+  assert.equal(snapshot.notice?.code, "preferences-read-failed");
+  assert.equal(snapshot.notice?.possibleEffects, "none");
+  assert.equal(snapshot.notice?.cause, cause);
+});

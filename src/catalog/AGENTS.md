@@ -4,6 +4,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- `readPreferences` resolves synchronous reads within one deferred snapshot transaction, preserving paired values across concurrent commits (#449).
 - Preferences hold opaque string values per key. `setPreference` upserts one key; `changePreferences` writes a patch and resolves its result
   through Preference reads in one immediate transaction. A thrown resolver or failed write rolls back every supplied key.
   Latest commits win; unrelated keys and their encoding stay untouched.

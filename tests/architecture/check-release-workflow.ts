@@ -201,6 +201,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m12-audit-working-area-boundary",
   "m10-audit-runtime-failure-causes",
   "m10-audit-turn-event-refusal",
+  "m10-audit-headless-output-parity",
 ] as const;
 
 function testFilesIn(script: string): string[] {

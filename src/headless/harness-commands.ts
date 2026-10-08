@@ -1,3 +1,4 @@
+import { headlessJson } from "./json.js";
 import type { Command } from "commander";
 import type {
   HarnessFocusSnapshot,
@@ -72,7 +73,7 @@ function listHarnesses(
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${JSON.stringify(snapshot, null, 2)}\n`);
+      io.out(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     if (snapshot.harnesses.length === 0) {
@@ -101,7 +102,7 @@ async function inspectHarness(
   }
   const harness = snapshot.result.harness;
   if (json) {
-    io.out(`${JSON.stringify(harness, null, 2)}\n`);
+    io.out(`${headlessJson(harness)}\n`);
     return 0;
   }
   io.out(renderHarnessFocus(harness));

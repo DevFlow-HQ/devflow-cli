@@ -51,24 +51,33 @@ function resolvePreferences(
 }
 
 function readPreferences(
-  catalog: Pick<Catalog, "getPreference">,
+  read: Catalog["readPreferences"],
 ): PreferencesSnapshot {
   const values: Record<string, string | undefined> = {};
   let notice: Problem | undefined;
-  for (const key of ["theme", "appearance"]) {
-    try {
-      values[key] = catalog.getPreference(key);
-    } catch (cause) {
-      notice = {
-        code: "preferences-read-failed",
-        explanation:
-          "Secant could not read saved appearance Preferences. Unreadable values use defaults.",
-        remediation:
-          "Retry `secant settings show` after repairing Preferences storage.",
-        possibleEffects: "none",
-        cause,
-      };
-    }
+  const unreadable = (cause: unknown) => {
+    notice = {
+      code: "preferences-read-failed",
+      explanation:
+        "Secant could not read saved appearance Preferences. Unreadable values use defaults.",
+      remediation:
+        "Retry `secant settings show` after repairing Preferences storage.",
+      possibleEffects: "none",
+      cause,
+    };
+  };
+  try {
+    read((getPreference) => {
+      for (const key of ["theme", "appearance"]) {
+        try {
+          values[key] = getPreference(key);
+        } catch (cause) {
+          unreadable(cause);
+        }
+      }
+    });
+  } catch (cause) {
+    unreadable(cause);
   }
   return {
     family: "preferences",
@@ -102,7 +111,7 @@ export function createPreferences(deps: {
         };
       });
       return {
-        snapshot: readPreferences(catalog),
+        snapshot: readPreferences(catalog.readPreferences),
         catchUp: "fresh",
         updates,
         close() {
@@ -145,7 +154,7 @@ export function createPreferences(deps: {
               let snapshot: PreferencesSnapshot;
               try {
                 snapshot = catalog.changePreferences(patch, (getPreference) =>
-                  readPreferences({ getPreference }),
+                  readPreferences((read) => read(getPreference)),
                 );
               } catch (cause) {
                 return {

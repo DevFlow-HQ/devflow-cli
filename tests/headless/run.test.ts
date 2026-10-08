@@ -1745,3 +1745,77 @@ test("m10-observed-harness-facts: run show JSON is byte-identical across live ac
   assert.deepEqual(live.owner.turnEvents(), []);
   await live.finish();
 });
+
+test("m10-audit-headless-output-parity: text transcript annotates Entry prompts, Steers and incomplete replies", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
+  assert.ok(runId && h.runGroup);
+  const owner = h.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  const at = new Date("2026-10-06T00:00:00.000Z");
+  owner.admitTurn({
+    turnId: "annotated-turn",
+    attemptId: "0.0:agent",
+    session: "s",
+    origin: "managed",
+    kind: "interactive-agent",
+    input: "Entry",
+    recoveryCoordinate: "native",
+    harness: "claude-code",
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "annotated-turn",
+    kind: "assistant-content",
+    payload: JSON.stringify({ messageId: "first", content: "First" }),
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "annotated-turn",
+    kind: "steer",
+    payload: JSON.stringify({
+      steerId: "direction",
+      text: "Direction",
+      sentAt: at.toISOString(),
+      settlement: { kind: "delivered", delivery: "after-boundary" },
+    }),
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "annotated-turn",
+    kind: "assistant-content",
+    payload: JSON.stringify({
+      messageId: "partial",
+      content: "\u001b[31mPartial\u001b[0m",
+      incomplete: true,
+    }),
+    at,
+  });
+  owner.settleTurn({
+    turnId: "annotated-turn",
+    session: "s",
+    resultKind: "interrupted",
+    resultDetail: "{}",
+    availability: "open",
+    at,
+  });
+  owner.close();
+  h.reset();
+  assert.equal(
+    await runHeadless(h.clients, ["run", "read", runId, "--transcript"], h.io),
+    0,
+  );
+  const entries =
+    "user · Entry prompt: Entry\nassistant: First\nuser · Steer: Direction\nassistant · incomplete: Partial\n";
+  assert.equal(
+    h.stdout(),
+    `Transcript page (s):\n${entries}\nComplete transcript (s):\n${entries}`,
+  );
+  assert.equal(h.stderr(), "");
+});

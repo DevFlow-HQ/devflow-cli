@@ -1,3 +1,4 @@
+import { headlessJson } from "./json.js";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { Command, CommanderError } from "commander";
@@ -17,7 +18,7 @@ import { registerHarnessCommands } from "./harness-commands.js";
 // The headless client speaks the Application Interfaces and nothing else: the
 // Projection Port for the Workspace and Bundle-management for `bundle build`.
 // It prints plain text with status carried by words; `--json` prints the
-// Projection snapshot, Operation result, or build report verbatim; any Problem
+// Projection snapshot, Operation result, or build report without Problem causes; any Problem
 // prints its code, explanation, and remediation and exits non-zero.
 //
 // One `commander` command tree owns all argument parsing (help is generated, so
@@ -385,7 +386,7 @@ function approve(
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${JSON.stringify(snapshot, null, 2)}\n`);
+      io.out(`${headlessJson(snapshot)}\n`);
       return snapshot.outcome.status === "applied" ? 0 : 1;
     }
     if (snapshot.outcome.status === "not-applied") {
@@ -407,7 +408,7 @@ function showWorkspace(
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${JSON.stringify(snapshot, null, 2)}\n`);
+      io.out(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     io.out(`Workspace: ${snapshot.path}\n`);
@@ -439,7 +440,7 @@ function listBundles(
     }
     const { bundles } = snapshot.result;
     if (json) {
-      io.out(`${JSON.stringify(snapshot, null, 2)}\n`);
+      io.out(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     if (bundles.length === 0) {
@@ -473,7 +474,7 @@ function inspectBundle(
     }
     const bundle = snapshot.result.bundle;
     if (json) {
-      io.out(`${JSON.stringify(bundle, null, 2)}\n`);
+      io.out(`${headlessJson(bundle)}\n`);
       return 0;
     }
     io.out(renderFocus(bundle));
@@ -486,7 +487,7 @@ function inspectBundle(
 function report(io: HeadlessIO, json: boolean, result: BundleResult): number {
   if (!result.ok) return fail(io, json, result.problem);
   if (json) {
-    io.out(`${JSON.stringify(result.report, null, 2)}\n`);
+    io.out(`${headlessJson(result.report)}\n`);
     return 0;
   }
   const { identity, digest, outputPath, installed, findings } = result.report;
@@ -510,7 +511,7 @@ function report(io: HeadlessIO, json: boolean, result: BundleResult): number {
 
 function fail(io: HeadlessIO, json: boolean, problem: Problem): number {
   if (json) {
-    io.out(`${JSON.stringify(problem, null, 2)}\n`);
+    io.out(`${headlessJson(problem)}\n`);
   } else {
     io.err(`Error [${problem.code}]: ${problem.explanation}\n`);
     for (const violation of problem.fieldViolations ?? []) {

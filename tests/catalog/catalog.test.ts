@@ -743,3 +743,52 @@ test("paired Preference updates roll back together and return partial saves unde
   assert.equal(catalog.getPreference("theme"), "nord");
   assert.equal(catalog.getPreference("appearance"), "dark");
 });
+
+test("m10-audit-headless-output-parity: Preference reads retain one snapshot across a committed paired change", (t) => {
+  const home = makeTempDir("secant-preferences-read-");
+  const first = openCatalog(home);
+  const database = new Database(join(home, "catalog.db"));
+  database.exec("PRAGMA journal_mode = WAL");
+  const second = openCatalog(home);
+  t.after(() => {
+    second.close();
+    database.close();
+    first.close();
+  });
+  first.changePreferences(
+    { theme: "nord", appearance: "light" },
+    () => undefined,
+  );
+  const pair = first.readPreferences((getPreference) => {
+    const theme = getPreference("theme");
+    second.changePreferences(
+      { theme: "ayu", appearance: "dark" },
+      () => undefined,
+    );
+    assert.equal(getPreference("missing"), undefined);
+    return { theme, appearance: getPreference("appearance") };
+  });
+  assert.deepEqual(pair, { theme: "nord", appearance: "light" });
+  assert.deepEqual(
+    first.readPreferences((getPreference) => ({
+      theme: getPreference("theme"),
+      appearance: getPreference("appearance"),
+    })),
+    { theme: "ayu", appearance: "dark" },
+  );
+  assert.throws(
+    () =>
+      first.readPreferences(() => {
+        throw new Error("resolver failure");
+      }),
+    /resolver failure/,
+  );
+  database.exec("INSERT INTO preferences (key, value) VALUES ('bad', x'00')");
+  assert.throws(() =>
+    first.readPreferences((getPreference) => getPreference("bad")),
+  );
+  assert.equal(
+    first.readPreferences((getPreference) => getPreference("theme")),
+    "ayu",
+  );
+});

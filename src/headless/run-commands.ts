@@ -1,3 +1,4 @@
+import { headlessJson } from "./json.js";
 import { settledOperation } from "./operation-settlement.js";
 import { createRunNoticeReporter, runSnapshotJson } from "./run-notice.js";
 import { randomUUID } from "node:crypto";
@@ -613,7 +614,7 @@ function reportNotReady(
   findings: readonly Problem[],
 ): number {
   if (json) {
-    io.out(`${JSON.stringify({ status: "not-ready", findings }, null, 2)}\n`);
+    io.out(`${headlessJson({ status: "not-ready", findings })}\n`);
     return 1;
   }
   for (const problem of findings) fail(io, false, problem);
@@ -962,7 +963,7 @@ function readRun(
   const read = port.readResource(outputRef);
   if (!read.found) return fail(io, json, read.problem);
   if (json) {
-    io.out(`${JSON.stringify(read, null, 2)}\n`);
+    io.out(`${headlessJson(read)}\n`);
     return 0;
   }
   io.out(read.content.endsWith("\n") ? read.content : `${read.content}\n`);
@@ -1036,7 +1037,7 @@ function readTranscript(
 
   if (json) {
     io.out(
-      `${JSON.stringify({ page: transcriptJson(page), export: complete === undefined ? undefined : transcriptJson(complete) }, null, 2)}\n`,
+      `${headlessJson({ page: transcriptJson(page), export: complete === undefined ? undefined : transcriptJson(complete) })}\n`,
     );
     return 0;
   }
@@ -1072,14 +1073,14 @@ function transcriptEntryJson(entry: RunTranscriptEntryView) {
 
 /** Render transcript entries as plain text, one labelled block per entry. */
 function renderTranscriptEntries(
-  entries: readonly { role: string; content: string }[],
+  entries: readonly RunTranscriptEntryView[],
 ): string {
   if (entries.length === 0) return "(no entries)\n";
   return entries
     .map(
       (entry) =>
         // Strip ANSI so the transcript reads clean, matching the TUI (D12).
-        `${entry.role === "user" ? "user" : "assistant"}: ${stripAnsi(entry.content)}`,
+        `${entry.role === "user" ? "user" : "assistant"}${entry.kind === "steer" ? " · Steer" : entry.kind === "entry-prompt" ? " · Entry prompt" : ""}${entry.incomplete === true ? " · incomplete" : ""}: ${stripAnsi(entry.content)}`,
     )
     .join("\n")
     .concat("\n");
@@ -1100,7 +1101,7 @@ function listRuns(
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${JSON.stringify(snapshot, null, 2)}\n`);
+      io.out(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     io.out(renderRunList(snapshot));
@@ -1199,7 +1200,7 @@ async function changeRunModelChoice(
       noticeView.close();
     }
     if (json) {
-      io.out(`${JSON.stringify(operation.snapshot, null, 2)}\n`);
+      io.out(`${headlessJson(operation.snapshot)}\n`);
       return outcome.status === "applied" ? 0 : 1;
     }
     if (outcome.status === "not-applied")
@@ -1244,7 +1245,7 @@ function endRunOperation(
   try {
     const outcome = opened.snapshot.outcome;
     if (json) {
-      io.out(`${JSON.stringify(opened.snapshot, null, 2)}\n`);
+      io.out(`${headlessJson(opened.snapshot)}\n`);
       return outcome.status === "applied" ? 0 : 1;
     }
     if (outcome.status === "not-applied") {
