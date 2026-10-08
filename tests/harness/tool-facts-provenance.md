@@ -94,3 +94,9 @@ Store acceptance checks immutable first appearance, start/settlement crash durab
 facts, and transcript exclusion. Renderer acceptance checks words independent of color, wrapping, keyboard scrolling,
 and dual resize. Standing headless, observer, control, and transcript cases remain in the three named M10 CI steps.
 Human terminal and installed-Harness release evidence remains a separate recorded gate.
+
+#439 replays the recorded Claude MCP names as `server/tool`. Synthetic child assistant,
+message-start and message-delta overlays verify exclusion from main-thread usage and
+Turn-local parent correlation, including a child arriving before its parent's start.
+These overlays enforce translation policy; they do not qualify a native subagent usage shape.
+Unknown and malformed control requests exercise a typed lost Turn and process retirement.

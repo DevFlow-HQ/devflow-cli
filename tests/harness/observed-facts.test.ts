@@ -79,6 +79,7 @@ async function codexFacts(
   t: TestContext,
   extra: readonly object[] = [],
   workspace = makeTempDir("secant-observed-codex-"),
+  summaryCase?: { provider: string; model: string; reroute?: string },
 ) {
   const traffic = z
     .object({
@@ -166,6 +167,77 @@ async function codexFacts(
           const frames: z.infer<typeof envelope>[] = [
             { ...reply, id: request.id },
           ];
+          if (summaryCase !== undefined && request.method === "thread/read") {
+            const native = z
+              .object({
+                result: z.object({ thread: z.looseObject({ id: z.string() }) }),
+              })
+              .parse(reply);
+            const started = z
+              .object({
+                params: z.object({
+                  threadId: z.string(),
+                  turn: z.object({ id: z.string() }),
+                }),
+              })
+              .parse(
+                notifications.find(
+                  (value) => envelope.parse(value).method === "turn/started",
+                ),
+              );
+            const correlation = {
+              threadId: started.params.threadId,
+              turnId: started.params.turn.id,
+            };
+            // Admit the read first, then replay display facts in the same Turn.
+            frames[0] = {
+              id: request.id,
+              result: {
+                thread: {
+                  ...native.result.thread,
+                  modelProvider: summaryCase.provider,
+                  model: summaryCase.model,
+                },
+              },
+            };
+            if (summaryCase.reroute !== undefined)
+              frames.push({
+                method: "model/rerouted",
+                params: {
+                  ...correlation,
+                  toModel: summaryCase.reroute,
+                  fromModel: summaryCase.model,
+                  reason: "test",
+                },
+              });
+            frames.push(
+              {
+                method: "item/reasoning/summaryTextDelta",
+                params: {
+                  ...correlation,
+                  itemId: "summary",
+                  summaryIndex: 0,
+                  delta: "Qualified summary",
+                },
+              },
+              {
+                method: "item/completed",
+                params: {
+                  ...correlation,
+                  item: {
+                    id: "summary",
+                    type: "reasoning",
+                    summary: ["Qualified summary"],
+                  },
+                },
+              },
+              ...notifications
+                .filter(
+                  (value) => envelope.parse(value).method === "turn/completed",
+                )
+                .map((value) => envelope.parse(value)),
+            );
+          }
           if (request.method === "turn/start") {
             const terminal = notifications.findIndex(
               (value) => envelope.parse(value).method === "turn/completed",
@@ -217,9 +289,11 @@ async function codexFacts(
                 }
                 return envelope.parse(value);
               }),
-              ...notifications
-                .slice(terminal)
-                .map((value) => envelope.parse(value)),
+              ...(summaryCase === undefined
+                ? notifications
+                    .slice(terminal)
+                    .map((value) => envelope.parse(value))
+                : []),
             );
           }
           return [
@@ -742,7 +816,7 @@ test("m10-observed-harness-facts: authentic Claude rejected Write is declined, i
   assert.equal(declined.tool, "file-change");
   assert.equal(declined.count, undefined);
 });
-test("m10-observed-harness-facts: authentic Claude external MCP result text does not infer refusal from elicitation", async (t) => {
+test("m10-audit-claude-fact-translation: authentic Claude MCP names translate and result text does not infer refusal from elicitation", async (t) => {
   const calls = await claudeTools(
     t,
     recordedToolFrames("elicitation-declined", [
@@ -755,8 +829,8 @@ test("m10-observed-harness-facts: authentic Claude external MCP result text does
       .filter((call) => call.tool === "mcp")
       .map((call) => [call.tool, call.input, call.outcome.kind]),
     [
-      ["mcp", "mcp__setup__setup · {}", "running"],
-      ["mcp", "mcp__setup__setup · {}", "completed"],
+      ["mcp", "setup/setup · {}", "running"],
+      ["mcp", "setup/setup · {}", "completed"],
     ],
   );
 });
@@ -873,8 +947,7 @@ test("m10-observed-harness-facts: authentic Claude Secant Agent calls never dupl
   );
   assert.equal(
     calls.some(
-      (call) =>
-        call.tool === "mcp" && call.input.includes("mcp__secant__step_done"),
+      (call) => call.tool === "mcp" && call.input.includes("secant/step_done"),
     ),
     false,
   );
@@ -1533,3 +1606,245 @@ for (const final of [
       ),
     );
   });
+
+test("m10-audit-claude-fact-translation: unidentified Claude replies receive distinct identities", async (t) => {
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    userFrame: () => [
+      init,
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "first" }] },
+      },
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "second" }] },
+      },
+      { type: "result", subtype: "success" },
+    ],
+  });
+  const harness = await prepare(scripted);
+  t.after(() => harness.close());
+  const turn = harness.startTurn(turnRequest("unidentified replies"));
+  const events: TurnEvent[] = [];
+  turn.subscribe((event) => events.push(event));
+  assert.equal((await turn.result()).kind, "completed");
+  const messages = events.filter((event) => event.kind === "assistant-content");
+  assert.deepEqual(
+    messages.map((event) => event.content),
+    ["first", "second"],
+  );
+  for (const message of messages) assert.ok(message.messageId);
+  assert.notEqual(messages[0]?.messageId, messages[1]?.messageId);
+});
+
+test("m10-audit-claude-fact-translation: child assistant and streaming usage never replace main usage or previews", async (t) => {
+  const usage = { input_tokens: 10, output_tokens: 2 };
+  const child = { input_tokens: 999, output_tokens: 888 };
+  const scripted = scriptedClaude({
+    answer: "confirm",
+    userFrame: () => [
+      init,
+      {
+        type: "stream_event",
+        event: { type: "message_start", message: { id: "main", usage } },
+      },
+      {
+        type: "stream_event",
+        parent_tool_use_id: "toolu_parent",
+        event: {
+          type: "message_start",
+          message: { id: "child", usage: child },
+        },
+      },
+      {
+        type: "stream_event",
+        parent_tool_use_id: "toolu_parent",
+        event: { type: "message_delta", usage: child },
+      },
+      {
+        type: "assistant",
+        parent_tool_use_id: "toolu_parent",
+        message: {
+          id: "child",
+          usage: child,
+          content: [{ type: "text", text: "helper" }],
+        },
+      },
+      {
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "main preview" },
+        },
+      },
+      {
+        type: "assistant",
+        message: {
+          id: "main",
+          usage,
+          content: [{ type: "text", text: "main reply" }],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ],
+  });
+  const harness = await prepare(scripted);
+  t.after(() => harness.close());
+  const turn = harness.startTurn(turnRequest("usage"));
+  const events: TurnEvent[] = [];
+  turn.subscribe((event) => events.push(event));
+  await turn.result();
+  assert.deepEqual(
+    events
+      .filter((event) => event.kind === "usage")
+      .map((event) => event.observation.summary),
+    [
+      "message: input 10, output 2 tokens",
+      "message: input 10, output 2 tokens",
+      "",
+    ],
+  );
+  assert.deepEqual(
+    events
+      .filter((event) => event.kind === "message-preview")
+      .map((event) => [event.messageId, event.content]),
+    [["main", "main preview"]],
+  );
+});
+
+for (const parentFirst of [true, false]) {
+  test(`m10-audit-claude-fact-translation: parent identities correlate without native ids, parent first ${parentFirst}`, async (t) => {
+    const parent = {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_parent",
+            name: "Agent",
+            input: { task: "help" },
+          },
+        ],
+      },
+    };
+    const child = {
+      type: "assistant",
+      parent_tool_use_id: "toolu_parent",
+      message: {
+        content: [
+          { type: "text", text: "helper reply" },
+          {
+            type: "tool_use",
+            id: "toolu_child",
+            name: "Read",
+            input: { file_path: "note.txt" },
+          },
+        ],
+      },
+    };
+    const scripted = scriptedClaude({
+      answer: "confirm",
+      userFrame: () => [
+        init,
+        ...(parentFirst ? [parent, child] : [child, parent]),
+        {
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_child",
+                content: "done",
+              },
+            ],
+          },
+        },
+        { type: "result", subtype: "success" },
+      ],
+    });
+    const harness = await prepare(scripted);
+    t.after(() => harness.close());
+    const turn = harness.startTurn(turnRequest("parent"));
+    const events: TurnEvent[] = [];
+    turn.subscribe((event) => events.push(event));
+    await turn.result();
+    const calls = events
+      .filter((event) => event.kind === "tool-call")
+      .map((event) => event.call);
+    const parentCall = calls.find((call) => call.tool === "other");
+    const children = calls.filter((call) => call.tool === "read");
+    assert.ok(parentCall);
+    assert.deepEqual(
+      children.map((call) => call.outcome.kind),
+      ["running", "completed"],
+    );
+    assert.equal(children[0]?.callId, children[1]?.callId);
+    assert.notEqual(children[0]?.callId, parentCall.callId);
+    assert.equal(children[0]?.parentCallId, parentCall.callId);
+    assert.equal(
+      events.find((event) => event.kind === "assistant-content")
+        ?.parentActivity,
+      parentCall.callId,
+    );
+    assert.equal(JSON.stringify(events).includes("toolu_"), false);
+  });
+}
+
+for (const request of [{ subtype: "future_control" }, { subtype: 123 }, null]) {
+  test(`m10-audit-claude-fact-translation: unsupported control is a visible typed failure ${JSON.stringify(request)}`, async (t) => {
+    const scripted = scriptedClaude({
+      answer: "confirm",
+      userFrame: () => [
+        init,
+        { type: "control_request", request_id: "unknown-request", request },
+      ],
+    });
+    const harness = await prepare(scripted);
+    t.after(() => harness.close());
+    const turn = harness.startTurn(turnRequest("control"));
+    const result = await turn.result();
+    assert.equal(result.kind, "lost");
+    assert.ok(result.kind === "lost");
+    assert.equal(
+      result.detail.failure?.category,
+      "unsupported-control-request",
+    );
+    assert.match(
+      result.detail.failure?.diagnostics ?? "",
+      /unsupported control request/i,
+    );
+    await scripted.closed();
+    assert.equal(scripted.stops(), 1);
+  });
+}
+
+for (const [provider, model, reroute, qualified] of [
+  ["openai", "gpt-6.1-sol", undefined, true],
+  ["other-provider", "gpt-6.1-sol", undefined, false],
+  ["openai", "other-model", undefined, false],
+  ["openai", "other-model", "gpt-6.1-sol", true],
+  ["other-provider", "other-model", "gpt-6.1-sol", false],
+  ["openai", "gpt-6.1-sol", "other-model", false],
+] as const) {
+  test(`m10-audit-claude-fact-translation: Codex Thought qualification ${provider}/${model} rerouted ${reroute}`, async (t) => {
+    const events = await codexFacts(
+      t,
+      [],
+      makeTempDir("secant-summary-rule-"),
+      { provider, model, ...(reroute === undefined ? {} : { reroute }) },
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.kind === "thought-preview")
+        .map((event) => event.content),
+      qualified ? ["Qualified summary"] : [],
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.kind === "thought")
+        .map((event) => event.content),
+      qualified ? ["Qualified summary"] : [],
+    );
+  });
+}

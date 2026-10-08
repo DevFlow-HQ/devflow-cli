@@ -6,8 +6,9 @@
 // state; it never touches a raw field.
 //
 // Parsing is deliberately lenient, exactly as the hand-rolled readers were: an
-// unknown frame type, or a known type whose parse fails, is ignored and is never
-// protocol corruption. Only the fields dispatch iterates
+// unknown frame type, or a known observation whose parse fails, is ignored and is never
+// protocol corruption. A control request cannot be ignored: unsupported or malformed
+// requests become a typed failure so the native exchange cannot hang silently. Only the fields dispatch iterates
 // over are structurally required (a message's content array, a stream event's
 // object); every other field falls back to "absent" when its type is not the
 // expected one (`.catch(undefined)`), so a new or reshaped field in a future
@@ -207,8 +208,8 @@ export type StatusFrame = z.infer<typeof StatusFrame>;
 
 const TelemetryFrame = z.looseObject({ type: z.literal("telemetry") });
 
-/** A frame the Adapter dispatches on. A known type whose schema failed,
- * or an unknown type, arrives as `other` and is ignored. */
+/** A frame the Adapter dispatches on. Unrecognized control requests are failures;
+ * other failed schemas and unknown types arrive as `other` and are ignored. */
 export type ParsedFrame =
   | {
       readonly kind: "elicitation";
@@ -257,6 +258,7 @@ export type ParsedFrame =
       readonly frame: StatusFrame;
     }
   | { readonly kind: "telemetry"; readonly type: string }
+  | { readonly kind: "unsupported-control"; readonly type: string }
   | { readonly kind: "other"; readonly type: string | undefined };
 
 /** Parse one decoded stdout line. Non-object JSON (a bare value or array) is
@@ -281,7 +283,7 @@ export function parseFrame(value: unknown): ParsedFrame | undefined {
       const parsed = ElicitationFrame.safeParse(value);
       return parsed.success
         ? { kind: "elicitation", type, frame: parsed.data }
-        : { kind: "other", type };
+        : { kind: "unsupported-control", type };
     }
     case "control_cancel_request": {
       const parsed = ControlCancelFrame.safeParse(value);
@@ -578,7 +580,9 @@ export function observedToolStart(
   return {
     callId,
     tool,
-    input: main ?? `${name} · ${JSON.stringify(block.input) ?? ""}`,
+    input:
+      main ??
+      `${tool === "mcp" ? name.slice(5).replace("__", "/") : name} · ${JSON.stringify(block.input) ?? ""}`,
     outcome: { kind: "running" },
   };
 }

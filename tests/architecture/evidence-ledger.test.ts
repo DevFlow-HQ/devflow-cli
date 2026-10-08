@@ -71,6 +71,9 @@ const PROCESS_FREE_TEST_FILES = new Set([
   // Written in place (#390) through runHeadless with scripted Projection Port streams and the
   // process-free headless harness; no child spawns.
   "tests/headless/readiness.test.ts",
+  // Born process-free (#439): production composition and the Claude Adapter use scripted
+  // Process streams and fake Git; history and transcript clients never reach a real child.
+  "tests/headless/claude-fact-translation.test.ts",
   // Written over the fake Git Run group (#214).
   "tests/run/store/working-area.test.ts",
   // Born process-free: fake view/Renderer Port controls, in-process Catalog, and an Application

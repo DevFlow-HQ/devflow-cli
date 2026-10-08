@@ -1676,6 +1676,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   readonly request: TurnRequest;
   private readonly producer = new TurnEventProducer();
   private readonly tools = new Map<string, ToolCall>();
+  private readonly toolIds = new Map<string, string>();
   private readonly resultPromise: Promise<TurnResult>;
   private resolveResult!: (result: TurnResult) => void;
   private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1971,12 +1972,23 @@ class ClaudeCodeTurn implements HarnessTurn {
     }, timeoutMs);
   }
 
-  /** Dispatch one parsed frame. A known type whose schema failed arrives as
-   *  `other` and is ignored, never corruption (frames.ts). */
+  /** Dispatch parsed observations, ignoring unsupported facts. Control requests
+   *  instead require an answer or a visible failure (frames.ts). */
   acceptFrame(parsed: ParsedFrame): void {
     if (this.settled || this.producer.sealed) return;
     if (parsed.kind === "elicitation") {
       this.declineElicitation(parsed.frame);
+      return;
+    }
+    if (parsed.kind === "unsupported-control") {
+      this.settleLost("completion", this.lastObservation, {
+        phase: "turn",
+        category: "unsupported-control-request",
+        possibleEffects: "possible",
+        diagnostics:
+          "Claude Code sent an unsupported control request. The Turn could not continue.",
+      });
+      void this.session.stop(this);
       return;
     }
     if (parsed.kind === "control-cancel") {
@@ -2247,12 +2259,15 @@ class ClaudeCodeTurn implements HarnessTurn {
   }
 
   private acceptAssistant(frame: MessageFrame): void {
-    if ("usage" in frame.message)
+    if (frame.parent_tool_use_id == null && "usage" in frame.message)
       this.producer.emit({
         kind: "usage",
         observation: usageObservation(frame.message, "message"),
       });
-    const parentActivity = frame.parent_tool_use_id ?? undefined;
+    const parentActivity =
+      frame.parent_tool_use_id == null
+        ? undefined
+        : this.toolId(frame.parent_tool_use_id);
     const blocks = contentBlocks(frame);
     let emittedText = false;
     for (const block of blocks) {
@@ -2269,9 +2284,7 @@ class ClaudeCodeTurn implements HarnessTurn {
           this.lastObservation = `assistant content: ${truncate(content)}`;
           this.producer.emit({
             kind: "assistant-content",
-            ...(frame.message.id === undefined
-              ? {}
-              : { messageId: frame.message.id }),
+            messageId: frame.message.id ?? randomUUID(),
             content,
             ...(parentActivity !== undefined ? { parentActivity } : {}),
           });
@@ -2286,10 +2299,23 @@ class ClaudeCodeTurn implements HarnessTurn {
         continue;
       const id = block.id;
       if (id === undefined || this.tools.has(id)) continue;
-      const call = observedToolStart(block, randomUUID());
+      const call: ToolCall = {
+        ...observedToolStart(block, this.toolId(id)),
+        ...(parentActivity === undefined
+          ? {}
+          : { parentCallId: parentActivity }),
+      };
       this.tools.set(id, call);
       this.producer.emit({ kind: "tool-call", call });
     }
+  }
+
+  private toolId(nativeId: string): string {
+    const existing = this.toolIds.get(nativeId);
+    if (existing !== undefined) return existing;
+    const id = randomUUID();
+    this.toolIds.set(nativeId, id);
+    return id;
   }
 
   private acceptToolResults(frame: MessageFrame): void {
@@ -2307,6 +2333,7 @@ class ClaudeCodeTurn implements HarnessTurn {
   private streamedMessageId: string | undefined;
 
   private acceptStreamEvent(frame: StreamEventFrame): void {
+    if (frame.parent_tool_use_id != null) return;
     const event = frame.event;
     if (
       event.type === "message_start" &&
@@ -2322,17 +2349,14 @@ class ClaudeCodeTurn implements HarnessTurn {
         kind: "usage",
         observation: usageObservation(event, "message"),
       });
-    if (event.type === "message_start" && frame.parent_tool_use_id == null) {
+    if (event.type === "message_start") {
       this.streamedMessageId = event.message?.id;
     }
     const delta = frame.event.delta;
     if (delta === undefined || delta.type !== "text_delta") return;
     const text = delta.text;
     if (text !== undefined)
-      this.producer.emitPreview(
-        text,
-        frame.parent_tool_use_id == null ? this.streamedMessageId : undefined,
-      );
+      this.producer.emitPreview(text, this.streamedMessageId);
   }
 
   /** A Steer's lifecycle: `started` is model exposure, `cancelled` the drop an

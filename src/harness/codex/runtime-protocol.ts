@@ -303,7 +303,7 @@ export function parseThreadReadResult(
 ): {
   readonly model?: string;
   readonly effort?: string;
-  readonly summaryQualified: boolean;
+  readonly modelProvider?: string;
 } {
   const { thread } = parseResult(value, threadReadResultSchema, "thread/read");
   if (thread.id !== threadId) {
@@ -312,14 +312,22 @@ export function parseThreadReadResult(
     );
   }
   return {
-    // Native positive qualification currently covers this provider/model pair only.
-    summaryQualified:
-      thread.modelProvider === "openai" && thread.model === "gpt-6.1-sol",
+    ...(thread.modelProvider === undefined
+      ? {}
+      : { modelProvider: thread.modelProvider }),
     ...(thread.model != null ? { model: thread.model } : {}),
     ...(thread.reasoningEffort != null
       ? { effort: thread.reasoningEffort }
       : {}),
   };
+}
+
+/** Native positive qualification currently covers this provider/model pair only. */
+export function qualifiesThoughtSummary(
+  provider: string | undefined,
+  model: string | undefined,
+): boolean {
+  return provider === "openai" && model === "gpt-6.1-sol";
 }
 
 export function parseTurnStartResult(value: unknown): string {

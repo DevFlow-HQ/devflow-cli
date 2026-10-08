@@ -193,6 +193,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-windows-release-check",
   "m10-audit-guidance-refresh",
   "m10-audit-file-input-resolution",
+  "m10-audit-claude-fact-translation",
   "m12-focused-check-scenarios",
   "m12-test-interface-ownership",
   "m12-renderer-test-lifecycle",

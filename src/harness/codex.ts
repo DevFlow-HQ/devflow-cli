@@ -78,6 +78,7 @@ import {
   parseRuntimeNotification,
   parseAgentCallMetadata,
   parseThreadReadResult,
+  qualifiesThoughtSummary,
   parseThreadResumeResult,
   parseThreadStartResult,
   sandboxAdmitsDirectory,
@@ -1374,6 +1375,7 @@ class CodexTurn implements HarnessTurn {
   /** Whether this Turn sent its `thread/read`. */
   private effectiveValuesRead = false;
   private summaryQualified = false;
+  private modelProvider: string | undefined;
   private readonly summaryParts = new Map<string, Map<number, string>>();
   /** Codex refused the first `thread/read`; the Turn's next item reads again. */
   private rereadPending = false;
@@ -2103,8 +2105,10 @@ class CodexTurn implements HarnessTurn {
         return;
       case "model-rerouted":
         this.rerouted = true;
-        if (notification.toModel !== "gpt-6.1-sol")
-          this.summaryQualified = false;
+        this.summaryQualified = qualifiesThoughtSummary(
+          this.modelProvider,
+          notification.toModel,
+        );
         this.observeModel(
           notification.toModel,
           this.model.known ? this.model.effort : undefined,
@@ -2374,7 +2378,11 @@ class CodexTurn implements HarnessTurn {
         const model =
           this.rerouted && current.known ? current.model : read.model;
         if (this.settled) return;
-        this.summaryQualified = read.summaryQualified && model === read.model;
+        this.modelProvider = read.modelProvider;
+        this.summaryQualified = qualifiesThoughtSummary(
+          this.modelProvider,
+          model,
+        );
         if (model === undefined) return;
         this.observeModel(model, read.effort);
       },

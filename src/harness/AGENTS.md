@@ -75,6 +75,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Context reports replace facts without calculation (#418): Claude keeps model capacity; Codex keeps total/last usage distinct. Tool ids are Turn-local opaque values
   (#414).
 
+- Claude child frames never replace main usage. Parent tool ids share the Turn's minted-id map even when the child arrives first (#439).
+  Unidentified settled replies receive a fresh message id; native stream identity is still required for previews.
+
 - Before changing Interrupt, recovery, or Turn cleanup, read [Harness Turn control](../../docs/agents/harness-turn-control.md).
 
 ## Tests

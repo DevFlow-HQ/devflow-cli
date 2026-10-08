@@ -18,10 +18,11 @@ Read before changing the private Claude Code Adapter.
   `stream_event`, `result`, `control_response`, `command_lifecycle`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the
   only
   raw-field accessors. Elicitation requests are declined; `control_cancel_request` withdraws only the exact pending elicitation (#371). Unrecognized frames add no
-  activity.
+  activity; an unrecognized or malformed `control_request` instead loses the Turn with `unsupported-control-request` and stops its process.
   Only the fields dispatch iterates over are structurally required (a message's content array, a stream event's object; a `result` always settles, a missing `subtype` as
   `unknown-result`); every other field degrades to absent (`.catch(undefined)`), unknown fields pass through, and a known type whose
-  parse fails or an unknown type is ignored, never protocol corruption. `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
+  observation parse fails or an unknown type is ignored, never protocol corruption. Control requests use the failure rule above.
+  `claude-code.ts` dispatches on `ParsedFrame` and reads no raw field.
 - `OwnedProcess.writeStdin` resolves after its error-free write callback and, when `write` returned `false`, the `drain` event. Errors reject.
   Bytes are accepted before the promise settles; durable admission relies on this ordering.
 - `jsonl.ts` is the one private hand-rolled NDJSON splitter both native Adapters use (M3 D15, M4 D1): it splits on `\n`, strips a trailing `\r`, preserves

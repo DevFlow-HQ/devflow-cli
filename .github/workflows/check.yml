@@ -212,6 +212,12 @@ jobs:
           tests/headless/run.test.ts
           tests/headless/agent-step.test.ts
           tests/tui/run-view.test.ts
+      - name: m10-audit-claude-fact-translation
+        run: >-
+          bun run test --
+          -t '^m10-audit-claude-fact-translation(:|$)'
+          tests/harness/observed-facts.test.ts
+          tests/headless/claude-fact-translation.test.ts
       - name: m10-audit-guidance-refresh
         run: >-
           bun run test --
