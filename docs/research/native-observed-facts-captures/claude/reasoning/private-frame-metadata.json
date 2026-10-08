@@ -1,0 +1,35 @@
+[
+  {
+    "type": "stream_event",
+    "eventType": "content_block_start",
+    "blockType": "thinking",
+    "thinking_display": "updates",
+    "index": 0
+  },
+  {
+    "type": "stream_event",
+    "eventType": "content_block_delta",
+    "deltaType": "thinking_delta",
+    "thinking_display": "updates",
+    "index": 0
+  },
+  {
+    "type": "stream_event",
+    "eventType": "content_block_delta",
+    "deltaType": "thinking_delta",
+    "thinking_display": "updates",
+    "index": 0
+  },
+  {
+    "type": "stream_event",
+    "eventType": "content_block_delta",
+    "deltaType": "signature_delta",
+    "index": 0
+  },
+  {
+    "type": "assistant",
+    "messageId": "msg_011CfpU7C4NnMEzvudkcxHSa",
+    "blockTypes": ["thinking"],
+    "suppliedThinkingDurationMs": 805
+  }
+]

@@ -1,0 +1,76 @@
+{
+  "capture": [
+    {
+      "direction": "stdin",
+      "line": "{\"id\":4,\"method\":\"thread/start\",\"params\":{\"cwd\":\"/tmp/secant-native-evidence-460/codex/workspace-decline\",\"approvalsReviewer\":\"user\"}}"
+    },
+    {
+      "direction": "stdin",
+      "line": "{\"id\":5,\"method\":\"turn/start\",\"params\":{\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"input\":[{\"type\":\"text\",\"text\":\"For an opt-in native approval recording, request escalated approval explicitly by setting sandbox_permissions=require_escalated to run `touch /tmp/secant-native-evidence-460-declined-marker`. This request will be denied by the recording client. Do not retry or run any fallback command after denial. Reply recorded decline.\"}]}}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/started\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"id\":\"exec-892f9a71-0342-4a2e-b56e-39fab5f3b899\",\"pluginId\":null,\"scriptPath\":null,\"command\":\"/bin/bash -lc 'touch /tmp/secant-native-evidence-460-declined-marker'\",\"cwd\":\"/tmp/secant-native-evidence-460/codex/workspace-decline\",\"processId\":null,\"source\":\"agent\",\"status\":\"inProgress\",\"commandActions\":[{\"type\":\"unknown\",\"command\":\"touch /tmp/secant-native-evidence-460-declined-marker\"}],\"aggregatedOutput\":null,\"exitCode\":null,\"durationMs\":null},\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"turnId\":\"01a11aa3-23b6-7d20-9347-e5108fe39406\",\"startedAtMs\":1791448267825},\"emittedAtMs\":1791448267825}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/commandExecution/requestApproval\",\"id\":0,\"params\":{\"kind\":\"command\",\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"turnId\":\"01a11aa3-23b6-7d20-9347-e5108fe39406\",\"itemId\":\"exec-892f9a71-0342-4a2e-b56e-39fab5f3b899\",\"startedAtMs\":1791448267824,\"environmentId\":\"local\",\"reason\":\"Do you approve creating the marker file for this opt-in native approval recording?\",\"command\":\"/bin/bash -lc 'touch /tmp/secant-native-evidence-460-declined-marker'\",\"cwd\":\"/tmp/secant-native-evidence-460/codex/workspace-decline\",\"commandActions\":[{\"type\":\"unknown\",\"command\":\"touch /tmp/secant-native-evidence-460-declined-marker\"}],\"proposedExecpolicyAmendment\":[\"touch\",\"/tmp/secant-native-evidence-460-declined-marker\"],\"availableDecisions\":[\"accept\",{\"acceptWithExecpolicyAmendment\":{\"execpolicy_amendment\":[\"touch\",\"/tmp/secant-native-evidence-460-declined-marker\"]}},\"cancel\"]}}"
+    },
+    {
+      "direction": "stdin",
+      "line": "{\"id\":0,\"result\":{\"decision\":\"decline\"}}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"serverRequest/resolved\",\"params\":{\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"requestId\":0},\"emittedAtMs\":1791448267829}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"commandExecution\",\"id\":\"exec-892f9a71-0342-4a2e-b56e-39fab5f3b899\",\"pluginId\":null,\"scriptPath\":null,\"command\":\"/bin/bash -lc 'touch /tmp/secant-native-evidence-460-declined-marker'\",\"cwd\":\"/tmp/secant-native-evidence-460/codex/workspace-decline\",\"processId\":null,\"source\":\"agent\",\"status\":\"declined\",\"commandActions\":[{\"type\":\"unknown\",\"command\":\"touch /tmp/secant-native-evidence-460-declined-marker\"}],\"aggregatedOutput\":null,\"exitCode\":null,\"durationMs\":null},\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"turnId\":\"01a11aa3-23b6-7d20-9347-e5108fe39406\",\"completedAtMs\":1791448267829},\"emittedAtMs\":1791448267829}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"turnId\":\"01a11aa3-23b6-7d20-9347-e5108fe39406\",\"tokenUsage\":{\"total\":{\"totalTokens\":27853,\"inputTokens\":27768,\"cachedInputTokens\":12288,\"cacheWriteInputTokens\":0,\"outputTokens\":85,\"reasoningOutputTokens\":0},\"last\":{\"totalTokens\":27853,\"inputTokens\":27768,\"cachedInputTokens\":12288,\"cacheWriteInputTokens\":0,\"outputTokens\":85,\"reasoningOutputTokens\":0},\"modelContextWindow\":828400}},\"emittedAtMs\":1791448267833}"
+    },
+    {
+      "direction": "stdout",
+      "line": "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"turnId\":\"01a11aa3-23b6-7d20-9347-e5108fe39406\",\"tokenUsage\":{\"total\":{\"totalTokens\":55758,\"inputTokens\":55666,\"cachedInputTokens\":39936,\"cacheWriteInputTokens\":0,\"outputTokens\":92,\"reasoningOutputTokens\":0},\"last\":{\"totalTokens\":27905,\"inputTokens\":27898,\"cachedInputTokens\":27648,\"cacheWriteInputTokens\":0,\"outputTokens\":7,\"reasoningOutputTokens\":0},\"modelContextWindow\":828400}},\"emittedAtMs\":1791448271517}"
+    },
+    {
+      "direction": "stdout-projection",
+      "line": "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"01a11aa3-22f1-71b3-9350-9b9a6e3891f2\",\"turn\":{\"id\":\"01a11aa3-23b6-7d20-9347-e5108fe39406\",\"status\":\"completed\",\"keys\":[\"id\",\"items\",\"itemsView\",\"status\",\"error\",\"startedAt\",\"completedAt\",\"durationMs\"],\"durationMs\":9976}}}"
+    }
+  ],
+  "omittedReasoningFieldNames": [],
+  "methods": {
+    "remoteControl/status/changed": 1,
+    "account/updated": 1,
+    "thread/started": 1,
+    "mcpServer/startupStatus/updated": 10,
+    "thread/status/changed": 4,
+    "turn/started": 1,
+    "hook/started": 5,
+    "hook/completed": 5,
+    "item/started": 4,
+    "item/completed": 4,
+    "item/agentMessage/delta": 15,
+    "item/commandExecution/requestApproval": 1,
+    "serverRequest/resolved": 1,
+    "thread/tokenUsage/updated": 2,
+    "account/rateLimits/updated": 2,
+    "turn/completed": 1
+  },
+  "result": {
+    "kind": "completed"
+  },
+  "receipts": [
+    {
+      "outcome": "accepted"
+    }
+  ],
+  "cleanupClean": true,
+  "closed": {
+    "kind": "exited",
+    "status": 0
+  }
+}

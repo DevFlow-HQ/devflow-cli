@@ -1,0 +1,45 @@
+{
+  "executableVersion": "2.1.294 (Claude Code)",
+  "startedAt": "2026-10-08T08:29:29.782Z",
+  "finishedAt": "2026-10-08T08:29:40.613Z",
+  "args": [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--safe-mode",
+    "--strict-mcp-config",
+    "--tools",
+    "Bash,Read,Edit",
+    "--allowedTools",
+    "Bash",
+    "Read",
+    "Edit",
+    "--permission-prompts",
+    "none",
+    "--no-session-persistence"
+  ],
+  "processExitCode": 0,
+  "signal": null,
+  "omitted": {
+    "streamed-tool-input": 34
+  },
+  "settingsPolicy": "No model, effort, thinking, reasoning-summary, or settings override. Safe mode disables customizations; authentication and model selection remain inherited. No session persistence. Native credentials are not read.",
+  "redactions": [
+    {
+      "placeholder": "\u00abWORKSPACE\u00bb",
+      "reason": "probe workspace"
+    },
+    {
+      "placeholder": "\u00abRUNTIME_DIR\u00bb",
+      "reason": "per-user runtime path"
+    },
+    {
+      "placeholder": "\u00abTOOL-INPUT-DELTAS\u00bb",
+      "reason": "streamed tool-input JSON deltas removed before redaction"
+    }
+  ]
+}

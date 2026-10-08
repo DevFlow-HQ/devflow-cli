@@ -1,0 +1,21 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.294 (Claude Code)",
+  "protocolVersion": "2.1.294",
+  "recordedAt": "2026-10-08T08:38:48.127Z",
+  "redactions": [
+    {
+      "placeholder": "«WORKSPACE»",
+      "reason": "probe workspace"
+    },
+    {
+      "placeholder": "«RUNTIME_DIR»",
+      "reason": "per-user runtime path"
+    },
+    {
+      "placeholder": "«PRIVATE-PAYLOAD-FRAMES»",
+      "reason": "whole frames containing thinking, signatures, or encrypted payload excluded; allowlisted metadata inventoried separately"
+    }
+  ],
+  "refreshCommand": "timeout -k 10s 180s bun docs/research/native-observed-facts-captures/claude/probe.mjs reasoning"
+}
