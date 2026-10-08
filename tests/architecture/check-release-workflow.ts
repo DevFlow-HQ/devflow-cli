@@ -170,6 +170,7 @@ const TEST_COMMAND = /\bbun\s+run\s+test(?:\s|$)/;
 export const NAMED_CHECK_SCENARIOS = [
   "operation-receipt-identity-and-lifetime",
   "m10-audit-operation-settlement-owner",
+  "m10-audit-steer-stored-when-sent",
   "Codex semantic schema qualification",
   "model-choice-bounded-eligibility",
   "Claude fallback cleanup retains owner",

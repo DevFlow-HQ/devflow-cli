@@ -101,7 +101,10 @@ type LiveControlOutcome =
 export type LiveSteerFn = (input: {
   readonly steerId: string;
   readonly text: string;
-}) => Promise<LiveControlOutcome>;
+}) => Promise<
+  | LiveControlOutcome
+  | { readonly outcome: "unrecorded"; readonly reason: string }
+>;
 
 /** Interrupt one live Turn and report whether it ended interrupted or lost.
  *  Receipt rejection returns immediately; acceptance waits for this Turn's end. */
@@ -607,6 +610,7 @@ async function driveHarnessTurn(
     void turn.interrupt();
   };
   const callAnswers: Promise<void>[] = [];
+  const settledSteers = new Set<string>();
   try {
     const resultPromise = turn.result();
     turn.subscribe((event) => {
@@ -662,7 +666,9 @@ async function driveHarnessTurn(
             }),
         );
       }
-      recordTurnEvent(append, turnId, event, answerSources);
+      const recorded = recordTurnEvent(append, turnId, event, answerSources);
+      if (event.kind === "steer" && recorded?.ok === true)
+        settledSteers.add(event.steerId);
       if (channel !== undefined) notifyChannel(channel, event, turnId, session);
       if (event.kind === "model" && event.change !== undefined)
         channel?.modelChanged(event.change);
@@ -695,10 +701,27 @@ async function driveHarnessTurn(
       // only reaches it when the prepared profile declares steer available, so a
       // Harness without it is never asked here.
       channel.bindSteer(async (input) => {
+        const sentAt = new Date();
         const receipt = await turn.steer(input);
-        return receipt.outcome === "accepted"
-          ? { outcome: "accepted" }
-          : { outcome: "rejected", reason: receipt.reason };
+        if (receipt.outcome === "rejected")
+          return { outcome: "rejected", reason: receipt.reason };
+        // A settlement can precede acceptance, including the Turn's own end.
+        // Its stored fact already proves the send; never append a later waiting fact.
+        if (!settledSteers.has(input.steerId)) {
+          const recorded = append({
+            turnId,
+            kind: "steer",
+            payload: JSON.stringify({
+              ...input,
+              sentAt: sentAt.toISOString(),
+              settlement: { kind: "waiting" },
+            }),
+            at: sentAt,
+          });
+          if (!recorded.ok)
+            return { outcome: "unrecorded", reason: recorded.reason };
+        }
+        return { outcome: "accepted" };
       });
       channel.bindModelChange(async (choice) => {
         const receipt = await turn.changeModel(choice);
@@ -1156,9 +1179,9 @@ function recordTurnEvent(
   turnId: string,
   event: TurnEvent,
   answerSources: ReadonlyMap<string, RequestAnswerBy>,
-): void {
+): ReturnType<RunOwner["appendTurnEvent"]> | undefined {
   if (event.kind === "elicitation-declined") {
-    append({
+    return append({
       turnId,
       kind: event.kind,
       payload: JSON.stringify({
@@ -1170,7 +1193,7 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "steer") {
-    append({
+    return append({
       turnId,
       kind: "steer",
       payload: JSON.stringify({
@@ -1187,7 +1210,7 @@ function recordTurnEvent(
     if (!event.observation.known) return;
     if (event.change !== undefined && event.change.outcome !== "applied")
       return;
-    append({
+    return append({
       turnId,
       kind: "model",
       payload: JSON.stringify({
@@ -1199,7 +1222,7 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "assistant-content") {
-    append({
+    return append({
       turnId,
       kind: "assistant-content",
       payload: JSON.stringify({
@@ -1217,14 +1240,14 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "turn-diff") {
-    append({
+    return append({
       turnId,
       kind: "turn-diff",
       payload: JSON.stringify(event.diff),
       at: new Date(),
     });
   } else if (event.kind === "thought") {
-    append({
+    return append({
       turnId,
       kind: "thought",
       payload: JSON.stringify({
@@ -1238,7 +1261,7 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "tool-call" || event.kind === "tool-partial") {
-    append({
+    return append({
       turnId,
       kind: event.kind,
       payload: JSON.stringify(event.call),
@@ -1249,7 +1272,7 @@ function recordTurnEvent(
     // approval a Turn paused on (#117 AC1). Durable history only; the request is
     // never stored as live state, so a resumed Run re-raises nothing.
     if (event.request.shape.kind === "approval") {
-      append({
+      return append({
         turnId,
         kind: "request-raised",
         payload: JSON.stringify({
@@ -1267,7 +1290,7 @@ function recordTurnEvent(
     const by = answerSources.get(event.requestId.opaque) ?? event.by;
     const decision =
       event.answer.kind === "approval" ? event.answer.decision : undefined;
-    append({
+    return append({
       turnId,
       kind: "request-answered",
       payload: JSON.stringify({
@@ -1278,13 +1301,14 @@ function recordTurnEvent(
       at: new Date(),
     });
   } else if (event.kind === "request-expired") {
-    append({
+    return append({
       turnId,
       kind: "request-expired",
       payload: JSON.stringify({ requestId: event.requestId.opaque }),
       at: new Date(),
     });
   }
+  return undefined;
 }
 
 /** Settle the durable Turn record from the authoritative result (#116): the result

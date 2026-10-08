@@ -953,6 +953,7 @@ interface RunSteerEvent {
   readonly text: string;
   readonly sentAt: string;
   readonly settlement:
+    | { readonly kind: "waiting" }
     | {
         readonly kind: "delivered";
         readonly delivery: "within-turn" | "after-boundary" | "re-delivered";

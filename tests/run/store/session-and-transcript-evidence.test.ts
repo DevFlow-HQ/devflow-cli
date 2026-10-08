@@ -1285,3 +1285,52 @@ test("m10-audit-entry-prompt-kind: managed Turn inputs are Entry prompts indepen
     expected,
   );
 });
+
+test("m10-audit-steer-stored-when-sent: Store rejects invalid waiting and settled Steers atomically", (t) => {
+  const group = openRunGroup(
+    makeTempDir("secant-steer-validation-"),
+    WORKSPACE,
+  );
+  t.after(() => group.close());
+  const created = create(group, "steer-validation");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.ok(
+    owner.admitTurn({
+      turnId: "turn",
+      attemptId: "attempt",
+      session: "s",
+      origin: "human",
+      kind: "agent",
+      input: "Work",
+      recoveryCoordinate: "native",
+      harness: "codex",
+      at: AT,
+    }).ok,
+  );
+  for (const settlement of [
+    { kind: "waiting" },
+    { kind: "dropped", reason: "loss" },
+    { kind: "delivered", delivery: "within-turn" },
+  ]) {
+    const result = owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "steer",
+      payload: JSON.stringify({
+        steerId: "",
+        text: "Invalid Steer",
+        sentAt: AT.toISOString(),
+        settlement,
+      }),
+      at: AT,
+    });
+    assert.ok(!result.ok);
+    assert.equal(result.reason, "unrecordable");
+    assert.deepEqual(owner.turnEvents(), []);
+    assert.deepEqual(
+      owner.transcript().map((entry) => entry.content),
+      ["Work"],
+    );
+  }
+});

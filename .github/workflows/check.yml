@@ -219,6 +219,15 @@ jobs:
           tests/run/execution/agent.test.ts
           tests/application/preflight.test.ts
 
+      - name: m10-audit-steer-stored-when-sent
+        run: >-
+          bun run test --
+          -t '^m10-audit-steer-stored-when-sent(:|$)'
+          tests/application/steer-history.test.ts
+          tests/run/store/session-and-transcript-evidence.test.ts
+          tests/headless/interactive-agent.test.ts
+          tests/tui/run-workbench-inspection.test.tsx
+          tests/tui/run-workbench-prompt.test.tsx
       - name: m10-audit-operation-settlement-owner
         run: >-
           bun run test --

@@ -1,5 +1,9 @@
 import { retainCommandOutput } from "../harness/harness.js";
-import { readToolCallEvent, readTurnDiffEvent } from "../run/store/store.js";
+import {
+  readSteerEvent,
+  readToolCallEvent,
+  readTurnDiffEvent,
+} from "../run/store/store.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -75,21 +79,6 @@ const payloadSchema = z.object({
   parentActivity: z.string().optional(),
   incomplete: z.literal(true).optional(),
   historyOrder: z.number().int().nonnegative().optional(),
-  steerId: z.string().optional(),
-  text: z.string().optional(),
-  settlement: z
-    .discriminatedUnion("kind", [
-      z.object({ kind: z.literal("waiting") }),
-      z.object({
-        kind: z.literal("delivered"),
-        delivery: z.enum(["within-turn", "after-boundary", "re-delivered"]),
-      }),
-      z.object({
-        kind: z.literal("dropped"),
-        reason: z.enum(["interrupt", "loss"]),
-      }),
-    ])
-    .optional(),
   requestId: z.string().optional(),
   input: z.string().optional(),
   decision: z.string().optional(),
@@ -138,8 +127,9 @@ function eventKey(
     return messageKey(event.turnId, data.messageId);
   if (event.kind === "thought" && data?.summaryId !== undefined)
     return thoughtKey(event.turnId, data.summaryId);
-  if (event.kind === "steer" && data?.steerId !== undefined)
-    return JSON.stringify([event.turnId, "steer", data.steerId]);
+  const steer = readSteerEvent(event);
+  if (steer !== undefined)
+    return JSON.stringify([event.turnId, "steer", steer.steerId]);
   const call = readAgentCallEvent({ ...event, at: "" });
   if (call !== undefined)
     return JSON.stringify([event.turnId, "agent-call", call.callId]);
@@ -274,16 +264,18 @@ export function createSessionHistory(deps: {
                 : { durationMs: data.durationMs }),
             };
         }
-        if (
-          event.kind === "steer" &&
-          data.steerId !== undefined &&
-          data.text !== undefined &&
-          data.settlement !== undefined
-        ) {
-          const settlement = data.settlement;
+        const steer = readSteerEvent(event);
+        if (steer !== undefined) {
+          const previous = facts.get(eventKey(event, index));
+          if (
+            steer.settlement.kind === "waiting" &&
+            previous?.value.kind === "steer"
+          )
+            continue;
+          const settlement = steer.settlement;
           value = {
             kind: "steer",
-            content: data.text,
+            content: steer.text,
             delivery:
               settlement.kind === "delivered"
                 ? settlement.delivery

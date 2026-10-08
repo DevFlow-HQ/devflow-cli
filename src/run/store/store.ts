@@ -1384,4 +1384,8 @@ export function openRunGroup(
   };
 }
 
-export { readToolCallEvent, readTurnDiffEvent } from "./turn-records.js";
+export {
+  readSteerEvent,
+  readToolCallEvent,
+  readTurnDiffEvent,
+} from "./turn-records.js";

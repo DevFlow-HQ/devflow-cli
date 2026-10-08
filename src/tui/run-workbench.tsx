@@ -1505,7 +1505,9 @@ export function RunWorkbench(props: {
       }
     }
     const entries = current.timeline.flatMap((event) =>
-      event.steer === undefined ? [] : [{ event, steer: event.steer }],
+      event.steer === undefined || event.steer.settlement.kind === "waiting"
+        ? []
+        : [{ event, steer: event.steer }],
     );
     if (!steerHistoryOpened) {
       for (const { steer } of entries) seenSteers.add(steer.steerId);

@@ -1142,3 +1142,55 @@ for (const appearance of ["dark", "light"] as const)
     await wb.t.renderOnce();
     noOverflow(wb.t.captureCharFrame(), 32);
   });
+
+test("m10-audit-steer-stored-when-sent: waiting Steer history renders and settlement replaces its displayed value", async () => {
+  const run = liveTurnRunOf({
+    sessions: [{ session: "s", name: "Conversation", availability: "open" }],
+  });
+  const { t, control } = await mountWorkbench(run, 100, 30);
+  const page = (
+    delivery: Extract<
+      SessionHistoryRow["value"],
+      { kind: "steer" }
+    >["delivery"],
+  ): SessionHistorySnapshot => ({
+    family: "session-history",
+    runId: run.runId,
+    session: "s",
+    result: {
+      found: true,
+      history: {
+        rows: [
+          {
+            id: "opaque-steer",
+            position: "opaque-position",
+            turn: "turn",
+            turnStartedAt: "2026-10-06T00:00:00Z",
+            source: "stored",
+            value: { kind: "steer", content: "Visible guidance", delivery },
+          },
+        ],
+        hasEarlier: false,
+        transcriptPage: {
+          type: "transcript-page",
+          runId: run.runId,
+          session: "s",
+        },
+        transcriptExport: {
+          type: "transcript-export",
+          runId: run.runId,
+          session: "s",
+        },
+      },
+    },
+  });
+  control.setHistory(page("waiting"));
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /Steer · waiting/);
+  assert.match(t.captureCharFrame(), /Visible guidance/);
+  control.setHistory(page("within-turn"));
+  await t.renderOnce();
+  assert.match(t.captureCharFrame(), /Steer · within-turn/);
+  assert.doesNotMatch(t.captureCharFrame(), /Steer · waiting/);
+  assert.equal(t.captureCharFrame().split("Visible guidance").length, 2);
+});

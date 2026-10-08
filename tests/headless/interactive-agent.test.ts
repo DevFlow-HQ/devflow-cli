@@ -1,4 +1,5 @@
 import { fakeHarnessProfile } from "../harness/fake-adapter.js";
+import { z } from "zod";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runHeadless, type HeadlessIO } from "../../src/headless/headless.js";
@@ -146,4 +147,86 @@ test("m12-test-interface-ownership: headless refuses an interactive-agent Bundle
   assert.match(h.stderr(), /TUI/i);
   assert.equal(h.stdout(), "");
   assert.deepEqual(h.runGroup?.listRuns(), []);
+});
+
+test("m10-audit-steer-stored-when-sent: run show includes accepted waiting Steers and their settlement", async (t) => {
+  const { wired, runId } = await launchInteractive(t, {
+    profile: fakeHarnessProfile({
+      steer: { available: true, evidence: "scripted" },
+    }),
+    turns: [{ block: true, result: COMPLETED_DETACHED.result }],
+  });
+  try {
+    const { steer } = await sendLiveTurn(wired, runId, "send");
+    assert.ok(steer.available);
+    assert.ok(
+      wired.projectionPort.submit({
+        operationId: "guidance",
+        operation: "steer-turn",
+        input: { runId, turnId: steer.turnId, text: "Waiting guidance" },
+      }).admitted,
+    );
+    assert.equal(
+      (await awaitSettled(wired.projectionPort, "guidance")).status,
+      "applied",
+    );
+    assert.match(
+      await runShow(wired, runId),
+      /steer.*waiting.*Waiting guidance/,
+    );
+    const out: string[] = [];
+    assert.equal(
+      await runHeadless(wired, ["run", "show", runId, "--json"], {
+        out: (text) => out.push(text),
+        err: () => {},
+        cwd: () => process.cwd(),
+      }),
+      0,
+    );
+    const snapshot = z
+      .object({
+        result: z.object({
+          run: z.object({
+            timeline: z.array(
+              z.object({
+                event: z.string(),
+                steer: z
+                  .object({
+                    steerId: z.string(),
+                    text: z.string(),
+                    sentAt: z.iso.datetime(),
+                    settlement: z.object({ kind: z.literal("waiting") }),
+                  })
+                  .strict()
+                  .optional(),
+              }),
+            ),
+          }),
+        }),
+      })
+      .parse(JSON.parse(out.join("")));
+    assert.equal(
+      snapshot.result.run.timeline.filter((event) => event.steer !== undefined)
+        .length,
+      1,
+    );
+    assert.equal(
+      snapshot.result.run.timeline.find((event) => event.steer !== undefined)
+        ?.steer?.text,
+      "Waiting guidance",
+    );
+    await interruptTurn(wired, runId, steer.turnId, "stop");
+    const shown = await runShow(wired, runId);
+    assert.match(shown, /steer.*dropped by interrupt.*Waiting guidance/);
+    assert.equal(
+      shown
+        .split("\n")
+        .filter(
+          (line) => line.includes("steer") && line.includes("Waiting guidance"),
+        ).length,
+      1,
+    );
+  } finally {
+    await wired.shutdown();
+  }
 });

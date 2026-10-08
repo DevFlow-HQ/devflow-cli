@@ -21,7 +21,9 @@ Read before changing Application Turn interrupt, Steer, live Model choice change
   `RequestChannel.bindSteer` hook, unbound at Turn end alongside `bindAnswer`); a native control race settles `steer-rejected`, a stale/settled turnId
   `turn-control-rejected`,
   an accepted steer `applied`, Run still running. Its Operation id is the opaque Steer id through execution to the Harness; replay never sends it twice (#356). Settlement
-  carries full text and send time through `appendTurnEvent`, independently of when the acceptance receipt resolves.
+  carries full text and send time through `appendTurnEvent`, independently of when the acceptance receipt resolves. Acceptance appends waiting unless
+  settlement was already stored (#433); history keeps one row per Steer and transcript reads include delivered Steers only.
+  A refused write after Harness acceptance reports `steer-not-recorded` with unknown effects, never a native rejection with no effects.
 - A `change-model-choice` whose Offer reach is `live-turn` (#348) sends `RequestChannel.bindModelChange`'s control and stays `pending`; the Run and preference
   are written only when the Harness reports it applied (`live-turn`), or when the receipt is rejected or the Turn ends unanswered (`next-turn`). A refusal writes
   nothing and settles `model-choice-refused`; another change meanwhile is `model-choice-change-pending`. Every write happens in the synchronous settle, before

@@ -185,6 +185,30 @@ const deliveredSteer = z.object({
     delivery: z.enum(["within-turn", "after-boundary", "re-delivered"]),
   }),
 });
+const steerEvent = deliveredSteer.extend({
+  sentAt: z.iso.datetime(),
+  settlement: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("waiting") }),
+    deliveredSteer.shape.settlement,
+    z.object({
+      kind: z.literal("dropped"),
+      reason: z.enum(["interrupt", "loss"]),
+    }),
+  ]),
+});
+
+export function readSteerEvent(
+  event: Pick<TurnEventRecord, "kind" | "payload">,
+) {
+  if (event.kind !== "steer") return undefined;
+  try {
+    const parsed = steerEvent.safeParse(JSON.parse(event.payload));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const messagePayload = z.object({
   role: z.string(),
   content: z.string().optional(),
@@ -374,8 +398,9 @@ export function appendTurnEvent(
       transcriptSeq = nextConversationPosition(db);
     }
   } else if (request.kind === "steer") {
-    const steer = deliveredSteer.safeParse(JSON.parse(payload));
-    if (steer.success) {
+    const steer = steerEvent.parse(JSON.parse(payload));
+    payload = JSON.stringify(steer);
+    if (steer.settlement.kind === "delivered") {
       const duplicate = db
         .select({ seq: turnEvents.seq })
         .from(turnEvents)
@@ -384,20 +409,20 @@ export function appendTurnEvent(
             eq(turnEvents.turn_id, request.turnId),
             eq(turnEvents.kind, "steer"),
             isNotNull(turnEvents.transcript_seq),
-            sql`json_extract(${turnEvents.payload}, '$.steerId') = ${steer.data.steerId}`,
+            sql`json_extract(${turnEvents.payload}, '$.steerId') = ${steer.steerId}`,
           ),
         )
         .get();
       if (duplicate !== undefined) return;
       payload = JSON.stringify({
-        ...steer.data,
+        ...steer,
         role: "user",
-        content: steer.data.text,
+        content: steer.text,
         kind: "steer",
         turn: request.turnId,
         steer: {
-          id: steer.data.steerId,
-          delivery: steer.data.settlement.delivery,
+          id: steer.steerId,
+          delivery: steer.settlement.delivery,
         },
       });
       transcriptSeq = nextConversationPosition(db);

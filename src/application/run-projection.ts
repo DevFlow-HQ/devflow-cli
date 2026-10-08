@@ -1,4 +1,4 @@
-import { readToolCallEvent } from "../run/store/store.js";
+import { readSteerEvent, readToolCallEvent } from "../run/store/store.js";
 import { createHash } from "node:crypto";
 import { modelChoiceOffer } from "./model-choice.js";
 import type { ApplicationHarnessQualification } from "./harness-registry.js";
@@ -986,22 +986,6 @@ function timelineDetail(text: string): string {
   return `${flat.slice(0, contentLimit)} ${RUN_TIMELINE_TRUNCATION_MARKER}`;
 }
 
-const steerEventSchema = z.object({
-  steerId: z.string(),
-  text: z.string(),
-  sentAt: z.iso.datetime(),
-  settlement: z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("delivered"),
-      delivery: z.enum(["within-turn", "after-boundary", "re-delivered"]),
-    }),
-    z.object({
-      kind: z.literal("dropped"),
-      reason: z.enum(["interrupt", "loss"]),
-    }),
-  ]),
-});
-
 const effectiveModelEventSchema = z.object({
   model: z.string().min(1),
   effort: z.string().min(1).optional(),
@@ -1015,7 +999,10 @@ const declinedElicitationSchema = z.object({
 });
 
 /** The turn-event timeline entries for one Turn's normalized durable events. */
-function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
+function turnEventEntry(
+  event: TurnEventRecord,
+  turn?: TurnRecord,
+): RunTimelineEvent | undefined {
   if (event.kind === "elicitation-declined") {
     let payload: unknown;
     try {
@@ -1058,23 +1045,35 @@ function turnEventEntry(event: TurnEventRecord): RunTimelineEvent | undefined {
     };
   }
   if (event.kind === "steer") {
-    let payload: unknown;
-    try {
-      payload = JSON.parse(event.payload);
-    } catch {
-      return undefined;
-    }
-    const parsed = steerEventSchema.safeParse(payload);
-    if (!parsed.success) return undefined;
-    const steer = parsed.data;
+    const parsed = readSteerEvent(event);
+    if (parsed === undefined) return undefined;
+    const steer = {
+      steerId: parsed.steerId,
+      text: parsed.text,
+      sentAt: parsed.sentAt,
+      settlement:
+        parsed.settlement.kind === "waiting" && turn?.resultKind !== undefined
+          ? {
+              kind: "dropped" as const,
+              reason:
+                turn.resultKind === "interrupted"
+                  ? ("interrupt" as const)
+                  : ("loss" as const),
+            }
+          : parsed.settlement,
+    };
     const settlement =
-      steer.settlement.kind === "dropped"
-        ? `dropped by ${steer.settlement.reason}`
-        : {
-            "within-turn": "delivered within Turn",
-            "after-boundary": "delivered after boundary",
-            "re-delivered": "re-delivered",
-          }[steer.settlement.delivery];
+      steer.settlement.kind === "waiting"
+        ? "waiting"
+        : steer.settlement.kind === "dropped"
+          ? steer.settlement.reason === "interrupt"
+            ? "dropped by interrupt"
+            : "delivery not confirmed"
+          : {
+              "within-turn": "delivered within Turn",
+              "after-boundary": "delivered after boundary",
+              "re-delivered": "re-delivered",
+            }[steer.settlement.delivery];
     return {
       at: event.at,
       event: "steer",
@@ -1327,6 +1326,7 @@ function buildTimeline(
       });
     }
   }
+  const steerPositions = new Map<string, number>();
   for (const turnEvent of turnEvents) {
     const call = readAgentCallEvent(turnEvent);
     const callTurn = turnsById.get(turnEvent.turnId);
@@ -1347,9 +1347,23 @@ function buildTimeline(
                     : "dropped",
             },
           }
-        : turnEventEntry(turnEvent);
+        : turnEventEntry(turnEvent, callTurn);
     if (entry === undefined) continue;
     const turn = turnsById.get(turnEvent.turnId);
+    if (entry.steer !== undefined) {
+      const key = JSON.stringify([turnEvent.turnId, entry.steer.steerId]);
+      const position = steerPositions.get(key);
+      if (position !== undefined) {
+        if (readSteerEvent(turnEvent)?.settlement.kind === "waiting") continue;
+        const previous = events[position]!;
+        events[position] = {
+          event: { ...previous.event, ...entry, at: previous.event.at },
+          order: previous.order,
+        };
+        continue;
+      }
+      steerPositions.set(key, events.length);
+    }
     events.push(
       turn === undefined
         ? { event: entry, order: afterSettled(entry.at) }

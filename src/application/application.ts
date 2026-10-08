@@ -2617,6 +2617,24 @@ export function createApplication(deps: ApplicationDependencies): Application {
           problem: steerRejected(input.runId, input.turnId, result.reason),
         };
       }
+      if (result.outcome === "unrecorded") {
+        return {
+          status: "not-applied",
+          problem: {
+            code: "steer-not-recorded",
+            explanation:
+              "The Harness accepted the guidance, but Secant could not record it. Delivery is not confirmed.",
+            remediation:
+              "Inspect the Run's history before deciding whether to send the guidance again.",
+            possibleEffects: "unknown",
+            details: {
+              runId: input.runId,
+              turnId: input.turnId,
+              reason: result.reason,
+            },
+          },
+        };
+      }
       return { status: "applied" };
     });
   }

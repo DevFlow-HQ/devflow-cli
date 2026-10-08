@@ -2893,3 +2893,34 @@ for (const completion of ["slash", "mention"] as const) {
     noOverflow(wb.t.captureCharFrame(), 48);
   });
 }
+
+test("m10-audit-steer-stored-when-sent: opening on a waiting Steer still restores its later Interrupt drop once", async () => {
+  const waiting = steerSettlement("waiting-on-open", "pending guidance", {
+    kind: "waiting",
+  });
+  const wb = await mountWorkbench(
+    steerableInteractiveRunOf({ timeline: [waiting] }),
+    100,
+    30,
+  );
+  await type(wb.t, "unsent draft");
+  const timeline = [
+    steerSettlement("waiting-on-open", "pending guidance", {
+      kind: "dropped",
+      reason: "interrupt",
+    }),
+  ];
+  wb.control.setRun(interactiveRunOf({ timeline }));
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /draft restored/);
+  wb.control.setRun(interactiveRunOf({ timeline }));
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "return");
+  assert.deepEqual(wb.control.sends, [
+    {
+      runId: "run-1",
+      stepId: "discuss",
+      text: "pending guidance\nunsent draft",
+    },
+  ]);
+});

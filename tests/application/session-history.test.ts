@@ -481,7 +481,7 @@ test("m10-session-history: a slow history observer closes alone; healthy FIFO pu
   await run.finish();
 });
 
-test("m10-interruption-and-transcript: partials, Steer delivery, Agent-call disposition, model and duration stay truthful through settlement", async (t) => {
+test("m10-interruption-and-transcript: partials, Agent-call disposition, model and duration stay truthful through settlement", async (t) => {
   const run = await openLiveRun(t);
   t.after(run.finish);
   admit(run.owner);
@@ -489,24 +489,6 @@ test("m10-interruption-and-transcript: partials, Steer delivery, Agent-call disp
     [
       "assistant-content",
       { messageId: "partial", content: "Known partial", incomplete: true },
-    ],
-    [
-      "steer",
-      {
-        steerId: "waiting",
-        text: "Waiting",
-        sentAt: "2026-10-06T00:00:00Z",
-        settlement: { kind: "waiting" },
-      },
-    ],
-    [
-      "steer",
-      {
-        steerId: "delivered",
-        text: "Delivered",
-        sentAt: "2026-10-06T00:00:00Z",
-        settlement: { kind: "delivered", delivery: "within-turn" },
-      },
     ],
     [
       "agent-call",
@@ -549,8 +531,6 @@ test("m10-interruption-and-transcript: partials, Steer delivery, Agent-call disp
       content: "Known partial",
       incomplete: true,
     },
-    { kind: "steer", content: "Waiting", delivery: "not-delivered" },
-    { kind: "steer", content: "Delivered", delivery: "within-turn" },
     {
       kind: "agent-call",
       call: "step_done",
@@ -572,7 +552,7 @@ test("m10-interruption-and-transcript: partials, Steer delivery, Agent-call disp
   assert.ok(transcript.found);
   assert.deepEqual(
     transcript.entries.map((entry) => entry.content),
-    ["Input", "Known partial", "Delivered"],
+    ["Input", "Known partial"],
   );
   await run.finish();
 });
