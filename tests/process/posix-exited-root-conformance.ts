@@ -104,9 +104,11 @@ export function registerPosixExitedRootCases(
 
 async function zeroBudgetDrain(): Promise<void> {
   let pid: number | undefined;
+  const reaped = Promise.withResolvers<ChildFact>();
   const adapter = createProcessAdapter(
     withRunnerObserver({
       observeChild: (fact) => {
+        if (fact.kind === "reap") reaped.resolve(fact);
         if (fact.kind === "spawn") pid = fact.pid;
       },
     }),
@@ -116,7 +118,9 @@ async function zeroBudgetDrain(): Promise<void> {
     executable: process.execPath,
     args: [
       "-e",
-      "process.stdout.write('x'.repeat(1024*1024));setInterval(()=>{},1000);",
+      // Keep the root live until SIGKILL, so Darwin's zombie-only group refusal
+      // cannot replace the zero-budget drain failure this case exercises.
+      "process.on('SIGTERM',()=>{});process.stdout.write('x'.repeat(1024*1024));setInterval(()=>{},1000);",
     ],
     cwd: process.cwd(),
     env: process.env,
@@ -137,6 +141,13 @@ async function zeroBudgetDrain(): Promise<void> {
     assert.ok(close.cause instanceof Error);
     assert.match(close.cause.message, /POSIX stdin cleanup timeout/);
     await waitForDeath(adapter, pid, "zero-budget child survived cleanup");
+    const terminal = await withTimeout(
+      reaped.promise,
+      5000,
+      "zero-budget root was not reaped",
+    );
+    assert.ok(terminal.kind === "reap");
+    assert.equal(terminal.signal, "SIGKILL");
   } finally {
     await child.interrupt(100);
   }
