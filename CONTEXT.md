@@ -80,6 +80,9 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   Steers, Agent calls, and Turn outcomes. See [Projection Views](./docs/glossary/projection-views.md) for its Projection.
 - **Tool call** — one **Harness**-observed invocation of a tool during a **Turn**, with a Turn-local identity, reported input, and observed outcome.
   Tool approval is a separate **Harness Request**; neither approval nor Turn success proves the tool completed.
+- **Turn diff** — the cumulative change a **Harness** reports for a whole **Turn**, shown as one **Session history** entry separate from any
+  **Tool call**'s own patch. Secant shows only what the Harness reports and never derives one; a Harness that reports none leaves the Turn without
+  one. _Avoid_: Patch, for one Tool call's change.
 - **Workspace path cue** — a path token beginning with `@` in the Run Workbench compose that requests Workspace path completion.
   Selecting a result edits that token in the native prompt. It reads no candidate content and creates no binding or Run Artifact.
 - **Thought** — the display alias for a qualified **Thought summary**, never raw reasoning. See the [Run lifecycle](./docs/glossary/secant-run-lifecycle.md).

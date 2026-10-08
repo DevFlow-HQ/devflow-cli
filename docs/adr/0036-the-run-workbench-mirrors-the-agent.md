@@ -41,6 +41,10 @@ with lines added and removed and expands to the full diff; per-call patches are 
 Amendment (2026-10-08): ADR 0039 bounds the content carried in history updates and reads large retained bodies on demand in bounded pieces.
 Existing panels still expand in place and may briefly show loading or a retryable content-read failure. Fully shown messages and questions remain
 readable without a new collapse rule; their visible text loads as needed. This changes delivery and loading, not the retained-content rules above.
+Amendment (2026-10-08, [#461](https://github.com/secantdev/secant/issues/461)): a changed-file list also collapses. A Turn diff, and a single
+call's file-change row, show the first 10 reported files in the Harness's order with paths wrapping, and the title line counts the rest as
+`N more files`; 10 or fewer files add no count. `ctrl+o` or a click still opens the complete Turn diff or call patch, and updates never expand the
+list. Only the list of names is capped; supplied diffs and patches stay uncut.
 
 **Colour.** Colour comes only from the vendored theme roles, and everforest is the default theme. The agent colour marks the human's messages, the
 prompt bar, the Turn line, and the working indicator. Muted text marks settled work, `warning` marks reasoning rows and Harness Requests, `error`
