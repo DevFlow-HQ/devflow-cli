@@ -24,9 +24,16 @@ import { openFakeRunGroup as openRunGroup } from "./fake-git-process.js";
 
 const AT = new Date("2026-09-23T12:00:00.000Z");
 
-function group(t: TestContext): { g: RunGroup; home: string } {
+function group(
+  t: TestContext,
+  options: { readonly aliasHome?: boolean } = {},
+): { g: RunGroup; home: string } {
   const home = makeTempDir("secant-store-working-area-");
-  const g = openRunGroup(home, "/work/project");
+  const storeHome = options.aliasHome
+    ? join(makeTempDir("secant-store-working-alias-"), "home")
+    : home;
+  if (options.aliasHome) symlinkSync(home, storeHome, "junction");
+  const g = openRunGroup(storeHome, "/work/project");
   t.after(() => g.close());
   return { g, home };
 }
@@ -164,7 +171,7 @@ test("m12-audit-working-area-boundary: a working-area path that is not a directo
 });
 
 test("m12-audit-working-area-boundary: a link to the private Run parent is refused without widening the grant", (t) => {
-  const { g } = group(t);
+  const { g } = group(t, { aliasHome: true });
   const owner = acquire(t, g, freshRun(g));
   const area = areaOf(owner);
   const parent = dirname(area);
@@ -177,7 +184,9 @@ test("m12-audit-working-area-boundary: a link to the private Run parent is refus
   assert.equal(result.ok, false, JSON.stringify(result));
   if (result.ok) throw new Error("unreachable");
   assert.equal(result.problem.kind, "working-area-unavailable");
-  assert.equal(result.problem.path, area);
+  // Resolve only the parent: following the rejected leaf would name its target.
+  assert.equal(realpathSync(dirname(result.problem.path)), dirname(area));
+  assert.equal(basename(result.problem.path), "working");
   assert.ok(result.problem.cause instanceof Error);
   assert.ok(lstatSync(area).isSymbolicLink());
   assert.equal(realpathSync(area), parent);
@@ -186,7 +195,7 @@ test("m12-audit-working-area-boundary: a link to the private Run parent is refus
 
 for (const keep of [false, true]) {
   test(`m12-audit-working-area-boundary: ${keep ? "retained" : "ordinary"} receipt allocation refuses an external working link and preserves its target`, (t) => {
-    const { g } = group(t);
+    const { g } = group(t, { aliasHome: true });
     const owner = acquire(t, g, freshRun(g));
     const area = areaOf(owner);
     const receipt = owner.outputReceiptDirectory("0.0:publish");
@@ -203,13 +212,16 @@ for (const keep of [false, true]) {
     assert.equal(result.ok, false, JSON.stringify(result));
     if (result.ok) throw new Error("unreachable");
     assert.equal(result.problem.kind, "working-area-unavailable");
-    assert.equal(result.problem.path, area);
+    // Resolve only the parent: following the rejected leaf would name its target.
+    assert.equal(realpathSync(dirname(result.problem.path)), dirname(area));
+    assert.equal(basename(result.problem.path), "working");
     assert.ok(result.problem.cause instanceof Error);
     // A new Attempt cannot create receipts through the redirected base either.
     const fresh = owner.outputReceiptDirectory("0.1:publish", { keep });
     assert.equal(fresh.ok, false, JSON.stringify(fresh));
     if (fresh.ok) throw new Error("unreachable");
     assert.equal(fresh.problem.kind, "working-area-unavailable");
+    assert.equal(fresh.problem.path, result.problem.path);
     assert.deepEqual(readdirSync(dirname(matchingReceipt)), [
       basename(receipt.path),
     ]);
