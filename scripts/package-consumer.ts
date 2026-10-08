@@ -18,6 +18,7 @@ import {
   type PlatformPackage,
 } from "./pack.js";
 import { npmInstall, sha256File } from "./release-helpers.js";
+import { withCleanup } from "./package-smoke/scenario.js";
 
 // The `platform-package-consumer` scenario (#151): install one per-platform npm
 // package exactly as a consumer receives it — with lifecycle scripts disabled —
@@ -181,65 +182,108 @@ export async function verifyPlatformPackage(options: {
   if (!native) return;
 
   const installDir = mkdtempSync(join(tmpdir(), "secant-package-consumer-"));
-  try {
-    // A bare consumer project, then install the tarball with lifecycle scripts
-    // disabled — the pnpm/`--ignore-scripts` route (spec #137, US 78).
-    writeFileSync(
-      join(installDir, "package.json"),
-      `${JSON.stringify({ name: "secant-package-consumer", private: true }, null, 2)}\n`,
-    );
-    const install = npmInstall({ tarballs: [tarballPath], cwd: installDir });
-    if (install.error) throw install.error;
-    if (install.status !== 0) {
-      throw new Error(
-        `npm install ${pkg.tarball} exited ${install.status}: ${install.stderr}`,
-      );
-    }
-
-    const installedDir = join(installDir, "node_modules", pkg.package);
-    if (!existsSync(installedDir)) {
-      throw new Error(
-        `npm did not install ${pkg.package} into ${installedDir}.`,
-      );
-    }
-
-    await verifyInstalledPackage(installedDir, pkg, manifest);
-    const executablePath = join(installedDir, pkg.executable);
-
-    // Apple silicon refuses arm64 code without at least Bun's ad-hoc signature,
-    // which has regressed twice (ADR 0030); verify it before running the binary.
-    if (process.platform === "darwin" && pkg.os === "darwin") {
-      const codesign = spawnSync(
-        "codesign",
-        ["--verify", "--deep", "--strict", executablePath],
-        { encoding: "utf8" },
-      );
-      if (codesign.error) throw codesign.error;
-      if (codesign.status !== 0) {
-        throw new Error(
-          `codesign rejected ${pkg.executable} (status ${codesign.status}): ${codesign.stderr}`,
+  let stage = "npm install";
+  const children: { phase: string; pid: number; status: number | null }[] = [];
+  await withCleanup(
+    async () => {
+      try {
+        // A bare consumer project, then install the tarball with lifecycle scripts
+        // disabled — the pnpm/`--ignore-scripts` route (spec #137, US 78).
+        writeFileSync(
+          join(installDir, "package.json"),
+          `${JSON.stringify({ name: "secant-package-consumer", private: true }, null, 2)}\n`,
         );
-      }
-    }
+        const install = npmInstall({
+          tarballs: [tarballPath],
+          cwd: installDir,
+        });
+        children.push({
+          phase: "npm install",
+          pid: install.pid,
+          status: install.status,
+        });
+        if (install.error) throw install.error;
+        if (install.status !== 0) {
+          throw new Error(
+            `npm install ${pkg.tarball} exited ${install.status}: ${install.stderr}`,
+          );
+        }
 
-    // Native execution and the embedded version.
-    const versionResult = spawnSync(executablePath, ["--version"], {
-      encoding: "utf8",
-    });
-    if (versionResult.error) throw versionResult.error;
-    if (versionResult.status !== 0) {
-      throw new Error(
-        `${pkg.executable} --version exited ${versionResult.status}: ${versionResult.stderr}`,
-      );
-    }
-    if (versionResult.stdout !== `${manifest.version}\n`) {
-      throw new Error(
-        `${pkg.executable} reported version ${JSON.stringify(versionResult.stdout)} instead of ${JSON.stringify(`${manifest.version}\n`)}.`,
-      );
-    }
-  } finally {
-    rmSync(installDir, { recursive: true, force: true });
-  }
+        const installedDir = join(installDir, "node_modules", pkg.package);
+        if (!existsSync(installedDir)) {
+          throw new Error(
+            `npm did not install ${pkg.package} into ${installedDir}.`,
+          );
+        }
+
+        stage = "installed contents";
+        await verifyInstalledPackage(installedDir, pkg, manifest);
+        const executablePath = join(installedDir, pkg.executable);
+
+        // Apple silicon refuses arm64 code without at least Bun's ad-hoc signature,
+        // which has regressed twice (ADR 0030); verify it before running the binary.
+        if (process.platform === "darwin" && pkg.os === "darwin") {
+          const codesign = spawnSync(
+            "codesign",
+            ["--verify", "--deep", "--strict", executablePath],
+            { encoding: "utf8" },
+          );
+          if (codesign.error) throw codesign.error;
+          if (codesign.status !== 0) {
+            throw new Error(
+              `codesign rejected ${pkg.executable} (status ${codesign.status}): ${codesign.stderr}`,
+            );
+          }
+        }
+
+        // Native execution and the embedded version.
+        stage = "native version";
+        const versionResult = spawnSync(executablePath, ["--version"], {
+          encoding: "utf8",
+        });
+        children.push({
+          phase: "native version",
+          pid: versionResult.pid,
+          status: versionResult.status,
+        });
+        if (versionResult.error) throw versionResult.error;
+        if (versionResult.status !== 0) {
+          throw new Error(
+            `${pkg.executable} --version exited ${versionResult.status}: ${versionResult.stderr}`,
+          );
+        }
+        if (versionResult.stdout !== `${manifest.version}\n`) {
+          throw new Error(
+            `${pkg.executable} reported version ${JSON.stringify(versionResult.stdout)} instead of ${JSON.stringify(`${manifest.version}\n`)}.`,
+          );
+        }
+        stage = "verified";
+      } catch (error) {
+        console.error(
+          "Platform package verification failed before cleanup:",
+          error,
+        );
+        throw error;
+      }
+    },
+    async () => {
+      try {
+        rmSync(installDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            phase: "cleanup",
+            verificationStage: stage,
+            installDir,
+            parentCwd: process.cwd(),
+            children,
+            remaining: readdirSync(installDir, { recursive: true }),
+          }),
+        );
+        throw error;
+      }
+    },
+  );
 }
 
 if (import.meta.main) {

@@ -393,6 +393,7 @@ jobs:
           import { join, resolve } from "node:path";
           import { pathToFileURL } from "node:url";
           const { npmInstall, sha256File } = await import(pathToFileURL(resolve("scripts/release-helpers.ts")));
+          const { verifyPlatformPackage } = await import(pathToFileURL(resolve("scripts/package-consumer.ts")));
           const manifest = JSON.parse(readFileSync("dist/packages/package-manifest.json", "utf8"));
           const pkg = manifest.packages.find((entry) => entry.key === "windows-x64");
           assert.ok(pkg);
@@ -437,6 +438,15 @@ jobs:
             if (result.error) throw result.error;
             assert.equal(result.status, 0, result.stderr);
           });
+          for (let trial = 0; trial < 16; trial++) {
+            try {
+              await verifyPlatformPackage({ packagesDir: "dist/packages", target: "windows-x64" });
+              console.log(JSON.stringify({ name: "complete-pipeline", trial, result: "passed" }));
+            } catch (error) {
+              console.error(JSON.stringify({ name: "complete-pipeline", trial, result: "failed", message: String(error) }));
+              failures.push(error);
+            }
+          }
           if (failures.length) throw new AggregateError(failures, "Windows cleanup probes failed.");
           '@ | Set-Content -LiteralPath $probe
           bun $probe
