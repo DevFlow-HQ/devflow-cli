@@ -14,7 +14,9 @@ The [Run Store notes](../../src/run/store/AGENTS.md) keep ownership and fencing 
   no request and on older rows; `TurnRecord.modelChoice` is present only when a model is stored, and settlement never touches them.
 - Conversation ordering (#411): nullable unique `turn_event.transcript_seq` keeps old transcript positions and allocates later ones under the owner fence.
   Pages filter by Session and exclusive `before`; later appends never renumber retained rows. Legacy rows have no fabricated new metadata.
-  `turn-input` stores admitted input; `legacy-message` retains migrated conversation without invented Turn metadata. Both are excluded from `turnEvents()`.
+  `turn-input` stores admitted input with `role: "user"` and `kind: "entry-prompt"` for every `managed` origin, including Agent-step retries and re-sends.
+  Human Turn inputs store `kind: "message"`. Earlier stored kinds remain unchanged in transcript pages and exports; Session history derives attribution from origin.
+  `legacy-message` retains migrated conversation without invented Turn metadata. Both are excluded from `turnEvents()`.
   Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
 - Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session.
   Two Sessions' Turns interleave in one numbering.

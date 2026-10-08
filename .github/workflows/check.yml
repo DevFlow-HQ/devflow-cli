@@ -169,6 +169,14 @@ jobs:
           tests/tui/run-view.test.ts
           tests/tui/run-workbench-history-scroll.test.tsx
           tests/tui/run-workbench-inspection.test.tsx
+      - name: m10-audit-entry-prompt-kind
+        run: >-
+          bun run test --
+          -t '^m10-audit-entry-prompt-kind(:|$)'
+          tests/application/session-history.test.ts
+          tests/run/store/session-and-transcript-evidence.test.ts
+          tests/headless/agent-step.test.ts
+          tests/tui/run-workbench-history-scroll.test.tsx
       - name: m10-paused-history-identity
         run: >-
           bun run test --

@@ -2019,3 +2019,90 @@ test("m10-session-history: command tails, uncapped supplied patches, Turn diffs 
   assert.deepEqual(run.owner.turnEvents(), before);
   await run.finish();
 });
+
+test("m10-audit-entry-prompt-kind: history attributes all managed inputs to Secant and human follow-ups to the human", async (t) => {
+  const { port, runId, owner, finish, storeHome } = await openLiveRun(t);
+  t.after(finish);
+  for (const input of [
+    {
+      turnId: "attempt",
+      origin: "managed",
+      kind: "agent",
+      input: "Attempt prompt",
+    },
+    {
+      turnId: "retry",
+      origin: "managed",
+      kind: "agent",
+      input: "Retry prompt",
+    },
+    {
+      turnId: "resend",
+      origin: "managed",
+      kind: "agent",
+      input: "Re-sent prompt",
+    },
+    {
+      turnId: "entry",
+      origin: "managed",
+      kind: "interactive-agent",
+      input: "Entry Turn prompt",
+    },
+    {
+      turnId: "unknown-kind",
+      origin: "managed",
+      kind: "agent",
+      input: "Managed prompt with unknown Step kind",
+    },
+    {
+      turnId: "follow-up",
+      origin: "human",
+      kind: "agent",
+      input: "Human follow-up",
+    },
+    {
+      turnId: "interactive",
+      origin: "human",
+      kind: "interactive-agent",
+      input: "Human Turn",
+    },
+  ] as const) {
+    assert.ok(
+      owner.admitTurn({
+        ...input,
+        attemptId: "0.0:echo",
+        session: "s",
+        recoveryCoordinate: "private",
+        harness: "codex",
+        at: new Date("2026-10-06T00:00:00Z"),
+      }).ok,
+    );
+  }
+  const groupFolder = readdirSync(join(storeHome, "runs"))[0]!;
+  const database = new Database(
+    join(storeHome, "runs", groupFolder, runId, "run.db"),
+  );
+  try {
+    database.run("UPDATE turn SET kind = NULL WHERE turn_id = 'unknown-kind'");
+  } finally {
+    database.close();
+  }
+  const opened = openHistory({ t, port, runId, session: "s" });
+  assert.ok(opened.snapshot.result.found);
+  assert.deepEqual(
+    opened.snapshot.result.history.rows.map((row) => row.value),
+    [
+      { kind: "entry-prompt", content: "Attempt prompt" },
+      { kind: "entry-prompt", content: "Retry prompt" },
+      { kind: "entry-prompt", content: "Re-sent prompt" },
+      { kind: "entry-prompt", content: "Entry Turn prompt" },
+      {
+        kind: "entry-prompt",
+        content: "Managed prompt with unknown Step kind",
+      },
+      { kind: "message", role: "user", content: "Human follow-up" },
+      { kind: "message", role: "user", content: "Human Turn" },
+    ],
+  );
+  await finish();
+});

@@ -6,7 +6,7 @@ import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js
 import { ownPreparations } from "../harness/preparation-double.js";
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
@@ -32,7 +32,7 @@ import {
 } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { RUNTIME_NAME } from "../helpers/commandBundle.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
+import { awaitSettled, followRun } from "../helpers/settleOperation.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
 import { scriptedClaude } from "../harness/scripted-claude.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -230,8 +230,9 @@ async function launchAgentRun(
   runId: string;
   run: RunView;
   docPath: string;
+  home: string;
 }> {
-  const { wired, bundleId, digest, docPath } = wireAgent(
+  const { wired, bundleId, digest, docPath, home } = wireAgent(
     t,
     script !== undefined ? { adapter: createFake(script)() } : {},
   );
@@ -255,7 +256,7 @@ async function launchAgentRun(
   try {
     assert.ok(opened.snapshot.result.found, JSON.stringify(opened.snapshot));
     if (!opened.snapshot.result.found) throw new Error("unreachable");
-    return { wired, runId, run: opened.snapshot.result.run, docPath };
+    return { wired, runId, run: opened.snapshot.result.run, docPath, home };
   } finally {
     opened.close();
   }
@@ -731,7 +732,7 @@ test("run show --json gains additive Harness-identity fields (#125)", async (t) 
   assert.match(run.effectiveModel, /^claude-/);
 });
 
-test("run show prints each event's Step; run show --json and run read --transcript --json gain the Step and plain Session name additively (#289)", async (t) => {
+test("m10-audit-entry-prompt-kind: run show prints each event's Step; run show --json and run read --transcript --json gain the Step and plain Session name additively (#289)", async (t) => {
   const { wired, runId } = await launchAgentRun(t);
   const shown = await runShow(wired, runId);
   const timeline = shown
@@ -826,7 +827,10 @@ test("run show prints each event's Step; run show --json and run read --transcri
       ]);
       assert.equal(entry.session, "s");
       assert.equal(entry.step, "fix");
-      assert.equal(entry.kind, "message");
+      assert.equal(
+        entry.kind,
+        entry.role === "user" ? "entry-prompt" : "message",
+      );
       assert.equal(typeof entry.turn, "string");
       assert.equal("id" in entry, false);
     }
@@ -1812,3 +1816,313 @@ for (const shutdown of [false, true]) {
     await app.shutdown();
   });
 }
+
+async function runTranscript(
+  wired: Wiring,
+  runId: string,
+  json = false,
+): Promise<string> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await runHeadless(
+    wired,
+    ["run", "read", runId, "--transcript", ...(json ? ["--json"] : [])],
+    {
+      out: (text) => out.push(text),
+      err: (text) => err.push(text),
+      cwd: () => process.cwd(),
+    },
+  );
+  assert.equal(code, 0, err.join(""));
+  return out.join("");
+}
+
+test("m10-audit-entry-prompt-kind: Agent retry prompts and post-Interrupt human follow-ups retain their attribution through Port and headless reads", async (t) => {
+  const plain = plainScript();
+  const { wired } = wireAgent(t, {
+    adapter: createFake({
+      ...plain,
+      turns: [
+        {
+          result: {
+            kind: "failed",
+            detail: {
+              failure: {
+                phase: "turn",
+                category: "native-failure",
+                possibleEffects: "possible",
+                diagnostics: "Retry the repair",
+              },
+              effectiveModel: { known: false },
+              session: { state: "open" },
+            },
+          },
+        },
+        {
+          result: {
+            kind: "interrupted",
+            detail: {
+              interruption: {
+                mode: "process-only",
+                evidence: "scripted Interrupt",
+              },
+              session: { state: "open" },
+            },
+          },
+        },
+        ...plain.turns,
+      ],
+    })(),
+  });
+  const bundle = authorAgentBundle({
+    id: "dev.secant.entry-prompt-retry",
+    name: "Entry prompt retry",
+    description: "Managed prompts and a human follow-up",
+    prompt: { path: "prompt.md", text: "Repair the test." },
+    routing: [
+      {
+        id: "repair",
+        kind: "agent",
+        session: "s",
+        retry: 1,
+        prompt: { asset: "prompt.md" },
+      },
+    ],
+  });
+  assert.ok(
+    wired.bundleManagement.build(bundle.folder, { noInstall: false }).ok,
+  );
+  const entry = wired.catalog.listEntries().find((e) => e.id === bundle.id);
+  assert.ok(entry);
+  const launched = wired.projectionPort.submit({
+    operationId: "entry-prompt-launch",
+    operation: "launch-run",
+    input: {
+      bundle: { id: bundle.id },
+      launchInputs: {},
+      trustDigest: entry.digest,
+      harness: "claude-code",
+      requestedModel: PLAIN_REPORTED_MODEL,
+    },
+  });
+  assert.ok(launched.admitted);
+  const runId = launched.runId;
+  assert.ok(runId);
+  await awaitSettled(wired.projectionPort, launched.operationId);
+  const waiting = wired.projectionPort.openProjection({ family: "run", runId });
+  t.after(() => waiting.close());
+  assert.ok(waiting.snapshot.result.found);
+  assert.equal(waiting.snapshot.result.run.state, "blocked");
+  const followUp = waiting.snapshot.result.run.actionOffers.find(
+    (o) => o.action === "send-follow-up-turn",
+  );
+  assert.ok(followUp?.action === "send-follow-up-turn");
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "entry-prompt-follow-up",
+      operation: "send-follow-up-turn",
+      input: { runId, turnId: followUp.turnId, text: "Finish the repair." },
+    }).admitted,
+  );
+  await awaitSettled(wired.projectionPort, "entry-prompt-follow-up");
+  const run = await followRun(wired.projectionPort, runId, (r) =>
+    r.state === "succeeded" ? r : undefined,
+  );
+  assert.equal(run.state, "succeeded");
+  const history = wired.projectionPort.openProjection({
+    family: "session-history",
+    runId,
+    session: "s",
+  });
+  t.after(() => history.close());
+  assert.ok(history.snapshot.result.found);
+  assert.deepEqual(
+    history.snapshot.result.history.rows
+      .map((r) => r.value)
+      .filter(
+        (v) =>
+          v.kind === "entry-prompt" ||
+          (v.kind === "message" && v.role === "user"),
+      ),
+    [
+      { kind: "entry-prompt", content: "Repair the test." },
+      { kind: "entry-prompt", content: "Repair the test." },
+      { kind: "message", role: "user", content: "Finish the repair." },
+    ],
+  );
+  const transcript = JSON.parse(await runTranscript(wired, runId, true));
+  assert.deepEqual(Object.keys(transcript), ["page", "export"]);
+  for (const entries of [transcript.page.entries, transcript.export.entries]) {
+    assert.deepEqual(
+      entries
+        .filter((e: RunTranscriptEntryView) => e.role === "user")
+        .map((e: RunTranscriptEntryView) => [e.role, e.kind, e.content]),
+      [
+        ["user", "entry-prompt", "Repair the test."],
+        ["user", "entry-prompt", "Repair the test."],
+        ["user", "message", "Finish the repair."],
+      ],
+    );
+    for (const entry of entries) {
+      assert.deepEqual(Object.keys(entry), [
+        "session",
+        "role",
+        "content",
+        "step",
+        "kind",
+        "turn",
+      ]);
+      assert.equal(entry.session, "s");
+      assert.equal(entry.step, "repair");
+    }
+  }
+  const text = await runTranscript(wired, runId);
+  assert.equal(
+    text
+      .split("\n")
+      .filter((line) => line === "user · Entry prompt: Repair the test.")
+      .length,
+    4,
+  );
+  assert.equal(
+    text.split("\n").filter((line) => line === "user: Finish the repair.")
+      .length,
+    2,
+  );
+  assert.doesNotMatch(text, /user: Repair the test\./);
+});
+
+test("m10-audit-entry-prompt-kind: an earlier Agent prompt relabels in history while its stored transcript and export remain messages", async (t) => {
+  const { wired, runId, home } = await launchAgentRun(t);
+  const groupFolder = readdirSync(join(home, "runs"))[0]!;
+  const database = new Database(
+    join(home, "runs", groupFolder, runId, "run.db"),
+  );
+  try {
+    // Seed the exact pre-change Turn-input payload without changing its managed origin.
+    database.run(
+      "UPDATE turn_event SET payload = json_set(payload, '$.kind', 'message') WHERE kind = 'turn-input'",
+    );
+  } finally {
+    database.close();
+  }
+  for (let read = 0; read < 2; read++) {
+    const history = wired.projectionPort.openProjection({
+      family: "session-history",
+      runId,
+      session: "s",
+    });
+    assert.ok(history.snapshot.result.found);
+    assert.equal(
+      history.snapshot.result.history.rows[0]?.value.kind,
+      "entry-prompt",
+    );
+    history.close();
+    const transcript = JSON.parse(await runTranscript(wired, runId, true));
+    for (const entries of [
+      transcript.page.entries,
+      transcript.export.entries,
+    ]) {
+      const input = entries.find(
+        (e: RunTranscriptEntryView) => e.role === "user",
+      );
+      assert.ok(input);
+      assert.equal(input.kind, "message");
+      assert.equal(input.role, "user");
+    }
+  }
+  const text = await runTranscript(wired, runId);
+  assert.match(text, /user: Repair the failing test/);
+  assert.doesNotMatch(text, /user · Entry prompt:/);
+});
+
+test("m10-audit-entry-prompt-kind: a managed prompt re-sent on resume after a lost Turn remains an Entry prompt", async (t) => {
+  let prepares = 0;
+  const plain = plainScript();
+  const adapter = ownPreparations({
+    prepare(options) {
+      prepares++;
+      return createFake(
+        prepares < 2
+          ? {
+              ...plain,
+              turns: [
+                {
+                  result: {
+                    kind: "lost",
+                    detail: {
+                      unknown: "completion",
+                      lastObservation: "transport ended",
+                      session: {
+                        state: "detached",
+                        coordinate: { opaque: "lost-session" },
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : plain,
+      )().prepare(options);
+    },
+  });
+  const { wired, bundleId, digest, docPath } = wireAgent(t, { adapter });
+  const launched = wired.projectionPort.submit({
+    operationId: "lost-entry-prompt",
+    operation: "launch-run",
+    input: {
+      bundle: { id: bundleId },
+      launchInputs: { doc: docPath },
+      trustDigest: digest,
+      harness: "claude-code",
+      requestedModel: PLAIN_REPORTED_MODEL,
+    },
+  });
+  assert.ok(launched.admitted);
+  const runId = launched.runId;
+  assert.ok(runId);
+  await awaitSettled(wired.projectionPort, launched.operationId);
+  assert.equal((await runShowJson(wired, runId)).state, "halted");
+  const out: string[] = [],
+    err: string[] = [];
+  assert.equal(
+    await runHeadless(wired, ["run", "resume", runId], {
+      out: (text) => out.push(text),
+      err: (text) => err.push(text),
+      cwd: () => process.cwd(),
+    }),
+    0,
+    err.join(""),
+  );
+  assert.equal(prepares, 2);
+  const history = wired.projectionPort.openProjection({
+    family: "session-history",
+    runId,
+    session: "s",
+  });
+  t.after(() => history.close());
+  assert.ok(history.snapshot.result.found);
+  assert.deepEqual(
+    history.snapshot.result.history.rows
+      .filter((row) => row.value.kind === "entry-prompt")
+      .map((row) => row.value.kind),
+    ["entry-prompt", "entry-prompt"],
+  );
+  const transcript = JSON.parse(await runTranscript(wired, runId, true));
+  for (const entries of [transcript.page.entries, transcript.export.entries]) {
+    const inputs = entries.filter(
+      (e: RunTranscriptEntryView) => e.role === "user",
+    );
+    assert.deepEqual(
+      inputs.map((e: RunTranscriptEntryView) => e.kind),
+      ["entry-prompt", "entry-prompt"],
+    );
+    assert.equal(inputs[0].content, inputs[1].content);
+  }
+  const text = await runTranscript(wired, runId);
+  assert.equal(
+    text.split("\n").filter((line) => line.startsWith("user · Entry prompt:"))
+      .length,
+    4,
+  );
+});

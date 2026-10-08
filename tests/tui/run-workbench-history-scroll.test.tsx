@@ -12,6 +12,7 @@ import type {
 } from "../../src/application/projection-port.js";
 import {
   resizeWorkbench,
+  previewPreferences,
   runOf,
   events,
   wrappingEvents,
@@ -1576,4 +1577,52 @@ for (const width of [40, 100]) {
         );
     });
   }
+}
+
+for (const appearance of ["dark", "light"] as const) {
+  test(`m10-audit-entry-prompt-kind: Workbench attributes managed prompts to Secant and human follow-ups to You across widths in ${appearance}`, async () => {
+    const preferences = previewPreferences();
+    const wb = await mountWorkbench(
+      runOf({
+        sessions: [
+          {
+            session: "conversation",
+            name: "Conversation",
+            availability: "open",
+          },
+        ],
+      }),
+      100,
+      40,
+      undefined,
+      true,
+      0,
+      {
+        ...preferences,
+        snapshot: () => ({
+          ...preferences.snapshot(),
+          preferences: { theme: "everforest", appearance },
+        }),
+      },
+    );
+    const managed: SessionHistoryRow = {
+      ...historyRow("managed", ""),
+      value: { kind: "entry-prompt", content: "BUNDLE_PROMPT_BODY" },
+    };
+    const human: SessionHistoryRow = {
+      ...historyRow("human", ""),
+      value: { kind: "message", role: "user", content: "HUMAN_FOLLOW_UP" },
+    };
+    wb.control.setHistory(historyPage([managed, human]));
+    for (const width of [40, 80, 120, 121, 160]) {
+      resizeWorkbench(wb.t, wb.renderer, width, 40);
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      assert.match(frame, /Secant\s+started the Step/);
+      assert.match(frame, /You[\s\S]*HUMAN_FOLLOW_UP/);
+      assert.equal(frame.match(/\bYou\b/g)?.length, 1);
+      assert.doesNotMatch(frame, /BUNDLE_PROMPT_BODY/);
+      noOverflow(frame, width);
+    }
+  });
 }

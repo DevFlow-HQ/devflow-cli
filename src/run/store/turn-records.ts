@@ -266,10 +266,7 @@ export function admitTurn(
       kind: "turn-input",
       payload: JSON.stringify({
         role: "user",
-        kind:
-          request.origin === "managed" && request.kind === "interactive-agent"
-            ? "entry-prompt"
-            : "message",
+        kind: request.origin === "managed" ? "entry-prompt" : "message",
         turn: request.turnId,
       }),
       transcript_seq: nextConversationPosition(db),

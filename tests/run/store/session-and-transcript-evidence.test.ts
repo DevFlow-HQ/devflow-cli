@@ -1206,3 +1206,82 @@ test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse ato
     ["Work", "Later"],
   );
 });
+
+test("m10-audit-entry-prompt-kind: managed Turn inputs are Entry prompts independently of Step kind; human inputs remain messages", (t) => {
+  const group = openRunGroup(makeTempDir("secant-entry-prompts-"), WORKSPACE);
+  t.after(() => group.close());
+  const runId = create(group, "entry-prompts").runId;
+  const owner = group.acquireRun(runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  const inputs = [
+    {
+      turnId: "attempt",
+      origin: "managed",
+      kind: "agent",
+      input: "Attempt prompt",
+    },
+    {
+      turnId: "retry",
+      origin: "managed",
+      kind: "agent",
+      input: "Retry prompt",
+    },
+    {
+      turnId: "resend",
+      origin: "managed",
+      kind: "agent",
+      input: "Re-sent prompt",
+    },
+    {
+      turnId: "entry",
+      origin: "managed",
+      kind: "interactive-agent",
+      input: "Entry Turn prompt",
+    },
+    {
+      turnId: "follow-up",
+      origin: "human",
+      kind: "agent",
+      input: "Human follow-up",
+    },
+    {
+      turnId: "interactive",
+      origin: "human",
+      kind: "interactive-agent",
+      input: "Human Turn",
+    },
+  ] as const;
+  for (const input of inputs) {
+    assert.ok(
+      owner.admitTurn({
+        ...input,
+        attemptId: "0.0:write",
+        session: "s",
+        recoveryCoordinate: "native",
+        harness: "claude-code",
+        at: AT,
+      }).ok,
+    );
+  }
+  const expected = [
+    ["user", "entry-prompt", "Attempt prompt"],
+    ["user", "entry-prompt", "Retry prompt"],
+    ["user", "entry-prompt", "Re-sent prompt"],
+    ["user", "entry-prompt", "Entry Turn prompt"],
+    ["user", "message", "Human follow-up"],
+    ["user", "message", "Human Turn"],
+  ];
+  assert.deepEqual(
+    owner.transcript().map((e) => [e.role, e.kind, e.content]),
+    expected,
+  );
+  owner.close();
+  const reopened = group.acquireRun(runId);
+  assert.ok(reopened);
+  t.after(() => reopened.close());
+  assert.deepEqual(
+    reopened.transcript().map((e) => [e.role, e.kind, e.content]),
+    expected,
+  );
+});

@@ -219,7 +219,7 @@ export function createSessionHistory(deps: {
           order: -1,
           source: "stored",
           value:
-            turn.origin === "managed" && turn.kind === "interactive-agent"
+            turn.origin === "managed"
               ? { kind: "entry-prompt", content: turn.input }
               : { kind: "message", role: "user", content: turn.input },
         });
