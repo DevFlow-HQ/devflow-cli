@@ -40,6 +40,25 @@ export class TurnEventProducer {
   }
   emit(event: TurnEvent): void {
     if (this.closed) return;
+    if (event.kind === "assistant-content") this.clearPreview(event.messageId);
+    if (event.kind === "message-preview") {
+      const previous = this.previews.get(event.messageId);
+      this.previews.set(event.messageId, event);
+      if (previous === undefined) this.events.push(event);
+      else this.events[this.events.indexOf(previous)] = event;
+      for (const listener of this.listeners) listener(event);
+      return;
+    }
+    if (event.kind === "thought-preview") {
+      if (this.settledThoughts.has(event.summaryId) || !event.content.trim())
+        return;
+      const previous = this.thoughts.get(event.summaryId);
+      this.thoughts.set(event.summaryId, event);
+      if (previous === undefined) this.events.push(event);
+      else this.events[this.events.indexOf(previous)] = event;
+      for (const listener of this.listeners) listener(event);
+      return;
+    }
     if (event.kind === "turn-diff-preview" || event.kind === "turn-diff") {
       if (this.diffSettled) return;
       if (event.kind === "turn-diff-preview") {
@@ -149,16 +168,13 @@ export class TurnEventProducer {
   emitPreview(delta: string, messageId?: string): void {
     if (this.closed || messageId === undefined) return;
     const previous = this.previews.get(messageId);
-    const event: Extract<TurnEvent, { kind: "message-preview" }> = {
+    this.emit({
       kind: "message-preview",
       messageId,
       content: (previous?.content ?? "") + delta,
-    };
-    this.previews.set(messageId, event);
-    if (previous === undefined) this.events.push(event);
-    else this.events[this.events.indexOf(previous)] = event;
-    for (const listener of this.listeners) listener(event);
+    });
   }
+
   clearPreview(messageId?: string): void {
     if (this.closed) return;
     for (const [id, event] of this.previews) {
@@ -168,19 +184,9 @@ export class TurnEventProducer {
     }
   }
   emitThoughtPreview(content: string, summaryId: string): void {
-    if (this.closed || this.settledThoughts.has(summaryId) || !content.trim())
-      return;
-    const previous = this.thoughts.get(summaryId);
-    const event: Extract<TurnEvent, { kind: "thought-preview" }> = {
-      kind: "thought-preview",
-      summaryId,
-      content,
-    };
-    this.thoughts.set(summaryId, event);
-    if (previous === undefined) this.events.push(event);
-    else this.events[this.events.indexOf(previous)] = event;
-    for (const listener of this.listeners) listener(event);
+    this.emit({ kind: "thought-preview", summaryId, content });
   }
+
   private clearThoughtPreview(summaryId: string): void {
     const previous = this.thoughts.get(summaryId);
     if (previous === undefined) return;
@@ -233,4 +239,12 @@ export class TurnEventProducer {
     this.closed = true;
     this.listeners.clear();
   }
+}
+
+/** Named test Seam carrying normalized events only, without native protocol. */
+export function createTurnEventProducerForTest(): Pick<
+  TurnEventProducer,
+  "subscribe" | "emit" | "settlePreview" | "seal"
+> {
+  return new TurnEventProducer();
 }

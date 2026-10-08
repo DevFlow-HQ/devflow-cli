@@ -53,7 +53,9 @@ export function registerPreparationOwnership(
       }),
     });
     await entered.promise;
-    const report = await adapter.close({ deadline: performance.now() });
+    const report = await adapter.close({
+      monotonicDeadlineMs: performance.now(),
+    });
     assert.equal(report.status, "unresolved");
     assert.deepEqual(report.preparations[0]?.unresolved, [
       { kind: "preparation-pending" },
@@ -167,7 +169,10 @@ export function registerPreparationOwnership(
 
           if (finalExit === "before") await scripted.exit();
           const closing = adapter.close();
-          assert.strictEqual(adapter.close({ deadline: 99999 }), closing);
+          assert.strictEqual(
+            adapter.close({ monotonicDeadlineMs: 99999 }),
+            closing,
+          );
           if (finalExit !== "before") {
             assert.deepEqual(clock.scheduled(), [5000]);
             clock.advance(5000);
@@ -350,7 +355,7 @@ export function registerPreparationOwnership(
     await Promise.all(scripts.map((script) => script.acquired));
 
     const closing = adapters.map((adapter) =>
-      adapter.close({ deadline: 5100 }),
+      adapter.close({ monotonicDeadlineMs: 5100 }),
     );
     assert.deepEqual(clock.scheduled(), [5100, 5100]);
     clock.advance(5100);

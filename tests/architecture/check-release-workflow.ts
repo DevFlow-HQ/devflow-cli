@@ -182,6 +182,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-full-transcript-prepend",
   "m10-workbench-interaction",
   "m10-confirmation-target-identity",
+  "m10-audit-production-harness-parts-in-doubles",
   "m10-initial-preparation-ownership",
   "m10-previous-release-conversation",
   "m10-audit-legacy-turn-order",

@@ -1,7 +1,4 @@
-import {
-  retainCommandOutput,
-  type ToolCall,
-} from "../../src/harness/harness.js";
+import { createTurnEventProducerForTest } from "../../src/harness/harness.js";
 import { ownPreparations } from "./preparation-double.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 // The deterministic fake Harness Adapter. It lives in the `harness` test domain
@@ -451,8 +448,8 @@ class FakeTurn {
   private interrupting = false;
   private resolveResult!: (result: TurnResult) => void;
   private readonly resultPromise: Promise<TurnResult>;
-  private readonly listeners = new Set<TurnEventListener>();
-  private readonly buffer: TurnEvent[] = [];
+  private readonly producer = createTurnEventProducerForTest();
+  private recording = true;
   private readonly requests = new Map<string, RequestState>();
   private readonly calls = new Map<string, "outstanding" | "answered">();
   private interruptSignal?: () => void;
@@ -470,6 +467,10 @@ class FakeTurn {
     private readonly history: TurnEvent[],
     private readonly modelChanges: ModelChoice[] | undefined,
   ) {
+    this.producer.subscribe((event) => {
+      if (this.recording && HISTORY_KINDS.has(event.kind))
+        this.history.push(event);
+    });
     this.resultPromise = new Promise<TurnResult>((resolve) => {
       this.resolveResult = resolve;
     });
@@ -484,16 +485,7 @@ class FakeTurn {
   }
 
   subscribe(listener: TurnEventListener): TurnSubscription {
-    // Replay history so a late subscriber sees the ordered stream from its
-    // start. This is replay to a new consumer, not a new event, so it does not
-    // breach terminal ordering even after the result has settled.
-    for (const event of this.buffer) listener(event);
-    if (!this.settled) this.listeners.add(listener);
-    return {
-      unsubscribe: () => {
-        this.listeners.delete(listener);
-      },
-    };
+    return this.producer.subscribe(listener);
   }
 
   result(): Promise<TurnResult> {
@@ -800,44 +792,10 @@ class FakeTurn {
 
   /** Terminal ordering: expire outstanding requests, close the producer, then
    *  settle the one result. No event is emitted after this. */
-  private readonly toolValues = new Map<string, ToolCall>();
   private settle(result: TurnResult): void {
     if (this.settled) return;
     this.terminal = true;
-    for (const call of this.toolValues.values())
-      if (call.outcome.kind === "running" && call.output !== undefined)
-        this.emit({
-          kind: "tool-partial",
-          call: {
-            ...call,
-            outcome: { kind: "running" },
-            output: { ...call.output, incomplete: true },
-          },
-        });
-    const previews = this.buffer.filter(
-      (event) =>
-        event.kind === "message-preview" ||
-        event.kind === "thought-preview" ||
-        event.kind === "turn-diff-preview",
-    );
-    this.removePreviews();
-    for (const event of previews)
-      if (event.kind === "turn-diff-preview")
-        this.emit({ kind: "turn-diff", diff: event.diff });
-      else if (event.kind === "thought-preview")
-        this.emit({
-          kind: "thought",
-          summaryId: event.summaryId,
-          content: event.content,
-          incomplete: true,
-        });
-      else if (event.kind === "message-preview")
-        this.emit({
-          kind: "assistant-content",
-          messageId: event.messageId,
-          content: event.content,
-          incomplete: true,
-        });
+    this.producer.settlePreview();
     for (const steer of this.steers.values()) {
       this.emit({
         kind: "steer",
@@ -862,7 +820,7 @@ class FakeTurn {
       }
     }
     this.settled = true;
-    this.listeners.clear();
+    this.producer.seal();
     this.resolveResult(result);
   }
 
@@ -871,133 +829,11 @@ class FakeTurn {
     options: { readonly record: boolean } = { record: true },
   ): void {
     if (this.settled) throw new Error("emit after result: terminal ordering");
-    if (event.kind === "turn-diff" || event.kind === "turn-diff-preview") {
-      if (this.buffer.some((retained) => retained.kind === "turn-diff")) return;
-      if (event.kind === "turn-diff")
-        for (let index = this.buffer.length - 1; index >= 0; index--)
-          if (this.buffer[index]?.kind === "turn-diff-preview")
-            this.buffer.splice(index, 1);
-    }
-    if (
-      event.kind === "tool-call" ||
-      event.kind === "tool-preview" ||
-      event.kind === "tool-partial"
-    ) {
-      const previous = this.toolValues.get(event.call.callId);
-      if (previous !== undefined && previous.outcome.kind !== "running") return;
-      const output =
-        event.call.output ??
-        (event.call.outcome.kind !== "running" && previous?.output !== undefined
-          ? { ...previous.output, incomplete: true as const }
-          : undefined);
-      const facts =
-        output === undefined ? {} : { output: retainCommandOutput(output) };
-      if (event.kind === "tool-call")
-        event = {
-          kind: "tool-call",
-          call: { ...previous, ...event.call, ...facts },
-        };
-      else if (event.kind === "tool-partial")
-        event = {
-          kind: "tool-partial",
-          call: {
-            ...previous,
-            ...event.call,
-            output: {
-              ...retainCommandOutput(event.call.output),
-              incomplete: true,
-            },
-            outcome: { kind: "running" },
-          },
-        };
-      else
-        event = {
-          kind: "tool-preview",
-          call: {
-            ...previous,
-            ...event.call,
-            outcome: { kind: "running" },
-            ...facts,
-          },
-        };
-      if (
-        event.kind === "tool-call" ||
-        event.kind === "tool-preview" ||
-        event.kind === "tool-partial"
-      )
-        this.toolValues.set(event.call.callId, event.call);
-    }
-    if (event.kind === "thought") this.removeThoughtPreviews(event.summaryId);
-    if (event.kind === "thought-preview" && !event.content.trim()) return;
-    if (event.kind === "assistant-content")
-      this.removePreviews(event.messageId);
-    if (
-      event.kind === "tool-partial" ||
-      (event.kind === "tool-call" && event.call.outcome.kind !== "running")
-    ) {
-      for (let index = this.buffer.length - 1; index >= 0; index--) {
-        const retained = this.buffer[index];
-        if (
-          retained?.kind === "tool-preview" &&
-          retained.call.callId === event.call.callId
-        )
-          this.buffer.splice(index, 1);
-      }
-    }
-    const preview =
-      event.kind === "turn-diff-preview"
-        ? this.buffer.findIndex(
-            (retained) => retained.kind === "turn-diff-preview",
-          )
-        : event.kind === "tool-preview"
-          ? this.buffer.findIndex(
-              (retained) =>
-                retained.kind === "tool-preview" &&
-                retained.call.callId === event.call.callId,
-            )
-          : event.kind === "message-preview"
-            ? this.buffer.findIndex(
-                (retained) =>
-                  retained.kind === "message-preview" &&
-                  retained.messageId === event.messageId,
-              )
-            : -1;
-    const thoughtPreview =
-      event.kind === "thought-preview"
-        ? this.buffer.findIndex(
-            (retained) =>
-              retained.kind === "thought-preview" &&
-              retained.summaryId === event.summaryId,
-          )
-        : -1;
-    if (thoughtPreview >= 0) this.buffer[thoughtPreview] = event;
-    else if (preview < 0) this.buffer.push(event);
-    else this.buffer[preview] = event;
-    if (options.record && HISTORY_KINDS.has(event.kind)) {
-      this.history.push(event);
-    }
-    for (const listener of this.listeners) listener(event);
-  }
-
-  private removeThoughtPreviews(summaryId?: string): void {
-    for (let index = this.buffer.length - 1; index >= 0; index--) {
-      const event = this.buffer[index];
-      if (
-        event?.kind === "thought-preview" &&
-        (summaryId === undefined || event.summaryId === summaryId)
-      )
-        this.buffer.splice(index, 1);
-    }
-  }
-  private removePreviews(messageId?: string): void {
-    if (messageId === undefined) this.removeThoughtPreviews();
-    for (let index = this.buffer.length - 1; index >= 0; index -= 1) {
-      const event = this.buffer[index];
-      if (
-        event.kind === "message-preview" &&
-        (messageId === undefined || event.messageId === messageId)
-      )
-        this.buffer.splice(index, 1);
+    this.recording = options.record;
+    try {
+      this.producer.emit(event);
+    } finally {
+      this.recording = true;
     }
   }
 

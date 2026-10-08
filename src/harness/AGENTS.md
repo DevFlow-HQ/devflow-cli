@@ -82,6 +82,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Tests
 
+- Doubles compose `createTurnEventProducerForTest` and `createPreparationOwnerForTest` through the public entry (#431);
+  normalized event retention and initial-resource ownership remain production policy. Preparation close takes `monotonicDeadlineMs`.
+
 - Before changing doubles, conformance, replayers, or recorders, read [Harness testing](../../docs/agents/harness-testing.md).
 
 ## Read next

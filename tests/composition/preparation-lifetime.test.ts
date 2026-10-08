@@ -134,8 +134,8 @@ for (const route of ["quit", "mount-failure", "renderer-failure"] as const) {
       return {
         prepare: (options) => adapter.prepare(options),
         close(options: PreparationCloseOptions = {}) {
-          assert.ok(options.deadline);
-          deadlines.push(options.deadline);
+          assert.ok(options.monotonicDeadlineMs);
+          deadlines.push(options.monotonicDeadlineMs);
           trace.push(`admission:${name}`);
           return adapter.close(options);
         },

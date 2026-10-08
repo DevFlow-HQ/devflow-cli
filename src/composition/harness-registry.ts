@@ -134,9 +134,9 @@ export class HarnessRegistry {
   /** All calls close admission synchronously before composition starts Run drain. */
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing;
-    const deadline = performance.now() + 5000;
+    const monotonicDeadlineMs = performance.now() + 5000;
     const reports = Array.from(this.entries, ([harness, entry]) =>
-      entry.adapter.close({ deadline }).then((report) => {
+      entry.adapter.close({ monotonicDeadlineMs }).then((report) => {
         recordPreparationCleanup(report, harness, this.invocation.log);
       }),
     );

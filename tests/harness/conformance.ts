@@ -26,6 +26,7 @@ import {
   type PreparedHarness,
   type RecoveryCoordinate,
   type TurnAdmission,
+  type ToolCall,
   type TurnEvent,
   type TurnRequest,
   type TurnResult,
@@ -2218,5 +2219,207 @@ function raisedCall(
       .then(() =>
         reject(new Error("Turn ended without raising an agent call")),
       );
+  });
+}
+
+/** Observed facts are shared policy even where native qualification differs.
+ * Every provider supplies command and file facts; only a qualified provider may
+ * supply a Thought summary. Raw reasoning is never an acceptable substitute. */
+export function runObservedFactCases(
+  scenarios: {
+    readonly label: string;
+    facts(): TestHarnessAdapterFactory;
+    pending(): TestHarnessAdapterFactory;
+    readonly terminal: readonly TurnEvent[];
+    readonly file: NonNullable<ToolCall["files"]>[number];
+    readonly runningFiles?: ToolCall["files"];
+    readonly commandInput?: string;
+    readonly commandOutput: "retained" | "unavailable";
+    readonly thought: boolean;
+  },
+  test: RegisterConformanceCase,
+): void {
+  test(`m10-audit-production-harness-parts-in-doubles: ${scenarios.label} shares observed tool, output, file and Thought conformance`, async () => {
+    const adapter = scenarios.facts()();
+    const ready = await adapter.prepare({ workspace: process.cwd() });
+    assert.ok(ready.ok, JSON.stringify(ready));
+    const harness = ready.harness;
+    try {
+      const turn = harness.startTurn({
+        ...request(recorder().recorder),
+        modelChoice: { model: "gpt-6.1-sol" },
+      });
+      const live: TurnEvent[] = [];
+      turn.subscribe((event) => live.push(event));
+      assert.equal((await turn.result()).kind, "completed");
+      const commands = live.flatMap((event) =>
+        event.kind === "tool-call" &&
+        event.call.input === (scenarios.commandInput ?? "printf conformance")
+          ? [event.call]
+          : [],
+      );
+      assert.deepEqual(
+        commands.map((call) => call.outcome.kind),
+        ["running", "completed"],
+        "duplicate starts and settled facts are suppressed",
+      );
+      assert.ok(commands[0]?.callId);
+      assert.equal(commands[0]?.callId, commands[1]?.callId);
+      assert.deepEqual(
+        commands[1]?.output,
+        scenarios.commandOutput === "retained"
+          ? { text: "z".repeat(30_000), secantDropped: true }
+          : undefined,
+      );
+      const files = live.flatMap((event) =>
+        event.kind === "tool-call" && event.call.tool === "file-change"
+          ? [event.call]
+          : [],
+      );
+      // Recorded baseline tools may precede the synthetic conformance calls.
+      const changed = files.filter((call) =>
+        call.files?.some((file) => file.path === "observed.ts"),
+      );
+      assert.equal(changed.length, 1);
+      assert.deepEqual(changed[0]?.files, [scenarios.file]);
+      const start = files.find(
+        (call) =>
+          call.callId === changed[0]?.callId && call.outcome.kind === "running",
+      );
+      assert.ok(start);
+      assert.deepEqual(
+        start.files,
+        scenarios.runningFiles,
+        "running calls carry only qualified target cues, never patches",
+      );
+      assert.equal(changed[0]?.outcome.kind, "completed");
+      assert.notEqual(start.callId, commands[0]?.callId);
+      const thoughts = live.filter((event) => event.kind === "thought");
+      assert.deepEqual(
+        thoughts.map((event) => event.content),
+        scenarios.thought ? ["Qualified summary"] : [],
+      );
+      if (scenarios.thought) {
+        const previews = live.filter(
+          (event) => event.kind === "thought-preview",
+        );
+        assert.equal(previews.length, 1);
+        assert.equal(previews[0]?.summaryId, thoughts[0]?.summaryId);
+      }
+      const retained: TurnEvent[] = [];
+      turn.subscribe((event) => retained.push(event)).unsubscribe();
+      assert.equal(
+        retained.some(
+          (event) =>
+            event.kind === "tool-preview" || event.kind === "thought-preview",
+        ),
+        false,
+      );
+      assert.deepEqual(
+        retained.filter((event) => event.kind === "thought"),
+        thoughts,
+      );
+      assert.deepEqual(
+        retained.filter((event) => event.kind === "tool-call"),
+        live.filter((event) => event.kind === "tool-call"),
+      );
+      const count = live.length;
+      await harness.close();
+      assert.equal(
+        live.length,
+        count,
+        "all facts precede the authoritative result",
+      );
+      const after: TurnEvent[] = [];
+      turn.subscribe((event) => after.push(event)).unsubscribe();
+      assert.deepEqual(after, retained);
+    } finally {
+      await harness.close();
+      await adapter.close();
+    }
+  });
+  test(`m10-audit-production-harness-parts-in-doubles: ${scenarios.label} drains pending observed facts in order before the result`, async () => {
+    const adapter = scenarios.pending()();
+    const ready = await adapter.prepare({ workspace: process.cwd() });
+    assert.ok(ready.ok, JSON.stringify(ready));
+    const harness = ready.harness;
+    try {
+      const turn = harness.startTurn({
+        ...request(recorder().recorder),
+        modelChoice: { model: "gpt-6.1-sol" },
+      });
+      const live: TurnEvent[] = [];
+      turn.subscribe((event) => live.push(event));
+      assert.equal((await turn.result()).kind, "completed");
+      const terminal = (events: readonly TurnEvent[]) =>
+        events.filter(
+          (event) =>
+            event.kind === "tool-partial" ||
+            event.kind === "turn-diff" ||
+            (event.kind === "assistant-content" && event.incomplete) ||
+            (event.kind === "thought" && event.incomplete),
+        );
+      const normalize = (event: TurnEvent): TurnEvent => {
+        switch (event.kind) {
+          case "tool-partial":
+            assert.ok(
+              live.some(
+                (preview) =>
+                  preview.kind === "tool-preview" &&
+                  preview.call.callId === event.call.callId,
+              ),
+            );
+            return {
+              ...event,
+              call: { ...event.call, callId: "pending-command" },
+            };
+          case "assistant-content":
+            assert.ok(
+              live.some(
+                (preview) =>
+                  preview.kind === "message-preview" &&
+                  preview.messageId === event.messageId,
+              ),
+            );
+            return { ...event, messageId: "pending-message" };
+          case "thought":
+            assert.ok(
+              live.some(
+                (preview) =>
+                  preview.kind === "thought-preview" &&
+                  preview.summaryId === event.summaryId,
+              ),
+            );
+            return { ...event, summaryId: "pending-thought" };
+          default:
+            return event;
+        }
+      };
+      assert.deepEqual(terminal(live).map(normalize), scenarios.terminal);
+      const retained: TurnEvent[] = [];
+      turn.subscribe((event) => retained.push(event)).unsubscribe();
+      assert.deepEqual(terminal(retained).map(normalize), scenarios.terminal);
+      assert.equal(
+        retained.some((event) =>
+          [
+            "tool-preview",
+            "turn-diff-preview",
+            "thought-preview",
+            "message-preview",
+          ].includes(event.kind),
+        ),
+        false,
+      );
+      const count = live.length;
+      await harness.close();
+      assert.equal(
+        live.length,
+        count,
+        "no fact follows the authoritative result",
+      );
+    } finally {
+      await harness.close();
+      await adapter.close();
+    }
   });
 }

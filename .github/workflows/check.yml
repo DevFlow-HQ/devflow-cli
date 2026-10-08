@@ -145,6 +145,13 @@ jobs:
           bun run test --
           -t '^m10-confirmation-target-identity(:|$)'
           tests/tui/run-workbench-interaction.test.tsx
+      - name: m10-audit-production-harness-parts-in-doubles
+        run: >-
+          bun run test --
+          -t '^m10-audit-production-harness-parts-in-doubles(:|$)'
+          tests/harness/production-parts.test.ts
+          tests/harness/observed-fact-conformance.test.ts
+          tests/composition/production-harness-parts.test.ts
       - name: m10-initial-preparation-ownership
         run: >-
           bun run test --

@@ -1006,7 +1006,7 @@ export interface HarnessAdapter {
 
 /** Absolute monotonic deadline, shared across Adapters by composition. */
 export interface PreparationCloseOptions {
-  readonly deadline?: number;
+  readonly monotonicDeadlineMs?: number;
 }
 
 /** Initial acquisitions only. Historical failure is distinct from present
@@ -1065,3 +1065,8 @@ export { startPermissionBridge } from "./permission-bridge.js";
 // and its bounds stay private; nothing registers a secret through this entry.
 export { translateCause } from "./safe-cause.js";
 export type { SafeCause } from "./safe-cause.js";
+
+// Named normalized test Seams. Doubles compose the production policies rather
+// than copying their retention and initial-acquisition implementations.
+export { createTurnEventProducerForTest } from "./turn-event-producer.js";
+export { createPreparationOwnerForTest } from "./preparation-owner.js";

@@ -187,7 +187,7 @@ export class PreparationOwner {
     options: PreparationCloseOptions = {},
   ): Promise<PreparationCleanupReport> {
     if (this.closing !== undefined) return this.closing;
-    this.deadline = options.deadline ?? this.clock.now() + 5000;
+    this.deadline = options.monotonicDeadlineMs ?? this.clock.now() + 5000;
     const result = Promise.withResolvers<PreparationCleanupReport>();
     // Close admission before cancelling anything; abort listeners may re-enter.
     this.closing = result.promise;
@@ -484,4 +484,11 @@ function snapshotFailure(
 function freezeCause(cause: SafeCause): SafeCause {
   if (cause.cause !== undefined) freezeCause(cause.cause);
   return Object.freeze(cause);
+}
+
+/** Named test Seam for composing the production initial-acquisition lifetime. */
+export function createPreparationOwnerForTest(
+  clock?: PreparationClock,
+): Pick<PreparationOwner, "prepare" | "close"> {
+  return new PreparationOwner(clock);
 }

@@ -11,6 +11,9 @@ const ledgerPath = join(root, "docs", "subprocess-test-migration-ledger.md");
 // A suite born over doubles has no real-child assertion to migrate. Keep its
 // rationale here, not as a second classification in the historical ledger.
 const PROCESS_FREE_TEST_FILES = new Set([
+  // Born process-free (#431): composition uses the production Harness policies with
+  // scripted Process acquisitions, Commands, child facts and fake Git throughout.
+  "tests/composition/production-harness-parts.test.ts",
   // Born process-free (#496): invocation start, real temporary files/SQLite, fake Process
   // and Harness, and an injected Renderer Port; no child spawns.
   "tests/composition/store-permissions.test.ts",
